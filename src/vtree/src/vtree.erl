@@ -4,7 +4,7 @@
 
 % The bounding box coordinate order follows the GeoJSON specification (http://geojson.org/): {x-low, y-low, x-high, y-high}
 
-% Design question: Should not fully filled nodes have only as many members as nodes, or be filled up with nils to their maximum number of nodes? - Current implementation is the second one (with nils).
+% Design question: Should not fully filled nodes have only as many members as nodes, or be filled up with nils to their maximum number of nodes? - Current implementation is the first one (dynamic number of members).
 
 lookup(Bbox, []) ->
     [];
@@ -12,8 +12,6 @@ lookup(Bbox, []) ->
 lookup(Bbox, Tree) ->
     Entries = lists:foldl(fun(Entry, Acc) ->
         case Entry of
-            nil ->
-                Acc;
             % Inner node
             {Mbr, ChildNodes} when is_list(ChildNodes) ->
                 lookup(Bbox, ChildNodes);
@@ -63,5 +61,5 @@ intersect(Mbr1, Mbr2) ->
 disjoint(Mbr1, Mbr2) ->
     not (within(Mbr1, Mbr2) or within(Mbr2, Mbr1) or intersect(Mbr1, Mbr2)).
 
-insert(Mbr, [nil, nil, nil, nil]) ->
-    [Mbr, nil, nil, nil].
+insert(Mbr, []) ->
+    [Mbr].
