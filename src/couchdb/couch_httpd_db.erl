@@ -277,7 +277,7 @@ handle_design_info_req(Req, _Db) ->
     send_method_not_allowed(Req, "GET").
 
 create_db_req(#httpd{user_ctx=UserCtx}=Req, DbName) ->
-    ok = couch_httpd:verify_is_server_admin(Req),
+    ok = couch_httpd:verify_permission(DbName, UserCtx, <<"create_db">>),
     case couch_server:create(DbName, [{user_ctx, UserCtx}]) of
     {ok, Db} ->
         couch_db:close(Db),
@@ -288,7 +288,7 @@ create_db_req(#httpd{user_ctx=UserCtx}=Req, DbName) ->
     end.
 
 delete_db_req(#httpd{user_ctx=UserCtx}=Req, DbName) ->
-    ok = couch_httpd:verify_is_server_admin(Req),
+    ok = couch_httpd:verify_permission(DbName, UserCtx, <<"delete_db">>),
     case couch_server:delete(DbName, [{user_ctx, UserCtx}]) of
     ok ->
         send_json(Req, 200, {[{ok, true}]});
@@ -297,6 +297,7 @@ delete_db_req(#httpd{user_ctx=UserCtx}=Req, DbName) ->
     end.
 
 do_db_req(#httpd{user_ctx=UserCtx,path_parts=[DbName|_]}=Req, Fun) ->
+    ok = couch_httpd:verify_permission(DbName, UserCtx, <<"read">>),
     case couch_db:open(DbName, [{user_ctx, UserCtx}]) of
     {ok, Db} ->
         try
@@ -308,11 +309,13 @@ do_db_req(#httpd{user_ctx=UserCtx,path_parts=[DbName|_]}=Req, Fun) ->
         throw(Error)
     end.
 
-db_req(#httpd{method='GET',path_parts=[_DbName]}=Req, Db) ->
+db_req(#httpd{method='GET',path_parts=[DbName],user_ctx=UserCtx}=Req, Db) ->
+    ok = couch_httpd:verify_permission(DbName, UserCtx, <<"read">>),
     {ok, DbInfo} = couch_db:get_db_info(Db),
     send_json(Req, {DbInfo});
 
-db_req(#httpd{method='POST',path_parts=[DbName]}=Req, Db) ->
+db_req(#httpd{method='POST',path_parts=[DbName],user_ctx=UserCtx}=Req, Db) ->
+    ok = couch_httpd:verify_permission(DbName, UserCtx, <<"write">>),
     Doc = couch_doc:from_json_obj(couch_httpd:json_body(Req)),
     Doc2 = case Doc#doc.id of
         <<"">> ->
@@ -374,7 +377,8 @@ db_req(#httpd{method='POST',path_parts=[_,<<"_ensure_full_commit">>]}=Req, Db) -
 db_req(#httpd{path_parts=[_,<<"_ensure_full_commit">>]}=Req, _Db) ->
     send_method_not_allowed(Req, "POST");
 
-db_req(#httpd{method='POST',path_parts=[_,<<"_bulk_docs">>]}=Req, Db) ->
+db_req(#httpd{method='POST',path_parts=[DbName,<<"_bulk_docs">>],user_ctx=UserCtx}=Req, Db) ->
+    ok = couch_httpd:verify_permission(DbName, UserCtx, <<"write">>),
     couch_stats_collector:increment({httpd, bulk_requests}),
     {JsonProps} = couch_httpd:json_body_obj(Req),
     DocsArray = proplists:get_value(<<"docs">>, JsonProps),
@@ -432,7 +436,8 @@ db_req(#httpd{method='POST',path_parts=[_,<<"_bulk_docs">>]}=Req, Db) ->
 db_req(#httpd{path_parts=[_,<<"_bulk_docs">>]}=Req, _Db) ->
     send_method_not_allowed(Req, "POST");
 
-db_req(#httpd{method='POST',path_parts=[_,<<"_purge">>]}=Req, Db) ->
+db_req(#httpd{method='POST',path_parts=[DbName,<<"_purge">>],user_ctx=UserCtx}=Req, Db) ->
+    ok = couch_httpd:verify_permission(DbName, UserCtx, <<"write">>),
     {IdsRevs} = couch_httpd:json_body_obj(Req),
     IdsRevs2 = [{Id, couch_doc:parse_revs(Revs)} || {Id, Revs} <- IdsRevs],
 
@@ -447,10 +452,12 @@ db_req(#httpd{method='POST',path_parts=[_,<<"_purge">>]}=Req, Db) ->
 db_req(#httpd{path_parts=[_,<<"_purge">>]}=Req, _Db) ->
     send_method_not_allowed(Req, "POST");
 
-db_req(#httpd{method='GET',path_parts=[_,<<"_all_docs">>]}=Req, Db) ->
+db_req(#httpd{method='GET',path_parts=[DbName,<<"_all_docs">>],user_ctx=UserCtx}=Req, Db) ->
+    ok = couch_httpd:verify_permission(DbName, UserCtx, <<"read">>),
     all_docs_view(Req, Db, nil);
 
-db_req(#httpd{method='POST',path_parts=[_,<<"_all_docs">>]}=Req, Db) ->
+db_req(#httpd{method='POST',path_parts=[DbName,<<"_all_docs">>],user_ctx=UserCtx}=Req, Db) ->
+    ok = couch_httpd:verify_permission(DbName, UserCtx, <<"read">>),
     {Fields} = couch_httpd:json_body_obj(Req),
     case proplists:get_value(<<"keys">>, Fields, nil) of
     nil ->
@@ -521,7 +528,8 @@ db_req(#httpd{method='GET',path_parts=[_,<<"_all_docs_by_seq">>]}=Req, Db) ->
 db_req(#httpd{path_parts=[_,<<"_all_docs_by_seq">>]}=Req, _Db) ->
     send_method_not_allowed(Req, "GET,HEAD");
 
-db_req(#httpd{method='POST',path_parts=[_,<<"_missing_revs">>]}=Req, Db) ->
+db_req(#httpd{method='POST',path_parts=[DbName,<<"_missing_revs">>],user_ctx=UserCtx}=Req, Db) ->
+    ok = couch_httpd:verify_permission(DbName, UserCtx, <<"read">>),
     {JsonDocIdRevs} = couch_httpd:json_body_obj(Req),
     JsonDocIdRevs2 = [{Id, [couch_doc:parse_rev(RevStr) || RevStr <- RevStrs]} || {Id, RevStrs} <- JsonDocIdRevs],
     {ok, Results} = couch_db:get_missing_revs(Db, JsonDocIdRevs2),
@@ -545,13 +553,15 @@ db_req(#httpd{method='GET',path_parts=[_,<<"_admins">>]}=Req, Db) ->
 db_req(#httpd{path_parts=[_,<<"_admins">>]}=Req, _Db) ->
     send_method_not_allowed(Req, "PUT,GET");
 
-db_req(#httpd{method='PUT',path_parts=[_,<<"_revs_limit">>]}=Req,
+db_req(#httpd{method='PUT',path_parts=[DbName,<<"_revs_limit">>],user_ctx=UserCtx}=Req,
         Db) ->
+    ok = couch_httpd:verify_permission(DbName, UserCtx, <<"write">>),
     Limit = couch_httpd:json_body(Req),
     ok = couch_db:set_revs_limit(Db, Limit),
     send_json(Req, {[{<<"ok">>, true}]});
 
-db_req(#httpd{method='GET',path_parts=[_,<<"_revs_limit">>]}=Req, Db) ->
+db_req(#httpd{method='GET',path_parts=[DbName,<<"_revs_limit">>],user_ctx=UserCtx}=Req, Db) ->
+    ok = couch_httpd:verify_permission(DbName, UserCtx, <<"read">>),
     send_json(Req, couch_db:get_revs_limit(Db));
 
 db_req(#httpd{path_parts=[_,<<"_revs_limit">>]}=Req, _Db) ->
@@ -680,7 +690,8 @@ all_docs_view(Req, Db, Keys) ->
         end
     end).
 
-db_doc_req(#httpd{method='DELETE'}=Req, Db, DocId) ->
+db_doc_req(#httpd{method='DELETE',user_ctx=UserCtx}=Req, Db, DocId) ->
+    ok = couch_httpd:verify_permission(Db#db.name, UserCtx, <<"write">>),
     % check for the existence of the doc to handle the 404 case.
     couch_doc_open(Db, DocId, nil, []),
     case couch_httpd:qs_value(Req, "rev") of
@@ -690,7 +701,8 @@ db_doc_req(#httpd{method='DELETE'}=Req, Db, DocId) ->
         update_doc(Req, Db, DocId, {[{<<"_rev">>, ?l2b(Rev)},{<<"_deleted">>,true}]})
     end;
 
-db_doc_req(#httpd{method='GET'}=Req, Db, DocId) ->
+db_doc_req(#httpd{method='GET',user_ctx=UserCtx}=Req, Db, DocId) ->
+    ok = couch_httpd:verify_permission(Db#db.name, UserCtx, <<"read">>),
     #doc_query_args{
         show = Format,
         rev = Rev,
@@ -740,7 +752,8 @@ db_doc_req(#httpd{method='GET'}=Req, Db, DocId) ->
         couch_httpd_show:handle_doc_show(Req, DesignName, ShowName, DocId, Db)
     end;
 
-db_doc_req(#httpd{method='POST'}=Req, Db, DocId) ->
+db_doc_req(#httpd{method='POST',user_ctx=UserCtx}=Req, Db, DocId) ->
+    ok = couch_httpd:verify_permission(Db#db.name, UserCtx, <<"write">>),
     couch_doc:validate_docid(DocId),
     case couch_httpd:header_value(Req, "content-type") of
     "multipart/form-data" ++  _Rest ->
@@ -778,7 +791,8 @@ db_doc_req(#httpd{method='POST'}=Req, Db, DocId) ->
         {rev, couch_doc:rev_to_str(NewRev)}
     ]});
 
-db_doc_req(#httpd{method='PUT'}=Req, Db, DocId) ->
+db_doc_req(#httpd{method='PUT',user_ctx=UserCtx}=Req, Db, DocId) ->
+    ok = couch_httpd:verify_permission(Db#db.name, UserCtx, <<"write">>),
     couch_doc:validate_docid(DocId),
     Json = couch_httpd:json_body(Req),
     case couch_httpd:qs_value(Req, "batch") of
@@ -796,7 +810,8 @@ db_doc_req(#httpd{method='PUT'}=Req, Db, DocId) ->
         update_doc(Req, Db, DocId, Json, [{"Location", Location}])
     end;
 
-db_doc_req(#httpd{method='COPY'}=Req, Db, SourceDocId) ->
+db_doc_req(#httpd{method='COPY',user_ctx=UserCtx}=Req, Db, SourceDocId) ->
+    ok = couch_httpd:verify_permission(Db#db.name, UserCtx, <<"write">>),
     SourceRev =
     case extract_header_rev(Req, couch_httpd:qs_value(Req, "rev")) of
         missing_rev -> nil;

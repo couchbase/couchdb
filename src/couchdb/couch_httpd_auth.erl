@@ -67,7 +67,25 @@ default_authentication_handler(Req) ->
         true ->
             Req#httpd{user_ctx=#user_ctx{name=?l2b(User), roles=[<<"_admin">>]}};
         false ->
-            throw({unauthorized, <<"Name or password is incorrect.">>})
+            % Look up user from db
+            DbName = couch_config:get("couch_httpd_auth", "authentication_db"),
+            ensure_users_db_exists(?l2b(DbName)),
+            UserDb = case couch_db:open(?l2b(DbName), [{user_ctx, #user_ctx{roles=[<<"_admin">>]}}]) of
+                {ok, Db} -> Db
+            end,
+            UserDoc = case get_user(UserDb, ?l2b(User)) of
+                nil -> [];
+                Result -> Result
+            end,
+            UserSalt = proplists:get_value(<<"salt">>, UserDoc, <<>>),
+            PasswordHash = hash_password(?l2b(Pass), UserSalt),
+            case proplists:get_value(<<"password_sha">>, UserDoc, nil) of
+                ExpectedHash when ExpectedHash == PasswordHash ->
+                    Req#httpd{user_ctx=#user_ctx{name=?l2b(User),
+                        roles=proplists:get_value(<<"roles">>, UserDoc, [])}};
+                _ ->
+                    throw({unauthorized, <<"Name or password is incorrect.">>})
+            end
         end;
     nil ->
         case couch_server:has_admins() of
