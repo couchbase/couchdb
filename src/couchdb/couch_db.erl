@@ -264,14 +264,17 @@ group_alike_docs([Doc|Rest], [Bucket|RestBuckets]) ->
     end.
 
 
-validate_doc_update(#db{user_ctx=UserCtx, admins=Admins},
-        #doc{id= <<"_design/",_/binary>>}, _GetDiskDocFun) ->
+validate_doc_update(#db{user_ctx=UserCtx, admins=Admins}=Db,
+        #doc{id= <<"_design/",_/binary>>}=Doc, GetDiskDocFun) ->
     UserNames = [UserCtx#user_ctx.name | UserCtx#user_ctx.roles],
     % if the user is a server admin or db admin, allow the save
     case length(UserNames -- [<<"_admin">> | Admins]) == length(UserNames) of
     true ->
         % not an admin
-        {unauthorized, <<"You are not a server or database admin.">>};
+        case couch_config:get("couchdb", "validate_design_docs", "false") of
+            "true" -> validate_doc_update0(Db, Doc, GetDiskDocFun);
+            _ -> {unauthorized, <<"You are not a server or database admin.">>}
+        end;
     false ->
         ok
     end;
@@ -280,6 +283,9 @@ validate_doc_update(#db{validate_doc_funs=[]}, _Doc, _GetDiskDocFun) ->
 validate_doc_update(_Db, #doc{id= <<"_local/",_/binary>>}, _GetDiskDocFun) ->
     ok;
 validate_doc_update(Db, Doc, GetDiskDocFun) ->
+    validate_doc_update0(Db, Doc, GetDiskDocFun).
+
+validate_doc_update0(Db, Doc, GetDiskDocFun) ->
     DiskDoc = GetDiskDocFun(),
     JsonCtx = couch_util:json_user_ctx(Db),
     try [case Fun(Doc, DiskDoc, JsonCtx) of
