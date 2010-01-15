@@ -63,8 +63,17 @@ handle_sleep_req(#httpd{method='GET'}=Req) ->
 handle_sleep_req(Req) ->
     send_method_not_allowed(Req, "GET,HEAD").
 
-handle_all_dbs_req(#httpd{method='GET'}=Req) ->
-    {ok, DbNames} = couch_server:all_databases(),
+handle_all_dbs_req(#httpd{method='GET',user_ctx=#user_ctx{name=Name,roles=Roles}}=Req) ->
+    {ok, DbNames} = case lists:member(<<"_admin">>, Roles) of
+        true -> couch_server:all_databases();
+        _ ->
+            case Name of
+                null -> {ok, []};
+                _ ->
+                    Prefix = couch_httpd:username_to_prefix(Name),
+                    couch_server:all_databases(?b2l(Prefix))
+            end
+    end,
     send_json(Req, DbNames);
 handle_all_dbs_req(Req) ->
     send_method_not_allowed(Req, "GET,HEAD").

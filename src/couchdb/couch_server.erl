@@ -15,7 +15,7 @@
 -behaviour(application).
 
 -export([start/0,start/1,start/2,stop/0,stop/1,restart/0]).
--export([open/2,create/2,delete/2,all_databases/0,get_version/0]).
+-export([open/2,create/2,delete/2,all_databases/0,all_databases/1,get_version/0]).
 -export([init/1, handle_call/3,sup_start_link/0]).
 -export([handle_cast/2,code_change/3,handle_info/2,terminate/2]).
 -export([dev_start/0,is_admin/2,has_admins/0,get_stats/0]).
@@ -168,10 +168,11 @@ terminate(Reason, _Srv) ->
     couch_util:terminate_linked(Reason),
     ok.
 
-all_databases() ->
+all_databases() -> all_databases("").
+all_databases(Prefix) ->
     {ok, #server{root_dir=Root}} = gen_server:call(couch_server, get_server),
     Filenames =
-    filelib:fold_files(Root, "^[a-z0-9\\_\\$()\\+\\-]*[\\.]couch$", true,
+    filelib:fold_files(Root ++ "/" ++ Prefix, "^[a-z0-9\\_\\$()\\+\\-]*[\\.]couch$", true,
         fun(Filename, AccIn) ->
             case Filename -- Root of
             [$/ | RelativeFilename] -> ok;

@@ -17,6 +17,7 @@
 
 -export([header_value/2,header_value/3,qs_value/2,qs_value/3,qs/1,path/1,absolute_uri/2,body_length/1]).
 -export([verify_is_server_admin/1,verify_permission/3,unquote/1,quote/1,recv/2,recv_chunked/4,error_info/1]).
+-export([username_to_prefix/1]).
 -export([parse_form/1,json_body/1,json_body_obj/1,body/1,doc_etag/1, make_etag/1, etag_respond/3]).
 -export([primary_header_value/2,partition/1,serve_file/3, server_header/0]).
 -export([start_chunked_response/3,send_chunk/2]).
@@ -373,6 +374,11 @@ verify_is_server_admin(#httpd{user_ctx=#user_ctx{roles=Roles}}) ->
     false -> throw({unauthorized, <<"You are not a server admin.">>})
     end.
 
+username_to_prefix(Name) ->
+    NameSize = size(Name),
+    <<NameMd5_0:3/binary, NameMd5_1:3/binary, _/binary>> = ?l2b(couch_util:to_hex(crypto:md5(Name))),
+    <<"u/", NameMd5_0:3/binary, "/", NameMd5_1:3/binary, "/", Name:NameSize/binary, "/">>.
+
 verify_permission(DbName, #user_ctx{name=Name, roles=Roles}, _Permission) ->
     case lists:member(<<"_admin">>, Roles) of
         true ->
@@ -381,9 +387,7 @@ verify_permission(DbName, #user_ctx{name=Name, roles=Roles}, _Permission) ->
             case Name of
                 null -> throw({unauthorized, "Please authenticate."});
                 _ ->
-                    NameSize = size(Name),
-                    <<NameMd5_0:3/binary, NameMd5_1:3/binary, _/binary>> = ?l2b(couch_util:to_hex(crypto:md5(Name))),
-                    Prefix = <<"u/", NameMd5_0:3/binary, "/", NameMd5_1:3/binary, "/", Name:NameSize/binary, "/">>,
+                    Prefix = username_to_prefix(Name),
                     PrefixSize = size(Prefix),
                     case DbName of
                         <<Prefix:PrefixSize/binary, _Suffix/binary>> ->
