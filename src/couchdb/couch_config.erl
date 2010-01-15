@@ -70,7 +70,7 @@ set(Section, Key, Value) ->
 set(Section, Key, Value, Persist) when is_binary(Section) and is_binary(Key)  ->
     ?MODULE:set(?b2l(Section), ?b2l(Key), Value, Persist);
 set(Section, Key, Value, Persist) ->
-    gen_server:call(?MODULE, {set, Section, Key, Value, Persist}).
+    gen_server:call(?MODULE, {set, Section, Key, Value, Persist}, 60000).
 
 
 delete(Section, Key) when is_binary(Section) and is_binary(Key) ->
