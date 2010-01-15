@@ -214,7 +214,7 @@ start_couchdb () {
         touch $PID_FILE
         interactive_option="+Bd -noinput"
     fi
-    command="`%ICU_CONFIG% --invoke` \
+    command="env \"LD_LIBRARY_PATH=${LD_LIBRARY_PATH}\" \
         %ERL% $interactive_option -smp auto -sasl errlog_type error +K true \
         -pa %localerlanglibdir%/%couchdbebindir% \
             %localerlanglibdir%/%mochiwebebindir% \
