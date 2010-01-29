@@ -3,7 +3,8 @@
 -export([lookup/2, within/2, intersect/2, disjoint/2, insert/2, area/1,
          merge_mbr/2, find_min_nth/1, find_min_nth2/1, find_min_nth3/1,
          is_leaf_node/1, find_area_min_nth/1, partition_leaf_node/1,
-         calc_nodes_mbr/1, calc_mbr/1, best_split/1]).
+         calc_nodes_mbr/1, calc_mbr/1, best_split/1, minimal_overlap/2,
+         calc_overlap/2, minimal_coverage/2]).
 
 % The bounding box coordinate order follows the GeoJSON specification (http://geojson.org/): {x-low, y-low, x-high, y-high}
 
@@ -80,7 +81,7 @@ insert({Mbr, Id}, {}) ->
 
 insert(NewNode, Tree) ->
     {TreeMbr, Entries} = Tree,
-    io:format("Entries: ~p~n", [Entries]),
+    %io:format("Entries: ~p~n", [Entries]),
     NodeSize = length(Entries),
     IsLeafNode = is_leaf_node(Entries),
     %{_Mbr, ChildNodes} = Tree,
@@ -91,23 +92,30 @@ insert(NewNode, Tree) ->
             NewLeafNode = {NewLeafNodeMbr, Entries ++ [NewNode]},
             if
                 NodeSize < ?MAX_FILLED ->
-                    io:format("New leaf node: ~p~n", [NewLeafNode]),
+                    %io:format("New leaf node: ~p~n", [NewLeafNode]),
                     NewLeafNode;
-                    %NewMbr = merge_mbr(TreeMbr, element(1, NewNode)),
-                    %{NewMbr, Entries ++ [NewNode]};
                 true ->
-                    % XXX vmx: split nodes etc.
                     Partition = partition_leaf_node(NewLeafNode),
-                    io:format("Partition: ~p~n", [Partition]),
+                    %io:format("Partition: ~p~n", [Partition]),
                     SplittedNodes = best_split(Partition),
                     case SplittedNodes of
-                        tie ->
-                            do_something;
+                        {tie, PartitionMbrs} ->
+                            SplittedNodes2 = minimal_overlap(Partition,
+                                                             PartitionMbrs),
+                            case SplittedNodes2 of
+                                tie ->
+                                    SplittedNodes3 = minimal_coverage(
+                                                       Partition,
+                                                       PartitionMbrs),
+                                    [{Mbr1, _}, {Mbr2, _}] = SplittedNodes3,
+                                    {merge_mbr(Mbr1, Mbr2), SplittedNodes3};
+                                _ ->
+                                    [{Mbr1, _}, {Mbr2, _}] = SplittedNodes2,
+                                    {merge_mbr(Mbr1, Mbr2), SplittedNodes2}
+                            end;
                         _ ->
-                            io:format("Split nodes into: ~p~n", [SplittedNodes]),
-                            io:format("Is list? ~p~n", [is_list(SplittedNodes)]),
+                            %io:format("Split nodes into: ~p~n", [SplittedNodes]),
                             [{Mbr1, _}, {Mbr2, _}] = SplittedNodes,
-                            io:format("Mbr1/2: ~p/~p~n", [Mbr1, Mbr2]),
                             {merge_mbr(Mbr1, Mbr2), SplittedNodes}
                     end
             end;
@@ -132,9 +140,6 @@ insert(NewNode, Tree) ->
             SubTree = lists:nth(MinPos, Entries),
             %{_Area, NewMbr} = lists:nth(MinPos, Expanded),
             NewInnerNode = insert(NewNode, SubTree),
-            %io:format("NewInnerNode is list? ~p~n", [element(1, NewInnerNode)]),
-            io:format("NewNode ~p~n", [NewNode]),
-            io:format("NewInnerNode is list? ~p~n", [NewInnerNode]),
             NewMbr = merge_mbr(TreeMbr, element(1, NewInnerNode)),
             {A, B} = lists:split(MinPos-1, Entries),
             {NewMbr, A ++ [NewInnerNode] ++ tl(B)}
@@ -260,19 +265,56 @@ calc_mbr([], Acc) ->
 
 
 best_split({PartW, PartS, PartE, PartN}) ->
+    MbrW = calc_nodes_mbr(PartW),
+    MbrE = calc_nodes_mbr(PartE),
+    MbrS = calc_nodes_mbr(PartS),
+    MbrN = calc_nodes_mbr(PartN),
     MaxWE = max(length(PartW), length(PartE)),
     MaxSN = max(length(PartS), length(PartN)),
     if
         MaxWE < MaxSN ->
-            MbrW = calc_nodes_mbr(PartW),
-            MbrE = calc_nodes_mbr(PartE),
             [{MbrW, PartW}, {MbrE, PartE}];
         MaxWE > MaxSN ->
-            MbrS = calc_nodes_mbr(PartS),
-            MbrN = calc_nodes_mbr(PartN),
+            [{MbrS, PartS}, {MbrN, PartN}];
+        true ->
+            % MBRs are needed for further calculation
+            {tie,  {MbrW, MbrS, MbrE, MbrN}}
+    end.
+
+
+minimal_overlap({PartW, PartS, PartE, PartN}, {MbrW, MbrS, MbrE, MbrN}) ->
+    OverlapWE = area(calc_overlap(MbrW, MbrE)),
+    OverlapSN = area(calc_overlap(MbrS, MbrN)),
+    %io:format("overlap: ~p|~p~n", [OverlapWE, OverlapSN]),
+    if
+        OverlapWE < OverlapSN ->
+            [{MbrW, PartW}, {MbrE, PartE}];
+        OverlapWE > OverlapSN ->
             [{MbrS, PartS}, {MbrN, PartN}];
         true ->
             tie
+    end.
+
+minimal_coverage({PartW, PartS, PartE, PartN}, {MbrW, MbrS, MbrE, MbrN}) ->
+    CoverageWE = area(MbrW) + area(MbrE),
+    CoverageSN = area(MbrS) + area(MbrN),
+    %io:format("coverage: ~p|~p~n", [CoverageWE, CoverageSN]),
+    if
+        CoverageWE < CoverageSN ->
+            [{MbrW, PartW}, {MbrE, PartE}];
+        true ->
+            [{MbrS, PartS}, {MbrN, PartN}]
+    end.
+
+calc_overlap(Mbr1, Mbr2) ->
+    IsDisjoint = disjoint(Mbr1, Mbr2),
+    if
+        not IsDisjoint ->
+            {W1, S1, E1, N1} = Mbr1,
+            {W2, S2, E2, N2} = Mbr2,
+            {max(W1, W2), max(S1, S2), min(E1, E2), min(N1, N2)};
+        true ->
+            {0, 0, 0, 0}
     end.
 
 
