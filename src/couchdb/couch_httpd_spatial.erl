@@ -20,7 +20,12 @@
 handle_spatial_req(#httpd{method='GET',
         path_parts=[_, _, DName, _, Query]}=Req, Db, _DDoc) ->
     ?LOG_DEBUG("Spatial query (~p): ~p", [DName, Query]),
-    Foo = couch_spatial:foo(Query),
+    %Foo = couch_spatial:foo(Query),
+    %{Seq, _Rest} = string:to_integer(Query),
+    %{Seq, _Rest} = list_to_integer(Query),
+    %{Seq, _Rest} = list_to_integer(binary_to_list(Query)),
+    Seq = list_to_integer(binary_to_list(Query)),
+    Foo = couch_spatial:get_docs(Db, Seq),
     send_json(Req, {[{<<"query1">>, Foo}]});
 
 handle_spatial_req(Req, _Db, _DDoc) ->
