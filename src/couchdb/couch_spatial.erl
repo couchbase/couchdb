@@ -13,35 +13,35 @@
 -module(couch_spatial).
 -behaviour(gen_server).
 
--export([start_link/0, init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
+-export([start_link/0, init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3,foo/1]).
 
 
 -include("couch_db.hrl").
 
 
--record(server,{
-    root_dir = []}).
+-record(spatial,{
+    count=0}).
 
 start_link() ->
     ?LOG_DEBUG("Spatial daemon: starting link.", []),
     gen_server:start_link({local, couch_spatial}, couch_spatial, [], []).
 
+foo(String) ->
+    gen_server:call(couch_spatial, {do_foo, String}).
 
 init([]) ->
-    {ok, []}.
+    {ok, #spatial{}}.
 
 
 terminate(Reason, _Srv) ->
-    couch_util:terminate_linked(Reason),
     ok.
 
 
-handle_call({get_group_server, DbName,
-    #group{name=GroupId,sig=Sig}=Group}, _From, #server{root_dir=Root}=Server) ->
-    {reply, {ok, []}, Server}.
+handle_call({do_foo,String}, _From, #spatial{count=Count}) ->
+    {reply, ?l2b(lists:flatten(io_lib:format("~s ~w", [String, Count]))), #spatial{count=Count+1}}.
 
-handle_cast({reset_indexes, DbName}, #server{root_dir=Root}=Server) ->
-    {noreply, Server}.
+handle_cast(foo,State) ->
+    {noreply, State}.
 
 handle_info(Msg, Server) ->
     {noreply, Server}.

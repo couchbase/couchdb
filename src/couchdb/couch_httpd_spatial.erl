@@ -20,7 +20,8 @@
 handle_spatial_req(#httpd{method='GET',
         path_parts=[_, _, DName, _, Query]}=Req, Db, _DDoc) ->
     ?LOG_DEBUG("Spatial query (~p): ~p", [DName, Query]),
-    send_json(Req, {[{<<"query">>, Query}]});
+    Foo = couch_spatial:foo(Query),
+    send_json(Req, {[{<<"query1">>, Foo}]});
 
 handle_spatial_req(Req, _Db, _DDoc) ->
     send_method_not_allowed(Req, "GET,HEAD").
