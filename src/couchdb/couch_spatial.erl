@@ -48,8 +48,9 @@ terminate(Reason, _Srv) ->
 handle_call({do_foo,String}, _From, #spatial{count=Count}) ->
     {reply, ?l2b(lists:flatten(io_lib:format("~s ~w", [String, Count]))), #spatial{count=Count+1}};
 
-handle_call({do_get_docs, Db, Seq}, _From, #spatial{tree=Tree}) ->
-    {ok, A, NewTree} = couch_db:enum_docs_since(Db, Seq, fun(DocInfo, _, TreeCurrent) ->
+handle_call({do_get_docs, Db, SeqFromQuery}, _From, #spatial{tree=Tree, seq=Seq}) ->
+    {ok, A, {NewTree, NewSeq}} = couch_db:enum_docs_since(Db, Seq,
+            fun(DocInfo, _, {TreeCurrent, _SeqCurrent}) ->
         {doc_info, DocId, DocSeq, _RevInfo} = DocInfo,
         %?LOG_DEBUG("doc: id:~p, seq:~p~n", [DocId, DocSeq]),
         {ok, Doc} = couch_db:open_doc(Db, DocInfo),
@@ -60,20 +61,22 @@ handle_call({do_get_docs, Db, Seq}, _From, #spatial{tree=Tree}) ->
         %Loc /= undefined ->
         is_list(Loc) ->
             TreeUpdated = insert_point(TreeCurrent, DocId, list_to_tuple(Loc)),
-            {ok, TreeUpdated};
+            {ok, {TreeUpdated, DocSeq}};
         true ->
-            {ok, TreeCurrent}
+            {ok, {TreeCurrent, DocSeq}}
         end
     end,
-    Tree, []),
-    {reply, ?l2b(io_lib:format("hello couch (seq: ~w, A: ~p, B: ~p)",
-                               [Seq, A, NewTree])), #spatial{tree=NewTree}}.
+    {Tree, Seq}, []),
+    ?LOG_DEBUG("newtree:~p, newseq:~p~n", [NewTree, NewSeq]),
+    {reply, ?l2b(io_lib:format("hello couch (newseq: ~w, A: ~p, B: ~p)",
+                               [NewSeq, A, NewTree])), #spatial{tree=NewTree,
+                                                             seq=NewSeq}}.
 
 insert_point(Tree, DocId, {X, Y}) ->
     ?LOG_DEBUG("Insert (~s) point (~w, ~w) into tree~n", [DocId, X, Y]),
-    ?LOG_DEBUG("Tree old:~p", [Tree]),
+%    ?LOG_DEBUG("Tree old:~p", [Tree]),
     TreeUpdated = vtree:insert({{X, Y, X, Y}, DocId}, Tree),
-    ?LOG_DEBUG("Tree new:~p~n", [TreeUpdated]),
+%    ?LOG_DEBUG("Tree new:~p~n", [TreeUpdated]),
     TreeUpdated.
 
 handle_cast(foo,State) ->
