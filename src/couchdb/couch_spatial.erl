@@ -47,16 +47,8 @@ terminate(Reason, _Srv) ->
 handle_call({do_foo,String}, _From, #spatial{count=Count}) ->
     {reply, ?l2b(lists:flatten(io_lib:format("~s ~w", [String, Count]))), #spatial{count=Count+1}};
 
-%handle_call({do_get_docs, Seq}, _From, #spatial{seq=OldSeq}) ->
 handle_call({do_get_docs, Db, Seq}, _From, _State) ->
-    %DocsFun = fun(A, B, C) ->
-    %    5
-    %end,
-%    {ok, A, B} = couch_db:enum_docs_since(Db, Seq, fun(DocInfo, _, ChangesProcessed) ->
-%        {ok, ChangesProcessed+1}
-%    end,
     {ok, A, Acc} = couch_db:enum_docs_since(Db, Seq, fun(DocInfo, _, DocInfoAcc) ->
-        %{ok, #doc_info{id=Id, revs=[#rev_info{deleted=false, rev=Rev}|_]}} = DocInfo,
         {doc_info, DocId, DocSeq, _RevInfo} = DocInfo,
         %?LOG_DEBUG("doc: id:~p, seq:~p~n", [DocId, DocSeq]),
         {ok, Doc} = couch_db:open_doc(Db, DocInfo),
@@ -70,11 +62,7 @@ handle_call({do_get_docs, Db, Seq}, _From, _State) ->
             {ok, DocInfoAcc ++ [{DocId, DocSeq}]};
         true ->
             {ok, DocInfoAcc}
-        end,
-        %?LOG_DEBUG("loc decoded: ~p~n", [?JSON_DECODE(?b2l(Loc))]),
-        %insert_point("spatial", {}
-        %{ok, DocInfoAcc ++ [DocInfo]}
-        {ok, DocInfoAcc ++ [{DocId, DocSeq}]}
+        end
     end,
     [], []),
     {reply, ?l2b(io_lib:format("hello couch (seq: ~w, A: ~p, B: ~p)",
