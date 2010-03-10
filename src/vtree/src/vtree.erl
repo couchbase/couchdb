@@ -17,16 +17,19 @@
 
 
 
-lookup(_Bbox, []) ->
-    [];
+lookup(_Bbox, {}) ->
+    {};
 
 lookup(Bbox, Tree) ->
+    {_, Nodes} = Tree,
     Entries = lists:foldl(
         fun(Entry, Acc) ->
             case Entry of
                 % Entry of an inner node
                 {_Mbr, ChildNodes} when is_list(ChildNodes) ->
-                    lookup(Bbox, ChildNodes);
+%                    lookup(Bbox, ChildNodes);
+%                    lookup(Bbox, Entry);
+                    Acc ++ lookup(Bbox, Entry);
                 % Entry of a leaf node
                 {Mbr, _} ->
                     Disjoint = disjoint(Mbr, Bbox),
@@ -40,12 +43,14 @@ lookup(Bbox, Tree) ->
                     io:format("Tree/node is invalid"),
                     error
             end
-        end, [], Tree),
+%        end, [], Tree),
+        end, [], Nodes),
     Entries.
 
 
 % Tests if Inner is within Outer box
 within(Inner, Outer) ->
+%    io:format("(within) Inner, Outer: ~p, ~p~n", [Inner, Outer]),
     {IW, IS, IE, IN} = Inner,
     {OW, OS, OE, ON} = Outer,
     (IW >= OW) and (IS >= OS) and (IE =< OE) and (IN =< ON).
@@ -72,6 +77,7 @@ intersect(Mbr1, Mbr2) ->
 
 % Returns true if two MBRs are spatially disjoint
 disjoint(Mbr1, Mbr2) ->
+    %io:format("(disjoint) Mbr1, Mbr2: ~p, ~p~n", [Mbr1, Mbr2]),
     not (within(Mbr1, Mbr2) or within(Mbr2, Mbr1) or intersect(Mbr1, Mbr2)).
 
 
@@ -96,10 +102,11 @@ insert(NewNode, Tree) ->
                     NewLeafNode;
                 true ->
                     Partition = partition_leaf_node(NewLeafNode),
-                    %io:format("Partition: ~p~n", [Partition]),
+                    %io:format("(insert) Partition: ~p~n", [Partition]),
                     SplittedNodes = best_split(Partition),
                     case SplittedNodes of
                         {tie, PartitionMbrs} ->
+                            %io:format("(insert) PartitionMbrs: ~p~n", [PartitionMbrs]),
                             SplittedNodes2 = minimal_overlap(Partition,
                                                              PartitionMbrs),
                             case SplittedNodes2 of
@@ -223,11 +230,48 @@ is_leaf_node([H|_T]) ->
     is_binary(NodeId).
 
 
+% XXX vmx: Partition problem. If one node surrounds all others, they might be all put into the "else" case.
+%(partition_leaf_node) Mbr: {47,218,580,947}
+%(partition_leaf_node) Nodes: [{{47,218,580,947},<<"Node48">>},
+%                              {{517,580,476,692},<<"Node152">>},
+%                              {{424,749,532,922},<<"Node160">>},
+%                              {{941,788,481,753},<<"Node196">>},
+%                              {{551,827,544,754},<<"Node226">>}]
+%(partition_leaf_node) Partitioned: {[],[],
+%                                    [{{47,218,580,947},<<"Node48">>},
+%                                     {{517,580,476,692},<<"Node152">>},
+%                                     {{424,749,532,922},<<"Node160">>},
+%                                     {{941,788,481,753},<<"Node196">>},
+%                                     {{551,827,544,754},<<"Node226">>}],
+%                                    [{{47,218,580,947},<<"Node48">>},
+%                                     {{517,580,476,692},<<"Node152">>},
+%                                     {{424,749,532,922},<<"Node160">>},
+%                                     {{941,788,481,753},<<"Node196">>},
+%                                     {{551,827,544,754},<<"Node226">>}]}
+% Similar problem here:
+% (partition_leaf_node) Mbr: {59,444,990,946}
+%(partition_leaf_node) Nodes: [{{93,444,724,946},<<"Node1">>},
+%                              {{210,698,160,559},<<"Node4">>},
+%                              {{215,458,422,6},<<"Node5">>},
+%                              {{563,476,401,310},<<"Node6">>},
+%                              {{59,579,990,331},<<"Node7">>}]
+%(partition_leaf_node) Partitioned: {[{{93,444,724,946},<<"Node1">>},
+%                                     {{210,698,160,559},<<"Node4">>},
+%                                     {{215,458,422,6},<<"Node5">>},
+%                                     {{563,476,401,310},<<"Node6">>},
+%                                     {{59,579,990,331},<<"Node7">>}],
+%                                    [{{93,444,724,946},<<"Node1">>},
+%                                     {{210,698,160,559},<<"Node4">>},
+%                                     {{215,458,422,6},<<"Node5">>},
+%                                     {{563,476,401,310},<<"Node6">>},
+%                                     {{59,579,990,331},<<"Node7">>}],
+%                                    [],[]}
 % Partitions a leaf node into for nodes (one for every direction)
 partition_leaf_node({Mbr, Nodes}) ->
     {MbrW, MbrS, MbrE, MbrN} = Mbr,
-    %io:format("MBRs: ~p, ~p, ~p, ~p~n", [MbrW, MbrS, MbrE, MbrN]),
-    lists:foldl(
+%    io:format("(partition_leaf_node) Mbr: ~p~n", [Mbr]),
+%    io:format("(partition_leaf_node) Nodes: ~p~n", [Nodes]),
+    Tmp = lists:foldl(
         fun(Node,  {AccW, AccS, AccE, AccN}) ->
             {{W, S, E, N}, _Id} = Node,
             if
@@ -247,13 +291,32 @@ partition_leaf_node({Mbr, Nodes}) ->
                     NewAccN = AccN ++ [Node]
             end,
             {NewAccW, NewAccS, NewAccE, NewAccN}
-        end, {[],[],[],[]}, Nodes).
+        end, {[],[],[],[]}, Nodes),
+%    io:format("(partition_leaf_node) Partitioned: ~p~n", [Tmp]),
+    % XXX vmx This is a hack! A better partitioning algorithm should be used.
+    %     If W and S or E and N is empty, split node in the middle
+    case Tmp of
+        {[], [], Es, Ns} ->
+%            io:format("(partition_leaf_node) Do the weird hack~n", []),
+            {NewW, NewE} = lists:split(length(Es) div 2, Es),
+            {NewS, NewN} = lists:split(length(Ns) div 2, Ns),
+            {NewW, NewS, NewE, NewN};
+        {Ws, Ss, [], []} ->
+%            io:format("(partition_leaf_node) Do the weird hack~n", []),
+            {NewW, NewE} = lists:split(length(Ws) div 2, Ws),
+            {NewS, NewN} = lists:split(length(Ss) div 2, Ss),
+            {NewW, NewS, NewE, NewN};
+        _ ->
+            Tmp
+    end.
 
 
 calc_nodes_mbr(Nodes) ->
     {Mbrs, _Ids} = lists:unzip(Nodes),
     calc_mbr(Mbrs).
 
+calc_mbr(Mbrs) when length(Mbrs) == 0 ->
+    error;
 calc_mbr([H|T]) ->
     calc_mbr(T, H).
 
@@ -265,6 +328,7 @@ calc_mbr([], Acc) ->
 
 
 best_split({PartW, PartS, PartE, PartN}) ->
+    %io:format("(best_split) PartW, PartS, PartE, PartN: ~p, ~p, ~p, ~p~n", [PartW, PartS, PartE, PartN]),
     MbrW = calc_nodes_mbr(PartW),
     MbrE = calc_nodes_mbr(PartE),
     MbrS = calc_nodes_mbr(PartS),
@@ -283,6 +347,7 @@ best_split({PartW, PartS, PartE, PartN}) ->
 
 
 minimal_overlap({PartW, PartS, PartE, PartN}, {MbrW, MbrS, MbrE, MbrN}) ->
+%    io:format("(minimal_overlap) MbrW, MbrS, MbrE, MbrN: ~p, ~p, ~p, ~p~n", [MbrW, MbrS, MbrE, MbrN]),
     OverlapWE = area(calc_overlap(MbrW, MbrE)),
     OverlapSN = area(calc_overlap(MbrS, MbrN)),
     %io:format("overlap: ~p|~p~n", [OverlapWE, OverlapSN]),
@@ -307,6 +372,7 @@ minimal_coverage({PartW, PartS, PartE, PartN}, {MbrW, MbrS, MbrE, MbrN}) ->
     end.
 
 calc_overlap(Mbr1, Mbr2) ->
+%    io:format("(calc_overlap) Mbr1, Mbr2: ~p, ~p~n", [Mbr1, Mbr2]),
     IsDisjoint = disjoint(Mbr1, Mbr2),
     if
         not IsDisjoint ->
