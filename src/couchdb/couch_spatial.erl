@@ -15,7 +15,7 @@
 
 -export([start_link/0, init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
--export([foo/1, get_docs/2]).
+-export([foo/1, update_tree/1]).
 
 
 -include("couch_db.hrl").
@@ -33,9 +33,9 @@ start_link() ->
 foo(String) ->
     gen_server:call(couch_spatial, {do_foo, String}).
 
-get_docs(Db, Seq) ->
+update_tree(Db) ->
     %gen_server:call(couch_spatial, {do_get_docs, Seq}).
-    gen_server:call(couch_spatial, {do_get_docs, Db, Seq}).
+    gen_server:call(couch_spatial, {do_update_tree, Db}).
 
 
 init([]) ->
@@ -48,7 +48,7 @@ terminate(Reason, _Srv) ->
 handle_call({do_foo,String}, _From, #spatial{count=Count}) ->
     {reply, ?l2b(lists:flatten(io_lib:format("~s ~w", [String, Count]))), #spatial{count=Count+1}};
 
-handle_call({do_get_docs, Db, SeqFromQuery}, _From, #spatial{tree=Tree, seq=Seq}) ->
+handle_call({do_update_tree, Db}, _From, #spatial{tree=Tree, seq=Seq}) ->
     {ok, A, {NewTree, NewSeq}} = couch_db:enum_docs_since(Db, Seq,
             fun(DocInfo, _, {TreeCurrent, _SeqCurrent}) ->
         {doc_info, DocId, DocSeq, _RevInfo} = DocInfo,
@@ -69,8 +69,8 @@ handle_call({do_get_docs, Db, SeqFromQuery}, _From, #spatial{tree=Tree, seq=Seq}
     {Tree, Seq}, []),
     ?LOG_DEBUG("newtree:~p, newseq:~p~n", [NewTree, NewSeq]),
     {reply, ?l2b(io_lib:format("hello couch (newseq: ~w, A: ~p, B: ~p)",
-                               [NewSeq, A, NewTree])), #spatial{tree=NewTree,
-                                                             seq=NewSeq}}.
+                               [NewSeq, A, NewTree])),
+     #spatial{tree=NewTree, seq=NewSeq}}.
 
 insert_point(Tree, DocId, {X, Y}) ->
     ?LOG_DEBUG("Insert (~s) point (~w, ~w) into tree~n", [DocId, X, Y]),
