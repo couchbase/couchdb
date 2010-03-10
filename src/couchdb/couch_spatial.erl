@@ -15,7 +15,7 @@
 
 -export([start_link/0, init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
--export([foo/1, update_tree/1]).
+-export([foo/1, update_tree/1, bbox_search/1]).
 
 
 -include("couch_db.hrl").
@@ -37,6 +37,8 @@ update_tree(Db) ->
     %gen_server:call(couch_spatial, {do_get_docs, Seq}).
     gen_server:call(couch_spatial, {do_update_tree, Db}).
 
+bbox_search(Bbox) ->
+    gen_server:call(couch_spatial, {do_bbox_search, Bbox}).
 
 init([]) ->
     {ok, #spatial{}}.
@@ -70,7 +72,20 @@ handle_call({do_update_tree, Db}, _From, #spatial{tree=Tree, seq=Seq}) ->
     ?LOG_DEBUG("newtree:~p, newseq:~p~n", [NewTree, NewSeq]),
     {reply, ?l2b(io_lib:format("hello couch (newseq: ~w, A: ~p, B: ~p)",
                                [NewSeq, A, NewTree])),
-     #spatial{tree=NewTree, seq=NewSeq}}.
+     #spatial{tree=NewTree, seq=NewSeq}};
+
+handle_call({do_bbox_search, Bbox}, _From, State=#spatial{tree=Tree}) ->
+    ?LOG_DEBUG("bbox_search tree: ~p", [Tree]),
+    Result = vtree:lookup(Bbox, Tree),
+    ?LOG_DEBUG("bbox_search result: ~p", [Result]),
+    %{reply, Result, State}.
+    Output = lists:foldl(fun({Loc, DocId}, Acc) ->
+         % NOTE vmx: it's only a point, but we saved MBRs
+         {X, Y, _, _} = Loc,
+         Acc ++ [{[{<<"id">>, DocId}, {<<"loc">>, [X, Y]}]}]
+    end, [], Result),
+    %{reply, {[{<<"id">>, <<"augsburg">>}, {<<"loc">>, [Output, 49]}]}, State}.
+    {reply, Output, State}.
 
 insert_point(Tree, DocId, {X, Y}) ->
     ?LOG_DEBUG("Insert (~s) point (~w, ~w) into tree~n", [DocId, X, Y]),
