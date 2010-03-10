@@ -23,7 +23,8 @@
 
 -record(spatial,{
     count=0,
-    seq=0}).
+    seq=0,
+    tree={}}).
 
 start_link() ->
     ?LOG_DEBUG("Spatial daemon: starting link.", []),
@@ -47,8 +48,8 @@ terminate(Reason, _Srv) ->
 handle_call({do_foo,String}, _From, #spatial{count=Count}) ->
     {reply, ?l2b(lists:flatten(io_lib:format("~s ~w", [String, Count]))), #spatial{count=Count+1}};
 
-handle_call({do_get_docs, Db, Seq}, _From, _State) ->
-    {ok, A, Acc} = couch_db:enum_docs_since(Db, Seq, fun(DocInfo, _, DocInfoAcc) ->
+handle_call({do_get_docs, Db, Seq}, _From, #spatial{tree=Tree}) ->
+    {ok, A, NewTree} = couch_db:enum_docs_since(Db, Seq, fun(DocInfo, _, TreeCurrent) ->
         {doc_info, DocId, DocSeq, _RevInfo} = DocInfo,
         %?LOG_DEBUG("doc: id:~p, seq:~p~n", [DocId, DocSeq]),
         {ok, Doc} = couch_db:open_doc(Db, DocInfo),
@@ -58,18 +59,22 @@ handle_call({do_get_docs, Db, Seq}, _From, _State) ->
         if
         %Loc /= undefined ->
         is_list(Loc) ->
-            insert_point("spatial", DocId, list_to_tuple(Loc)),
-            {ok, DocInfoAcc ++ [{DocId, DocSeq}]};
+            TreeUpdated = insert_point(TreeCurrent, DocId, list_to_tuple(Loc)),
+            {ok, TreeUpdated};
         true ->
-            {ok, DocInfoAcc}
+            {ok, TreeCurrent}
         end
     end,
-    [], []),
+    Tree, []),
     {reply, ?l2b(io_lib:format("hello couch (seq: ~w, A: ~p, B: ~p)",
-                               [Seq, A, Acc])), #spatial{seq=Seq}}.
+                               [Seq, A, NewTree])), #spatial{tree=NewTree}}.
 
-insert_point(DbName, DocId, {X, Y}) ->
-    ?LOG_DEBUG("Insert (~s) point (~w, ~w) into '~s'~n", [DocId, X, Y, DbName]).
+insert_point(Tree, DocId, {X, Y}) ->
+    ?LOG_DEBUG("Insert (~s) point (~w, ~w) into tree~n", [DocId, X, Y]),
+    ?LOG_DEBUG("Tree old:~p", [Tree]),
+    TreeUpdated = vtree:insert({{X, Y, X, Y}, DocId}, Tree),
+    ?LOG_DEBUG("Tree new:~p~n", [TreeUpdated]),
+    TreeUpdated.
 
 handle_cast(foo,State) ->
     {noreply, State}.
