@@ -1,31 +1,28 @@
 -module(testplan).
 -export([start/0]).
 
-% XXX TODO vmx: update lookup tests to new tree structure ( {} instead of []
-%     at the root)
-
 start() ->
-%    test_within(),
-%    test_intersect(),
-%    test_disjoint(),
+    test_within(),
+    test_intersect(),
+    test_disjoint(),
     test_lookup(),
-%    test_insert(),
-%    test_area(),
-%    test_merge_mbr(),
-%    test_find_min_nth(),
-%    test_find_min_nth2(),
-%    test_find_min_nth3(),
-%    test_find_area_min_nth(),
-%    test_is_leaf_node(),
-%    test_partition_leaf_node(),
-%    test_calc_mbr(),
-%    test_calc_nodes_mbr(),
-%    test_best_split(),
-%    test_minimal_overlap(),
-%    test_minimal_coverage(),
-%    test_calc_overlap(),
-%    %profile_find_min_nth(),
-%
+    test_insert(),
+    test_area(),
+    test_merge_mbr(),
+    test_find_min_nth(),
+    test_find_min_nth2(),
+    test_find_min_nth3(),
+    test_find_area_min_nth(),
+    test_is_leaf_node(),
+    test_partition_leaf_node(),
+    test_calc_mbr(),
+    test_calc_nodes_mbr(),
+    test_best_split(),
+    test_minimal_overlap(),
+    test_minimal_coverage(),
+    test_calc_overlap(),
+    %profile_find_min_nth(),
+
     etap:end_tests().
 
 test_within() ->
