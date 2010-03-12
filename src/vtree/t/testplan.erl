@@ -1,29 +1,97 @@
 -module(testplan).
 -export([start/0]).
 
+-define(FILENAME, "/tmp/vtree.bin").
+
 start() ->
-    test_within(),
-    test_intersect(),
-    test_disjoint(),
-    test_lookup(),
-    test_insert(),
-    test_area(),
-    test_merge_mbr(),
-    test_find_min_nth(),
-    test_find_min_nth2(),
-    test_find_min_nth3(),
-    test_find_area_min_nth(),
-    test_is_leaf_node(),
-    test_partition_leaf_node(),
-    test_calc_mbr(),
-    test_calc_nodes_mbr(),
-    test_best_split(),
-    test_minimal_overlap(),
-    test_minimal_coverage(),
-    test_calc_overlap(),
-    %profile_find_min_nth(),
+%    test_within(),
+%    test_intersect(),
+%    test_disjoint(),
+%    test_lookup(),
+%    test_insert(),
+%    test_area(),
+%    test_merge_mbr(),
+%    test_find_min_nth(),
+%    test_find_min_nth2(),
+%    test_find_min_nth3(),
+%    test_find_area_min_nth(),
+%    test_is_leaf_node(),
+%    test_partition_leaf_node(),
+%    test_calc_mbr(),
+%    test_calc_nodes_mbr(),
+%    test_best_split(),
+%    test_minimal_overlap(),
+%    test_minimal_coverage(),
+%    test_calc_overlap(),
+%    %profile_find_min_nth(),
+%    test_insert2(),
 
     etap:end_tests().
+
+
+-record(node, {
+    % type = inner | leaf
+    type=leaf}).
+
+test_insert2() ->
+    etap:plan(1),
+
+    {ok, Fd} = case couch_file:open(?FILENAME, [create, overwrite]) of
+    {ok, Fd2} ->
+        {ok, Fd2};
+    {error, Reason} ->
+        io:format("ERROR: Couldn't open file (~s) for tree storage~n",
+                  [?FILENAME])
+    end,
+
+    Node1 = {{10,5,13,15}, #node{type=leaf}, <<"Node1">>},
+    Node2 = {{-18,-3,-10,-1}, #node{type=leaf}, <<"Node2">>},
+    Node3 = {{-21,2,-10,14}, #node{type=leaf}, <<"Node3">>},
+    Node4 = {{5,-32,19,-25}, #node{type=leaf}, <<"Node4">>},
+    Node5 = {{-5,-16,4,19}, #node{type=leaf}, <<"Node5">>},
+    Mbr1 = {10,5,13,15},
+    Mbr1_2 = Mbr1_2_8 = {-18,-3,13,15},
+    Mbr1_2_3 = {-21,-3,13,15},
+    Mbr1_2_3_4 = {-21,-32,19,15},
+    Mbr1_2_3_4_5 = {-21,-32,19,19},
+    Mbr1_4_5 = {-5,-32,19,19},
+    Mbr2_3 = {-21,-3,-10,14},
+    Mbr3_4 = {-21,-32,19,14},
+    Tree1Node1 = {Mbr1, #node{type=leaf}, [Node1]},
+    Tree1Node1_2 = {Mbr1_2, #node{type=leaf}, [Node1, Node2]},
+    Tree1Node1_2_3 = {Mbr1_2_3, #node{type=leaf}, [Node1, Node2, Node3]},
+    Tree1Node1_2_3_4 = {Mbr1_2_3_4, #node{type=leaf},
+                        [Node1, Node2, Node3, Node4]},
+    Tree1Node1_2_3_4_5 = {Mbr1_2_3_4_5, #node{type=inner},
+                          [{ok, {Mbr2_3, #node{type=leaf}, [Node2, Node3]}},
+                           {ok, {Mbr1_4_5, #node{type=leaf},
+                                 [Node1, Node4, Node5]}}]},
+
+    etap:is(vtree:insert2(Fd, -1, Node1), {ok, Mbr1, 0},
+            "Insert a node into an empty tree (write to disk)"),
+    etap:is(vtree:get_node(Fd, 0), {ok, Tree1Node1},
+            "Insert a node into an empty tree" ++
+            " (check if it was written correctly)"),
+    {ok, Mbr1_2, Pos2} = vtree:insert2(Fd, 0, Node2),
+    etap:is(vtree:get_node(Fd, Pos2), {ok, Tree1Node1_2}, 
+            "Insert a node into a not yet full leaf node (root node) (a)"),
+    {ok, Mbr1_2_3, Pos3} = vtree:insert2(Fd, Pos2, Node3),
+    etap:is(vtree:get_node(Fd, Pos3), {ok, Tree1Node1_2_3}, 
+            "Insert a node into a not yet full leaf node (root node) (b)"),
+    {ok, Mbr1_2_3_4, Pos4} = vtree:insert2(Fd, Pos3, Node4),
+    etap:is(vtree:get_node(Fd, Pos4), {ok, Tree1Node1_2_3_4},
+            "Insert a nodes into a then to be full leaf node (root node)"),
+    {ok, Mbr1_2_3_4_5, Pos5} = vtree:insert2(Fd, Pos4, Node5),
+    {ok, {Mbr1_2_3_4_5, #node{type=inner}, [Pos5_1, Pos5_2]}} =
+                vtree:get_node(Fd, Pos5),
+    etap:is({ok, {Mbr1_2_3_4_5, #node{type=inner},
+                  [vtree:get_node(Fd, Pos5_1), vtree:get_node(Fd, Pos5_2)]}},
+                  {ok, Tree1Node1_2_3_4_5},
+            "Insert a nodes into a full leaf node (root node)"),
+
+
+    ok.
+    
 
 test_within() ->
     etap:plan(4),
@@ -120,6 +188,14 @@ test_lookup() ->
 
 test_insert() ->
     etap:plan(9),
+    {ok, Fd} = case couch_file:open(?FILENAME, [create, overwrite]) of
+    {ok, Fd2} ->
+        {ok, Fd2};
+    {error, Reason} ->
+        io:format("ERROR: Couldn't open file (~s) for tree storage~n",
+                  [?FILENAME])
+    end,
+
     Node1 = {{10,5,13,15}, <<"Node1">>},
     Node2 = {{-18,-3,-10,-1}, <<"Node2">>},
     Node3 = {{-21,2,-10,14}, <<"Node3">>},
@@ -153,8 +229,8 @@ test_insert() ->
     Tree1Node1_2 = {Mbr1_2, [Node1, Node2]},
     Tree1Node1_2_3 = {Mbr1_2_3, [Node1, Node2, Node3]},
     Tree1Node1_2_3_4 = {Mbr1_2_3_4, [Node1, Node2, Node3, Node4]},
-    Tree1Node1_2_3_4_5 = {Mbr1_2_3_4_5, [{Mbr2_3, [Node2, Node3]},
-                                         {Mbr1_4_5, [Node1, Node4, Node5]}]},
+    Tree1Node1_2_3_4_5 = {Mbr1_2_3_4_5, [{ok, {Mbr2_3, [Node2, Node3]}},
+                                         {ok, {Mbr1_4_5, [Node1, Node4, Node5]}}]},
     Tree2 = {Mbr1_2_3_4, [{Mbr1_2, [Node1, Node2]}, {Mbr3_4, [Node3, Node4]}]},
     Tree2Node5 = {Mbr1_2_3_4_5, [{Mbr1_2, [Node1, Node2]},
                                  {Mbr3_4_5, [Node3, Node4, Node5]}
@@ -178,26 +254,38 @@ test_insert() ->
                                       [{Mbr3_7, [Node3, Node7]},
                                        {Mbr4_5_9, [Node4, Node5, Node9]}
                                       ]}]},
-    etap:is(vtree:insert(Node1, EmptyTree), Tree1Node1,
-            "Insert a node into an empty tree"),
-    etap:is(vtree:insert(Node2, Tree1Node1), Tree1Node1_2, 
+    etap:is(vtree:insert(Fd, Node1, -1), {0, Mbr1},
+            "Insert a node into an empty tree (write to disk)"),
+    etap:is(vtree:get_node(Fd, 0), {ok, Tree1Node1},
+            "Insert a node into an empty tree" ++
+            " (check if it was written correctly)"),
+    {Pos2, Mbr1_2} = vtree:insert(Fd, Node2, 0),
+    etap:is(vtree:get_node(Fd, Pos2), {ok, Tree1Node1_2}, 
             "Insert a node into a not yet full leaf node (root node)"),
-    etap:is(vtree:insert(Node4, Tree1Node1_2_3), Tree1Node1_2_3_4,
+    {Pos3, Mbr1_2_3} = vtree:insert(Fd, Node3, Pos2),
+    {Pos4, Mbr1_2_3_4} = vtree:insert(Fd, Node4, Pos3),
+    etap:is(vtree:get_node(Fd, Pos4), {ok, Tree1Node1_2_3_4},
             "Insert a nodes into a then to be full leaf node (root node)"),
-    etap:is(vtree:insert(Node5, Tree2), Tree2Node5,
-            "Insert a nodes into a not yet full leaf node (depth=2) (a)"),
-    etap:is(vtree:insert(Node8, Tree2Node6), Tree2Node8,
-            "Insert a nodes into a not yet full leaf node (depth=2) (b)"),
-    etap:is(vtree:insert(Node6, Tree2Node5), Tree2Node6,
-            "Insert a nodes into then to be full leaf node (depth=2)"),
-    etap:is(vtree:insert(Node5, Tree1Node1_2_3_4), Tree1Node1_2_3_4_5,
+%    {Pos4, Mbr1_2_3_4_5} = vtree:insert(Fd, Node5, Tree2),
+%    etap:is(vtree:get_node(Fd, Pos4), {ok, Tree2Node5},
+%            "Insert a nodes into a not yet full leaf node (depth=2) (a)"),
+
+%    etap:is(vtree:insert(Node8, Tree2Node6), Tree2Node8,
+%            "Insert a nodes into a not yet full leaf node (depth=2) (b)"),
+%    etap:is(vtree:insert(Node6, Tree2Node5), Tree2Node6,
+%            "Insert a nodes into then to be full leaf node (depth=2)"),
+    {Pos5, Mbr1_2_3_4_5} = vtree:insert(Fd, Node5, Pos4),
+    {ok, {Mbr1_2_3_4_5, [Pos5_1, Pos5_2]}} = vtree:get_node(Fd, Pos5),
+    etap:is({ok, {Mbr1_2_3_4_5, [vtree:get_node(Fd, Pos5_1),
+                                 vtree:get_node(Fd, Pos5_2)]}},
+                  {ok, Tree1Node1_2_3_4_5},
             "Insert a nodes into a full leaf node (root node)"),
-    etap:is(vtree:insert(Node7, Tree2Node6), Tree2Node7,
-            "Insert a nodes into a full leaf node (depth=2)" ++
-            "(tie on best_split occurs)"),
-    etap:is(vtree:insert(Node9, Tree2Node7b), Tree2Node9,
-            "Insert a nodes into a full leaf node (depth=2)" ++
-            " (split in WE direction)"),
+%    etap:is(vtree:insert(Node7, Tree2Node6), Tree2Node7,
+%            "Insert a nodes into a full leaf node (depth=2)" ++
+%            "(tie on best_split occurs)"),
+%    etap:is(vtree:insert(Node9, Tree2Node7b), Tree2Node9,
+%            "Insert a nodes into a full leaf node (depth=2)" ++
+%            " (split in WE direction)"),
     ok.
 
 test_area() ->
