@@ -3,6 +3,8 @@
 
 -define(FILENAME, "/tmp/vtree.bin").
 
+% XXX vmx: update tests to new node structure
+
 start() ->
 %    test_within(),
 %    test_intersect(),

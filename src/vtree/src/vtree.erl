@@ -14,8 +14,8 @@
 % Design question: Should not fully filled nodes have only as many members as nodes, or be filled up with nils to their maximum number of nodes? - Current implementation is the first one (dynamic number of members).
 
 % Nodes maximum/minimum filling grade (TODO vmx: shouldn't be hard-coded)
--define(MAX_FILLED, 4).
--define(MIN_FILLED, 2).
+-define(MAX_FILLED, 40).
+-define(MIN_FILLED, 20).
 %-define(IS_LEAF_NODE(List), is_binary(element(2, hd(list)))).
 
 -define(FILENAME, "/tmp/vtree.bin").
@@ -93,29 +93,19 @@ disjoint(Mbr1, Mbr2) ->
 
 
 split_node({LeafNodeMbr, LeafNodeMeta, EntriesPos}=LeafNode) ->
-    io:format("We need to split~n", []),
+    %io:format("We need to split~n", []),
     Partition = partition_leaf_node(LeafNode),
-    %io:format("(insert) Partition: ~p~n", [Partition]),
     SplittedLeaf = best_split(Partition),
-    % XXX vmx: Nodes dont' have the right structure yet
-    %{SplittedLeafMbr, Node1, Node2} = case SplittedLeaf of
     [{Mbr1, Children1}, {Mbr2, Children2}] = case SplittedLeaf of
     {tie, PartitionMbrs} ->
-        %io:format("(insert) PartitionMbrs: ~p~n", [PartitionMbrs]),
         SplittedLeaf2 = minimal_overlap(Partition, PartitionMbrs),
-        %[{Mbr1, Children1}, {Mbr2, Children2}] = case SplittedLeaf2 of
         case SplittedLeaf2 of
         tie ->
             minimal_coverage(Partition, PartitionMbrs);
         _ ->
             SplittedLeaf2
         end;
-        %{merge_mbr(Mbr1, Mbr2), {Mbr1, #node{type=Type}, Children1},
-        % {Mbr2, #node{type=Type}, Children2};
     _ ->
-        %io:format("Split nodes into: ~p~n", [SplittedNodes]),
-        %[{Mbr1, _}, {Mbr2, _}] = SplittedLeaf,
-        %{merge_mbr(Mbr1, Mbr2), #node{type=Type}, SplittedLeaf}
         SplittedLeaf
     end,
     case LeafNodeMeta#node.type of
@@ -125,7 +115,8 @@ split_node({LeafNodeMbr, LeafNodeMeta, EntriesPos}=LeafNode) ->
          {Mbr2, #node{type=leaf}, Children2}};
     inner ->
         % Child nodes were expanded (read from file) to do some calculations,
-        % now get the pointers to their position in the file back
+        % now get the pointers to their position in the file back and return
+        % only a list of these positions.
         ChildrenPos1 = lists:map(fun(Entry) ->
             {_, _, EntryPos} = Entry,
             EntryPos
@@ -150,7 +141,10 @@ insert2(Fd, -1, {Mbr, Meta, Id}) ->
     {ok, Pos} = couch_file:append_term(Fd, InitialTree),
     {ok, Mbr, Pos};
 
-insert2(Fd, RootPos, {NewNodeMbr, NewNodeMeta, NewNodeId}) ->
+insert2(Fd, RootPos, NewNode) ->
+    insert2(Fd, RootPos, NewNode, 0).
+
+insert2(Fd, RootPos, {NewNodeMbr, NewNodeMeta, NewNodeId}, CallDepth) ->
     NewNode = {NewNodeMbr, NewNodeMeta#node{type=leaf}, NewNodeId},
     {ok, {TreeMbr, Meta, EntriesPos}} = couch_file:pread_term(Fd, RootPos),
     % EntriesPos is only a pointer to the node (position in file)
@@ -174,30 +168,29 @@ insert2(Fd, RootPos, {NewNodeMbr, NewNodeMeta, NewNodeId}) ->
             {EntryMbr, EntryMeta, EntryPos}
         end, EntriesPos)
     end,
-    io:format("Entries: ~p~n", [Entries]),
-    %io:format("Foo: ~p~n", [Foo]),
+    %io:format("Entries: ~p~n", [Entries]),
     EntryNum = length(Entries),
     Inserted = case Meta#node.type of
-    % XXX vmx: leaf node my transform into an inner node => change meta data
+    % XXX vmx: leaf node may transform into an inner node => change meta data
     leaf ->
-        io:format("I'm a leaf node~n", []),
+        %io:format("I'm a leaf node~n", []),
         LeafNodeMbr = merge_mbr(TreeMbr, element(1, NewNode)),
         LeafNode = {LeafNodeMbr, #node{type=leaf}, Entries ++ [NewNode]},
         if
         EntryNum < ?MAX_FILLED ->
-            io:format("There's plenty of space (leaf node)~n", []),
+            %io:format("There's plenty of space (leaf node)~n", []),
             {ok, Pos} = couch_file:append_term(Fd, LeafNode),
             {ok, LeafNodeMbr, Pos};
         % do the fancy split algorithm
         true ->
-            io:format("We need to split (leaf node)~n", []),
+            %io:format("We need to split (leaf node)~p~n", [CallDepth]),
             {SplittedMbr, Node1, Node2} = split_node(LeafNode),
             {ok, Pos1} = couch_file:append_term(Fd, Node1),
             {ok, Pos2} = couch_file:append_term(Fd, Node2),
             {splitted, SplittedMbr, Pos1, Pos2}
         end;
     inner ->
-        io:format("I'm an inner node~n", []),
+        %io:format("I'm an inner node~n", []),
         % Get entry where smallest MBR expansion is needed
         Expanded = lists:map(
             fun(Entry) ->
@@ -215,8 +208,8 @@ insert2(Fd, RootPos, {NewNodeMbr, NewNodeMeta, NewNodeId}) ->
         MinPos = find_area_min_nth(Expanded),
         %{_, _, SubTreePos} = lists:nth(MinPos, Entries),
         SubTreePos = lists:nth(MinPos, EntriesPos),
-        %{NewInnerNodePos, NewInnerNodeMbr} = insert(Fd, NewNode, SubTree),
-        case insert2(Fd, SubTreePos, NewNode) of
+        %case insert2(Fd, SubTreePos, NewNode) of
+        case insert2(Fd, SubTreePos, NewNode, CallDepth+1) of
         {ok, ChildMbr, ChildPos} ->
             NewMbr = merge_mbr(TreeMbr, ChildMbr),
             {A, B} = lists:split(MinPos-1, EntriesPos),
@@ -226,13 +219,18 @@ insert2(Fd, RootPos, {NewNodeMbr, NewNodeMeta, NewNodeId}) ->
             NewNode2 = {NewMbr, #node{type=inner}, A ++ [ChildPos] ++ tl(B)},
             {ok, Pos} = couch_file:append_term(Fd, NewNode2),
             {ok, NewMbr, Pos};
+%        {splitted, _, _, _} ->
+%            io:format("Matched!~n", []);
+%        _ ->
+%            io:format("Not matched at all!~n", [])
         {splitted, ChildMbr, ChildPos1, ChildPos2} ->
             NewMbr = merge_mbr(TreeMbr, ChildMbr),
+            %io:format("EntryNum: ~p~n", [EntryNum]),
             if
             % Both nodes of the split fit in the current inner node
             EntryNum+1 < ?MAX_FILLED ->
                 % NOTE vmx: Weird, it seems that this point is never reached
-                io:format("There's plenty of space (inner node)~n", []),
+                %io:format("There's plenty of space (inner node)~n", []),
                 {A, B} = lists:split(MinPos-1, EntriesPos),
                 NewNode2 = {NewMbr, #node{type=inner},
                             A ++ [ChildPos1, ChildPos2] ++ tl(B)},
@@ -240,7 +238,7 @@ insert2(Fd, RootPos, {NewNodeMbr, NewNodeMeta, NewNodeId}) ->
                 {ok, NewMbr, Pos};
             % We need to split the inner node
             true ->
-                io:format("We need to split (inner node)~n", []),
+                %io:format("We need to split (inner node)~n", []),
                 {SplittedMbr, Node1, Node2} = split_node(
                         {NewMbr, #node{type=inner}, Entries}),
                 {ok, Pos1} = couch_file:append_term(Fd, Node1),
@@ -249,19 +247,44 @@ insert2(Fd, RootPos, {NewNodeMbr, NewNodeMeta, NewNodeId}) ->
             end
         end
     end,
-    case Inserted of
+%    case Inserted of
+%        % Root node needs to be split => new root node
+%        {splitted, NewRootMbr, {SplittedNode1, SplittedNode2}} ->
+%            %io:format("Creating new root node~n", []),
+%            NewRoot = {NewRootMbr, #node{type=inner},
+%                           [SplittedNode1, SplittedNode2]},
+%            {ok, NewRootPos} = couch_file:append_term(Fd, NewRoot),
+%            {ok, NewRootMbr, NewRootPos};
+%        {ok, _, _} ->
+%            Inserted
+%    end.
+    case {Inserted, CallDepth} of
         % Root node needs to be split => new root node
-        {splitted, NewRootMbr, SplittedNode1, SplittedNode2} ->
-            io:format("Creating new root node~n", []),
+        {{splitted, NewRootMbr, SplittedNode1, SplittedNode2}, 0} ->
+            %io:format("Creating new root node~n", []),
             NewRoot = {NewRootMbr, #node{type=inner},
                            [SplittedNode1, SplittedNode2]},
             {ok, NewRootPos} = couch_file:append_term(Fd, NewRoot),
-            io:format("New root written to: ~p~n", [NewRootPos]),
-            io:format("~p~n", [NewRoot]),
             {ok, NewRootMbr, NewRootPos};
-        {ok, _, _} ->
+        _ ->
             Inserted
     end.
+
+%    {OpInfo, NewRootMbr, {SplittedNode1, SplittedNode2}} = Inserted,
+%    io:format("OpInfo: ~p~n", [OpInfo]),
+%    % Root node needs to be split => new root node
+%    %if OpInfo == splitted and CallDepth == 0 ->
+%    if CallDepth == 0 ->
+%        %io:format("Creating new root node~n", []),
+%        NewRoot = {NewRootMbr, #node{type=inner},
+%                   [SplittedNode1, SplittedNode2]},
+%        {ok, NewRootPos} = couch_file:append_term(Fd, NewRoot),
+%        {ok, NewRootMbr, NewRootPos};
+%    true ->
+%        Inserted
+%    end.
+    %io:format("Inserted: ~p~n", [Inserted]),
+    %Inserted.
 
 
 
@@ -502,17 +525,24 @@ partition_leaf_node({Mbr, Meta, Nodes}) ->
         end, {[],[],[],[]}, Nodes),
 %    io:format("(partition_leaf_node) Partitioned: ~p~n", [Tmp]),
     % XXX vmx This is a hack! A better partitioning algorithm should be used.
-    %     If W and S or E and N is empty, split node in the middle
+    %     If the two corresponding partitions are empty, split node in the
+    %     middle
     case Tmp of
         {[], [], Es, Ns} ->
-%            io:format("(partition_leaf_node) Do the weird hack~n", []),
             {NewW, NewE} = lists:split(length(Es) div 2, Es),
             {NewS, NewN} = lists:split(length(Ns) div 2, Ns),
             {NewW, NewS, NewE, NewN};
         {Ws, Ss, [], []} ->
-%            io:format("(partition_leaf_node) Do the weird hack~n", []),
             {NewW, NewE} = lists:split(length(Ws) div 2, Ws),
             {NewS, NewN} = lists:split(length(Ss) div 2, Ss),
+            {NewW, NewS, NewE, NewN};
+        {Ws, [], [], Ns} ->
+            {NewW, NewE} = lists:split(length(Ws) div 2, Ws),
+            {NewS, NewN} = lists:split(length(Ns) div 2, Ns),
+            {NewW, NewS, NewE, NewN};
+        {[], Ss, Es, []} ->
+            {NewS, NewN} = lists:split(length(Ss) div 2, Ss),
+            {NewW, NewE} = lists:split(length(Es) div 2, Es),
             {NewW, NewS, NewE, NewN};
         _ ->
             Tmp
@@ -555,7 +585,7 @@ best_split({PartW, PartS, PartE, PartN}) ->
 
 
 minimal_overlap({PartW, PartS, PartE, PartN}, {MbrW, MbrS, MbrE, MbrN}) ->
-%    io:format("(minimal_overlap) MbrW, MbrS, MbrE, MbrN: ~p, ~p, ~p, ~p~n", [MbrW, MbrS, MbrE, MbrN]),
+    %io:format("(minimal_overlap) MbrW, MbrS, MbrE, MbrN: ~p, ~p, ~p, ~p~n", [MbrW, MbrS, MbrE, MbrN]),
     OverlapWE = area(calc_overlap(MbrW, MbrE)),
     OverlapSN = area(calc_overlap(MbrS, MbrN)),
     %io:format("overlap: ~p|~p~n", [OverlapWE, OverlapSN]),

@@ -26,9 +26,10 @@ test_insertion() ->
                     Fd, CurTreePos,
                     {RandomMbr, #node{type=leaf},
                      list_to_binary("Node" ++ integer_to_list(Count))}),
-                io:format("test_insertion: ~p~n", [NewRootPos]),
+                %io:format("test_insertion: ~p~n", [NewRootPos]),
                 NewRootPos
-            end, -1, lists:seq(1,10000)),
+            %end, -1, lists:seq(1,10000)),
+            end, -1, lists:seq(1,60000)),
         io:format("Tree: ~p~n", [Tree]),
         ok;
     {error, Reason} ->
