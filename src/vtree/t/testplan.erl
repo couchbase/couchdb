@@ -3,30 +3,23 @@
 
 -define(FILENAME, "/tmp/vtree.bin").
 
-% XXX vmx: update tests to new node structure
 
 start() ->
-%    test_within(),
-%    test_intersect(),
-%    test_disjoint(),
-%    test_lookup(),
-%    test_insert(),
-%    test_area(),
-%    test_merge_mbr(),
-%    test_find_min_nth(),
-%    test_find_min_nth2(),
-%    test_find_min_nth3(),
-%    test_find_area_min_nth(),
-%    test_is_leaf_node(),
-%    test_partition_leaf_node(),
-%    test_calc_mbr(),
-%    test_calc_nodes_mbr(),
-%    test_best_split(),
-%    test_minimal_overlap(),
-%    test_minimal_coverage(),
-%    test_calc_overlap(),
-%    %profile_find_min_nth(),
-%    test_insert2(),
+    test_within(),
+    test_intersect(),
+    test_disjoint(),
+    test_lookup(),
+    test_area(),
+    test_merge_mbr(),
+    test_find_area_min_nth(),
+    test_partition_leaf_node(),
+    test_calc_mbr(),
+    test_calc_nodes_mbr(),
+    test_best_split(),
+    test_minimal_overlap(),
+    test_minimal_coverage(),
+    test_calc_overlap(),
+    test_insert(),
 
     etap:end_tests().
 
@@ -35,15 +28,15 @@ start() ->
     % type = inner | leaf
     type=leaf}).
 
-test_insert2() ->
+test_insert() ->
     etap:plan(1),
 
     {ok, Fd} = case couch_file:open(?FILENAME, [create, overwrite]) of
     {ok, Fd2} ->
         {ok, Fd2};
     {error, Reason} ->
-        io:format("ERROR: Couldn't open file (~s) for tree storage~n",
-                  [?FILENAME])
+        io:format("ERROR (~s): Couldn't open file (~s) for tree storage~n",
+                  [Reason, ?FILENAME])
     end,
 
     Node1 = {{10,5,13,15}, #node{type=leaf}, <<"Node1">>},
@@ -52,13 +45,12 @@ test_insert2() ->
     Node4 = {{5,-32,19,-25}, #node{type=leaf}, <<"Node4">>},
     Node5 = {{-5,-16,4,19}, #node{type=leaf}, <<"Node5">>},
     Mbr1 = {10,5,13,15},
-    Mbr1_2 = Mbr1_2_8 = {-18,-3,13,15},
+    Mbr1_2 = {-18,-3,13,15},
     Mbr1_2_3 = {-21,-3,13,15},
     Mbr1_2_3_4 = {-21,-32,19,15},
     Mbr1_2_3_4_5 = {-21,-32,19,19},
     Mbr1_4_5 = {-5,-32,19,19},
     Mbr2_3 = {-21,-3,-10,14},
-    Mbr3_4 = {-21,-32,19,14},
     Tree1Node1 = {Mbr1, #node{type=leaf}, [Node1]},
     Tree1Node1_2 = {Mbr1_2, #node{type=leaf}, [Node1, Node2]},
     Tree1Node1_2_3 = {Mbr1_2_3, #node{type=leaf}, [Node1, Node2, Node3]},
@@ -69,29 +61,27 @@ test_insert2() ->
                            {ok, {Mbr1_4_5, #node{type=leaf},
                                  [Node1, Node4, Node5]}}]},
 
-    etap:is(vtree:insert2(Fd, -1, Node1), {ok, Mbr1, 0},
+    etap:is(vtree:insert(Fd, -1, Node1), {ok, Mbr1, 0},
             "Insert a node into an empty tree (write to disk)"),
     etap:is(vtree:get_node(Fd, 0), {ok, Tree1Node1},
             "Insert a node into an empty tree" ++
             " (check if it was written correctly)"),
-    {ok, Mbr1_2, Pos2} = vtree:insert2(Fd, 0, Node2),
+    {ok, Mbr1_2, Pos2} = vtree:insert(Fd, 0, Node2),
     etap:is(vtree:get_node(Fd, Pos2), {ok, Tree1Node1_2}, 
             "Insert a node into a not yet full leaf node (root node) (a)"),
-    {ok, Mbr1_2_3, Pos3} = vtree:insert2(Fd, Pos2, Node3),
+    {ok, Mbr1_2_3, Pos3} = vtree:insert(Fd, Pos2, Node3),
     etap:is(vtree:get_node(Fd, Pos3), {ok, Tree1Node1_2_3}, 
             "Insert a node into a not yet full leaf node (root node) (b)"),
-    {ok, Mbr1_2_3_4, Pos4} = vtree:insert2(Fd, Pos3, Node4),
+    {ok, Mbr1_2_3_4, Pos4} = vtree:insert(Fd, Pos3, Node4),
     etap:is(vtree:get_node(Fd, Pos4), {ok, Tree1Node1_2_3_4},
             "Insert a nodes into a then to be full leaf node (root node)"),
-    {ok, Mbr1_2_3_4_5, Pos5} = vtree:insert2(Fd, Pos4, Node5),
+    {ok, Mbr1_2_3_4_5, Pos5} = vtree:insert(Fd, Pos4, Node5),
     {ok, {Mbr1_2_3_4_5, #node{type=inner}, [Pos5_1, Pos5_2]}} =
                 vtree:get_node(Fd, Pos5),
     etap:is({ok, {Mbr1_2_3_4_5, #node{type=inner},
                   [vtree:get_node(Fd, Pos5_1), vtree:get_node(Fd, Pos5_2)]}},
                   {ok, Tree1Node1_2_3_4_5},
             "Insert a nodes into a full leaf node (root node)"),
-
-
     ok.
     
 
@@ -188,108 +178,6 @@ test_lookup() ->
             "Query window outside of all nodes (tree height=2)"),
     ok.
 
-test_insert() ->
-    etap:plan(9),
-    {ok, Fd} = case couch_file:open(?FILENAME, [create, overwrite]) of
-    {ok, Fd2} ->
-        {ok, Fd2};
-    {error, Reason} ->
-        io:format("ERROR: Couldn't open file (~s) for tree storage~n",
-                  [?FILENAME])
-    end,
-
-    Node1 = {{10,5,13,15}, <<"Node1">>},
-    Node2 = {{-18,-3,-10,-1}, <<"Node2">>},
-    Node3 = {{-21,2,-10,14}, <<"Node3">>},
-    Node4 = {{5,-32,19,-25}, <<"Node4">>},
-    Node5 = {{-5,-16,4,19}, <<"Node5">>},
-    Node6 = {{-25,-26,-14,-19}, <<"Node6">>},
-    Node7 = {{-30,-12,4,-1}, <<"Node7">>},
-    Node8 = {{-3,-2,-1,-1}, <<"Node8">>},
-    Node9 = {{0,15,1,18}, <<"Node9">>},
-    Mbr1 = {10,5,13,15},
-    Mbr1_2 = Mbr1_2_8 = {-18,-3,13,15},
-    Mbr1_2_3 = {-21,-3,13,15},
-    Mbr1_2_3_4 = {-21,-32,19,15},
-    Mbr1_2_3_4_5 = {-21,-32,19,19},
-    Mbr1_2_3_4_5_6 = Mbr1_2_3_4_5_6_8 = {-25,-32,19,19},
-    Mbr1_2_3_4_5_7 = Mbr1_2_3_4_5_7_9 = {-30,-32,19,19},
-    Mbr1_2_3_4_5_6_7 = {-30,-32,19,19},
-    Mbr1_4_5 = {-5,-32,19,19},
-    Mbr2_3 = {-21,-3,-10,14},
-    Mbr3_4 = {-21,-32,19,14},
-    Mbr3_4_5 = {-21,-32,19,19},
-    Mbr3_4_5_6 = {-25,-32,19,19},
-    Mbr3_4_5_7 = Mbr3_4_5_7_9 = {-30,-32,19,19},
-    Mbr3_4_5_6_7 = {-30,-32,19,19},
-    Mbr3_5_7 = {-30,-16,4,19},
-    Mbr4_5_9 = {-5,-32,19,19},
-    Mbr4_6 = {-25,-32,19,-19},
-    Mbr3_7 = {-30,-12,4,14},
-    EmptyTree = {},
-    Tree1Node1 = {Mbr1, [Node1]},
-    Tree1Node1_2 = {Mbr1_2, [Node1, Node2]},
-    Tree1Node1_2_3 = {Mbr1_2_3, [Node1, Node2, Node3]},
-    Tree1Node1_2_3_4 = {Mbr1_2_3_4, [Node1, Node2, Node3, Node4]},
-    Tree1Node1_2_3_4_5 = {Mbr1_2_3_4_5, [{ok, {Mbr2_3, [Node2, Node3]}},
-                                         {ok, {Mbr1_4_5, [Node1, Node4, Node5]}}]},
-    Tree2 = {Mbr1_2_3_4, [{Mbr1_2, [Node1, Node2]}, {Mbr3_4, [Node3, Node4]}]},
-    Tree2Node5 = {Mbr1_2_3_4_5, [{Mbr1_2, [Node1, Node2]},
-                                 {Mbr3_4_5, [Node3, Node4, Node5]}
-                                ]},
-    Tree2Node6 = {Mbr1_2_3_4_5_6, [{Mbr1_2, [Node1, Node2]},
-                                   {Mbr3_4_5_6, [Node3, Node4, Node5, Node6]}
-                                  ]},
-    Tree2Node7b = {Mbr1_2_3_4_5_7, [{Mbr1_2, [Node1, Node2]},
-                                   {Mbr3_4_5_7, [Node3, Node4, Node5, Node7]}
-                                  ]},
-    % XXX vmx: Not yet right
-    Tree2Node7 = {Mbr1_2_3_4_5_6_7, [{Mbr1_2, [Node1, Node2]},
-                                     {Mbr3_4_5_6_7, [{Mbr4_6, [Node4, Node6]},
-                                                     {Mbr3_5_7, [Node3, Node5, Node7]}]}
-                                    ]},
-    Tree2Node8 = {Mbr1_2_3_4_5_6_8, [{Mbr1_2_8, [Node1, Node2, Node8]},
-                                     {Mbr3_4_5_6, [Node3, Node4, Node5, Node6]}
-                                    ]},
-    Tree2Node9 = {Mbr1_2_3_4_5_7_9, [{Mbr1_2, [Node1, Node2]},
-                                     {Mbr3_4_5_7_9,
-                                      [{Mbr3_7, [Node3, Node7]},
-                                       {Mbr4_5_9, [Node4, Node5, Node9]}
-                                      ]}]},
-    etap:is(vtree:insert(Fd, Node1, -1), {0, Mbr1},
-            "Insert a node into an empty tree (write to disk)"),
-    etap:is(vtree:get_node(Fd, 0), {ok, Tree1Node1},
-            "Insert a node into an empty tree" ++
-            " (check if it was written correctly)"),
-    {Pos2, Mbr1_2} = vtree:insert(Fd, Node2, 0),
-    etap:is(vtree:get_node(Fd, Pos2), {ok, Tree1Node1_2}, 
-            "Insert a node into a not yet full leaf node (root node)"),
-    {Pos3, Mbr1_2_3} = vtree:insert(Fd, Node3, Pos2),
-    {Pos4, Mbr1_2_3_4} = vtree:insert(Fd, Node4, Pos3),
-    etap:is(vtree:get_node(Fd, Pos4), {ok, Tree1Node1_2_3_4},
-            "Insert a nodes into a then to be full leaf node (root node)"),
-%    {Pos4, Mbr1_2_3_4_5} = vtree:insert(Fd, Node5, Tree2),
-%    etap:is(vtree:get_node(Fd, Pos4), {ok, Tree2Node5},
-%            "Insert a nodes into a not yet full leaf node (depth=2) (a)"),
-
-%    etap:is(vtree:insert(Node8, Tree2Node6), Tree2Node8,
-%            "Insert a nodes into a not yet full leaf node (depth=2) (b)"),
-%    etap:is(vtree:insert(Node6, Tree2Node5), Tree2Node6,
-%            "Insert a nodes into then to be full leaf node (depth=2)"),
-    {Pos5, Mbr1_2_3_4_5} = vtree:insert(Fd, Node5, Pos4),
-    {ok, {Mbr1_2_3_4_5, [Pos5_1, Pos5_2]}} = vtree:get_node(Fd, Pos5),
-    etap:is({ok, {Mbr1_2_3_4_5, [vtree:get_node(Fd, Pos5_1),
-                                 vtree:get_node(Fd, Pos5_2)]}},
-                  {ok, Tree1Node1_2_3_4_5},
-            "Insert a nodes into a full leaf node (root node)"),
-%    etap:is(vtree:insert(Node7, Tree2Node6), Tree2Node7,
-%            "Insert a nodes into a full leaf node (depth=2)" ++
-%            "(tie on best_split occurs)"),
-%    etap:is(vtree:insert(Node9, Tree2Node7b), Tree2Node9,
-%            "Insert a nodes into a full leaf node (depth=2)" ++
-%            " (split in WE direction)"),
-    ok.
-
 test_area() ->
     etap:plan(5),
     Mbr1 = {10,5,13,15},
@@ -326,99 +214,46 @@ test_merge_mbr() ->
             "Merge MBR of equal MBRs"),
     ok.
 
-test_find_min_nth() ->
-    etap:plan(5),
-    etap:is(vtree:find_min_nth([5]), 1,
-            "Find position of minimum in a list with one element"),
-    etap:is(vtree:find_min_nth([538, 29]), 2,
-            "Find position of minimum in a list with two elements (1>2)"),
-    etap:is(vtree:find_min_nth([54, 538]), 1,
-            "Find position of minimum in a list with two elements (1<2)"),
-    etap:is(vtree:find_min_nth([54, 54]), 1,
-            "Find position of minimum in a list with two equal elements"),
-    etap:is(vtree:find_min_nth([329, 930, 203, 72, 402, 2904, 283]), 4,
-            "Find position of minimum in a list"),
-    ok.
-
-
-test_find_min_nth2() ->
-    etap:plan(5),
-    etap:is(vtree:find_min_nth2([5]), 1,
-            "Find position of minimum in a list with one element"),
-    etap:is(vtree:find_min_nth2([538, 29]), 2,
-            "Find position of minimum in a list with two elements (1>2)"),
-    etap:is(vtree:find_min_nth2([54, 538]), 1,
-            "Find position of minimum in a list with two elements (1<2)"),
-    etap:is(vtree:find_min_nth2([54, 54]), 1,
-            "Find position of minimum in a list with two equal elements"),
-    etap:is(vtree:find_min_nth2([329, 930, 203, 72, 402, 2904, 283]), 4,
-            "Find position of minimum in a list"),
-    ok.
-
-test_find_min_nth3() ->
-    etap:plan(5),
-    etap:is(vtree:find_min_nth3([5]), 1,
-            "Find position of minimum in a list with one element"),
-    etap:is(vtree:find_min_nth3([538, 29]), 2,
-            "Find position of minimum in a list with two elements (1>2)"),
-    etap:is(vtree:find_min_nth3([54, 538]), 1,
-            "Find position of minimum in a list with two elements (1<2)"),
-    etap:is(vtree:find_min_nth3([54, 54]), 1,
-            "Find position of minimum in a list with two equal elements"),
-    etap:is(vtree:find_min_nth3([329, 930, 203, 72, 402, 2904, 283]), 4,
-            "Find position of minimum in a list"),
-    ok.
-
-
 test_find_area_min_nth() ->
     etap:plan(5),
-    etap:is(vtree:find_min_nth3([{5, {23,64,24,79}}]), 1,
+    etap:is(vtree:find_area_min_nth([{5, {23,64,24,79}}]), 1,
             "Find position of minimum area in a list with one element"),
-    etap:is(vtree:find_min_nth3([{538, {2,64,4,79}}, {29, {2,64,4,79}}]), 2,
+    etap:is(vtree:find_area_min_nth([{538, {2,64,4,79}}, {29, {2,64,4,79}}]), 2,
             "Find position of minimum area in a list with two elements (1>2)"),
-    etap:is(vtree:find_min_nth3([{54, {2,64,4,79}}, {538, {2,64,4,79}}]), 1,
+    etap:is(vtree:find_area_min_nth([{54, {2,64,4,79}}, {538, {2,64,4,79}}]), 1,
             "Find position of minimum area in a list with two elements (1<2)"),
-    etap:is(vtree:find_min_nth3([{54, {2,64,4,79}}, {54, {2,64,4,79}}]), 1,
+    etap:is(vtree:find_area_min_nth([{54, {2,64,4,79}}, {54, {2,64,4,79}}]), 1,
             "Find position of minimum area in a list with two equal elements"),
-    etap:is(vtree:find_min_nth3(
+    etap:is(vtree:find_area_min_nth(
               [{329, {2,64,4,79}}, {930, {2,64,4,79}}, {203, {2,64,4,79}},
                {72, {2,64,4,79}}, {402, {2,64,4,79}}, {2904, {2,64,4,79}},
                {283, {2,64,4,79}}]), 4,
             "Find position of minimum area in a list"),
     ok.
 
-test_is_leaf_node() ->
-    etap:plan(2),
-    Node1 = {{10,5,13,15}, <<"Node1">>},
-    Node2 = {{-18,-3,-10,-1}, <<"Node2">>},
-    Mbr1_2 = {-18,-3,13,15},
-    Tree1 = [Node1, Node2],
-    Tree2 = [{Mbr1_2, [Node1, Node2]}],
-    etap:is(vtree:is_leaf_node(Tree1), true, "Node is a leaf node"),
-    etap:is(vtree:is_leaf_node(Tree2), false, "Node is not a leaf node"),
-    ok.
-
-
 test_partition_leaf_node() ->
     etap:plan(3),
-    Node1 = {{10,5,13,15}, <<"Node1">>},
-    Node2 = {{-18,-3,-10,-1}, <<"Node2">>},
-    Node3 = {{-21,2,-10,14}, <<"Node3">>},
-    Node4 = {{5,-32,19,-25}, <<"Node4">>},
-    Node5 = {{-5,-16,4,19}, <<"Node5">>},
+    Node1 = {{10,5,13,15}, #node{type=leaf}, <<"Node1">>},
+    Node2 = {{-18,-3,-10,-1}, #node{type=leaf}, <<"Node2">>},
+    Node3 = {{-21,2,-10,14}, #node{type=leaf}, <<"Node3">>},
+    Node4 = {{5,-32,19,-25}, #node{type=leaf}, <<"Node4">>},
+    Node5 = {{-5,-16,4,19}, #node{type=leaf}, <<"Node5">>},
     LeafChildren3 = [Node1, Node2, Node4],
     LeafChildren4 = LeafChildren3 ++ [Node3],
     LeafChildren5 = LeafChildren4 ++ [Node5],
     Mbr1_2_4 = {-18,-25,19,15},
     Mbr1_2_3_4_5 = {-21,-25,19,19},
-    etap:is(vtree:partition_leaf_node({Mbr1_2_4, LeafChildren3}),
+    etap:is(vtree:partition_leaf_node({Mbr1_2_4, #node{type=leaf},
+                                       LeafChildren3}),
             {[Node2], [Node4], [Node1, Node4], [Node1, Node2]},
             "Partition 3 nodes"),
-    etap:is(vtree:partition_leaf_node({Mbr1_2_3_4_5, LeafChildren4}),
+    etap:is(vtree:partition_leaf_node({Mbr1_2_3_4_5, #node{type=leaf},
+                                       LeafChildren4}),
             {[Node2, Node3], [Node4],
              [Node1, Node4], [Node1, Node2, Node3]},
             "Partition 4 nodes"),
-    etap:is(vtree:partition_leaf_node({Mbr1_2_3_4_5, LeafChildren5}),
+    etap:is(vtree:partition_leaf_node({Mbr1_2_3_4_5, #node{type=leaf},
+                                       LeafChildren5}),
             {[Node2, Node3], [Node4],
              [Node1, Node4, Node5], [Node1, Node2, Node3, Node5]},
             "Partition 5 nodes"),
@@ -455,10 +290,10 @@ test_calc_mbr() ->
 
 test_calc_nodes_mbr() ->
     etap:plan(9),
-    Node1 = {{10,5,13,15}, <<"Node1">>},
-    Node2 = {{-18,-3,-10,-1}, <<"Node2">>},
-    Node3 = {{-21,2,-10,14}, <<"Node3">>},
-    Node4 = {{5,-32,19,-25}, <<"Node4">>},
+    Node1 = {{10,5,13,15}, #node{type=leaf}, <<"Node1">>},
+    Node2 = {{-18,-3,-10,-1}, #node{type=leaf}, <<"Node2">>},
+    Node3 = {{-21,2,-10,14}, #node{type=leaf}, <<"Node3">>},
+    Node4 = {{5,-32,19,-25}, #node{type=leaf}, <<"Node4">>},
     etap:is(vtree:calc_nodes_mbr([Node1]), {10, 5, 13, 15},
             "Calculate MBR of a single nodes"),
     etap:is(vtree:calc_nodes_mbr([Node1, Node2]), {-18, -3, 13, 15},
@@ -481,14 +316,14 @@ test_calc_nodes_mbr() ->
 
 test_best_split() ->
     etap:plan(4),
-    Node1 = {{10,5,13,15}, <<"Node1">>},
-    Node2 = {{-18,-3,-10,-1}, <<"Node2">>},
-    Node3 = {{-21,2,-10,14}, <<"Node3">>},
-    Node4 = {{5,-32,19,-25}, <<"Node4">>},
-    Node5 = {{-5,-16,4,19}, <<"Node5">>},
-    Node6 = {{-15,10,-12,17}, <<"Node6">>},
-    {Mbr2, _} = Node2,
-    {Mbr4, _} = Node4,
+    Node1 = {{10,5,13,15}, #node{type=leaf}, <<"Node1">>},
+    Node2 = {{-18,-3,-10,-1}, #node{type=leaf}, <<"Node2">>},
+    Node3 = {{-21,2,-10,14}, #node{type=leaf}, <<"Node3">>},
+    Node4 = {{5,-32,19,-25}, #node{type=leaf}, <<"Node4">>},
+    Node5 = {{-5,-16,4,19}, #node{type=leaf}, <<"Node5">>},
+    Node6 = {{-15,10,-12,17}, #node{type=leaf}, <<"Node6">>},
+    {Mbr2, _, _} = Node2,
+    {Mbr4, _, _} = Node4,
     Mbr1_2 = {-18,-3,13,15},
     Mbr1_4 = {5,-32,19,15},
     Mbr1_4_5 = {-5,-32,19,19},
@@ -558,8 +393,6 @@ test_minimal_coverage() ->
     Mbr1_4_6 = {-11,-32,19,24},
     Mbr2_3 = {-21,-3,-10,14},
     Mbr2_4_5 = {-18,-32,19,10},
-    Mbr3_7 = {-21,2,-10,14}, %132
-    Mbr3_8 = {-21,2,16,14}, %408
     Partition5 = {[Node2, Node3], [Node2, Node4, Node5],
                   [Node1, Node4, Node5], [Node1, Node3]},
     Partition6 = {[Node2, Node3], [Node4],
@@ -599,38 +432,3 @@ test_calc_overlap() ->
     etap:is(vtree:calc_overlap(Mbr4, Mbr5), {0, 0, 0, 0},
             "Calculate overlap of MBRs with no overlap"),
     ok.
-
-
-    
-profile_find_min_nth() ->
-    TestList = [329, 930, 203, 72, 402, 2904, 283, 382, 230, 34, 450, 45, 30, 3204, 30, 30, 30, 340, 23049, 305, 204, 304, 2304, 324,03,45,9,83,2498,5984,7589,47,59,4,375, 329, 930, 203, 72, 402, 2904, 283, 382, 230, 34, 450, 45, 30, 3204, 30, 30, 30, 340, 23049, 305, 204, 304, 2304, 324,03,45,9,83,2498,5984,7589,47,59,4,375, 329, 930, 203, 72, 402, 2904, 283, 382, 230, 34, 450, 45, 30, 3204, 30, 30, 30, 340, 23049, 305, 204, 304, 2304, 324,03,45,9,83,2498,5984,7589,47,59,4,375, 329, 930, 203, 72, 402, 2904, 283, 382, 230, 34, 450, 45, 30, 3204, 30, 30, 30, 340, 23049, 305, 204, 304, 2304, 324,03,45,9,83,2498,5984,7589,47,59,4,375, 329, 930, 203, 72, 402, 2904, 283, 382, 230, 34, 450, 45, 30, 3204, 30, 30, 30, 340, 23049, 305, 204, 304, 2304, 324,03,45,9,83,2498,5984,7589,47,59,4,375, 329, 930, 203, 72, 402, 2904, 283, 382, 230, 34, 450, 45, 30, 3204, 30, 30, 30, 340, 23049, 305, 204, 304, 2304, 324,03,45,9,83,2498,5984,7589,47,59,4,375, 329, 930, 203, 72, 402, 2904, 283, 382, 230, 34, 450, 45, 30, 3204, 30, 30, 30, 340, 23049, 305, 204, 304, 2304, 324,03,45,9,83,2498,5984,7589,47,59,4,375, 329, 930, 203, 72, 402, 2904, 283, 382, 230, 34, 450, 45, 30, 3204, 30, 30, 30, 340, 23049, 305, 204, 304, 2304, 324,03,45,9,83,2498,5984,7589,47,59,4,375, 329, 930, 203, 72, 402, 2904, 283, 382, 230, 34, 450, 45, 30, 3204, 30, 30, 30, 340, 23049, 305, 204, 304, 2304, 324,03,45,9,83,2498,5984,7589,47,59,4,375, 329, 930, 203, 72, 402, 2904, 283, 382, 230, 34, 450, 45, 30, 3204, 30, 30, 30, 340, 23049, 305, 204, 304, 2304, 324,03,45,9,83,2498,5984,7589,47,59,4,375, 329, 930, 203, 72, 402, 2904, 283, 382, 230, 34, 450, 45, 30, 3204, 30, 30, 30, 340, 23049, 305, 204, 304, 2304, 324,03,45,9,83,2498,5984,7589,47,59,4,375, 329, 930, 203, 72, 402, 2904, 283, 382, 230, 34, 450, 45, 30, 3204, 30, 30, 30, 340, 23049, 305, 204, 304, 2304, 324,03,45,9,83,2498,5984,7589,47,59,4,375, 329, 930, 203, 72, 402, 2904, 283, 382, 230, 34, 450, 45, 30, 3204, 30, 30, 30, 340, 23049, 305, 204, 304, 2304, 324,03,45,9,83,2498,5984,7589,47,59,4,375, 329, 930, 203, 72, 402, 2904, 283, 382, 230, 34, 450, 45, 30, 3204, 30, 30, 30, 340, 23049, 305, 204, 304, 2304, 324,03,45,9,83,2498,5984,7589,47,59,4,375 ],
-
-    io:format("NTH:~n", []),
-    test_avg(vtree, find_min_nth, [TestList], 100000),
-    io:format("NTH2:~n", []),
-    test_avg(vtree, find_min_nth2, [TestList], 100000),
-    io:format("NTH3:~n", []),
-    test_avg(vtree, find_min_nth3, [TestList], 100000),
-    ok.
-
-
-% From http://www.trapexit.org/Measuring_Function_Execution_Time (2010-01-17)
-test_avg(M, F, A, N) when N > 0 ->
-    L = test_loop(M, F, A, N, []),
-    Length = length(L),
-    Min = lists:min(L),
-    Max = lists:max(L),
-    Med = lists:nth(round((Length / 2)), lists:sort(L)),
-    Avg = round(lists:foldl(fun(X, Sum) -> X + Sum end, 0, L) / Length),
-    io:format("Range: ~b - ~b mics~n"
-	      "Median: ~b mics~n"
-	      "Average: ~b mics~n",
-	      [Min, Max, Med, Avg]),
-    Med.
-
-test_loop(_M, _F, _A, 0, List) ->
-    List;
-test_loop(M, F, A, N, List) ->
-    {T, _Result} = timer:tc(M, F, A),
-    test_loop(M, F, A, N - 1, [T|List]).
-

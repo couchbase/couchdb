@@ -10,7 +10,7 @@
     type=leaf}).
 
 start() ->
-    test_insertion(),
+    %test_insertion(),
     %profile_insertion(),
     etap:end_tests().
 
@@ -25,7 +25,7 @@ test_insertion() ->
                 RandomMbr = {random:uniform(Max), random:uniform(Max),
                              random:uniform(Max), random:uniform(Max)},
                 %io:format("~p~n", [RandomMbr]),
-                {ok, _, NewRootPos} = vtree:insert2(
+                {ok, _, NewRootPos} = vtree:insert(
                     Fd, CurTreePos,
                     {RandomMbr, #node{type=leaf},
                      list_to_binary("Node" ++ integer_to_list(Count))}),
