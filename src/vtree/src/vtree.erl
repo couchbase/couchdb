@@ -1,7 +1,7 @@
 -module(vtree).
 
 -export([lookup/2, within/2, intersect/2, disjoint/2, insert/3, area/1,
-         merge_mbr/2, find_area_min_nth/1, partition_leaf_node/1,
+         merge_mbr/2, find_area_min_nth/1, partition_node/1,
          calc_nodes_mbr/1, calc_mbr/1, best_split/1, minimal_overlap/2,
          calc_overlap/2, minimal_coverage/2]).
 
@@ -91,7 +91,7 @@ disjoint(Mbr1, Mbr2) ->
 
 split_node({_Mbr, Meta, _EntriesPos}=Node) ->
     %io:format("We need to split~n", []),
-    Partition = partition_leaf_node(Node),
+    Partition = partition_node(Node),
     SplittedLeaf = best_split(Partition),
     [{Mbr1, Children1}, {Mbr2, Children2}] = case SplittedLeaf of
     {tie, PartitionMbrs} ->
@@ -270,10 +270,10 @@ find_area_min_nth(Count, [{HMin, HMbr}|T], {{Min, _Mbr}, _MinCount})
 find_area_min_nth(Count, [_H|T], {{Min, Mbr}, MinCount}) ->
     find_area_min_nth(Count+1, T, {{Min, Mbr}, MinCount}).
 
-partition_leaf_node({Mbr, _Meta, Nodes}) ->
+partition_node({Mbr, _Meta, Nodes}) ->
     {MbrW, MbrS, MbrE, MbrN} = Mbr,
-%    io:format("(partition_leaf_node) Mbr: ~p~n", [Mbr]),
-%    io:format("(partition_leaf_node) Nodes: ~p~n", [Nodes]),
+%    io:format("(partition_node) Mbr: ~p~n", [Mbr]),
+%    io:format("(partition_node) Nodes: ~p~n", [Nodes]),
     Tmp = lists:foldl(
         fun(Node,  {AccW, AccS, AccE, AccN}) ->
             {{W, S, E, N}, _Meta, _Id} = Node,
@@ -295,7 +295,7 @@ partition_leaf_node({Mbr, _Meta, Nodes}) ->
             end,
             {NewAccW, NewAccS, NewAccE, NewAccN}
         end, {[],[],[],[]}, Nodes),
-%    io:format("(partition_leaf_node) Partitioned: ~p~n", [Tmp]),
+%    io:format("(partition_node) Partitioned: ~p~n", [Tmp]),
     % XXX vmx This is a hack! A better partitioning algorithm should be used.
     %     If the two corresponding partitions are empty, split node in the
     %     middle
