@@ -1,6 +1,8 @@
 -module(insertion).
 -export([start/0]).
 
+-export([test_insertion/0]).
+
 -define(FILENAME, "/tmp/vtree_huge.bin").
 
 -record(node, {
@@ -9,6 +11,7 @@
 
 start() ->
     test_insertion(),
+    %profile_insertion(),
     etap:end_tests().
 
 test_insertion() ->
@@ -28,11 +31,16 @@ test_insertion() ->
                      list_to_binary("Node" ++ integer_to_list(Count))}),
                 %io:format("test_insertion: ~p~n", [NewRootPos]),
                 NewRootPos
-            %end, -1, lists:seq(1,10000)),
-            end, -1, lists:seq(1,60000)),
+            end, -1, lists:seq(1,5000)),
+            %end, -1, lists:seq(1,60000)),
         io:format("Tree: ~p~n", [Tree]),
         ok;
     {error, Reason} ->
         io:format("ERROR: Couldn't open file (~s) for tree storage~n",
                   [?FILENAME])
     end.
+
+profile_insertion() ->
+     fprof:apply(insertion, test_insertion, []),
+     fprof:profile(),
+     fprof:analyse().

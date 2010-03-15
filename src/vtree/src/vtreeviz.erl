@@ -30,7 +30,7 @@ print_nodes(ParentPos, Children) ->
         string_join("|", ChildrenLabels,
                     fun(X) -> io_lib:format("~s", [X]) end)
     end,
-    io:format("node~w [label=~p];~n", [ParentPos, ChildrenIds]).
+    io:format("node~w [label=\"{~s}\"];~n", [ParentPos, ChildrenIds]).
 
 print_edges(Fd, ParentPos, Children) ->  
     lists:foreach(fun(ChildPos) ->
