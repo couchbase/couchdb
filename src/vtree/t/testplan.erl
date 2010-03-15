@@ -29,7 +29,7 @@ start() ->
     type=leaf}).
 
 test_insert() ->
-    etap:plan(1),
+    etap:plan(6),
 
     {ok, Fd} = case couch_file:open(?FILENAME, [create, overwrite]) of
     {ok, Fd2} ->
@@ -149,32 +149,46 @@ test_disjoint() ->
 
 test_lookup() ->
     etap:plan(6),
+
+    {ok, Fd} = case couch_file:open(?FILENAME, [create, overwrite]) of
+    {ok, Fd2} ->
+        {ok, Fd2};
+    {error, Reason} ->
+        io:format("ERROR (~s): Couldn't open file (~s) for tree storage~n",
+                  [Reason, ?FILENAME])
+    end,
+
+    Node1 = {{10,5,13,15}, #node{type=leaf}, <<"Node1">>},
+    Node2 = {{-18,-3,-10,-1}, #node{type=leaf}, <<"Node2">>},
+    Node3 = {{-21,2,-10,14}, #node{type=leaf}, <<"Node3">>},
+    Node4 = {{5,-32,19,-25}, #node{type=leaf}, <<"Node4">>},
+    Node5 = {{-5,-16,4,19}, #node{type=leaf}, <<"Node5">>},
+    Mbr1 = {10,5,13,15},
+    Mbr1_2 = {-18,-3,13,15},
+    Mbr1_2_3 = {-21,-3,13,15},
+    Mbr1_2_3_4 = {-21,-32,19,15},
+    Mbr1_2_3_4_5 = {-21,-32,19,19},
     Bbox1 = {-20, -10, 30, 21},
     Bbox2 = {-20, -10, 0, 0},
     Bbox3 = {100, 200, 300, 400},
-    Bbox4 = {-22, -33, 20, -15},
-    Node1 = {{10,5,13,15}, <<"Node1">>},
-    Node2 = {{-18,-3,-10,-1}, <<"Node2">>},
-    Node3 = {{-21,2,-10,14}, <<"Node3">>},
-    Node4 = {{5,-32,19,-25}, <<"Node4">>},
-    Mbr1_2 = {-18,-3,13,15},
-    Mbr1_2_3_4 = {-21,-32,19,15},
-    Mbr3_4 = {-21,-32,19,14},
-    EmptyTree = {},
-    Tree1 = {Mbr1_2, [Node1, Node2]},
-    Tree2 = {Mbr1_2_3_4, [{Mbr1_2, [Node1, Node2]}, {Mbr3_4, [Node3, Node4]}]},
-    etap:is(vtree:lookup(Bbox1, EmptyTree), {}, "Lookup in empty tree"),
-    etap:is(vtree:lookup(Bbox1, Tree1), [Node1, Node2],
+    Bbox4 = {0, 0, 20, 15},
+    {ok, Mbr1, 0} = vtree:insert(Fd, -1, Node1),
+    {ok, Mbr1_2, Pos2} = vtree:insert(Fd, 0, Node2),
+    {ok, Mbr1_2_3, Pos3} = vtree:insert(Fd, Pos2, Node3),
+    {ok, Mbr1_2_3_4, Pos4} = vtree:insert(Fd, Pos3, Node4),
+    {ok, Mbr1_2_3_4_5, Pos5} = vtree:insert(Fd, Pos4, Node5),
+
+    etap:is(vtree:lookup(Fd, Pos2, Bbox1), [Node1, Node2],
             "Find all nodes in tree (tree height=1)"),
-    etap:is(vtree:lookup(Bbox2, Tree1), [Node2],
+    etap:is(vtree:lookup(Fd, Pos2, Bbox2), [Node2],
             "Find some nodes in tree (tree height=1)"),
-    etap:is(vtree:lookup(Bbox3, Tree1), [],
+    etap:is(vtree:lookup(Fd, Pos2, Bbox3), [],
             "Query window outside of all nodes (tree height=1)"),
-    etap:is(vtree:lookup(Bbox2, Tree2), [Node2],
+    etap:is(vtree:lookup(Fd, Pos5, Bbox2), [Node2, Node5],
             "Find some nodes in tree (tree height=2) (a)"),
-    etap:is(vtree:lookup(Bbox4, Tree2), [Node4],
+    etap:is(vtree:lookup(Fd, Pos5, Bbox4), [Node1, Node5],
             "Find some nodes in tree (tree height=2) (b)"),
-    etap:is(vtree:lookup(Bbox3, Tree2), [],
+    etap:is(vtree:lookup(Fd, Pos5, Bbox3), [],
             "Query window outside of all nodes (tree height=2)"),
     ok.
 

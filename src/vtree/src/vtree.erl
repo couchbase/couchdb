@@ -1,6 +1,6 @@
 -module(vtree).
 
--export([lookup/2, within/2, intersect/2, disjoint/2, insert/3, area/1,
+-export([lookup/3, within/2, intersect/2, disjoint/2, insert/3, area/1,
          merge_mbr/2, find_area_min_nth/1, partition_node/1,
          calc_nodes_mbr/1, calc_mbr/1, best_split/1, minimal_overlap/2,
          calc_overlap/2, minimal_coverage/2]).
@@ -25,34 +25,31 @@
     type=inner}).
 
 
-lookup(_Bbox, {}) ->
-    {};
-
-lookup(Bbox, Tree) ->
-    {_, Nodes} = Tree,
+lookup(Fd, Pos, Bbox) ->
+    {ok, Parent} = couch_file:pread_term(Fd, Pos),
+    {_Mbr, Meta, NodesPos} = Parent,
     Entries = lists:foldl(
-        fun(Entry, Acc) ->
-            case Entry of
-                % Entry of an inner node
-                {_Mbr, ChildNodes} when is_list(ChildNodes) ->
-%                    lookup(Bbox, ChildNodes);
-%                    lookup(Bbox, Entry);
-                    Acc ++ lookup(Bbox, Entry);
-                % Entry of a leaf node
-                {Mbr, _} ->
+        fun(EntryPos, Acc) ->
+            %case Entry of
+            case Meta#node.type of
+            inner ->
+                Acc ++ lookup(Fd, EntryPos, Bbox);
+            leaf ->
+                % loop through all data nodes
+                lists:foldl(fun(Child, Acc) ->
+                    {Mbr, _, _Id} = Child,
                     Disjoint = disjoint(Mbr, Bbox),
-                    if 
-                        not Disjoint ->
-                            Acc ++ [Entry];
-                        true ->
-                            Acc
-                    end;
-                _ ->
-                    io:format("Tree/node is invalid"),
-                    error
+                    if not Disjoint ->
+                        Acc ++ [Child];
+                    true ->
+                        Acc
+                    end
+                end, [], NodesPos);
+            _ ->
+                io:format("Tree/node is invalid", []),
+                error
             end
-%        end, [], Tree),
-        end, [], Nodes),
+        end, [], NodesPos),
     Entries.
 
 
