@@ -263,7 +263,7 @@ find_area_min_nth(Count, [{HMin, HMbr}|T], {{Min, _Mbr}, _MinCount})
 find_area_min_nth(Count, [_H|T], {{Min, Mbr}, MinCount}) ->
     find_area_min_nth(Count+1, T, {{Min, Mbr}, MinCount}).
 
-partition_node({Mbr, Meta, Nodes}) ->
+partition_node({Mbr, _Meta, Nodes}) ->
     {MbrW, MbrS, MbrE, MbrN} = Mbr,
 %    io:format("(partition_node) Mbr: ~p~n", [Mbr]),
     Tmp = lists:foldl(
