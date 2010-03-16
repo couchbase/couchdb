@@ -138,33 +138,20 @@ insert(Fd, RootPos, NewNode) ->
 
 insert(Fd, RootPos, {NewNodeMbr, NewNodeMeta, NewNodeId}, CallDepth) ->
     NewNode = {NewNodeMbr, NewNodeMeta#node{type=leaf}, NewNodeId},
-    {ok, {TreeMbr, Meta, EntriesPos}} = couch_file:pread_term(Fd, RootPos),
     % EntriesPos is only a pointer to the node (position in file)
-    Entries = case Meta#node.type of
+    {ok, {TreeMbr, Meta, EntriesPos}} = couch_file:pread_term(Fd, RootPos),
+    EntryNum = length(EntriesPos),
+    %Entries = case Meta#node.type of
+    Inserted = case Meta#node.type of
     leaf ->
-        EntriesPos;
         % NOTE vmx: Currently we don't save each entry individually, but the
         %     whole set of entries. This might be worth changing in the future
         %lists:map(fun(EntryPos) ->
         %    {ok, CurEntry} = couch_file:pread_term(Fd, EntryPos),
         %    CurEntry
         %end, EntriesPos);
-    % If the nodes are inner nodes, they only contain pointers to their child
-    % nodes. We only need their MBRs, position, but not their children's
-    % position. Read them from disk, but store their position in file (pointer
-    % from parent node) instead of their child nodes.
-    inner ->
-        lists:map(fun(EntryPos) ->
-            {ok, CurEntry} = couch_file:pread_term(Fd, EntryPos),
-            {EntryMbr, EntryMeta, _} = CurEntry,
-            {EntryMbr, EntryMeta, EntryPos}
-        end, EntriesPos)
-    end,
-    %io:format("Entries: ~p~n", [Entries]),
-    EntryNum = length(Entries),
-    Inserted = case Meta#node.type of
-    leaf ->
-        %io:format("I'm a leaf node~n", []),
+        Entries = EntriesPos,
+
         LeafNodeMbr = merge_mbr(TreeMbr, element(1, NewNode)),
         LeafNode = {LeafNodeMbr, #node{type=leaf}, Entries ++ [NewNode]},
         if
@@ -180,7 +167,17 @@ insert(Fd, RootPos, {NewNodeMbr, NewNodeMeta, NewNodeId}, CallDepth) ->
             {ok, Pos2} = couch_file:append_term(Fd, Node2),
             {splitted, SplittedMbr, Pos1, Pos2}
         end;
+    % If the nodes are inner nodes, they only contain pointers to their child
+    % nodes. We only need their MBRs, position, but not their children's
+    % position. Read them from disk, but store their position in file (pointer
+    % from parent node) instead of their child nodes.
     inner ->
+        Entries = lists:map(fun(EntryPos) ->
+            {ok, CurEntry} = couch_file:pread_term(Fd, EntryPos),
+            {EntryMbr, EntryMeta, _} = CurEntry,
+            {EntryMbr, EntryMeta, EntryPos}
+        end, EntriesPos),
+
         %io:format("I'm an inner node~n", []),
         % Get entry where smallest MBR expansion is needed
         Expanded = lists:map(
