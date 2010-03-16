@@ -15,11 +15,10 @@
 -define(MAX_FILLED, 4).
 -define(MIN_FILLED, 2).
 
--define(FILENAME, "/tmp/vtree.bin").
 
-
-% XXX vmx: rethink "leaf" type. At the moment it's used for the nodes that
-%    contain the actual data (the doc IDs) and their parent node.
+% NOTE vmx: At the moment "leaf" is used for the nodes that
+%    contain the actual data (the doc IDs) and their parent node. It makes
+%    the lookup code easier.
 -record(node, {
     % type = inner | leaf
     type=inner}).
@@ -36,13 +35,13 @@ lookup(Fd, Pos, Bbox) ->
                 Acc ++ lookup(Fd, EntryPos, Bbox);
             leaf ->
                 % loop through all data nodes
-                lists:foldl(fun(Child, Acc) ->
+                lists:foldl(fun(Child, Acc2) ->
                     {Mbr, _, _Id} = Child,
                     Disjoint = disjoint(Mbr, Bbox),
                     if not Disjoint ->
-                        Acc ++ [Child];
+                        Acc2 ++ [Child];
                     true ->
-                        Acc
+                        Acc2
                     end
                 end, [], NodesPos);
             _ ->
@@ -87,7 +86,7 @@ disjoint(Mbr1, Mbr2) ->
 
 
 split_node({_Mbr, Meta, _EntriesPos}=Node) ->
-    %io:format("We need to split~n", []),
+    %io:format("We need to split~n~p~n", [Node]),
     Partition = partition_node(Node),
     SplittedLeaf = best_split(Partition),
     [{Mbr1, Children1}, {Mbr2, Children2}] = case SplittedLeaf of
@@ -149,7 +148,7 @@ insert(Fd, RootPos, {NewNodeMbr, NewNodeMeta, NewNodeId}, CallDepth) ->
         %lists:map(fun(EntryPos) ->
         %    {ok, CurEntry} = couch_file:pread_term(Fd, EntryPos),
         %    CurEntry
-        %end, EntriesPos),
+        %end, EntriesPos);
     % If the nodes are inner nodes, they only contain pointers to their child
     % nodes. We only need their MBRs, position, but not their children's
     % position. Read them from disk, but store their position in file (pointer
@@ -175,7 +174,7 @@ insert(Fd, RootPos, {NewNodeMbr, NewNodeMeta, NewNodeId}, CallDepth) ->
             {ok, LeafNodeMbr, Pos};
         % do the fancy split algorithm
         true ->
-            %io:format("We need to split (leaf node)~p~n", [CallDepth]),
+            %io:format("We need to split (leaf node)~n~p~n", [LeafNode]),
             {SplittedMbr, Node1, Node2} = split_node(LeafNode),
             {ok, Pos1} = couch_file:append_term(Fd, Node1),
             {ok, Pos2} = couch_file:append_term(Fd, Node2),
@@ -222,7 +221,7 @@ insert(Fd, RootPos, {NewNodeMbr, NewNodeMeta, NewNodeId}, CallDepth) ->
                 {ok, NewMbr, Pos};
             % We need to split the inner node
             true ->
-                %io:format("We need to split (inner node)~n", []),
+                %io:format("We need to split (inner node)~n~p~n", [Entries]),
                 {SplittedMbr, Node1, Node2} = split_node(
                         {NewMbr, #node{type=inner}, Entries}),
                 {ok, Pos1} = couch_file:append_term(Fd, Node1),
@@ -267,13 +266,12 @@ find_area_min_nth(Count, [{HMin, HMbr}|T], {{Min, _Mbr}, _MinCount})
 find_area_min_nth(Count, [_H|T], {{Min, Mbr}, MinCount}) ->
     find_area_min_nth(Count+1, T, {{Min, Mbr}, MinCount}).
 
-partition_node({Mbr, _Meta, Nodes}) ->
+partition_node({Mbr, Meta, Nodes}) ->
     {MbrW, MbrS, MbrE, MbrN} = Mbr,
 %    io:format("(partition_node) Mbr: ~p~n", [Mbr]),
-%    io:format("(partition_node) Nodes: ~p~n", [Nodes]),
     Tmp = lists:foldl(
         fun(Node,  {AccW, AccS, AccE, AccN}) ->
-            {{W, S, E, N}, _Meta, _Id} = Node,
+            {{W, S, E, N}, _NodeMeta, _Id} = Node,
             if
                 W-MbrW < MbrE-E ->
                     NewAccW = AccW ++ [Node],
