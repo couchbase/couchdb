@@ -23,7 +23,7 @@
 -include("couch_db.hrl").
 
 
--record(spatial,{
+-record(spatial, {
     count=0,
     seq=0,
     fd=nil,
@@ -32,6 +32,11 @@
 -record(node, {
     % type = inner | leaf
     type=inner}).
+
+-record(spatial_header, {
+    seq=0,
+    treepos=-1
+}).
 
 start_link() ->
     ?LOG_DEBUG("Spatial daemon: starting link.", []),
@@ -48,16 +53,30 @@ bbox_search(Bbox) ->
     gen_server:call(couch_spatial, {do_bbox_search, Bbox}).
 
 init([]) ->
-    case couch_file:open(?FILENAME, [create, overwrite]) of
+    {ok, State} = case couch_file:open(?FILENAME) of
     {ok, Fd} ->
         {ok, #spatial{fd=Fd}};
+    {error, enoent} ->
+        case couch_file:open(?FILENAME, [create, overwrite]) of
+        {ok, Fd} ->
+            couch_file:write_header(Fd, #spatial_header{}),
+            {ok, #spatial{fd=Fd}};
+        {error, Reason} ->
+            io:format("ERROR (~s): Couldn't open file (~s) for tree storage~n",
+                      [Reason, ?FILENAME]),
+            {error, Reason}
+        end;
     {error, Reason} ->
         io:format("ERROR (~s): Couldn't open file (~s) for tree storage~n",
                   [Reason, ?FILENAME]),
         {error, Reason}
-    end.
+    end,
 
-terminate(Reason, _Srv) ->
+    {ok, Header} = couch_file:read_header(State#spatial.fd),
+    {ok, State#spatial{seq=Header#spatial_header.seq,
+                       treepos=Header#spatial_header.treepos}}.
+
+terminate(_Reason, _Srv) ->
     ok.
 
 
@@ -78,16 +97,14 @@ handle_call({do_update_tree, Db}, _From,
         %Loc /= undefined ->
         is_list(Loc) ->
             ?LOG_DEBUG("insert point: TreePosCur: ~p~n", [TreePosCur]),
-            %TreeUpdated = insert_point(TreeCurrent, DocId, list_to_tuple(Loc)),
             TreePosNew = insert_point(Fd, TreePosCur, DocId, list_to_tuple(Loc)),
-            %{ok, {TreeUpdated, DocSeq}};
             {ok, {TreePosNew, DocSeq}};
         true ->
-            %{ok, {TreeCurrent, DocSeq}}
             {ok, {TreePosCur, DocSeq}}
         end
     end, {TreePos, Seq}, []),
-    %?LOG_DEBUG("newtree:~p, newseq:~p~n", [NewTree, NewSeq]),
+    couch_file:write_header(Fd, #spatial_header{seq=NewSeq,
+                                                treepos=TreePosNew}),
     {reply, ?l2b(io_lib:format("hello couch (newseq: ~w, A: ~p, B: ~p)",
                                [NewSeq, A, TreePosNew])),
      #spatial{seq=NewSeq, fd=Fd, treepos=TreePosNew}};
@@ -116,7 +133,7 @@ insert_point(Fd, TreePos, DocId, {X, Y}) ->
 handle_cast(foo,State) ->
     {noreply, State}.
 
-handle_info(Msg, Server) ->
+handle_info(_Msg, Server) ->
     {noreply, Server}.
 
 code_change(_OldVsn, State, _Extra) ->
