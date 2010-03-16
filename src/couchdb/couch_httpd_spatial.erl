@@ -20,14 +20,11 @@
 handle_spatial_req(#httpd{method='GET',
         path_parts=[_, _, DName, _, Query]}=Req, Db, _DDoc) ->
     ?LOG_DEBUG("Spatial query (~p): ~p", [DName, Query]),
-    %Seq = list_to_integer(binary_to_list(Query)),
-    %Bbox = 
-    %Foo = couch_spatial:update_tree(Db),
     couch_spatial:update_tree(Db),
-    %Bbox = list_to_tuple([-180, -90, 180, 90]),
     Bbox = list_to_tuple(?JSON_DECODE(Query)),
     %Foo = couch_spatial:bbox_search({-180, -90, 180, 90}),
     Foo = couch_spatial:bbox_search(Bbox),
+%    Foo = <<"bar">>,
     send_json(Req, {[{<<"query1">>, Foo}]});
 
 handle_spatial_req(Req, _Db, _DDoc) ->
