@@ -2,6 +2,7 @@
 -export([run/0]).
 
 -define(FILENAME, "/tmp/vtree_huge.bin").
+%-define(FILENAME, "/tmp/couchdb_vtree.bin").
 -define(NODE_NUM, 5000).
 
 -record(node, {
@@ -9,6 +10,15 @@
     type=leaf}).
 
 run() ->
+%    case couch_file:open(?FILENAME) of
+%    {ok, Fd} ->
+%        %io:format("Tree: ~p~n", [TreePos]),
+%        vtreeviz:visualize(Fd, 1318),
+%        ok;
+%    {error, Reason} ->
+%       io:format("ERROR (~s): Couldn't open file (~s) for tree storage~n",
+%                  [Reason, ?FILENAME])
+%    end.
     case couch_file:open(?FILENAME, [create, overwrite]) of
     {ok, Fd} ->
         TreePos = build_tree(Fd, ?NODE_NUM),
