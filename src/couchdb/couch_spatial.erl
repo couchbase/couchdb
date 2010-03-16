@@ -17,6 +17,8 @@
 
 -export([foo/1, update_tree/1, bbox_search/1]).
 
+-define(FILENAME, "/tmp/couchdb_vtree.bin").
+
 
 -include("couch_db.hrl").
 
@@ -24,7 +26,12 @@
 -record(spatial,{
     count=0,
     seq=0,
-    tree={}}).
+    fd=nil,
+    treepos=-1}).
+
+-record(node, {
+    % type = inner | leaf
+    type=inner}).
 
 start_link() ->
     ?LOG_DEBUG("Spatial daemon: starting link.", []),
@@ -41,7 +48,14 @@ bbox_search(Bbox) ->
     gen_server:call(couch_spatial, {do_bbox_search, Bbox}).
 
 init([]) ->
-    {ok, #spatial{}}.
+    case couch_file:open(?FILENAME, [create, overwrite]) of
+    {ok, Fd} ->
+        {ok, #spatial{fd=Fd}};
+    {error, Reason} ->
+        io:format("ERROR (~s): Couldn't open file (~s) for tree storage~n",
+                  [Reason, ?FILENAME]),
+        {error, Reason}
+    end.
 
 terminate(Reason, _Srv) ->
     ok.
@@ -50,9 +64,10 @@ terminate(Reason, _Srv) ->
 handle_call({do_foo,String}, _From, #spatial{count=Count}) ->
     {reply, ?l2b(lists:flatten(io_lib:format("~s ~w", [String, Count]))), #spatial{count=Count+1}};
 
-handle_call({do_update_tree, Db}, _From, #spatial{tree=Tree, seq=Seq}) ->
-    {ok, A, {NewTree, NewSeq}} = couch_db:enum_docs_since(Db, Seq,
-            fun(DocInfo, _, {TreeCurrent, _SeqCurrent}) ->
+handle_call({do_update_tree, Db}, _From,
+            #spatial{seq=Seq, fd=Fd, treepos=TreePos}) ->
+    {ok, A, {TreePosNew, NewSeq}} = couch_db:enum_docs_since(Db, Seq,
+            fun(DocInfo, _, {TreePosCur, _SeqCur}) ->
         {doc_info, DocId, DocSeq, _RevInfo} = DocInfo,
         %?LOG_DEBUG("doc: id:~p, seq:~p~n", [DocId, DocSeq]),
         {ok, Doc} = couch_db:open_doc(Db, DocInfo),
@@ -62,24 +77,28 @@ handle_call({do_update_tree, Db}, _From, #spatial{tree=Tree, seq=Seq}) ->
         if
         %Loc /= undefined ->
         is_list(Loc) ->
-            TreeUpdated = insert_point(TreeCurrent, DocId, list_to_tuple(Loc)),
-            {ok, {TreeUpdated, DocSeq}};
+            ?LOG_DEBUG("insert point: TreePosCur: ~p~n", [TreePosCur]),
+            %TreeUpdated = insert_point(TreeCurrent, DocId, list_to_tuple(Loc)),
+            TreePosNew = insert_point(Fd, TreePosCur, DocId, list_to_tuple(Loc)),
+            %{ok, {TreeUpdated, DocSeq}};
+            {ok, {TreePosNew, DocSeq}};
         true ->
-            {ok, {TreeCurrent, DocSeq}}
+            %{ok, {TreeCurrent, DocSeq}}
+            {ok, {TreePosCur, DocSeq}}
         end
-    end,
-    {Tree, Seq}, []),
-    ?LOG_DEBUG("newtree:~p, newseq:~p~n", [NewTree, NewSeq]),
+    end, {TreePos, Seq}, []),
+    %?LOG_DEBUG("newtree:~p, newseq:~p~n", [NewTree, NewSeq]),
     {reply, ?l2b(io_lib:format("hello couch (newseq: ~w, A: ~p, B: ~p)",
-                               [NewSeq, A, NewTree])),
-     #spatial{tree=NewTree, seq=NewSeq}};
+                               [NewSeq, A, TreePosNew])),
+     #spatial{seq=NewSeq, fd=Fd, treepos=TreePosNew}};
 
-handle_call({do_bbox_search, Bbox}, _From, State=#spatial{tree=Tree}) ->
-    ?LOG_DEBUG("bbox_search tree: ~p", [Tree]),
-    Result = vtree:lookup(Bbox, Tree),
+handle_call({do_bbox_search, Bbox}, _From,
+            State=#spatial{fd=Fd, treepos=TreePos}) ->
+    ?LOG_DEBUG("bbox_search tree: ~p", [TreePos]),
+    Result = vtree:lookup(Fd, TreePos, Bbox),
     ?LOG_DEBUG("bbox_search result: ~p", [Result]),
     %{reply, Result, State}.
-    Output = lists:foldl(fun({Loc, DocId}, Acc) ->
+    Output = lists:foldl(fun({Loc, _Meta, DocId}, Acc) ->
          % NOTE vmx: it's only a point, but we saved MBRs
          {X, Y, _, _} = Loc,
          Acc ++ [{[{<<"id">>, DocId}, {<<"loc">>, [X, Y]}]}]
@@ -87,12 +106,12 @@ handle_call({do_bbox_search, Bbox}, _From, State=#spatial{tree=Tree}) ->
     %{reply, {[{<<"id">>, <<"augsburg">>}, {<<"loc">>, [Output, 49]}]}, State}.
     {reply, Output, State}.
 
-insert_point(Tree, DocId, {X, Y}) ->
+insert_point(Fd, TreePos, DocId, {X, Y}) ->
     ?LOG_DEBUG("Insert (~s) point (~w, ~w) into tree~n", [DocId, X, Y]),
-%    ?LOG_DEBUG("Tree old:~p", [Tree]),
-    TreeUpdated = vtree:insert({{X, Y, X, Y}, DocId}, Tree),
-%    ?LOG_DEBUG("Tree new:~p~n", [TreeUpdated]),
-    TreeUpdated.
+    {ok, _Mbr, TreePosNew} = vtree:insert(Fd, TreePos,
+                                          {{X, Y, X, Y}, #node{type=leaf},
+                                           DocId}),
+    TreePosNew.
 
 handle_cast(foo,State) ->
     {noreply, State}.
