@@ -3,7 +3,7 @@
 -export([lookup/3, within/2, intersect/2, disjoint/2, insert/3, area/1,
          merge_mbr/2, find_area_min_nth/1, partition_node/1,
          calc_nodes_mbr/1, calc_mbr/1, best_split/1, minimal_overlap/2,
-         calc_overlap/2, minimal_coverage/2]).
+         calc_overlap/2, minimal_coverage/2, delete/4]).
 
 -export([get_node/2]).
 
@@ -32,6 +32,8 @@ lookup(Fd, Pos, Bbox) ->
             %case Entry of
             case Meta#node.type of
             inner ->
+                % XXX FIXME vmx: I look at _every_ inner node. Not just at the
+                %     that intersect with the Bbox
                 Acc ++ lookup(Fd, EntryPos, Bbox);
             leaf ->
                 % loop through all data nodes
@@ -385,6 +387,93 @@ calc_overlap(Mbr1, Mbr2) ->
             {0, 0, 0, 0}
     end.
 
+% Returns: {ok, NewRootPos} or
+%     not_found or
+%     empty (if tree is empty because of that deletion)
+delete(Fd, DeleteId, DeleteMbr, RootPos) when not is_list(RootPos) ->
+    case delete(Fd, DeleteId, DeleteMbr, [RootPos]) of
+    {ok, RootNewPos, RootPos} ->
+        {ok, RootNewPos};
+    % Tree is completely empty
+    {empty, RootPos} ->
+        empty;
+    not_found ->
+        not_found
+    end;
+
+delete(_Fd, _DeleteId, _DeleteMbr, []) ->
+    not_found;
+
+% Returns: {ok, NewPos, OldPos} or
+%     not_found or
+%     {empty, OldPos}
+delete(Fd, DeleteId, DeleteMbr, [NodePos|NodePosTail]) ->
+    {ok, Node} = couch_file:pread_term(Fd, NodePos),
+    {NodeMbr, NodeMeta, NodeEntriesPos} = Node,
+    case within(DeleteMbr, NodeMbr) of
+    true ->
+        case NodeMeta#node.type of
+        inner ->
+            case delete(Fd, DeleteId, DeleteMbr, NodeEntriesPos) of
+            {ok, ChildNewPos, ChildOldPos} ->
+                % Delete pointer to old node, add new one
+                EntriesPosNew = lists:delete(ChildOldPos, NodeEntriesPos) ++
+                        [ChildNewPos],
+                NodeNewPos = rebuild_node(Fd, NodeMeta, EntriesPosNew),
+                {ok, NodeNewPos, NodePos};
+            % Node doesn't have children any longer
+            {empty, ChildOldPos} ->
+                EntriesPosNew = lists:delete(ChildOldPos, NodeEntriesPos),
+                % This node is empty as well
+                if length(EntriesPosNew) == 0 ->
+                    %io:format("It's empty again: ~p~n", [NodePos]),
+                    {empty, NodePos};
+                true ->
+                    NodeNewPos = rebuild_node(Fd, NodeMeta, EntriesPosNew),
+                    {ok, NodeNewPos, NodePos}
+                end;
+            not_found ->
+                % go on with sibling nodes
+                delete(Fd, DeleteId, DeleteMbr, NodePosTail)
+            end;
+        leaf ->
+            case lists:keytake(DeleteId, 3, NodeEntriesPos) of
+            {value, _DeletedNode, EntriesNew} ->
+                case EntriesNew of
+                [] ->
+                    {empty, NodePos};
+                _ ->
+                    NodeMbrNew = calc_nodes_mbr(EntriesNew),
+                    {ok, NodeNewPos} = couch_file:append_term(Fd,
+                                          {NodeMbrNew, NodeMeta, EntriesNew}),
+                    % NodePos is the old position in file
+                    {ok, NodeNewPos, NodePos}
+                end;
+            false ->
+                not_found
+            end
+        end;
+    false ->
+        % go on with sibling nodes
+        delete(Fd, DeleteId, DeleteMbr, NodePosTail)
+    end.
+
+rebuild_node(Fd, NodeMeta, EntriesPos) ->
+    Entries = pos_to_data(Fd, EntriesPos),
+    Mbr = calc_nodes_mbr(Entries),
+    {ok, NodePos} = couch_file:append_term(Fd, {Mbr, NodeMeta, EntriesPos}),
+    NodePos.
+
+% Transforms a list of positions in a file to the actual data
+pos_to_data(Fd, List) ->
+    pos_to_data(Fd, List, []).
+
+pos_to_data(_Fd, [], DataList) ->
+    DataList;
+
+pos_to_data(Fd, [H|T], DataList) ->
+    {ok, Data} = couch_file:pread_term(Fd, H),
+    pos_to_data(Fd, T, DataList ++ [Data]).
 
 min(A, B) ->
     if A > B -> B ; true -> A end.

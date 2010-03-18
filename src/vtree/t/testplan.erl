@@ -20,6 +20,7 @@ start() ->
     test_minimal_coverage(),
     test_calc_overlap(),
     test_insert(),
+    test_delete(),
 
     etap:end_tests().
 
@@ -442,4 +443,109 @@ test_calc_overlap() ->
             "Calculate overlap of one MBRs enclosing the other (2)"),
     etap:is(vtree:calc_overlap(Mbr4, Mbr5), {0, 0, 0, 0},
             "Calculate overlap of MBRs with no overlap"),
+    ok.
+
+test_delete() ->
+    etap:plan(9),
+
+    {ok, Fd} = case couch_file:open(?FILENAME, [create, overwrite]) of
+    {ok, Fd2} ->
+        {ok, Fd2};
+    {error, Reason} ->
+        io:format("ERROR (~s): Couldn't open file (~s) for tree storage~n",
+                  [Reason, ?FILENAME])
+    end,
+
+    Node1 = {{10,5,13,15}, #node{type=leaf}, <<"Node1">>},
+    Node2 = {{-18,-3,-10,-1}, #node{type=leaf}, <<"Node2">>},
+    Node3 = {{-21,2,-10,14}, #node{type=leaf}, <<"Node3">>},
+    Node4 = {{5,-32,19,-25}, #node{type=leaf}, <<"Node4">>},
+    Node5 = {{-5,-16,4,19}, #node{type=leaf}, <<"Node5">>},
+    Mbr1 = {10,5,13,15},
+    Mbr1_2 = {-18,-3,13,15},
+    Mbr1_2_3 = {-21,-3,13,15},
+    Mbr1_2_3_4 = {-21,-32,19,15},
+    Mbr1_2_3_4_5 = {-21,-32,19,19},
+    Mbr1_3_4 = {-21,-32,19,15},
+    Mbr1_3_4_5 = {-21,-32,19,19},
+    Mbr1_4_5 = {-5,-32,19,19},
+    Mbr1_4 = {5,-32,19,15},
+    {Mbr2, _, _} = Node2,
+    Mbr2_3 = {-21,-3,-10,14},
+    Mbr2_3_4_5 = {-21,-32,19,19},
+    {Mbr3, _, _} = Node3,
+    Mbr4_5 = {-5,-32,19,19},
+    {ok, Mbr1, 0} = vtree:insert(Fd, -1, Node1),
+    {ok, Mbr1_2, Pos2} = vtree:insert(Fd, 0, Node2),
+    {ok, Mbr1_2_3, Pos3} = vtree:insert(Fd, Pos2, Node3),
+    {ok, Mbr1_2_3_4, Pos4} = vtree:insert(Fd, Pos3, Node4),
+    {ok, Mbr1_2_3_4_5, Pos5} = vtree:insert(Fd, Pos4, Node5),
+    Tree3 = {Mbr3, #node{type=leaf}, [Node3]},
+    Tree2_3 = {Mbr2_3, #node{type=leaf}, [Node2, Node3]},
+    Tree4_5 = {Mbr4_5, #node{type=leaf}, [Node4, Node5]},
+    Tree1_4_5 = {Mbr1_4_5, #node{type=leaf}, [Node1, Node4, Node5]},
+    Tree2_3_4_5 = {Mbr2_3_4_5, #node{type=inner}, [Tree2_3, Tree4_5]},
+    Tree1_3_4_5 = {Mbr1_3_4_5, #node{type=inner}, [Tree1_4_5, Tree3]},
+    Tree1_4 = {Mbr1_4, #node{type=leaf}, [Node1, Node4]},
+    Tree1_3_4 = {Mbr1_3_4, #node{type=inner}, [Tree3, Tree1_4]},
+
+    {Node1Mbr, _, Node1Id} = Node1,
+    {Node2Mbr, _, Node2Id} = Node2,
+    {Node3Mbr, _, Node3Id} = Node3,
+    {Node4Mbr, _, Node4Id} = Node4,
+    {Node5Mbr, _, Node5Id} = Node5,
+    etap:is(vtree:delete(Fd, <<"bliblablubfoobar">>, Node1Mbr, Pos2),
+            not_found,
+            "Delete a node which ID's doesn't exist (tree height=1)"),
+
+    {ok, Pos2_1} = vtree:delete(Fd, Node1Id, Node1Mbr, Pos2),
+    etap:is(vtree:get_node(Fd, Pos2_1),
+            {ok, {Mbr2, #node{type=leaf}, [Node2]}},
+            "Delete a node (tree height=1) (a)"),
+
+    {ok, Pos2_2} = vtree:delete(Fd, Node2Id, Node2Mbr, Pos2),
+    etap:is(vtree:get_node(Fd, Pos2_2),
+            {ok, {Mbr1, #node{type=leaf}, [Node1]}},
+            "Delete a node (tree height=1) (b)"),
+
+    {ok, Pos5_1} = vtree:delete(Fd, Node1Id, Node1Mbr, Pos5),
+    {ok, {Pos5_1Mbr, Pos5_1Meta, [Pos5_1C1, Pos5_1C2]}} = vtree:get_node(
+                                                            Fd, Pos5_1),
+    {ok, Pos5_1Child1} = vtree:get_node(Fd, Pos5_1C1),
+    {ok, Pos5_1Child2} = vtree:get_node(Fd, Pos5_1C2),
+    etap:is({Pos5_1Mbr, Pos5_1Meta, [Pos5_1Child1, Pos5_1Child2]}, Tree2_3_4_5,
+            "Delete a node (tree height=2) (a)"),
+
+    {ok, Pos5_2} = vtree:delete(Fd, Node2Id, Node2Mbr, Pos5),
+    {ok, {Pos5_2Mbr, Pos5_2Meta, [Pos5_2C1, Pos5_2C2]}} = vtree:get_node(
+                                                            Fd, Pos5_2),
+    {ok, Pos5_2Child1} = vtree:get_node(Fd, Pos5_2C1),
+    {ok, Pos5_2Child2} = vtree:get_node(Fd, Pos5_2C2),
+    etap:is({Pos5_2Mbr, Pos5_2Meta, [Pos5_2Child1, Pos5_2Child2]}, Tree1_3_4_5,
+            "Delete a node (tree height=2) (b)"),
+
+    {ok, Pos5_3} = vtree:delete(Fd, Node3Id, Node3Mbr, Pos5_2),
+    {ok, {Pos5_3Mbr, Pos5_3Meta, [Pos5_3C]}} = vtree:get_node(Fd, Pos5_3),
+    {ok, Pos5_3Child} = vtree:get_node(Fd, Pos5_3C),
+    etap:is({Pos5_3Mbr, Pos5_3Meta, [Pos5_3Child]},
+            {Mbr1_4_5, #node{type=inner}, [Tree1_4_5]},
+            "Delete a node which is the only child (tree height=2) (b)"),
+
+    {ok, Pos5_4} = vtree:delete(Fd, Node5Id, Node5Mbr, Pos5_2),
+    {ok, {Pos5_4Mbr, Pos5_4Meta, [Pos5_4C1, Pos5_4C2]}} = vtree:get_node(
+                                                            Fd, Pos5_4),
+    {ok, Pos5_4Child1} = vtree:get_node(Fd, Pos5_4C1),
+    {ok, Pos5_4Child2} = vtree:get_node(Fd, Pos5_4C2),
+    etap:is({Pos5_4Mbr, Pos5_4Meta, [Pos5_4Child1, Pos5_4Child2]}, Tree1_3_4,
+            "Delete a node (tree height=2) (b)"),
+
+    % previous tests test the same code path already
+    {ok, Pos5_5} = vtree:delete(Fd, Node4Id, Node4Mbr, Pos5_4),
+    {ok, Pos5_6} = vtree:delete(Fd, Node3Id, Node3Mbr, Pos5_5),
+
+    etap:is(vtree:delete(Fd, Node1Id, Node1Mbr, Pos5_6), empty,
+            "After deletion of node, the tree is empty (tree height=2)"),
+
+    etap:is(vtree:delete(Fd, Node5Id, Node5Mbr, Pos5_6), not_found,
+            "Node can't be found (tree height=2)"),
     ok.
