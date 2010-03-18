@@ -39,19 +39,18 @@ start_link() ->
     gen_server:start_link({local, couch_spatial}, couch_spatial, [], []).
 
 update_tree(Db) ->
-    %gen_server:call(couch_spatial, {do_get_docs, Seq}).
     gen_server:call(couch_spatial, {do_update_tree, Db}).
 
 bbox_search(Bbox) ->
     gen_server:call(couch_spatial, {do_bbox_search, Bbox}).
 
 init([]) ->
-    case couch_file:open(?FILENAME) of
-    {ok, Fd} ->
-        {ok, State} = couch_file:read_header(Fd),
-        {ok, Btree} = couch_btree:open(nil, Fd),
-        {ok, State#spatial{fd=Fd, btree=Btree}};
-    {error, enoent} ->
+%    case couch_file:open(?FILENAME) of
+%    {ok, Fd} ->
+%        {ok, State} = couch_file:read_header(Fd),
+%        {ok, Btree} = couch_btree:open(nil, Fd),
+%        {ok, State#spatial{fd=Fd, btree=Btree}};
+%    {error, enoent} ->
         case couch_file:open(?FILENAME, [create, overwrite]) of
         {ok, Fd} ->
             {ok, Btree} = couch_btree:open(nil, Fd),
@@ -62,31 +61,51 @@ init([]) ->
             io:format("ERROR (~s): Couldn't open file (~s) for tree storage~n",
                       [Reason, ?FILENAME]),
             {error, Reason}
-        end;
-    {error, Reason} ->
-        io:format("ERROR (~s): Couldn't open file (~s) for tree storage~n",
-                  [Reason, ?FILENAME]),
-        {error, Reason}
+%        end;
+%    {error, Reason} ->
+%        io:format("ERROR (~s): Couldn't open file (~s) for tree storage~n",
+%                  [Reason, ?FILENAME]),
+%        {error, Reason}
     end.
 
 terminate(_Reason, _Srv) ->
     ok.
 
 handle_call({do_update_tree, Db}, _From,
-            #spatial{seq=Seq, fd=Fd}=State) ->
+            #spatial{seq=Seq, fd=Fd, btree=Btree}=State) ->
     {ok, _, StateNew} = couch_db:enum_docs_since(Db, Seq,
             fun(DocInfo, _, StateCur) ->
-        {doc_info, DocId, DocSeq, _RevInfo} = DocInfo,
-        {ok, Doc} = couch_db:open_doc(Db, DocInfo),
-        {Body} = Doc#doc.body,
-        Loc = proplists:get_value(<<"loc">>, Body, 0),
-        if
-%        %Loc /= undefined ->
-        is_list(Loc) ->
-            TreePos = insert_point(StateCur, DocId, list_to_tuple(Loc)),
-            {ok, StateCur#spatial{seq=DocSeq, treepos=TreePos}};
+        % NOTE vmx: I only take the first element of RevInfo, that should be
+        %enough
+        {doc_info, DocId, DocSeq, [RevInfo|_]} = DocInfo,
+        case RevInfo#rev_info.deleted of
+        false ->
+            {ok, Doc} = couch_db:open_doc(Db, DocInfo),
+            {Body} = Doc#doc.body,
+            Loc = proplists:get_value(<<"loc">>, Body, 0),
+            if
+            %Loc /= undefined ->
+            is_list(Loc) ->
+                {TreePos, BtreeNew} = insert_point(StateCur, DocId,
+                                                   list_to_tuple(Loc)),
+                {ok, StateCur#spatial{seq=DocSeq, treepos=TreePos,
+                                      btree=BtreeNew}};
+            true ->
+                {ok, StateCur#spatial{seq=DocSeq}}
+            end;
         true ->
-            {ok, StateCur#spatial{seq=DocSeq}}
+            ?LOG_DEBUG("document got deleted: ~p", [DocId]),
+            case couch_btree:lookup(StateCur#spatial.btree, [DocId]) of
+            [{ok, {DocId, Mbr}}] ->
+                ?LOG_DEBUG("~p's MBR is: ~p", [DocId, Mbr]),
+                {TreePos, BtreeNew} = delete_point(State, DocId, Mbr),
+                {ok, StateCur#spatial{seq=DocSeq, treepos=TreePos,
+                                      btree=BtreeNew}};
+            [not_found] ->
+                % If it's not in the back-index it's not in the spatial index
+                {ok, StateCur#spatial{seq=DocSeq}}
+            end
+%            {ok, StateCur#spatial{seq=DocSeq}}
         end
     end, State, []),
     couch_file:write_header(Fd, StateNew),
@@ -110,9 +129,19 @@ insert_point(#spatial{fd=Fd, treepos=TreePos, btree=Btree}=State,
     {ok, _Mbr, TreePosNew} = vtree:insert(Fd, TreePos,
             {{X, Y, X, Y}, #node{type=leaf}, DocId}),
     % store MBR in back-index
-    couch_btree:add(Btree, [{DocId, {X, Y, X, Y}}]),
+    {ok, BtreeNew} = couch_btree:add(Btree, [{DocId, {X, Y, X, Y}}]),
 
-    TreePosNew.
+    {TreePosNew, BtreeNew}.
+
+delete_point(#spatial{fd=Fd, treepos=TreePos, btree=Btree}=State,
+             DocId, Mbr) ->
+    ?LOG_DEBUG("delete point: ~p", [DocId]),
+    {ok, TreePosNew} = vtree:delete(Fd, DocId, Mbr, TreePos),
+    % delete from back-index
+    {ok, BtreeNew} = couch_btree:add_remove(Btree, [], [DocId]),
+
+    {TreePosNew, BtreeNew}.
+
 
 handle_cast(foo,State) ->
     {noreply, State}.
