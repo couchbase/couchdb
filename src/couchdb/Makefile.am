@@ -47,6 +47,7 @@ source_files = \
     couch_httpd_oauth.erl \
     couch_httpd_external.erl \
     couch_httpd_show.erl \
+    couch_httpd_spatial.erl \
     couch_httpd_view.erl \
     couch_httpd_misc_handlers.erl \
 	couch_httpd_rewrite.erl \
@@ -67,6 +68,7 @@ source_files = \
     couch_rep_writer.erl \
     couch_server.erl \
     couch_server_sup.erl \
+    couch_spatial.erl \
     couch_stats_aggregator.erl \
     couch_stats_collector.erl \
     couch_stream.erl \
@@ -104,6 +106,7 @@ compiled_files = \
     couch_httpd_oauth.beam \
     couch_httpd_external.beam \
     couch_httpd_show.beam \
+    couch_httpd_spatial.beam \
     couch_httpd_view.beam \
     couch_httpd_misc_handlers.beam \
 	couch_httpd_rewrite.beam \
@@ -124,6 +127,7 @@ compiled_files = \
     couch_rep_writer.beam \
     couch_server.beam \
     couch_server_sup.beam \
+    couch_spatial.beam \
     couch_stats_aggregator.beam \
     couch_stats_collector.beam \
     couch_stream.beam \

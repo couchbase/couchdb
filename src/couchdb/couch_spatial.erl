@@ -15,7 +15,7 @@
 
 -export([start_link/0, init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
--export([update_tree/1, bbox_search/1]).
+-export([update_tree/3, bbox_search/1]).
 
 -define(FILENAME, "/tmp/couchdb_vtree.bin").
 
@@ -38,8 +38,8 @@ start_link() ->
     ?LOG_DEBUG("Spatial daemon: starting link.", []),
     gen_server:start_link({local, couch_spatial}, couch_spatial, [], []).
 
-update_tree(Db) ->
-    gen_server:call(couch_spatial, {do_update_tree, Db}).
+update_tree(Db, DDoc, SpatialName) ->
+    gen_server:call(couch_spatial, {do_update_tree, Db, DDoc, SpatialName}).
 
 bbox_search(Bbox) ->
     gen_server:call(couch_spatial, {do_bbox_search, Bbox}).
@@ -68,10 +68,14 @@ init([]) ->
 %        {error, Reason}
     end.
 
-terminate(_Reason, _Srv) ->
-    ok.
+%terminate(_Reason, _Srv) ->
+%    ok.
+terminate(Reason, State) ->
+    ?LOG_DEBUG("!!!! TERMINATION: ~p~n~p", [Reason, State]),
+    {reply, [], State}.
 
-handle_call({do_update_tree, Db}, _From,
+
+handle_call({do_update_tree, Db, DDoc, SpatialName}, _From,
             #spatial{seq=Seq, fd=Fd, btree=Btree}=State) ->
     {ok, _, StateNew} = couch_db:enum_docs_since(Db, Seq,
             fun(DocInfo, _, StateCur) ->
@@ -81,17 +85,28 @@ handle_call({do_update_tree, Db}, _From,
         case RevInfo#rev_info.deleted of
         false ->
             {ok, Doc} = couch_db:open_doc(Db, DocInfo),
-            {Body} = Doc#doc.body,
-            Loc = proplists:get_value(<<"loc">>, Body, 0),
-            if
-            %Loc /= undefined ->
-            is_list(Loc) ->
-                {TreePos, BtreeNew} = insert_point(StateCur, DocId,
-                                                   list_to_tuple(Loc)),
-                {ok, StateCur#spatial{seq=DocSeq, treepos=TreePos,
-                                      btree=BtreeNew}};
-            true ->
-                {ok, StateCur#spatial{seq=DocSeq}}
+            JsonDoc = couch_query_servers:json_doc(Doc),
+            % XXX vmx: ERRORHANDLING. If the function doesn't exist in the
+            %     design document, then CouchDB should handle the problem.
+            [<<"spatial">>, GeoJson] = couch_query_servers:ddoc_prompt(
+                    DDoc, [<<"spatial">>, SpatialName], [JsonDoc]),
+            case GeoJson of
+            false ->
+                % Document doesn't contain spatial information
+                {ok, StateCur#spatial{seq=DocSeq}};
+            _ ->
+                {GeoProplist} = GeoJson,
+                Coords = proplists:get_value(<<"coordinates">>, GeoProplist),
+                case proplists:get_value(<<"type">>, GeoProplist) of
+                <<"Point">> ->
+                    {TreePos, BtreeNew} = insert_point(StateCur, DocId,
+                                                       list_to_tuple(Coords)),
+                    {ok, StateCur#spatial{seq=DocSeq, treepos=TreePos,
+                                          btree=BtreeNew}};
+                _ ->
+                    ?LOG_INFO("Other types than Points are not supported yet", []),
+                    {ok, StateCur#spatial{seq=DocSeq}}
+                end
             end;
         true ->
             ?LOG_DEBUG("document got deleted: ~p", [DocId]),
@@ -105,7 +120,6 @@ handle_call({do_update_tree, Db}, _From,
                 % If it's not in the back-index it's not in the spatial index
                 {ok, StateCur#spatial{seq=DocSeq}}
             end
-%            {ok, StateCur#spatial{seq=DocSeq}}
         end
     end, State, []),
     couch_file:write_header(Fd, StateNew),
@@ -145,6 +159,20 @@ delete_point(#spatial{fd=Fd, treepos=TreePos, btree=Btree}=State,
 
 handle_cast(foo,State) ->
     {noreply, State}.
+
+%handle_info({'EXIT', FromPid, {{nocatch, Reason}, _Trace}}, State) ->
+%    ?LOG_DEBUG("Uncaught throw() in linked pid: ~p", [{FromPid, Reason}]),
+%    {stop, Reason, State};
+%handle_info({'EXIT', FromPid, {{_, Reason}, _Trace}}, State) ->
+%    ?LOG_DEBUG("Uncaught throw() in linked pid: ~p", [{FromPid, Reason}]),
+%    {stop, Reason, State};
+
+%handle_info({'EXIT', FromPid, {{bad_return_value, Reason}, _Trace}}, State) ->
+%    ?LOG_DEBUG("Uncaught throw() in linked pid: ~p", [{FromPid, Reason}]),
+%    {stop, Reason, State};
+handle_info({'EXIT', FromPid, Reason}, State) ->
+    ?LOG_DEBUG("Exit from linked pid: ~p", [{FromPid, Reason}]),
+    {stop, Reason, State};
 
 handle_info(_Msg, Server) ->
     {noreply, Server}.

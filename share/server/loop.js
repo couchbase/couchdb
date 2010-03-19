@@ -43,7 +43,8 @@ var DDoc = (function() {
     "shows"    : Render.show,
     "filters"   : Filter.filter,
     "updates"  : Render.update,
-    "validate_doc_update" : Validate.validate
+    "validate_doc_update" : Validate.validate,
+    "spatial" : Spatial.spatial
   };
   var ddocs = {};
   return {

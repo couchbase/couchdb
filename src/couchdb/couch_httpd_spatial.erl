@@ -18,9 +18,9 @@
 -import(couch_httpd, [send_json/2, send_method_not_allowed/2]).
 
 handle_spatial_req(#httpd{method='GET',
-        path_parts=[_, _, DName, _, Query]}=Req, Db, _DDoc) ->
+        path_parts=[_, _, DName, _, SpatialName, Query]}=Req, Db, DDoc) ->
     ?LOG_DEBUG("Spatial query (~p): ~p", [DName, Query]),
-    couch_spatial:update_tree(Db),
+    couch_spatial:update_tree(Db, DDoc, SpatialName),
     Bbox = list_to_tuple(?JSON_DECODE(Query)),
     %Foo = couch_spatial:bbox_search({-180, -90, 180, 90}),
     Foo = couch_spatial:bbox_search(Bbox),

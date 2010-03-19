@@ -17,6 +17,7 @@ JS_FILE_COMPONENTS = \
     server/filter.js \
     server/mimeparse.js \
     server/render.js \
+    server/spatial.js \
     server/state.js \
     server/util.js \
     server/validate.js \
