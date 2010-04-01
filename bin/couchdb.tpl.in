@@ -225,6 +225,14 @@ start_couchdb () {
     command="%ERL% $interactive_option $ERL_START_OPTIONS \
         -env ERL_LIBS %localerlanglibdir% -couch_ini $start_arguments -s couch"
     if test "$BACKGROUND" = "true" -a "$RECURSED" = "false"; then
+
+        echo "Closing all filehandles"
+        arg=""
+        for a in 0 1 2; do
+          arg="$arg $a>&-"
+        done
+        eval `echo exec $arg`
+
         $0 $background_start_arguments -b -r $RESPAWN_TIMEOUT -p $PID_FILE \
             -o $STDOUT_FILE -e $STDERR_FILE -R &
         echo "Apache CouchDB has started, time to relax."
