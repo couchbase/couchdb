@@ -227,9 +227,11 @@ start_couchdb () {
     if test "$BACKGROUND" = "true" -a "$RECURSED" = "false"; then
 
         echo "Closing all filehandles"
-        arg=""
-        for a in 0 1 2; do
-          arg="$arg $a>&-"
+        arg="0</dev/null 1>/dev/null 2>/dev/null"
+        for a in `seq 3 255`; do
+          if [ -e "/proc/$$/fd/$a" ]; then
+            arg="$arg $a>&-"
+          fi
         done
         eval `echo exec $arg`
 
