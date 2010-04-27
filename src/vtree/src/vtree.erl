@@ -3,7 +3,7 @@
 -export([lookup/3, within/2, intersect/2, disjoint/2, insert/3, area/1,
          merge_mbr/2, find_area_min_nth/1, partition_node/1,
          calc_nodes_mbr/1, calc_mbr/1, best_split/1, minimal_overlap/2,
-         calc_overlap/2, minimal_coverage/2, delete/4]).
+         calc_overlap/2, minimal_coverage/2, delete/4, add_remove/4]).
 
 -export([get_node/2]).
 
@@ -26,6 +26,22 @@
 -record(node, {
     % type = inner | leaf
     type=inner}).
+
+% XXX vmx: tests are missing
+add_remove(Fd, Pos, AddKeyValues, _KeysToRemove) ->
+    % XXX vmx not sure about the structure of "KeysToRemove"
+    %NewPos = lists:foldl(fun({DocId}, _Value}, CurPos) ->
+    %    {ok, CurPos2} = delete(Fd, DocId, Mbr, CurPos),
+    %    CurPos2
+    %end, Pos, KeysToRemove),
+    NewPos = Pos,
+    NewPos2 = lists:foldl(fun({{Mbr, DocId}, _Value}, CurPos) ->
+        io:format("vtree: add (~p:~p): ~p~n", [Fd, CurPos, DocId]),
+        {ok, _NewMbr, CurPos2} = insert(Fd, CurPos, {Mbr, #node{type=leaf}, DocId}),
+        io:format("(2) vtree: add): ~p~n", [CurPos2]),
+        CurPos2
+    end, NewPos, AddKeyValues),
+    {ok, NewPos2}.
 
 
 lookup(Fd, Pos, Bbox) ->
@@ -134,7 +150,7 @@ split_node({_Mbr, Meta, _EntriesPos}=Node) ->
 % At top-level: {ok, MBR, position_in_file}
 % If a split occurs: {splitted, MBR_of_both_nodes, position_in_file_node1,
 %                     position_in_file_node2}
-insert(Fd, -1, {Mbr, Meta, Id}) ->
+insert(Fd, nil, {Mbr, Meta, Id}) ->
     InitialTree = {Mbr, #node{type=leaf}, [{Mbr, Meta, Id}]},
     {ok, Pos} = couch_file:append_term(Fd, InitialTree),
     {ok, Mbr, Pos};
