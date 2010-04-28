@@ -28,22 +28,22 @@
     type=inner}).
 
 % XXX vmx: tests are missing
-add_remove(Fd, Pos, AddKeyValues, _KeysToRemove) ->
+add_remove(Fd, Pos, AddKeyValues, KeysToRemove) ->
     % XXX vmx not sure about the structure of "KeysToRemove"
-    %NewPos = lists:foldl(fun({DocId}, _Value}, CurPos) ->
-    %    {ok, CurPos2} = delete(Fd, DocId, Mbr, CurPos),
-    %    CurPos2
-    %end, Pos, KeysToRemove),
-    NewPos = Pos,
+    NewPos = lists:foldl(fun({Mbr, DocId}, CurPos) ->
+        io:format("vtree: delete (~p:~p): ~p~n", [Fd, CurPos, DocId]),
+        {ok, CurPos2} = delete(Fd, DocId, Mbr, CurPos),
+        CurPos2
+    end, Pos, KeysToRemove),
     NewPos2 = lists:foldl(fun({{Mbr, DocId}, _Value}, CurPos) ->
         io:format("vtree: add (~p:~p): ~p~n", [Fd, CurPos, DocId]),
         {ok, _NewMbr, CurPos2} = insert(Fd, CurPos, {Mbr, #node{type=leaf}, DocId}),
-        io:format("(2) vtree: add): ~p~n", [CurPos2]),
         CurPos2
     end, NewPos, AddKeyValues),
     {ok, NewPos2}.
 
-
+lookup(_Fd, nil, _Bbox) ->
+    [];
 lookup(Fd, Pos, Bbox) ->
     {ok, Parent} = couch_file:pread_term(Fd, Pos),
     {_Mbr, Meta, NodesPos} = Parent,
