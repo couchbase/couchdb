@@ -163,8 +163,6 @@ process_doc(Db, Owner, DocInfo, {Docs, Group, IndexKVs, DocIdIndexIdKeys}) ->
     #spatial_group{ design_options = DesignOptions } = Group,
 
     #doc_info{id=DocId, revs=[#rev_info{deleted=Deleted}|_]} = DocInfo,
-%    IncludeDesign = proplists:get_value(<<"include_design">>,
-%        DesignOptions, false),
     LocalSeq = proplists:get_value(<<"local_seq">>,
         DesignOptions, false),
     DocOpts = case LocalSeq of
@@ -173,7 +171,6 @@ process_doc(Db, Owner, DocInfo, {Docs, Group, IndexKVs, DocIdIndexIdKeys}) ->
         _ ->
             [conflicts, deleted_conflicts]
     end,
-    %case {IncludeDesign, DocId} of
     case DocId of
     <<?DESIGN_DOC_PREFIX, _/binary>> -> % we skip design docs
         {Docs, Group, IndexKVs, DocIdIndexIdKeys};
@@ -234,13 +231,11 @@ write_changes(Group, IndexKeyValuesToAdd, DocIdIndexIdKeys, NewSeq) ->
 
     Indexes2 = lists:zipwith(fun(Index, {_Index, AddKeyValues}) ->
         KeysToRemove = couch_util:dict_find(Index#spatial.id_num, KeysToRemoveByIndex, []),
-        % XXX vmx: Do the spatial dance!
-        ?LOG_DEBUG("storing spatial data: ~n~p~n~p~n~p", [Index, AddKeyValues, KeysToRemove]),
+        ?LOG_DEBUG("storing spatial data: ~n~p~n~p~n~p",
+                   [Index, AddKeyValues, KeysToRemove]),
         {ok, IndexTreePos} = vtree:add_remove(Fd, Index#spatial.treepos,
                                               AddKeyValues, KeysToRemove),
         Index#spatial{treepos=IndexTreePos}
-        %{ok, IndexBtree2} = couch_btree:add_remove(Index#spatial.btree, AddKeyValues, KeysToRemove),
-        %Index#spatial{btree = IndexBtree2}
     end, Group#spatial_group.indexes, IndexKeyValuesToAdd),
 
     Group2 = Group#spatial_group{indexes=Indexes2, current_seq=NewSeq, id_btree=IdBtree2},
