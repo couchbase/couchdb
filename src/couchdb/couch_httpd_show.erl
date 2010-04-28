@@ -125,22 +125,27 @@ handle_doc_update_req(Req, _Db, _DDoc) ->
 send_doc_update_response(Req, Db, DDoc, UpdateName, Doc, DocId) ->
     JsonReq = couch_httpd_external:json_req_obj(Req, Db, DocId),
     JsonDoc = couch_query_servers:json_doc(Doc),
-    case couch_query_servers:ddoc_prompt(DDoc, [<<"updates">>, UpdateName], [JsonDoc, JsonReq]) of
-        [<<"up">>, {NewJsonDoc}, JsonResp] ->
-            Options = case couch_httpd:header_value(Req, "X-Couch-Full-Commit", "false") of
+    {Code, JsonResp1} = case couch_query_servers:ddoc_prompt(DDoc, 
+                [<<"updates">>, UpdateName], [JsonDoc, JsonReq]) of
+        [<<"up">>, {NewJsonDoc}, {JsonResp}] ->
+            Options = case couch_httpd:header_value(Req, "X-Couch-Full-Commit", 
+                "false") of
             "true" ->
                 [full_commit];
             _ ->
                 []
             end,
             NewDoc = couch_doc:from_json_obj({NewJsonDoc}),
-            Code = 201,
-            {ok, _NewRev} = couch_db:update_doc(Db, NewDoc, Options);
+            {ok, NewRev} = couch_db:update_doc(Db, NewDoc, Options),
+            NewRevStr = couch_doc:rev_to_str(NewRev),
+            JsonRespWithRev =  {[{<<"headers">>, 
+                {[{<<"X-Couch-Update-NewRev">>, NewRevStr}]}} | JsonResp]},
+            {201, JsonRespWithRev};
         [<<"up">>, _Other, JsonResp] ->
-            Code = 200,
-            ok
+            {200, JsonResp}
     end,
-    JsonResp2 = json_apply_field({<<"code">>, Code}, JsonResp),
+    
+    JsonResp2 = json_apply_field({<<"code">>, Code}, JsonResp1),
     % todo set location field
     couch_httpd_external:send_external_response(Req, JsonResp2).
 
@@ -185,21 +190,21 @@ handle_view_list(Req, Db, DDoc, LName, {ViewDesignName, ViewName}, Keys) ->
     {ViewType, View, Group, QueryArgs} = couch_httpd_view:load_view(Req, Db, {ViewDesignId, ViewName}, Keys),
     Etag = list_etag(Req, Db, Group, {couch_httpd:doc_etag(DDoc), Keys}),    
     couch_httpd:etag_respond(Req, Etag, fun() ->
-            output_list(ViewType, Req, Db, DDoc, LName, View, QueryArgs, Etag, Keys)
+            output_list(ViewType, Req, Db, DDoc, LName, View, QueryArgs, Etag, Keys, Group)
         end).    
 
 list_etag(#httpd{user_ctx=UserCtx}=Req, Db, Group, More) ->
     Accept = couch_httpd:header_value(Req, "Accept"),
     couch_httpd_view:view_group_etag(Group, Db, {More, Accept, UserCtx#user_ctx.roles}).
 
-output_list(map, Req, Db, DDoc, LName, View, QueryArgs, Etag, Keys) ->
-    output_map_list(Req, Db, DDoc, LName, View, QueryArgs, Etag, Keys);
-output_list(reduce, Req, Db, DDoc, LName, View, QueryArgs, Etag, Keys) ->
-    output_reduce_list(Req, Db, DDoc, LName, View, QueryArgs, Etag, Keys).
+output_list(map, Req, Db, DDoc, LName, View, QueryArgs, Etag, Keys, Group) ->
+    output_map_list(Req, Db, DDoc, LName, View, QueryArgs, Etag, Keys, Group);
+output_list(reduce, Req, Db, DDoc, LName, View, QueryArgs, Etag, Keys, Group) ->
+    output_reduce_list(Req, Db, DDoc, LName, View, QueryArgs, Etag, Keys, Group).
     
 % next step:
 % use with_ddoc_proc/2 to make this simpler
-output_map_list(Req, Db, DDoc, LName, View, QueryArgs, Etag, Keys) ->
+output_map_list(Req, Db, DDoc, LName, View, QueryArgs, Etag, Keys, Group) ->
     #view_query_args{
         limit = Limit,
         skip = SkipCount
@@ -215,11 +220,12 @@ output_map_list(Req, Db, DDoc, LName, View, QueryArgs, Etag, Keys) ->
             reduce_count = fun couch_view:reduce_to_count/1,
             start_response = StartListRespFun = make_map_start_resp_fun(QServer, Db, LName),
             send_row = make_map_send_row_fun(QServer)
-        },        
+        },
+		CurrentSeq = Group#group.current_seq,
 
         {ok, _, FoldResult} = case Keys of
             nil ->
-                FoldlFun = couch_httpd_view:make_view_fold_fun(Req, QueryArgs, Etag, Db, RowCount, ListFoldHelpers),        
+                FoldlFun = couch_httpd_view:make_view_fold_fun(Req, QueryArgs, Etag, Db, CurrentSeq, RowCount, ListFoldHelpers),
                     couch_view:fold(View, FoldlFun, FoldAccInit, 
                     couch_httpd_view:make_key_options(QueryArgs));
             Keys ->
@@ -229,27 +235,29 @@ output_map_list(Req, Db, DDoc, LName, View, QueryArgs, Etag, Keys) ->
                                 start_key = Key,
                                 end_key = Key
                             },
-                        FoldlFun = couch_httpd_view:make_view_fold_fun(Req, QueryArgs2, Etag, Db, RowCount, ListFoldHelpers),
+                        FoldlFun = couch_httpd_view:make_view_fold_fun(Req, QueryArgs2, Etag, Db, CurrentSeq, RowCount, ListFoldHelpers),
                         couch_view:fold(View, FoldlFun, FoldAcc,
                             couch_httpd_view:make_key_options(QueryArgs2))
                     end, {ok, nil, FoldAccInit}, Keys)
             end,
-        finish_list(Req, QServer, Etag, FoldResult, StartListRespFun, RowCount)
+        finish_list(Req, QServer, Etag, FoldResult, StartListRespFun, CurrentSeq, RowCount)
     end).
 
 
-output_reduce_list(Req, Db, DDoc, LName, View, QueryArgs, Etag, Keys) ->
+output_reduce_list(Req, Db, DDoc, LName, View, QueryArgs, Etag, Keys, Group) ->
     #view_query_args{
         limit = Limit,
         skip = SkipCount,
         group_level = GroupLevel
     } = QueryArgs,
 
+	CurrentSeq = Group#group.current_seq,
+
     couch_query_servers:with_ddoc_proc(DDoc, fun(QServer) ->
         StartListRespFun = make_reduce_start_resp_fun(QServer, Db, LName),
         SendListRowFun = make_reduce_send_row_fun(QServer, Db),
         {ok, GroupRowsFun, RespFun} = couch_httpd_view:make_reduce_fold_funs(Req,
-            GroupLevel, QueryArgs, Etag,
+            GroupLevel, QueryArgs, Etag, CurrentSeq,
             #reduce_fold_helper_funs{
                 start_response = StartListRespFun,
                 send_row = SendListRowFun
@@ -269,19 +277,19 @@ output_reduce_list(Req, Db, DDoc, LName, View, QueryArgs, Etag, Keys) ->
                             )    
                     end, {ok, FoldAccInit}, Keys)
             end,
-        finish_list(Req, QServer, Etag, FoldResult, StartListRespFun, null)
+        finish_list(Req, QServer, Etag, FoldResult, StartListRespFun, CurrentSeq, null)
     end).
 
 
 make_map_start_resp_fun(QueryServer, Db, LName) ->
-    fun(Req, Etag, TotalRows, Offset, _Acc) ->
-        Head = {[{<<"total_rows">>, TotalRows}, {<<"offset">>, Offset}]},
+    fun(Req, Etag, TotalRows, Offset, _Acc, UpdateSeq) ->
+        Head = {[{<<"total_rows">>, TotalRows}, {<<"offset">>, Offset}, {<<"update_seq">>, UpdateSeq}]},
         start_list_resp(QueryServer, LName, Req, Db, Head, Etag)
     end.
 
 make_reduce_start_resp_fun(QueryServer, Db, LName) ->
-    fun(Req2, Etag, _Acc) ->
-        start_list_resp(QueryServer, LName, Req2, Db, {[]}, Etag)
+    fun(Req2, Etag, _Acc, UpdateSeq) ->
+        start_list_resp(QueryServer, LName, Req2, Db, {[{<<"update_seq">>, UpdateSeq}]}, Etag)
     end.
 
 start_list_resp(QServer, LName, Req, Db, Head, Etag) ->
@@ -340,7 +348,7 @@ send_non_empty_chunk(Resp, Chunk) ->
         _ -> send_chunk(Resp, Chunk)
     end.
 
-finish_list(Req, {Proc, _DDocId}, Etag, FoldResult, StartFun, TotalRows) ->
+finish_list(Req, {Proc, _DDocId}, Etag, FoldResult, StartFun, CurrentSeq, TotalRows) ->
     FoldResult2 = case FoldResult of
         {Limit, SkipCount, Response, RowAcc} ->
             {Limit, SkipCount, Response, RowAcc, nil};
@@ -350,7 +358,7 @@ finish_list(Req, {Proc, _DDocId}, Etag, FoldResult, StartFun, TotalRows) ->
     case FoldResult2 of
         {_, _, undefined, _, _} ->
             {ok, Resp, BeginBody} =
-                render_head_for_empty_list(StartFun, Req, Etag, TotalRows),
+                render_head_for_empty_list(StartFun, Req, Etag, CurrentSeq, TotalRows),
             [<<"end">>, Chunks] = couch_query_servers:proc_prompt(Proc, [<<"list_end">>]),            
             Chunk = BeginBody ++ ?b2l(?l2b(Chunks)),
             send_non_empty_chunk(Resp, Chunk);
@@ -363,10 +371,10 @@ finish_list(Req, {Proc, _DDocId}, Etag, FoldResult, StartFun, TotalRows) ->
     last_chunk(Resp).
 
 
-render_head_for_empty_list(StartListRespFun, Req, Etag, null) ->
-    StartListRespFun(Req, Etag, []); % for reduce
-render_head_for_empty_list(StartListRespFun, Req, Etag, TotalRows) ->
-    StartListRespFun(Req, Etag, TotalRows, null, []).
+render_head_for_empty_list(StartListRespFun, Req, Etag, CurrentSeq, null) ->
+    StartListRespFun(Req, Etag, [], CurrentSeq); % for reduce
+render_head_for_empty_list(StartListRespFun, Req, Etag, CurrentSeq, TotalRows) ->
+    StartListRespFun(Req, Etag, TotalRows, null, [], CurrentSeq).
 
 
 % Maybe this is in the proplists API

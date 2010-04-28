@@ -17,7 +17,7 @@ function jsonp(obj) {
 }
 
 couchTests.changes = function(debug) {
-  var db = new CouchDB("test_suite_db", {"X-Couch-Full-Commit":"false"});
+  var db = new CouchDB("test_suite_db", {"X-Couch-Full-Commit":"true"});
   db.deleteDb();
   db.createDb();
   if (debug) debugger;
@@ -29,11 +29,13 @@ couchTests.changes = function(debug) {
   var docFoo = {_id:"foo", bar:1};
   T(db.save(docFoo).ok);
   T(db.ensureFullCommit().ok);
+  T(db.open(docFoo._id)._id == docFoo._id);
   
   req = CouchDB.request("GET", "/test_suite_db/_changes");
   var resp = JSON.parse(req.responseText);
 
-  T(resp.results.length == 1 && resp.last_seq==1, "one doc db")
+  T(resp.last_seq == 1);
+  T(resp.results.length == 1, "one doc db")
   T(resp.results[0].changes[0].rev == docFoo._rev)
 
   // test with callback
@@ -70,98 +72,103 @@ couchTests.changes = function(debug) {
     // WebKit (last checked on nightly #47686) does fail on processing
     // the async-request properly while javascript is executed.
 
-    var sleep = function(msecs) {
-      // by making a slow sync request, we allow the waiting XHR request data
-      // to be received.
-      var req = CouchDB.request("GET", "/_sleep?time=" + msecs);
-      T(JSON.parse(req.responseText).ok == true);
-    }
-
-    xhr.open("GET", "/test_suite_db/_changes?feed=continuous", true);
+    xhr.open("GET", "/test_suite_db/_changes?feed=continuous&timeout=500", true);
     xhr.send("");
 
     var docBar = {_id:"bar", bar:1};
     db.save(docBar);
+    
+    var lines, change1, change2;
+    waitForSuccess(function() {
+      lines = xhr.responseText.split("\n");
+      change1 = JSON.parse(lines[0]);
+      change2 = JSON.parse(lines[1]);      
+    }, "bar-only");
 
-    sleep(100);
-    var lines = xhr.responseText.split("\n");
-  
-    var change = JSON.parse(lines[0]);
-
-    T(change.seq == 1)
-    T(change.id == "foo")
-
-    change = JSON.parse(lines[1]);
-
-    T(change.seq == 2)
-    T(change.id == "bar")
-    T(change.changes[0].rev == docBar._rev)
-
+    T(change1.seq == 1)
+    T(change1.id == "foo")
+    
+    T(change2.seq == 2)
+    T(change2.id == "bar")
+    T(change2.changes[0].rev == docBar._rev)
+    
+    
     var docBaz = {_id:"baz", baz:1};
     db.save(docBaz);
 
-    sleep(100);
-    var lines = xhr.responseText.split("\n");
-
-    change = JSON.parse(lines[2]);
-
-    T(change.seq == 3);
-    T(change.id == "baz");
-    T(change.changes[0].rev == docBaz._rev);
+    var change3;
+    waitForSuccess(function() {
+      lines = xhr.responseText.split("\n");
+      change3 = JSON.parse(lines[2]);
+    });
+    
+    T(change3.seq == 3);
+    T(change3.id == "baz");
+    T(change3.changes[0].rev == docBaz._rev);
 
 
     xhr = CouchDB.newXhr();
 
     //verify the hearbeat newlines are sent
-    xhr.open("GET", "/test_suite_db/_changes?feed=continuous&heartbeat=10", true);
+    xhr.open("GET", "/test_suite_db/_changes?feed=continuous&heartbeat=10&timeout=500", true);
     xhr.send("");
-
-    sleep(100);
-
-    var str = xhr.responseText;
+    
+    var str;
+    waitForSuccess(function() {
+      str = xhr.responseText;
+      if (str.charAt(str.length - 1) != "\n" || str.charAt(str.length - 2) != "\n") {
+        throw("keep waiting");
+      }
+    }, "heartbeat");
 
     T(str.charAt(str.length - 1) == "\n")
     T(str.charAt(str.length - 2) == "\n")
 
+    // otherwise we'll continue to receive heartbeats forever
+    xhr.abort();
 
     // test longpolling
     xhr = CouchDB.newXhr();
 
     xhr.open("GET", "/test_suite_db/_changes?feed=longpoll", true);
     xhr.send("");
-
-    sleep(100);
-    var lines = xhr.responseText.split("\n");
-    T(lines[5]=='"last_seq":3}');
-
+    
+    waitForSuccess(function() {
+      lines = xhr.responseText.split("\n");
+      if (lines[5] != '"last_seq":3}') {
+        throw("still waiting");
+      }
+    }, "last_seq");
+    
     xhr = CouchDB.newXhr();
 
     xhr.open("GET", "/test_suite_db/_changes?feed=longpoll&since=3", true);
     xhr.send("");
 
-    sleep(100);
-
     var docBarz = {_id:"barz", bar:1};
     db.save(docBarz);
-
-    sleep(100);
-
-    var lines = xhr.responseText.split("\n");
-
+    
     var parse_changes_line = function(line) {
       if (line.charAt(line.length-1) == ",") {
-        line = line.substring(0, line.length-1);
+        var linetrimmed = line.substring(0, line.length-1);
+      } else {
+        var linetrimmed = line
       }
-      return JSON.parse(line);
+      return JSON.parse(linetrimmed);
     }
-
-    change = parse_changes_line(lines[1]);
-
+    
+    waitForSuccess(function() {
+      lines = xhr.responseText.split("\n");
+      if (lines[3] != '"last_seq":4}') {
+        throw("still waiting");
+      }
+    }, "change_lines");
+    
+    var change = parse_changes_line(lines[1]);
     T(change.seq == 4);
     T(change.id == "barz");
     T(change.changes[0].rev == docBarz._rev);
     T(lines[3]=='"last_seq":4}');
-	
   }
   
   // test the filtered changes
@@ -177,6 +184,14 @@ couchTests.changes = function(debug) {
         return doc.user && (doc.user == req.userCtx.name);
       }),
       "conflicted" : "function(doc, req) { return (doc._conflicts);}",
+    },
+    options : {
+      local_seq : true
+    },
+    views : {
+      local_seq : {
+        map : "function(doc) {emit(doc._local_seq, null)}"
+      }
     }
   }
 
@@ -191,7 +206,7 @@ couchTests.changes = function(debug) {
   
   var req = CouchDB.request("GET", "/test_suite_db/_changes?filter=changes_filter/bop");
   var resp = JSON.parse(req.responseText);
-  T(resp.results.length == 1);
+  T(resp.results.length == 1, "filtered/bop");
     
   req = CouchDB.request("GET", "/test_suite_db/_changes?filter=changes_filter/dynamic&field=woox");
   resp = JSON.parse(req.responseText);
@@ -205,9 +220,8 @@ couchTests.changes = function(debug) {
     // filter with longpoll
     // longpoll filters full history when run without a since seq
     xhr = CouchDB.newXhr();
-    xhr.open("GET", "/test_suite_db/_changes?feed=longpoll&filter=changes_filter/bop", true);
+    xhr.open("GET", "/test_suite_db/_changes?feed=longpoll&filter=changes_filter/bop", false);
     xhr.send("");
-    sleep(100);
     var resp = JSON.parse(xhr.responseText);
     T(resp.last_seq == 7);
     // longpoll waits until a matching change before returning
@@ -216,22 +230,53 @@ couchTests.changes = function(debug) {
     xhr.send("");
     db.save({"_id":"falsy", "bop" : ""}); // empty string is falsy
     db.save({"_id":"bingo","bop" : "bingo"});
-    sleep(100);
-    var resp = JSON.parse(xhr.responseText);
+    
+    waitForSuccess(function() {
+      resp = JSON.parse(xhr.responseText);
+    }, "longpoll-since");
+    
     T(resp.last_seq == 9);
     T(resp.results && resp.results.length > 0 && resp.results[0]["id"] == "bingo", "filter the correct update");
+    xhr.abort();
+    
+    timeout = 500;
+    last_seq = 10
+    while (true) {
 
-    // filter with continuous
-    xhr = CouchDB.newXhr();
-    xhr.open("GET", "/test_suite_db/_changes?feed=continuous&filter=changes_filter/bop&timeout=200", true);
-    xhr.send("");
-    db.save({"_id":"rusty", "bop" : "plankton"});
-    T(db.ensureFullCommit().ok);
-    sleep(300);
-    var lines = xhr.responseText.split("\n");
-    T(JSON.parse(lines[1]).id == "bingo", lines[1]);
-    T(JSON.parse(lines[2]).id == "rusty", lines[2]);
-    T(JSON.parse(lines[3]).last_seq == 10, lines[3]);
+      // filter with continuous
+      xhr = CouchDB.newXhr();
+      xhr.open("GET", "/test_suite_db/_changes?feed=continuous&filter=changes_filter/bop&timeout="+timeout, true);
+      xhr.send("");
+
+      db.save({"_id":"rusty", "bop" : "plankton"});
+      T(xhr.readyState != 4, "test client too slow");
+      var rusty = db.open("rusty", {cache_bust : new Date()});
+      T(rusty._id == "rusty");
+
+      waitForSuccess(function() { // throws an error after 5 seconds
+        if (xhr.readyState != 4) {
+          throw("still waiting")
+        }
+      }, "continuous-rusty");
+      lines = xhr.responseText.split("\n");
+      try {
+        JSON.parse(lines[3])
+        good = true;
+      } catch(e) {
+        good = false;
+      }
+      if (good) {
+        T(JSON.parse(lines[1]).id == "bingo", lines[1]);
+        T(JSON.parse(lines[2]).id == "rusty", lines[2]);
+        T(JSON.parse(lines[3]).last_seq == last_seq, lines[3]);
+        break;
+      } else {
+        xhr.abort();
+        db.deleteDoc(rusty);
+        timeout = timeout * 2;
+        last_seq = last_seq + 2;
+      }
+    }
   }
   // error conditions
 
@@ -258,7 +303,8 @@ couchTests.changes = function(debug) {
   var req = CouchDB.request("GET", 
     "/test_suite_db/_changes?filter=changes_filter/bop&style=all_docs");
   var resp = JSON.parse(req.responseText);
-  TEquals(3, resp.results.length, "should return matching rows");
+  var expect = (!is_safari && xhr) ? 3: 1;
+  TEquals(expect, resp.results.length, "should return matching rows");
   
   // test for userCtx
   run_on_modified_server(
@@ -301,5 +347,44 @@ couchTests.changes = function(debug) {
   req = CouchDB.request("GET", "/test_suite_db/_changes?filter=changes_filter/conflicted");
   resp = JSON.parse(req.responseText);
   T(resp.results.length == 1);
+
+  // test with erlang filter function
+  run_on_modified_server([{
+    section: "native_query_servers",
+    key: "erlang",
+    value: "{couch_native_process, start_link, []}"
+  }], function() {
+    var erl_ddoc = {
+      _id: "_design/erlang",
+      language: "erlang",
+      filters: {
+        foo:
+          'fun({Doc}, Req) -> ' +
+          '  Value = proplists:get_value(<<"value">>, Doc),' +
+          '  (Value rem 2) =:= 0' +
+          'end.'
+      }
+    };
+
+    db.deleteDb();
+    db.createDb();
+    T(db.save(erl_ddoc).ok);
+
+    var req = CouchDB.request("GET", "/test_suite_db/_changes?filter=erlang/foo");
+    var resp = JSON.parse(req.responseText);
+    T(resp.results.length === 0);
+
+    T(db.save({_id: "doc1", value : 1}).ok);
+    T(db.save({_id: "doc2", value : 2}).ok);
+    T(db.save({_id: "doc3", value : 3}).ok);
+    T(db.save({_id: "doc4", value : 4}).ok);
+
+    var req = CouchDB.request("GET", "/test_suite_db/_changes?filter=erlang/foo");
+    var resp = JSON.parse(req.responseText);
+    T(resp.results.length === 2);
+    T(resp.results[0].id === "doc2");
+    T(resp.results[1].id === "doc4");
+  });
+
 };
 

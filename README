@@ -1,414 +1,59 @@
 Apache CouchDB README
 =====================
 
-Apache CouchDB is beta software and still under heavy development. Please be
-aware that important areas such as the public API or internal database format
-may see backwards incompatible changes between versions.
+Installation
+------------
 
-Building From Checkout
-----------------------
+For a low-level guide, see:
 
-You can skip this section if you are installing from a release tarball.
+    INSTALL
 
-Dependencies
-~~~~~~~~~~~~
+For a high-level guide to Unix-like systems, inc. Mac OS X and Ubuntu, see:
 
-To build Apache CouchDB from checkout, you need some of the following installed:
+    INSTALL.Unix
 
- * GNU Automake (>=1.6.3) (http://www.gnu.org/software/automake/)
- * GNU Autoconf (>=2.59)  (http://www.gnu.org/software/autoconf/)
- * GNU Libtool            (http://www.gnu.org/software/libtool/)
- * GNU help2man           (http://www.gnu.org/software/help2man/)
+For a high-level guide to Microsoft Windows, see:
 
-Debian-based (inc. Ubuntu) Systems
-++++++++++++++++++++++++++++++++++
+    INSTALL.Windows
 
-You can install the dependencies by running:
+Follow the proper instructions to get CouchDB installed on your system.
 
-    apt-get install automake autoconf libtool help2man
-
-Mac OS X
-++++++++
-
-You can install the dependencies using MacPorts by running:
-
-    port install automake autoconf libtool help2man
-
-Bootstrapping
-~~~~~~~~~~~~~
-
-Note: You must repeat this step every time you update your checkout.
-
-Bootstrap the pristine source by running:
-
-    ./bootstrap
-
-Installation and First Run
---------------------------
-
-Unix-like Operating Systems (inc. Mac OS X)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Dependencies
-^^^^^^^^^^^^
-
-To build and install Apache CouchDB, you will need the following installed:
-
- * Erlang OTP (>=R12B5)        (http://erlang.org/)
- * ICU                         (http://icu.sourceforge.net/)
- * OpenSSL                     (http://www.openssl.org/)
- * Mozilla SpiderMonkey (=1.8) (http://www.mozilla.org/js/spidermonkey/)
- * libcurl                     (http://curl.haxx.se/libcurl/)
- * GNU Make                    (http://www.gnu.org/software/make/)
- * GNU Compiler Collection     (http://gcc.gnu.org/)
-
-It is recommended that you install Erlang OTP R12B-5 or above where possible.
-
-Debian-based (inc. Ubuntu) Systems
-++++++++++++++++++++++++++++++++++
-
-You can install the dependencies by running:
-
-    apt-get install build-essential erlang libicu-dev libmozjs-dev libcurl4-openssl-dev
-
-If you get an error regarding the `libicu38` or `libicu-dev` be sure to check
-the version used by your distribution (using `apt-cache search libicu`) and
-install those packages instead. `libcurl4-openssl-dev` is the current version of
-`libcurl-dev` supplied by Ubuntu. You may need to specify an alternate package
-name for libcurl bindings.
-
-Mac OS X
-++++++++
-
-To install GNU Make and the GNU Compiler Collection on Mac OS X you should
-install the Xcode Tools metapackage by running:
-
-    open /Applications/Installers/Xcode\ Tools/XcodeTools.mpkg
-
-You can install the dependencies using MacPorts by running:
-
-    port install icu erlang spidermonkey curl
-
-Installing
-^^^^^^^^^^
-
-Once you have satisfied the dependencies you should run:
-
-    ./configure
-
-Note: Apache CouchDB is installed into `/usr/local` by default. If you want to
-change where Apache CouchDB is installed (or where to find Erlang) be sure to
-read the output from running the `./configure --help` command.
-
-Note: All the examples assume you have installed into `/usr/local`.
-
-If everything was successful you should see the following message:
-
-    You have configured Apache CouchDB, time to relax.
-
-Relax.
-
-To install Apache CouchDB you should then run the following command:
-
-    make && sudo make install
-
-Note: The use of the `sudo` command is only required if you are installing into
-a system owned directory. You do not need to do this if you are installing
-elsewhere, such as your home directory.
-
-If you are having problems running `make` you may want to try running `gmake` if
-this is available on your system.
-
-More options can be found by reading the `INSTALL` file.
-
-Security Considerations
-^^^^^^^^^^^^^^^^^^^^^^^
-
-It is not advisable to run Apache CouchDB as the superuser. We strongly
-recommend that you create a specific user to run Apache CouchDB and own the
-data/log directories.
-
-You can use whatever tool your system provides to create a new `couchdb` user.
-
-On many Unix-like systems you can run:
-
-    adduser --system --home /usr/local/var/lib/couchdb --no-create-home \
-            --shell /bin/bash --group --gecos "CouchDB Administrator" couchdb
-
-Mac OS X provides the standard Accounts option from the System Preferences
-application or you can optionally use the Workgroup Manager application which
-can be downloaded as part of the Server Admin Tools:
-
-  http://www.apple.com/support/downloads/serveradmintools1047.html
-
-You should make sure that the `couchdb` user has a working POSIX shell and set
-the home directory to `/usr/local/var/lib/couchdb` which is the Apache CouchDB
-database directory.
-
-Change the ownership of the Apache CouchDB directories by running:
-
-    chown -R couchdb:couchdb /usr/local/etc/couchdb
-    chown -R couchdb:couchdb /usr/local/var/lib/couchdb
-    chown -R couchdb:couchdb /usr/local/var/log/couchdb
-    chown -R couchdb:couchdb /usr/local/var/run/couchdb
-
-Change the permission of the Apache CouchDB directories by running:
-
-    chmod -R 0770 /usr/local/etc/couchdb
-    chmod -R 0770 /usr/local/var/lib/couchdb
-    chmod -R 0770 /usr/local/var/log/couchdb
-    chmod -R 0770 /usr/local/var/run/couchdb
-
-Running Manually
-^^^^^^^^^^^^^^^^
-
-You can start the Apache CouchDB server by running:
-
-    sudo -i -u couchdb couchdb -b
-
-This uses the `sudo` command to run the `couchdb` command as the `couchdb` user.
-
-When Apache CouchDB starts it should eventually display the following message:
-
-    Apache CouchDB has started, time to relax.
-
-Relax.
-
-To check that everything has worked, point your web browser to:
-
-  http://127.0.0.1:5984/_utils/index.html
-
-From here you should run the test suite.
+If you're having problems, skip to the next section.
 
 Troubleshooting
-^^^^^^^^^^^^^^^
+----------------
 
-If you're getting a cryptic error message, visit the wiki:
+For troubleshooting, see:
 
-  http://wiki.apache.org/couchdb/Error_messages
+    http://wiki.apache.org/couchdb/Troubleshooting
 
-For general troubleshooting, visit the wiki:
+If you're getting a cryptic error message, see:
 
-  http://wiki.apache.org/couchdb/Troubleshooting
+    http://wiki.apache.org/couchdb/Error_messages
 
-Running as a Daemon
-^^^^^^^^^^^^^^^^^^^
+For general help, see:
 
-Note: These instructions assume you have created the `couchdb` user. See the
-specific system information included below to learn how to reconfigure this.
+     http://couchdb.apache.org/community/lists.html
 
-Note: If any of these methods report a failure you can run the `couchdb` command
-manually to see the error messages it is displaying.
-
-The `/usr/local/etc/logrotate.d/couchdb` file is provided as a logrotate
-configuration that you can use to rotate Apache CouchDB's logs.
-
-SysV/BSD-style Systems
-++++++++++++++++++++++
-
-Depending on your system the `couchdb` init script will be installed into a
-direcory called `init.d` (for SysV-style systems) or `rc.d` (for BSD-style
-systems). These examples use the `[init.d|rc.d]` notation to indicate this.
-
-You can control the Apache CouchDB daemon by running:
-
-    /usr/local/etc/[init.d|rc.d]/couchdb [start|stop|restart|force-reload|status]
-
-If you wish to configure how the init script works, such as which user to run
-Apache CouchDB as, you must edit the `/usr/local/etc/default/couchdb` file as
-appropriate. If you are running the init script as a non-superuser you need to
-remove the line with the `COUCHDB_USER` setting.
-
-If you wish the Apache CouchDB daemon to run as a system service you need to
-copy the `/usr/local/etc/[init.d|rc.d]/couchdb` script into your system wide
-`/etc/[init.d|rc.d]` directory and update your system configuration.
-
-You may be able to configure your system using the following command:
-
-    sudo update-rc.d couchdb defaults
-
-Consult your system documentation for more information.
-
-Mac OS X
-++++++++
-
-You can use the `launchctl` command to control the Apache CouchDB daemon.
-
-You can load the launchd configuration by running:
-
-    sudo launchctl load /usr/local/Library/LaunchDaemons/org.apache.couchdb.plist
-
-You can stop the Apache CouchDB daemon by running:
-
-    sudo launchctl unload /usr/local/Library/LaunchDaemons/org.apache.couchdb.plist
-
-You can start Apache CouchDB by running:
-
-    sudo launchctl start org.apache.couchdb
-
-You can restart Apache CouchDB by running:
-
-    sudo launchctl stop org.apache.couchdb
-
-You can change the launchd configuration by running:
-
-    open /usr/local/Library/LaunchDaemons/org.apache.couchdb.plist
-
-If you want the Apache CouchDB daemon to run at startup, copy the
-`/usr/local/Library/LaunchDaemons/org.apache.couchdb.plist` file to your system
-`/Library/LaunchDaemons` directory.
-
-Windows
-~~~~~~~
-
-The Windows build process is very similar to the Erlang build process.
-
-Build Tools
-^^^^^^^^^^^
-
-To build on Windows, you will need the following installed:
-
- * Erlang OTP (>=R12B5)        (http://erlang.org/)
- * ICU                         (http://icu.sourceforge.net/)
- * OpenSSL                     (http://www.openssl.org/)
- * Mozilla SpiderMonkey (=1.8) (http://www.mozilla.org/js/spidermonkey/)
- * libcurl                     (http://curl.haxx.se/libcurl/)
- * Cygwin                      (http://www.cygwin.com/)
- * Visual Studio 2008          (http://msdn.microsoft.com/en-gb/vstudio/default.aspx)
-
-Please note:
-
- * When installing Erlang, you must build it from source. The CouchDB build
-   makes use of a number of the Erlang build scripts.
-
- * When installing ICU, select the binaries built with Visual Studio 2008.
-
- * When installing Cygwin, be sure to select all the `development` tools.
-
- * When installing libcurl, be sure to install by hand as the Cygwin binaries
-   are built with an incompatible compiler and will not work with Erlang.
-
-Setting Up
-^^^^^^^^^^
-
-Before starting any Cygwin terminals, run the following command:
-
-    set CYGWIN=nontsec
-
-To set up your environment, run the following command:
-
-    [VS_BIN]/vcvars32.bat
-
-Replace [VS_BIN] with the path to your Visual Studio `bin` directory.
-
-After you have done this, `link.exe` and `cl.exe` should be on your path and
-correspond to the Microsoft linker and compiler, respectively.
-
-To set up your environment, run the following command:
-
-    eval `./otp_build env_win32`
-
-Do this even if you have already built Erlang because the CouchDB build system
-needs the environment variables set up by this script.
-
-To set up your path, run the following command:
-
-    export PATH=$ERL_TOP/release/win32/erts-5.7.2/bin:$PATH
-
-Everything should be set up properly now.
-
-Building
-^^^^^^^^
-
-We start by bootstrapping:
-
-  $ cd $COUCHDB_TOP
-  $ ./bootstrap
-  You have bootstrapped Apache CouchDB, time to relax.
-
-  Run `./configure' to configure the source before you install.
-  $
-
-Relax.
-
-Now we need to run a complicated configure command-line.
-
-  $ ./configure \
-      --with-js-include=/cygdrive/c/path_to_seamonkey_include \
-      --with-js-lib=/cygdrive/c/path_to_seamonkey_lib \
-      --with-win32-icu-binaries=/cygdrive/c/path_to_icu_binaries_root \
-      --with-erlang=$ERL_TOP/release/win32/usr/include \
-      --with-win32-curl=/cygdrive/c/path/to/curl/root/directory \
-      --with-openssl-bin-dir=/cygdrive/c/openssl/bin \
-      --with-msvc-redist-dir=/cygdrive/c/dir/with/vcredist_platform_executable \
-      --prefix=$ERL_TOP/release/win32
-
-Relax, then relax some more, then get a beer and relax some more; the
-above command may take many many minutes to complete...
-
-Note that all paths must be in cygwin format (ie, using '/cygdrive/c/dir/...'
-rather than 'c:/dir'.)  Those starting with $ERL_TOP can be entered 
-literally, assuming ERL_TOP is set as described above.
-
-Notes:
-  When building the installer, the necessary openssl binaries are pulled from
-  the directory pointed to --with-openssl-bin-dir.
-
-Now we can build it and "install" it into the $ERL_TOP/release/win32 (or
-wherever you set --prefix to above) directory:
-
- $ make install
-
-Relax on your new couch:
-
-  The $ERL_TOP/release/win32 directory is now ready to .zip up, be packaged
-  by an installer, etc.  To test it in-place, execute:
-
-  $ $ERL_TOP/release/win32/bin/couchdb.bat
-
-  and everything should work fine.
-
-To create an installer, execute:
-
-  $ make dist
-
-and look for etc/windows/setup-couch*.exe.  Note - only do this after
-a clean build, not after testing in-place - otherwise your test database and
-log files will be shipped!
-
-Notes
-^^^^^
-
-Building Erlang
-+++++++++++++++
-
- * Follow the instructions as described. You do need openssl, but don't need
-   the GUI tools. You can skip them with the following command:
-
-    echo "skipping gs" > lib/gs/SKIP
-    echo "skipping ic" > lib/ic/SKIP
-
- * Ensure `which link` points at the Microsoft linker. If you do not do this,
-   the one in /usr/bin may be found instead.
-
- * After executing `./otp_build release -a`, be sure to execute Install.exe in
-   the release/win32 directory to setup the release/win32/bin dir correctly.
+The mailing lists provide a wealth of support and knowledge for you to tap into.
+Feel free to drop by with your questions or discussion. See the official CouchDB
+website for more information about our community resources.
 
 Cryptographic Software Notice
 -----------------------------
 
-This distribution includes cryptographic software.  The country in which you
+This distribution includes cryptographic software. The country in which you
 currently reside may have restrictions on the import, possession, use, and/or
-re-export to another country, of encryption software.  BEFORE using any
+re-export to another country, of encryption software. BEFORE using any
 encryption software, please check your country's laws, regulations and policies
 concerning the import, possession, or use, and re-export of encryption software,
-to see if this is permitted.  See <http://www.wassenaar.org/> for more
+to see if this is permitted. See <http://www.wassenaar.org/> for more
 information.
 
 The U.S. Government Department of Commerce, Bureau of Industry and Security
 (BIS), has classified this software as Export Commodity Control Number (ECCN)
 5D002.C.1, which includes information security software using or performing
-cryptographic functions with asymmetric algorithms.  The form and manner of this
+cryptographic functions with asymmetric algorithms. The form and manner of this
 Apache Software Foundation distribution makes it eligible for export under the
 License Exception ENC Technology Software Unrestricted (TSU) exception (see the
 BIS Export Administration Regulations, Section 740.13) for both object code and

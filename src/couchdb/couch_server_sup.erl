@@ -32,12 +32,7 @@ start_link(IniFiles) ->
     end.
 
 restart_core_server() ->
-    supervisor:terminate_child(couch_primary_services, couch_server),
-    supervisor:terminate_child(couch_secondary_services, stats_aggregator),
-    supervisor:terminate_child(couch_secondary_services, stats_collector),
-    supervisor:restart_child(couch_primary_services, couch_server),
-    supervisor:restart_child(couch_secondary_services, stats_collector),
-    supervisor:restart_child(couch_secondary_services, stats_aggregator).
+    init:restart().
 
 couch_config_start_link_wrapper(IniFiles, FirstConfigPid) ->
     case is_process_alive(FirstConfigPid) of
@@ -174,7 +169,7 @@ start_secondary_services() ->
             {list_to_atom(Name),
                 {Module, Fun, Args},
                 permanent,
-                brutal_kill,
+                1000,
                 worker,
                 [Module]}
         end

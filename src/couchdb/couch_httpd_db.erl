@@ -492,10 +492,10 @@ all_docs_view(Req, Db, Keys) ->
         true -> EndDocId
         end,
         FoldAccInit = {Limit, SkipCount, undefined, []},
-
+		UpdateSeq = couch_db:get_update_seq(Db),
         case Keys of
         nil ->
-            FoldlFun = couch_httpd_view:make_view_fold_fun(Req, QueryArgs, CurrentEtag, Db,
+            FoldlFun = couch_httpd_view:make_view_fold_fun(Req, QueryArgs, CurrentEtag, Db, UpdateSeq,
                 TotalRowCount, #view_fold_helper_funs{
                     reduce_count = fun couch_db:enum_docs_reduce_to_count/1
                 }),
@@ -512,7 +512,7 @@ all_docs_view(Req, Db, Keys) ->
                     {if Inclusive -> end_key; true -> end_key_gt end, EndId}]),
             couch_httpd_view:finish_view_fold(Req, TotalRowCount, LastOffset, FoldResult);
         _ ->
-            FoldlFun = couch_httpd_view:make_view_fold_fun(Req, QueryArgs, CurrentEtag, Db,
+            FoldlFun = couch_httpd_view:make_view_fold_fun(Req, QueryArgs, CurrentEtag, Db, UpdateSeq,
                 TotalRowCount, #view_fold_helper_funs{
                     reduce_count = fun(Offset) -> Offset end
                 }),
@@ -736,7 +736,7 @@ send_doc_efficiently(Req, #doc{atts=Atts}=Doc, Headers, Options) ->
         end,
         case lists:member("multipart/related", AcceptedTypes) of
         false ->
-            send_json(Req, 200, [], couch_doc:to_json_obj(Doc, Options));
+            send_json(Req, 200, Headers, couch_doc:to_json_obj(Doc, Options));
         true ->
             Boundary = couch_uuids:random(),
             JsonBytes = ?JSON_ENCODE(couch_doc:to_json_obj(Doc, [follows|Options])),
@@ -751,7 +751,7 @@ send_doc_efficiently(Req, #doc{atts=Atts}=Doc, Headers, Options) ->
                     fun(Data) -> couch_httpd:send(Resp, Data) end, false)
         end;
     false ->
-        send_json(Req, 200, [], couch_doc:to_json_obj(Doc, Options))
+        send_json(Req, 200, Headers, couch_doc:to_json_obj(Doc, Options))
     end.
 
 
@@ -853,35 +853,60 @@ db_attachment_req(#httpd{method='GET'}=Req, Db, DocId, FileNameParts) ->
     case [A || A <- Atts, A#att.name == FileName] of
     [] ->
         throw({not_found, "Document is missing attachment"});
-    [#att{type=Type, comp=Comp}=Att] ->
+    [#att{type=Type, encoding=Enc, disk_len=DiskLen, att_len=AttLen}=Att] ->
         Etag = couch_httpd:doc_etag(Doc),
-        ReqAcceptsGzip = lists:member(
-           "gzip",
+        ReqAcceptsAttEnc = lists:member(
+           atom_to_list(Enc),
            couch_httpd:accepted_encodings(Req)
         ),
         Headers = [
             {"ETag", Etag},
             {"Cache-Control", "must-revalidate"},
             {"Content-Type", binary_to_list(Type)}
-        ] ++ case {Comp, ReqAcceptsGzip} of
-        {true, true} ->
-            [{"Content-Encoding", "gzip"}];
+        ] ++ case ReqAcceptsAttEnc of
+        true ->
+            [{"Content-Encoding", atom_to_list(Enc)}];
         _ ->
             []
         end,
-        AttFun = case {Comp, ReqAcceptsGzip} of
-        {true, false} ->
-            fun couch_doc:att_foldl_unzip/3;
+        Len = case {Enc, ReqAcceptsAttEnc} of
+        {identity, _} ->
+            % stored and served in identity form
+            DiskLen;
+        {_, false} when DiskLen =/= AttLen ->
+            % Stored encoded, but client doesn't accept the encoding we used,
+            % so we need to decode on the fly.  DiskLen is the identity length
+            % of the attachment.
+            DiskLen;
+        {_, true} ->
+            % Stored and served encoded.  AttLen is the encoded length.
+            AttLen;
         _ ->
+            % We received an encoded attachment and stored it as such, so we
+            % don't know the identity length.  The client doesn't accept the
+            % encoding, and since we cannot serve a correct Content-Length
+            % header we'll fall back to a chunked response.
+            undefined
+        end,
+        AttFun = case ReqAcceptsAttEnc of
+        false ->
+            fun couch_doc:att_foldl_decode/3;
+        true ->
             fun couch_doc:att_foldl/3
         end,
         couch_httpd:etag_respond(
             Req,
             Etag,
             fun() ->
-                {ok, Resp} = start_chunked_response(Req, 200, Headers),
-                AttFun(Att, fun(Seg, _) -> send_chunk(Resp, Seg) end, ok),
-                last_chunk(Resp)
+                case Len of
+                undefined ->
+                    {ok, Resp} = start_chunked_response(Req, 200, Headers),
+                    AttFun(Att, fun(Seg, _) -> send_chunk(Resp, Seg) end, ok),
+                    last_chunk(Resp);
+                _ ->
+                    {ok, Resp} = start_response_length(Req, 200, Headers, Len),
+                    AttFun(Att, fun(Seg, _) -> send(Resp, Seg) end, ok)
+                end
             end
         )
     end;
@@ -945,7 +970,20 @@ db_attachment_req(#httpd{method=Method,mochi_req=MochiReq}=Req, Db, DocId, FileN
                     Length ->
                         list_to_integer(Length)
                     end,
-                md5 = get_md5_header(Req)
+                md5 = get_md5_header(Req),
+                encoding = case string:to_lower(string:strip(
+                    couch_httpd:header_value(Req,"Content-Encoding","identity")
+                )) of
+                "identity" ->
+                   identity;
+                "gzip" ->
+                   gzip;
+                _ ->
+                   throw({
+                       bad_ctype,
+                       "Only gzip and identity content-encodings are supported"
+                   })
+                end
             }]
     end,
 
@@ -1045,8 +1083,8 @@ parse_doc_query(Req) ->
             Args#doc_query_args{update_type=replicated_changes};
         {"new_edits", "true"} ->
             Args#doc_query_args{update_type=interactive_edit};
-        {"att_gzip_length", "true"} ->
-            Options = [att_gzip_length | Args#doc_query_args.options],
+        {"att_encoding_info", "true"} ->
+            Options = [att_encoding_info | Args#doc_query_args.options],
             Args#doc_query_args{options=Options};
         _Else -> % unknown key value pair, ignore.
             Args

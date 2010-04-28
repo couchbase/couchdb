@@ -26,6 +26,7 @@
 -export([set_security/2,get_security/1]).
 -export([init/1,terminate/2,handle_call/3,handle_cast/2,code_change/3,handle_info/2]).
 -export([changes_since/5,changes_since/6,read_doc/2,new_revid/1]).
+-export([check_is_admin/1, check_is_reader/1]).
 
 -include("couch_db.hrl").
 
@@ -92,9 +93,8 @@ ensure_full_commit(#db{update_pid=UpdatePid,instance_start_time=StartTime}) ->
 close(#db{fd_ref_counter=RefCntr}) ->
     couch_ref_counter:drop(RefCntr).
 
-open_ref_counted(MainPid, UserCtx) ->
-    {ok, Db} = gen_server:call(MainPid, {open_ref_count, self()}),
-    {ok, Db#db{user_ctx=UserCtx}}.
+open_ref_counted(MainPid, OpenedPid) ->
+    gen_server:call(MainPid, {open_ref_count, OpenedPid}).
 
 is_idle(MainPid) ->
     gen_server:call(MainPid, is_idle).
@@ -818,14 +818,14 @@ flush_att(Fd, #att{data=Fun,att_len=AttLen}=Att) when is_function(Fun) ->
 % is present in the request, but there is no Content-MD5
 % trailer, we're free to ignore this inconsistency and
 % pretend that no Content-MD5 exists.
-with_stream(Fd, #att{md5=InMd5,type=Type,comp=AlreadyComp}=Att, Fun) ->
-    {ok, OutputStream} = case (not AlreadyComp) andalso
+with_stream(Fd, #att{md5=InMd5,type=Type,encoding=Enc}=Att, Fun) ->
+    {ok, OutputStream} = case (Enc =:= identity) andalso
         couch_util:compressible_att_type(Type) of
     true ->
         CompLevel = list_to_integer(
             couch_config:get("attachments", "compression_level", "0")
         ),
-        couch_stream:open(Fd, CompLevel);
+        couch_stream:open(Fd, gzip, [{compression_level, CompLevel}]);
     _ ->
         couch_stream:open(Fd)
     end,
@@ -841,18 +841,32 @@ with_stream(Fd, #att{md5=InMd5,type=Type,comp=AlreadyComp}=Att, Fun) ->
     {StreamInfo, Len, IdentityLen, Md5, IdentityMd5} =
         couch_stream:close(OutputStream),
     check_md5(IdentityMd5, ReqMd5),
-    {AttLen, DiskLen} = case AlreadyComp of
-    true ->
-        {Att#att.att_len, Att#att.disk_len};
-    _ ->
-        {Len, IdentityLen}
+    {AttLen, DiskLen, NewEnc} = case Enc of
+    identity ->
+        case {Md5, IdentityMd5} of
+        {Same, Same} ->
+            {Len, IdentityLen, identity};
+        _ ->
+            {Len, IdentityLen, gzip}
+        end;
+    gzip ->
+        case {Att#att.att_len, Att#att.disk_len} of
+        {AL, DL} when AL =:= undefined orelse DL =:= undefined ->
+            % Compressed attachment uploaded through the standalone API.
+            {Len, Len, gzip};
+        {AL, DL} ->
+            % This case is used for efficient push-replication, where a
+            % compressed attachment is located in the body of multipart
+            % content-type request.
+            {AL, DL, gzip}
+        end
     end,
     Att#att{
         data={Fd,StreamInfo},
         att_len=AttLen,
         disk_len=DiskLen,
         md5=Md5,
-        comp=(AlreadyComp orelse (IdentityMd5 =/= Md5))
+        encoding=NewEnc
     }.
 
 
@@ -916,10 +930,11 @@ init({DbName, Filepath, Fd, Options}) ->
     {ok, #db{fd_ref_counter=RefCntr}=Db} = gen_server:call(UpdaterPid, get_db),
     couch_ref_counter:add(RefCntr),
     couch_stats_collector:track_process_count({couchdb, open_databases}),
+    process_flag(trap_exit, true),
     {ok, Db}.
 
-terminate(Reason, _Db) ->
-    couch_util:terminate_linked(Reason),
+terminate(_Reason, Db) ->
+    couch_util:shutdown_sync(Db#db.update_pid),
     ok.
 
 handle_call({open_ref_count, OpenerPid}, _, #db{fd_ref_counter=RefCntr}=Db) ->
@@ -947,7 +962,11 @@ handle_cast(Msg, Db) ->
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
-
+    
+handle_info({'EXIT', _Pid, normal}, Db) ->
+    {noreply, Db};
+handle_info({'EXIT', _Pid, Reason}, Server) ->
+    {stop, Reason, Server};
 handle_info(Msg, Db) ->
     ?LOG_ERROR("Bad message received for db ~s: ~p", [Db#db.name, Msg]),
     exit({error, Msg}).
@@ -1082,7 +1101,7 @@ make_doc(#db{fd=Fd}=Db, Id, Deleted, Bp, RevisionPath) ->
         {ok, {BodyData0, Atts0}} = read_doc(Db, Bp),
         {BodyData0,
             lists:map(
-                fun({Name,Type,Sp,AttLen,DiskLen,RevPos,Md5,Comp}) ->
+                fun({Name,Type,Sp,AttLen,DiskLen,RevPos,Md5,Enc}) ->
                     #att{name=Name,
                         type=Type,
                         att_len=AttLen,
@@ -1090,7 +1109,18 @@ make_doc(#db{fd=Fd}=Db, Id, Deleted, Bp, RevisionPath) ->
                         md5=Md5,
                         revpos=RevPos,
                         data={Fd,Sp},
-                        comp=Comp};
+                        encoding=
+                            case Enc of
+                            true ->
+                                % 0110 UPGRADE CODE
+                                gzip;
+                            false ->
+                                % 0110 UPGRADE CODE
+                                identity;
+                            _ ->
+                                Enc
+                            end
+                    };
                 ({Name,Type,Sp,AttLen,RevPos,Md5}) ->
                     #att{name=Name,
                         type=Type,

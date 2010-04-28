@@ -90,8 +90,8 @@ cleanup_index_files(Db) ->
 
     % filter out the ones in use
     DeleteFiles = [FilePath
-		   || FilePath <- FileList,
-		      re:run(FilePath, RegExp, [{capture, none}]) =:= nomatch],
+           || FilePath <- FileList,
+              re:run(FilePath, RegExp, [{capture, none}]) =:= nomatch],
     % delete unused files
     ?LOG_DEBUG("deleting unused view index files: ~p",[DeleteFiles]),
     [file:delete(File)||File <- DeleteFiles],
@@ -269,8 +269,9 @@ init([]) ->
     {ok, #server{root_dir=RootDir}}.
 
 
-terminate(Reason, _Srv) ->
-    couch_util:terminate_linked(Reason),
+terminate(_Reason, _Srv) ->
+    [couch_util:shutdown_sync(Pid) || {Pid, _} <-
+            ets:tab2list(couch_groups_by_updater)],
     ok.
 
 
@@ -311,10 +312,8 @@ do_reset_indexes(DbName, Root) ->
         fun({_DbName, Sig}) ->
             ?LOG_DEBUG("Killing update process for view group ~s. in database ~s.", [Sig, DbName]),
             [{_, Pid}] = ets:lookup(group_servers_by_sig, {DbName, Sig}),
-            exit(Pid, kill),
-            receive {'EXIT', Pid, _} ->
-                delete_from_ets(Pid, DbName, Sig)
-            end
+            couch_util:shutdown_sync(Pid),
+            delete_from_ets(Pid, DbName, Sig)
         end, Names),
     delete_index_dir(Root, DbName),
     file:delete(Root ++ "/." ++ ?b2l(DbName) ++ "_temp").
@@ -370,81 +369,67 @@ nuke_dir(Dir) ->
 
 % keys come back in the language of btree - tuples.
 less_json_ids({JsonA, IdA}, {JsonB, IdB}) ->
-    case JsonA == JsonB of
-    false ->
-        less_json(JsonA, JsonB);
-    true ->
-        IdA < IdB
-    end.
-        
-
-less_json(A, B) ->
-    TypeA = type_sort(A),
-    TypeB = type_sort(B),
-    if TypeA == TypeB ->
-	    less_same_type(A, B);
-       true ->
-	    TypeA < TypeB
+    case less_json0(JsonA, JsonB) of
+    0 ->
+        IdA < IdB;
+    Result ->
+        Result < 0
     end.
 
-type_sort(V) when is_atom(V) -> 0;
-type_sort(V) when is_integer(V) -> 1;
-type_sort(V) when is_float(V) -> 1;
-type_sort(V) when is_binary(V) -> 2;
-type_sort(V) when is_list(V) -> 3;
-type_sort({V}) when is_list(V) -> 4;
-type_sort(V) when is_tuple(V) -> 5.
+less_json(A,B) ->
+    less_json0(A,B) < 0.
 
+less_json0(A,A)                                 -> 0;
+
+less_json0(A,B) when is_atom(A), is_atom(B)     -> atom_sort(A) - atom_sort(B);
+less_json0(A,_) when is_atom(A)                 -> -1;
+less_json0(_,B) when is_atom(B)                 -> 1;
+
+less_json0(A,B) when is_number(A), is_number(B) -> A - B;
+less_json0(A,_) when is_number(A)               -> -1;
+less_json0(_,B) when is_number(B)               -> 1;
+
+less_json0(A,B) when is_binary(A), is_binary(B) -> couch_util:collate(A,B);
+less_json0(A,_) when is_binary(A)               -> -1;
+less_json0(_,B) when is_binary(B)               -> 1;
+
+less_json0(A,B) when is_list(A), is_list(B)     -> less_list(A,B);
+less_json0(A,_) when is_list(A)                 -> -1;
+less_json0(_,B) when is_list(B)                 -> 1;
+
+less_json0({A},{B}) when is_list(A), is_list(B) -> less_props(A,B);
+less_json0({A},_) when is_list(A)               -> -1;
+less_json0(_,{B}) when is_list(B)               -> 1.
 
 atom_sort(null) -> 1;
 atom_sort(false) -> 2;
 atom_sort(true) -> 3.
 
-
-less_same_type(A,B) when is_atom(A) ->
-  atom_sort(A) < atom_sort(B);
-less_same_type(A,B) when is_binary(A) ->
-  couch_util:collate(A, B) < 0;
-less_same_type({AProps}, {BProps}) ->
-  less_props(AProps, BProps);
-less_same_type(A, B) when is_list(A) ->
-  less_list(A, B);
-less_same_type(A, B) ->
-    A < B.
-
 less_props([], [_|_]) ->
-    true;
+    -1;
 less_props(_, []) ->
-    false;
+    1;
 less_props([{AKey, AValue}|RestA], [{BKey, BValue}|RestB]) ->
     case couch_util:collate(AKey, BKey) of
-    -1 -> true;
-    1 -> false;
     0 ->
-        case less_json(AValue, BValue) of
-        true -> true;
-        false ->
-            case less_json(BValue, AValue) of
-            true -> false;
-            false ->
-                less_props(RestA, RestB)
-            end
-        end
+        case less_json0(AValue, BValue) of
+        0 ->
+            less_props(RestA, RestB);
+        Result ->
+            Result
+        end;
+    Result ->
+        Result
     end.
 
 less_list([], [_|_]) ->
-    true;
+    -1;
 less_list(_, []) ->
-    false;
+    1;
 less_list([A|RestA], [B|RestB]) ->
-    case less_json(A,B) of
-    true -> true;
-    false ->
-        case less_json(B,A) of
-        true -> false;
-        false ->
-            less_list(RestA, RestB)
-        end
+    case less_json0(A,B) of
+    0 ->
+        less_list(RestA, RestB);
+    Result ->
+        Result
     end.
-
-

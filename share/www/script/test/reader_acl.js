@@ -28,6 +28,7 @@ couchTests.reader_acl = function(debug) {
         roles : ["top-secret"]
       }, "funnybone");
       T(usersDb.save(jchrisUserDoc).ok);
+      usersDb.ensureFullCommit();
 
       T(CouchDB.session().userCtx.name == null);
 
@@ -41,12 +42,15 @@ couchTests.reader_acl = function(debug) {
           names : ["joe","barb"]
         }
       }).ok);
-      
-      usersDb.ensureFullCommit();
-      // security changes will always commit synchronously
-      restartServer();
-      
-      // can't read it as jchris
+    } finally {
+      CouchDB.logout();
+    }
+  }
+  
+  // split into 2 funs so we can test restart behavior
+  function testFun2() {
+    try {
+      // can't read it as jchris b/c he's missing the needed role
       T(CouchDB.login("jchris@apache.org", "funnybone").ok);
       T(CouchDB.session().userCtx.name == "jchris@apache.org");
 
@@ -72,9 +76,16 @@ couchTests.reader_acl = function(debug) {
         }
       }).ok);
 
+
       T(CouchDB.login("jchris@apache.org", "funnybone").ok);
 
+      // db admin can read
       T(secretDb.open("baz").foo == "bar");
+
+      // and run temp views
+      TEquals(secretDb.query(function(doc) {
+        emit(null, null)
+      }).total_rows, 1);
 
       CouchDB.logout();
       T(CouchDB.session().userCtx.roles.indexOf("_admin") != -1);
@@ -116,6 +127,17 @@ couchTests.reader_acl = function(debug) {
       // readers can query stored views
       T(secretDb.view("foo/bar").total_rows == 1);
       
+      // readers can't do temp views
+      try {
+        var results = secretDb.query(function(doc) {
+          emit(null, null);
+        });
+        T(false && "temp view should be admin only");
+      } catch (e) {
+        T(true && "temp view is admin only");
+      }
+      
+      
       CouchDB.logout();
 
       // can't set non string reader names or roles
@@ -151,7 +173,7 @@ couchTests.reader_acl = function(debug) {
     } finally {
       CouchDB.logout();
     }
-  }
+  };
 
   run_on_modified_server(
     [{section: "httpd",
@@ -160,5 +182,17 @@ couchTests.reader_acl = function(debug) {
      {section: "couch_httpd_auth",
       key: "authentication_db", value: "test_suite_users"}],
     testFun
+  );
+        
+  // security changes will always commit synchronously
+  restartServer();
+  
+  run_on_modified_server(
+    [{section: "httpd",
+      key: "authentication_handlers",
+      value: "{couch_httpd_auth, cookie_authentication_handler}, {couch_httpd_auth, default_authentication_handler}"},
+     {section: "couch_httpd_auth",
+      key: "authentication_db", value: "test_suite_users"}],
+    testFun2
   );
 }

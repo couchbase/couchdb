@@ -20,6 +20,7 @@
 
 
 init({MainPid, DbName, Filepath, Fd, Options}) ->
+    process_flag(trap_exit, true),
     case lists:member(create, Options) of
     true ->
         % create a new header and writes it to the file
@@ -37,8 +38,10 @@ init({MainPid, DbName, Filepath, Fd, Options}) ->
     {ok, Db2#db{main_pid=MainPid}}.
 
 
-terminate(Reason, _Srv) ->
-    couch_util:terminate_linked(Reason),
+terminate(_Reason, Db) ->
+    couch_file:close(Db#db.fd),
+    couch_util:shutdown_sync(Db#db.compactor_pid),
+    couch_util:shutdown_sync(Db#db.fd_ref_counter),
     ok.
 
 handle_call(get_db, _From, Db) ->
@@ -158,8 +161,12 @@ handle_cast({compact_done, CompactFilepath}, #db{filepath=Filepath}=Db) ->
                 fun(Value, _Offset, Acc) -> {ok, [Value | Acc]} end, []),
         {ok, NewLocalBtree} = couch_btree:add(NewDb#db.local_docs_btree, LocalDocs),
 
-        NewDb2 = commit_data( NewDb#db{local_docs_btree=NewLocalBtree,
-                main_pid = Db#db.main_pid,filepath = Filepath}),
+        NewDb2 = commit_data(NewDb#db{
+            local_docs_btree = NewLocalBtree,
+            main_pid = Db#db.main_pid,
+            filepath = Filepath,
+            instance_start_time = Db#db.instance_start_time
+        }),
 
         ?LOG_DEBUG("CouchDB swapping files ~s and ~s.",
                 [Filepath, CompactFilepath]),
@@ -214,7 +221,11 @@ handle_info(delayed_commit, Db) ->
         Db2 ->
             ok = gen_server:call(Db2#db.main_pid, {db_updated, Db2}),
             {noreply, Db2}
-    end.
+    end;
+handle_info({'EXIT', _Pid, normal}, Db) ->
+    {noreply, Db};
+handle_info({'EXIT', _Pid, Reason}, Db) ->
+    {stop, Reason, Db}.
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
@@ -430,9 +441,9 @@ flush_trees(#db{fd=Fd,header=Header}=Db,
                 case Atts of
                 [] -> [];
                 [#att{data={BinFd, _Sp}} | _ ] when BinFd == Fd ->
-                    [{N,T,P,AL,DL,R,M,C}
+                    [{N,T,P,AL,DL,R,M,E}
                         || #att{name=N,type=T,data={_,P},md5=M,revpos=R,
-                               att_len=AL,disk_len=DL,comp=C}
+                               att_len=AL,disk_len=DL,encoding=E}
                         <- Atts];
                 _ ->
                     % BinFd must not equal our Fd. This can happen when a database
@@ -702,27 +713,37 @@ copy_doc_attachments(#db{fd=SrcFd}=SrcDb, {Pos,_RevId}, SrcSp, DestFd) ->
             % 09 UPGRADE CODE
             {NewBinSp, AttLen, AttLen, Md5, _IdentityMd5} =
                 couch_stream:old_copy_to_new_stream(SrcFd, BinSp, AttLen, DestFd),
-            {Name, Type, NewBinSp, AttLen, AttLen, Pos, Md5, false};
+            {Name, Type, NewBinSp, AttLen, AttLen, Pos, Md5, identity};
         ({Name, {Type, BinSp, AttLen}}) ->
             % 09 UPGRADE CODE
             {NewBinSp, AttLen, AttLen, Md5, _IdentityMd5} =
                 couch_stream:copy_to_new_stream(SrcFd, BinSp, DestFd),
-            {Name, Type, NewBinSp, AttLen, AttLen, Pos, Md5, false};
+            {Name, Type, NewBinSp, AttLen, AttLen, Pos, Md5, identity};
         ({Name, Type, BinSp, AttLen, _RevPos, <<>>}) when
             is_tuple(BinSp) orelse BinSp == null ->
             % 09 UPGRADE CODE
             {NewBinSp, AttLen, AttLen, Md5, _IdentityMd5} =
                 couch_stream:old_copy_to_new_stream(SrcFd, BinSp, AttLen, DestFd),
-            {Name, Type, NewBinSp, AttLen, AttLen, AttLen, Md5, false};
+            {Name, Type, NewBinSp, AttLen, AttLen, AttLen, Md5, identity};
         ({Name, Type, BinSp, AttLen, RevPos, Md5}) ->
             % 010 UPGRADE CODE
             {NewBinSp, AttLen, AttLen, Md5, _IdentityMd5} =
                 couch_stream:copy_to_new_stream(SrcFd, BinSp, DestFd),
-            {Name, Type, NewBinSp, AttLen, AttLen, RevPos, Md5, false};
-        ({Name, Type, BinSp, AttLen, DiskLen, RevPos, Md5, Comp}) ->
+            {Name, Type, NewBinSp, AttLen, AttLen, RevPos, Md5, identity};
+        ({Name, Type, BinSp, AttLen, DiskLen, RevPos, Md5, Enc1}) ->
             {NewBinSp, AttLen, _, Md5, _IdentityMd5} =
                 couch_stream:copy_to_new_stream(SrcFd, BinSp, DestFd),
-            {Name, Type, NewBinSp, AttLen, DiskLen, RevPos, Md5, Comp}
+            Enc = case Enc1 of
+            true ->
+                % 0110 UPGRADE CODE
+                gzip;
+            false ->
+                % 0110 UPGRADE CODE
+                identity;
+            _ ->
+                Enc1
+            end,
+            {Name, Type, NewBinSp, AttLen, DiskLen, RevPos, Md5, Enc}
         end, BinInfos),
     {BodyData, NewBinInfos}.
 
