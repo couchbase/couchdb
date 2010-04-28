@@ -18,7 +18,7 @@
     def_lang,
     design_options=[],
     indexes,
-    id_btree=nil,
+    id_btree=nil, % the back-index
     current_seq=0,
     purge_seq=0,
     query_server=nil
@@ -32,7 +32,7 @@
     seq=0,
     % XXX delete fds, it's not needed any longer
     fds=[],
-    treepos=-1,
+    treepos=nil,
     btree=nil,
     id_num = 0, % comes from couch_spatial_group requirements
     def = nil, % The function in the query/view server

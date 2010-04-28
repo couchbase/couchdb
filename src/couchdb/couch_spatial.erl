@@ -17,7 +17,7 @@
 
 -export([start_link/0, init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
--export([update_tree/4, bbox_search/1]).
+-export([update_tree/3, bbox_search/4]).
 
 -define(FILENAME, "/tmp/couchdb_vtree.bin").
 
@@ -42,12 +42,19 @@ start_link() ->
     ?LOG_DEBUG("Spatial daemon: starting link.", []),
     gen_server:start_link({local, couch_spatial}, couch_spatial, [], []).
 
-update_tree(Db, DDoc, DName, SpatialName) ->
-    gen_server:call(couch_spatial, {do_update_tree, Db, DDoc, DName, SpatialName}).
+update_tree(Db, DDoc, SpatialName) ->
+    {ok, Index, Group} = get_spatial_index(Db, DDoc#doc.id, SpatialName, nil),
+%    do_update_tree(Db, DDoc, SpatialName, Group, Index),
+    ?LOG_DEBUG("Update tree complete", []).
+%    ok.
+%    gen_server:call(couch_spatial, {do_update_tree, Db, DDoc, SpatialName, Group, Index}).
 
-bbox_search(Bbox) ->
+bbox_search(Db, DDoc, SpatialName, Bbox) ->
+    {ok, Index, Group} = get_spatial_index(Db, DDoc#doc.id, SpatialName, nil),
+    {ok, Result} = do_bbox_search(Bbox, Group, Index),
     %gen_server:call(couch_spatial, {do_bbox_search, Bbox}).
-    <<"foohoo">>.
+    %<<"foohoo">>.
+    Result.
 
 init([]) ->
     RootDir = couch_config:get("couchdb", "view_index_dir"),
@@ -99,6 +106,7 @@ get_group_server(DbName, DDocName) ->
     case couch_spatial_group:open_db_group(DbName, DDocName) of
     % do we need to close this db?
     {ok, _Db, Group} ->
+?LOG_DEBUG("get_group_server: ~p", [DDocName]),
         case gen_server:call(couch_spatial, {get_group_server, DbName, Group}) of
         {ok, Pid} ->
             Pid;
@@ -114,6 +122,7 @@ get_group(Db, GroupId, Stale) ->
     ok -> 0;
     _Else -> couch_db:get_update_seq(Db)
     end,
+?LOG_DEBUG("get_group: MinUpdateSeq: ~p (stale? ~p)", [MinUpdateSeq, Stale]),
     couch_spatial_group:request_group(
             get_group_server(couch_db:name(Db), GroupId),
             MinUpdateSeq).
@@ -140,6 +149,7 @@ do_reset_indexes(DbName, Root) ->
 
 % counterpart in couch_view is get_map_view/4
 get_spatial_index(Db, GroupId, Name, Stale) ->
+?LOG_DEBUG("get_spatial_index: ~p", [Name]),
     case get_group(Db, GroupId, Stale) of
     {ok, #spatial_group{indexes=Indexes}=Group} ->
         case get_spatial_index0(Name, Indexes) of
@@ -155,6 +165,7 @@ get_spatial_index(Db, GroupId, Name, Stale) ->
 get_spatial_index0(_Name, []) ->
     {not_found, missing_named_view};
 get_spatial_index0(Name, [#spatial{index_names=IndexNames}=Index|Rest]) ->
+?LOG_DEBUG("Name: ~p, IndexNames: ~p", [Name, IndexNames]),
     % NOTE vmx: I don't understand why need lists:member and recursion
     case lists:member(Name, IndexNames) of
         true -> {ok, Index};
@@ -208,67 +219,91 @@ terminate(_Reason, _Srv) ->
 %%        {error, Reason}
 %    end.
 
-% GroupId = DName (design document name without "_design/" prefix
-handle_call({do_update_tree, Db, DDoc, GroupId, SpatialName}, _From,
-            #spatial{seq=Seq, root_dir=RootDir, btree=Btree}=State) ->
-    % Index is a #spatial record
-    {ok, Index, Group} = get_spatial_index(Db, GroupId, SpatialName, ok),
-    Fd = Group#spatial_group.fd,
-    TreePos = Index#spatial.treepos,
+do_update_tree(Db, DDoc, SpatialName, #spatial_group{fd=Fd}=Group,
+               #spatial{seq=Seq}=Index) ->
+%    TreePos = Index#spatial.treepos,
+%    {ok, _, StateNew2} = couch_db:enum_docs_since(Db, Seq,
+%            fun(DocInfo, _, StateCur) ->
+    ok.
 
-    {ok, _, StateNew2} = couch_db:enum_docs_since(Db, Seq,
-            fun(DocInfo, _, StateCur) ->
-        % NOTE vmx: I only take the first element of RevInfo, that should be
-        %enough
-        {doc_info, DocId, DocSeq, [RevInfo|_]} = DocInfo,
-        case RevInfo#rev_info.deleted of
-        false ->
-            {ok, Doc} = couch_db:open_doc(Db, DocInfo),
-            JsonDoc = couch_query_servers:json_doc(Doc),
-            % XXX vmx: ERRORHANDLING. If the function doesn't exist in the
-            %     design document, then CouchDB should handle the problem.
-            [<<"spatial">>, GeoJson] = couch_query_servers:ddoc_prompt(
-                    DDoc, [<<"spatial">>, SpatialName], [JsonDoc]),
-            case GeoJson of
-            false ->
-                % Document doesn't contain spatial information
-                {ok, StateCur#spatial{seq=DocSeq}};
-            _ ->
-                {GeoProplist} = GeoJson,
-                Coords = proplists:get_value(<<"coordinates">>, GeoProplist),
-                case proplists:get_value(<<"type">>, GeoProplist) of
-                <<"Point">> ->
-                    {TreePos, BtreeNew} = insert_point(Fd, TreePos, Btree,
-                                                       DocId,
-                                                       list_to_tuple(Coords)),
-                    % XXX vmx: not the whole state is needed. A new record
-                    %     is needed for this loop. That record should contain
-                    %     seq, treepos, btree.
-                    {ok, StateCur#spatial{seq=DocSeq, treepos=TreePos,
-                                          btree=BtreeNew}};
-                _ ->
-                    ?LOG_INFO("Other types than Points are not supported yet", []),
-                    {ok, StateCur#spatial{seq=DocSeq}}
-                end
-            end;
-        true ->
-            ?LOG_DEBUG("document got deleted: ~p", [DocId]),
-%            case couch_btree:lookup(StateCur#spatial.btree, [DocId]) of
-%            [{ok, {DocId, Mbr}}] ->
-%                ?LOG_DEBUG("~p's MBR is: ~p", [DocId, Mbr]),
-%                %{TreePos, BtreeNew} = delete_point(State, DocId, Mbr),
-%                {TreePos, BtreeNew} = delete_point(StateCur, DocId, Mbr),
-%                {ok, StateCur#spatial{seq=DocSeq, treepos=TreePos,
-%                                      btree=BtreeNew}};
-%            [not_found] ->
-%                % If it's not in the back-index it's not in the spatial index
-%                {ok, StateCur#spatial{seq=DocSeq}}
-%            end
-            {ok, StateCur#spatial{seq=DocSeq}}
-        end
-    end, State, []),
-%    couch_file:write_header(Fd, StateNew2),
-    {reply, [], StateNew2};
+do_bbox_search(Bbox, #spatial_group{fd=Fd}=Group,
+               #spatial{treepos=TreePos}=Index) ->
+    Result = vtree:lookup(Fd, TreePos, Bbox),
+    ?LOG_DEBUG("bbox_search result: ~p", [Result]),
+    Output = lists:foldl(fun({Loc, _Meta, DocId}, Acc) ->
+         % NOTE vmx: it's only a point, but we saved MBRs
+         {X, Y, _, _} = Loc,
+         Acc ++ [{[{<<"id">>, DocId}, {<<"loc">>, [X, Y]}]}]
+    end, [], Result),
+    {ok, Output}.
+    
+
+
+%% % GroupId = DName (design document name without "_design/" prefix
+%% handle_call({do_update_tree, Db, DDoc, SpatialName, Group, Index}, _From,
+%%             #spatial{seq=Seq, root_dir=RootDir, btree=Btree}=State) ->
+%% ?LOG_DEBUG("handle do_update_tree call", []),
+%%     % Index is a #spatial record
+%%     %{ok, Index, Group} = get_spatial_index(Db, DDoc#doc.id, SpatialName, ok),
+%%     Fd = Group#spatial_group.fd,
+%%     TreePos = Index#spatial.treepos,
+
+%%     {ok, _, StateNew2} = couch_db:enum_docs_since(Db, Seq,
+%%             fun(DocInfo, _, StateCur) ->
+%%         % NOTE vmx: I only take the first element of RevInfo, that should be
+%%         %enough
+%%         {doc_info, DocId, DocSeq, [RevInfo|_]} = DocInfo,
+%% ?LOG_DEBUG("(2) handle do_update_tree call", []),
+%%         case RevInfo#rev_info.deleted of
+%%         false ->
+%%             {ok, Doc} = couch_db:open_doc(Db, DocInfo),
+%%             JsonDoc = couch_query_servers:json_doc(Doc),
+%% ?LOG_DEBUG("(3) handle do_update_tree call", []),
+%%             % XXX vmx: ERRORHANDLING. If the function doesn't exist in the
+%%             %     design document, then CouchDB should handle the problem.
+%%             [<<"spatial">>, GeoJson] = couch_query_servers:ddoc_prompt(
+%%                     DDoc, [<<"spatial">>, SpatialName], [JsonDoc]),
+%%             case GeoJson of
+%%             false ->
+%%                 % Document doesn't contain spatial information
+%%                 {ok, StateCur#spatial{seq=DocSeq}};
+%%             _ ->
+%% ?LOG_DEBUG("(4) handle do_update_tree call", []),
+%%                 {GeoProplist} = GeoJson,
+%%                 Coords = proplists:get_value(<<"coordinates">>, GeoProplist),
+%%                 case proplists:get_value(<<"type">>, GeoProplist) of
+%%                 <<"Point">> ->
+%%                     {TreePos, BtreeNew} = insert_point(Fd, TreePos, Btree,
+%%                                                        DocId,
+%%                                                        list_to_tuple(Coords)),
+%%                     % XXX vmx: not the whole state is needed. A new record
+%%                     %     is needed for this loop. That record should contain
+%%                     %     seq, treepos, btree.
+%%                     {ok, StateCur#spatial{seq=DocSeq, treepos=TreePos,
+%%                                           btree=BtreeNew}};
+%%                 _ ->
+%%                     ?LOG_INFO("Other types than Points are not supported yet", []),
+%%                     {ok, StateCur#spatial{seq=DocSeq}}
+%%                 end
+%%             end;
+%%         true ->
+%%             ?LOG_DEBUG("document got deleted: ~p", [DocId]),
+%% %            case couch_btree:lookup(StateCur#spatial.btree, [DocId]) of
+%% %            [{ok, {DocId, Mbr}}] ->
+%% %                ?LOG_DEBUG("~p's MBR is: ~p", [DocId, Mbr]),
+%% %                %{TreePos, BtreeNew} = delete_point(State, DocId, Mbr),
+%% %                {TreePos, BtreeNew} = delete_point(StateCur, DocId, Mbr),
+%% %                {ok, StateCur#spatial{seq=DocSeq, treepos=TreePos,
+%% %                                      btree=BtreeNew}};
+%% %            [not_found] ->
+%% %                % If it's not in the back-index it's not in the spatial index
+%% %                {ok, StateCur#spatial{seq=DocSeq}}
+%% %            end
+%%             {ok, StateCur#spatial{seq=DocSeq}}
+%%         end
+%%     end, State, []),
+%% %    couch_file:write_header(Fd, StateNew2),
+%%     {reply, [], StateNew2};
 
 
 %handle_call({do_update_tree_old, Db, DDoc, SpatialName}, _From,
@@ -362,6 +397,7 @@ handle_call({do_update_tree, Db, DDoc, GroupId, SpatialName}, _From,
 handle_call({get_group_server, DbName,
     #spatial_group{name=GroupId,sig=Sig}=Group}, _From,
             #spatial{root_dir=Root}=Server) ->
+?LOG_DEBUG("get_group_server handle:", []),
     case ets:lookup(spatial_group_servers_by_sig, {DbName, Sig}) of
     [] ->
         ?LOG_DEBUG("Spawning new group server for spatial group ~s in database ~s.",
@@ -369,7 +405,7 @@ handle_call({get_group_server, DbName,
         case (catch couch_spatial_group:start_link({Root, DbName, Group})) of
         {ok, NewPid} ->
             add_to_ets(NewPid, DbName, Sig),
-            {reply, {ok, NewPid}, Server};
+           {reply, {ok, NewPid}, Server};
         {error, invalid_view_seq} ->
             do_reset_indexes(DbName, Root),
             case (catch couch_spatial_group:start_link({Root, DbName, Group})) of

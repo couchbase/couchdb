@@ -70,6 +70,7 @@ source_files = \
     couch_server_sup.erl \
     couch_spatial.erl \
     couch_spatial_group.erl \
+    couch_spatial_updater.erl \
     couch_stats_aggregator.erl \
     couch_stats_collector.erl \
     couch_stream.erl \
@@ -130,6 +131,7 @@ compiled_files = \
     couch_server_sup.beam \
     couch_spatial.beam \
     couch_spatial_group.beam \
+    couch_spatial_updater.beam \
     couch_stats_aggregator.beam \
     couch_stats_collector.beam \
     couch_stream.beam \

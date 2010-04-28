@@ -16,6 +16,7 @@
 %% API
 -export([start_link/1, request_group/2, request_group_info/1]).
 -export([open_db_group/2, open_temp_group/5, design_doc_to_view_group/1,design_root/2]).
+-export([hex_sig/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -125,6 +126,7 @@ handle_call({request_group, RequestSeq}, From,
             updater_pid=nil,
             waiting_list=WaitList
             }=State) when RequestSeq > Seq ->
+?LOG_DEBUG("view (1) request_group handler", []),
     {ok, Db} = couch_db:open_int(DbName, []),
     Group2 = Group#group{db=Db},
     Owner = self(),
@@ -143,12 +145,14 @@ handle_call({request_group, RequestSeq}, _From, #group_state{
             group = #group{current_seq=GroupSeq} = Group,
             ref_counter = RefCounter
         } = State) when RequestSeq =< GroupSeq  ->
+?LOG_DEBUG("view (2) request_group handler: seqs: req: ~p, group: ~p", [RequestSeq, GroupSeq]),
     {reply, {ok, Group, RefCounter}, State};
 
 % Otherwise: TargetSeq => RequestSeq > GroupSeq
 % We've already initiated the appropriate action, so just hold the response until the group is up to the RequestSeq
 handle_call({request_group, RequestSeq}, From,
         #group_state{waiting_list=WaitList}=State) ->
+?LOG_DEBUG("view (3) request_group handler", []),
     {noreply, State#group_state{
         waiting_list=[{From, RequestSeq}|WaitList]
         }, infinity};

@@ -1,4 +1,4 @@
--module(couch_spatial_group).
+ -module(couch_spatial_group).
 -behaviour(gen_server).
 
 %% API
@@ -16,9 +16,9 @@
     db_name,
     init_args,
     group,
-%    updater_pid=nil,
+    updater_pid=nil,
 %    compactor_pid=nil,
-%    waiting_commit=false,
+    waiting_commit=false,
     waiting_list=[],
     ref_counter=nil
 }).
@@ -48,6 +48,7 @@ request_group(Pid, Seq) ->
     ?LOG_DEBUG("request_group {Pid, Seq} ~p", [{Pid, Seq}]),
     case gen_server:call(Pid, {request_group, Seq}, infinity) of
     {ok, Group, RefCounter} ->
+?LOG_DEBUG("request_group:~n~p", [Group]),
         couch_ref_counter:add(RefCounter),
         {ok, Group};
     Error ->
@@ -57,31 +58,35 @@ request_group(Pid, Seq) ->
 
 
 
-%init([]) ->
 init({InitArgs, ReturnPid, Ref}) ->
+?LOG_DEBUG("(1) couch_spatial_group init", []),
     process_flag(trap_exit, true),
     case prepare_group(InitArgs, false) of
-    {ok, #group{db=Db, fd=Fd, current_seq=Seq}=Group} ->
+    {ok, #spatial_group{db=Db, fd=Fd, current_seq=Seq}=Group} ->
+?LOG_DEBUG("(2) couch_spatial_group init", []),
         case Seq > couch_db:get_update_seq(Db) of
         true ->
+?LOG_DEBUG("(2b) couch_spatial_group init", []),
             ReturnPid ! {Ref, self(), {error, invalid_view_seq}},
             ignore;
         _ ->
             couch_db:monitor(Db),
             Owner = self(),
-            % XXX vmx: I don't have an updater daemon yet!
-%            Pid = spawn_link(
-%                fun()-> couch_view_updater:update(Owner, Group) end
-%            ),
+?LOG_DEBUG("(3) couch_spatial_group init pre-spawn", []),
+            Pid = spawn_link(
+                fun()-> couch_spatial_updater:update(Owner, Group) end
+            ),
+?LOG_DEBUG("(4) couch_spatial_group init post-spawn", []),
             {ok, RefCounter} = couch_ref_counter:start([Fd]),
             {ok, #group_state{
                     db_name=couch_db:name(Db),
                     init_args=InitArgs,
-%                    updater_pid = Pid,
+                    updater_pid = Pid,
                     group=Group,
                     ref_counter=RefCounter}}
         end;
     Error ->
+?LOG_DEBUG("(3) couch_spatial_group init: ~p", [Error]),
         ReturnPid ! {Ref, self(), Error},
         ignore
     end.
@@ -89,18 +94,17 @@ init({InitArgs, ReturnPid, Ref}) ->
 % NOTE vmx: There's a lenghy comment about this call in couch_view_group.erl
 handle_call({request_group, RequestSeq}, From, #group_state{
             db_name=DbName,
-            group=#group{current_seq=Seq}=Group,
-%            updater_pid=nil,
+            group=#spatial_group{current_seq=GroupSeq}=Group,
+            updater_pid=nil,
             waiting_list=WaitList
-            }=State) when RequestSeq > Seq ->
+            }=State) when RequestSeq > GroupSeq ->
     {ok, Db} = couch_db:open_int(DbName, []),
-    Group2 = Group#group{db=Db},
+    Group2 = Group#spatial_group{db=Db},
     Owner = self(),
-    % XXX vmx: I don't have an updater daemon yet!
-%    Pid = spawn_link(fun()-> couch_view_updater:update(Owner, Group2) end),
+    Pid = spawn_link(fun()-> couch_spatial_updater:update(Owner, Group2) end),
 
     {noreply, State#group_state{
-%        updater_pid=Pid,
+        updater_pid=Pid,
         group=Group2,
         waiting_list=[{From,RequestSeq}|WaitList]
         }, infinity};
@@ -108,15 +112,18 @@ handle_call({request_group, RequestSeq}, From, #group_state{
 % If the request seqence is less than or equal to the seq_id of a known Group,
 % we respond with that Group.
 handle_call({request_group, RequestSeq}, _From, #group_state{
-            group = #group{current_seq=GroupSeq} = Group,
+            group = #spatial_group{current_seq=GroupSeq} = Group,
             ref_counter = RefCounter
         } = State) when RequestSeq =< GroupSeq  ->
+?LOG_DEBUG("(2) request_group handler: seqs: req: ~p, group: ~p", [RequestSeq, GroupSeq]),
+?LOG_DEBUG("(2b) request_group handler: Group:~n~p", [Group]),
     {reply, {ok, Group, RefCounter}, State};
 
 % Otherwise: TargetSeq => RequestSeq > GroupSeq
 % We've already initiated the appropriate action, so just hold the response until the group is up to the RequestSeq
 handle_call({request_group, RequestSeq}, From,
         #group_state{waiting_list=WaitList}=State) ->
+?LOG_DEBUG("(3) request_group handler: seqs: req: ~p", [RequestSeq]),
     {noreply, State#group_state{
         waiting_list=[{From, RequestSeq}|WaitList]
         }, infinity}.
@@ -124,6 +131,31 @@ handle_call({request_group, RequestSeq}, From,
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
+
+handle_info({'EXIT', FromPid, {new_group, #spatial_group{db=Db}=Group}},
+        #group_state{db_name=DbName,
+            updater_pid=UpPid,
+            ref_counter=RefCounter,
+            waiting_list=WaitList,
+            waiting_commit=WaitingCommit}=State) when UpPid == FromPid ->
+    ok = couch_db:close(Db),
+    if not WaitingCommit ->
+        erlang:send_after(1000, self(), delayed_commit);
+    true -> ok
+    end,
+    case reply_with_group(Group, WaitList, [], RefCounter) of
+    [] ->
+        {noreply, State#group_state{waiting_commit=true, waiting_list=[],
+                group=Group#spatial_group{db=nil}, updater_pid=nil}};
+    StillWaiting ->
+        % we still have some waiters, reopen the database and reupdate the index
+        {ok, Db2} = couch_db:open_int(DbName, []),
+        Group2 = Group#spatial_group{db=Db2},
+        Owner = self(),
+        Pid = spawn_link(fun() -> couch_view_updater:update(Owner, Group2) end),
+        {noreply, State#group_state{waiting_commit=true,
+                waiting_list=StillWaiting, group=Group2, updater_pid=Pid}}
+    end;
 
 handle_info(_Msg, Server) ->
     {noreply, Server}.
@@ -134,44 +166,68 @@ terminate(_Reason, _Srv) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
+% reply_with_group/3
+% for each item in the WaitingList {Pid, Seq}
+% if the Seq is =< GroupSeq, reply
+reply_with_group(Group=#spatial_group{current_seq=GroupSeq}, [{Pid, Seq}|WaitList],
+        StillWaiting, RefCounter) when Seq =< GroupSeq ->
+    gen_server:reply(Pid, {ok, Group, RefCounter}),
+    reply_with_group(Group, WaitList, StillWaiting, RefCounter);
+
+% else
+% put it in the continuing waiting list
+reply_with_group(Group, [{Pid, Seq}|WaitList], StillWaiting, RefCounter) ->
+    reply_with_group(Group, WaitList, [{Pid, Seq}|StillWaiting], RefCounter);
+
+% return the still waiting list
+reply_with_group(_Group, [], StillWaiting, _RefCounter) ->
+    StillWaiting.
+
 
 open_db_group(DbName, DDocId) ->
+?LOG_DEBUG("open_db_group: DbName: ~p, DDocId: ~p", [DbName, DDocId]),
     case couch_db:open_int(DbName, []) of
     {ok, Db} ->
+?LOG_DEBUG("(2) open_db_group: DbName: ~p, DDocId: ~p", [DbName, DDocId]),
         case couch_db:open_doc(Db, DDocId) of
         {ok, Doc} ->
+?LOG_DEBUG("(3) open_db_group: DbName: ~p, DDocId: ~p", [DbName, DDocId]),
             {ok, Db, design_doc_to_spatial_group(Doc)};
         Else ->
+?LOG_DEBUG("(4) open_db_group: DbName: ~p, DDocId: ~p", [DbName, DDocId]),
             couch_db:close(Db),
             Else
         end;
     Else ->
+?LOG_DEBUG("(5) open_db_group: DbName: ~p, DDocId: ~p", [DbName, DDocId]),
         Else
     end.
 
 
 design_doc_to_spatial_group(#doc{id=Id,body={Fields}}) ->
+?LOG_DEBUG("design_doc_to_spatial_group", []),
     Language = proplists:get_value(<<"language">>, Fields, <<"javascript">>),
     {DesignOptions} = proplists:get_value(<<"options">>, Fields, {[]}),
     {RawIndexes} = proplists:get_value(<<"spatial">>, Fields, {[]}),
+?LOG_DEBUG("rawindexes:~p", [RawIndexes]),
     % add the views to a dictionary object, with the map source as the key
     DictBySrc =
-    lists:foldl(
-        fun({Name, {IndexSrc}}, DictBySrcAcc) ->
-            Index =
-            case dict:find({IndexSrc}, DictBySrcAcc) of
-                {ok, Index0} -> Index0;
-                error -> #spatial{def=IndexSrc} % create new spatial index object
-            end,
-            Index2 = Index#spatial{index_names=[Name|Index#spatial.index_names]},
-            dict:store({IndexSrc}, Index2, DictBySrcAcc)
-        end, dict:new(), RawIndexes),
+    lists:foldl(fun({Name, IndexSrc}, DictBySrcAcc) ->
+?LOG_DEBUG("inner fun: Name: ~p, IndexSrc: ~p", [Name, IndexSrc]),
+        Index =
+        case dict:find({IndexSrc}, DictBySrcAcc) of
+            {ok, Index0} -> Index0;
+            error -> #spatial{def=IndexSrc} % create new spatial index object
+        end,
+        Index2 = Index#spatial{index_names=[Name|Index#spatial.index_names]},
+        dict:store({IndexSrc}, Index2, DictBySrcAcc)
+    end, dict:new(), RawIndexes),
     % number the views
     {Indexes, _N} = lists:mapfoldl(
         fun({_Src, Index}, N) ->
             {Index#spatial{id_num=N},N+1}
         end, 0, lists:sort(dict:to_list(DictBySrc))),
-
+?LOG_DEBUG("(2) design_doc_to_spatial_group: ~p", [Indexes]),
     set_index_sig(#spatial_group{name=Id, indexes=Indexes, def_lang=Language,
                                  design_options=DesignOptions}).
 
@@ -185,30 +241,39 @@ set_index_sig(#spatial_group{
 
 
 prepare_group({RootDir, DbName, #spatial_group{sig=Sig}=Group}, ForceReset)->
+?LOG_DEBUG("(1) prepare group", []),
     case couch_db:open_int(DbName, []) of
     {ok, Db} ->
+?LOG_DEBUG("(2) prepare group", []),
         case open_index_file(RootDir, DbName, Sig) of
         {ok, Fd} ->
+?LOG_DEBUG("(3) prepare group", []),
             if ForceReset ->
+?LOG_DEBUG("(6) prepare group", []),
                 % this can happen if we missed a purge
                 {ok, reset_file(Db, Fd, DbName, Group)};
             true ->
+?LOG_DEBUG("(7) prepare group", []),
                 % 09 UPGRADE CODE
                 ok = couch_file:upgrade_old_header(Fd, <<$r, $c, $k, 0>>),
                 case (catch couch_file:read_header(Fd)) of
                 {ok, {Sig, HeaderInfo}} ->
+?LOG_DEBUG("(8) prepare group", []),
                     % sigs match!
                     {ok, init_group(Db, Fd, Group, HeaderInfo)};
                 _ ->
+?LOG_DEBUG("(9) prepare group", []),
                     % this happens on a new file
                     {ok, reset_file(Db, Fd, DbName, Group)}
                 end
             end;
         Error ->
+?LOG_DEBUG("(4) prepare group", []),
             catch delete_index_file(RootDir, DbName, Sig),
             Error
         end;
     Else ->
+?LOG_DEBUG("(5) prepare group", []),
         Else
     end.
 

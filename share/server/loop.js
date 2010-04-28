@@ -43,8 +43,8 @@ var DDoc = (function() {
     "shows"    : Render.show,
     "filters"   : Filter.filter,
     "updates"  : Render.update,
-    "validate_doc_update" : Validate.validate,
-    "spatial" : Spatial.spatial
+    "validate_doc_update" : Validate.validate
+//    "spatial" : Spatial.spatial
   };
   var ddocs = {};
   return {
@@ -103,7 +103,8 @@ var Loop = function() {
     "add_fun"  : State.addFun,
     "map_doc"  : Views.mapDoc,
     "reduce"   : Views.reduce,
-    "rereduce" : Views.rereduce
+    "rereduce" : Views.rereduce,
+    "spatial" : Spatial.spatial
   };
   function handleError(e) {
     var type = e[0];
