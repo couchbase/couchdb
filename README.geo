@@ -39,3 +39,19 @@ Make a bounding box request:
 It should return:
 
     {"query1":[{"id":"augsburg","loc":[10.898333,48.371667]}]}
+
+
+The Design Document Function
+----------------------------
+
+function(doc) {
+    if (doc.loc) {
+        emit(doc._id, {
+            type: "Point",
+            coordinates: [doc.loc[0], doc.loc[1]]
+        });
+    }};"
+
+It uses the emit() from normal views. The key isn't taken into account, it
+could be `null`. The value needs to be [GeoJSON](http://geojson.org). At
+the moment only points are supported.
