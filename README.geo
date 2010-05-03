@@ -8,7 +8,7 @@ Clone the GeoCouch branch:
 
     git clone git@github.com:vmx/couchdb.git
     cd couchdb
-    git checkout geocouch
+    git checkout -t origin/geocouch
 
 Compile it:
 
