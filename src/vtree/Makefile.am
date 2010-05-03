@@ -22,8 +22,8 @@ vtree_file_collection = \
 vtreeebin_make_generated_file_list = \
     vtree.beam \
     vtreeviz.beam \
-    run_vtreeviz.beam
-    vtree_test.beaml \
+    run_vtreeviz.beam \
+    vtree_test.beam \
     vtree_insbench.beam
 
 vtreeebin_DATA = \
