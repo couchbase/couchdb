@@ -6,7 +6,7 @@ Prerequisites
 
 Clone the GeoCouch branch:
 
-    git clone git@github.com:vmx/couchdb.git
+    git clone http://github.com/vmx/couchdb.git
     cd couchdb
     git checkout -t origin/geocouch
 
