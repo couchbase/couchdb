@@ -1,19 +1,24 @@
-Welcome to the World of GeoCouch
+Welcome to the world of GeoCouch
 ================================
 
 Prerequisites
 -------------
 
-You will need the R-tree data structure first. I've called my implementation
-vtree. Get it from
+Clone the GeoCouch branch:
 
-    git clone git://gitorious.org/geocouch/vtree.git
+    git clone git@github.com:vmx/couchdb.git
+    cd couchdb
+    git checkout geocouch
 
-and compile it with `make`.
+Compile it:
 
-When you startup the vtree has to be in the Erlang path. I use e.g.
+    ./bootstrap
+    ./configure
+    make dev
 
-    ERL_FLAGS="-pa /home/vmx/src/erlang/vtree/ebin" ./utils/run
+Run it:
+
+    ./utils/run
 
 
 Using GeoCouch
@@ -25,7 +30,7 @@ Create a database:
 
 Add a Design Document with a spatial function:
 
-    curl -X PUT -d '{"spatial":{"points1":"function(doc) {\n    if (doc.loc) {\n        emit(doc._id, {\n            type: \"Point\",\n            coordinates: [doc.loc[0], doc.loc[1]]\n        });\n    }};"}}' http://127.0.0.1:5984/places/_design/main
+    curl -X PUT -d '{"spatial":{"points":"function(doc) {\n    if (doc.loc) {\n        emit(doc._id, {\n            type: \"Point\",\n            coordinates: [doc.loc[0], doc.loc[1]]\n        });\n    }};"}}' http://127.0.0.1:5984/places/_design/main
 
 Put some data into it:
 
@@ -34,7 +39,7 @@ Put some data into it:
 
 Make a bounding box request:
 
-    curl -X GET 'http://localhost:5984/places/_design/main/_spatial/points1/%5B0,0,180,90%5D'
+    curl -X GET 'http://localhost:5984/places/_design/main/_spatial/points/%5B0,0,180,90%5D'
     
 It should return:
 
