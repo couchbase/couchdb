@@ -1,4 +1,4 @@
--module(testplan).
+-module(vtree_test).
 -export([start/0]).
 
 -define(FILENAME, "/tmp/vtree.bin").

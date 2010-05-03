@@ -1,4 +1,4 @@
--module(insertion).
+-module(vtree_insbench).
 -export([start/0]).
 
 -export([test_insertion/0]).
