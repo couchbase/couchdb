@@ -10,8 +10,6 @@
 % License for the specific language governing permissions and limitations under
 % the License.
 
-% The groupID is the name of the design document (ID minus the "_design/"
-
 -module(couch_spatial).
 -behaviour(gen_server).
 
