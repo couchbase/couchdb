@@ -166,8 +166,10 @@ handle_request(MochiReq, DefaultFun, UrlHandlers, DbUrlHandlers,
 handle_request_int(MochiReq, DefaultFun,
             UrlHandlers, DbUrlHandlers, DesignUrlHandlers) ->
     Begin = now(),
-    AuthenticationSrcs = make_fun_spec_strs(
-            couch_config:get("httpd", "authentication_handlers")),
+    AuthenticationSrcs = [
+        "{couch_httpd_hosting_auth, hosting_authentication_handler}"
+        | make_fun_spec_strs(
+            couch_config:get("httpd", "authentication_handlers"))],
     % for the path, use the raw path with the query string and fragment
     % removed, but URL quoting left intact
     RawUri = MochiReq:get(raw_path),
