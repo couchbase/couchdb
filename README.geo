@@ -6,9 +6,9 @@ Prerequisites
 
 Clone the GeoCouch branch:
 
+    # default branch is already geocouch
     git clone http://github.com/vmx/couchdb.git
     cd couchdb
-    git checkout -t origin/geocouch
 
 Compile it:
 
