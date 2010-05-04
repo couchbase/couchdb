@@ -6,4 +6,15 @@
 -export([hosting_authentication_handler/1]).
 
 hosting_authentication_handler(Req) ->
-    Req#httpd{user_ctx=#user_ctx{roles=[<<"_admin">>]}}.
+    case couch_httpd:header_value(Req, "Authorization") of
+        "Basic " ++ Base64Value ->
+            HostingCredentials = ?l2b(os:getenv("COUCH_HOSTING_CREDENTIALS")),
+            case couch_util:decodeBase64(Base64Value) of
+                HostingCredentials ->
+                    Req#httpd{user_ctx=#user_ctx{roles=[<<"_admin">>]}};
+                _ ->
+                    Req
+            end;
+        _ ->
+            Req
+    end.
