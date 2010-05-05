@@ -173,9 +173,8 @@ code_change(_OldVsn, State, _Extra) ->
 do_bbox_search(Bbox, #spatial_group{fd=Fd}, #spatial{treepos=TreePos}) ->
     Result = vtree:lookup(Fd, TreePos, Bbox),
     ?LOG_DEBUG("bbox_search result: ~p", [Result]),
-    Output = lists:foldl(fun({Loc, _Meta, DocId}, Acc) ->
-         % NOTE vmx: it's only a point, but we saved MBRs
-         {X, Y, _, _} = Loc,
-         Acc ++ [{[{<<"id">>, DocId}, {<<"loc">>, [X, Y]}]}]
+    Output = lists:foldl(fun({Bbox, _Meta, DocId}, Acc) ->
+         Acc ++ [{[{<<"id">>, DocId}, {<<"bbox">>,
+                                       erlang:tuple_to_list(Bbox)}]}]
     end, [], Result),
     {ok, Output}.
