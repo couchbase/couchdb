@@ -11,6 +11,7 @@
 % the License.
 
 -module(couch_spatial_updater).
+-include_lib("eunit/include/eunit.hrl").
 
 -export([update/2]).
 
@@ -255,12 +256,137 @@ write_changes(Group, IndexKeyValuesToAdd, DocIdIndexIdKeys, NewSeq) ->
 
 
 process_result([[DocId|[{Geo}]]]) ->
-    Coords = proplists:get_value(<<"coordinates">>, Geo),
-    Bbox = case proplists:get_value(<<"type">>, Geo) of
-    <<"Point">> ->
-        [X, Y] = Coords,
-        {X, Y, X, Y};
+    Type = proplists:get_value(<<"type">>, Geo),
+    Bbox = case Type of
+    <<"GeometryCollection">> ->
+        Geometries = proplists:get_value(<<"geometries">>, Geo),
+        lists:foldl(fun({Geometry}, CurBbox) ->
+            Type2 = proplists:get_value(<<"type">>, Geometry),
+            Coords = proplists:get_value(<<"coordinates">>, Geometry),
+            extract_bbox(Type2, Coords, CurBbox)
+        end, nil, Geometries);
     _ ->
-        ?LOG_INFO("Other types than Points are not supported yet", [])
+        Coords = proplists:get_value(<<"coordinates">>, Geo),
+        extract_bbox(Type, Coords)
     end,
-    {Bbox, DocId}.
+    {erlang:list_to_tuple(Bbox), DocId}.
+
+
+extract_bbox(Type, Coords) ->
+    extract_bbox(Type, Coords, nil).
+
+extract_bbox(Type, Coords, InitBbox) ->
+    Bbox = case Type of
+    <<"Point">> ->
+        bbox([Coords], InitBbox);
+    <<"LineString">> ->
+        bbox(Coords, InitBbox);
+    <<"Polygon">> ->
+        % holes don't matter for the bounding box
+        bbox(hd(Coords), InitBbox);
+    <<"MultiPoint">> ->
+        bbox(Coords, InitBbox);
+    <<"MultiLineString">> ->
+        lists:foldl(fun(Linestring, CurBbox) ->
+            bbox(Linestring, CurBbox)
+        end, InitBbox, Coords);
+    <<"MultiPolygon">> ->
+        lists:foldl(fun(Polygon, CurBbox) ->
+            bbox(hd(Polygon), CurBbox)
+        end, InitBbox, Coords)
+    end.
+
+bbox(Coords) ->
+    bbox(Coords, nil).
+
+bbox([], {Min, Max}) ->
+    Min ++ Max;
+bbox([Coords|Rest], nil) ->
+    bbox(Rest, {Coords, Coords});
+bbox(Coords, Bbox) when is_list(Bbox)->
+    MinMax = lists:split(length(Bbox) div 2, Bbox),
+    bbox(Coords, MinMax);
+bbox([Coords|Rest], {Min, Max}) ->
+    Min2 = lists:zipwith(fun(X, Y) -> erlang:min(X,Y) end, Coords, Min),
+    Max2 = lists:zipwith(fun(X, Y) -> erlang:max(X,Y) end, Coords, Max),
+    bbox(Rest, {Min2, Max2}).
+
+
+% The tests are based on the examples of the GeoJSON format specification
+bbox_test() ->
+    ?assertEqual([100.0, 0.0, 101.0, 1.0], 
+                 bbox([[100.0, 0.0], [101.0, 1.0]])),
+    ?assertEqual([100.0, 0.0, 101.0, 1.0], 
+                 bbox([[100.0, 0.0], [101.0, 0.0], [101.0, 1.0], [100.0, 1.0],
+                       [100.0, 0.0]])),
+    ?assertEqual([-10.0, -1.0, -72.8, 9.5, 101.0, 0.0, 50.4, 58.69], 
+                 bbox([[-10.0, 0.0, 50.4, 58.69], [101.0, -1.0, -72.8, 9.5]])).
+
+bbox_nil_test() ->
+    ?assertEqual([100.0, 0.0, 101.0, 1.0], 
+                 bbox([[100.0, 0.0], [101.0, 1.0]], nil)),
+    ?assertEqual([100.0, 0.0, 101.0, 1.0], 
+                 bbox([[100.0, 0.0], [101.0, 0.0], [101.0, 1.0], [100.0, 1.0],
+                       [100.0, 0.0]], nil)),
+    ?assertEqual([-10.0, -1.0, -72.8, 9.5, 101.0, 0.0, 50.4, 58.69], 
+                 bbox([[-10.0, 0.0, 50.4, 58.69], [101.0, -1.0, -72.8, 9.5]],
+                 nil)).
+
+bbox_initbbox_test() ->
+    ?assertEqual([100.0, 0.0, 200.36, 1.0],
+                 bbox([[100.0, 0.0], [110.0, 1.0]],
+                      [105.4, 20.3, 200.36, 0.378])),
+    ?assertEqual([100.0, 0.0, 200.36, 1.0], 
+                 bbox([[100.0, 0.0], [110.0, 1.0]],
+                      {[105.4, 20.3], [200.36, 0.378]})).
+
+extract_bbox_point_test() ->
+    ?assertEqual([100.0, 0.0, 100.0, 0.0],
+                 extract_bbox(<<"Point">>, [100.0, 0.0])).
+
+extract_bbox_linestring_test() ->
+    ?assertEqual([100.0, 0.0, 101.0, 1.0],
+                 extract_bbox(<<"LineString">>, [[100.0, 0.0], [101.0, 1.0]])).
+
+extract_bbox_polygon_test() ->
+    ?assertEqual([100.0, 0.0, 101.0, 1.0],
+                 extract_bbox(<<"Polygon">>, [
+        [[100.0, 0.0], [101.0, 0.0], [101.0, 1.0], [100.0, 1.0], [100.0, 0.0]],
+        [[100.2, 0.2], [100.8, 0.2], [100.8, 0.8], [100.2, 0.8], [100.2, 0.2]]
+    ])).
+
+extract_bbox_multilinestring_test() ->
+    ?assertEqual([100.0, 0.0, 103.0, 3.0],
+                 extract_bbox(<<"MultiLineString">>, [
+        [[100.0, 0.0], [101.0, 1.0]],
+        [[102.0, 2.0], [103.0, 3.0]]
+    ])).
+
+extract_bbox_multipolygon_test() ->
+    ?assertEqual([100.0, 0.0, 103.0, 3.0],
+                 extract_bbox(<<"MultiPolygon">>, [
+        [[[102.0, 2.0], [103.0, 2.0], [103.0, 3.0], [102.0, 3.0], [102.0, 2.0]]],
+        [[[100.0, 0.0], [101.0, 0.0], [101.0, 1.0], [100.0, 1.0], [100.0, 0.0]],
+         [[100.2, 0.2], [100.8, 0.2], [100.8, 0.8], [100.2, 0.8], [100.2, 0.2]]]
+    ])).
+
+process_result_geometrycollection_test() ->
+    Geojson = {[{<<"type">>,<<"GeometryCollection">>},
+                {<<"geometries">>,
+                 [{[{<<"type">>,<<"Point">>},
+                    {<<"coordinates">>,[100.0,0.0]}]},
+                  {[{<<"type">>,<<"LineString">>},
+                    {<<"coordinates">>,[[101.0,0.0],[102.0,1.0]]}]}]}]},
+    {Bbox, <<"somedoc">>} = process_result([[<<"somedoc">>, Geojson]]),
+    ?assertEqual({100.0, 0.0, 102.0, 1.0}, Bbox).
+
+process_result_geometrycollection_fail_test() ->
+    % collection contains geometries with different dimensions
+    Geojson = {[{<<"type">>,<<"GeometryCollection">>},
+                {<<"geometries">>,
+                 [{[{<<"type">>,<<"Point">>},
+                    {<<"coordinates">>,[100.0,0.0,54.5]}]},
+                  {[{<<"type">>,<<"LineString">>},
+                    {<<"coordinates">>,[[101.0,0.0],[102.0,1.0]]}]}]}]},
+    ?assertError(function_clause, process_result([[<<"somedoc">>, Geojson]])).
+    
