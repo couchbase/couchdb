@@ -43,7 +43,7 @@ Make a bounding box request:
     
 It should return:
 
-    {"query1":[{"id":"augsburg","loc":[10.898333,48.371667]}]}
+    {"spatial":[{"id":"augsburg","loc":[10.898333,48.371667,10.898333,48.371667]}]}
 
 
 The Design Document Function
@@ -58,5 +58,5 @@ function(doc) {
     }};"
 
 It uses the emit() from normal views. The key isn't taken into account, it
-could be `null`. The value needs to be [GeoJSON](http://geojson.org). At
-the moment only points are supported.
+could be `null`. The value needs to be [GeoJSON](http://geojson.org). All
+geometry types (even GemetryCollections) are supported.
