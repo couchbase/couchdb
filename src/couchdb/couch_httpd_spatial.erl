@@ -20,12 +20,9 @@
 handle_spatial_req(#httpd{method='GET',
         path_parts=[_, _, DName, _, SpatialName, Query]}=Req, Db, DDoc) ->
     ?LOG_DEBUG("Spatial query (~p): ~p ~n~p", [DName, Query, DDoc#doc.id]),
-    %couch_spatial:update_tree(Db, DDoc, SpatialName),
     Bbox = list_to_tuple(?JSON_DECODE(Query)),
-    %Foo = couch_spatial:bbox_search({-180, -90, 180, 90}),
-    Foo = couch_spatial:bbox_search(Db, DDoc, SpatialName, Bbox),
-%    Foo = <<"bar">>,
-    send_json(Req, {[{<<"query1">>, Foo}]});
+    Result = couch_spatial:bbox_search(Db, DDoc, SpatialName, Bbox),
+    send_json(Req, {[{<<"spatial">>, Result}]});
 
 handle_spatial_req(Req, _Db, _DDoc) ->
     send_method_not_allowed(Req, "GET,HEAD").
