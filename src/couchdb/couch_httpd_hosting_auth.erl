@@ -8,12 +8,17 @@
 hosting_authentication_handler(Req) ->
     case couch_httpd:header_value(Req, "Authorization") of
         "Basic " ++ Base64Value ->
-            HostingCredentials = ?l2b(os:getenv("COUCH_HOSTING_CREDENTIALS")),
-            case couch_util:decodeBase64(Base64Value) of
-                HostingCredentials ->
-                    Req#httpd{user_ctx=#user_ctx{roles=[<<"_admin">>]}};
-                _ ->
-                    Req
+            case os:getenv("COUCH_HOSTING_CREDENTIALS") of
+              false ->
+                  Req;
+              Credentials ->
+                  HostingCredentials = ?l2b(Credentials),
+                  case couch_util:decodeBase64(Base64Value) of
+                      HostingCredentials ->
+                          Req#httpd{user_ctx=#user_ctx{roles=[<<"_admin">>]}};
+                      _ ->
+                          Req
+                  end
             end;
         _ ->
             Req
