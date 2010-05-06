@@ -30,7 +30,7 @@ Create a database:
 
 Add a Design Document with a spatial function:
 
-    curl -X PUT -d '{"spatial":{"points":"function(doc) {\n    if (doc.loc) {\n        emit(doc._id, {\n            type: \"Point\",\n            coordinates: [doc.loc[0], doc.loc[1]]\n        });\n    }};"}}' http://127.0.0.1:5984/places/_design/main
+    curl -X PUT -d '{"spatial":{"points":"function(doc) {\n    if (doc.loc) {\n        emit({\n            type: \"Point\",\n            coordinates: [doc.loc[0], doc.loc[1]]\n        }, doc._id);\n    }};"}}' http://127.0.0.1:5984/places/_design/main
 
 Put some data into it:
 
@@ -43,7 +43,7 @@ Make a bounding box request:
     
 It should return:
 
-    {"spatial":[{"id":"augsburg","loc":[10.898333,48.371667,10.898333,48.371667]}]}
+    {"spatial":[{"id":"augsburg","bbox":[10.898333,48.371667,10.898333,48.371667],"value":"augsburg"}]}
 
 
 The Design Document Function
@@ -51,14 +51,14 @@ The Design Document Function
 
 function(doc) {
     if (doc.loc) {
-        emit(doc._id, {
+        emit({
             type: "Point",
             coordinates: [doc.loc[0], doc.loc[1]]
-        });
+        }, doc._id);
     }};"
 
-It uses the emit() from normal views. The key isn't taken into account, it
-could be `null`. The value needs to be [GeoJSON](http://geojson.org). All
+It uses the emit() from normal views. The key is a
+[GeoJSON](http://geojson.org) geometry, the value is any arbitrary JSON. All
 geometry types (even GemetryCollections) are supported.
 
 If the GeoJSON geometry contains a `bbox` property it will be used instead
