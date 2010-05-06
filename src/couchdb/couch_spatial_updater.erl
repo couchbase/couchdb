@@ -255,7 +255,7 @@ write_changes(Group, IndexKeyValuesToAdd, DocIdIndexIdKeys, NewSeq) ->
     {ok, Group2}.
 
 
-process_result([[DocId|[{Geo}]]]) ->
+process_result([[{Geo}|[Value]]]) ->
     Type = proplists:get_value(<<"type">>, Geo),
     Bbox = case Type of
     <<"GeometryCollection">> ->
@@ -279,7 +279,7 @@ process_result([[DocId|[{Geo}]]]) ->
             Bbox2
         end
     end,
-    {erlang:list_to_tuple(Bbox), DocId}.
+    {erlang:list_to_tuple(Bbox), Value}.
 
 
 extract_bbox(Type, Coords) ->
@@ -387,7 +387,7 @@ process_result_geometrycollection_test() ->
                     {<<"coordinates">>,[100.0,0.0]}]},
                   {[{<<"type">>,<<"LineString">>},
                     {<<"coordinates">>,[[101.0,0.0],[102.0,1.0]]}]}]}]},
-    {Bbox, <<"somedoc">>} = process_result([[<<"somedoc">>, Geojson]]),
+    {Bbox, <<"somedoc">>} = process_result([[Geojson, <<"somedoc">>]]),
     ?assertEqual({100.0, 0.0, 102.0, 1.0}, Bbox).
 
 process_result_geometrycollection_fail_test() ->
@@ -398,30 +398,30 @@ process_result_geometrycollection_fail_test() ->
                     {<<"coordinates">>,[100.0,0.0,54.5]}]},
                   {[{<<"type">>,<<"LineString">>},
                     {<<"coordinates">>,[[101.0,0.0],[102.0,1.0]]}]}]}]},
-    ?assertError(function_clause, process_result([[<<"somedoc">>, Geojson]])).
+    ?assertError(function_clause, process_result([[Geojson, <<"somedoc">>]])).
     
 process_result_point_test() ->
     Geojson = {[{<<"type">>,<<"Point">>},
                 {<<"coordinates">>,[100.0,0.0]}]},
-    {Bbox, <<"somedoc">>} = process_result([[<<"somedoc">>, Geojson]]),
+    {Bbox, <<"somedoc">>} = process_result([[Geojson, <<"somedoc">>]]),
     ?assertEqual({100.0, 0.0, 100.0, 0.0}, Bbox).
 
 process_result_point_bbox_test() ->
     Geojson = {[{<<"type">>,<<"Point">>},
                 {<<"coordinates">>,[100.0,0.0]},
                 {<<"bbox">>,[100.0,0.0,105.54,8.614]}]},
-    {Bbox, <<"somedoc">>} = process_result([[<<"somedoc">>, Geojson]]),
+    {Bbox, <<"somedoc">>} = process_result([[Geojson, <<"somedoc">>]]),
     ?assertEqual({100.0, 0.0, 105.54, 8.614}, Bbox).
 
 process_result_linestring_test() ->
     Geojson = {[{<<"type">>,<<"LineString">>},
                 {<<"coordinates">>,[[101.0,0.0],[102.0,1.0]]}]},
-    {Bbox, <<"somedoc">>} = process_result([[<<"somedoc">>, Geojson]]),
+    {Bbox, <<"somedoc">>} = process_result([[Geojson, <<"somedoc">>]]),
     ?assertEqual({101.0, 0.0, 102.0, 1.0}, Bbox).
 
 process_result_linestring_toosmallbbox_test() ->
     Geojson = {[{<<"type">>,<<"LineString">>},
                 {<<"coordinates">>,[[101.0,0.0],[102.0,1.0]]},
                 {<<"bbox">>,[101.0,0.0,101.54,0.614]}]},
-    {Bbox, <<"somedoc">>} = process_result([[<<"somedoc">>, Geojson]]),
+    {Bbox, <<"somedoc">>} = process_result([[Geojson, <<"somedoc">>]]),
     ?assertEqual({101.0, 0.0, 101.54, 0.614}, Bbox).

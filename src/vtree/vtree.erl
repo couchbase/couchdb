@@ -12,7 +12,7 @@
 
 -module(vtree).
 
--export([lookup/3, within/2, intersect/2, disjoint/2, insert/3, area/1,
+-export([lookup/3, within/2, intersect/2, disjoint/2, insert/4, area/1,
          merge_mbr/2, find_area_min_nth/1, partition_node/1,
          calc_nodes_mbr/1, calc_mbr/1, best_split/1, minimal_overlap/2,
          calc_overlap/2, minimal_coverage/2, delete/4, add_remove/4]).
@@ -50,43 +50,43 @@ add_remove(Fd, Pos, AddKeyValues, KeysToRemove) ->
         {ok, CurPos2} = delete(Fd, DocId, Mbr, CurPos),
         CurPos2
     end, Pos, KeysToRemove),
-    NewPos2 = lists:foldl(fun({{Mbr, DocId}, _Value}, CurPos) ->
-        io:format("vtree: add (~p:~p): ~p~n", [Fd, CurPos, DocId]),
-        {ok, _NewMbr, CurPos2} = insert(Fd, CurPos, {Mbr, #node{type=leaf}, DocId}),
+    NewPos2 = lists:foldl(fun({{Mbr, DocId}, Value}, CurPos) ->
+        io:format("vtree: add (~p:~p): {~p,~p}~n", [Fd, CurPos, DocId, Value]),
+        {ok, _NewMbr, CurPos2} = insert(Fd, CurPos, DocId,
+                                        {Mbr, #node{type=leaf}, Value}),
         CurPos2
     end, NewPos, AddKeyValues),
     {ok, NewPos2}.
 
+% returns a list of 3-tuple with MBR, id, value
 lookup(_Fd, nil, _Bbox) ->
     [];
 lookup(Fd, Pos, Bbox) ->
     {ok, Parent} = couch_file:pread_term(Fd, Pos),
     {_Mbr, Meta, NodesPos} = Parent,
-    Entries = lists:foldl(
-        fun(EntryPos, Acc) ->
-            %case Entry of
-            case Meta#node.type of
-            inner ->
-                % XXX FIXME vmx: I look at _every_ inner node. Not just at the
-                %     that intersect with the Bbox
-                Acc ++ lookup(Fd, EntryPos, Bbox);
-            leaf ->
-                % loop through all data nodes
-                lists:foldl(fun(Child, Acc2) ->
-                    {Mbr, _, _Id} = Child,
-                    Disjoint = disjoint(Mbr, Bbox),
-                    if not Disjoint ->
-                        Acc2 ++ [Child];
-                    true ->
-                        Acc2
-                    end
-                end, [], NodesPos);
-            _ ->
-                io:format("Tree/node is invalid", []),
-                error
-            end
-        end, [], NodesPos),
-    Entries.
+    lists:foldl(fun(EntryPos, Acc) ->
+        %case Entry of
+        case Meta#node.type of
+        inner ->
+            % XXX FIXME vmx: I look at _every_ inner node. Not just at the
+            %     that intersect with the Bbox
+            Acc ++ lookup(Fd, EntryPos, Bbox);
+        leaf ->
+            % loop through all data nodes
+            lists:foldl(fun(Child, Acc2) ->
+                {Mbr, _Meta, {Id, Value}} = Child,
+                Disjoint = disjoint(Mbr, Bbox),
+                if not Disjoint ->
+                    [{Mbr, Id, Value}|Acc2];
+                true ->
+                    Acc2
+                end
+            end, [], NodesPos);
+        _ ->
+            io:format("Tree/node is invalid", []),
+            error
+        end
+    end, [], NodesPos).
 
 
 % Tests if Inner is within Outer box
@@ -165,16 +165,18 @@ split_node({_Mbr, Meta, _EntriesPos}=Node) ->
 % At top-level: {ok, MBR, position_in_file}
 % If a split occurs: {splitted, MBR_of_both_nodes, position_in_file_node1,
 %                     position_in_file_node2}
-insert(Fd, nil, {Mbr, Meta, Id}) ->
-    InitialTree = {Mbr, #node{type=leaf}, [{Mbr, Meta, Id}]},
+insert(Fd, nil, Id, {Mbr, Meta, Value}) ->
+    InitialTree = {Mbr, #node{type=leaf}, [{Mbr, Meta, {Id, Value}}]},
     {ok, Pos} = couch_file:append_term(Fd, InitialTree),
     {ok, Mbr, Pos};
 
-insert(Fd, RootPos, NewNode) ->
-    insert(Fd, RootPos, NewNode, 0).
+insert(Fd, RootPos, Id, Node) ->
+    insert(Fd, RootPos, Id, Node, 0).
 
-insert(Fd, RootPos, {NewNodeMbr, NewNodeMeta, NewNodeId}, CallDepth) ->
-    NewNode = {NewNodeMbr, NewNodeMeta#node{type=leaf}, NewNodeId},
+insert(Fd, RootPos, NewNodeId,
+       {NewNodeMbr, NewNodeMeta, NewNodeValue}, CallDepth) ->
+    NewNode = {NewNodeMbr, NewNodeMeta#node{type=leaf},
+               {NewNodeId, NewNodeValue}},
     % EntriesPos is only a pointer to the node (position in file)
     {ok, {TreeMbr, Meta, EntriesPos}} = couch_file:pread_term(Fd, RootPos),
     EntryNum = length(EntriesPos),
@@ -472,8 +474,9 @@ delete(Fd, DeleteId, DeleteMbr, [NodePos|NodePosTail]) ->
                 delete(Fd, DeleteId, DeleteMbr, NodePosTail)
             end;
         leaf ->
-            case lists:keytake(DeleteId, 3, NodeEntriesPos) of
-            {value, _DeletedNode, EntriesNew} ->
+            case funtake(fun({_, _, {DocId, _Value}}) -> DocId end,
+                         DeleteId, NodeEntriesPos) of
+            {value, EntriesNew} ->
                 case EntriesNew of
                 [] ->
                     {empty, NodePos};
@@ -498,6 +501,21 @@ rebuild_node(Fd, NodeMeta, EntriesPos) ->
     Mbr = calc_nodes_mbr(Entries),
     {ok, NodePos} = couch_file:append_term(Fd, {Mbr, NodeMeta, EntriesPos}),
     NodePos.
+
+% It's a bit like lists:keytake/3, but uses a function that returns a key
+% instead of using the key directly
+funtake(Pred, ToFind, List) ->
+    funtake(Pred, ToFind, List, []).
+
+funtake(_Pred, _ToFind, [], _Acc) ->
+    false;
+funtake(Pred, ToFind, [H|T], Acc) ->
+    case Pred(H) of
+    ToFind ->
+        {value, Acc ++ T};
+    _ ->
+        funtake(Pred, ToFind, T, Acc ++ [H])
+    end.
 
 % Transforms a list of positions in a file to the actual data
 pos_to_data(Fd, List) ->
