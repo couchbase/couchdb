@@ -60,3 +60,7 @@ function(doc) {
 It uses the emit() from normal views. The key isn't taken into account, it
 could be `null`. The value needs to be [GeoJSON](http://geojson.org). All
 geometry types (even GemetryCollections) are supported.
+
+If the GeoJSON geometry contains a `bbox` property it will be used instead
+of calculating it from the geometry (even if it's wrong, i.e. is not
+the actual bounding box).
