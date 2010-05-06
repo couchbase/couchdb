@@ -286,7 +286,7 @@ extract_bbox(Type, Coords) ->
     extract_bbox(Type, Coords, nil).
 
 extract_bbox(Type, Coords, InitBbox) ->
-    Bbox = case Type of
+    case Type of
     <<"Point">> ->
         bbox([Coords], InitBbox);
     <<"LineString">> ->
