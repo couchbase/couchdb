@@ -28,10 +28,10 @@
 % Design question: Should not fully filled nodes have only as many members as nodes, or be filled up with nils to their maximum number of nodes? - Current implementation is the first one (dynamic number of members).
 
 % Nodes maximum/minimum filling grade (TODO vmx: shouldn't be hard-coded)
-%-define(MAX_FILLED, 80).
-%-define(MIN_FILLED, 40).
--define(MAX_FILLED, 4).
--define(MIN_FILLED, 2).
+-define(MAX_FILLED, 40).
+-define(MIN_FILLED, 20).
+%-define(MAX_FILLED, 2).
+%-define(MIN_FILLED, 4).
 
 
 % NOTE vmx: At the moment "leaf" is used for the nodes that
@@ -91,7 +91,7 @@ lookup(Fd, Pos, Bbox) ->
 
 % Tests if Inner is within Outer box
 within(Inner, Outer) ->
-%    io:format("(within) Inner, Outer: ~p, ~p~n", [Inner, Outer]),
+    %io:format("(within) Inner, Outer: ~p, ~p~n", [Inner, Outer]),
     {IW, IS, IE, IN} = Inner,
     {OW, OS, OE, ON} = Outer,
     (IW >= OW) and (IS >= OS) and (IE =< OE) and (IN =< ON).
@@ -175,8 +175,7 @@ insert(Fd, RootPos, Id, Node) ->
 
 insert(Fd, RootPos, NewNodeId,
        {NewNodeMbr, NewNodeMeta, NewNodeValue}, CallDepth) ->
-    NewNode = {NewNodeMbr, NewNodeMeta#node{type=leaf},
-               {NewNodeId, NewNodeValue}},
+    NewNode = {NewNodeMbr, NewNodeMeta#node{type=leaf}, NewNodeValue},
     % EntriesPos is only a pointer to the node (position in file)
     {ok, {TreeMbr, Meta, EntriesPos}} = couch_file:pread_term(Fd, RootPos),
     EntryNum = length(EntriesPos),
@@ -190,9 +189,13 @@ insert(Fd, RootPos, NewNodeId,
         %    CurEntry
         %end, EntriesPos);
         Entries = EntriesPos,
-
         LeafNodeMbr = merge_mbr(TreeMbr, element(1, NewNode)),
-        LeafNode = {LeafNodeMbr, #node{type=leaf}, Entries ++ [NewNode]},
+
+        % store the ID with every node:
+        NewNode2 = {NewNodeMbr, NewNodeMeta#node{type=leaf},
+               {NewNodeId, NewNodeValue}},
+
+        LeafNode = {LeafNodeMbr, #node{type=leaf}, Entries ++ [NewNode2]},
         if
         EntryNum < ?MAX_FILLED ->
             %io:format("There's plenty of space (leaf node)~n", []),
@@ -232,8 +235,9 @@ insert(Fd, RootPos, NewNodeId,
             end, Entries),
         MinPos = find_area_min_nth(Expanded),
         SubTreePos = lists:nth(MinPos, EntriesPos),
-        case insert(Fd, SubTreePos, NewNode, CallDepth+1) of
+        case insert(Fd, SubTreePos, NewNodeId, NewNode, CallDepth+1) of
         {ok, ChildMbr, ChildPos} ->
+            %io:format("not splitted:~n", []),
             NewMbr = merge_mbr(TreeMbr, ChildMbr),
             {A, B} = lists:split(MinPos-1, EntriesPos),
             % NOTE vmx: I guess child nodes don't really have an order, we
@@ -243,8 +247,8 @@ insert(Fd, RootPos, NewNodeId,
             {ok, Pos} = couch_file:append_term(Fd, NewNode2),
             {ok, NewMbr, Pos};
         {splitted, ChildMbr, ChildPos1, ChildPos2} ->
-            NewMbr = merge_mbr(TreeMbr, ChildMbr),
             %io:format("EntryNum: ~p~n", [EntryNum]),
+            NewMbr = merge_mbr(TreeMbr, ChildMbr),
             if
             % Both nodes of the split fit in the current inner node
             EntryNum+1 < ?MAX_FILLED ->
@@ -304,7 +308,7 @@ find_area_min_nth(Count, [_H|T], {{Min, Mbr}, MinCount}) ->
 
 partition_node({Mbr, _Meta, Nodes}) ->
     {MbrW, MbrS, MbrE, MbrN} = Mbr,
-%    io:format("(partition_node) Mbr: ~p~n", [Mbr]),
+    %io:format("(partition_node) Mbr: ~p~n", [Mbr]),
     Tmp = lists:foldl(
         fun(Node,  {AccW, AccS, AccE, AccN}) ->
             {{W, S, E, N}, _NodeMeta, _Id} = Node,
@@ -326,7 +330,7 @@ partition_node({Mbr, _Meta, Nodes}) ->
             end,
             {NewAccW, NewAccS, NewAccE, NewAccN}
         end, {[],[],[],[]}, Nodes),
-%    io:format("(partition_node) Partitioned: ~p~n", [Tmp]),
+    %io:format("(partition_node) Partitioned: ~p~n", [Tmp]),
     % XXX vmx This is a hack! A better partitioning algorithm should be used.
     %     If the two corresponding partitions are empty, split node in the
     %     middle
@@ -382,8 +386,31 @@ best_split({PartW, PartS, PartE, PartN}) ->
         MaxWE > MaxSN ->
             [{MbrS, PartS}, {MbrN, PartN}];
         true ->
-            % MBRs are needed for further calculation
-            {tie,  {MbrW, MbrS, MbrE, MbrN}}
+            % XXX vmx This is very unlikely to happen (but can for small node
+            %     sizes) It means that the partition consists of a single node
+            %     only.
+            % XXX vmx This is a hack! A better partitioning algorithm should
+            %     be used.
+            %     If there is only one node, use that one.
+            case {MbrW, MbrS, MbrE, MbrN} of
+                {error, error, _, _} ->
+                    io:format("vtree: WORKAROUND WAS USED, PLEASE TELL vmx~n"),
+                    [{MbrE, PartE}, {MbrN, PartN}];
+                {_, _, error, error} ->
+                    io:format("vtree: WORKAROUND WAS USED, PLEASE TELL vmx~n"),
+                    [{MbrW, PartW}, {MbrS, PartS}];
+                {_, error, error, _} ->
+                    io:format("vtree: WORKAROUND WAS USED, PLEASE TELL vmx~n"),
+                    [{MbrW, PartW}, {MbrN, PartN}];
+                {error, _, _, error} ->
+                    io:format("vtree: WORKAROUND WAS USED, PLEASE TELL vmx~n"),
+                    [{MbrS, PartS}, {MbrE, PartE}];
+                _ ->
+                    % XXX vmx this is the right, normal case (i.e. the hack
+                    % is above)
+                    % MBRs are needed for further calculation
+                    {tie,  {MbrW, MbrS, MbrE, MbrN}}
+            end
     end.
 
 
