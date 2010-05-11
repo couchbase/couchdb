@@ -59,7 +59,8 @@ update(Owner, Group) ->
     couch_task_status:set_update_frequency(0),
     couch_task_status:update("Finishing."),
     {Group4, Results} = spatial_compute(Group3, UncomputedDocs),
-?LOG_DEBUG("spatial_compute results: ~p", [Results]),
+    % Output is way to huge
+    %?LOG_DEBUG("spatial_compute results: ~p", [Results]),
     % XXX vmx: I don't quite understand what view_insert_query_results does.
     %    It seems to optimize the result
     {ViewKVsToAdd2, DocIdViewIdKeys2} = view_insert_query_results(
@@ -244,8 +245,8 @@ write_changes(Group, IndexKeyValuesToAdd, DocIdIndexIdKeys, NewSeq) ->
 
     Indexes2 = lists:zipwith(fun(Index, {_Index, AddKeyValues}) ->
         KeysToRemove = couch_util:dict_find(Index#spatial.id_num, KeysToRemoveByIndex, []),
-        ?LOG_DEBUG("storing spatial data: ~n~p~n~p~n~p",
-                   [Index, AddKeyValues, KeysToRemove]),
+        %?LOG_DEBUG("storing spatial data: ~n~p~n~p~n~p",
+        %           [Index, AddKeyValues, KeysToRemove]),
         {ok, IndexTreePos} = vtree:add_remove(Fd, Index#spatial.treepos,
                                               AddKeyValues, KeysToRemove),
         Index#spatial{treepos=IndexTreePos}

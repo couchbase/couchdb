@@ -172,7 +172,7 @@ code_change(_OldVsn, State, _Extra) ->
 
 do_bbox_search(Bbox, #spatial_group{fd=Fd}, #spatial{treepos=TreePos}) ->
     Result = vtree:lookup(Fd, TreePos, Bbox),
-    ?LOG_DEBUG("bbox_search result: ~p", [Result]),
+    %?LOG_DEBUG("bbox_search result: ~p", [Result]),
     Output = lists:foldl(fun({Bbox2, DocId, Value}, Acc) ->
          Acc ++ [{[{<<"id">>, DocId},
                    {<<"bbox">>, erlang:tuple_to_list(Bbox2)},
