@@ -15,7 +15,8 @@
 -export([lookup/3, within/2, intersect/2, disjoint/2, insert/4, area/1,
          merge_mbr/2, find_area_min_nth/1, partition_node/1,
          calc_nodes_mbr/1, calc_mbr/1, best_split/1, minimal_overlap/2,
-         calc_overlap/2, minimal_coverage/2, delete/4, add_remove/4]).
+         calc_overlap/2, minimal_coverage/2, delete/4, add_remove/4,
+         split_flipped_bbox/2]).
 
 -export([get_node/2]).
 
@@ -30,8 +31,8 @@
 % Nodes maximum/minimum filling grade (TODO vmx: shouldn't be hard-coded)
 -define(MAX_FILLED, 40).
 -define(MIN_FILLED, 20).
-%-define(MAX_FILLED, 2).
-%-define(MIN_FILLED, 4).
+%-define(MAX_FILLED, 4).
+%-define(MIN_FILLED, 2).
 
 
 % NOTE vmx: At the moment "leaf" is used for the nodes that
@@ -61,7 +62,10 @@ add_remove(Fd, Pos, AddKeyValues, KeysToRemove) ->
 % returns a list of 3-tuple with MBR, id, value
 lookup(_Fd, nil, _Bbox) ->
     [];
-lookup(Fd, Pos, Bbox) ->
+lookup(Fd, Pos, Bbox) when not is_list(Bbox) ->
+    % default bounds are from this world 
+    lookup(Fd, Pos, Bbox, {-180, -90, 180, 90});
+lookup(Fd, Pos, Bboxes) ->
     {ok, Parent} = couch_file:pread_term(Fd, Pos),
     {_Mbr, Meta, NodesPos} = Parent,
     lists:foldl(fun(EntryPos, Acc) ->
@@ -70,23 +74,54 @@ lookup(Fd, Pos, Bbox) ->
         inner ->
             % XXX FIXME vmx: I look at _every_ inner node. Not just at the
             %     that intersect with the Bbox
-            Acc ++ lookup(Fd, EntryPos, Bbox);
+            Acc ++ lookup(Fd, EntryPos, Bboxes);
         leaf ->
             % loop through all data nodes
             lists:foldl(fun(Child, Acc2) ->
                 {Mbr, _Meta, {Id, Value}} = Child,
-                Disjoint = disjoint(Mbr, Bbox),
-                if not Disjoint ->
-                    [{Mbr, Id, Value}|Acc2];
-                true ->
-                    Acc2
-                end
+                 case bboxes_not_disjoint(Mbr, Bboxes) of
+                 true ->
+                     [{Mbr, Id, Value}|Acc2];
+                 false ->
+                     Acc2
+                 end
             end, [], NodesPos);
         _ ->
             io:format("Tree/node is invalid", []),
             error
         end
     end, [], NodesPos).
+
+% Only a single bounding box is split
+lookup(Fd, Pos, Bbox, Bounds) when not is_list(Bbox) ->
+    case split_flipped_bbox(Bbox, Bounds) of
+    not_flipped ->
+        lookup(Fd, Pos, [Bbox]);
+    Bboxes ->
+        lookup(Fd, Pos, Bboxes)
+    end.
+
+% Loops recursively through a list of bounding boxes and returns
+% true if the given MBR is not disjoint with one of the bounding boxes
+bboxes_not_disjoint(_Mbr, []) ->
+    false;
+bboxes_not_disjoint(Mbr, [Bbox|Tail]) ->
+    case disjoint(Mbr, Bbox) of
+    false ->
+        true;
+    true ->
+        bboxes_not_disjoint(Mbr, Tail)
+    end.
+
+% Splits a bounding box (BBox) at specific Bounds that is flipped
+split_flipped_bbox({W, S, E, N}, {BW, BS, BE, BN}) when E < W, N < S ->
+    [{W, S, BE, BN}, {BW, BS, E, N}];
+split_flipped_bbox({W, S, E, N}, {BW, _, BE, _}) when E < W ->
+    [{W, S, BE, N}, {BW, S, E, N}];
+split_flipped_bbox({W, S, E, N}, {_, BS, _, BN}) when N < S ->
+    [{W, S, E, BN}, {W, BS, E, N}];
+split_flipped_bbox(_Bbox, _Bounds) ->
+    not_flipped.
 
 
 % Tests if Inner is within Outer box
