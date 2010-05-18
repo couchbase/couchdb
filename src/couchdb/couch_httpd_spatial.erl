@@ -12,8 +12,10 @@
 
 -module(couch_httpd_spatial).
 -include("couch_db.hrl").
+-include("couch_spatial.hrl").
 
--export([handle_spatial_req/3]).
+-export([handle_spatial_req/3, spatial_group_etag/3,
+         load_index/3, spatial_group_etag/3]).
 
 -import(couch_httpd, [send_json/2, send_method_not_allowed/2]).
 
@@ -26,3 +28,20 @@ handle_spatial_req(#httpd{method='GET',
 
 handle_spatial_req(Req, _Db, _DDoc) ->
     send_method_not_allowed(Req, "GET,HEAD").
+
+load_index(Req, Db, {SpatialDesignId, SpatialName}) ->
+    % XXX NOTE vmx not sure if spatial indexes support "stale" yet
+    %Stale = couch_httpd_view:get_state_type(Req),
+    Stale = nil,
+    case couch_spatial:get_spatial_index(Db, SpatialDesignId, SpatialName, Stale) of
+    {ok, Index, Group} ->
+          {ok, Index, Group};
+    {not_found, Reason} ->
+        throw({not_found, Reason})
+    end.
+
+% counterpart in couch_httpd_view is view_group_etag/2 resp. /3
+spatial_group_etag(Group, Db) ->
+    spatial_group_etag(Group, Db, nil).
+spatial_group_etag(#spatial_group{sig=Sig,current_seq=CurrentSeq}, _Db, Extra) ->
+    couch_httpd:make_etag({Sig, CurrentSeq, Extra}).

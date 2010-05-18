@@ -48,6 +48,7 @@ source_files = \
     couch_httpd_external.erl \
     couch_httpd_show.erl \
     couch_httpd_spatial.erl \
+    couch_httpd_spatial_list.erl \
     couch_httpd_view.erl \
     couch_httpd_misc_handlers.erl \
 	couch_httpd_rewrite.erl \
@@ -109,6 +110,7 @@ compiled_files = \
     couch_httpd_external.beam \
     couch_httpd_show.beam \
     couch_httpd_spatial.beam \
+    couch_httpd_spatial_list.beam \
     couch_httpd_view.beam \
     couch_httpd_misc_handlers.beam \
 	couch_httpd_rewrite.beam \

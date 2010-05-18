@@ -15,6 +15,9 @@
 -export([handle_doc_show_req/3, handle_doc_update_req/3, handle_view_list_req/3,
         handle_view_list/6, get_fun_key/3]).
 
+% NOTE vmx for GeoCouch
+-export([make_map_start_resp_fun/3]).
+
 -include("couch_db.hrl").
 
 -import(couch_httpd,

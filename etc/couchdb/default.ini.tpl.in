@@ -89,6 +89,7 @@ _info = {couch_httpd_db,   handle_design_info_req}
 _rewrite = {couch_httpd_rewrite, handle_rewrite_req}
 _update = {couch_httpd_show, handle_doc_update_req}
 _spatial = {couch_httpd_spatial, handle_spatial_req}
+_spatiallist = {couch_httpd_spatial_list, handle_spatial_list_req}
 
 [uuids]
 ; Known algorithms:

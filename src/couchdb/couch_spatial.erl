@@ -14,8 +14,8 @@
 -behaviour(gen_server).
 
 -export([start_link/0, init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
-
 -export([bbox_search/4]).
+-export([get_spatial_index/4]).
 
 -include("couch_db.hrl").
 -include("couch_spatial.hrl").
@@ -168,8 +168,8 @@ handle_info(_Msg, Server) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-
-
+% kind of counterpart of output_map_view in couch_httpd_view
+% kind of counterpart of fold in couch_view
 do_bbox_search(Bbox, #spatial_group{fd=Fd}, #spatial{treepos=TreePos}) ->
     Result = vtree:lookup(Fd, TreePos, Bbox),
     %?LOG_DEBUG("bbox_search result: ~p", [Result]),
@@ -178,4 +178,10 @@ do_bbox_search(Bbox, #spatial_group{fd=Fd}, #spatial{treepos=TreePos}) ->
                    {<<"bbox">>, erlang:tuple_to_list(Bbox2)},
                    {<<"value">>, Value}]}]
     end, [], Result),
+    {ok, Output}.
+
+do_bbox_search(Bbox, #spatial_group{fd=Fd}, #spatial{treepos=TreePos}, FoldFun) ->
+    Result = vtree:lookup(Fd, TreePos, Bbox),
+    %?LOG_DEBUG("bbox_search result: ~p", [Result]),
+    Output = lists:foldl(FoldFun, [], Result),
     {ok, Output}.
