@@ -53,22 +53,32 @@ list_etag(#httpd{user_ctx=UserCtx}=Req, Db, Group, More) ->
         Group, Db, {More, Accept, UserCtx#user_ctx.roles}).
 
 output_list(Req, Db, DDoc, LName, Index, Etag, Group) ->
+?LOG_DEBUG("(1) output_list: Result", []),
     % XXX vmx DON'T HARDOCDE
     Bbox = {-180,-90,180,90},
+    TotalRows = 10,
+
     couch_query_servers:with_ddoc_proc(DDoc, fun(QServer) ->
         StartListRespFun = couch_httpd_show:make_map_start_resp_fun(
                                QServer, Db, LName),
+?LOG_DEBUG("(2) output_list: Result", []),
         CurrentSeq = Group#spatial_group.current_seq,
         SendRowFun = make_spatial_get_row_fun(QServer),
-        {ok, Resp, BeginBody} = StartListRespFun(Req, Etag, [], CurrentSeq),
+?LOG_DEBUG("(3) output_list: Result", []),
+        %{ok, Resp, BeginBody} = StartListRespFun(Req, Etag, [], CurrentSeq),
+        {ok, Resp, BeginBody} = StartListRespFun(Req, Etag, TotalRows, null,
+                                                 [], CurrentSeq),
+?LOG_DEBUG("(4) output_list: Result", []),
         {ok, Result} = couch_spatial:do_bbox_search(Bbox, Group, Index, SendRowFun),
 ?LOG_DEBUG("output_list: Result: ~p", [Result]),
 %        finish_list(Req, QServer, Etag, Result, Resp, CurrentSeq)
+        couch_httpd_show:send_non_empty_chunk(Resp, Result),
         {Proc, _DDocId} = QServer,
         [<<"end">>, Chunks] = couch_query_servers:proc_prompt(Proc,
                                                           [<<"list_end">>]),
+?LOG_DEBUG("(5) output_list: Result: ~p", [Chunks]),
         Chunk = BeginBody ++ ?b2l(?l2b(Chunks)),
-        couch_http_show:send_non_empty_chunk(Resp, Chunk),
+        couch_httpd_show:send_non_empty_chunk(Resp, Chunk),
         couch_httpd:last_chunk(Resp)
     end).
 
@@ -83,7 +93,9 @@ output_list(Req, Db, DDoc, LName, Index, Etag, Group) ->
 % is that there no direct output, but it returns the result as list
 make_spatial_get_row_fun(QueryServer) ->
     fun({_Bbox, _DocId, _Value}=Row, Acc) ->
-        Acc ++ prompt_list_row(QueryServer, Row)
+        [Go, Chunks] = prompt_list_row(QueryServer, Row),
+        %Acc ++ prompt_list_row(QueryServer, Row)
+        Acc ++ Chunks
     end.
 %    fun(Resp, Row, RowFront) ->
 %        get_list_row(Resp, QueryServer, Row, RowFront)
@@ -106,11 +118,15 @@ get_list_row(Resp, QueryServer, Row, RowFront) ->
             throw({already_sent, Resp, Error})
     end.
 
-% IncludeDoc is not supported
 %prompt_list_row({Proc, _DDocId}, Db, {{Key, DocId}, Value}, IncludeDoc) ->
 %    JsonRow = couch_httpd_view:view_row_obj(Db, {{Key, DocId}, Value}, IncludeDoc),
-%    couch_query_servers:proc_prompt(Proc, [<<"list_row">>, JsonRow]);
+%    couch_query_servers:proc_prompt(Proc, [<<"list_row">>, JsonRow]).
 
-prompt_list_row({Proc, _DDocId}, {Bbox, _DocId, Value}) ->
-    JsonRow = {[{key, Bbox}, {value, Value}]},
+%prompt_list_row({Proc, _DDocId}, {Bbox, _DocId, Value}) ->
+%?LOG_DEBUG("(4) prompt_list_row: Value ~p", [Value]),
+%    JsonRow = {[{key, tuple_to_list(Bbox)}, {value, Value}]},
+%    couch_query_servers:proc_prompt(Proc, [<<"list_row">>, JsonRow]).
+prompt_list_row({Proc, _DDocId}, {Bbox, DocId, Value}) ->
+?LOG_DEBUG("(4) prompt_list_row: Value ~p", [Value]),
+    JsonRow = {[{id, DocId}, {key, tuple_to_list(Bbox)}, {value, Value}]},
     couch_query_servers:proc_prompt(Proc, [<<"list_row">>, JsonRow]).
