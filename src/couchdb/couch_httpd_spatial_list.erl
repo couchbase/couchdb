@@ -20,16 +20,16 @@
                       send_error/4, send_chunked_error/2]).
 
 
-% spatial-list request with view and list from same design doc.
+% spatial-list request with spatial index and list from same design doc.
 handle_spatial_list_req(#httpd{method='GET',
         path_parts=[_, _, DesignName, _, ListName, SpatialName]}=Req, Db, DDoc) ->
     handle_spatial_list(Req, Db, DDoc, ListName, {DesignName, SpatialName});
 
-% TODO vmx
-%% view-list request with view and list from different design docs.
-%handle_view_list_req(#httpd{method='GET',
-%        path_parts=[_, _, _, _, ListName, ViewDesignName, ViewName]}=Req, Db, DDoc) ->
-%    handle_view_list(Req, Db, DDoc, ListName, {ViewDesignName, ViewName}, nil);
+% spatial-list request with spatial index and list from different design docs.
+handle_spatial_list_req(#httpd{method='GET',
+        path_parts=[_, _, _, _, ListName, DesignName, SpatialName]}=Req,
+        Db, DDoc) ->
+    handle_spatial_list(Req, Db, DDoc, ListName, {DesignName, SpatialName});
 
 handle_spatial_list_req(#httpd{method='GET'}=Req, _Db, _DDoc) ->
     send_error(Req, 404, <<"list_error">>, <<"Invalid path.">>);
