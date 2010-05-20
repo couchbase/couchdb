@@ -16,7 +16,7 @@
         handle_view_list/6, get_fun_key/3]).
 
 % NOTE vmx for GeoCouch
--export([make_map_start_resp_fun/3, send_non_empty_chunk/2]).
+-export([start_list_resp/6, send_non_empty_chunk/2]).
 
 -include("couch_db.hrl").
 
@@ -323,7 +323,6 @@ send_list_row(Resp, QueryServer, Db, Row, RowFront, IncludeDoc) ->
     try
         [Go,Chunks] = prompt_list_row(QueryServer, Db, Row, IncludeDoc),
         Chunk = RowFront ++ ?b2l(?l2b(Chunks)),
-?LOG_DEBUG("(1) send_list_row: Chunk ~p", [Chunk]),
         send_non_empty_chunk(Resp, Chunk),
         case Go of
             <<"chunks">> ->
@@ -339,12 +338,10 @@ send_list_row(Resp, QueryServer, Db, Row, RowFront, IncludeDoc) ->
 
 
 prompt_list_row({Proc, _DDocId}, Db, {{Key, DocId}, Value}, IncludeDoc) ->
-?LOG_DEBUG("(1) prompt_list_row: ~p", [IncludeDoc]),
     JsonRow = couch_httpd_view:view_row_obj(Db, {{Key, DocId}, Value}, IncludeDoc),
     couch_query_servers:proc_prompt(Proc, [<<"list_row">>, JsonRow]);
 
 prompt_list_row({Proc, _DDocId}, _, {Key, Value}, _IncludeDoc) ->
-?LOG_DEBUG("(2) prompt_list_row: ~p", [Key]),
     JsonRow = {[{key, Key}, {value, Value}]},
     couch_query_servers:proc_prompt(Proc, [<<"list_row">>, JsonRow]).
 
@@ -366,16 +363,12 @@ finish_list(Req, {Proc, _DDocId}, Etag, FoldResult, StartFun, CurrentSeq, TotalR
             {ok, Resp, BeginBody} =
                 render_head_for_empty_list(StartFun, Req, Etag, CurrentSeq, TotalRows),
             [<<"end">>, Chunks] = couch_query_servers:proc_prompt(Proc, [<<"list_end">>]),            
-?LOG_DEBUG("(5) finish_list: Chunks: ~p", [Chunks]),
             Chunk = BeginBody ++ ?b2l(?l2b(Chunks)),
-?LOG_DEBUG("(8) finish_list: Chunk: ~p", [Chunk]),
             send_non_empty_chunk(Resp, Chunk);
         {_, _, Resp, stop, _} ->
-?LOG_DEBUG("(7) finish_list: Chunks:", []),
             ok;
         {_, _, Resp, _, _} ->
             [<<"end">>, Chunks] = couch_query_servers:proc_prompt(Proc, [<<"list_end">>]),
-?LOG_DEBUG("(6) finish_list: Chunks: ~p", [Chunks]),
             send_non_empty_chunk(Resp, ?b2l(?l2b(Chunks)))
     end,
     last_chunk(Resp).
