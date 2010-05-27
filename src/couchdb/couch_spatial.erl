@@ -195,5 +195,16 @@ do_bbox_search(Bbox, #spatial_group{fd=Fd}, #spatial{treepos=TreePos}) ->
 do_bbox_search(Bbox, #spatial_group{fd=Fd}, #spatial{treepos=TreePos}, FoldFun) ->
     Result = vtree:lookup(Fd, TreePos, Bbox),
     ?LOG_DEBUG("bbox_search result: ~p", [Result]),
-    Output = lists:foldl(FoldFun, [], Result),
+    Output = foldl_stop(FoldFun, [], Result),
     {ok, Output}.
+
+foldl_stop(_, Acc, []) ->
+    Acc;
+foldl_stop(Fun, Acc, [H|T]) ->
+    Return = Fun(H, Acc),
+    case Return of
+    {ok, Acc2} ->
+        foldl_stop(Fun, Acc2, T);
+    {stop, Acc2} ->
+        Acc2
+    end.

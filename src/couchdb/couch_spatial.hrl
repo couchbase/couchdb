@@ -39,9 +39,14 @@
     index_names = []
 }).
 
--record(spatial_index_header,
-    {seq=0,
+-record(spatial_index_header, {
+    seq=0,
     purge_seq=0,
     id_btree_state=nil, % pointer/position in file to back-index
     index_states=nil % pointers/positions to the indexes
+}).
+
+-record(spatial_query_args, {
+    bbox=nil,
+    stale=nil
 }).

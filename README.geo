@@ -30,7 +30,7 @@ Create a database:
 
 Add a Design Document with a spatial function:
 
-    curl -X PUT -d '{"spatial":{"points":"function(doc) {\n    if (doc.loc) {\n        emit({\n            type: \"Point\",\n            coordinates: [doc.loc[0], doc.loc[1]]\n        }, doc._id);\n    }};"}}' http://127.0.0.1:5984/places/_design/main
+    curl -X PUT -d '{"spatial":{"points":"function(doc) {\n    if (doc.loc) {\n        emit({\n            type: \"Point\",\n            coordinates: [doc.loc[0], doc.loc[1]]\n        }, [doc._id, doc.loc]);\n    }};"}}' http://127.0.0.1:5984/places/_design/main
 
 Put some data into it:
 
@@ -40,11 +40,10 @@ Put some data into it:
 Make a bounding box request:
 
     curl -X GET 'http://localhost:5984/places/_design/main/_spatial/points/%5B0,0,180,90%5D'
-    
+
 It should return:
 
-    {"spatial":[{"id":"augsburg","bbox":[10.898333,48.371667,10.898333,48.371667],"value":"augsburg"}]}
-
+    {"spatial":[{"id":"augsburg","bbox":[10.898333,48.371667,10.898333,48.371667],"value":["augsburg",[10.898333,48.371667]]}]}
 
 The Design Document Function
 ----------------------------
@@ -54,7 +53,7 @@ function(doc) {
         emit({
             type: "Point",
             coordinates: [doc.loc[0], doc.loc[1]]
-        }, doc._id);
+        }, [doc._id, doc.loc]);
     }};"
 
 It uses the emit() from normal views. The key is a
@@ -91,11 +90,46 @@ And request only Australia and Brasilia:
     curl -X GET 'http://localhost:5984/places/_design/main/_spatial/points/%5B110,-60,-30,15%5D'
 
 The result is as expected:
-    
-    {"spatial":[{"id":"brasilia","bbox":[-52.95,-10.65,-52.95,-10.65],"value":"brasilia"},{"id":"australia","bbox":[135,-25,135,-25],"value":"australia"}]}
+
+    {"spatial":[{"id":"brasilia","bbox":[-52.95,-10.65,-52.95,-10.65],"value":["brasilia",[-52.95,-10.65]]},{"id":"australia","bbox":[135,-25,135,-25],"value":["australia",[135,-25]]}]}
 
 The bounding with the same numbers, but different order
 (`-30,-60,110,15`) would only return Namibia:
 
     curl -X GET 'http://localhost:5984/places/_design/main/_spatial/points/%5B-30,-60,110,15%5D'
-    {"spatial":[{"id":"namibia","bbox":[17.15,-22.566667,17.15,-22.566667],"value":"namibia"}]}
+    {"spatial":[{"id":"namibia","bbox":[17.15,-22.566667,17.15,-22.566667],"value":["namibia",[17.15,-22.566667]]}]}
+
+
+List function support
+---------------------
+
+GeoCouch supports List functions just as CouchDB does for Views. This way
+you can output any arbitrary format, e.g. GeoRSS.
+
+As an example we output the points as WKT. Add a new Design Document
+with an additional List function (the rest is the same as above). Make
+sure you use the right `_rev`:
+
+    curl -X PUT -d '{"_rev": "1-121efc747b00743b8c7621ffccf1ac40", "lists": {"wkt": "function(head, req) {\n    var row;\n    while (row = getRow()) {\n        send(\"POINT(\" + row.value[1].join(\" \") + \")\\n\");\n    }\n};"}, "spatial":{"points":"function(doc) {\n    if (doc.loc) {\n        emit({\n            type: \"Point\",\n            coordinates: [doc.loc[0], doc.loc[1]]\n        }, [doc._id, doc.loc]);\n    }};"}}' http://127.0.0.1:5984/places/_design/main
+
+Now you can request this List function as you would do for CouchDB,
+though with a different Design handler (`_spatiallist` instead of
+`_list` ):
+
+    curl -X GET 'http://localhost:5984/places/_design/main/_spatiallist/wkt/points?bbox=-180,-90,180,90'
+
+The result is:
+
+    POINT(-52.95 -10.65)
+    POINT(135 -25)
+    POINT(17.15 -22.566667)
+    POINT(10.898333 48.371667)
+    POINT(-122.270833 37.804444)
+
+Using List functions from Design Documents other than the one containing the
+Spatial functions is supported as well. This time we add the Document
+ID in parenthesis:
+
+    curl -X PUT -d '{"lists": {"wkt": "function(head, req) {\n    var row;\n    while (row = getRow()) {\n        send(\"POINT(\" + row.value[1].join(\" \") + \") (\" + row.id + \")\\n\");\n    }\n};"}}' http://127.0.0.1:5984/places/_design/listfunonly
+
+    curl -X GET 'http://localhost:5984/places/_design/listfunonly/_spatiallist/wkt/main/points?bbox=-180,-90,180,90''

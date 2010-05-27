@@ -56,6 +56,7 @@ loadTest("http.js");
 loadTest("invalid_docids.js");
 loadTest("jsonp.js");
 loadTest("large_docs.js");
+loadTest("list_spatial.js");
 loadTest("list_views.js");
 loadTest("lots_of_docs.js");
 loadTest("multiple_rows.js");

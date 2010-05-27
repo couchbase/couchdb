@@ -29,13 +29,16 @@ handle_spatial_req(#httpd{method='GET',
 handle_spatial_req(Req, _Db, _DDoc) ->
     send_method_not_allowed(Req, "GET,HEAD").
 
-load_index(Req, Db, {SpatialDesignId, SpatialName}) ->
+load_index(Req, Db, {DesignId, SpatialName}) ->
     % XXX NOTE vmx not sure if spatial indexes support "stale" yet
     %Stale = couch_httpd_view:get_state_type(Req),
-    Stale = nil,
-    case couch_spatial:get_spatial_index(Db, SpatialDesignId, SpatialName, Stale) of
+    QueryArgs = parse_spatial_params(Req),
+    Stale = QueryArgs#spatial_query_args.stale,
+%    Stale = nil,
+    case couch_spatial:get_spatial_index(Db, DesignId, SpatialName, Stale) of
     {ok, Index, Group} ->
-          {ok, Index, Group};
+%          QueryArgs = couch_httpd_spatial:parse_spatial_params(Req),
+          {ok, Index, Group, QueryArgs};
     {not_found, Reason} ->
         throw({not_found, Reason})
     end.
@@ -43,5 +46,32 @@ load_index(Req, Db, {SpatialDesignId, SpatialName}) ->
 % counterpart in couch_httpd_view is view_group_etag/2 resp. /3
 spatial_group_etag(Group, Db) ->
     spatial_group_etag(Group, Db, nil).
-spatial_group_etag(#spatial_group{sig=Sig,current_seq=CurrentSeq}, _Db, Extra) ->
+spatial_group_etag(#spatial_group{sig=Sig, current_seq=CurrentSeq}, _Db, Extra) ->
     couch_httpd:make_etag({Sig, CurrentSeq, Extra}).
+
+parse_spatial_params(Req) ->
+    QueryList = couch_httpd:qs(Req),
+    QueryParams = lists:foldl(fun({K, V}, Acc) ->
+        parse_view_param(K, V) ++ Acc
+    end, [], QueryList),
+    QueryArgs = lists:foldl(fun({K, V}, Args2) ->
+        validate_spatial_query(K, V, Args2)
+    end, #spatial_query_args{}, lists:reverse(QueryParams)).
+
+parse_view_param("bbox", Bbox) ->
+    [{bbox, list_to_tuple(?JSON_DECODE("[" ++ Bbox ++ "]"))}];
+parse_view_param("stale", "ok") ->
+    [{stale, ok}];
+parse_view_param("stale", _Value) ->
+    throw({query_parse_error, <<"stale only available as stale=ok">>});
+parse_view_param(Key, Value) ->
+    [{extra, {Key, Value}}].
+
+validate_spatial_query(bbox, Value, Args) ->
+    Args#spatial_query_args{bbox=Value};
+validate_spatial_query(stale, ok, Args) ->
+    Args#spatial_query_args{stale=ok};
+validate_spatial_query(stale, _, Args) ->
+    Args;
+validate_spatial_query(extra, _Value, Args) ->
+    Args.

@@ -40,11 +40,11 @@ handle_spatial_list_req(Req, _Db, _DDoc) ->
 
 handle_spatial_list(Req, Db, DDoc, LName, {SpatialDesignName, SpatialName}) ->
     SpatialDesignId = <<"_design/", SpatialDesignName/binary>>,
-    {ok, Index, Group} = couch_httpd_spatial:load_index(
-                             Req, Db, {SpatialDesignId, SpatialName}),
+    {ok, Index, Group, QueryArgs} = couch_httpd_spatial:load_index(
+            Req, Db, {SpatialDesignId, SpatialName}),
     Etag = list_etag(Req, Db, Group, couch_httpd:doc_etag(DDoc)),
     couch_httpd:etag_respond(Req, Etag, fun() ->
-        output_list(Req, Db, DDoc, LName, Index, Etag, Group)
+        output_list(Req, Db, DDoc, LName, Index, QueryArgs, Etag, Group)
     end).
 
 list_etag(#httpd{user_ctx=UserCtx}=Req, Db, Group, More) ->
@@ -52,24 +52,34 @@ list_etag(#httpd{user_ctx=UserCtx}=Req, Db, Group, More) ->
     couch_httpd_spatial:spatial_group_etag(
         Group, Db, {More, Accept, UserCtx#user_ctx.roles}).
 
-output_list(Req, Db, DDoc, LName, Index, Etag, Group) ->
-    % XXX vmx DON'T HARDOCDE
-    Bbox = {-180,-90,180,90},
+output_list(_, _, _, _, _, #spatial_query_args{bbox=nil}, _, _) ->
+    throw({spatial_query_error, <<"Bounding box not specified.">>});
+
+output_list(Req, Db, DDoc, LName, Index, QueryArgs, Etag, Group) ->
+    #spatial_query_args{
+        bbox = Bbox
+    } = QueryArgs,
 
     couch_query_servers:with_ddoc_proc(DDoc, fun(QServer) ->
         StartListRespFun = make_spatial_start_resp_fun(
                                QServer, Db, LName),
         CurrentSeq = Group#spatial_group.current_seq,
-        {ok, Resp, _BeginBody} = StartListRespFun(Req, Etag, [], CurrentSeq),
+        {ok, Resp, BeginBody} = StartListRespFun(Req, Etag, [], CurrentSeq),
+        couch_httpd_show:send_non_empty_chunk(Resp, BeginBody),
         SendRowFun = make_spatial_get_row_fun(QServer, Resp),
 %        {ok, Result} = couch_spatial:do_bbox_search(Bbox, Group, Index, SendRowFun),
-        couch_spatial:do_bbox_search(Bbox, Group, Index, SendRowFun),
-        {Proc, _DDocId} = QServer,
-        [<<"end">>, Chunks] = couch_query_servers:proc_prompt(
-                                  Proc, [<<"list_end">>]),
-%        Chunk = BeginBody ++ ?b2l(?l2b(Chunks)),
-        Chunk = ?b2l(?l2b(Chunks)),
-        couch_httpd_show:send_non_empty_chunk(Resp, Chunk),
+        {ok, Go} = couch_spatial:do_bbox_search(Bbox, Group, Index, SendRowFun),
+        case Go of
+        [] ->
+            {Proc, _DDocId} = QServer,
+            [<<"end">>, Chunks] = couch_query_servers:proc_prompt(
+                                      Proc, [<<"list_end">>]),
+%            Chunk = BeginBody ++ ?b2l(?l2b(Chunks)),
+            Chunk = ?b2l(?l2b(Chunks)),
+            couch_httpd_show:send_non_empty_chunk(Resp, Chunk);
+        stop ->
+            ok
+        end,
         couch_httpd:last_chunk(Resp)
     end).
 
@@ -103,7 +113,6 @@ send_list_row(Resp, QueryServer, Row) ->
             send_chunked_error(Resp, Error),
             throw({already_sent, Resp, Error})
     end.
-
 
 prompt_list_row({Proc, _DDocId}, {Bbox, DocId, Value}) ->
     JsonRow = {[{id, DocId}, {key, tuple_to_list(Bbox)}, {value, Value}]},
