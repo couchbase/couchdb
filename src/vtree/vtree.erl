@@ -79,12 +79,12 @@ lookup(Fd, Pos, Bboxes) ->
             % loop through all data nodes
             lists:foldl(fun(Child, Acc2) ->
                 {Mbr, _Meta, {Id, Value}} = Child,
-                 case bboxes_not_disjoint(Mbr, Bboxes) of
-                 true ->
-                     [{Mbr, Id, Value}|Acc2];
-                 false ->
-                     Acc2
-                 end
+                case bboxes_not_disjoint(Mbr, Bboxes) of
+                true ->
+                    [{Mbr, Id, Value}|Acc2];
+                false ->
+                    Acc2
+                end
             end, [], NodesPos);
         _ ->
             io:format("Tree/node is invalid", []),
