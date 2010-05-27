@@ -97,7 +97,8 @@ init({InitArgs, ReturnPid, Ref}) ->
     end.
 
 % NOTE vmx: There's a lenghy comment about this call in couch_view_group.erl
-handle_call({request_group, RequestSeq}, From, #group_state{
+handle_call({request_group, RequestSeq}, From,
+        #group_state{
             db_name=DbName,
             group=#spatial_group{current_seq=GroupSeq}=Group,
             updater_pid=nil,
@@ -161,6 +162,11 @@ handle_info({'EXIT', FromPid, {new_group, #spatial_group{db=Db}=Group}},
                 waiting_list=StillWaiting, group=Group2, updater_pid=Pid}}
     end;
 
+% Shutting down will trigger couch_spatial:handle_info(EXIT...)
+handle_info({'DOWN',_,_,_,_}, State) ->
+    ?LOG_INFO("Shutting down spatial group server, monitored db is closing.", []),
+    {stop, normal, reply_all(State, shutdown)};
+
 handle_info(_Msg, Server) ->
     {noreply, Server}.
 
@@ -187,6 +193,9 @@ reply_with_group(Group, [{Pid, Seq}|WaitList], StillWaiting, RefCounter) ->
 reply_with_group(_Group, [], StillWaiting, _RefCounter) ->
     StillWaiting.
 
+reply_all(#group_state{waiting_list=WaitList}=State, Reply) ->
+    [catch gen_server:reply(Pid, Reply) || {Pid, _} <- WaitList],
+    State#group_state{waiting_list=[]}.
 
 open_db_group(DbName, DDocId) ->
     case couch_db:open_int(DbName, []) of

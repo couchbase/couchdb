@@ -159,9 +159,20 @@ handle_call({get_group_server, DbName,
 handle_cast(foo,State) ->
     {noreply, State}.
 
-handle_info({'EXIT', FromPid, Reason}, State) ->
-    ?LOG_DEBUG("Exit from linked pid: ~p", [{FromPid, Reason}]),
-    {stop, Reason, State};
+% Cleanup on exit, e.g. resetting the group information stored in ETS tables 
+handle_info({'EXIT', FromPid, Reason}, Server) ->
+    case ets:lookup(couch_spatial_groups_by_updater, FromPid) of
+    [] ->
+        if Reason /= normal ->
+            % non-updater linked process died, we propagate the error
+            ?LOG_ERROR("Exit on non-updater process: ~p", [Reason]),
+            exit(Reason);
+        true -> ok
+        end;
+    [{_, {DbName, GroupId}}] ->
+        delete_from_ets(FromPid, DbName, GroupId)
+    end,
+    {noreply, Server};
 
 handle_info(_Msg, Server) ->
     {noreply, Server}.
