@@ -133,3 +133,12 @@ ID in parenthesis:
     curl -X PUT -d '{"lists": {"wkt": "function(head, req) {\n    var row;\n    while (row = getRow()) {\n        send(\"POINT(\" + row.value[1].join(\" \") + \") (\" + row.id + \")\\n\");\n    }\n};"}}' http://127.0.0.1:5984/places/_design/listfunonly
 
     curl -X GET 'http://localhost:5984/places/_design/listfunonly/_spatiallist/wkt/main/points?bbox=-180,-90,180,90'
+
+
+Other supported query arguments
+-------------------------------
+
+### stale ###
+`stale=ok` is supported. The spatial index won't be rebuild even if
+new Documents were added. It works for normal spatial queries as well
+as for the spatial List functions.
