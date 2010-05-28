@@ -20,10 +20,10 @@
 -import(couch_httpd, [send_json/2, send_method_not_allowed/2]).
 
 handle_spatial_req(#httpd{method='GET',
-        path_parts=[_, _, DName, _, SpatialName, Query]}=Req, Db, DDoc) ->
-    ?LOG_DEBUG("Spatial query (~p): ~p ~n~p", [DName, Query, DDoc#doc.id]),
-    Bbox = list_to_tuple(?JSON_DECODE(Query)),
-    Result = couch_spatial:bbox_search(Db, DDoc, SpatialName, Bbox),
+        path_parts=[_, _, DName, _, SpatialName]}=Req, Db, DDoc) ->
+    ?LOG_DEBUG("Spatial query (~p): ~n~p", [DName, DDoc#doc.id]),
+    QueryArgs = parse_spatial_params(Req),
+    Result = couch_spatial:bbox_search(Db, DDoc, SpatialName, QueryArgs),
     send_json(Req, {[{<<"spatial">>, Result}]});
 
 handle_spatial_req(Req, _Db, _DDoc) ->

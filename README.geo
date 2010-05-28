@@ -39,7 +39,7 @@ Put some data into it:
 
 Make a bounding box request:
 
-    curl -X GET 'http://localhost:5984/places/_design/main/_spatial/points/%5B0,0,180,90%5D'
+    curl -X GET 'http://localhost:5984/places/_design/main/_spatial/points?bbox=0,0,180,90'
 
 It should return:
 
@@ -87,7 +87,7 @@ above). Insert some Documents:
 
 And request only Australia and Brasilia:
 
-    curl -X GET 'http://localhost:5984/places/_design/main/_spatial/points/%5B110,-60,-30,15%5D'
+    curl -X GET 'http://localhost:5984/places/_design/main/_spatial/points?bbox=110,-60,-30,15'
 
 The result is as expected:
 
@@ -96,7 +96,7 @@ The result is as expected:
 The bounding with the same numbers, but different order
 (`-30,-60,110,15`) would only return Namibia:
 
-    curl -X GET 'http://localhost:5984/places/_design/main/_spatial/points/%5B-30,-60,110,15%5D'
+    curl -X GET 'http://localhost:5984/places/_design/main/_spatial/points?bbox=-30,-60,110,15'
     {"spatial":[{"id":"namibia","bbox":[17.15,-22.566667,17.15,-22.566667],"value":["namibia",[17.15,-22.566667]]}]}
 
 
@@ -132,4 +132,4 @@ ID in parenthesis:
 
     curl -X PUT -d '{"lists": {"wkt": "function(head, req) {\n    var row;\n    while (row = getRow()) {\n        send(\"POINT(\" + row.value[1].join(\" \") + \") (\" + row.id + \")\\n\");\n    }\n};"}}' http://127.0.0.1:5984/places/_design/listfunonly
 
-    curl -X GET 'http://localhost:5984/places/_design/listfunonly/_spatiallist/wkt/main/points?bbox=-180,-90,180,90''
+    curl -X GET 'http://localhost:5984/places/_design/listfunonly/_spatiallist/wkt/main/points?bbox=-180,-90,180,90'

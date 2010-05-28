@@ -26,8 +26,13 @@ start_link() ->
     ?LOG_DEBUG("Spatial daemon: starting link.", []),
     gen_server:start_link({local, couch_spatial}, couch_spatial, [], []).
 
-bbox_search(Db, DDoc, SpatialName, Bbox) ->
-    {ok, Index, Group} = get_spatial_index(Db, DDoc#doc.id, SpatialName, nil),
+bbox_search(Db, DDoc, SpatialName, QueryArgs) ->
+    #spatial_query_args{
+        bbox = Bbox,
+        stale = Stale
+    } = QueryArgs,
+    {ok, Index, Group} = get_spatial_index(
+                             Db, DDoc#doc.id, SpatialName, Stale),
     {ok, Result} = do_bbox_search(Bbox, Group, Index),
     Result.
 
