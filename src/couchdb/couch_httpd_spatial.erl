@@ -30,14 +30,10 @@ handle_spatial_req(Req, _Db, _DDoc) ->
     send_method_not_allowed(Req, "GET,HEAD").
 
 load_index(Req, Db, {DesignId, SpatialName}) ->
-    % XXX NOTE vmx not sure if spatial indexes support "stale" yet
-    %Stale = couch_httpd_view:get_state_type(Req),
     QueryArgs = parse_spatial_params(Req),
     Stale = QueryArgs#spatial_query_args.stale,
-%    Stale = nil,
     case couch_spatial:get_spatial_index(Db, DesignId, SpatialName, Stale) of
     {ok, Index, Group} ->
-%          QueryArgs = couch_httpd_spatial:parse_spatial_params(Req),
           {ok, Index, Group, QueryArgs};
     {not_found, Reason} ->
         throw({not_found, Reason})
