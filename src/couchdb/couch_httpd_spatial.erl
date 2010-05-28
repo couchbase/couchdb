@@ -14,8 +14,7 @@
 -include("couch_db.hrl").
 -include("couch_spatial.hrl").
 
--export([handle_spatial_req/3, spatial_group_etag/3,
-         load_index/3, spatial_group_etag/3]).
+-export([handle_spatial_req/3, spatial_group_etag/3, load_index/3]).
 
 -import(couch_httpd, [send_json/2, send_method_not_allowed/2]).
 
@@ -50,7 +49,7 @@ parse_spatial_params(Req) ->
     QueryParams = lists:foldl(fun({K, V}, Acc) ->
         parse_view_param(K, V) ++ Acc
     end, [], QueryList),
-    QueryArgs = lists:foldl(fun({K, V}, Args2) ->
+    _QueryArgs = lists:foldl(fun({K, V}, Args2) ->
         validate_spatial_query(K, V, Args2)
     end, #spatial_query_args{}, lists:reverse(QueryParams)).
 
