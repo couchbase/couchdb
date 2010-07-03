@@ -13,7 +13,7 @@ hosting_authentication_handler(Req) ->
                   Req;
               Credentials ->
                   HostingCredentials = ?l2b(Credentials),
-                  case couch_util:decodeBase64(Base64Value) of
+                  case base64:decode(Base64Value) of
                       HostingCredentials ->
                           Req#httpd{user_ctx=#user_ctx{roles=[<<"_admin">>]}};
                       _ ->
