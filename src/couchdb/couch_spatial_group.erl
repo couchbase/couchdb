@@ -180,6 +180,17 @@ handle_info({'EXIT', FromPid, {new_group, #spatial_group{db=Db}=Group}},
                 waiting_list=StillWaiting, group=Group2, updater_pid=Pid}}
     end;
 
+handle_info({'EXIT', _FromPid, normal}, State) ->
+    {noreply, State};
+
+handle_info({'EXIT', FromPid, {{nocatch, Reason}, _Trace}}, State) ->
+    ?LOG_DEBUG("Uncaught throw() in linked pid: ~p", [{FromPid, Reason}]),
+    {stop, Reason, State};
+
+handle_info({'EXIT', FromPid, Reason}, State) ->
+    ?LOG_DEBUG("Exit from linked pid: ~p", [{FromPid, Reason}]),
+    {stop, Reason, State};
+
 % Shutting down will trigger couch_spatial:handle_info(EXIT...)
 handle_info({'DOWN',_,_,_,_}, State) ->
     ?LOG_INFO("Shutting down spatial group server, monitored db is closing.", []),
