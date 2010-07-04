@@ -37,6 +37,8 @@ update(Owner, Group) ->
     %    purge_index(Group);
     %true ->
     %    couch_task_status:update(<<"Resetting view index due to lost purge entries.">>),
+    %    % NOTE vmx:probably  needs handle_info({'EXIT', FromPid, reset}
+    %    %     in couch_spatial_group.erl
     %    exit(reset)
     %end,
 
