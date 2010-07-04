@@ -59,46 +59,72 @@ add_remove(Fd, Pos, AddKeyValues, KeysToRemove) ->
     end, NewPos, AddKeyValues),
     {ok, NewPos2}.
 
-% returns a list of 3-tuple with MBR, id, value
-lookup(_Fd, nil, _Bbox) ->
+lookup(Fd, Pos, Bbox) ->
+    % default function returns a list of 3-tuple with MBR, id, value
+    lookup(Fd, Pos, Bbox, fun({Bbox, DocId, Value}, Acc) ->
+         Acc ++ [{[{<<"id">>, DocId},
+                   {<<"bbox">>, erlang:tuple_to_list(Bbox)},
+                   {<<"value">>, Value}]}]
+    end.
+lookup(_Fd, nil, _Bbox, _FoldFun) ->
     [];
-lookup(Fd, Pos, Bbox) when not is_list(Bbox) ->
-    % default bounds are from this world 
-    lookup(Fd, Pos, Bbox, {-180, -90, 180, 90});
-lookup(Fd, Pos, Bboxes) ->
+lookup(Fd, Pos, Bbox, FoldFun) when not is_list(Bbox) ->
+    % default bounds are from this world
+    lookup(Fd, Pos, Bbox, FoldFun, {-180, -90, 180, 90});
+% Returns whatever FoldFun returns
+lookup(Fd, Pos, Bboxes, FoldFun) ->
     {ok, Parent} = couch_file:pread_term(Fd, Pos),
-    {_Mbr, Meta, NodesPos} = Parent,
-    lists:foldl(fun(EntryPos, Acc) ->
+    {ParentMbr, Meta, NodesPos} = Parent,
+    Result = lists:foldl(fun(EntryPos, Acc) ->
         %case Entry of
         case Meta#node.type of
         inner ->
-            % XXX FIXME vmx: I look at _every_ inner node. Not just at the
-            %     that intersect with the Bbox
-            Acc ++ lookup(Fd, EntryPos, Bboxes);
+            case bboxes_not_disjoint(ParentMbr, Bboxes) of
+            true ->
+                %io:format("Intersection in inner node.~nNodeMbr: ~p~nSearchMbr: ~p~nDepth: ~p~n", [ParentMbr, Bboxes, Depth]),
+                % XXX FIXME vmx: I look at _every_ inner node. Not just at the
+                %     that intersect with the Bbox
+                Acc ++ lookup(Fd, EntryPos, Bboxes);
+            false ->
+                Acc
+            end;
         leaf ->
-            % loop through all data nodes
-            lists:foldl(fun(Child, Acc2) ->
-                {Mbr, _Meta, {Id, Value}} = Child,
-                case bboxes_not_disjoint(Mbr, Bboxes) of
-                true ->
-                    [{Mbr, Id, Value}|Acc2];
-                false ->
-                    Acc2
-                end
-            end, [], NodesPos);
+            case bboxes_within(ParentMbr, Bboxes) of
+            % all children are within the bbox we search with
+            true ->
+                %io:format("All children are within MBR in leaf node.~nNodeMbr: ~p~nSearchMbr: ~p~nDepth: ~p~n", [ParentMbr, Bboxes, Depth]),
+                % return all children
+                lists:map(fun(Elem) ->
+                    {Mbr, _Meta, {Id, Value}} = Elem, {Mbr, Id, Value}
+                end, NodesPos);
+            false ->
+                % loop through all data nodes
+                lists:foldl(fun(Child, Acc2) ->
+                    {Mbr, _Meta, {Id, Value}} = Child,
+                    case bboxes_not_disjoint(Mbr, Bboxes) of
+                    true ->
+                        %io:format("Intersection in leaf node.~nNodeMbr: ~p~nSearchMbr: ~p~nDepth: ~p~n", [ParentMbr, Bboxes, Depth]),
+                        [{Mbr, Id, Value}|Acc2];
+                    false ->
+                        Acc2
+                    end
+                end, [], NodesPos)
+            end;
         _ ->
             io:format("Tree/node is invalid", []),
             error
         end
-    end, [], NodesPos).
+    end, [], NodesPos),
+    io:format("Result done~n", []),
+    Result;
 
-% Only a single bounding box is split
-lookup(Fd, Pos, Bbox, Bounds) when not is_list(Bbox) ->
+% Only a single bounding box. It may be split if it covers the data line
+lookup(Fd, Pos, Bbox, FoldFun, Bounds) when not is_list(Bbox) ->
     case split_flipped_bbox(Bbox, Bounds) of
     not_flipped ->
-        lookup(Fd, Pos, [Bbox]);
+        lookup(Fd, Pos, [Bbox], FoldFun);
     Bboxes ->
-        lookup(Fd, Pos, Bboxes)
+        lookup(Fd, Pos, Bboxes, FoldFun)
     end.
 
 % Loops recursively through a list of bounding boxes and returns
@@ -111,6 +137,18 @@ bboxes_not_disjoint(Mbr, [Bbox|Tail]) ->
         true;
     true ->
         bboxes_not_disjoint(Mbr, Tail)
+    end.
+
+% Loops recursively through a list of bounding boxes and returns
+% true if the given MBR is within one of the bounding boxes
+bboxes_within(_Mbr, []) ->
+    false;
+bboxes_within(Mbr, [Bbox|Tail]) ->
+    case within(Mbr, Bbox) of
+    true ->
+        true;
+    false ->
+        bboxes_within(Mbr, Tail)
     end.
 
 % Splits a bounding box (BBox) at specific Bounds that is flipped

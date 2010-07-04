@@ -195,6 +195,7 @@ do_bbox_search(Bbox, #spatial_group{fd=Fd}, #spatial{treepos=TreePos}) ->
                    {<<"bbox">>, erlang:tuple_to_list(Bbox2)},
                    {<<"value">>, Value}]}]
     end, [], Result),
+    ?LOG_DEBUG("do_bbox_search done:", []),
     {ok, Output}.
 
 do_bbox_search(Bbox, #spatial_group{fd=Fd}, #spatial{treepos=TreePos}, FoldFun) ->
