@@ -136,6 +136,24 @@ handle_call({request_group, RequestSeq}, From,
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
+handle_info(delayed_commit, #group_state{db_name=DbName,group=Group}=State) ->
+    {ok, Db} = couch_db:open_int(DbName, []),
+    CommittedSeq = couch_db:get_committed_update_seq(Db),
+    couch_db:close(Db),
+    if CommittedSeq >= Group#spatial_group.current_seq ->
+        % save the header
+        Header = {Group#spatial_group.sig, get_index_header_data(Group)},
+        ok = couch_file:write_header(Group#spatial_group.fd, Header),
+        {noreply, State#group_state{waiting_commit=false}};
+    true ->
+        % We can't commit the header because the database seq that's fully
+        % committed to disk is still behind us. If we committed now and the
+        % database lost those changes our view could be forever out of sync
+        % with the database. But a crash before we commit these changes, no big
+        % deal, we only lose incremental changes since last committal.
+        erlang:send_after(1000, self(), delayed_commit),
+        {noreply, State#group_state{waiting_commit=true}}
+    end;
 
 handle_info({'EXIT', FromPid, {new_group, #spatial_group{db=Db}=Group}},
         #group_state{db_name=DbName,
@@ -271,6 +289,14 @@ prepare_group({RootDir, DbName, #spatial_group{sig=Sig}=Group}, ForceReset)->
     Else ->
         Else
     end.
+
+get_index_header_data(#spatial_group{current_seq=Seq, purge_seq=PurgeSeq,
+            id_btree=IdBtree,indexes=Indexes}) ->
+    IndexStates = [TreePos || #spatial{treepos=TreePos} <- Indexes],
+    #spatial_index_header{seq=Seq,
+            purge_seq=PurgeSeq,
+            id_btree_state=couch_btree:get_state(IdBtree),
+            index_states=IndexStates}.
 
 delete_index_file(RootDir, DbName, GroupSig) ->
     file:delete(index_file_name(RootDir, DbName, GroupSig)).
