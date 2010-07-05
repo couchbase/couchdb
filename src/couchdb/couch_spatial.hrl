@@ -11,8 +11,8 @@
 % the License.
 
 -record(spatial_group, {       
-    sig=nil,           
-    db=nil,            
+    sig=nil,
+    db=nil,
     fd=nil,
     name, % design document ID
     def_lang,
