@@ -65,7 +65,7 @@ lookup(Fd, Pos, Bbox) ->
          Acc ++ [{[{<<"id">>, DocId},
                    {<<"bbox">>, erlang:tuple_to_list(Bbox)},
                    {<<"value">>, Value}]}]
-    end.
+    end).
 lookup(_Fd, nil, _Bbox, _FoldFun) ->
     [];
 lookup(Fd, Pos, Bbox, FoldFun) when not is_list(Bbox) ->
@@ -92,19 +92,15 @@ lookup(Fd, Pos, Bboxes, FoldFun) ->
             case bboxes_within(ParentMbr, Bboxes) of
             % all children are within the bbox we search with
             true ->
-                %io:format("All children are within MBR in leaf node.~nNodeMbr: ~p~nSearchMbr: ~p~nDepth: ~p~n", [ParentMbr, Bboxes, Depth]),
-                % return all children
-                lists:map(fun(Elem) ->
-                    {Mbr, _Meta, {Id, Value}} = Elem, {Mbr, Id, Value}
-                end, NodesPos);
+                lists:foldl(fun({Mbr, _Meta, {Id, Value}}, Acc2) ->
+                    FoldFun({Mbr, Id, Value}, Acc2)
+                end, [], NodesPos);
             false ->
-                % loop through all data nodes
-                lists:foldl(fun(Child, Acc2) ->
-                    {Mbr, _Meta, {Id, Value}} = Child,
+                % loop through all data nodes and find not disjoint ones
+                lists:foldl(fun({Mbr, _Meta, {Id, Value}}, Acc2) ->
                     case bboxes_not_disjoint(Mbr, Bboxes) of
                     true ->
-                        %io:format("Intersection in leaf node.~nNodeMbr: ~p~nSearchMbr: ~p~nDepth: ~p~n", [ParentMbr, Bboxes, Depth]),
-                        [{Mbr, Id, Value}|Acc2];
+                        FoldFun({Mbr, Id, Value}, Acc2);
                     false ->
                         Acc2
                     end
@@ -114,9 +110,7 @@ lookup(Fd, Pos, Bboxes, FoldFun) ->
             io:format("Tree/node is invalid", []),
             error
         end
-    end, [], NodesPos),
-    io:format("Result done~n", []),
-    Result;
+    end, [], NodesPos).
 
 % Only a single bounding box. It may be split if it covers the data line
 lookup(Fd, Pos, Bbox, FoldFun, Bounds) when not is_list(Bbox) ->

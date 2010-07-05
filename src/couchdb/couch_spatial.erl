@@ -189,14 +189,8 @@ code_change(_OldVsn, State, _Extra) ->
 % kind of counterpart of fold in couch_view
 do_bbox_search(Bbox, #spatial_group{fd=Fd}, #spatial{treepos=TreePos}) ->
     Result = vtree:lookup(Fd, TreePos, Bbox),
-    %?LOG_DEBUG("bbox_search result: ~p", [Result]),
-    Output = lists:foldl(fun({Bbox2, DocId, Value}, Acc) ->
-         Acc ++ [{[{<<"id">>, DocId},
-                   {<<"bbox">>, erlang:tuple_to_list(Bbox2)},
-                   {<<"value">>, Value}]}]
-    end, [], Result),
     ?LOG_DEBUG("do_bbox_search done:", []),
-    {ok, Output}.
+    {ok, Result}.
 
 do_bbox_search(Bbox, #spatial_group{fd=Fd}, #spatial{treepos=TreePos}, FoldFun) ->
     Result = vtree:lookup(Fd, TreePos, Bbox),
