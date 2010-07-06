@@ -12,8 +12,8 @@
 
 -module(vtree).
 
--export([lookup/3, within/2, intersect/2, disjoint/2, insert/4, area/1,
-         merge_mbr/2, find_area_min_nth/1, partition_node/1,
+-export([lookup/4, within/2, intersect/2, disjoint/2, insert/4,
+         area/1, merge_mbr/2, find_area_min_nth/1, partition_node/1,
          calc_nodes_mbr/1, calc_mbr/1, best_split/1, minimal_overlap/2,
          calc_overlap/2, minimal_coverage/2, delete/4, add_remove/4,
          split_flipped_bbox/2]).
@@ -59,66 +59,65 @@ add_remove(Fd, Pos, AddKeyValues, KeysToRemove) ->
     end, NewPos, AddKeyValues),
     {ok, NewPos2}.
 
-lookup(Fd, Pos, Bbox) ->
-    % default function returns a list of 3-tuple with MBR, id, value
-    lookup(Fd, Pos, Bbox, fun({Bbox, DocId, Value}, Acc) ->
-         Acc ++ [{[{<<"id">>, DocId},
-                   {<<"bbox">>, erlang:tuple_to_list(Bbox)},
-                   {<<"value">>, Value}]}]
-    end).
-lookup(_Fd, nil, _Bbox, _FoldFun) ->
+%lookup(Fd, Pos, Bbox) ->
+%io:format("lookup 1~n", []),
+%    % default function returns a list of 3-tuple with MBR, id, value
+%    lookup(Fd, Pos, Bbox, fun({Bbox2, DocId, Value}, Acc) ->
+%         Acc ++ [{[{<<"id">>, DocId},
+%                   {<<"bbox">>, erlang:tuple_to_list(Bbox2)},
+%                   {<<"value">>, Value}]}]
+%    end).
+lookup(_Fd, nil, _Bbox, _FoldFunAndAcc) ->
     [];
-lookup(Fd, Pos, Bbox, FoldFun) when not is_list(Bbox) ->
+lookup(Fd, Pos, Bbox, {FoldFun, InitAcc}) when not is_list(Bbox) ->
     % default bounds are from this world
-    lookup(Fd, Pos, Bbox, FoldFun, {-180, -90, 180, 90});
+    lookup(Fd, Pos, Bbox, {FoldFun, InitAcc}, {-180, -90, 180, 90});
 % Returns whatever FoldFun returns
-lookup(Fd, Pos, Bboxes, FoldFun) ->
+lookup(Fd, Pos, Bboxes, {FoldFun, InitAcc}) ->
     {ok, Parent} = couch_file:pread_term(Fd, Pos),
-    {ParentMbr, Meta, NodesPos} = Parent,
-    Result = lists:foldl(fun(EntryPos, Acc) ->
-        %case Entry of
-        case Meta#node.type of
-        inner ->
+    {ParentMbr, ParentMeta, NodesPos} = Parent,
+
+    case ParentMeta#node.type of
+    inner ->
+        lists:foldl(fun(EntryPos, Acc) ->
             case bboxes_not_disjoint(ParentMbr, Bboxes) of
             true ->
-                %io:format("Intersection in inner node.~nNodeMbr: ~p~nSearchMbr: ~p~nDepth: ~p~n", [ParentMbr, Bboxes, Depth]),
-                % XXX FIXME vmx: I look at _every_ inner node. Not just at the
-                %     that intersect with the Bbox
-                Acc ++ lookup(Fd, EntryPos, Bboxes);
+                lookup(Fd, EntryPos, Bboxes, {FoldFun, Acc});
             false ->
                 Acc
-            end;
-        leaf ->
-            case bboxes_within(ParentMbr, Bboxes) of
-            % all children are within the bbox we search with
-            true ->
-                lists:foldl(fun({Mbr, _Meta, {Id, Value}}, Acc2) ->
-                    FoldFun({Mbr, Id, Value}, Acc2)
-                end, [], NodesPos);
-            false ->
-                % loop through all data nodes and find not disjoint ones
-                lists:foldl(fun({Mbr, _Meta, {Id, Value}}, Acc2) ->
-                    case bboxes_not_disjoint(Mbr, Bboxes) of
-                    true ->
-                        FoldFun({Mbr, Id, Value}, Acc2);
-                    false ->
-                        Acc2
-                    end
-                end, [], NodesPos)
-            end;
-        _ ->
-            io:format("Tree/node is invalid", []),
-            error
-        end
-    end, [], NodesPos).
+            end
+        end, InitAcc, NodesPos);
+    leaf ->
+        case bboxes_within(ParentMbr, Bboxes) of
+        % all children are within the bbox we search with
+        true ->
+            lists:foldl(fun({Mbr, _Meta, {Id, Value}}, Acc2) ->
+                FoldFun({Mbr, Id, Value}, Acc2)
+            end, InitAcc, NodesPos);
+        false ->
+            % loop through all data nodes and find not disjoint ones
+            lists:foldl(fun({Mbr, _Meta, {Id, Value}}, Acc2) ->
+                case bboxes_not_disjoint(Mbr, Bboxes) of
+                true ->
+                    FoldFun({Mbr, Id, Value}, Acc2);
+                false ->
+                    Acc2
+                end
+            end, InitAcc, NodesPos)
+        end;
+    _ ->
+        io:format("Tree/node is invalid", []),
+        error
+    end.
+
 
 % Only a single bounding box. It may be split if it covers the data line
-lookup(Fd, Pos, Bbox, FoldFun, Bounds) when not is_list(Bbox) ->
+lookup(Fd, Pos, Bbox, FoldFunAndAcc, Bounds) when not is_list(Bbox) ->
     case split_flipped_bbox(Bbox, Bounds) of
     not_flipped ->
-        lookup(Fd, Pos, [Bbox], FoldFun);
+        lookup(Fd, Pos, [Bbox], FoldFunAndAcc);
     Bboxes ->
-        lookup(Fd, Pos, Bboxes, FoldFun)
+        lookup(Fd, Pos, Bboxes, FoldFunAndAcc)
     end.
 
 % Loops recursively through a list of bounding boxes and returns

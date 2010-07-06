@@ -50,3 +50,8 @@
     bbox=nil,
     stale=nil
 }).
+
+-record(spatial_fold_helper_funs, {
+    start_response,
+    send_row
+}).
