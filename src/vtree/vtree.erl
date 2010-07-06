@@ -73,41 +73,52 @@ lookup(Fd, Pos, Bbox, {FoldFun, InitAcc}) when not is_list(Bbox) ->
     % default bounds are from this world
     lookup(Fd, Pos, Bbox, {FoldFun, InitAcc}, {-180, -90, 180, 90});
 % Returns whatever FoldFun returns
+% InitAcc/Acc is: {ok|stop, {Resp, SomeRestFromPreviousRow}}
 lookup(Fd, Pos, Bboxes, {FoldFun, InitAcc}) ->
     {ok, Parent} = couch_file:pread_term(Fd, Pos),
     {ParentMbr, ParentMeta, NodesPos} = Parent,
-
+%io:format("lookup: ~p~n", [InitAcc]),
     case ParentMeta#node.type of
     inner ->
-        lists:foldl(fun(EntryPos, Acc) ->
+        %lists:foldl(fun(EntryPos, Acc) ->
+        foldl_stop(fun(EntryPos, Acc) ->
+%io:format("fold_stop: ~p~n", [Acc]),
             case bboxes_not_disjoint(ParentMbr, Bboxes) of
             true ->
+%io:format("fold_stop2: ~p~n", [Acc]),
                 lookup(Fd, EntryPos, Bboxes, {FoldFun, Acc});
             false ->
-                Acc
+%io:format("fold_stop3: ~p~n", [Acc]),
+                %Acc
+                {ok, Acc}
             end
         end, InitAcc, NodesPos);
     leaf ->
+%io:format("fold_stop4: ~p~n", [InitAcc]),
         case bboxes_within(ParentMbr, Bboxes) of
         % all children are within the bbox we search with
         true ->
-            lists:foldl(fun({Mbr, _Meta, {Id, Value}}, Acc2) ->
-                FoldFun({Mbr, Id, Value}, Acc2)
-            end, InitAcc, NodesPos);
+%io:format("true~n", []),
+            Res = foldl_stop(fun({Mbr, _Meta, {Id, Value}}, Acc) ->
+                FoldFun({Mbr, Id, Value}, Acc)
+            end, InitAcc, NodesPos),
+%io:format("fold_stop5: ~p~n", [Res]),
+            Res;
         false ->
+%io:format("false~n", []),
             % loop through all data nodes and find not disjoint ones
-            lists:foldl(fun({Mbr, _Meta, {Id, Value}}, Acc2) ->
+            Res = foldl_stop(fun({Mbr, _Meta, {Id, Value}}, Acc) ->
                 case bboxes_not_disjoint(Mbr, Bboxes) of
                 true ->
-                    FoldFun({Mbr, Id, Value}, Acc2);
+                    FoldFun({Mbr, Id, Value}, Acc);
                 false ->
-                    Acc2
+                    %Acc
+                    {ok, Acc}
                 end
-            end, InitAcc, NodesPos)
-        end;
-    _ ->
-        io:format("Tree/node is invalid", []),
-        error
+            end, InitAcc, NodesPos),
+%io:format("fold_stop6: ~p~n", [Res]),
+            Res
+        end
     end.
 
 
@@ -118,6 +129,22 @@ lookup(Fd, Pos, Bbox, FoldFunAndAcc, Bounds) when not is_list(Bbox) ->
         lookup(Fd, Pos, [Bbox], FoldFunAndAcc);
     Bboxes ->
         lookup(Fd, Pos, Bboxes, FoldFunAndAcc)
+    end.
+
+% It's just like lists:foldl/3. The difference is that it can be stopped.
+% Therefore you always need to return a tuple with either "ok" or "stop"
+% and the actual accumulator.
+foldl_stop(_, Acc, []) ->
+    {ok, Acc};
+foldl_stop(Fun, Acc, [H|T]) ->
+%io:format("real fold_stop1: ~p~n", [Acc]),
+    Return = Fun(H, Acc),
+%io:format("real fold_stop2 return: ~p~nTail: ~p~n", [Return, T]),
+    case Return of
+    {ok, Acc2} ->
+        foldl_stop(Fun, Acc2, T);
+    {stop, Acc2} ->
+        Acc2
     end.
 
 % Loops recursively through a list of bounding boxes and returns

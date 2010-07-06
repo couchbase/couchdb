@@ -14,10 +14,11 @@
 -behaviour(gen_server).
 
 -export([start_link/0, init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
--export([bbox_search/5]).
+%-export([bbox_search/5]).
 -export([fold/5]).
 % For List functions
--export([get_spatial_index/4, do_bbox_search/4]).
+-export([get_spatial_index/4]).
+%-export([get_spatial_index/4, do_bbox_search/4]).
 
 -include("couch_db.hrl").
 -include("couch_spatial.hrl").
@@ -30,15 +31,15 @@ start_link() ->
 % FoldFun is used within the vtree to process the results. It has the
 % following signature:
 % fun({Bbox, DocId, Value}, Acc)
-bbox_search(Db, DDoc, SpatialName, QueryArgs, FoldFun) ->
-    #spatial_query_args{
-        bbox = Bbox,
-        stale = Stale
-    } = QueryArgs,
-    {ok, Index, Group} = get_spatial_index(
-                             Db, DDoc#doc.id, SpatialName, Stale),
-    {ok, Result} = do_bbox_search(Bbox, Group, Index, FoldFun),
-    Result.
+%bbox_search(Db, DDoc, SpatialName, QueryArgs, FoldFun) ->
+%    #spatial_query_args{
+%        bbox = Bbox,
+%        stale = Stale
+%    } = QueryArgs,
+%    {ok, Index, Group} = get_spatial_index(
+%                             Db, DDoc#doc.id, SpatialName, Stale),
+%    {ok, Result} = do_bbox_search(Bbox, Group, Index, FoldFun),
+%    Result.
 
 init([]) ->
     RootDir = couch_config:get("couchdb", "view_index_dir"),
@@ -191,24 +192,22 @@ code_change(_OldVsn, State, _Extra) ->
 
 % counterpart in couch_view is fold/4
 fold(#spatial{treepos=Treepos}, Fd, FoldFun, InitAcc, Bbox) ->
-    %Result = vtree:lookup(Fd, Treepos, Bbox, {FoldFun, InitAcc}),
-    %?LOG_DEBUG("fold result: ~p", [Result]),
-    {Resp, _Acc} = vtree:lookup(Fd, Treepos, Bbox, {FoldFun, InitAcc}),
+    {_State, {Resp, _Acc}} = vtree:lookup(Fd, Treepos, Bbox, {FoldFun, InitAcc}),
     {ok, Resp}.
 
-% kind of counterpart of output_map_view in couch_httpd_view
-% kind of counterpart of fold in couch_view
-do_bbox_search(Bbox, #spatial_group{fd=Fd}, #spatial{treepos=TreePos}) ->
-    Result = vtree:lookup(Fd, TreePos, Bbox),
-    ?LOG_DEBUG("do_bbox_search done 1:", []),
-    {ok, Result}.
-
-do_bbox_search(Bbox, #spatial_group{fd=Fd}, #spatial{treepos=TreePos}, FoldFun) ->
-%    Etag = couch_http_spatial:spatial_group_etag(Group, Db),
-
-    Result = vtree:lookup(Fd, TreePos, Bbox, FoldFun),
-    ?LOG_DEBUG("do_bbox_search done 2: ~p", [Result]),
-    {ok, Result}.
+%% kind of counterpart of output_map_view in couch_httpd_view
+%% kind of counterpart of fold in couch_view
+%do_bbox_search(Bbox, #spatial_group{fd=Fd}, #spatial{treepos=TreePos}) ->
+%    Result = vtree:lookup(Fd, TreePos, Bbox),
+%    ?LOG_DEBUG("do_bbox_search done 1:", []),
+%    {ok, Result}.
+%
+%do_bbox_search(Bbox, #spatial_group{fd=Fd}, #spatial{treepos=TreePos}, FoldFun) ->
+%%    Etag = couch_http_spatial:spatial_group_etag(Group, Db),
+%
+%    Result = vtree:lookup(Fd, TreePos, Bbox, FoldFun),
+%    ?LOG_DEBUG("do_bbox_search done 2: ~p", [Result]),
+%    {ok, Result}.
 
 
 % XXX vmx: _list functions are disabled atm
