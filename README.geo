@@ -43,7 +43,9 @@ Make a bounding box request:
 
 It should return:
 
-    {"spatial":[{"id":"augsburg","bbox":[10.898333,48.371667,10.898333,48.371667],"value":["augsburg",[10.898333,48.371667]]}]}
+    {"update_seq":3,"rows":[
+    {"id":"augsburg","bbox":[10.898333,48.371667,10.898333,48.371667],"value":["augsburg",[10.898333,48.371667]]}
+    ]}
 
 The Design Document Function
 ----------------------------
@@ -91,14 +93,19 @@ And request only Australia and Brasilia:
 
 The result is as expected:
 
-    {"spatial":[{"id":"brasilia","bbox":[-52.95,-10.65,-52.95,-10.65],"value":["brasilia",[-52.95,-10.65]]},{"id":"australia","bbox":[135,-25,135,-25],"value":["australia",[135,-25]]}]}
+    {"update_seq":6,"rows":[
+    {"id":"australia","bbox":[135,-25,135,-25],"value":["australia",[135,-25]]},
+    {"id":"brasilia","bbox":[-52.95,-10.65,-52.95,-10.65],"value":["brasilia",[-52.95,-10.65]]}
+    ]}
 
 The bounding with the same numbers, but different order
 (`-30,-60,110,15`) would only return Namibia:
 
     curl -X GET 'http://localhost:5984/places/_design/main/_spatial/points?bbox=-30,-60,110,15'
-    {"spatial":[{"id":"namibia","bbox":[17.15,-22.566667,17.15,-22.566667],"value":["namibia",[17.15,-22.566667]]}]}
 
+    {"update_seq":6,"rows":[
+    {"id":"namibia","bbox":[17.15,-22.566667,17.15,-22.566667],"value":["namibia",[17.15,-22.566667]]}
+    ]}
 
 List function support
 ---------------------
@@ -120,11 +127,11 @@ though with a different Design handler (`_spatiallist` instead of
 
 The result is:
 
-    POINT(-52.95 -10.65)
-    POINT(135 -25)
-    POINT(17.15 -22.566667)
-    POINT(10.898333 48.371667)
     POINT(-122.270833 37.804444)
+    POINT(10.898333 48.371667)
+    POINT(17.15 -22.566667)
+    POINT(135 -25)
+    POINT(-52.95 -10.65)
 
 Using List functions from Design Documents other than the one containing the
 Spatial functions is supported as well. This time we add the Document

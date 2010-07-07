@@ -67,8 +67,9 @@ output_list(Req, Db, DDoc, LName, Index, QueryArgs, Etag, Group) ->
         {ok, Resp, BeginBody} = StartListRespFun(Req, Etag, [], CurrentSeq),
         couch_httpd_show:send_non_empty_chunk(Resp, BeginBody),
         SendRowFun = make_spatial_get_row_fun(QServer, Resp),
-%        {ok, Result} = couch_spatial:do_bbox_search(Bbox, Group, Index, SendRowFun),
-        {ok, Go} = couch_spatial:do_bbox_search(Bbox, Group, Index, SendRowFun),
+        FoldAccInit = {undefined, ""},
+        {ok, {_Resp, Go}} = couch_spatial:fold(Group, Index, SendRowFun,
+                                               FoldAccInit, Bbox),
         case Go of
         [] ->
             {Proc, _DDocId} = QServer,
@@ -94,7 +95,8 @@ make_spatial_start_resp_fun(QueryServer, Db, LName) ->
 % Counterpart to make_map_send_row_fun/1 in couch_http_show.
 make_spatial_get_row_fun(QueryServer, Resp) ->
     fun({_Bbox, _DocId, _Value}=Row, _Acc) ->
-        send_list_row(Resp, QueryServer, Row)
+        {State, Result} = send_list_row(Resp, QueryServer, Row),
+        {State, {Resp, Result}}
     end.
 
 send_list_row(Resp, QueryServer, Row) ->

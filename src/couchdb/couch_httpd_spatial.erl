@@ -57,9 +57,9 @@ output_spatial_index(Req, Index, Group, Db, QueryArgs) ->
                     Req, QueryArgs, CurrentEtag, Db,
                     Group#spatial_group.current_seq, HelperFuns),
         FoldAccInit = {undefined, ""},
-        {ok, Resp} = couch_spatial:fold(
-                             Index, Group#spatial_group.fd, FoldFun,
-                             FoldAccInit, QueryArgs#spatial_query_args.bbox),
+        {ok, {Resp, _Acc}} = couch_spatial:fold(
+                       Group, Index, FoldFun, FoldAccInit,
+                       QueryArgs#spatial_query_args.bbox),
         finish_spatial_fold(Req, Resp)
     end).
 

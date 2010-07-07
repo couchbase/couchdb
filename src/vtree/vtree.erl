@@ -12,7 +12,7 @@
 
 -module(vtree).
 
--export([lookup/4, within/2, intersect/2, disjoint/2, insert/4,
+-export([lookup/3, lookup/4, within/2, intersect/2, disjoint/2, insert/4,
          area/1, merge_mbr/2, find_area_min_nth/1, partition_node/1,
          calc_nodes_mbr/1, calc_mbr/1, best_split/1, minimal_overlap/2,
          calc_overlap/2, minimal_coverage/2, delete/4, add_remove/4,
@@ -59,65 +59,52 @@ add_remove(Fd, Pos, AddKeyValues, KeysToRemove) ->
     end, NewPos, AddKeyValues),
     {ok, NewPos2}.
 
-%lookup(Fd, Pos, Bbox) ->
-%io:format("lookup 1~n", []),
-%    % default function returns a list of 3-tuple with MBR, id, value
-%    lookup(Fd, Pos, Bbox, fun({Bbox2, DocId, Value}, Acc) ->
-%         Acc ++ [{[{<<"id">>, DocId},
-%                   {<<"bbox">>, erlang:tuple_to_list(Bbox2)},
-%                   {<<"value">>, Value}]}]
-%    end).
+% All lookup functions return {ok|stop, Acc}
+
+% This lookup function is mainly for testing
+lookup(Fd, Pos, Bbox) ->
+    % default function returns a list of 3-tuple with MBR, id, value
+    lookup(Fd, Pos, Bbox, {fun({Bbox2, DocId, Value}, Acc) ->
+         Acc2 = [{Bbox2, DocId, Value}|Acc],
+         {ok, Acc2}
+    end, []}).
 lookup(_Fd, nil, _Bbox, _FoldFunAndAcc) ->
-    [];
+    {ok, []};
 lookup(Fd, Pos, Bbox, {FoldFun, InitAcc}) when not is_list(Bbox) ->
     % default bounds are from this world
     lookup(Fd, Pos, Bbox, {FoldFun, InitAcc}, {-180, -90, 180, 90});
-% Returns whatever FoldFun returns
-% InitAcc/Acc is: {ok|stop, {Resp, SomeRestFromPreviousRow}}
+% For spatial index and spatial list requests InitAcc/Acc is:
+% {ok|stop, {Resp, SomeRestFromPreviousRow}}
 lookup(Fd, Pos, Bboxes, {FoldFun, InitAcc}) ->
     {ok, Parent} = couch_file:pread_term(Fd, Pos),
     {ParentMbr, ParentMeta, NodesPos} = Parent,
-%io:format("lookup: ~p~n", [InitAcc]),
     case ParentMeta#node.type of
     inner ->
-        %lists:foldl(fun(EntryPos, Acc) ->
         foldl_stop(fun(EntryPos, Acc) ->
-%io:format("fold_stop: ~p~n", [Acc]),
             case bboxes_not_disjoint(ParentMbr, Bboxes) of
             true ->
-%io:format("fold_stop2: ~p~n", [Acc]),
                 lookup(Fd, EntryPos, Bboxes, {FoldFun, Acc});
             false ->
-%io:format("fold_stop3: ~p~n", [Acc]),
-                %Acc
                 {ok, Acc}
             end
         end, InitAcc, NodesPos);
     leaf ->
-%io:format("fold_stop4: ~p~n", [InitAcc]),
         case bboxes_within(ParentMbr, Bboxes) of
         % all children are within the bbox we search with
         true ->
-%io:format("true~n", []),
-            Res = foldl_stop(fun({Mbr, _Meta, {Id, Value}}, Acc) ->
+            foldl_stop(fun({Mbr, _Meta, {Id, Value}}, Acc) ->
                 FoldFun({Mbr, Id, Value}, Acc)
-            end, InitAcc, NodesPos),
-%io:format("fold_stop5: ~p~n", [Res]),
-            Res;
+            end, InitAcc, NodesPos);
         false ->
-%io:format("false~n", []),
             % loop through all data nodes and find not disjoint ones
-            Res = foldl_stop(fun({Mbr, _Meta, {Id, Value}}, Acc) ->
+            foldl_stop(fun({Mbr, _Meta, {Id, Value}}, Acc) ->
                 case bboxes_not_disjoint(Mbr, Bboxes) of
                 true ->
                     FoldFun({Mbr, Id, Value}, Acc);
                 false ->
-                    %Acc
                     {ok, Acc}
                 end
-            end, InitAcc, NodesPos),
-%io:format("fold_stop6: ~p~n", [Res]),
-            Res
+            end, InitAcc, NodesPos)
         end
     end.
 
@@ -137,9 +124,7 @@ lookup(Fd, Pos, Bbox, FoldFunAndAcc, Bounds) when not is_list(Bbox) ->
 foldl_stop(_, Acc, []) ->
     {ok, Acc};
 foldl_stop(Fun, Acc, [H|T]) ->
-%io:format("real fold_stop1: ~p~n", [Acc]),
     Return = Fun(H, Acc),
-%io:format("real fold_stop2 return: ~p~nTail: ~p~n", [Return, T]),
     case Return of
     {ok, Acc2} ->
         foldl_stop(Fun, Acc2, T);
