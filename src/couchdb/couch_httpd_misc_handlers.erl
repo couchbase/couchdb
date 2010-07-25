@@ -162,28 +162,31 @@ handle_config_req(#httpd{method='GET', path_parts=[_, Section, Key]}=Req) ->
     Value ->
         send_json(Req, 200, list_to_binary(Value))
     end;
+% PUT or DELETE /_config/Section/Key
+handle_config_req(#httpd{method=Method, path_parts=[_, Section, Key]}=Req)
+      when (Method == 'PUT') or (Method == 'DELETE') ->
+    ok = couch_httpd:verify_is_server_admin(Req),
+    Persist = couch_httpd:header_value(Req, "X-Couch-Persist") /= "false",
+    handle_approved_config_req(Req, Persist);
+handle_config_req(Req) ->
+    send_method_not_allowed(Req, "GET,PUT,DELETE").
+
 % PUT /_config/Section/Key
 % "value"
-handle_config_req(#httpd{method='PUT', path_parts=[_, Section, Key]}=Req) ->
-    ok = couch_httpd:verify_is_server_admin(Req),
+handle_approved_config_req(#httpd{method='PUT', path_parts=[_, Section, Key]}=Req, Persist) ->
     Value = couch_httpd:json_body(Req),
-    Persist = couch_httpd:header_value(Req, "X-Couch-Persist") /= "false",
     OldValue = couch_config:get(Section, Key, ""),
     ok = couch_config:set(Section, Key, ?b2l(Value), Persist),
     send_json(Req, 200, list_to_binary(OldValue));
 % DELETE /_config/Section/Key
-handle_config_req(#httpd{method='DELETE',path_parts=[_,Section,Key]}=Req) ->
-    ok = couch_httpd:verify_is_server_admin(Req),
-    Persist = couch_httpd:header_value(Req, "X-Couch-Persist") /= "false",
+handle_approved_config_req(#httpd{method='DELETE',path_parts=[_,Section,Key]}=Req, Persist) ->
     case couch_config:get(Section, Key, null) of
     null ->
         throw({not_found, unknown_config_value});
     OldValue ->
         couch_config:delete(Section, Key, Persist),
         send_json(Req, 200, list_to_binary(OldValue))
-    end;
-handle_config_req(Req) ->
-    send_method_not_allowed(Req, "GET,PUT,DELETE").
+    end.
 
 
 % httpd db handlers
