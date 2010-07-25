@@ -167,7 +167,58 @@ handle_config_req(#httpd{method=Method, path_parts=[_, Section, Key]}=Req)
       when (Method == 'PUT') or (Method == 'DELETE') ->
     ok = couch_httpd:verify_is_server_admin(Req),
     Persist = couch_httpd:header_value(Req, "X-Couch-Persist") /= "false",
-    handle_approved_config_req(Req, Persist);
+    case couch_config:get(<<"httpd">>, <<"config_whitelist">>, null) of
+        null ->
+            % No whitelist; allow all changes.
+            handle_approved_config_req(Req, Persist);
+        WhitelistValue ->
+            % Provide a failsafe to protect against inadvertently locking
+            % onesself out of the config by supplying a syntactically-incorrect
+            % Erlang term. To intentionally lock down the whitelist, supply a
+            % well-formed list which does not include the whitelist config
+            % variable itself.
+            FallbackWhitelist = [{<<"httpd">>, <<"config_whitelist">>}],
+
+            Whitelist = case couch_util:parse_term(WhitelistValue) of
+                {ok, Value} when is_list(Value) ->
+                    Value;
+                {ok, _NonListValue} ->
+                    FallbackWhitelist;
+                {error, _} ->
+                    [{WhitelistSection, WhitelistKey}] = FallbackWhitelist,
+                    ?LOG_ERROR("Only whitelisting ~s/~s due to error parsing: ~p",
+                               [WhitelistSection, WhitelistKey, WhitelistValue]),
+                    FallbackWhitelist
+            end,
+
+            IsRequestedKeyVal = fun(Element) ->
+                case Element of
+                    {A, B} ->
+                        % For readability, tuples may be used instead of binaries
+                        % in the whitelist.
+                        case {couch_util:to_binary(A), couch_util:to_binary(B)} of
+                            {Section, Key} ->
+                                true;
+                            {Section, <<"*">>} ->
+                                true;
+                            _Else ->
+                                false
+                        end;
+                    _Else ->
+                        false
+                end
+            end,
+
+            case lists:any(IsRequestedKeyVal, Whitelist) of
+                true ->
+                    % Allow modifying this whitelisted variable.
+                    handle_approved_config_req(Req, Persist);
+                _NotWhitelisted ->
+                    % Disallow modifying this non-whitelisted variable.
+                    send_error(Req, 400, <<"modification_not_allowed">>,
+                               ?l2b("This config variable is read-only"))
+            end
+    end;
 handle_config_req(Req) ->
     send_method_not_allowed(Req, "GET,PUT,DELETE").
 
