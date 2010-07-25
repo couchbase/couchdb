@@ -153,15 +153,6 @@ handle_config_req(#httpd{method='GET', path_parts=[_,Section]}=Req) ->
     KVs = [{list_to_binary(Key), list_to_binary(Value)}
             || {Key, Value} <- couch_config:get(Section)],
     send_json(Req, 200, {KVs});
-% PUT /_config/Section/Key
-% "value"
-handle_config_req(#httpd{method='PUT', path_parts=[_, Section, Key]}=Req) ->
-    ok = couch_httpd:verify_is_server_admin(Req),
-    Value = couch_httpd:json_body(Req),
-    Persist = couch_httpd:header_value(Req, "X-Couch-Persist") /= "false",
-    OldValue = couch_config:get(Section, Key, ""),
-    ok = couch_config:set(Section, Key, ?b2l(Value), Persist),
-    send_json(Req, 200, list_to_binary(OldValue));
 % GET /_config/Section/Key
 handle_config_req(#httpd{method='GET', path_parts=[_, Section, Key]}=Req) ->
     ok = couch_httpd:verify_is_server_admin(Req),
@@ -171,6 +162,15 @@ handle_config_req(#httpd{method='GET', path_parts=[_, Section, Key]}=Req) ->
     Value ->
         send_json(Req, 200, list_to_binary(Value))
     end;
+% PUT /_config/Section/Key
+% "value"
+handle_config_req(#httpd{method='PUT', path_parts=[_, Section, Key]}=Req) ->
+    ok = couch_httpd:verify_is_server_admin(Req),
+    Value = couch_httpd:json_body(Req),
+    Persist = couch_httpd:header_value(Req, "X-Couch-Persist") /= "false",
+    OldValue = couch_config:get(Section, Key, ""),
+    ok = couch_config:set(Section, Key, ?b2l(Value), Persist),
+    send_json(Req, 200, list_to_binary(OldValue));
 % DELETE /_config/Section/Key
 handle_config_req(#httpd{method='DELETE',path_parts=[_,Section,Key]}=Req) ->
     ok = couch_httpd:verify_is_server_admin(Req),
