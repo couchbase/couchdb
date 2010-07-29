@@ -27,8 +27,8 @@ to_json_rev(0, []) ->
 to_json_rev(Start, [FirstRevId|_]) ->
     [{<<"_rev">>, ?l2b([integer_to_list(Start),"-",revid_to_str(FirstRevId)])}].
 
-to_json_body(true, _Body) ->
-    [{<<"_deleted">>, true}];
+to_json_body(true, {Body}) ->
+    Body ++ [{<<"_deleted">>, true}];
 to_json_body(false, {Body}) ->
     Body.
 
@@ -267,7 +267,7 @@ att_encoding_info(BinProps) ->
         {identity, DiskLen};
     Enc ->
         EncodedLen = couch_util:get_value(<<"encoded_length">>, BinProps, DiskLen),
-        {list_to_atom(?b2l(Enc)), EncodedLen}
+        {list_to_existing_atom(?b2l(Enc)), EncodedLen}
     end.
 
 to_doc_info(FullDocInfo) ->
@@ -437,7 +437,7 @@ atts_to_mp([Att | RestAtts], Boundary, WriteFun,
     true ->
         fun att_foldl/3
     end,
-    AttFun(Att, fun(Data, ok) -> WriteFun(Data) end, ok),
+    AttFun(Att, fun(Data, _) -> WriteFun(Data) end, ok),
     WriteFun(<<"\r\n--", Boundary/binary>>),
     atts_to_mp(RestAtts, Boundary, WriteFun, SendEncodedAtts).
 

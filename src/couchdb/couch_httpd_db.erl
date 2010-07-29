@@ -106,6 +106,9 @@ handle_changes_req(#httpd{method='GET'}=Req, Db) ->
             FeedChangesFun(MakeCallback(Resp))
         end
     end,
+    couch_stats_collector:track_process_count(
+        {httpd, clients_requesting_changes}
+    ),
     WrapperFun(ChangesFun);
 
 handle_changes_req(#httpd{path_parts=[_,<<"_changes">>]}=Req, _Db) ->
@@ -144,7 +147,9 @@ handle_design_req(#httpd{
     % load ddoc
     DesignId = <<"_design/", DesignName/binary>>,
     DDoc = couch_httpd_db:couch_doc_open(Db, DesignId, nil, []),
-    Handler = couch_util:dict_find(Action, DesignUrlHandlers, fun db_req/2),
+    Handler = couch_util:dict_find(Action, DesignUrlHandlers, fun(_, _, _) ->
+            throw({not_found, <<"missing handler: ", Action/binary>>})
+        end),
     Handler(Req, Db, DDoc);
 
 handle_design_req(Req, Db) ->
@@ -242,6 +247,7 @@ db_req(#httpd{path_parts=[_DbName]}=Req, _Db) ->
     send_method_not_allowed(Req, "DELETE,GET,HEAD,POST");
 
 db_req(#httpd{method='POST',path_parts=[_,<<"_ensure_full_commit">>]}=Req, Db) ->
+    couch_httpd:validate_ctype(Req, "application/json"),
     UpdateSeq = couch_db:get_update_seq(Db),
     CommittedSeq = couch_db:get_committed_update_seq(Db),
     {ok, StartTime} =

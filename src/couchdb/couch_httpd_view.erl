@@ -61,6 +61,7 @@ handle_view_req(#httpd{method='GET',
 
 handle_view_req(#httpd{method='POST',
         path_parts=[_, _, DName, _, ViewName]}=Req, Db, _DDoc) ->
+    couch_httpd:validate_ctype(Req, "application/json"),
     {Fields} = couch_httpd:json_body_obj(Req),
     case couch_util:get_value(<<"keys">>, Fields, nil) of
     nil ->
@@ -77,6 +78,7 @@ handle_view_req(Req, _Db, _DDoc) ->
     send_method_not_allowed(Req, "GET,POST,HEAD").
 
 handle_temp_view_req(#httpd{method='POST'}=Req, Db) ->
+    couch_httpd:validate_ctype(Req, "application/json"),
     ok = couch_db:check_is_admin(Db),
     couch_stats_collector:increment({httpd, temporary_view_reads}),
     {Props} = couch_httpd:json_body_obj(Req),
@@ -196,10 +198,10 @@ reverse_key_default(?MAX_STR) -> ?MIN_STR;
 reverse_key_default(Key) -> Key.
 
 get_stale_type(Req) ->
-    list_to_atom(couch_httpd:qs_value(Req, "stale", "nil")).
+    list_to_existing_atom(couch_httpd:qs_value(Req, "stale", "nil")).
 
 get_reduce_type(Req) ->
-    list_to_atom(couch_httpd:qs_value(Req, "reduce", "true")).
+    list_to_existing_atom(couch_httpd:qs_value(Req, "reduce", "true")).
 
 load_view(Req, Db, {ViewDesignId, ViewName}, Keys) ->
     Stale = get_stale_type(Req),

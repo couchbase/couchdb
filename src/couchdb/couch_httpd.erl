@@ -227,7 +227,7 @@ handle_request_int(MochiReq, DefaultFun,
     true -> 
         ?LOG_INFO("MethodOverride: ~s (real method was ~s)", [MethodOverride, Method1]),
         case Method1 of
-        'POST' -> list_to_atom(MethodOverride);
+        'POST' -> couch_util:to_existing_atom(MethodOverride);
         _ -> 
             % Ignore X-HTTP-Method-Override when the original verb isn't POST.
             % I'd like to send a 406 error to the client, but that'd require a nasty refactor.
@@ -752,7 +752,8 @@ error_headers(#httpd{mochi_req=MochiReq}=Req, Code, ErrorStr, ReasonStr) ->
                     AuthRedirect ->
                         case couch_config:get("couch_httpd_auth", "require_valid_user", "false") of
                         "true" ->
-                            {Code, []};
+                            % send the browser popup header no matter what if we are require_valid_user
+                            {Code, [{"WWW-Authenticate", "Basic realm=\"server\""}]};
                         _False ->
                             % if the accept header matches html, then do the redirect. else proceed as usual.
                             case re:run(MochiReq:get_header_value("Accept"), "html", [{capture, none}]) of
