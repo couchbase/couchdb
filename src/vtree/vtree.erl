@@ -205,7 +205,7 @@ disjoint(Mbr1, Mbr2) ->
     not (within(Mbr1, Mbr2) or within(Mbr2, Mbr1) or intersect(Mbr1, Mbr2)).
 
 
-split_node({_Mbr, Meta, _EntriesPos}=Node) ->
+split_node({_Mbr, Meta, _Entries}=Node) ->
     %io:format("We need to split~n~p~n", [Node]),
     Partition = partition_node(Node),
     SplittedLeaf = best_split(Partition),
@@ -246,8 +246,10 @@ split_node({_Mbr, Meta, _EntriesPos}=Node) ->
 
 % Return values of insert:
 % At top-level: {ok, MBR, position_in_file}
-% If a split occurs: {splitted, MBR_of_both_nodes, position_in_file_node1,
-%                     position_in_file_node2}
+% XXX vmx MBR_of_both_nodes could be calculated if needed
+% If a split occurs: {splitted, MBR_of_both_nodes,
+%                     {MBR_of_node1, position_in_file_node1},
+%                     {MBR_of_node2, position_in_file_node2}}
 insert(Fd, nil, Id, {Mbr, Meta, Value}) ->
     InitialTree = {Mbr, #node{type=leaf}, [{Mbr, Meta, {Id, Value}}]},
     {ok, Pos} = couch_file:append_term(Fd, InitialTree),
@@ -287,10 +289,11 @@ insert(Fd, RootPos, NewNodeId,
         % do the fancy split algorithm
         true ->
             %io:format("We need to split (leaf node)~n~p~n", [LeafNode]),
-            {SplittedMbr, Node1, Node2} = split_node(LeafNode),
+            {SplittedMbr, {Node1Mbr, _, _}=Node1, {Node2Mbr, _, _}=Node2}
+                    = split_node(LeafNode),
             {ok, Pos1} = couch_file:append_term(Fd, Node1),
             {ok, Pos2} = couch_file:append_term(Fd, Node2),
-            {splitted, SplittedMbr, Pos1, Pos2}
+            {splitted, SplittedMbr, {Node1Mbr, Pos1}, {Node2Mbr, Pos2}}
         end;
     % If the nodes are inner nodes, they only contain pointers to their child
     % nodes. We only need their MBRs, position, but not their children's
@@ -329,14 +332,12 @@ insert(Fd, RootPos, NewNodeId,
             NewNode2 = {NewMbr, #node{type=inner}, A ++ [ChildPos] ++ tl(B)},
             {ok, Pos} = couch_file:append_term(Fd, NewNode2),
             {ok, NewMbr, Pos};
-        {splitted, ChildMbr, ChildPos1, ChildPos2} ->
+        {splitted, ChildMbr, {Child1Mbr, ChildPos1}, {Child2Mbr, ChildPos2}} ->
             %io:format("EntryNum: ~p~n", [EntryNum]),
             NewMbr = merge_mbr(TreeMbr, ChildMbr),
             if
             % Both nodes of the split fit in the current inner node
             EntryNum+1 < ?MAX_FILLED ->
-                % NOTE vmx: Weird, it seems that this point is never reached
-                %io:format("There's plenty of space (inner node)~n", []),
                 {A, B} = lists:split(MinPos-1, EntriesPos),
                 NewNode2 = {NewMbr, #node{type=inner},
                             A ++ [ChildPos1, ChildPos2] ++ tl(B)},
@@ -345,17 +346,26 @@ insert(Fd, RootPos, NewNodeId,
             % We need to split the inner node
             true ->
                 %io:format("We need to split (inner node)~n~p~n", [Entries]),
-                {SplittedMbr, Node1, Node2} = split_node(
-                        {NewMbr, #node{type=inner}, Entries}),
+                {_, ChildNodeMeta, _} = lists:nth(1, Entries),
+                Child1 = {Child1Mbr, ChildNodeMeta, ChildPos1},
+                Child2 = {Child2Mbr, ChildNodeMeta, ChildPos2},
+
+                % Original node, that was split, needs to be removed
+                {A, B} = lists:split(MinPos-1, Entries),
+
+                {SplittedMbr, {Node1Mbr, _, _}=Node1, {Node2Mbr, _, _}=Node2}
+                        = split_node({NewMbr, #node{type=inner},
+                                      A ++ [Child1, Child2] ++ tl(B)}),
                 {ok, Pos1} = couch_file:append_term(Fd, Node1),
                 {ok, Pos2} = couch_file:append_term(Fd, Node2),
-                {splitted, SplittedMbr, Pos1, Pos2}
+                {splitted, SplittedMbr, {Node1Mbr, Pos1}, {Node2Mbr, Pos2}}
             end
         end
     end,
     case {Inserted, CallDepth} of
         % Root node needs to be split => new root node
-        {{splitted, NewRootMbr, SplittedNode1, SplittedNode2}, 0} ->
+        {{splitted, NewRootMbr, {SplittedNode1Mbr, SplittedNode1},
+          {SplittedNode2Mbr, SplittedNode2}}, 0} ->
             %io:format("Creating new root node~n", []),
             NewRoot = {NewRootMbr, #node{type=inner},
                            [SplittedNode1, SplittedNode2]},
