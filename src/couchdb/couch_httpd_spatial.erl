@@ -45,6 +45,15 @@ load_index(Req, Db, {DesignId, SpatialName}) ->
         throw({not_found, Reason})
     end.
 
+%output_spatial_index(Req, Index, Group, Db,
+%                     QueryArgs#spatial_query_args{count=true}) ->
+output_spatial_index(Req, Index, Group, Db, QueryArgs) when
+      QueryArgs#spatial_query_args.count == true ->
+    {ok, Count} = vtree:count_lookup(Group#spatial_group.fd,
+                                     Index#spatial.treepos,
+                                     QueryArgs#spatial_query_args.bbox),
+    send_json(Req, Count);
+
 % counterpart in couch_httpd_view is output_map_view/6
 output_spatial_index(Req, Index, Group, Db, QueryArgs) ->
     CurrentEtag = spatial_group_etag(Group, Db),
@@ -132,6 +141,10 @@ parse_view_param("stale", "ok") ->
     [{stale, ok}];
 parse_view_param("stale", _Value) ->
     throw({query_parse_error, <<"stale only available as stale=ok">>});
+parse_view_param("count", "true") ->
+    [{count, true}];
+parse_view_param("count", _Value) ->
+    throw({query_parse_error, <<"count only available as count=true">>});
 parse_view_param(Key, Value) ->
     [{extra, {Key, Value}}].
 
@@ -139,6 +152,8 @@ validate_spatial_query(bbox, Value, Args) ->
     Args#spatial_query_args{bbox=Value};
 validate_spatial_query(stale, ok, Args) ->
     Args#spatial_query_args{stale=ok};
+validate_spatial_query(count, true, Args) ->
+    Args#spatial_query_args{count=true};
 validate_spatial_query(stale, _, Args) ->
     Args;
 validate_spatial_query(extra, _Value, Args) ->

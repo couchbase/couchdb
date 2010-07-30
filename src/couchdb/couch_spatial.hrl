@@ -48,7 +48,8 @@
 
 -record(spatial_query_args, {
     bbox=nil,
-    stale=nil
+    stale=nil,
+    count=false
 }).
 
 -record(spatial_fold_helper_funs, {

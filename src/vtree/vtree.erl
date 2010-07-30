@@ -16,7 +16,7 @@
          area/1, merge_mbr/2, find_area_min_nth/1, partition_node/1,
          calc_nodes_mbr/1, calc_mbr/1, best_split/1, minimal_overlap/2,
          calc_overlap/2, minimal_coverage/2, delete/4, add_remove/4,
-         split_flipped_bbox/2]).
+         split_flipped_bbox/2, count_lookup/3]).
 
 -export([get_node/2]).
 
@@ -58,6 +58,11 @@ add_remove(Fd, Pos, AddKeyValues, KeysToRemove) ->
         CurPos2
     end, NewPos, AddKeyValues),
     {ok, NewPos2}.
+
+
+% Returns the number of matching geometries only
+count_lookup(Fd, Pos, Bbox) ->
+    lookup(Fd, Pos, Bbox, {fun(Item, Acc) -> {ok, Acc+1} end,0}).
 
 % All lookup functions return {ok|stop, Acc}
 
