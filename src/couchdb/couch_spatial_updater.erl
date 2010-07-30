@@ -15,6 +15,9 @@
 
 -export([update/2]).
 
+% for benchmark script
+-export([geojson_get_bbox/1]).
+
 -include("couch_db.hrl").
 -include("couch_spatial.hrl").
 
@@ -256,6 +259,15 @@ write_changes(Group, IndexKeyValuesToAdd, DocIdIndexIdKeys, NewSeq) ->
 
     Group2 = Group#spatial_group{indexes=Indexes2, current_seq=NewSeq, id_btree=IdBtree2},
     {ok, Group2}.
+
+
+% NOTE vmx: This is kind of ugly. This function is needed for a benchmark for
+%     the replication filter
+% Return the bounding box of a GeoJSON geometry. "Geo" is wrapped in
+% brackets ({}) as returned from proplists:get_value()
+geojson_get_bbox(Geo) ->
+    {Bbox, nil} = process_result([[Geo|[nil]]]),
+    Bbox.
 
 
 process_result([[{Geo}|[Value]]]) ->
