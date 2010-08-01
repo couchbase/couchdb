@@ -203,25 +203,22 @@ process_doc(Db, Owner, DocInfo, {Docs, Group, IndexKVs, DocIdIndexIdKeys}) ->
             {[Doc | Docs], DocIdIndexIdKeys}
         end,
 
-        % XXX vmx: we don't flush in between. Potentially this indexing could
-        %     eat up all your memmory.
-        %case couch_util:should_flush() of
-        %true ->
-        %    {Group1, Results} = view_compute(Group, Docs2),
-        %    {ViewKVs3, DocIdViewIdKeys3} = view_insert_query_results(Docs2,
-        %        Results, IndexKVs, DocIdIndexIdKeys2),
-        %    {ok, Group2} = write_changes(Group1, ViewKVs3, DocIdViewIdKeys3,
-        %        DocInfo#doc_info.high_seq),
-        %    if is_pid(Owner) ->
-        %        ok = gen_server:cast(Owner, {partial_update, self(), Group2});
-        %    true -> ok end,
-        %    garbage_collect(),
-        %    ViewEmptyKeyValues = [{View, []} || View <- Group2#group.views],
-        %    {[], Group2, ViewEmptyKeyValues, []};
-        %false ->
-        %    {Docs2, Group, IndexKVs, DocIdIndexIdKeys2}
-        %end
-        {Docs2, Group, IndexKVs, DocIdIndexIdKeys2}
+        case couch_util:should_flush() of
+        true ->
+            {Group1, Results} = spatial_compute(Group, Docs2),
+            {ViewKVs3, DocIdViewIdKeys3} = view_insert_query_results(Docs2,
+                Results, IndexKVs, DocIdIndexIdKeys2),
+            {ok, Group2} = write_changes(Group1, ViewKVs3, DocIdViewIdKeys3,
+                DocInfo#doc_info.high_seq),
+            if is_pid(Owner) ->
+                ok = gen_server:cast(Owner, {partial_update, self(), Group2});
+            true -> ok end,
+            garbage_collect(),
+            IndexEmptyKVs = [{Index, []} || Index <- Group#spatial_group.indexes],
+            {[], Group2, IndexEmptyKVs, []};
+        false ->
+            {Docs2, Group, IndexKVs, DocIdIndexIdKeys2}
+        end
     end.
 
 

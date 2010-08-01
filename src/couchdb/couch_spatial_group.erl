@@ -133,6 +133,20 @@ handle_call({request_group, RequestSeq}, From,
         waiting_list=[{From, RequestSeq}|WaitList]
         }, infinity}.
 
+handle_cast({partial_update, Pid, NewGroup}, #group_state{updater_pid=Pid}
+        = State) ->
+    #group_state{
+        db_name = DbName,
+        waiting_commit = WaitingCommit
+    } = State,
+    NewSeq = NewGroup#spatial_group.current_seq,
+    ?LOG_INFO("checkpointing spatial update at seq ~p for ~s ~s", [NewSeq,
+        DbName, NewGroup#spatial_group.name]),
+    if not WaitingCommit ->
+        erlang:send_after(1000, self(), delayed_commit);
+    true -> ok
+    end,
+    {noreply, State#group_state{group=NewGroup, waiting_commit=true}};
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
