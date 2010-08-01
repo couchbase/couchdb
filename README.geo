@@ -149,3 +149,7 @@ Other supported query arguments
 `stale=ok` is supported. The spatial index won't be rebuild even if
 new Documents were added. It works for normal spatial queries as well
 as for the spatial List functions.
+
+### count ###
+`count` is a boolean. `count=true` will only return the number of geometries
+the query will return, not the geometry themselves.
