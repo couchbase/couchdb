@@ -1,0 +1,63 @@
+
+var app = {};
+window.app = app;
+
+var isEven = function (someNumber) {
+    return (someNumber%2 == 0) ? true : false;
+};
+var formatSize = function (size) {
+  var jump = 512;
+  if (size < jump) return size + " bytes";
+  var units = ["KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"];
+  var i = 0;
+  while (size >= jump && i < units.length) {
+    i += 1;
+    size /= 1024
+  }
+  return size.toFixed(1) + ' ' + units[i - 1];
+}
+  
+app.index = function () {
+  var rowCount = 0;
+  var dbRow = function (name) {
+    var row = $('<tr id=db-"'+name+'"></tr>')
+    if (isEven(rowCount)) row.addClass("even")
+    else row.addClass("odd")
+    row.append('<th><a href="#/'+name+'">'+name+'</a></th>');
+    row.appendTo('tbody.content');
+    $.ajax({ dataType: 'json', url: '/'+name 
+           , success: function (info) {              
+               row.append('<td class="size">'+formatSize(info.disk_size)+'</td>');
+               row.append('<td class="count">'+info.doc_count+'</td>');
+               row.append('<td class="seq">'+info.update_seq+'</td>');   
+               row.tooltip({content:"tool"})
+           }
+           , error: function (info) {
+               row.append('<td class="size">error</td>');
+               row.append('<td class="count">error</td>');
+               row.append('<td class="seq">error</td>');
+           }
+    });
+    rowCount += 1
+  }
+
+  $.ajax({ dataType: 'json', url: '/_all_dbs' 
+         , success: function (dbs) { 
+           for (var i=0;i<dbs.length;i+=1) { dbRow(dbs[i]) }; 
+         }
+         , error: function () {
+           console.log('index')
+             // var 
+         }    
+  });
+}
+app.showDatabase = function () {
+  var db = this.params['db'];
+  
+}
+
+$.sammy(function () {
+  this.get('', app.index);
+  this.get('#/:db', app.showDatabase)
+}).run();
+

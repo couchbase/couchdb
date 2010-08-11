@@ -26,8 +26,28 @@ specific language governing permissions and limitations under the License.
     <script src="script/futon.js?0.11.0"></script>
     <script src="script/futon.browse.js?0.11.0"></script>
     <script src="script/futon.format.js?0.11.0"></script>
-    <script src="sammy/sammy.js"></script>
-    <script src="sammy/app.js"></script>
+    <script>
+      var page = new $.futon.CouchIndexPage();
+      $(document).ready(function() {
+        if (!/index\.html$/.test(location.pathname)) {
+          $.futon.navigation.ready(function() {
+            this.updateSelection(location.pathname + "index.html");
+          });
+        }
+        var dbsPerPage = $.futon.storage.get("per_page");
+        if (dbsPerPage) $("#perpage").val(dbsPerPage);
+        $("#perpage").change(function() {
+          page.updateDatabaseListing();
+          $.futon.storage.set("per_page", this.value);
+        });
+
+        page.updateDatabaseListing();
+
+        $("#toolbar button.add").click(function() {
+          page.addDatabase();
+        });
+      });
+    </script>
   </head>
   <body>
     <div id="wrap">
@@ -48,15 +68,20 @@ specific language governing permissions and limitations under the License.
             </tr>
           </thead>
           <tbody class="content">
-            
           </tbody>
           <tbody class="footer">
             <tr>
               <td colspan="5">
-                <!-- <div id="paging">
+                <div id="paging">
                   <a class="prev">← Previous Page</a> |
+                  <label>Rows per page: <select id="perpage">
+                    <option selected>10</option>
+                    <option>25</option>
+                    <option>50</option>
+                    <option>100</option>
+                  </select></label> |
                   <a class="next">Next Page →</a>
-                </div> -->
+                </div>
                 <span></span>
               </td>
             </tr>
