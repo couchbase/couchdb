@@ -19,23 +19,28 @@ var formatSize = function (size) {
   
 app.index = function () {
   var rowCount = 0;
+
   var dbRow = function (name) {
-    var row = $('<tr id=db-"'+name+'"></tr>')
+    var row = $('<tr id=db-"'+name+'"><th><a href="#/'+name+'">'+name+'</a></th></tr>')
+    
     if (isEven(rowCount)) row.addClass("even")
     else row.addClass("odd")
-    row.append('<th><a href="#/'+name+'">'+name+'</a></th>');
+    
     row.appendTo('tbody.content');
     $.ajax({ dataType: 'json', url: '/'+name 
            , success: function (info) {              
-               row.append('<td class="size">'+formatSize(info.disk_size)+'</td>');
-               row.append('<td class="count">'+info.doc_count+'</td>');
-               row.append('<td class="seq">'+info.update_seq+'</td>');   
-               row.tooltip({content:"tool"})
+               row.append('<td class="size">'+formatSize(info.disk_size)+'</td>' +
+                          '<td class="count">'+info.doc_count+'</td>' + 
+                          '<td class="seq">'+info.update_seq+'</td>'
+                          )
+                          ;   
            }
            , error: function (info) {
-               row.append('<td class="size">error</td>');
-               row.append('<td class="count">error</td>');
-               row.append('<td class="seq">error</td>');
+               row.append('<td class="size">error</td>' +
+                          '<td class="count">error</td>' +
+                          '<td class="seq">error</td>'
+                          )
+                          ;
            }
     });
     rowCount += 1
