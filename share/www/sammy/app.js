@@ -54,8 +54,10 @@ app.index = function () {
 
   $.ajax({ dataType: 'json', url: '/_all_dbs' 
          , success: function (dbs) { 
-             $('td.more').append('<span class="more">Load 20 More Items</span>');
-             moreRows(dbs, 0)
+             if (dbs.length > 20) {
+               $('td.more').append('<span class="more">Load 20 More Items</span>');
+             }
+             moreRows(dbs, 0);
          }
          , error: function () {
            // Add a good error message on the page. 
