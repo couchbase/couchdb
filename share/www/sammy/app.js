@@ -46,7 +46,7 @@ app.index = function () {
   var moreRows = function (dbs, start) {
     for (var i=start;i<(start + 20);i+=1) { 
        if (dbs[i]) dbRow(dbs[i], i);
-       else {$('span.more').unbind('click'); return;}
+       else {$('span.more').remove(); return;}
     }
     $('span.more').unbind('click');
     $('span.more').click(function ( ) { moreRows(dbs, i) })
