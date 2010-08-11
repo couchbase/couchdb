@@ -18,14 +18,11 @@ var formatSize = function (size) {
 }
   
 app.index = function () {
-  var rowCount = 0;
 
-  var dbRow = function (name) {
-    var row = $('<tr id=db-"'+name+'"><th><a href="#/'+name+'">'+name+'</a></th></tr>')
+  var dbRow = function (name, rowCount) {
+    var row = $('<tr id=db-"'+name+'"><th><a href="#/'+name+'">'+name+'</a></th></tr>');
     
-    if (isEven(rowCount)) row.addClass("even")
-    else row.addClass("odd")
-    
+    row.addClass(isEven(rowCount) ? "even" : "odd")    
     row.appendTo('tbody.content');
     $.ajax({ dataType: 'json', url: '/'+name 
            , success: function (info) {              
@@ -43,16 +40,25 @@ app.index = function () {
                           ;
            }
     });
-    rowCount += 1
+    
+  }
+  
+  var moreRows = function (dbs, start) {
+    for (var i=start;i<(start + 20);i+=1) { 
+       if (dbs[i]) dbRow(dbs[i], i);
+       else {$('span.more').unbind('click'); return;}
+    }
+    $('span.more').unbind('click');
+    $('span.more').click(function ( ) { moreRows(dbs, i) })
   }
 
   $.ajax({ dataType: 'json', url: '/_all_dbs' 
          , success: function (dbs) { 
-           for (var i=0;i<dbs.length;i+=1) { dbRow(dbs[i]) }; 
+             $('td.more').append('<span class="more">Load 20 More Items</span>');
+             moreRows(dbs, 0)
          }
          , error: function () {
-           console.log('index')
-             // var 
+           // Add a good error message on the page. 
          }    
   });
 }
