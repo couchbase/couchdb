@@ -1,4 +1,13 @@
 
+// -- new style templates --
+// this.get('#/', function() {
+//   this.render('index.mustache')
+//       .replace('#main')
+//       .render('items.json')
+//       .renderEach('item.mustache')
+//       .appendTo('#main ul');
+// });
+
 var app = {};
 window.app = app;
 
@@ -18,11 +27,11 @@ var formatSize = function (size) {
 }
   
 app.index = function () {
-
-  var dbRow = function (name, rowCount) {
+  $('h1#topbar').append('<strong>Overview</strong>');
+  var dbRow = function (name, even) {
     var row = $('<tr id=db-"'+name+'"><th><a href="#/'+name+'">'+name+'</a></th></tr>');
     
-    row.addClass(isEven(rowCount) ? "even" : "odd")    
+    row.addClass(even ? "even" : "odd")    
     row.appendTo('tbody.content');
     $.ajax({ dataType: 'json', url: '/'+name 
            , success: function (info) {              
@@ -40,12 +49,11 @@ app.index = function () {
                           ;
            }
     });
-    
   }
   
   var moreRows = function (dbs, start) {
     for (var i=start;i<(start + 20);i+=1) { 
-       if (dbs[i]) dbRow(dbs[i], i);
+       if (dbs[i]) dbRow(dbs[i], isEven(i));
        else {$('span.more').remove(); return;}
     }
     $('span.more').unbind('click');
@@ -70,7 +78,9 @@ app.showDatabase = function () {
 }
 
 $.sammy(function () {
-  this.get('', app.index);
+  this.get('', function () {
+    this.render('templates/index.mustache').replace('#content').then(app.index);
+  });
   this.get('#/:db', app.showDatabase)
 }).run();
 
