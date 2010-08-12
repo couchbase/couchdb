@@ -72,18 +72,53 @@ app.index = function () {
          }    
   });
 }
-app.showDatabase = function () {
-  var db = this.params['db'];
-  
+app.showDatabase = function (db) {
+  $('h1#topbar').append('<strong>'+db+'</strong>');
+  var rowCount = 0;
+  var moreRows = function (start, limit) {
+    $.ajax({ dataType: 'json', url: '/'+db+'/_all_docs?limit='+limit+'&skip='+start
+           , success: function (resp) {
+             for (i in resp.rows) {
+               var r = resp.rows[i];
+               var row = $('<tr><td><a href="#/'+db+'/'+r.key+'">'+r.key+'</a></td><td>' +
+                            r.value.rev+'</td></tr>'
+                          )
+                          .addClass(isEven(rowCount) ? "even" : "odd")
+                          .appendTo('tbody.content')
+                          ;
+               rowCount += 1;
+             }
+             if (resp.total_rows > (resp.rows.length + start) && !$('span.more').length ) {
+               $('td.more').append('<span class="more">Load 20 More Items</span>');
+             } else if ( resp.total_rows <= (resp.rows.length + start) ) {
+               $('span.more').remove()
+             }
+             $('span.more').unbind('click');
+             $('span.more').click(function ( ) { moreRows(start + limit, limit) });
+           }
+           
+           })
+  }
+  moreRows(0, 20)
 }
 
-var a = $.sammy(function () {
+$.sammy(function () {
   
   var indexRoute = function () {
     this.render('templates/index.mustache').replace('#content').then(app.index);
   }
+  var databaseRoute = function () {
+    var db = this.params['db'];
+    this.render('/'+db)
+        .render('templates/database.mustache')
+        .replace('#content')
+        .then( function () {app.showDatabase(db)} )
+        ;
+
+  }
+  
   this.get('', indexRoute);
   this.get("#/", indexRoute);
-  this.get('#/:db', app.showDatabase)
+  this.get('#/:db', databaseRoute);
 }).run();
 

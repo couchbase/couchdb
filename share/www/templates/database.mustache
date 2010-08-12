@@ -1,0 +1,61 @@
+<div id="switch">
+  <label>View: <select autocomplete="false">
+    <option value="_all_docs">All documents</option>
+    <option value="_design_docs">Design documents</option>
+    <option value="_temp_view">Temporary view…</option>
+  </select></label>
+</div>
+<div id="jumpto">
+  <label>Jump to:
+    <input type="text" name="docid" placeholder="Document ID" autocomplete="off" />
+  </label>
+</div>
+<ul id="toolbar">
+  <li><button class="add">New Document</button></li>
+  <!-- <li><button class="security">Security…</button></li> -->
+  <li><button class="compact">Compact &amp; Cleanup…</button></li>
+</ul>
+
+<table id="info" class="listing" cellspacing="0">
+  <thead>
+    <tr>
+      <th>doc_count</th>
+      <th>doc_del_count</th>
+      <th>update_seq</th>
+      <th>purge_seq</th>
+      <th>compact_running</th>
+      <th>disk_size</th>
+    </tr>
+  </thead>
+  <tbody class="info">
+    <tr>
+      <th>{{doc_count}}</th>
+      <th>{{doc_del_count}}</th>
+      <th>{{update_seq}}</th>
+      <th>{{purge_seq}}</th>
+      <th>{{compact_running}}</th>
+      <th>{{disk_size}}</th>
+    </tr>
+  </tbody>  
+</table>
+
+<table id="documents" class="listing" cellspacing="0">
+  <caption>Documents</caption>
+  <thead>
+    <tr>
+      <th class="key">id</th>
+      <th class="value">rev</th>
+    </tr>
+  </thead>
+  <tbody class="content">
+  </tbody>
+  <tbody class="footer">
+    <tr>
+      <td colspan="4" class="more">
+      </td>
+    </tr>
+  </tbody>
+</table>
+<ul id="toolbar">
+  <li><button class="delete">Delete Database…</button></li>
+</ul>
