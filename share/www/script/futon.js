@@ -221,34 +221,38 @@ function $$(node) {
             "</a></li>");
         }
       });
-      if (selection) {
-        this.updateSelection(selection[0], selection[1]);
-      }
+      // if (selection) {
+      //   this.updateSelection(selection[0], selection[1]);
+      // }
       $("#dbs button.remove").click(function() {
         nav.removeDatabase(this.value);
         return false;
       });
     }
 
-    this.updateSelection = function(path, queryString) {
-      function fixupPath(path) { // hack for IE/Win
-        return (path.charAt(0) != "/") ? ("/" + path) : path;
-      }
-      if (!path) {
-        path = location.pathname;
-        if (!queryString) {
-          queryString = location.search;
-        }
-      } else if (!queryString) {
-        queryString = "";
-      }
-      var href = fixupPath(path + queryString);
-      $("#nav li").removeClass("selected");
-      $("#nav li a").each(function() {
-        if (fixupPath(this.pathname) + this.search != href) return;
-        $(this).parent("li").addClass("selected").parents("li").addClass("selected");
-      });
-    }
+    // this.updateSelection = function(path, queryString) {
+    //   function fixupPath(path, queryString, hash) { // hack for IE/Win
+    //     if (!path) {
+    //       path = location.pathname;
+    //       if (!hash && location.has) 
+    //       if (location.hash) path += location.hash;
+    //       if (!queryString) {
+    //         queryString = location.search;
+    //       }
+    //     } else if (!queryString) {
+    //       queryString = "";
+    //     }
+    //     return (path.charAt(0) != "/") ? ("/" + path) : path;
+    //   }
+    //   
+    //   var href = fixupPath();
+    //   $("#nav li").removeClass("selected");
+    //   $("#nav li a").each(function() {
+    //     console.log(location)
+    //     if (fixupPath() + this.search != href) return;
+    //     $(this).parent("li").addClass("selected").parents("li").addClass("selected");
+    //   });
+    // }
 
     this.toggle = function(speed) {
       if (speed === undefined) {

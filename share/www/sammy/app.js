@@ -77,10 +77,13 @@ app.showDatabase = function () {
   
 }
 
-$.sammy(function () {
-  this.get('', function () {
+var a = $.sammy(function () {
+  
+  var indexRoute = function () {
     this.render('templates/index.mustache').replace('#content').then(app.index);
-  });
+  }
+  this.get('', indexRoute);
+  this.get("#/", indexRoute);
   this.get('#/:db', app.showDatabase)
 }).run();
 

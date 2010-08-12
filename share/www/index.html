@@ -18,14 +18,17 @@ specific language governing permissions and limitations under the License.
     <title>Overview</title>
     <meta http-equiv="Content-Type" content="text/html;charset=utf-8">
     <link rel="stylesheet" href="style/sammy.css?0.11.0" type="text/css">
-    <script src="script/json2.js"></script>
-    <script src="script/sha1.js"></script>
     <script src="script/jquery.js?1.4.2"></script>
     <script src="script/jquery.couch.js?0.11.0"></script>
     <script src="script/jquery.dialog.js?0.11.0"></script>
+    
     <script src="script/futon.js?0.11.0"></script>
     <script src="script/futon.browse.js?0.11.0"></script>
     <script src="script/futon.format.js?0.11.0"></script>
+    
+    <script src="script/json2.js"></script>
+    <script src="script/sha1.js"></script>
+    
     <script src="sammy/sammy.js"></script>
     <script src="sammy/app.js"></script>
     <script>
@@ -41,13 +44,14 @@ specific language governing permissions and limitations under the License.
       }
 
       $.futon.navigation.updateDatabases();
-      $.futon.navigation.updateSelection();
+      // $.futon.navigation.updateSelection();
       $.futon.navigation.ready();
       $.futon.session.setupSidebar();
       $.futon.session.sidebar();
 
       $.couch.info({
         success: function(info, status) {
+          console.log(info.version)
           $("#version").text(info.version);
         }
       });
@@ -66,11 +70,11 @@ specific language governing permissions and limitations under the License.
         </a>
         <ul id="nav">
           <li><span>Tools</span><ul>
-            <li><a href="index.html">Overview</a></li>
-            <li><a href="config.html">Configuration</a></li>
-            <li><a href="replicator.html">Replicator</a></li>
-            <li><a href="status.html">Status</a></li>
-            <li><a href="couch_tests.html?script/couch_tests.js">Test Suite</a></li>
+            <li><a href="#/">Overview</a></li>
+            <li><a href="#/_config">Configuration</a></li>
+            <li><a href="#/_replicate">Replicator</a></li>
+            <li><a href="#/_stats">Status</a></li>
+            <li><a href="#/tests">Test Suite</a></li>
           </ul></li>
           <li><span>Recent Databases</span>
             <ul id="dbs"></ul>
@@ -100,8 +104,7 @@ specific language governing permissions and limitations under the License.
           </span>
           <hr/>
           <span class="couch">
-            Futon on <a href="http://couchdb.apache.org/">Apache CouchDB</a>
-            <span id="version">?</span>
+            <a href="http://couchdb.apache.org/">Apache CouchDB </a><span id="version">?</span>
           </span>
         </div>
       </div>
