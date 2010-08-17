@@ -397,6 +397,13 @@ body.loading #dialog h2 {
   text-align: right;
 }
 
+div#dbinfo {margin-bottom:8px;}
+.dbquery-select {float:right;}
+#pagination {float:left;}
+#pages-input {width:18px;}
+div.info-title { float:left; color: #666; margin-right:7px;}
+div.info-value { float:left; margin-right:20px;}
+
 /* Documents table */
 
 #documents thead th { line-height: 150%; width: 50%; }

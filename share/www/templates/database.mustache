@@ -1,9 +1,5 @@
 <div id="switch">
-  <label>View: <select autocomplete="false">
-    <option value="_all_docs">All documents</option>
-    <option value="_design_docs">Design documents</option>
-    <option value="_temp_view">Temporary view…</option>
-  </select></label>
+  <label>View: </label>
 </div>
 <div id="jumpto">
   <label>Jump to:
@@ -16,28 +12,18 @@
   <li><button class="compact">Compact &amp; Cleanup…</button></li>
 </ul>
 
-<table id="info" class="listing" cellspacing="0">
-  <thead>
-    <tr>
-      <th>doc_count</th>
-      <th>doc_del_count</th>
-      <th>update_seq</th>
-      <th>purge_seq</th>
-      <th>compact_running</th>
-      <th>disk_size</th>
-    </tr>
-  </thead>
-  <tbody class="info">
-    <tr>
-      <th>{{doc_count}}</th>
-      <th>{{doc_del_count}}</th>
-      <th>{{update_seq}}</th>
-      <th>{{purge_seq}}</th>
-      <th>{{compact_running}}</th>
-      <th>{{disk_size}}</th>
-    </tr>
-  </tbody>  
-</table>
+<div id="dbinfo">
+  <div class="info-title">Documents </div><div class="info-value" id="doc_count"></div>
+  <div class="info-title">Deleted </div><div class="info-value" id="doc_del_count"></div>
+  <div class="info-title">Sequence </div><div class="info-value" id="update_seq"></div>
+  <div class="info-title">Purge Seq </div><div class="info-value" id="purge_seq"></div>
+  <div class="info-title">Compacting </div><div class="info-value" id="compact_running"></div>
+  <br>
+  <div class="info-title">Document Store Size </div><div class="info-value" id="disk_size"></div>
+  <div class="info-title">View Index Size </div><div class="info-value" id="views_size"></div>
+  <div class="info-title">Full Database Size </div><div class="info-value" id="full_size"></div>
+  <br>
+</div>
 
 <table id="documents" class="listing" cellspacing="0">
   <caption>Documents</caption>
@@ -52,6 +38,11 @@
   <tbody class="footer">
     <tr>
       <td colspan="4" class="more">
+        <select class="dbquery-select" autocomplete="false">
+          <option value="_all_docs">All documents</option>
+          <option value="_design_docs">Design documents</option>
+          <option value="_temp_view">Temporary view…</option>
+        </select>
       </td>
     </tr>
   </tbody>
