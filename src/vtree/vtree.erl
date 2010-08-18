@@ -62,7 +62,11 @@ add_remove(Fd, Pos, AddKeyValues, KeysToRemove) ->
 
 % Returns the number of matching geometries only
 count_lookup(Fd, Pos, Bbox) ->
-    lookup(Fd, Pos, Bbox, {fun(Item, Acc) -> {ok, Acc+1} end,0}).
+    case lookup(Fd, Pos, Bbox, {fun(Item, Acc) -> {ok, Acc+1} end, 0}) of
+        {ok, []} -> 0;
+        {ok, Count} -> Count
+    end.
+
 
 % All lookup functions return {ok|stop, Acc}
 

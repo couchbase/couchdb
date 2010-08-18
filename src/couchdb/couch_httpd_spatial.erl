@@ -48,11 +48,11 @@ load_index(Req, Db, {DesignId, SpatialName}) ->
 %output_spatial_index(Req, Index, Group, Db,
 %                     QueryArgs#spatial_query_args{count=true}) ->
 output_spatial_index(Req, Index, Group, Db, QueryArgs) when
-      QueryArgs#spatial_query_args.count == true ->
-    {ok, Count} = vtree:count_lookup(Group#spatial_group.fd,
-                                     Index#spatial.treepos,
-                                     QueryArgs#spatial_query_args.bbox),
-    send_json(Req, Count);
+        QueryArgs#spatial_query_args.count == true ->
+    Count = vtree:count_lookup(Group#spatial_group.fd,
+                               Index#spatial.treepos,
+                               QueryArgs#spatial_query_args.bbox),
+    send_json(Req, {[{"count",Count}]});
 
 % counterpart in couch_httpd_view is output_map_view/6
 output_spatial_index(Req, Index, Group, Db, QueryArgs) ->
