@@ -132,6 +132,7 @@ nobase_dist_localdata_DATA = \
     www/script/test/invalid_docids.js \
     www/script/test/jsonp.js \
     www/script/test/large_docs.js \
+    www/script/test/list_spatial.js \
     www/script/test/list_views.js \
     www/script/test/lorem.txt \
     www/script/test/lorem_b64.txt \
@@ -150,6 +151,7 @@ nobase_dist_localdata_DATA = \
     www/script/test/rev_stemming.js \
     www/script/test/security_validation.js \
     www/script/test/show_documents.js \
+    www/script/test/spatial.js \
     www/script/test/stats.js \
     www/script/test/update_documents.js \
     www/script/test/utf8.js \
