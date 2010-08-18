@@ -76,6 +76,7 @@ loadTest("rev_stemming.js");
 loadTest("rewrite.js");
 loadTest("security_validation.js");
 loadTest("show_documents.js");
+loadTest("spatial.js");
 loadTest("stats.js");
 loadTest("update_documents.js");
 loadTest("users_db.js");
