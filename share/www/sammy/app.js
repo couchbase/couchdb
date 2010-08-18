@@ -89,10 +89,11 @@ app.showDatabase = function (db) {
     var disk_size = info.disk_size;
     $('div#disk_size').text(formatSize(info.disk_size))
     
-    request({url:'/'+db+'/_all_docs?startkey="_design/"&endkey="design0"'}, function (err, docs) {
+    request({url:'/'+db+'/_all_docs?startkey="_design/"&endkey="_design0"'}, function (err, docs) {
       var sizes = [];
       for (var i=0;i<docs.rows.length;i+=1) {
-        request({url:'/'+db+'/'+docs.rows[i].id+'/_info'}, function (err, info) {
+        request({url:'/'+db+'/'+docs.rows[i].id+'/_info?stale=ok'}, function (err, info) {
+          if (err) throw err
           sizes.push(info.view_index.disk_size);
           if (sizes.length === docs.rows.length) {
             var s = sum(sizes)
@@ -100,6 +101,10 @@ app.showDatabase = function (db) {
             $('div#full_size').text(formatSize(s + disk_size));
           }
         })
+      }
+      if (docs.rows.length === 0) {
+        $('div#views_size').text(formatSize(disk_size));
+        $('div#full_size').text(formatSize(disk_size));
       }
   })
   
