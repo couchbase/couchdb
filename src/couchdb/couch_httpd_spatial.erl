@@ -66,7 +66,7 @@ output_spatial_index(Req, Index, Group, Db, QueryArgs) ->
                     Req, QueryArgs, CurrentEtag, Db,
                     Group#spatial_group.current_seq, HelperFuns),
         FoldAccInit = {undefined, ""},
-        {ok, {Resp, _Acc}} = couch_spatial:fold(
+        {ok, Resp} = couch_spatial:fold(
                        Group, Index, FoldFun, FoldAccInit,
                        QueryArgs#spatial_query_args.bbox),
         finish_spatial_fold(Req, Resp)
@@ -96,8 +96,9 @@ make_spatial_fold_funs(Req, QueryArgs, Etag, Db, UpdateSeq, HelperFuns) ->
 % counterpart in couch_httpd_view is finish_view_fold/5
 finish_spatial_fold(Req, Resp) ->
     case Resp of
+    % no response was sent yet
     undefined ->
-        send_json(Req, 200, {[]});
+        send_json(Req, 200, {[{"rows", []}]});
     Resp ->
         % end the index
         send_chunk(Resp, "\r\n]}"),

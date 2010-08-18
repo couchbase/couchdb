@@ -162,13 +162,17 @@ spatial_docs(Proc, Docs) ->
             % [{Key1, Value1}, {Key2, Value2}]
             lists:map(
                 fun(FunRs) ->
-                    % do some post-processing of the result documents
-                    FunRs2 = process_result(FunRs),
-                    %JsonDoc = couch_query_servers:json_doc(Doc),
-                    ?LOG_DEBUG("spatial_docs:~n~p~n~p", [FunRs, FunRs2]),
-                    %[list_to_tuple(FunResult) || FunResult <- [FunRs]]
-                    %[list_to_tuple(FunResult) || FunResult <- [FunRs2]]
-                    [FunRs2]
+                    case FunRs of
+                    [] -> [];
+                    FunRs ->
+                        % do some post-processing of the result documents
+                        FunRs2 = process_result(FunRs),
+                        %JsonDoc = couch_query_servers:json_doc(Doc),
+                        ?LOG_DEBUG("spatial_docs:~n~p~n~p", [FunRs, FunRs2]),
+                        %[list_to_tuple(FunResult) || FunResult <- [FunRs]]
+                        %[list_to_tuple(FunResult) || FunResult <- [FunRs2]]
+                        [FunRs2]
+                    end
                 end,
             FunsResults)
         end,

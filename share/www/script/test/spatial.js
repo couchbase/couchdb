@@ -29,23 +29,18 @@ couchTests.spatial = function(debug) {
         }, doc.string);
       }),
       dontEmitAll : stringFun(function(doc) {
-        if (doc.id>5) {
+        if (doc._id>5) {
           emit({
             type: "Point",
             coordinates: [doc.loc[0], doc.loc[1]]
           }, doc.string);
         }
       }),
+      emitNothing : stringFun(function(doc) {}),
       geoJsonGeoms : stringFun(function(doc) {
         if (doc._id.substr(0,3)=="geo") {
           emit(doc.geom, doc.string);
         }
-        /*else {
-          emit({
-            type: "Point",
-            coordinates: [-99999, -99999]
-          }, null);
-        }*/
       })
     }
   };
@@ -90,7 +85,7 @@ couchTests.spatial = function(debug) {
 
   bbox = [0, 4, 180, 90];
   xhr = CouchDB.request("GET", url_pre + "basicIndex?bbox=" + bbox.join(","));
-  TEquals("{\"update_seq\":11,\"rows\":[]}\n", xhr.responseText,
+  TEquals("{\"rows\":[]}\n", xhr.responseText,
           "should return no geometries");
 
   bbox = [-18, 17, -14, 21];
@@ -162,8 +157,11 @@ couchTests.spatial = function(debug) {
   // spatial function that doesn't always emit
   bbox = [-180, -90, 180, 90];
   xhr = CouchDB.request("GET", url_pre + "dontEmitAll?bbox=" + bbox.join(","));
-  TEquals('56789', extract_ids(xhr.responseText),
+  TEquals('6789', extract_ids(xhr.responseText),
           "should return geometries with id>5");
+  
+  xhr = CouchDB.request("GET", url_pre + "emitNothing?bbox=" + bbox.join(","));
+  TEquals('{\"rows\":[]}\n', xhr.responseText, "nothing emitted at all");
 
   
   // GeoJSON geometry tests
