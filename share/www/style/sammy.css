@@ -401,8 +401,13 @@ div#dbinfo {margin-bottom:8px;}
 .dbquery-select {float:right;}
 #pagination {float:left;}
 #pages-input {width:18px;}
-div.info-title { float:left; color: #666; margin-right:7px;}
-div.info-value { float:left; margin-right:20px;}
+span.to-views { color: #FF0000; font-weight: bold;
+  line-height: 16px; padding: 5px;
+}
+span.query-option { float:right; margin-left:8px;}
+input.query-option { float:right; margin-left:5px; width:70px;}
+div.info-title { float:left; color: #666; margin-right:8px; }
+div.info-value { float:left; margin-right:30px; }
 
 /* Documents table */
 

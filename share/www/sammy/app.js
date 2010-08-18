@@ -1,13 +1,4 @@
 
-// -- new style templates --
-// this.get('#/', function() {
-//   this.render('index.mustache')
-//       .replace('#main')
-//       .render('items.json')
-//       .renderEach('item.mustache')
-//       .appendTo('#main ul');
-// });
-
 var app = {};
 window.app = app;
 
@@ -29,6 +20,16 @@ var formatSize = function (size) {
     size /= 1024
   }
   return size.toFixed(1) + ' ' + units[i - 1];
+}
+var parseQuery = function (query) {
+  if (query[0] === '?') query = query.slice(1);
+  var s = query.split('&');
+  var r = {}
+  for (var i=0;i<s.length;i+=1) {
+    var x = s[i];
+    r[x.slice(0, x.indexOf('='))] = unescape(x.slice(x.indexOf('=')+1));
+  }
+  return r;
 }
 
 var request = function (options, callback) {
@@ -60,8 +61,6 @@ app.index = function () {
     });
   }
   
-  
-  
   request({url: '/_all_dbs'}, function (err, dbs) {
     if (err) $('tbody.content').append('<tr><td>error</td><td>error</td><td>error</td></tr>');
     else {
@@ -82,38 +81,100 @@ app.index = function () {
   })
 
 }
-app.showDatabase = function (db) {
-  $('h1#topbar').html('<a href="#/">Overview</a><strong>'+db+'</strong>');
-  request({url: '/'+db}, function (err, info) {
-    for (i in info) {$('div#'+i).text(info[i])}
-    var disk_size = info.disk_size;
-    $('div#disk_size').text(formatSize(info.disk_size))
-    
-    request({url:'/'+db+'/_all_docs?startkey="_design/"&endkey="_design0"'}, function (err, docs) {
-      var sizes = [];
-      for (var i=0;i<docs.rows.length;i+=1) {
-        request({url:'/'+db+'/'+docs.rows[i].id+'/_info?stale=ok'}, function (err, info) {
-          if (err) throw err
-          sizes.push(info.view_index.disk_size);
-          if (sizes.length === docs.rows.length) {
-            var s = sum(sizes)
-            $('div#views_size').text(formatSize(s));
-            $('div#full_size').text(formatSize(s + disk_size));
-          }
-        })
-      }
-      if (docs.rows.length === 0) {
-        $('div#views_size').text(formatSize(disk_size));
-        $('div#full_size').text(formatSize(disk_size));
-      }
-  })
+app.showDatabase = function () {
+  var db = this.params['db']
+    , query
+    ;
   
-    
-  })
+  if (window.location.hash.indexOf('?') !== -1) {
+    query = window.location.hash.slice(window.location.hash.indexOf('?'))
+  }
+  
+  var init = function () {
+    $('h1#topbar').html('<a href="#/">Overview</a><strong>'+db+'</strong>');
+
+    var addquery = function () {
+      $('select.dbquery-select').before(
+        '<div class="alldoc-query">' + 
+          '<span class="query-option">end<input class="query-option" id="end" type="text"></input></span>' +
+          '<span class="query-option">start<input class="query-option" id="start" type="text"></input></span>' +
+        '</div>'
+      );
+      $('input.query-option').change(function () {
+        var startkey = $('input#start').val()
+          , endkey = $('input#end').val()
+          ;
+        if (startkey[0] !== '"' && startkey.length !== 0) startkey = '"'+startkey+'"'
+        if (endkey[0] !== '"' && endkey.length !== 0) endkey = '"'+endkey+'"'
+        
+         h = '#/'+db+'/_all_docs?';
+         if (startkey.length > 0) h += ('startkey='+escape(startkey) + '&');
+         if (endkey.length > 0) h += ( 'endkey='+escape(endkey) + '&');
+         window.location.hash = h;
+      });
+    }
+
+    request({url: '/'+db}, function (err, info) {
+
+      for (i in info) {$('div#'+i).text(info[i])}
+
+      var disk_size = info.disk_size;
+      $('div#disk_size').text(formatSize(info.disk_size))
+
+      request({url:'/'+db+'/_all_docs?startkey="_design/"&endkey="_design0"'}, function (err, docs) {
+        var sizes = [];
+        for (var i=0;i<docs.rows.length;i+=1) {
+          request({url:'/'+db+'/'+docs.rows[i].id+'/_info?stale=ok'}, function (err, info) {
+            if (err) throw err
+            sizes.push(info.view_index.disk_size);
+            if (sizes.length === docs.rows.length) {
+              var s = sum(sizes)
+              $('div#views_size').text(formatSize(s));
+              $('div#full_size').text(formatSize(s + disk_size));
+            }
+          })
+        }
+        if (docs.rows.length === 0) {
+          $('div#views_size').text(formatSize(disk_size));
+          $('div#full_size').text(formatSize(disk_size));
+        }
+      })
+    })
+
+    $('select.dbquery-select').change(function (e) {
+      if (e.target.value === 'all') {
+        $('div.alldoc-query').remove();
+        if (query) {window.location.hash = '#/'+db}
+      } else if (e.target.value === 'ddocs') {
+        $('div.alldoc-query').remove();
+        addquery();
+        $('input#start').val('_design/');
+        $('input#end').val('_design0').change();
+      } else if (e.target.value === 'query') {
+        $('div.alldoc-query').remove();
+        addquery();
+      }
+    })
+    if (query) {
+      var q = parseQuery(query);
+      if (q.startkey || q.endkey) {
+        $('option[value=all]').attr('selected', false);
+        $('option[value=query]').attr('selected', true).change();
+        $('input#start').val(q.startkey ? q.startkey : '');
+        $('input#end').val(q.endkey ? q.endkey : '');
+      }
+    }
+  } 
+  
   var rowCount = 0;
   var moreRows = function (start, limit) {
-    request({url: '/'+db+'/_all_docs?limit='+limit+'&skip='+start}, function (err, resp) {
-      if (err) return;
+    if (query) {
+      query += '&limit='+limit+'&skip='+start
+    } else {
+      query = '?limit='+limit+'&skip='+start
+    }
+    request({url: '/'+db+'/_all_docs'+query}, function (err, resp) {
+      if (err) throw err;
       for (i in resp.rows) {
          var r = resp.rows[i];
          var row = $('<tr><td><a href="#/'+db+'/'+r.key+'">'+r.key+'</a></td><td>' +
@@ -127,14 +188,25 @@ app.showDatabase = function (db) {
      if (resp.total_rows > (resp.rows.length + start) && !$('span.more').length ) {
        $('td.more').append('<div id="pagination"><span class="more">Load </span><input type="text" id="pages-input" value='+limit+'></input><span class="more"> More Items</span></div>');
      } else if ( resp.total_rows <= (resp.rows.length + start) ) {
-       console.log([resp.total_rows, resp.rows.length + start])
        $('div#pagination').remove()
      }
      $('span.more').unbind('click');
      $('span.more').click(function ( ) { moreRows(start + limit, parseInt($('#pages-input').val())) });
    })
   }
-  moreRows(0, 20);
+  
+  // Decide whether or not to load the template content
+  if ( $('table#documents').length === 0) {    
+    this.render('templates/database.mustache', {db:db})
+      .replace('#content')
+      .then(function () {init(); moreRows(0,20);})
+      
+  } else {
+    // If the template content is already there, remove the current content
+    $('tr.even').remove();
+    $('tr.odd').remove();
+    moreRows(0, 20);
+  }
 }
 
 var a = $.sammy(function () {
@@ -142,18 +214,11 @@ var a = $.sammy(function () {
   var indexRoute = function () {
     this.render('templates/index.mustache').replace('#content').then(app.index);
   }
-  var databaseRoute = function () {
-    var db = this.params['db'];
-    this.render('templates/database.mustache')
-        .replace('#content')
-        .then( function () {app.showDatabase(db)} )
-        ;
-
-  }
   
   this.get('', indexRoute);
   this.get("#/", indexRoute);
-  this.get('#/:db', databaseRoute);
+  this.get('#/:db', app.showDatabase);
+  this.get('#/:db/_all_docs', app.showDatabase);
 })
 
 $(function () {a.run()});
