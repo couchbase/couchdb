@@ -324,6 +324,9 @@ body.loading #dialog h2 {
 #switch { color: #666; float: right; font-size: 90%; font-weight: bold;
   line-height: 16px; padding: 5px;
 }
+#changes { color: #666; float: right; font-size: 90%; font-weight: bold;
+  line-height: 16px; ;
+}
 #switch select { font-size: 90%; }
 
 /* Stale views checkbox */
