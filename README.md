@@ -1,7 +1,7 @@
 Welcome to the world of GeoCouch
 ================================
 
-The original CouchDB README was renamed to README.orig
+See README for the original CouchDB information.
 
 Prerequisites
 -------------
