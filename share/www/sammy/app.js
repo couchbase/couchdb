@@ -209,6 +209,52 @@ app.showDatabase = function () {
   }
 }
 
+app.showDocument = function () {
+  var db = this.params['db']
+    , docid = this.params['docid']
+    ;
+  this.render('templates/document.mustache', {db:db,docid:docid}).replace('#content').then(
+    $.getScript('script/base64.js', function() {
+    $.getScript('script/jquery.resizer.js?0.11.0', function() {
+    $.getScript('script/jquery.editinline.js?0.11.0', function() {
+    $.getScript('script/jquery.form.js?2.36', function() {
+      var page = new $.futon.CouchDocumentPage(db, docid);
+
+      $.futon.navigation.ready(function() {
+        this.addDatabase( db );
+        // this.updateSelection(
+        //   location.pathname.replace(/document\.html/, "database.html"),
+        //   "?" + page.db.name
+        // );
+      });
+
+      $(function() {
+        $("h1 a.dbname").text(page.dbName)
+          .attr("href", "database.html?" + encodeURIComponent(docid));
+        $("h1 strong").text(page.docId);
+        $("h1 a.raw").attr("href", "/" + encodeURIComponent(docid) +
+          "/" + encodeURIComponent(docid));
+        page.updateFieldListing();
+
+        $("#tabs li.tabular a").click(page.activateTabularView);
+        $("#tabs li.source a").click(page.activateSourceView);
+
+        $("#toolbar button.save").click(page.saveDocument);
+        $("#toolbar button.add").click(page.addField);
+        $("#toolbar button.load").click(page.uploadAttachment);
+        if (page.isNew) {
+          $("#toolbar button.delete").hide();
+        } else {
+          $("#toolbar button.delete").click(page.deleteDocument);
+        }
+      });
+    });
+    });
+    });
+    })
+  )
+}
+
 var a = $.sammy(function () {
   
   var indexRoute = function () {
@@ -219,6 +265,7 @@ var a = $.sammy(function () {
   this.get("#/", indexRoute);
   this.get('#/:db', app.showDatabase);
   this.get('#/:db/_all_docs', app.showDatabase);
+  this.get('#/:db/:docid', app.showDocument);
 })
 
-$(function () {a.run()});
+$(function () {a.use('Mustache'); a.run(); });

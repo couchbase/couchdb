@@ -788,19 +788,25 @@
     },
 
     // Page class for browse/document.html
-    CouchDocumentPage: function() {
-      var urlParts = location.search.substr(1).split("/");
-      var dbName = decodeURIComponent(urlParts.shift());
-      if (urlParts.length) {
-        var idParts = urlParts.join("/").split("@", 2);
-        var docId = decodeURIComponent(idParts[0]);
-        var docRev = (idParts.length > 1) ? idParts[1] : null;
+    CouchDocumentPage: function(dbName, docId) {
+      // var urlParts = location.search.substr(1).split("/");
+      // if (urlParts.length) {
+      //   var idParts = urlParts.join("/").split("@", 2);
+      //   var docId = decodeURIComponent(idParts[0]);
+      //   var docRev = (idParts.length > 1) ? idParts[1] : null;
+      //   this.isNew = false;
+      // } else {
+      //   var docId = $.couch.newUUID();
+      //   var docRev = null;
+      //   this.isNew = true;
+      // }
+      
+      if (docId) {
         this.isNew = false;
       } else {
-        var docId = $.couch.newUUID();
-        var docRev = null;
         this.isNew = true;
       }
+      docRev = null;
       var db = $.couch.db(dbName);
 
       $.futon.storage.declare("tab", {defaultValue: "tabular", scope: "cookie"});
@@ -947,6 +953,7 @@
         if (!page.isNew) {
           db.openDoc(docId, {revs_info: true,
             success: function(doc) {
+              console.log(doc)
               var revs = doc._revs_info || [];
               delete doc._revs_info;
               if (docRev != null) {

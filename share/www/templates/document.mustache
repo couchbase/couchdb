@@ -1,0 +1,43 @@
+<script>
+  
+</script>
+
+<div id="content">
+  <ul id="toolbar">
+    <li><button class="save">Save Document</button></li>
+    <li><button class="add">Add Field</button></li>
+    <li><button class="load">Upload Attachment…</button></li>
+    <li><button class="delete">Delete Document…</button></li>
+  </ul>
+
+  <ul id="tabs">
+    <li class="active tabular"><a href="#tabular">Fields</a></li>
+    <li class="source"><a href="#source">Source</a></li>
+  </ul>
+  <table id="fields" class="listing" cellspacing="0">
+    <col class="field"><col class="value">
+    <caption>Fields</caption>
+    <thead>
+      <tr>
+        <th>Field</th>
+        <th>Value</th>
+      </tr>
+    </thead>
+    <tbody class="content">
+    </tbody>
+    <tbody class="source" style="display: none">
+      <tr><td colspan="2"></td></tr>
+    </tbody>
+    <tbody class="footer">
+      <tr>
+        <td colspan="2">
+          <div id="paging">
+            <a class="prev">← Previous Version</a> | <a class="next">Next Version →</a>
+          </div>
+          <span></span>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
