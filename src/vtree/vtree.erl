@@ -77,8 +77,8 @@ lookup(Fd, Pos, Bbox) ->
          Acc2 = [{Bbox2, DocId, Value}|Acc],
          {ok, Acc2}
     end, []}).
-lookup(_Fd, nil, _Bbox, _FoldFunAndAcc) ->
-    {ok, []};
+lookup(_Fd, nil, _Bbox, {FoldFun, InitAcc}) ->
+    {ok, InitAcc};
 lookup(Fd, Pos, Bbox, {FoldFun, InitAcc}) when not is_list(Bbox) ->
     % default bounds are from this world
     lookup(Fd, Pos, Bbox, {FoldFun, InitAcc}, {-180, -90, 180, 90});

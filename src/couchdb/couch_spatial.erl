@@ -175,11 +175,6 @@ code_change(_OldVsn, State, _Extra) ->
 
 % counterpart in couch_view is fold/4
 fold(Group, Index, FoldFun, InitAcc, Bbox) ->
-    % RespAcc consists of a tuple, the response and the actual accumulator.
-    % But the response might not be set (if the index is empty)
-    {_State, RespAcc} = vtree:lookup(Group#spatial_group.fd,
+    {_State, Acc} = vtree:lookup(Group#spatial_group.fd,
                             Index#spatial.treepos, Bbox, {FoldFun, InitAcc}),
-    case RespAcc of
-        [] -> {ok, undefined};
-        {Resp, _Acc} -> {ok, Resp}
-    end.
+    {ok, Acc}.
