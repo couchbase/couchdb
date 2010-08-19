@@ -119,7 +119,7 @@ couchTests.spatial = function(debug) {
   bbox = [-180, -90, 180, 90];
   xhr = CouchDB.request("GET", url_pre + "basicIndex?bbox=" + bbox.join(",") +
                         "&count=true");
-  TEquals('{"count": 10}', xhr.responseText,
+  TEquals('{"count":10}\n', xhr.responseText,
           "should return the count of all geometries");
   
 
