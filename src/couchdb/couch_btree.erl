@@ -13,7 +13,7 @@
 -module(couch_btree).
 
 -export([open/2, open/3, query_modify/4, add/2, add_remove/3]).
--export([fold/4, full_reduce/1, final_reduce/2,foldl/3,foldl/4]).
+-export([fold/4, full_reduce/1, final_reduce/2, foldl/3, foldl/4]).
 -export([fold_reduce/4, lookup/2, get_state/1, set_options/2]).
 
 -define(CHUNK_THRESHOLD, 16#4ff).
@@ -70,10 +70,10 @@ final_reduce(Reduce, {KVs, Reductions}) ->
     final_reduce(Reduce, {[], [Red | Reductions]}).
 
 fold_reduce(#btree{root=Root}=Bt, Fun, Acc, Options) ->
-    Dir = proplists:get_value(dir, Options, fwd),
-    StartKey = proplists:get_value(start_key, Options),
-    EndKey = proplists:get_value(end_key, Options),
-    KeyGroupFun = proplists:get_value(key_group_fun, Options, fun(_,_) -> true end),
+    Dir = couch_util:get_value(dir, Options, fwd),
+    StartKey = couch_util:get_value(start_key, Options),
+    EndKey = couch_util:get_value(end_key, Options),
+    KeyGroupFun = couch_util:get_value(key_group_fun, Options, fun(_,_) -> true end),
     {StartKey2, EndKey2} =
     case Dir of
         rev -> {EndKey, StartKey};
@@ -107,9 +107,9 @@ convert_fun_arity(Fun) when is_function(Fun, 3) ->
     Fun.    % Already arity 3
 
 make_key_in_end_range_function(#btree{less=Less}, fwd, Options) ->
-    case proplists:get_value(end_key_gt, Options) of
+    case couch_util:get_value(end_key_gt, Options) of
     undefined ->
-        case proplists:get_value(end_key, Options) of
+        case couch_util:get_value(end_key, Options) of
         undefined ->
             fun(_Key) -> true end;
         LastKey ->
@@ -119,9 +119,9 @@ make_key_in_end_range_function(#btree{less=Less}, fwd, Options) ->
         fun(Key) -> Less(Key, EndKey) end
     end;
 make_key_in_end_range_function(#btree{less=Less}, rev, Options) ->
-    case proplists:get_value(end_key_gt, Options) of
+    case couch_util:get_value(end_key_gt, Options) of
     undefined ->
-        case proplists:get_value(end_key, Options) of
+        case couch_util:get_value(end_key, Options) of
         undefined ->
             fun(_Key) -> true end;
         LastKey ->
@@ -142,15 +142,15 @@ foldl(Bt, Fun, Acc, Options) ->
 fold(#btree{root=nil}, _Fun, Acc, _Options) ->
     {ok, {[], []}, Acc};
 fold(#btree{root=Root}=Bt, Fun, Acc, Options) ->
-    Dir = proplists:get_value(dir, Options, fwd),
+    Dir = couch_util:get_value(dir, Options, fwd),
     InRange = make_key_in_end_range_function(Bt, Dir, Options),
     Result =
-    case proplists:get_value(start_key, Options) of
+    case couch_util:get_value(start_key, Options) of
     undefined ->
-        stream_node(Bt, [], Bt#btree.root, InRange, Dir, 
+        stream_node(Bt, [], Bt#btree.root, InRange, Dir,
                 convert_fun_arity(Fun), Acc);
     StartKey ->
-        stream_node(Bt, [], Bt#btree.root, StartKey, InRange, Dir, 
+        stream_node(Bt, [], Bt#btree.root, StartKey, InRange, Dir,
                 convert_fun_arity(Fun), Acc)
     end,
     case Result of
@@ -203,8 +203,7 @@ lookup(#btree{root=Root, less=Less}=Bt, Keys) ->
     % We want to return the results in the same order as the keys were input
     % but we may have changed the order when we sorted. So we need to put the
     % order back into the results.
-    KeyDict = dict:from_list(SortedResults),
-    [dict:fetch(Key, KeyDict) || Key <- Keys].
+    couch_util:reorder_results(Keys, SortedResults).
 
 lookup(_Bt, nil, Keys) ->
     {ok, [{Key, not_found} || Key <- Keys]};
@@ -271,29 +270,26 @@ complete_root(Bt, KPs) ->
 % written. Plus with the "case byte_size(term_to_binary(InList)) of" code
 % it's probably really inefficient.
 
-% dialyzer says this pattern is never matched
-% chunkify(_Bt, []) ->
-%     [];
-chunkify(Bt, InList) ->
+chunkify(InList) ->
     case byte_size(term_to_binary(InList)) of
     Size when Size > ?CHUNK_THRESHOLD ->
         NumberOfChunksLikely = ((Size div ?CHUNK_THRESHOLD) + 1),
         ChunkThreshold = Size div NumberOfChunksLikely,
-        chunkify(Bt, InList, ChunkThreshold, [], 0, []);
+        chunkify(InList, ChunkThreshold, [], 0, []);
     _Else ->
         [InList]
     end.
 
-chunkify(_Bt, [], _ChunkThreshold, [], 0, OutputChunks) ->
+chunkify([], _ChunkThreshold, [], 0, OutputChunks) ->
     lists:reverse(OutputChunks);
-chunkify(_Bt, [], _ChunkThreshold, OutList, _OutListSize, OutputChunks) ->
+chunkify([], _ChunkThreshold, OutList, _OutListSize, OutputChunks) ->
     lists:reverse([lists:reverse(OutList) | OutputChunks]);
-chunkify(Bt, [InElement | RestInList], ChunkThreshold, OutList, OutListSize, OutputChunks) ->
+chunkify([InElement | RestInList], ChunkThreshold, OutList, OutListSize, OutputChunks) ->
     case byte_size(term_to_binary(InElement)) of
     Size when (Size + OutListSize) > ChunkThreshold andalso OutList /= [] ->
-        chunkify(Bt, RestInList, ChunkThreshold, [], 0, [lists:reverse([InElement | OutList]) | OutputChunks]);
+        chunkify(RestInList, ChunkThreshold, [], 0, [lists:reverse([InElement | OutList]) | OutputChunks]);
     Size ->
-        chunkify(Bt, RestInList, ChunkThreshold, [InElement | OutList], OutListSize + Size, OutputChunks)
+        chunkify(RestInList, ChunkThreshold, [InElement | OutList], OutListSize + Size, OutputChunks)
     end.
 
 modify_node(Bt, RootPointerInfo, Actions, QueryOutput) ->
@@ -336,7 +332,7 @@ get_node(#btree{fd = Fd}, NodePos) ->
 
 write_node(Bt, NodeType, NodeList) ->
     % split up nodes into smaller sizes
-    NodeListList = chunkify(Bt, NodeList),
+    NodeListList = chunkify(NodeList),
     % now write out each chunk and return the KeyPointer pairs for those nodes
     ResultList = [
         begin

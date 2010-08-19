@@ -156,6 +156,9 @@ couchTests.list_views = function(debug) {
         var row = getRow();
         send(row.doc.integer);
         return "tail";
+      }),
+      secObj: stringFun(function(head, req) {
+        return toJSON(req.secObj);
       })
     }
   };
@@ -178,7 +181,7 @@ couchTests.list_views = function(debug) {
             'fun(Head, {Req}) -> ' +
             '  Send(<<"[">>), ' +
             '  Fun = fun({Row}, Sep) -> ' +
-            '    Val = proplists:get_value(<<"key">>, Row, 23), ' +
+            '    Val = couch_util:get_value(<<"key">>, Row, 23), ' +
             '    Send(list_to_binary(Sep ++ integer_to_list(Val))), ' +
             '    {ok, ","} ' +
             '  end, ' +
@@ -201,6 +204,7 @@ couchTests.list_views = function(debug) {
   T(xhr.status == 200, "standard get should be 200");
   T(/head0123456789tail/.test(xhr.responseText));
 
+
   // test that etags are available
   var etag = xhr.getResponseHeader("etag");
   xhr = CouchDB.request("GET", "/test_suite_db/_design/lists/_list/basicBasic/basicView", {
@@ -220,7 +224,7 @@ couchTests.list_views = function(debug) {
   T(etag1 != etag2, "POST to map _list generates key-depdendent ETags");
 
   // test the richness of the arguments
-  xhr = CouchDB.request("GET", "/test_suite_db/_design/lists/_list/basicJSON/basicView");
+  xhr = CouchDB.request("GET", "/test_suite_db/_design/lists/_list/basicJSON/basicView?update_seq=true");
   T(xhr.status == 200, "standard get should be 200");
   var resp = JSON.parse(xhr.responseText);
   TEquals(10, resp.head.total_rows);
@@ -346,13 +350,21 @@ couchTests.list_views = function(debug) {
   // T(xhr.getResponseHeader("Content-Type") == "text/plain");
   T(xhr.responseText.match(/^head 0 1 2 tail$/) && "basic stop");
 
-  xhr = CouchDB.request("GET", "/test_suite_db/_design/lists/_list/stopIter2/basicView");
+  xhr = CouchDB.request("GET", "/test_suite_db/_design/lists/_list/stopIter2/basicView", {
+    headers : {
+      "Accept" : "text/html"
+    }
+  });
   T(xhr.responseText.match(/^head 0 1 2 tail$/) && "stop 2");
 
   // aborting iteration with reduce
   var xhr = CouchDB.request("GET", "/test_suite_db/_design/lists/_list/stopIter/withReduce?group=true");
   T(xhr.responseText.match(/^head 0 1 2 tail$/) && "reduce stop");
-  xhr = CouchDB.request("GET", "/test_suite_db/_design/lists/_list/stopIter2/withReduce?group=true");
+  xhr = CouchDB.request("GET", "/test_suite_db/_design/lists/_list/stopIter2/withReduce?group=true", {
+    headers : {
+      "Accept" : "text/html"
+    }
+  });
   T(xhr.responseText.match(/^head 0 1 2 tail$/) && "reduce stop 2");
 
   // with accept headers for HTML
@@ -397,6 +409,12 @@ couchTests.list_views = function(debug) {
   T(/FirstKey: -2/.test(xhr.responseText));
   T(/LastKey: -7/.test(xhr.responseText));
 
+    // Test if secObj is available
+  var xhr = CouchDB.request("GET", "/test_suite_db/_design/lists/_list/secObj/basicView");
+  T(xhr.status == 200, "standard get should be 200");
+  var resp = JSON.parse(xhr.responseText);
+  T(typeof(resp) == "object");
+
   var erlViewTest = function() {
     T(db.save(erlListDoc).ok);
     var url = "/test_suite_db/_design/erlang/_list/simple/views/basicView" +
@@ -410,6 +428,8 @@ couchTests.list_views = function(debug) {
         T(list[i] + 3 == i);
     }
   };
+
+  
 
   run_on_modified_server([{
     section: "native_query_servers",

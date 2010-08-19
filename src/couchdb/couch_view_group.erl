@@ -182,7 +182,7 @@ handle_cast({compact_done, #group{current_seq=NewSeq} = NewGroup},
         when NewSeq >= OldSeq ->
     #group_state{
         group = #group{name=GroupId, fd=OldFd, sig=GroupSig} = Group,
-        init_args = {RootDir, DbName, _}, 
+        init_args = {RootDir, DbName, _},
         updater_pid = UpdaterPid,
         ref_counter = RefCounter
     } = State,
@@ -190,7 +190,7 @@ handle_cast({compact_done, #group{current_seq=NewSeq} = NewGroup},
     ?LOG_INFO("View index compaction complete for ~s ~s", [DbName, GroupId]),
     FileName = index_file_name(RootDir, DbName, GroupSig),
     CompactName = index_file_name(compact, RootDir, DbName, GroupSig),
-    file:delete(FileName),
+    ok = couch_file:delete(RootDir, FileName),
     ok = file:rename(CompactName, FileName),
 
     %% if an updater is running, kill it and start a new one
@@ -460,7 +460,7 @@ set_view_sig(#group{
             views=Views,
             def_lang=Language,
             design_options=DesignOptions}=G) ->
-    G#group{sig=erlang:md5(term_to_binary({Views, Language, DesignOptions}))}.
+    G#group{sig=couch_util:md5(term_to_binary({Views, Language, DesignOptions}))}.
 
 open_db_group(DbName, GroupId) ->
     case couch_db:open_int(DbName, []) of
@@ -506,16 +506,16 @@ get_group_info(State) ->
 
 % maybe move to another module
 design_doc_to_view_group(#doc{id=Id,body={Fields}}) ->
-    Language = proplists:get_value(<<"language">>, Fields, <<"javascript">>),
-    {DesignOptions} = proplists:get_value(<<"options">>, Fields, {[]}),
-    {RawViews} = proplists:get_value(<<"views">>, Fields, {[]}),
+    Language = couch_util:get_value(<<"language">>, Fields, <<"javascript">>),
+    {DesignOptions} = couch_util:get_value(<<"options">>, Fields, {[]}),
+    {RawViews} = couch_util:get_value(<<"views">>, Fields, {[]}),
     % add the views to a dictionary object, with the map source as the key
     DictBySrc =
     lists:foldl(
         fun({Name, {MRFuns}}, DictBySrcAcc) ->
-            MapSrc = proplists:get_value(<<"map">>, MRFuns),
-            RedSrc = proplists:get_value(<<"reduce">>, MRFuns, null),
-            {ViewOptions} = proplists:get_value(<<"options">>, MRFuns, {[]}),
+            MapSrc = couch_util:get_value(<<"map">>, MRFuns),
+            RedSrc = couch_util:get_value(<<"reduce">>, MRFuns, null),
+            {ViewOptions} = couch_util:get_value(<<"options">>, MRFuns, {[]}),
             View =
             case dict:find({MapSrc, ViewOptions}, DictBySrcAcc) of
                 {ok, View0} -> View0;
@@ -549,7 +549,7 @@ reset_file(Db, Fd, DbName, #group{sig=Sig,name=Name} = Group) ->
     init_group(Db, Fd, reset_group(Group), nil).
 
 delete_index_file(RootDir, DbName, GroupSig) ->
-    file:delete(index_file_name(RootDir, DbName, GroupSig)).
+    couch_file:delete(RootDir, index_file_name(RootDir, DbName, GroupSig)).
 
 init_group(Db, Fd, #group{views=Views}=Group, nil) ->
     init_group(Db, Fd, Group,
@@ -578,7 +578,7 @@ init_group(Db, Fd, #group{def_lang=Lang,views=Views}=
                     {Count, Reduced}
                 end,
             
-            case proplists:get_value(<<"collation">>, Options, <<"default">>) of
+            case couch_util:get_value(<<"collation">>, Options, <<"default">>) of
             <<"default">> ->
                 Less = fun couch_view:less_json_ids/2;
             <<"raw">> ->

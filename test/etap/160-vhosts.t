@@ -54,7 +54,7 @@ config_files() ->
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(3),
+    etap:plan(10),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -69,6 +69,7 @@ test() ->
     ibrowse:start(),
     crypto:start(),
 
+    timer:sleep(1000),
     couch_server:delete(list_to_binary(dbname()), [admin_user_ctx()]),
     {ok, Db} = couch_db:create(list_to_binary(dbname()), [admin_user_ctx()]),
 
@@ -76,19 +77,58 @@ test() ->
         {<<"_id">>, <<"doc1">>},
         {<<"value">>, 666}
     ]}),
-    {ok, _} = couch_db:update_docs(Db, [Doc]),
+
+    Doc1 = couch_doc:from_json_obj({[
+        {<<"_id">>, <<"_design/doc1">>},
+        {<<"shows">>, {[
+            {<<"test">>, <<"function(doc, req) {
+    return { json: {
+        requested_path: '/' + req.requested_path.join('/'),
+        path: '/' + req.path.join('/')
+    }};
+}">>}
+        ]}},
+        {<<"rewrites">>, [
+            {[
+                {<<"from">>, <<"/">>},
+                {<<"to">>, <<"_show/test">>}
+            ]}
+        ]}
+    ]}),
+
+    {ok, _} = couch_db:update_docs(Db, [Doc, Doc1]),
+
     couch_db:ensure_full_commit(Db),
 
     %% end boilerplate, start test
 
-    couch_config:set("vhosts", "example.com", "/etap-test-db", false),
+    ok = couch_config:set("vhosts", "example.com", "/etap-test-db", false),
+    ok = couch_config:set("vhosts", "*.example.com", 
+            "/etap-test-db/_design/doc1/_rewrite", false),
+    ok = couch_config:set("vhosts", "example1.com", 
+            "/etap-test-db/_design/doc1/_rewrite/", false),
+    ok = couch_config:set("vhosts","$appname.$dbname.example1.com",
+            "/$dbname/_design/$appname/_rewrite/", false),
+    ok = couch_config:set("vhosts", "$dbname.example1.com", "/$dbname", false),
+    ok = couch_config:set("vhosts", "*.example2.com", "/*", false),
+
+
     test_regular_request(),
     test_vhost_request(),
     test_vhost_request_with_qs(),
-
+    test_vhost_request_with_global(),
+    test_vhost_requested_path(),    
+    test_vhost_requested_path_path(),
+    test_vhost_request_wildcard(),
+    test_vhost_request_replace_var(),
+    test_vhost_request_replace_var1(), 
+    test_vhost_request_replace_wildcard(),
+    
     %% restart boilerplate
     couch_db:close(Db),
-    couch_server:delete(list_to_binary(dbname()), []),
+    timer:sleep(3000),
+    couch_server_sup:stop(),    
+
     ok.
 
 test_regular_request() ->
@@ -104,7 +144,7 @@ test_regular_request() ->
 test_vhost_request() ->
     case ibrowse:send_req(server(), [], get, [], [{host_header, "example.com"}]) of
         {ok, _, _, Body} ->
-            {[{<<"db_name">>, <<"etap-test-db">>},_,_,_,_,_,_,_,_]}
+            {[{<<"db_name">>, <<"etap-test-db">>},_,_,_,_,_,_,_,_,_]}
                 = couch_util:json_decode(Body),
             etap:is(true, true, "should return database info");
         _Else -> false
@@ -117,5 +157,77 @@ test_vhost_request_with_qs() ->
             {JsonProps} = couch_util:json_decode(Body),
             HasRevsInfo = proplists:is_defined(<<"_revs_info">>, JsonProps),
             etap:is(HasRevsInfo, true, "should return _revs_info");
+        _Else -> false
+    end.
+
+test_vhost_request_with_global() ->
+    Url2 = server() ++ "_utils/index.html",
+    case ibrowse:send_req(Url2, [], get, [], [{host_header, "example.com"}]) of
+        {ok, _, _, Body2} ->
+            "<!DOCTYPE" ++ _Foo = Body2,
+            etap:is(true, true, "should serve /_utils even inside vhosts");
+        _Else -> false
+    end.
+
+test_vhost_requested_path() ->
+    case ibrowse:send_req(server(), [], get, [], [{host_header, "example1.com"}]) of
+        {ok, _, _, Body} ->
+            {Json} = couch_util:json_decode(Body), 
+            etap:is(case proplists:get_value(<<"requested_path">>, Json) of
+                <<"/">> -> true;
+                _ -> false
+            end, true, <<"requested path in req ok">>);
+        _Else -> false
+    end.
+
+test_vhost_requested_path_path() ->
+    case ibrowse:send_req(server(), [], get, [], [{host_header, "example1.com"}]) of
+        {ok, _, _, Body} ->
+            {Json} = couch_util:json_decode(Body),
+            etap:is(case proplists:get_value(<<"path">>, Json) of
+                <<"/etap-test-db/_design/doc1/_show/test">> -> true;
+                _ -> false
+            end, true, <<"path in req ok">>);
+        _Else -> false
+    end.
+
+test_vhost_request_wildcard()->
+    case ibrowse:send_req(server(), [], get, [], [{host_header, "test.example.com"}]) of
+        {ok, _, _, Body} ->
+            {Json} = couch_util:json_decode(Body),
+            etap:is(case proplists:get_value(<<"path">>, Json) of
+                <<"/etap-test-db/_design/doc1/_show/test">> -> true;
+                _ -> false
+            end, true, <<"wildcard  ok">>);
+        _Else -> false
+    end.
+
+
+test_vhost_request_replace_var() ->
+    case ibrowse:send_req(server(), [], get, [], [{host_header,"etap-test-db.example1.com"}]) of
+        {ok, _, _, Body} ->
+            {[{<<"db_name">>, <<"etap-test-db">>},_,_,_,_,_,_,_,_,_]}
+                = couch_util:json_decode(Body),
+            etap:is(true, true, "should return database info");
+        _Else -> false
+    end.
+
+test_vhost_request_replace_var1() ->
+    case ibrowse:send_req(server(), [], get, [], [{host_header, "doc1.etap-test-db.example1.com"}]) of
+        {ok, _, _, Body} ->
+            {Json} = couch_util:json_decode(Body),
+            etap:is(case proplists:get_value(<<"path">>, Json) of
+                <<"/etap-test-db/_design/doc1/_show/test">> -> true;
+                _ -> false
+            end, true, <<"wildcard  ok">>);
+        _Else -> false
+    end.
+
+test_vhost_request_replace_wildcard() ->
+    case ibrowse:send_req(server(), [], get, [], [{host_header,"etap-test-db.example2.com"}]) of
+        {ok, _, _, Body} ->
+            {[{<<"db_name">>, <<"etap-test-db">>},_,_,_,_,_,_,_,_,_]}
+                = couch_util:json_decode(Body),
+            etap:is(true, true, "should return database info");
         _Else -> false
     end.

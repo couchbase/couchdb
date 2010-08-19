@@ -15,14 +15,18 @@
 -export([priv_dir/0, start_driver/1, normpath/1]).
 -export([should_flush/0, should_flush/1, to_existing_atom/1]).
 -export([rand32/0, implode/2, collate/2, collate/3]).
--export([abs_pathname/1,abs_pathname/2, trim/1, ascii_lower/1]).
+-export([abs_pathname/1,abs_pathname/2, trim/1]).
 -export([encodeBase64Url/1, decodeBase64Url/1]).
 -export([to_hex/1, parse_term/1, dict_find/3]).
--export([file_read_size/1, get_nested_json_value/2, json_user_ctx/1]).
+-export([get_nested_json_value/2, json_user_ctx/1]).
+-export([proplist_apply_field/2, json_apply_field/2]).
 -export([to_binary/1, to_integer/1, to_list/1, url_encode/1]).
 -export([json_encode/1, json_decode/1]).
 -export([verify/2,simple_call/2,shutdown_sync/1]).
 -export([compressible_att_type/1]).
+-export([get_value/2, get_value/3]).
+-export([md5/1, md5_init/0, md5_update/2, md5_final/1]).
+-export([reorder_results/2]).
 
 -include("couch_db.hrl").
 -include_lib("kernel/include/file.hrl").
@@ -66,9 +70,9 @@ normparts([Part | RestParts], Acc) ->
 % works like list_to_existing_atom, except can be list or binary and it
 % gives you the original value instead of an error if no existing atom.
 to_existing_atom(V) when is_list(V) ->
-    try list_to_existing_atom(V) catch _ -> V end;
+    try list_to_existing_atom(V) catch _:_ -> V end;
 to_existing_atom(V) when is_binary(V) ->
-    try list_to_existing_atom(?b2l(V)) catch _ -> V end;
+    try list_to_existing_atom(?b2l(V)) catch _:_ -> V end;
 to_existing_atom(V) when is_atom(V) ->
     V.
 
@@ -119,9 +123,19 @@ parse_term(List) ->
     {ok, Tokens, _} = erl_scan:string(List ++ "."),
     erl_parse:parse_term(Tokens).
 
+get_value(Key, List) ->
+    get_value(Key, List, undefined).
+
+get_value(Key, List, Default) ->
+    case lists:keysearch(Key, 1, List) of
+    {value, {Key,Value}} ->
+        Value;
+    false ->
+        Default
+    end.
 
 get_nested_json_value({Props}, [Key|Keys]) ->
-    case proplists:get_value(Key, Props, nil) of
+    case couch_util:get_value(Key, Props, nil) of
     nil -> throw({not_found, <<"missing json key: ", Key/binary>>});
     Value -> get_nested_json_value(Value, Keys)
     end;
@@ -129,6 +143,19 @@ get_nested_json_value(Value, []) ->
     Value;
 get_nested_json_value(_NotJSONObj, _) ->
     throw({not_found, json_mismatch}).
+
+proplist_apply_field(H, L) ->
+    {R} = json_apply_field(H, {L}),
+    R.
+
+json_apply_field(H, {L}) ->
+    json_apply_field(H, L, []).
+json_apply_field({Key, NewValue}, [{Key, _OldVal} | Headers], Acc) ->
+    json_apply_field({Key, NewValue}, Headers, Acc);
+json_apply_field({Key, NewValue}, [{OtherKey, OtherVal} | Headers], Acc) ->
+    json_apply_field({Key, NewValue}, Headers, [{OtherKey, OtherVal} | Acc]);
+json_apply_field({Key, NewValue}, [], Acc) ->
+    {[{Key, NewValue}|Acc]}.
 
 json_user_ctx(#db{name=DbName, user_ctx=Ctx}) ->
     {[{<<"db">>, DbName},
@@ -175,18 +202,6 @@ separate_cmd_args(" " ++ Rest, CmdAcc) ->
     {lists:reverse(CmdAcc), " " ++ Rest};
 separate_cmd_args([Char|Rest], CmdAcc) ->
     separate_cmd_args(Rest, [Char | CmdAcc]).
-
-% lowercases string bytes that are the ascii characters A-Z.
-% All other characters/bytes are ignored.
-ascii_lower(String) ->
-    ascii_lower(String, []).
-
-ascii_lower([], Acc) ->
-    lists:reverse(Acc);
-ascii_lower([Char | RestString], Acc) when Char >= $A, Char =< $B ->
-    ascii_lower(RestString, [Char + ($a-$A) | Acc]);
-ascii_lower([Char | RestString], Acc) ->
-    ascii_lower(RestString, [Char | Acc]).
 
 % Is a character whitespace?
 is_whitespace($\s) -> true;
@@ -287,14 +302,6 @@ dict_find(Key, Dict, DefaultValue) ->
         DefaultValue
     end.
 
-
-file_read_size(FileName) ->
-    case file:read_file_info(FileName) of
-        {ok, FileInfo} ->
-            FileInfo#file_info.size;
-        Error -> Error
-    end.
-
 to_binary(V) when is_binary(V) ->
     V;
 to_binary(V) when is_list(V) ->
@@ -385,7 +392,7 @@ compressible_att_type(MimeType) when is_binary(MimeType) ->
 compressible_att_type(MimeType) ->
     TypeExpList = re:split(
         couch_config:get("attachments", "compressible_types", ""),
-        "\\s+",
+        ", ?",
         [{return, list}]
     ),
     lists:any(
@@ -401,3 +408,27 @@ compressible_att_type(MimeType) ->
         end,
         [T || T <- TypeExpList, T /= []]
     ).
+
+-spec md5(Data::(iolist() | binary())) -> Digest::binary().
+md5(Data) ->
+    try crypto:md5(Data) catch error:_ -> erlang:md5(Data) end.
+
+-spec md5_init() -> Context::binary().
+md5_init() ->
+    try crypto:md5_init() catch error:_ -> erlang:md5_init() end.
+
+-spec md5_update(Context::binary(), Data::(iolist() | binary())) ->
+    NewContext::binary().
+md5_update(Ctx, D) ->
+    try crypto:md5_update(Ctx,D) catch error:_ -> erlang:md5_update(Ctx,D) end.
+
+-spec md5_final(Context::binary()) -> Digest::binary().
+md5_final(Ctx) ->
+    try crypto:md5_final(Ctx) catch error:_ -> erlang:md5_final(Ctx) end.
+
+% linear search is faster for small lists, length() is 0.5 ms for 100k list
+reorder_results(Keys, SortedResults) when length(Keys) < 100 ->
+    [couch_util:get_value(Key, SortedResults) || Key <- Keys];
+reorder_results(Keys, SortedResults) ->
+    KeyDict = dict:from_list(SortedResults),
+    [dict:fetch(Key, KeyDict) || Key <- Keys].

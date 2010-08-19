@@ -43,15 +43,18 @@ nobase_dist_localdata_DATA = \
     www/couch_tests.html \
     www/custom_test.html \
     www/database.html \
+    www/session.html \
     www/dialog/_admin_party.html \
     www/dialog/_compact_cleanup.html \
     www/dialog/_create_admin.html \
     www/dialog/_login.html \
     www/dialog/_signup.html \
     www/dialog/_create_database.html \
+    www/dialog/_create_config.html \
     www/dialog/_delete_database.html \
     www/dialog/_delete_document.html \
     www/dialog/_database_security.html \
+    www/dialog/_share_test_reports.html \
     www/dialog/_save_view_as.html \
     www/dialog/_upload_attachment.html \
     www/document.html \
@@ -102,14 +105,21 @@ nobase_dist_localdata_DATA = \
     www/script/jquery.resizer.js \
     www/script/jquery.suggest.js \
     www/script/json2.js \
+    www/script/jspec/jspec.css \
+    www/script/jspec/jspec.jquery.js \
+    www/script/jspec/jspec.js \
+    www/script/jspec/jspec.xhr.js \
     www/script/oauth.js \
     www/script/sha1.js \
+    www/script/base64.js \
     www/script/test/all_docs.js \
     www/script/test/attachments.js \
     www/script/test/attachments_multipart.js \
     www/script/test/attachment_names.js \
     www/script/test/attachment_paths.js \
+    www/script/test/attachment_ranges.js \
     www/script/test/attachment_views.js \
+    www/script/test/auth_cache.js \
     www/script/test/basics.js \
     www/script/test/batch_save.js \
     www/script/test/bulk_docs.js \
@@ -137,6 +147,7 @@ nobase_dist_localdata_DATA = \
     www/script/test/lorem.txt \
     www/script/test/lorem_b64.txt \
     www/script/test/lots_of_docs.js \
+    www/script/test/method_override.js \
     www/script/test/multiple_rows.js \
     www/script/test/oauth.js \
     www/script/test/proxyauth.js \
@@ -148,17 +159,21 @@ nobase_dist_localdata_DATA = \
     www/script/test/reduce_false.js \
     www/script/test/reduce_false_temp.js \
     www/script/test/replication.js \
+    www/script/test/replicator_db.js \
     www/script/test/rev_stemming.js \
+    www/script/test/rewrite.js \
     www/script/test/security_validation.js \
     www/script/test/show_documents.js \
     www/script/test/spatial.js \
     www/script/test/stats.js \
     www/script/test/update_documents.js \
+    www/script/test/users_db.js \
     www/script/test/utf8.js \
     www/script/test/uuids.js \
     www/script/test/view_collation.js \
     www/script/test/view_collation_raw.js \
     www/script/test/view_conflicts.js \
+    www/script/test/view_compaction.js \
     www/script/test/view_errors.js \
     www/script/test/view_include_docs.js \
     www/script/test/view_multi_key_all_docs.js \
@@ -169,6 +184,16 @@ nobase_dist_localdata_DATA = \
     www/script/test/view_pagination.js \
     www/script/test/view_sandboxing.js \
     www/script/test/view_xml.js \
+    www/spec/couch_js_class_methods_spec.js \
+    www/spec/couch_js_instance_methods_1_spec.js \
+    www/spec/couch_js_instance_methods_2_spec.js \
+    www/spec/couch_js_instance_methods_3_spec.js \
+    www/spec/custom_helpers.js \
+    www/spec/jquery_couch_js_class_methods_spec.js \
+    www/spec/jquery_couch_js_instance_methods_1_spec.js \
+    www/spec/jquery_couch_js_instance_methods_2_spec.js \
+    www/spec/jquery_couch_js_instance_methods_3_spec.js \
+    www/spec/run.html \
     www/status.html \
     www/style/layout.css \
     www/_sidebar.html

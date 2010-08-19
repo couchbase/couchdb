@@ -16,8 +16,9 @@
 -export([handle_changes/3]).
 
 %% @type Req -> #httpd{} | {json_req, JsonObj()}
-handle_changes(#changes_args{}=Args1, Req, Db) ->
-    Args = Args1#changes_args{filter=make_filter_fun(Args1#changes_args.filter, Req, Db)},
+handle_changes(#changes_args{style=Style}=Args1, Req, Db) ->
+    Args = Args1#changes_args{filter=
+            make_filter_fun(Args1#changes_args.filter, Style, Req, Db)},
     StartSeq = case Args#changes_args.dir of
     rev ->
         couch_db:get_update_seq(Db);
@@ -37,10 +38,6 @@ handle_changes(#changes_args{}=Args1, Req, Db) ->
             ),
             start_sending_changes(Callback, Args#changes_args.feed),
             {Timeout, TimeoutFun} = get_changes_timeout(Args, Callback),
-            couch_stats_collector:track_process_count(
-                Self,
-                {httpd, clients_requesting_changes}
-            ),
             try
                 keep_sending_changes(
                     Args,
@@ -72,14 +69,18 @@ handle_changes(#changes_args{}=Args1, Req, Db) ->
     end.
 
 %% @type Req -> #httpd{} | {json_req, JsonObj()}
-make_filter_fun(FilterName, Req, Db) ->
+make_filter_fun(FilterName, Style, Req, Db) ->
     case [list_to_binary(couch_httpd:unquote(Part))
             || Part <- string:tokens(FilterName, "/")] of
     [] ->
-        fun(DocInfos) ->
-        % doing this as a batch is more efficient for external filters
-            [{[{<<"rev">>, couch_doc:rev_to_str(Rev)}]} ||
-                #doc_info{revs=[#rev_info{rev=Rev}|_]} <- DocInfos]
+        fun(#doc_info{revs=[#rev_info{rev=Rev}|_]=Revs}) ->
+            case Style of
+            main_only ->
+                [{[{<<"rev">>, couch_doc:rev_to_str(Rev)}]}];
+            all_docs ->
+                [{[{<<"rev">>, couch_doc:rev_to_str(R)}]}
+                        || #rev_info{rev=R} <- Revs]
+            end
         end;
     [DName, FName] ->
         DesignId = <<"_design/", DName/binary>>,
@@ -87,17 +88,23 @@ make_filter_fun(FilterName, Req, Db) ->
         % validate that the ddoc has the filter fun
         #doc{body={Props}} = DDoc,
         couch_util:get_nested_json_value({Props}, [<<"filters">>, FName]),
-        fun(DocInfos) ->
+        fun(DocInfo) ->
+            DocInfos =
+            case Style of
+            main_only ->
+                [DocInfo];
+            all_docs ->
+                [DocInfo#doc_info{revs=[Rev]}|| Rev <- DocInfo#doc_info.revs]
+            end,
             Docs = [Doc || {ok, Doc} <- [
-                {ok, _Doc} = couch_db:open_doc(Db, DInfo, [deleted, conflicts])
-                || DInfo <- DocInfos]],
+                    couch_db:open_doc(Db, DocInfo2, [deleted, conflicts])
+                        || DocInfo2 <- DocInfos]],
             {ok, Passes} = couch_query_servers:filter_docs(
                 Req, Db, DDoc, FName, Docs
             ),
-            % ?LOG_INFO("filtering ~p ~w",[FName, [DI#doc_info.high_seq || DI <- DocInfos]]),
-            [{[{<<"rev">>, couch_doc:rev_to_str(Rev)}]}
-                || #doc_info{revs=[#rev_info{rev=Rev}|_]} <- DocInfos,
-                Pass <- Passes, Pass == true]
+            [{[{<<"rev">>, couch_doc:rev_to_str({RevPos,RevId})}]}
+                || {Pass, #doc{revs={RevPos,[RevId|_]}}}
+                <- lists:zip(Passes, Docs), Pass == true]
         end;
     _Else ->
         throw({bad_request,
@@ -158,7 +165,8 @@ keep_sending_changes(Args, Callback, Db, StartSeq, Prepend, Timeout,
     TimeoutFun) ->
     #changes_args{
         feed = ResponseType,
-        limit = Limit
+        limit = Limit,
+        db_open_options = DbOptions
     } = Args,
     % ?LOG_INFO("send_changes start ~p",[StartSeq]),
     {ok, {_, EndSeq, Prepend2, _, _, _, NewLimit, _}} = send_changes(
@@ -172,7 +180,8 @@ keep_sending_changes(Args, Callback, Db, StartSeq, Prepend, Timeout,
         case wait_db_updated(Timeout, TimeoutFun) of
         updated ->
             % ?LOG_INFO("wait_db_updated updated ~p",[{Db#db.name, EndSeq}]),
-            case couch_db:open(Db#db.name, [{user_ctx, Db#db.user_ctx}]) of
+            DbOptions1 = [{user_ctx, Db#db.user_ctx} | DbOptions],
+            case couch_db:open(Db#db.name, DbOptions1) of
             {ok, Db2} ->
                 keep_sending_changes(
                     Args#changes_args{limit=NewLimit},
@@ -195,12 +204,12 @@ keep_sending_changes(Args, Callback, Db, StartSeq, Prepend, Timeout,
 end_sending_changes(Callback, EndSeq, ResponseType) ->
     Callback({stop, EndSeq}, ResponseType).
 
-changes_enumerator(DocInfos, {Db, _, _, FilterFun, Callback, "continuous",
+changes_enumerator(DocInfo, {Db, _, _, FilterFun, Callback, "continuous",
     Limit, IncludeDocs}) ->
 
-    [#doc_info{id=Id, high_seq=Seq, revs=[#rev_info{deleted=Del,rev=Rev}|_]}|_]
-        = DocInfos,
-    Results0 = FilterFun(DocInfos),
+    #doc_info{id=Id, high_seq=Seq,
+            revs=[#rev_info{deleted=Del,rev=Rev}|_]} = DocInfo,
+    Results0 = FilterFun(DocInfo),
     Results = [Result || Result <- Results0, Result /= null],
     Go = if Limit =< 1 -> stop; true -> ok end,
     case Results of
@@ -215,12 +224,12 @@ changes_enumerator(DocInfos, {Db, _, _, FilterFun, Callback, "continuous",
                 IncludeDocs}
         }
     end;
-changes_enumerator(DocInfos, {Db, _, Prepend, FilterFun, Callback, ResponseType,
+changes_enumerator(DocInfo, {Db, _, Prepend, FilterFun, Callback, ResponseType,
     Limit, IncludeDocs}) ->
 
-    [#doc_info{id=Id, high_seq=Seq, revs=[#rev_info{deleted=Del,rev=Rev}|_]}|_]
-        = DocInfos,
-    Results0 = FilterFun(DocInfos),
+    #doc_info{id=Id, high_seq=Seq, revs=[#rev_info{deleted=Del,rev=Rev}|_]}
+        = DocInfo,
+    Results0 = FilterFun(DocInfo),
     Results = [Result || Result <- Results0, Result /= null],
     Go = if Limit =< 1 -> stop; true -> ok end,
     case Results of
@@ -244,7 +253,7 @@ changes_row(_, Seq, Id, Del, Results, _, false) ->
     {[{<<"seq">>, Seq}, {<<"id">>, Id}, {<<"changes">>, Results}] ++
         deleted_item(Del)}.
 
-deleted_item(true) -> [{deleted, true}];
+deleted_item(true) -> [{<<"deleted">>, true}];
 deleted_item(_) -> [].
 
 % waits for a db_updated msg, if there are multiple msgs, collects them.

@@ -122,6 +122,13 @@ start_server(IniFiles) ->
     Port = mochiweb_socket_server:get(couch_httpd, port),
     io:format("Apache CouchDB has started. Time to relax.~n"),
     ?LOG_INFO("Apache CouchDB has started on http://~s:~w/", [Ip, Port]),
+    
+    case couch_config:get("couchdb", "uri_file", null) of 
+    null -> ok;
+    UriFile ->
+        Line = io_lib:format("http://~s:~w/~n", [Ip, Port]),
+        file:write_file(UriFile, Line)
+    end,
 
     {ok, Pid}.
 

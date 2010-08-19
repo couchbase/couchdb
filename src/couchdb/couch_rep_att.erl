@@ -29,11 +29,11 @@ convert_stub(#att{data=stub, name=Name} = Attachment,
     Attachment#att{data=RcvFun}.
 
 cleanup() ->
-    receive 
+    receive
     {ibrowse_async_response, _, _} ->
         %% TODO maybe log, didn't expect to have data here
         cleanup();
-    {ibrowse_async_response_end, _} -> 
+    {ibrowse_async_response_end, _} ->
         cleanup();
     {ibrowse_async_headers, _, _, _} ->
         cleanup()
@@ -54,7 +54,7 @@ attachment_receiver(Ref, Request) ->
         receive_data(Ref, ReqId, ContentEncoding)
     end
     catch
-    throw:{attachment_request_failed, timeout} ->
+    throw:{attachment_request_failed, _} ->
         case {Request#http_db.retries, Request#http_db.pause} of
         {0, _} ->
              ?LOG_INFO("request for ~p failed", [Request#http_db.resource]),

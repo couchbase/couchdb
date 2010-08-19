@@ -10,6 +10,18 @@
 // License for the specific language governing permissions and limitations under
 // the License.
 
+// $$ inspired by @wycats: http://yehudakatz.com/2009/04/20/evented-programming-with-jquery/
+function $$(node) {
+  var data = $(node).data("$$");
+  if (data) {
+    return data;
+  } else {
+    data = {};
+    $(node).data("$$", data);
+    return data;
+  }
+};
+
 (function($) {
 
   function Session() {
@@ -75,7 +87,11 @@
                   return;
                 }
                 doSignup(data.name, null, function(errors) {
-                  callback(errors);
+                  if (errors && errors.name && errors.name.indexOf && errors.name.indexOf("taken") == -1) {
+                    callback(errors);
+                  } else {
+                    callback();
+                  }
                   }, false);
                 });            
             }
@@ -126,8 +142,9 @@
       $.couch.session({
         success : function(r) {
           var userCtx = r.userCtx;
+          $$("#userCtx").userCtx = userCtx;
           if (userCtx.name) {
-            $("#userCtx .name").text(userCtx.name).attr({href : "/_utils/document.html?"+encodeURIComponent(r.info.authentication_db)+"/org.couchdb.user%3A"+encodeURIComponent(userCtx.name)});
+            $("#userCtx .name").text(userCtx.name).attr({href : $.couch.urlPrefix + "/_utils/document.html?"+encodeURIComponent(r.info.authentication_db)+"/org.couchdb.user%3A"+encodeURIComponent(userCtx.name)});
             if (userCtx.roles.indexOf("_admin") != -1) {
               $("#userCtx .loggedinadmin").show();
             } else {

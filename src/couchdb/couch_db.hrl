@@ -20,7 +20,6 @@
 -define(JSON_ENCODE(V), couch_util:json_encode(V)).
 -define(JSON_DECODE(V), couch_util:json_decode(V)).
 
--define(b2a(V), list_to_atom(binary_to_list(V))).
 -define(b2l(V), binary_to_list(V)).
 -define(l2b(V), list_to_binary(V)).
 
@@ -28,18 +27,23 @@
 
 -define(LOG_DEBUG(Format, Args),
     case couch_log:debug_on() of
-        true -> error_logger:info_report(couch_debug, {Format, Args});
+        true ->
+            gen_event:sync_notify(error_logger,
+                {self(), couch_debug, {Format, Args}});
         false -> ok
     end).
 
 -define(LOG_INFO(Format, Args),
     case couch_log:info_on() of
-        true -> error_logger:info_report(couch_info, {Format, Args});
+        true ->
+            gen_event:sync_notify(error_logger,
+                {self(), couch_info, {Format, Args}});
         false -> ok
     end).
 
 -define(LOG_ERROR(Format, Args),
-    error_logger:error_report(couch_error, {Format, Args})).
+    gen_event:sync_notify(error_logger,
+            {self(), couch_error, {Format, Args}})).
 
 
 -record(rev_info,
@@ -68,6 +72,7 @@
     {mochi_req,
     peer,
     method,
+    requested_path_parts,
     path_parts,
     db_url_handlers,
     user_ctx,
@@ -168,7 +173,8 @@
     user_ctx = #user_ctx{},
     waiting_delayed_commit = nil,
     revs_limit = 1000,
-    fsync_options = []
+    fsync_options = [],
+    is_sys_db = false
     }).
 
 
@@ -284,5 +290,7 @@
     heartbeat,
     timeout,
     filter = "",
-    include_docs = false
+    include_docs = false,
+    db_open_options = []
 }).
+

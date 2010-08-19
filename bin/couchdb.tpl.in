@@ -15,6 +15,7 @@
 BACKGROUND=false
 DEFAULT_CONFIG_DIR=%localconfdir%/default.d
 DEFAULT_CONFIG_FILE=%localconfdir%/%defaultini%
+ERL_START_OPTIONS="-sasl errlog_type error +K true +A 4"
 HEART_BEAT_TIMEOUT=11
 HEART_COMMAND="%bindir%/%couchdb_command_name% -k"
 INTERACTIVE=false
@@ -61,11 +62,19 @@ Usage: $basename [OPTION]
 
 The $basename command runs the %package_name% server.
 
+Erlang is called with:
+
+    $ERL_START_OPTIONS
+
 Erlang inherits the environment of this command.
 
-The exit status is 0 for success or 1 for failure.
+You can override these options using the environment:
 
-The \`-s' option will exit 0 for running and 1 for not running.
+    ERL_AFLAGS, ERL_FLAGS, ERL_ZFLAGS
+
+See erl(1) for more information about the environment variables.
+
+The exit status is 0 for success or 1 for failure.
 
 Options:
 
@@ -120,8 +129,10 @@ EOF
 }
 
 _add_config_dir () {
-    for file in `find "$1" -mindepth 1 -maxdepth 1 -type f -name '*.ini'`; do
-        _add_config_file $file
+    for file in "$1"/*.ini; do
+        if [ -r "$file" ]; then
+          _add_config_file "$file"
+        fi
     done
 }
 
@@ -211,7 +222,7 @@ start_couchdb () {
         touch $PID_FILE
         interactive_option="+Bd -noinput"
     fi
-    command="%ERL% $interactive_option -sasl errlog_type error +K true \
+    command="%ERL% $interactive_option $ERL_START_OPTIONS \
         -env ERL_LIBS %localerlanglibdir% -couch_ini $start_arguments -s couch"
     if test "$BACKGROUND" = "true" -a "$RECURSED" = "false"; then
         $0 $background_start_arguments -b -r $RESPAWN_TIMEOUT -p $PID_FILE \

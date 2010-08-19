@@ -103,7 +103,7 @@ monitor(#db{main_pid=MainPid}) ->
     erlang:monitor(process, MainPid).
 
 start_compact(#db{update_pid=Pid}) ->
-    gen_server:cast(Pid, start_compact).
+    gen_server:call(Pid, start_compact).
 
 delete_doc(Db, Id, Revisions) ->
     DeletedDocs = [#doc{id=Id, revs=[Rev], deleted=true} || Rev <- Revisions],
@@ -114,23 +114,52 @@ open_doc(Db, IdOrDocInfo) ->
     open_doc(Db, IdOrDocInfo, []).
 
 open_doc(Db, Id, Options) ->
-    couch_stats_collector:increment({couchdb, database_reads}),
+    increment_stat(Db, {couchdb, database_reads}),
     case open_doc_int(Db, Id, Options) of
     {ok, #doc{deleted=true}=Doc} ->
         case lists:member(deleted, Options) of
         true ->
-            {ok, Doc};
+            apply_open_options({ok, Doc},Options);
         false ->
             {not_found, deleted}
         end;
     Else ->
-        Else
+        apply_open_options(Else,Options)
+    end.
+
+apply_open_options({ok, Doc},Options) ->
+    apply_open_options2(Doc,Options);
+apply_open_options(Else,_Options) ->
+    Else.
+    
+apply_open_options2(Doc,[]) ->
+    {ok, Doc};
+apply_open_options2(#doc{atts=Atts,revs=Revs}=Doc,
+        [{atts_since, PossibleAncestors}|Rest]) ->
+    RevPos = find_ancestor_rev_pos(Revs, PossibleAncestors),
+    apply_open_options2(Doc#doc{atts=[A#att{data=
+        if AttPos>RevPos -> Data; true -> stub end}
+        || #att{revpos=AttPos,data=Data}=A <- Atts]}, Rest);
+apply_open_options2(Doc,[_|Rest]) ->
+    apply_open_options2(Doc,Rest).
+
+
+find_ancestor_rev_pos({_, []}, _AttsSinceRevs) ->
+    0;
+find_ancestor_rev_pos(_DocRevs, []) ->
+    0;
+find_ancestor_rev_pos({RevPos, [RevId|Rest]}, AttsSinceRevs) ->
+    case lists:member({RevPos, RevId}, AttsSinceRevs) of
+    true ->
+        RevPos;
+    false ->
+        find_ancestor_rev_pos({RevPos - 1, Rest}, AttsSinceRevs)
     end.
 
 open_doc_revs(Db, Id, Revs, Options) ->
-    couch_stats_collector:increment({couchdb, database_reads}),
-    [Result] = open_doc_revs_int(Db, [{Id, Revs}], Options),
-    Result.
+    increment_stat(Db, {couchdb, database_reads}),
+    [{ok, Results}] = open_doc_revs_int(Db, [{Id, Revs}], Options),
+    {ok, [apply_open_options(Result, Options) || Result <- Results]}.
 
 % Each returned result is a list of tuples:
 % {Id, MissingRevs, PossibleAncestors}
@@ -151,9 +180,9 @@ find_missing([{Id, Revs}|RestIdRevs], [{ok, FullInfo} | RestLookupInfo]) ->
         % Find the revs that are possible parents of this rev
         PossibleAncestors =
         lists:foldl(fun({LeafPos, LeafRevId}, Acc) ->
-            % this leaf is a "possible ancenstor" of the missing 
+            % this leaf is a "possible ancenstor" of the missing
             % revs if this LeafPos lessthan any of the missing revs
-            case lists:any(fun({MissingPos, _}) -> 
+            case lists:any(fun({MissingPos, _}) ->
                     LeafPos < MissingPos end, MissingRevs) of
             true ->
                 [{LeafPos, LeafRevId} | Acc];
@@ -210,7 +239,8 @@ get_db_info(Db) ->
         update_seq=SeqNum,
         name=Name,
         fulldocinfo_by_id_btree=FullDocBtree,
-        instance_start_time=StartTime} = Db,
+        instance_start_time=StartTime,
+        committed_update_seq=CommittedUpdateSeq} = Db,
     {ok, Size} = couch_file:bytes(Fd),
     {ok, {Count, DelCount}} = couch_btree:full_reduce(FullDocBtree),
     InfoList = [
@@ -222,7 +252,8 @@ get_db_info(Db) ->
         {compact_running, Compactor/=nil},
         {disk_size, Size},
         {instance_start_time, StartTime},
-        {disk_format_version, DiskVersion}
+        {disk_format_version, DiskVersion},
+        {committed_update_seq, CommittedUpdateSeq}
         ],
     {ok, InfoList}.
 
@@ -239,8 +270,8 @@ get_design_docs(#db{fulldocinfo_by_id_btree=Btree}=Db) ->
 
 check_is_admin(#db{user_ctx=#user_ctx{name=Name,roles=Roles}}=Db) ->
     {Admins} = get_admins(Db),
-    AdminRoles = [<<"_admin">> | proplists:get_value(<<"roles">>, Admins, [])],
-    AdminNames = proplists:get_value(<<"names">>, Admins,[]),
+    AdminRoles = [<<"_admin">> | couch_util:get_value(<<"roles">>, Admins, [])],
+    AdminNames = couch_util:get_value(<<"names">>, Admins,[]),
     case AdminRoles -- Roles of
     AdminRoles -> % same list, not an admin role
         case AdminNames -- [Name] of
@@ -258,10 +289,10 @@ check_is_reader(#db{user_ctx=#user_ctx{name=Name,roles=Roles}=UserCtx}=Db) ->
     ok -> ok;
     _ ->
         {Readers} = get_readers(Db),
-        ReaderRoles = proplists:get_value(<<"roles">>, Readers,[]),
+        ReaderRoles = couch_util:get_value(<<"roles">>, Readers,[]),
         WithAdminRoles = [<<"_admin">> | ReaderRoles],
-        ReaderNames = proplists:get_value(<<"names">>, Readers,[]),
-        case ReaderRoles ++ ReaderNames of 
+        ReaderNames = couch_util:get_value(<<"names">>, Readers,[]),
+        case ReaderRoles ++ ReaderNames of
         [] -> ok; % no readers == public access
         _Else ->
             case WithAdminRoles -- Roles of
@@ -280,10 +311,10 @@ check_is_reader(#db{user_ctx=#user_ctx{name=Name,roles=Roles}=UserCtx}=Db) ->
     end.
 
 get_admins(#db{security=SecProps}) ->
-    proplists:get_value(<<"admins">>, SecProps, {[]}).
+    couch_util:get_value(<<"admins">>, SecProps, {[]}).
 
 get_readers(#db{security=SecProps}) ->
-    proplists:get_value(<<"readers">>, SecProps, {[]}).
+    couch_util:get_value(<<"readers">>, SecProps, {[]}).
 
 get_security(#db{security=SecProps}) ->
     {SecProps}.
@@ -298,21 +329,21 @@ set_security(_, _) ->
     throw(bad_request).
 
 validate_security_object(SecProps) ->
-    Admins = proplists:get_value(<<"admins">>, SecProps, {[]}),
-    Readers = proplists:get_value(<<"readers">>, SecProps, {[]}),
+    Admins = couch_util:get_value(<<"admins">>, SecProps, {[]}),
+    Readers = couch_util:get_value(<<"readers">>, SecProps, {[]}),
     ok = validate_names_and_roles(Admins),
     ok = validate_names_and_roles(Readers),
     ok.
 
 % validate user input
 validate_names_and_roles({Props}) when is_list(Props) ->
-    case proplists:get_value(<<"names">>,Props,[]) of
+    case couch_util:get_value(<<"names">>,Props,[]) of
     Ns when is_list(Ns) ->
             [throw("names must be a JSON list of strings") ||N <- Ns, not is_binary(N)],
             Ns;
     _ -> throw("names must be a JSON list of strings")
     end,
-    case proplists:get_value(<<"roles">>,Props,[]) of
+    case couch_util:get_value(<<"roles">>,Props,[]) of
     Rs when is_list(Rs) ->
         [throw("roles must be a JSON list of strings") ||R <- Rs, not is_binary(R)],
         Rs;
@@ -339,6 +370,8 @@ update_doc(Db, Doc, Options, UpdateType) ->
     case update_docs(Db, [Doc], Options, UpdateType) of
     {ok, [{ok, NewRev}]} ->
         {ok, NewRev};
+    {ok, [{{_Id, _Rev}, Error}]} ->
+        throw(Error);
     {ok, [Error]} ->
         throw(Error);
     {ok, []} ->
@@ -429,15 +462,15 @@ prep_and_validate_update(Db, #doc{id=Id,revs={RevStart, Revs}}=Doc,
 prep_and_validate_updates(_Db, [], [], _AllowConflict, AccPrepped,
         AccFatalErrors) ->
    {AccPrepped, AccFatalErrors};
-prep_and_validate_updates(Db, [DocBucket|RestBuckets], [not_found|RestLookups], 
+prep_and_validate_updates(Db, [DocBucket|RestBuckets], [not_found|RestLookups],
         AllowConflict, AccPrepped, AccErrors) ->
     [#doc{id=Id}|_]=DocBucket,
     % no existing revs are known,
     {PreppedBucket, AccErrors3} = lists:foldl(
-        fun(#doc{revs=Revs}=Doc, {AccBucket, AccErrors2}) ->       
+        fun(#doc{revs=Revs}=Doc, {AccBucket, AccErrors2}) ->
             case couch_doc:has_stubs(Doc) of
             true ->
-                couch_doc:merge_doc(Doc, #doc{}); % will throw exception
+                couch_doc:merge_stubs(Doc, #doc{}); % will throw exception
             false -> ok
             end,
             case Revs of
@@ -475,12 +508,12 @@ prep_and_validate_updates(Db, [DocBucket|RestBuckets],
             end
         end,
         {[], AccErrors}, DocBucket),
-    prep_and_validate_updates(Db, RestBuckets, RestLookups, AllowConflict, 
+    prep_and_validate_updates(Db, RestBuckets, RestLookups, AllowConflict,
             [PreppedBucket | AccPrepped], AccErrors3).
 
 
-update_docs(#db{update_pid=UpdatePid}=Db, Docs, Options) ->
-    update_docs(#db{update_pid=UpdatePid}=Db, Docs, Options, interactive_edit).
+update_docs(Db, Docs, Options) ->
+    update_docs(Db, Docs, Options, interactive_edit).
 
 
 prep_and_validate_replicated_updates(_Db, [], [], AccPrepped, AccErrors) ->
@@ -491,10 +524,10 @@ prep_and_validate_replicated_updates(Db, [Bucket|RestBuckets], [OldInfo|RestOldI
     case OldInfo of
     not_found ->
         {ValidatedBucket, AccErrors3} = lists:foldl(
-            fun(Doc, {AccPrepped2, AccErrors2}) ->                
+            fun(Doc, {AccPrepped2, AccErrors2}) ->
                 case couch_doc:has_stubs(Doc) of
                 true ->
-                    couch_doc:merge_doc(Doc, #doc{}); % will throw exception
+                    couch_doc:merge_stubs(Doc, #doc{}); % will throw exception
                 false -> ok
                 end,
                 case validate_doc_update(Db, Doc, fun() -> nil end) of
@@ -564,7 +597,7 @@ new_revid(#doc{body=Body,revs={OldStart,OldRevs},
         ?l2b(integer_to_list(couch_util:rand32()));
     Atts2 ->
         OldRev = case OldRevs of [] -> 0; [OldRev0|_] -> OldRev0 end,
-        erlang:md5(term_to_binary([Deleted, OldStart, OldRev, Body, Atts2]))
+        couch_util:md5(term_to_binary([Deleted, OldStart, OldRev, Body, Atts2]))
     end.
 
 new_revs([], OutBuckets, IdRevsAcc) ->
@@ -592,7 +625,7 @@ check_dup_atts2(_) ->
 
 
 update_docs(Db, Docs, Options, replicated_changes) ->
-    couch_stats_collector:increment({couchdb, database_writes}),
+    increment_stat(Db, {couchdb, database_writes}),
     DocBuckets = group_alike_docs(Docs),
 
     case (Db#db.validate_doc_funs /= []) orelse
@@ -618,7 +651,7 @@ update_docs(Db, Docs, Options, replicated_changes) ->
     {ok, DocErrors};
 
 update_docs(Db, Docs, Options, interactive_edit) ->
-    couch_stats_collector:increment({couchdb, database_writes}),
+    increment_stat(Db, {couchdb, database_writes}),
     AllOrNothing = lists:member(all_or_nothing, Options),
     % go ahead and generate the new revision ids for the documents.
     % separate out the NonRep documents from the rest of the documents
@@ -892,17 +925,18 @@ changes_since(Db, Style, StartSeq, Fun, Acc) ->
 changes_since(Db, Style, StartSeq, Fun, Options, Acc) ->
     Wrapper = fun(DocInfo, _Offset, Acc2) ->
             #doc_info{revs=Revs} = DocInfo,
+            DocInfo2 =
             case Style of
             main_only ->
-                Infos = [DocInfo];
+                DocInfo;
             all_docs ->
-                % make each rev it's own doc info
-                Infos = [DocInfo#doc_info{revs=[RevInfo]} ||
-                    #rev_info{seq=RevSeq}=RevInfo <- Revs, StartSeq < RevSeq]
+                % remove revs before the seq
+                DocInfo#doc_info{revs=[RevInfo ||
+                    #rev_info{seq=RevSeq}=RevInfo <- Revs, StartSeq < RevSeq]}
             end,
-            Fun(Infos, Acc2)
+            Fun(DocInfo2, Acc2)
         end,
-    {ok, _LastReduction, AccOut} = couch_btree:fold(Db#db.docinfo_by_seq_btree, 
+    {ok, _LastReduction, AccOut} = couch_btree:fold(Db#db.docinfo_by_seq_btree,
         Wrapper, Acc, [{start_key, StartSeq + 1}] ++ Options),
     {ok, AccOut}.
 
@@ -929,7 +963,12 @@ init({DbName, Filepath, Fd, Options}) ->
     {ok, UpdaterPid} = gen_server:start_link(couch_db_updater, {self(), DbName, Filepath, Fd, Options}, []),
     {ok, #db{fd_ref_counter=RefCntr}=Db} = gen_server:call(UpdaterPid, get_db),
     couch_ref_counter:add(RefCntr),
-    couch_stats_collector:track_process_count({couchdb, open_databases}),
+    case lists:member(sys_db, Options) of
+    true ->
+        ok;
+    false ->
+        couch_stats_collector:track_process_count({couchdb, open_databases})
+    end,
     process_flag(trap_exit, true),
     {ok, Db}.
 
@@ -953,7 +992,9 @@ handle_call({db_updated, NewDb}, _From, #db{fd_ref_counter=OldRefCntr}) ->
         couch_ref_counter:add(NewRefCntr),
         couch_ref_counter:drop(OldRefCntr)
     end,
-    {reply, ok, NewDb}.
+    {reply, ok, NewDb};
+handle_call(get_db, _From, Db) ->
+    {reply, {ok, Db}, Db}.
 
 
 handle_cast(Msg, Db) ->
@@ -1148,4 +1189,7 @@ make_doc(#db{fd=Fd}=Db, Id, Deleted, Bp, RevisionPath) ->
         }.
 
 
-
+increment_stat(#db{is_sys_db = true}, _Stat) ->
+    ok;
+increment_stat(#db{}, Stat) ->
+    couch_stats_collector:increment(Stat).

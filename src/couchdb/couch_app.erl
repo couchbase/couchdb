@@ -20,7 +20,7 @@
 
 start(_Type, DefaultIniFiles) ->
     IniFiles = get_ini_files(DefaultIniFiles),
-    case start_apps([crypto, sasl, inets, oauth, ssl, ibrowse, mochiweb]) of
+    case start_apps([crypto, public_key, sasl, inets, oauth, ssl, ibrowse, mochiweb]) of
     ok ->
         couch_server_sup:start_link(IniFiles);
     {error, Reason} ->
@@ -47,6 +47,9 @@ start_apps([App|Rest]) ->
     ok ->
        start_apps(Rest);
     {error, {already_started, App}} ->
+       start_apps(Rest);
+    {error, _Reason} when App =:= public_key ->
+       % ignore on R12B5
        start_apps(Rest);
     {error, _Reason} ->
        {error, {app_would_not_start, App}}
