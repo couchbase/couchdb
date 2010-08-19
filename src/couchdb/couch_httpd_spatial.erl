@@ -143,8 +143,11 @@ parse_view_param("bbox", Bbox) ->
     [{bbox, list_to_tuple(?JSON_DECODE("[" ++ Bbox ++ "]"))}];
 parse_view_param("stale", "ok") ->
     [{stale, ok}];
+parse_view_param("stale", "update_after") ->
+    [{stale, update_after}];
 parse_view_param("stale", _Value) ->
-    throw({query_parse_error, <<"stale only available as stale=ok">>});
+    throw({query_parse_error,
+            <<"stale only available as stale=ok or as stale=update_after">>});
 parse_view_param("count", "true") ->
     [{count, true}];
 parse_view_param("count", _Value) ->
@@ -156,6 +159,8 @@ validate_spatial_query(bbox, Value, Args) ->
     Args#spatial_query_args{bbox=Value};
 validate_spatial_query(stale, ok, Args) ->
     Args#spatial_query_args{stale=ok};
+validate_spatial_query(stale, update_after, Args) ->
+    Args#spatial_query_args{stale=update_after};
 validate_spatial_query(count, true, Args) ->
     Args#spatial_query_args{count=true};
 validate_spatial_query(stale, _, Args) ->

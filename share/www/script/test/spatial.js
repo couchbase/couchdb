@@ -132,11 +132,8 @@ couchTests.spatial = function(debug) {
   db.save({"id": "stale1", "loc": [50,60]});
   xhr = CouchDB.request("GET", url_pre + "basicIndex?bbox=" + bbox.join(",") +
                         "&stale=ok");
-  T(JSON.parse(xhr.responseText).update_seq == lastUpdateSeq);
-  // XXX vmx: not sure if that's sufficient. The first stale=ok could behave
-  //    wrongly and trigger and update, but we wouldn't notice it
-  xhr = CouchDB.request("GET", url_pre + "basicIndex?bbox=" + bbox.join(",") +
-                        "&stale=ok");
+  // NOTE vmx: stale=ok could potentially trigger an update (like
+  //     stale=update_after). There's no good way to test it.
   T(JSON.parse(xhr.responseText).update_seq == lastUpdateSeq);
   xhr = CouchDB.request("GET", url_pre + "basicIndex?bbox=" + bbox.join(","));
   T(JSON.parse(xhr.responseText).update_seq == lastUpdateSeq+1);
@@ -147,9 +144,12 @@ couchTests.spatial = function(debug) {
   xhr = CouchDB.request("GET", url_pre + "basicIndex?bbox=" + bbox.join(",") +
                         "&stale=update_after");
   T(JSON.parse(xhr.responseText).update_seq == lastUpdateSeq);
-  // XXX vmx: also not sure if that's sufficient. see comment at stale=ok
-  xhr = CouchDB.request("GET", url_pre + "basicIndex?bbox=" + bbox.join(","));
+  // make sure it was updated
+  xhr = CouchDB.request("GET", url_pre + "basicIndex?bbox=" + bbox.join(",") +
+                        "&stale=ok");
   T(JSON.parse(xhr.responseText).update_seq == lastUpdateSeq+1);
+  //xhr = CouchDB.request("GET", url_pre + "basicIndex?bbox=" + bbox.join(","));
+  //T(JSON.parse(xhr.responseText).update_seq == lastUpdateSeq+1);
   
 
   // emit tests

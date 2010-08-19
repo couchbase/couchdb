@@ -65,12 +65,24 @@ get_group_server(DbName, DDocName) ->
 get_group(Db, GroupId, Stale) ->
     MinUpdateSeq = case Stale of
     ok -> 0;
+    update_after -> 0;
     _Else -> couch_db:get_update_seq(Db)
     end,
 ?LOG_DEBUG("get_group: MinUpdateSeq: ~p (stale? ~p)", [MinUpdateSeq, Stale]),
-    couch_spatial_group:request_group(
+    Result = {ok, Group} = couch_spatial_group:request_group(
             get_group_server(couch_db:name(Db), GroupId),
-            MinUpdateSeq).
+            MinUpdateSeq),
+    case Stale of
+    update_after ->
+        % best effort, process might die
+        spawn(fun() ->
+            LastSeq = couch_db:get_update_seq(Db),
+            couch_spatial_group:request_group(Group, LastSeq)
+        end);
+    _ ->
+        ok
+    end,
+    Result.
 
 delete_index_dir(RootDir, DbName) ->
     couch_view:nuke_dir(RootDir ++ "/." ++ ?b2l(DbName) ++ "_design").
