@@ -19,6 +19,8 @@ html, body { color: #000; font: normal 90% Verdana, sans-serif;
   height: 100%; margin: 0; padding: 0; overflow: hidden;
 }
 
+th { font-weight: ;}
+
 :link, :visited { color: #ba1e16; text-decoration: none; }
 :link img, :visited img { border: none; }
 span.more { text-align: center; color: #ba1e16; cursor:pointer;}
@@ -80,7 +82,7 @@ table.listing caption { display: none; }
 table.listing th, table.listing td { padding: .2em .5em; }
 table.listing thead th { background: #dadada url(../image/thead.gif) repeat-x;
   border: 1px solid #a7a7a7; border-width: 0 0 1px 1px; color: #333;
-  font-size: 95%; font-weight: normal; text-align: left;
+  font-size: 95%; text-align: left;
   text-shadow: #999 2px 1px 2px; white-space: nowrap;
 }
 table.listing thead th:first-child { border-left: none; }
