@@ -1,6 +1,8 @@
 Welcome to the world of GeoCouch
 ================================
 
+The original CouchDB README was renamed to README.orig
+
 Prerequisites
 -------------
 
@@ -155,4 +157,5 @@ as for the spatial List functions.
 the query will return, not the geometry themselves.
 
     curl -X GET 'http://localhost:5984/places/_design/main/_spatial/points?bbox=0,0,180,90'
+
     {"count":1}
