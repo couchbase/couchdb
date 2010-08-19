@@ -412,6 +412,24 @@ input.query-option { float:right; margin-left:5px; width:70px;}
 div.info-title { float:left; color: #666; margin-right:8px; }
 div.info-value { float:left; margin-right:30px; }
 
+/* Changes table */
+
+#changes thead th label { color: #333; float: right; font-size: 90%;
+  text-shadow: none;
+}
+#changes thead th label.disabled { color: #777; }
+#changes thead th label input { vertical-align: middle; }
+#changes tbody.content td { color: #999;
+  font: normal 11px "DejaVu Sans Mono",Menlo,Courier,monospace;
+}
+#changes tbody.content td.key { color: #333; }
+#changes tbody.content td.key a { display: block; }
+#changes tbody.content td.key a strong { font-weight: normal; }
+#changes tbody.content td.key span.docid { color: #999;
+  font: normal 10px Verdana, sans-serif;
+}
+#changes tbody.content td.value { font-size: 10px; }
+
 /* Documents table */
 
 #documents thead th { line-height: 150%; width: 50%; }

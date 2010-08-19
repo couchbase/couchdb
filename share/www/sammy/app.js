@@ -285,7 +285,8 @@ app.showChanges = function () {
   this.render('templates/changes.mustache').replace('#content').then(function () {
     var query = getQuery()
       , url = '/'+db+'/_changes'
-    if (query) url += ('?' + queryToString(query))
+    if (query) url += ('?' + queryToString(query));
+    var rowCount = 0;
     request({url:url}, function (err, resp) {
       // Render the response in 10 row chunks for efficiency
       var pending = []
@@ -299,8 +300,12 @@ app.showChanges = function () {
         $.each(c.changes, function (x, change) {
           changes.push(change.rev);
         })
-        pending.push('<tr><td>'+c.seq+'</td><td><a href="'+baseUrl+c.id+'">'+c.id+'</a><td>['+changes.join(', ')+']</td></tr>')
+        pending.push('<tr class="'+(isEven(rowCount) ? "even" : "odd")+'">' + 
+                       '<td><a href="'+baseUrl+'_changes?since='+(c.seq-1)+'">'+c.seq+'</td>'+
+                       '<td><a href="'+baseUrl+c.id+'">'+c.id+'</a><td>['+changes.join(', ')+']</td></tr>'
+                    )
         if (pending.length > 10) renderPending();
+        rowCount += 1;
       }
       renderPending()
     })
