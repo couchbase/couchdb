@@ -277,7 +277,11 @@ couchTests.list_spatial = function(debug) {
   // T(xhr.getResponseHeader("Content-Type") == "text/plain");
   T(xhr.responseText.match(/^head 0 1 2 tail$/) && "basic stop");
 
-  xhr = CouchDB.request("GET", url_pre + "stopIter2/basicIndex" + url_bbox);
+  xhr = CouchDB.request("GET", url_pre + "stopIter2/basicIndex" + url_bbox, {
+    headers : {
+      "Accept" : "text/html"
+    }
+  });
   T(xhr.responseText.match(/^head 0 1 2 tail$/) && "stop 2");
 
   // with accept headers for HTML
