@@ -135,6 +135,16 @@ couchTests.spatial = function(debug) {
   // NOTE vmx: stale=ok could potentially trigger an update (like
   //     stale=update_after). There's no good way to test it.
   T(JSON.parse(xhr.responseText).update_seq == lastUpdateSeq);
+  // wait 5 seconds for the next assertions to pass in very slow machines
+  var t0 = new Date(), t1;
+  do {
+    CouchDB.request("GET", "/");
+    t1 = new Date();
+  } while ((t1 - t0) < 3000);
+    
+  xhr = CouchDB.request("GET", url_pre + "basicIndex?bbox=" + bbox.join(",") +
+                        "&stale=ok");
+  T(JSON.parse(xhr.responseText).update_seq == lastUpdateSeq);
   xhr = CouchDB.request("GET", url_pre + "basicIndex?bbox=" + bbox.join(","));
   T(JSON.parse(xhr.responseText).update_seq == lastUpdateSeq+1);
   
@@ -144,12 +154,17 @@ couchTests.spatial = function(debug) {
   xhr = CouchDB.request("GET", url_pre + "basicIndex?bbox=" + bbox.join(",") +
                         "&stale=update_after");
   T(JSON.parse(xhr.responseText).update_seq == lastUpdateSeq);
-  // make sure it was updated
+  // wait 5 seconds for the next assertions to pass in very slow machines
+  t0 = new Date();
+  do {
+    CouchDB.request("GET", "/");
+    t1 = new Date();
+  } while ((t1 - t0) < 3000);
   xhr = CouchDB.request("GET", url_pre + "basicIndex?bbox=" + bbox.join(",") +
                         "&stale=ok");
   T(JSON.parse(xhr.responseText).update_seq == lastUpdateSeq+1);
-  //xhr = CouchDB.request("GET", url_pre + "basicIndex?bbox=" + bbox.join(","));
-  //T(JSON.parse(xhr.responseText).update_seq == lastUpdateSeq+1);
+  xhr = CouchDB.request("GET", url_pre + "basicIndex?bbox=" + bbox.join(","));
+  T(JSON.parse(xhr.responseText).update_seq == lastUpdateSeq+1);
   
 
   // emit tests

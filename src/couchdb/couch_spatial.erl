@@ -69,15 +69,14 @@ get_group(Db, GroupId, Stale) ->
     _Else -> couch_db:get_update_seq(Db)
     end,
 ?LOG_DEBUG("get_group: MinUpdateSeq: ~p (stale? ~p)", [MinUpdateSeq, Stale]),
-    Result = {ok, Group} = couch_spatial_group:request_group(
-            get_group_server(couch_db:name(Db), GroupId),
-            MinUpdateSeq),
+    GroupPid = get_group_server(couch_db:name(Db), GroupId),
+    Result = couch_spatial_group:request_group(GroupPid, MinUpdateSeq),
     case Stale of
     update_after ->
         % best effort, process might die
         spawn(fun() ->
             LastSeq = couch_db:get_update_seq(Db),
-            couch_spatial_group:request_group(Group, LastSeq)
+            couch_spatial_group:request_group(GroupPid, LastSeq)
         end);
     _ ->
         ok
