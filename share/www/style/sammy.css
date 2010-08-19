@@ -235,14 +235,14 @@ body.fullwidth #wrap { margin-right: 0; }
 #toolbar li { display: inline; }
 #toolbar li.current {float:right;}
 #toolbar button { background: transparent 2px 2px no-repeat; border: none;
-  color: #666; margin: 0; padding: 2px 1em 2px 22px; cursor: pointer;
+  color: #666; margin: 0; padding: 2px 0em 2px 22px; cursor: pointer;
   font-size: 95%; line-height: 16px;
 }
 #toolbar button:hover { background-position: 2px -30px; color: #000; }
 #toolbar button:active { background-position: 2px -62px; color: #000; }
 #toolbar button.add { background-image: url(../image/add.png); }
 #toolbar button.security { background-image: url(../image/key.png); }
-#toolbar button.compact { background-image: url(../image/compact.png); }
+#toolbar button.compact { background-image: url(../image/compact.png); float:right;}
 #toolbar button.delete { background-image: url(../image/delete.png); }
 #toolbar button.load { background-image: url(../image/load.png); }
 #toolbar button.run { background-image: url(../image/run.png); }

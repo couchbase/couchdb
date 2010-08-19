@@ -138,10 +138,6 @@
         ruby: "lambda {|doc|\n  emit(nil, doc);\n}"
       }
 
-      this.newDocument = function() {
-        location.href = "document.html?" + encodeURIComponent(db.name);
-      }
-
       this.compactAndCleanup = function() {
         $.showDialog("dialog/_compact_cleanup.html", {
           submit: function(data, callback) {
@@ -158,25 +154,6 @@
                 db.viewCleanup({success: function(resp) { callback() }});
                 break;
             }
-          }
-        });
-      }
-
-      this.deleteDatabase = function() {
-        $.showDialog("dialog/_delete_database.html", {
-          submit: function(data, callback) {
-            db.drop({
-              success: function(resp) {
-                callback();
-                location.href = "index.html";
-                if (window !== null) {
-                  $("#dbs li").filter(function(index) {
-                    return $("a", this).text() == dbName;
-                  }).remove();
-                  $.futon.navigation.removeDatabase(dbName);
-                }
-              }
-            });
           }
         });
       }

@@ -395,13 +395,55 @@ function $$(node) {
     };
 
   }
+  
+  function Dialogs () {
+    
+    this.createDatabase = function() {
+      $.showDialog("dialog/_create_database.html", {
+        submit: function(data, callback) {
+          if (!data.name || data.name.length == 0) {
+            callback({name: "Please enter a name."});
+            return;
+          }
+          $.couch.db(data.name).create({
+            error: function(status, id, reason) { callback({name: reason}) },
+            success: function(resp) {
+              location.hash = "#/" + encodeURIComponent(data.name);
+              callback();
+            }
+          });
+        }
+      });
+      return false;
+    }
+    
+    this.deleteDatabase = function(dbName) {
+      $.showDialog("dialog/_delete_database.html", {
+        submit: function(data, callback) {
+          $.couch.db(dbName).drop({
+            success: function(resp) {
+              callback();
+              location.href = "index.html";
+              if (window !== null) {
+                $("#dbs li").filter(function(index) {
+                  return $("a", this).text() == dbName;
+                }).remove();
+                $.futon.navigation.removeDatabase(dbName);
+              }
+            }
+          });
+        }
+      });
+    }
+  }
 
   $.couch.urlPrefix = "..";
   $.futon = $.futon || {};
   $.extend($.futon, {
     navigation: new Navigation(),
     session : new Session(),
-    storage: new Storage()
+    storage: new Storage(),
+    dialogs: new Dialogs()
   });
 
   $.fn.addPlaceholder = function() {

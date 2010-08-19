@@ -57,6 +57,7 @@ var request = function (options, callback) {
   
 app.index = function () {
   $('h1#topbar').html('<strong>Overview</strong>');
+  $("#toolbar button.add").click($.futon.dialogs.createDatabase);
   var dbRow = function (name, even) {
     var row = $('<tr id=db-"'+name+'"><th><a href="#/'+name+'">'+name+'</a></th></tr>');
     
@@ -97,10 +98,13 @@ app.showDatabase = function () {
     , query = getQuery()
     ;
   
-  
   var init = function () {
     $('h1#topbar').html('<a href="#/">Overview</a><strong>'+db+'</strong>');
-
+    $("#toolbar button.add").click( function () { location.href = "/_utils/#/" + db + '/_new';});
+    $("#toolbar button.compact").click(function () { location.href = "/_utils/#/" + db + '/_compact';});
+    $("#toolbar button.delete").click(function (){$.futon.dialogs.deleteDatabase(db)});
+    // $("#toolbar button.security").click(page.databaseSecurity); TODO : New security UI
+    
     var addquery = function () {
       // This function adds the _all_docs startkey/endkey query options
       $('select.dbquery-select').before(
@@ -291,8 +295,7 @@ app.showChanges = function () {
       // Render the response in 10 row chunks for efficiency
       var pending = []
         , renderPending = function () {$('table#changes').append(pending.join('')); pending = [];}
-        , c , changes
-        , baseUrl = '#/'+db+'/'
+        , c , changes, baseUrl = '#/'+db+'/'
         ;
       for (var i=0;i<resp.results.length;i+=1) {
         c = resp.results[i]; 
@@ -312,6 +315,10 @@ app.showChanges = function () {
   })
 }
 
+app.showViews = function () {
+  
+}
+
 var a = $.sammy(function () {
   
   var indexRoute = function () {
@@ -325,6 +332,8 @@ var a = $.sammy(function () {
   this.get('#/:db/_all_docs', app.showDatabase);
   // Database _changes feed
   this.get('#/:db/_changes', app.showChanges);
+  // Database views viewer
+  this.get('#/:db/_views', app.showViews);
   // Document editor/viewer
   this.get('#/:db/:docid', app.showDocument);
 })
