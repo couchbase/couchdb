@@ -167,7 +167,7 @@ handle_request(MochiReq, DefaultFun,
 
     % grab Host from Req
     Vhost = case MochiReq:get_header_value("X-Couch-Vhost") of
-        <<"false">> ->
+        "false" ->
             % Vhosting was explicitly requested to be disabled.
             undefined;
         _ ->
