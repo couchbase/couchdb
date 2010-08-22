@@ -164,7 +164,13 @@ handle_request(MochiReq, DefaultFun,
     UrlHandlers, DbUrlHandlers, DesignUrlHandlers, VirtualHosts, VhostGlobals) ->
 
     % grab Host from Req
-    Vhost = MochiReq:get_header_value("Host"),
+    Vhost = case MochiReq:get_header_value("X-Couch-Vhost") of
+        <<"false">> ->
+            % Vhosting was explicitly requested to be disabled.
+            undefined;
+        _ ->
+            MochiReq:get_header_value("Host")
+    end,
 
     % find Vhost in config
     case couch_util:get_value(Vhost, VirtualHosts) of
