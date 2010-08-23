@@ -138,7 +138,7 @@ foldl_stop(Fun, Acc, [H|T]) ->
     {ok, Acc2} ->
         foldl_stop(Fun, Acc2, T);
     {stop, Acc2} ->
-        {ok, Acc2}
+        {stop, Acc2}
     end.
 
 % Loops recursively through a list of bounding boxes and returns
