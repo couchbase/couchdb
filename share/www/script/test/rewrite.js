@@ -84,6 +84,20 @@ couchTests.rewrite = function(debug) {
               "method": "GET"
             },
             {
+             "from": "/welcome4/*",
+             "to" : "_show/welcome3",
+             "query": {
+               "name": "*"
+             }
+            },
+            {
+             "from": "/welcome5/*",
+             "to" : "_show/*",
+             "query": {
+               "name": "*"
+             }
+            },
+            {
               "from": "simpleForm/basicView",
               "to": "_list/simpleForm/basicView",
             },
@@ -138,13 +152,13 @@ couchTests.rewrite = function(debug) {
                 "key": [":a", ":b"]
               }
             },
-            
             {
-              "from": "uuids",
-              "to": "../../../_uuids"
+              "from": "simpleForm/complexView6",
+              "to": "_list/simpleForm/complexView3",
+              "query": {
+                "key": [":a", ":b"]
+              }
             }
-            
-            
           ],
           lists: {
             simpleForm: stringFun(function(head, req) {
@@ -169,6 +183,9 @@ couchTests.rewrite = function(debug) {
             "welcome2": stringFun(function(doc, req) {
               return "Welcome " + doc.name;
             }),
+            "welcome3": stringFun(function(doc,req) {
+              return "Welcome " + req.query["name"];
+            })
           },
           updates: {
             "hello" : stringFun(function(doc, req) {
@@ -288,6 +305,12 @@ couchTests.rewrite = function(debug) {
         
         xhr = CouchDB.request("GET", "/test_suite_db/_design/test/_rewrite/welcome3/test");
         T(xhr.responseText == "Welcome test");
+
+        req = CouchDB.request("GET", "/test_suite_db/_design/test/_rewrite/welcome4/user");
+        T(req.responseText == "Welcome user");
+
+        req = CouchDB.request("GET", "/test_suite_db/_design/test/_rewrite/welcome5/welcome3");
+        T(req.responseText == "Welcome welcome3");
         
         
         // get with query params
@@ -338,13 +361,34 @@ couchTests.rewrite = function(debug) {
         T(xhr.status == 200, "with query params");
         T(/Value: doc 4/.test(xhr.responseText));
         
+        xhr = CouchDB.request("GET", "/test_suite_db/_design/test/_rewrite/simpleForm/complexView6?a=test&b=essai");
+        T(xhr.status == 200, "with query params");
+        T(/Value: doc 4/.test(xhr.responseText));
+        
         // test path relative to server
+        designDoc.rewrites.push({
+           "from": "uuids",
+           "to": "../../../_uuids"
+        });
+        T(db.save(designDoc).ok);
         
         var xhr = CouchDB.request("GET", "/test_suite_db/_design/test/_rewrite/uuids");
-        T(xhr.status == 200);
+        T(xhr.status == 500);
         var result = JSON.parse(xhr.responseText);
-        T(result.uuids.length == 1);
-        var first = result.uuids[0];
+        T(result.error == "insecure_rewrite_rule");
+
+        run_on_modified_server(
+          [{section: "httpd",
+            key: "secure_rewrites",
+            value: "false"}],
+            function() {
+              var xhr = CouchDB.request("GET", "/test_suite_db/_design/test/_rewrite/uuids?cache=bust");
+              T(xhr.status == 200);
+              var result = JSON.parse(xhr.responseText);
+              T(result.uuids.length == 1);
+              var first = result.uuids[0];
+        });
+
   });
   
 }

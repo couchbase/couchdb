@@ -27,15 +27,25 @@ init({MainPid, DbName, Filepath, Fd, Options}) ->
         Header =  #db_header{},
         ok = couch_file:write_header(Fd, Header),
         % delete any old compaction files that might be hanging around
-        file:delete(Filepath ++ ".compact");
+        RootDir = couch_config:get("couchdb", "database_dir", "."),
+        couch_file:delete(RootDir, Filepath ++ ".compact");
     false ->
         ok = couch_file:upgrade_old_header(Fd, <<$g, $m, $k, 0>>), % 09 UPGRADE CODE
-        {ok, Header} = couch_file:read_header(Fd)
+        case couch_file:read_header(Fd) of
+        {ok, Header} ->
+            ok;
+        no_valid_header ->
+            % create a new header and writes it to the file
+            Header =  #db_header{},
+            ok = couch_file:write_header(Fd, Header),
+            % delete any old compaction files that might be hanging around
+            file:delete(Filepath ++ ".compact")
+        end
     end,
 
     Db = init_db(DbName, Filepath, Fd, Header),
     Db2 = refresh_validate_doc_funs(Db),
-    {ok, Db2#db{main_pid=MainPid}}.
+    {ok, Db2#db{main_pid = MainPid, is_sys_db = lists:member(sys_db, Options)}}.
 
 
 terminate(_Reason, Db) ->
@@ -133,21 +143,22 @@ handle_call({purge_docs, IdRevs}, _From, Db) ->
 
     ok = gen_server:call(Db2#db.main_pid, {db_updated, Db2}),
     couch_db_update_notifier:notify({updated, Db#db.name}),
-    {reply, {ok, (Db2#db.header)#db_header.purge_seq, IdRevsPurged}, Db2}.
-
-
-handle_cast(start_compact, Db) ->
+    {reply, {ok, (Db2#db.header)#db_header.purge_seq, IdRevsPurged}, Db2};
+handle_call(start_compact, _From, Db) ->
     case Db#db.compactor_pid of
     nil ->
         ?LOG_INFO("Starting compaction for db \"~s\"", [Db#db.name]),
         Pid = spawn_link(fun() -> start_copy_compact(Db) end),
         Db2 = Db#db{compactor_pid=Pid},
         ok = gen_server:call(Db#db.main_pid, {db_updated, Db2}),
-        {noreply, Db2};
+        {reply, ok, Db2};
     _ ->
         % compact currently running, this is a no-op
-        {noreply, Db}
-    end;
+        {reply, ok, Db}
+    end.
+
+
+
 handle_cast({compact_done, CompactFilepath}, #db{filepath=Filepath}=Db) ->
     {ok, NewFd} = couch_file:open(CompactFilepath),
     {ok, NewHeader} = couch_file:read_header(NewFd),
@@ -165,12 +176,14 @@ handle_cast({compact_done, CompactFilepath}, #db{filepath=Filepath}=Db) ->
             local_docs_btree = NewLocalBtree,
             main_pid = Db#db.main_pid,
             filepath = Filepath,
-            instance_start_time = Db#db.instance_start_time
+            instance_start_time = Db#db.instance_start_time,
+            revs_limit = Db#db.revs_limit
         }),
 
         ?LOG_DEBUG("CouchDB swapping files ~s and ~s.",
                 [Filepath, CompactFilepath]),
-        file:delete(Filepath),
+        RootDir = couch_config:get("couchdb", "database_dir", "."),
+        couch_file:delete(RootDir, Filepath),
         ok = file:rename(CompactFilepath, Filepath),
         close_db(Db),
         ok = gen_server:call(Db#db.main_pid, {db_updated, NewDb2}),
@@ -187,11 +200,11 @@ handle_cast({compact_done, CompactFilepath}, #db{filepath=Filepath}=Db) ->
     end.
 
 
-handle_info({update_docs, Client, GroupedDocs, NonRepDocs, MergeConflicts, 
+handle_info({update_docs, Client, GroupedDocs, NonRepDocs, MergeConflicts,
         FullCommit}, Db) ->
     GroupedDocs2 = [[{Client, D} || D <- DocGroup] || DocGroup <- GroupedDocs],
     if NonRepDocs == [] ->
-        {GroupedDocs3, Clients, FullCommit2} = collect_updates(GroupedDocs2, 
+        {GroupedDocs3, Clients, FullCommit2} = collect_updates(GroupedDocs2,
                 [Client], MergeConflicts, FullCommit);
     true ->
         GroupedDocs3 = GroupedDocs2,
@@ -199,7 +212,7 @@ handle_info({update_docs, Client, GroupedDocs, NonRepDocs, MergeConflicts,
         Clients = [Client]
     end,
     NonRepDocs2 = [{Client, NRDoc} || NRDoc <- NonRepDocs],
-    try update_docs_int(Db, GroupedDocs3, NonRepDocs2, MergeConflicts, 
+    try update_docs_int(Db, GroupedDocs3, NonRepDocs2, MergeConflicts,
                 FullCommit2) of
     {ok, Db2} ->
         ok = gen_server:call(Db#db.main_pid, {db_updated, Db2}),
@@ -214,6 +227,9 @@ handle_info({update_docs, Client, GroupedDocs, NonRepDocs, MergeConflicts,
             [catch(ClientPid ! {retry, self()}) || ClientPid <- Clients],
             {noreply, Db}
     end;
+handle_info(delayed_commit, #db{waiting_delayed_commit=nil}=Db) ->
+    %no outstanding delayed commits, ignore
+    {noreply, Db};
 handle_info(delayed_commit, Db) ->
     case commit_data(Db) of
         Db ->
@@ -254,7 +270,7 @@ collect_updates(GroupedDocsAcc, ClientsAcc, MergeConflicts, FullCommit) ->
         {update_docs, Client, GroupedDocs, [], MergeConflicts, FullCommit2} ->
             GroupedDocs2 = [[{Client, Doc} || Doc <- DocGroup]
                     || DocGroup <- GroupedDocs],
-            GroupedDocsAcc2 = 
+            GroupedDocsAcc2 =
                 merge_updates(GroupedDocsAcc, GroupedDocs2, []),
             collect_updates(GroupedDocsAcc2, [Client | ClientsAcc],
                     MergeConflicts, (FullCommit or FullCommit2))
@@ -505,7 +521,7 @@ merge_rev_trees(MergeConflicts, [NewDocs|RestDocsList],
                         % this means we are recreating a brand new document
                         % into a state that already existed before.
                         % put the rev into a subsequent edit of the deletion
-                        #doc_info{revs=[#rev_info{rev={OldPos,OldRev}}|_]} = 
+                        #doc_info{revs=[#rev_info{rev={OldPos,OldRev}}|_]} =
                                 couch_doc:to_doc_info(OldDocInfo),
                         NewRevId = couch_db:new_revid(
                                 NewDoc#doc{revs={OldPos, [OldRev]}}),
@@ -513,7 +529,7 @@ merge_rev_trees(MergeConflicts, [NewDocs|RestDocsList],
                         {NewTree2, _} = couch_key_tree:merge(AccTree,
                                 [couch_db:doc_to_tree(NewDoc2)]),
                         % we changed the rev id, this tells the caller we did
-                        send_result(Client, Id, {Pos-1,PrevRevs}, 
+                        send_result(Client, Id, {Pos-1,PrevRevs},
                                 {ok, {OldPos + 1, NewRevId}}),
                         NewTree2;
                     true ->
@@ -527,7 +543,7 @@ merge_rev_trees(MergeConflicts, [NewDocs|RestDocsList],
                 {NewTree, _} = couch_key_tree:merge(AccTree,
                             [couch_db:doc_to_tree(NewDoc)]),
                 NewTree
-            end 
+            end
         end,
         OldTree, NewDocs),
     if NewRevTree == OldTree ->
@@ -670,32 +686,32 @@ db_to_header(Db, Header) ->
         security_ptr = Db#db.security_ptr,
         revs_limit = Db#db.revs_limit}.
 
-commit_data(#db{fd=Fd,header=OldHeader,fsync_options=FsyncOptions}=Db, Delay) ->
-    Header = db_to_header(Db, OldHeader),
-    if OldHeader == Header ->
-        Db;
-    Delay and (Db#db.waiting_delayed_commit == nil) ->
-        Db#db{waiting_delayed_commit=
-                erlang:send_after(1000, self(), delayed_commit)};
-    Delay ->
-        Db;
-    true ->
-        if Db#db.waiting_delayed_commit /= nil ->
-            case erlang:cancel_timer(Db#db.waiting_delayed_commit) of
-            false -> receive delayed_commit -> ok after 0 -> ok end;
-            _ -> ok
-            end;
-        true -> ok
-        end,
+commit_data(#db{waiting_delayed_commit=nil} = Db, true) ->
+    Db#db{waiting_delayed_commit=erlang:send_after(1000,self(),delayed_commit)};
+commit_data(Db, true) ->
+    Db;
+commit_data(Db, _) ->
+    #db{
+        fd = Fd,
+        filepath = Filepath,
+        header = OldHeader,
+        fsync_options = FsyncOptions,
+        waiting_delayed_commit = Timer
+    } = Db,
+    if is_reference(Timer) -> erlang:cancel_timer(Timer); true -> ok end,
+    case db_to_header(Db, OldHeader) of
+    OldHeader ->
+        Db#db{waiting_delayed_commit=nil};
+    Header ->
         case lists:member(before_header, FsyncOptions) of
-        true -> ok = couch_file:sync(Fd);
+        true -> ok = couch_file:sync(Filepath);
         _    -> ok
         end,
 
         ok = couch_file:write_header(Fd, Header),
 
         case lists:member(after_header, FsyncOptions) of
-        true -> ok = couch_file:sync(Fd);
+        true -> ok = couch_file:sync(Filepath);
         _    -> ok
         end,
 
@@ -823,7 +839,7 @@ copy_compact(Db, NewDb0, Retry) ->
     couch_task_status:set_update_frequency(500),
 
     {ok, _, {NewDb2, Uncopied, TotalChanges}} =
-        couch_btree:foldl(Db#db.docinfo_by_seq_btree, EnumBySeqFun, 
+        couch_btree:foldl(Db#db.docinfo_by_seq_btree, EnumBySeqFun,
             {NewDb, [], 0},
             [{start_key, NewDb#db.update_seq + 1}]),
 
@@ -856,8 +872,8 @@ start_copy_compact(#db{name=Name,filepath=Filepath}=Db) ->
         ok = couch_file:write_header(Fd, Header=#db_header{})
     end,
     NewDb = init_db(Name, CompactFile, Fd, Header),
+    unlink(Fd),
     NewDb2 = copy_compact(Db, NewDb, Retry),
-
-    gen_server:cast(Db#db.update_pid, {compact_done, CompactFile}),
-    close_db(NewDb2).
+    close_db(NewDb2),
+    gen_server:cast(Db#db.update_pid, {compact_done, CompactFile}).
 

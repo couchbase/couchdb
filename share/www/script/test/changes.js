@@ -39,12 +39,18 @@ couchTests.changes = function(debug) {
   T(resp.results[0].changes[0].rev == docFoo._rev)
 
   // test with callback
-  var xhr = CouchDB.request("GET", "/test_suite_db/_changes?callback=jsonp");
-  T(xhr.status == 200);
-  jsonp_flag = 0;
-  eval(xhr.responseText);
-  T(jsonp_flag == 1);
-
+  
+  run_on_modified_server(
+    [{section: "httpd",
+      key: "allow_jsonp",
+      value: "true"}],
+  function() {
+    var xhr = CouchDB.request("GET", "/test_suite_db/_changes?callback=jsonp");
+    T(xhr.status == 200);
+    jsonp_flag = 0;
+    eval(xhr.responseText);
+    T(jsonp_flag == 1);
+  });
 
   req = CouchDB.request("GET", "/test_suite_db/_changes?feed=continuous&timeout=10");
   var lines = req.responseText.split("\n");
@@ -82,7 +88,10 @@ couchTests.changes = function(debug) {
     waitForSuccess(function() {
       lines = xhr.responseText.split("\n");
       change1 = JSON.parse(lines[0]);
-      change2 = JSON.parse(lines[1]);      
+      change2 = JSON.parse(lines[1]);
+      if (change2.seq != 2) {
+          throw "bad seq, try again"
+      }
     }, "bar-only");
 
     T(change1.seq == 1)
@@ -100,6 +109,9 @@ couchTests.changes = function(debug) {
     waitForSuccess(function() {
       lines = xhr.responseText.split("\n");
       change3 = JSON.parse(lines[2]);
+      if (change3.seq != 3) {
+        throw "bad seq, try again"
+      }
     });
     
     T(change3.seq == 3);
@@ -214,7 +226,7 @@ couchTests.changes = function(debug) {
   
   req = CouchDB.request("GET", "/test_suite_db/_changes?filter=changes_filter/dynamic&field=bop");
   resp = JSON.parse(req.responseText);
-  T(resp.results.length == 1);
+  T(resp.results.length == 1, "changes_filter/dynamic&field=bop");
 
   if (!is_safari && xhr) { // full test requires parallel connections
     // filter with longpoll
@@ -346,7 +358,7 @@ couchTests.changes = function(debug) {
 
   req = CouchDB.request("GET", "/test_suite_db/_changes?filter=changes_filter/conflicted");
   resp = JSON.parse(req.responseText);
-  T(resp.results.length == 1);
+  T(resp.results.length == 1, "filter=changes_filter/conflicted");
 
   // test with erlang filter function
   run_on_modified_server([{
@@ -360,7 +372,7 @@ couchTests.changes = function(debug) {
       filters: {
         foo:
           'fun({Doc}, Req) -> ' +
-          '  Value = proplists:get_value(<<"value">>, Doc),' +
+          '  Value = couch_util:get_value(<<"value">>, Doc),' +
           '  (Value rem 2) =:= 0' +
           'end.'
       }

@@ -15,8 +15,8 @@
 
 -export([handle_view_req/3,handle_temp_view_req/2]).
 
--export([get_stale_type/1, get_reduce_type/1, parse_view_params/3]).
--export([make_view_fold_fun/7, finish_view_fold/4, view_row_obj/3]).
+-export([parse_view_params/3]).
+-export([make_view_fold_fun/7, finish_view_fold/4, finish_view_fold/5, view_row_obj/3]).
 -export([view_group_etag/2, view_group_etag/3, make_reduce_fold_funs/6]).
 -export([design_doc_view/5, parse_bool_param/1, doc_member/2]).
 -export([make_key_options/1, load_view/4]).
@@ -61,8 +61,9 @@ handle_view_req(#httpd{method='GET',
 
 handle_view_req(#httpd{method='POST',
         path_parts=[_, _, DName, _, ViewName]}=Req, Db, _DDoc) ->
+    couch_httpd:validate_ctype(Req, "application/json"),
     {Fields} = couch_httpd:json_body_obj(Req),
-    case proplists:get_value(<<"keys">>, Fields, nil) of
+    case couch_util:get_value(<<"keys">>, Fields, nil) of
     nil ->
         Fmt = "POST to view ~p/~p in database ~p with no keys member.",
         ?LOG_DEBUG(Fmt, [DName, ViewName, Db]),
@@ -77,15 +78,16 @@ handle_view_req(Req, _Db, _DDoc) ->
     send_method_not_allowed(Req, "GET,POST,HEAD").
 
 handle_temp_view_req(#httpd{method='POST'}=Req, Db) ->
+    couch_httpd:validate_ctype(Req, "application/json"),
     ok = couch_db:check_is_admin(Db),
     couch_stats_collector:increment({httpd, temporary_view_reads}),
     {Props} = couch_httpd:json_body_obj(Req),
-    Language = proplists:get_value(<<"language">>, Props, <<"javascript">>),
-    {DesignOptions} = proplists:get_value(<<"options">>, Props, {[]}),
-    MapSrc = proplists:get_value(<<"map">>, Props),
-    Keys = proplists:get_value(<<"keys">>, Props, nil),
+    Language = couch_util:get_value(<<"language">>, Props, <<"javascript">>),
+    {DesignOptions} = couch_util:get_value(<<"options">>, Props, {[]}),
+    MapSrc = couch_util:get_value(<<"map">>, Props),
+    Keys = couch_util:get_value(<<"keys">>, Props, nil),
     Reduce = get_reduce_type(Req),
-    case proplists:get_value(<<"reduce">>, Props, null) of
+    case couch_util:get_value(<<"reduce">>, Props, null) of
     null ->
         QueryArgs = parse_view_params(Req, Keys, map),
         {ok, View, Group} = couch_view:get_temp_map_view(Db, Language,
@@ -116,9 +118,9 @@ output_map_view(Req, View, Group, Db, QueryArgs, nil) ->
         {ok, RowCount} = couch_view:get_row_count(View),
         FoldlFun = make_view_fold_fun(Req, QueryArgs, CurrentEtag, Db, Group#group.current_seq, RowCount, #view_fold_helper_funs{reduce_count=fun couch_view:reduce_to_count/1}),
         FoldAccInit = {Limit, SkipCount, undefined, []},
-        {ok, LastReduce, FoldResult} = couch_view:fold(View, 
+        {ok, LastReduce, FoldResult} = couch_view:fold(View,
                 FoldlFun, FoldAccInit, make_key_options(QueryArgs)),
-        finish_view_fold(Req, RowCount, 
+        finish_view_fold(Req, RowCount,
                 couch_view:reduce_to_count(LastReduce), FoldResult)
     end);
 
@@ -196,31 +198,28 @@ reverse_key_default(?MAX_STR) -> ?MIN_STR;
 reverse_key_default(Key) -> Key.
 
 get_stale_type(Req) ->
-    list_to_atom(couch_httpd:qs_value(Req, "stale", "nil")).
+    list_to_existing_atom(couch_httpd:qs_value(Req, "stale", "nil")).
 
 get_reduce_type(Req) ->
-    list_to_atom(couch_httpd:qs_value(Req, "reduce", "true")).
+    list_to_existing_atom(couch_httpd:qs_value(Req, "reduce", "true")).
 
 load_view(Req, Db, {ViewDesignId, ViewName}, Keys) ->
-    Stale = couch_httpd_view:get_stale_type(Req),
-    Reduce = couch_httpd_view:get_reduce_type(Req),
+    Stale = get_stale_type(Req),
+    Reduce = get_reduce_type(Req),
     case couch_view:get_map_view(Db, ViewDesignId, ViewName, Stale) of
     {ok, View, Group} ->
-        QueryArgs = couch_httpd_view:parse_view_params(Req, Keys, map),
-?LOG_DEBUG("load_view: Stale: ~p", [QueryArgs]),
+        QueryArgs = parse_view_params(Req, Keys, map),
         {map, View, Group, QueryArgs};
     {not_found, _Reason} ->
         case couch_view:get_reduce_view(Db, ViewDesignId, ViewName, Stale) of
         {ok, ReduceView, Group} ->
             case Reduce of
             false ->
-                QueryArgs =
-                    couch_httpd_view:parse_view_params(Req, Keys, map_red),
+                QueryArgs = parse_view_params(Req, Keys, map_red),
                 MapView = couch_view:extract_map_view(ReduceView),
                 {map, MapView, Group, QueryArgs};
             _ ->
-                QueryArgs =
-                    couch_httpd_view:parse_view_params(Req, Keys, reduce),
+                QueryArgs = parse_view_params(Req, Keys, reduce),
                 {reduce, ReduceView, Group, QueryArgs}
             end;
         {not_found, Reason} ->
@@ -283,8 +282,11 @@ parse_view_param("count", _Value) ->
     throw({query_parse_error, <<"Query parameter 'count' is now 'limit'.">>});
 parse_view_param("stale", "ok") ->
     [{stale, ok}];
+parse_view_param("stale", "update_after") ->
+    [{stale, update_after}];
 parse_view_param("stale", _Value) ->
-    throw({query_parse_error, <<"stale only available as stale=ok">>});
+    throw({query_parse_error,
+            <<"stale only available as stale=ok or as stale=update_after">>});
 parse_view_param("update", _Value) ->
     throw({query_parse_error, <<"update=false is now stale=ok">>});
 parse_view_param("descending", Value) ->
@@ -509,8 +511,8 @@ apply_default_helper_funs(
 apply_default_helper_funs(
         #reduce_fold_helper_funs{
             start_response = StartResp,
-            send_row = SendRow}
-        =Helpers) ->
+            send_row = SendRow
+        }=Helpers) ->
     StartResp2 = case StartResp of
     undefined -> fun json_reduce_start_resp/4;
     _ -> StartResp
@@ -527,7 +529,7 @@ apply_default_helper_funs(
     }.
 
 make_key_options(#view_query_args{direction = Dir}=QueryArgs) ->
-     [{dir,Dir} | make_start_key_option(QueryArgs) ++ 
+     [{dir,Dir} | make_start_key_option(QueryArgs) ++
             make_end_key_option(QueryArgs)].
 
 make_start_key_option(
@@ -556,10 +558,17 @@ make_end_key_option(
 
 json_view_start_resp(Req, Etag, TotalViewCount, Offset, _Acc, UpdateSeq) ->
     {ok, Resp} = start_json_response(Req, 200, [{"Etag", Etag}]),
-    BeginBody = io_lib:format(
-            "{\"total_rows\":~w,\"update_seq\":~w,"
-            "\"offset\":~w,\"rows\":[\r\n",
-            [TotalViewCount, UpdateSeq, Offset]),
+    BeginBody = case couch_httpd:qs_value(Req, "update_seq") of
+    "true" ->
+        io_lib:format(
+                "{\"total_rows\":~w,\"update_seq\":~w,"
+                "\"offset\":~w,\"rows\":[\r\n",
+                [TotalViewCount, UpdateSeq, Offset]);
+    _Else ->
+        io_lib:format(
+                "{\"total_rows\":~w,\"offset\":~w,\"rows\":[\r\n",
+                [TotalViewCount, Offset])
+    end,
     {ok, Resp, BeginBody}.
 
 send_json_view_row(Resp, Db, {{Key, DocId}, Value}, IncludeDocs, RowFront) ->
@@ -569,7 +578,12 @@ send_json_view_row(Resp, Db, {{Key, DocId}, Value}, IncludeDocs, RowFront) ->
 
 json_reduce_start_resp(Req, Etag, _Acc0, UpdateSeq) ->
     {ok, Resp} = start_json_response(Req, 200, [{"Etag", Etag}]),
-    {ok, Resp, io_lib:format("{\"update_seq\":~w,\"rows\":[\r\n",[UpdateSeq])}.
+    case couch_httpd:qs_value(Req, "update_seq") of
+    "true" ->
+        {ok, Resp, io_lib:format("{\"update_seq\":~w,\"rows\":[\r\n",[UpdateSeq])};
+    _Else ->
+        {ok, Resp, "{\"rows\":[\r\n"}
+    end.
 
 send_json_reduce_row(Resp, {Key, Value}, RowFront) ->
     send_chunk(Resp, RowFront ++ ?JSON_ENCODE({[{key, Key}, {value, Value}]})),
@@ -591,13 +605,13 @@ view_row_obj(_Db, {{Key, error}, Value}, _IncludeDocs) ->
     {[{key, Key}, {error, Value}]};
 % include docs in the view output
 view_row_obj(Db, {{Key, DocId}, {Props}}, true) ->
-    Rev = case proplists:get_value(<<"_rev">>, Props) of
+    Rev = case couch_util:get_value(<<"_rev">>, Props) of
     undefined ->
         nil;
     Rev0 ->
         couch_doc:parse_rev(Rev0)
     end,
-    IncludeId = proplists:get_value(<<"_id">>, Props, DocId),
+    IncludeId = couch_util:get_value(<<"_id">>, Props, DocId),
     view_row_with_doc(Db, {{Key, DocId}, {Props}}, {IncludeId, Rev});
 view_row_obj(Db, {{Key, DocId}, Value}, true) ->
     view_row_with_doc(Db, {{Key, DocId}, Value}, {DocId, nil});

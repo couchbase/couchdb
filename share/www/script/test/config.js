@@ -29,19 +29,25 @@ couchTests.config = function(debug) {
   */
   var server_port = CouchDB.host.split(':');
   if(server_port.length == 1 && CouchDB.inBrowser) {
-    var proto = window.location.protocol;
-    if(proto == "http:") {
+    if(CouchDB.protocol == "http://") {
       port = 80;
     }
-    if(proto == "https:") {
+    if(CouchDB.protocol == "https://") {
       port = 443;
     }
   } else {
     port = server_port.pop();
   }
 
+  if(CouchDB.protocol == "http://") {
+    config_port = config.httpd.port;
+  }
+  if(CouchDB.protocol == "https://") {
+    config_port = config.ssl.port;
+  }
+
   if(port) {
-    T(config.httpd.port == port);
+    TEquals(config_port, port, "ports should match");
   }
 
   T(config.couchdb.database_dir);

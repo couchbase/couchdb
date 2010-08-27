@@ -12,6 +12,8 @@
 
 SUBDIRS = bin etc src share test var utils
 
+ACLOCAL_AMFLAGS = -I m4
+
 localdoc_DATA = \
     AUTHORS.gz \
     BUGS.gz \
@@ -107,6 +109,8 @@ install-data-hook:
 	@echo "You have installed Apache CouchDB, time to relax."
 
 distclean-local:
+	rm -fr $(top_builddir)/etc/couchdb/default.d
+	rm -fr $(top_builddir)/etc/couchdb/local.d
 	rm -fr $(top_builddir)/tmp
 
 .PHONY: local-clean
@@ -121,11 +125,11 @@ local-clean: maintainer-clean
 	rm -f $(top_srcdir)/test/etap/temp.*
 	rm -f $(top_srcdir)/*.tar.gz
 	rm -f $(top_srcdir)/*.tar.gz.*
-	find $(top_srcdir) -name Makefile.in -exec rm {} \;
+	find $(top_srcdir) -name Makefile.in -exec rm -f {} \;
 
 dist-hook:
-	find $(top_srcdir) -type f -name "._*" -delete
-	find $(top_builddir) -type f -name "._*" -delete
+	find $(top_srcdir) -type f -name "._*" -exec rm -f {} \;
+	find $(top_builddir) -type f -name "._*" -exec rm -f {} \;
 
 distcheck-hook:
 	grep -rL 'http://www.apache.org/licenses/LICENSE-2.0' * \

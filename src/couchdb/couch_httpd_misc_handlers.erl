@@ -79,6 +79,7 @@ handle_task_status_req(Req) ->
     send_method_not_allowed(Req, "GET,HEAD").
 
 handle_replicate_req(#httpd{method='POST'}=Req) ->
+    couch_httpd:validate_ctype(Req, "application/json"),
     PostBody = couch_httpd:json_body_obj(Req),
     try couch_rep:replicate(PostBody, Req#httpd.user_ctx) of
     {ok, {continuous, RepId}} ->
@@ -102,6 +103,7 @@ handle_replicate_req(Req) ->
 
 
 handle_restart_req(#httpd{method='POST'}=Req) ->
+    couch_httpd:validate_ctype(Req, "application/json"),
     ok = couch_httpd:verify_is_server_admin(Req),
     couch_server_sup:restart_core_server(),
     send_json(Req, 200, {[{ok, true}]});
@@ -243,6 +245,7 @@ handle_approved_config_req(#httpd{method='DELETE',path_parts=[_,Section,Key]}=Re
 % httpd db handlers
 
 increment_update_seq_req(#httpd{method='POST'}=Req, Db) ->
+    couch_httpd:validate_ctype(Req, "application/json"),
     {ok, NewSeq} = couch_db:increment_update_seq(Db),
     send_json(Req, {[{ok, true},
         {update_seq, NewSeq}
@@ -253,6 +256,7 @@ increment_update_seq_req(Req, _Db) ->
 % httpd log handlers
 
 handle_log_req(#httpd{method='GET'}=Req) ->
+    ok = couch_httpd:verify_is_server_admin(Req),
     Bytes = list_to_integer(couch_httpd:qs_value(Req, "bytes", "1000")),
     Offset = list_to_integer(couch_httpd:qs_value(Req, "offset", "0")),
     Chunk = couch_log:read(Bytes, Offset),

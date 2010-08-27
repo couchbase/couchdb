@@ -19,7 +19,6 @@
 -export([proxy_authentification_handler/1]).
 -export([cookie_auth_header/2]).
 -export([handle_session_req/1]).
--export([ensure_users_db_exists/1, get_user/1]).
 
 -import(couch_httpd, [header_value/2, send_json/2,send_json/4, send_method_not_allowed/2]).
 
@@ -66,18 +65,18 @@ basic_name_pw(Req) ->
 default_authentication_handler(Req) ->
     case basic_name_pw(Req) of
     {User, Pass} ->
-        case get_user(?l2b(User)) of
+        case couch_auth_cache:get_user_creds(User) of
             nil ->
                 throw({unauthorized, <<"Name or password is incorrect.">>});
             UserProps ->
-                UserSalt = proplists:get_value(<<"salt">>, UserProps, <<>>),
+                UserSalt = couch_util:get_value(<<"salt">>, UserProps, <<>>),
                 PasswordHash = hash_password(?l2b(Pass), UserSalt),
-                ExpectedHash = proplists:get_value(<<"password_sha">>, UserProps, nil),
+                ExpectedHash = couch_util:get_value(<<"password_sha">>, UserProps, nil),
                 case couch_util:verify(ExpectedHash, PasswordHash) of
                     true ->
                         Req#httpd{user_ctx=#user_ctx{
                             name=?l2b(User),
-                            roles=proplists:get_value(<<"roles">>, UserProps, [])
+                            roles=couch_util:get_value(<<"roles">>, UserProps, [])
                         }};
                     _Else ->
                         throw({unauthorized, <<"Name or password is incorrect.">>})
@@ -100,18 +99,18 @@ default_authentication_handler(Req) ->
 null_authentication_handler(Req) ->
     Req#httpd{user_ctx=#user_ctx{roles=[<<"_admin">>]}}.
 
-%% @doc proxy auth handler. 
+%% @doc proxy auth handler.
 %
-% This handler allows creation of a userCtx object from a user authenticated remotly. 
-% The client just pass specific headers to CouchDB and the handler create the userCtx. 
+% This handler allows creation of a userCtx object from a user authenticated remotly.
+% The client just pass specific headers to CouchDB and the handler create the userCtx.
 % Headers  name can be defined in local.ini. By thefault they are :
 %
-%   * X-Auth-CouchDB-UserName : contain the username, (x_auth_username in 
+%   * X-Auth-CouchDB-UserName : contain the username, (x_auth_username in
 %   couch_httpd_auth section)
-%   * X-Auth-CouchDB-Roles : contain the user roles, list of roles separated by a 
+%   * X-Auth-CouchDB-Roles : contain the user roles, list of roles separated by a
 %   comma (x_auth_roles in couch_httpd_auth section)
-%   * X-Auth-CouchDB-Token : token to authenticate the authorization (x_auth_token 
-%   in couch_httpd_auth section). This token is an hmac-sha1 created from secret key 
+%   * X-Auth-CouchDB-Token : token to authenticate the authorization (x_auth_token
+%   in couch_httpd_auth section). This token is an hmac-sha1 created from secret key
 %   and username. The secret key should be the same in the client and couchdb node. s
 %   ecret key is the secret key in couch_httpd_auth section of ini. This token is optional
 %   if value of proxy_use_secret key in couch_httpd_auth section of ini isn't true.
@@ -127,14 +126,14 @@ proxy_auth_user(Req) ->
                                 "X-Auth-CouchDB-UserName"),
     XHeaderRoles = couch_config:get("couch_httpd_auth", "x_auth_roles",
                                 "X-Auth-CouchDB-Roles"),
-    XHeaderToken = couch_config:get("couch_httpd_auth", "x_auth_token", 
+    XHeaderToken = couch_config:get("couch_httpd_auth", "x_auth_token",
                                 "X-Auth-CouchDB-Token"),
     case header_value(Req, XHeaderUserName) of
         undefined -> nil;
         UserName ->
             Roles = case header_value(Req, XHeaderRoles) of
                 undefined -> [];
-                Else ->  
+                Else ->
                     [?l2b(R) || R <- string:tokens(Else, ",")]
             end,
             case couch_config:get("couch_httpd_auth", "proxy_use_secret", "false") of
@@ -153,158 +152,15 @@ proxy_auth_user(Req) ->
                     end;
                 _ ->
                     Req#httpd{user_ctx=#user_ctx{name=?l2b(UserName), roles=Roles}}
-            end           
-    end.
-
-% maybe we can use hovercraft to simplify running this view query
-% rename to get_user_from_users_db
-get_user(UserName) ->
-    case couch_config:get("admins", ?b2l(UserName)) of
-    "-hashed-" ++ HashedPwdAndSalt ->
-        % the name is an admin, now check to see if there is a user doc
-        % which has a matching name, salt, and password_sha
-        [HashedPwd, Salt] = string:tokens(HashedPwdAndSalt, ","),
-        case get_user_props_from_db(UserName) of
-            nil ->        
-                [{<<"roles">>, [<<"_admin">>]},
-                  {<<"salt">>, ?l2b(Salt)},
-                  {<<"password_sha">>, ?l2b(HashedPwd)}];
-            UserProps when is_list(UserProps) ->
-                DocRoles = proplists:get_value(<<"roles">>, UserProps),
-                [{<<"roles">>, [<<"_admin">> | DocRoles]},
-                  {<<"salt">>, ?l2b(Salt)},
-                  {<<"password_sha">>, ?l2b(HashedPwd)}]
-        end;
-    _Else ->
-        get_user_props_from_db(UserName)
-    end.
-
-get_user_props_from_db(UserName) ->
-    DbName = couch_config:get("couch_httpd_auth", "authentication_db"),
-    {ok, Db} = ensure_users_db_exists(?l2b(DbName)),
-    DocId = <<"org.couchdb.user:", UserName/binary>>,
-    try couch_httpd_db:couch_doc_open(Db, DocId, nil, [conflicts]) of
-        #doc{meta=Meta}=Doc ->
-            %  check here for conflict state and throw error if conflicted
-            case proplists:get_value(conflicts,Meta,[]) of
-                [] -> 
-                    {DocProps} = couch_query_servers:json_doc(Doc),
-                    case proplists:get_value(<<"type">>, DocProps) of
-                        <<"user">> ->
-                            DocProps;
-                        _Else -> 
-                            ?LOG_ERROR("Invalid user doc. Id: ~p",[DocId]),
-                            nil
-                    end;
-                _Else ->
-                    throw({unauthorized, <<"User document conflict must be resolved before login.">>})
             end
-    catch
-        throw:_Throw ->
-            nil
-    after
-        couch_db:close(Db)
     end.
 
-% this should handle creating the ddoc
-ensure_users_db_exists(DbName) ->
-    case couch_db:open(DbName, [{user_ctx, #user_ctx{roles=[<<"_admin">>]}}]) of
-    {ok, Db} ->
-        ensure_auth_ddoc_exists(Db, <<"_design/_auth">>),
-        {ok, Db};
-    _Error -> 
-        {ok, Db} = couch_db:create(DbName, [{user_ctx, #user_ctx{roles=[<<"_admin">>]}}]),
-        ensure_auth_ddoc_exists(Db, <<"_design/_auth">>),
-        {ok, Db}
-    end.
-    
-ensure_auth_ddoc_exists(Db, DDocId) -> 
-    try couch_httpd_db:couch_doc_open(Db, DDocId, nil, []) of
-        _Foo -> ok
-    catch 
-        _:_Error -> 
-            % create the design document
-            {ok, AuthDesign} = auth_design_doc(DDocId),
-            {ok, _Rev} = couch_db:update_doc(Db, AuthDesign, []),
-            ok
-    end.
-
-% add the validation function here
-auth_design_doc(DocId) ->
-    DocProps = [
-        {<<"_id">>, DocId},
-        {<<"language">>,<<"javascript">>},
-        {
-            <<"validate_doc_update">>,
-            <<"function(newDoc, oldDoc, userCtx) {
-                if ((oldDoc || newDoc).type != 'user') {
-                    throw({forbidden : 'doc.type must be user'});
-                } // we only validate user docs for now
-                if (newDoc._deleted === true) {
-                    // allow deletes by admins and matching users 
-                    // without checking the other fields
-                    if ((userCtx.roles.indexOf('_admin') != -1) || (userCtx.name == oldDoc.name)) {
-                        return;
-                    } else {
-                        throw({forbidden : 'Only admins may delete other user docs.'});
-                    }
-                }
-                if (!newDoc.name) {
-                    throw({forbidden : 'doc.name is required'});
-                }
-                if (!(newDoc.roles && (typeof newDoc.roles.length != 'undefined') )) {
-                    throw({forbidden : 'doc.roles must be an array'});
-                }
-                if (newDoc._id != 'org.couchdb.user:'+newDoc.name) {
-                    throw({forbidden : 'Docid must be of the form org.couchdb.user:name'});
-                }
-                if (oldDoc) { // validate all updates
-                    if (oldDoc.name != newDoc.name) {
-                      throw({forbidden : 'Usernames may not be changed.'});
-                    }
-                }
-                if (newDoc.password_sha && !newDoc.salt) {
-                    throw({forbidden : 'Users with password_sha must have a salt. See /_utils/script/couch.js for example code.'});
-                }
-                if (userCtx.roles.indexOf('_admin') == -1) { // not an admin
-                    if (oldDoc) { // validate non-admin updates
-                        if (userCtx.name != newDoc.name) {
-                          throw({forbidden : 'You may only update your own user document.'});
-                        }
-                        // validate role updates
-                        var oldRoles = oldDoc.roles.sort();
-                        var newRoles = newDoc.roles.sort();
-                        if (oldRoles.length != newRoles.length) {
-                            throw({forbidden : 'Only _admin may edit roles'});
-                        }
-                        for (var i=0; i < oldRoles.length; i++) {
-                            if (oldRoles[i] != newRoles[i]) {
-                                throw({forbidden : 'Only _admin may edit roles'});
-                            }
-                        };
-                    } else if (newDoc.roles.length > 0) {
-                        throw({forbidden : 'Only _admin may set roles'});
-                    }
-                }
-                // no system roles in users db
-                for (var i=0; i < newDoc.roles.length; i++) {
-                    if (newDoc.roles[i][0] == '_') {
-                        throw({forbidden : 'No system roles (starting with underscore) in users db.'});
-                    }
-                };
-                // no system names as names
-                if (newDoc.name[0] == '_') {
-                    throw({forbidden : 'Username may not start with underscore.'});
-                }
-            }">>
-        }],
-    {ok, couch_doc:from_json_obj({DocProps})}.
 
 cookie_authentication_handler(#httpd{mochi_req=MochiReq}=Req) ->
     case MochiReq:get_cookie_value("AuthSession") of
     undefined -> Req;
     [] -> Req;
-    Cookie -> 
+    Cookie ->
         [User, TimeStr | HashParts] = try
             AuthSession = couch_util:decodeBase64Url(Cookie),
             [_A, _B | _Cs] = string:tokens(?b2l(AuthSession), ":")
@@ -316,15 +172,15 @@ cookie_authentication_handler(#httpd{mochi_req=MochiReq}=Req) ->
         % Verify expiry and hash
         CurrentTime = make_cookie_time(),
         case couch_config:get("couch_httpd_auth", "secret", nil) of
-        nil -> 
+        nil ->
             ?LOG_ERROR("cookie auth secret is not set",[]),
             Req;
         SecretStr ->
             Secret = ?l2b(SecretStr),
-            case get_user(?l2b(User)) of
+            case couch_auth_cache:get_user_creds(User) of
             nil -> Req;
             UserProps ->
-                UserSalt = proplists:get_value(<<"salt">>, UserProps, <<"">>),
+                UserSalt = couch_util:get_value(<<"salt">>, UserProps, <<"">>),
                 FullSecret = <<Secret/binary, UserSalt/binary>>,
                 ExpectedHash = crypto:sha_mac(FullSecret, User ++ ":" ++ TimeStr),
                 Hash = ?l2b(string:join(HashParts, ":")),
@@ -338,7 +194,7 @@ cookie_authentication_handler(#httpd{mochi_req=MochiReq}=Req) ->
                                 ?LOG_DEBUG("Successful cookie auth as: ~p", [User]),
                                 Req#httpd{user_ctx=#user_ctx{
                                     name=?l2b(User),
-                                    roles=proplists:get_value(<<"roles">>, UserProps, [])
+                                    roles=couch_util:get_value(<<"roles">>, UserProps, [])
                                 }, auth={FullSecret, TimeLeft < Timeout*0.9}};
                             _Else ->
                                 Req
@@ -359,9 +215,9 @@ cookie_auth_header(#httpd{user_ctx=#user_ctx{name=User}, auth={Secret, true}}, H
     %    or logout handler.
     % The login and logout handlers need to set the AuthSession cookie
     % themselves.
-    CookieHeader = proplists:get_value("Set-Cookie", Headers, ""),
+    CookieHeader = couch_util:get_value("Set-Cookie", Headers, ""),
     Cookies = mochiweb_cookies:parse_cookie(CookieHeader),
-    AuthSession = proplists:get_value("AuthSession", Cookies),
+    AuthSession = couch_util:get_value("AuthSession", Cookies),
     if AuthSession == undefined ->
         TimeStamp = make_cookie_time(),
         [cookie_auth_cookie(?b2l(User), Secret, TimeStamp)];
@@ -391,25 +247,30 @@ ensure_cookie_auth_secret() ->
 
 % session handlers
 % Login handler with user db
-% TODO this should also allow a JSON POST
 handle_session_req(#httpd{method='POST', mochi_req=MochiReq}=Req) ->
     ReqBody = MochiReq:recv_body(),
     Form = case MochiReq:get_primary_header_value("content-type") of
+        % content type should be json
         "application/x-www-form-urlencoded" ++ _ ->
             mochiweb_util:parse_qs(ReqBody);
+        "application/json" ++ _ ->
+            {Pairs} = ?JSON_DECODE(ReqBody),
+            lists:map(fun({Key, Value}) ->
+              {?b2l(Key), ?b2l(Value)}
+            end, Pairs);
         _ ->
             []
     end,
-    UserName = ?l2b(proplists:get_value("name", Form, "")),
-    Password = ?l2b(proplists:get_value("password", Form, "")),
+    UserName = ?l2b(couch_util:get_value("name", Form, "")),
+    Password = ?l2b(couch_util:get_value("password", Form, "")),
     ?LOG_DEBUG("Attempt Login: ~s",[UserName]),
-    User = case get_user(UserName) of
+    User = case couch_auth_cache:get_user_creds(UserName) of
         nil -> [];
         Result -> Result
     end,
-    UserSalt = proplists:get_value(<<"salt">>, User, <<>>),
+    UserSalt = couch_util:get_value(<<"salt">>, User, <<>>),
     PasswordHash = hash_password(Password, UserSalt),
-    ExpectedHash = proplists:get_value(<<"password_sha">>, User, nil),
+    ExpectedHash = couch_util:get_value(<<"password_sha">>, User, nil),
     case couch_util:verify(ExpectedHash, PasswordHash) of
         true ->
             % setup the session cookie
@@ -426,8 +287,8 @@ handle_session_req(#httpd{method='POST', mochi_req=MochiReq}=Req) ->
             send_json(Req#httpd{req_body=ReqBody}, Code, Headers,
                 {[
                     {ok, true},
-                    {name, proplists:get_value(<<"name">>, User, null)},
-                    {roles, proplists:get_value(<<"roles">>, User, [])}
+                    {name, couch_util:get_value(<<"name">>, User, null)},
+                    {roles, couch_util:get_value(<<"roles">>, User, [])}
                 ]});
         _Else ->
             % clear the session
@@ -454,7 +315,7 @@ handle_session_req(#httpd{method='GET', user_ctx=UserCtx}=Req) ->
                     {authentication_db, ?l2b(couch_config:get("couch_httpd_auth", "authentication_db"))},
                     {authentication_handlers, [auth_name(H) || H <- couch_httpd:make_fun_spec_strs(
                             couch_config:get("httpd", "authentication_handlers"))]}
-                ] ++ maybe_value(authenticated, UserCtx#user_ctx.handler, fun(Handler) -> 
+                ] ++ maybe_value(authenticated, UserCtx#user_ctx.handler, fun(Handler) ->
                         auth_name(?b2l(Handler))
                     end)}}
             ]})
@@ -473,7 +334,7 @@ handle_session_req(Req) ->
     send_method_not_allowed(Req, "GET,HEAD,POST,DELETE").
 
 maybe_value(_Key, undefined, _Fun) -> [];
-maybe_value(Key, Else, Fun) -> 
+maybe_value(Key, Else, Fun) ->
     [{Key, Fun(Else)}].
 
 auth_name(String) when is_list(String) ->
@@ -481,7 +342,7 @@ auth_name(String) when is_list(String) ->
     ?l2b(Name).
 
 to_int(Value) when is_binary(Value) ->
-    to_int(?b2l(Value)); 
+    to_int(?b2l(Value));
 to_int(Value) when is_list(Value) ->
     list_to_integer(Value);
 to_int(Value) when is_integer(Value) ->

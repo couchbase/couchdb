@@ -12,7 +12,7 @@
 
 -module(couch_rep_reader).
 -behaviour(gen_server).
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, 
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
     code_change/3]).
 
 -export([start_link/4, next/1]).
@@ -108,6 +108,8 @@ code_change(_OldVsn, State, _Extra) ->
 
 %internal funs
 
+handle_add_docs(_Seq, [], _From, State) ->
+    {reply, ok, State};
 handle_add_docs(Seq, DocsToAdd, From, #state{reply_to=nil} = State) ->
     State1 = update_sequence_lists(Seq, State),
     NewState = State1#state{
@@ -151,9 +153,13 @@ handle_open_remote_doc(Id, Seq, Revs, _, #state{source=#http_db{}} = State) ->
     {_, _Ref} = spawn_document_request(Source, Id, Seq, Revs),
     {reply, ok, State#state{monitor_count = Count+1}}.
 
-handle_monitor_down(normal, #state{pending_doc_request=nil,
+handle_monitor_down(normal, #state{pending_doc_request=nil, reply_to=nil,
         monitor_count=1, complete=waiting_on_monitors} = State) ->
     {noreply, State#state{complete=true, monitor_count=0}};
+handle_monitor_down(normal, #state{pending_doc_request=nil, reply_to=From,
+        monitor_count=1, complete=waiting_on_monitors} = State) ->
+    gen_server:reply(From, {complete, calculate_new_high_seq(State)}),
+    {stop, normal, State#state{complete=true, monitor_count=0}};
 handle_monitor_down(normal, #state{pending_doc_request=nil} = State) ->
     #state{monitor_count = Count} = State,
     {noreply, State#state{monitor_count = Count-1}};

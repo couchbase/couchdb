@@ -62,7 +62,11 @@ add_remove(Fd, Pos, AddKeyValues, KeysToRemove) ->
 
 % Returns the number of matching geometries only
 count_lookup(Fd, Pos, Bbox) ->
-    lookup(Fd, Pos, Bbox, {fun(Item, Acc) -> {ok, Acc+1} end,0}).
+    case lookup(Fd, Pos, Bbox, {fun(Item, Acc) -> {ok, Acc+1} end, 0}) of
+        {ok, []} -> 0;
+        {ok, Count} -> Count
+    end.
+
 
 % All lookup functions return {ok|stop, Acc}
 
@@ -73,8 +77,8 @@ lookup(Fd, Pos, Bbox) ->
          Acc2 = [{Bbox2, DocId, Value}|Acc],
          {ok, Acc2}
     end, []}).
-lookup(_Fd, nil, _Bbox, _FoldFunAndAcc) ->
-    {ok, []};
+lookup(_Fd, nil, _Bbox, {FoldFun, InitAcc}) ->
+    {ok, InitAcc};
 lookup(Fd, Pos, Bbox, {FoldFun, InitAcc}) when not is_list(Bbox) ->
     % default bounds are from this world
     lookup(Fd, Pos, Bbox, {FoldFun, InitAcc}, {-180, -90, 180, 90});
@@ -134,7 +138,7 @@ foldl_stop(Fun, Acc, [H|T]) ->
     {ok, Acc2} ->
         foldl_stop(Fun, Acc2, T);
     {stop, Acc2} ->
-        Acc2
+        {stop, Acc2}
     end.
 
 % Loops recursively through a list of bounding boxes and returns

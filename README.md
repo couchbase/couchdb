@@ -1,6 +1,8 @@
 Welcome to the world of GeoCouch
 ================================
 
+See README for the original CouchDB information.
+
 Prerequisites
 -------------
 
@@ -153,3 +155,7 @@ as for the spatial List functions.
 ### count ###
 `count` is a boolean. `count=true` will only return the number of geometries
 the query will return, not the geometry themselves.
+
+    curl -X GET 'http://localhost:5984/places/_design/main/_spatial/points?bbox=0,0,180,90'
+
+    {"count":1}

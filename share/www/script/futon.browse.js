@@ -62,7 +62,8 @@
                     .find("td.size").text($.futon.formatSize(info.disk_size)).end()
                     .find("td.count").text(info.doc_count).end()
                     .find("td.seq").text(info.update_seq);
-                }
+                },
+                error : function() {}
               });
             });
             $("#databases tbody tr:odd").addClass("odd");
@@ -106,7 +107,8 @@
         reduce: {},
         group_level: {defaultValue: 100},
         per_page: {defaultValue: 10},
-        view: {defaultValue: ""}
+        view: {defaultValue: ""},
+        stale: {defaultValue: false}
       });
 
       var viewName = (urlParts.length > 0) ? urlParts.join("/") : null;
@@ -152,7 +154,7 @@
                     page.viewName.indexOf("/_view"));
                 db.compactView(groupname, {success: function(resp) { callback() }});
                 break;
-              case "view_cleanup": 
+              case "view_cleanup":
                 db.viewCleanup({success: function(resp) { callback() }});
                 break;
             }
@@ -178,7 +180,7 @@
           }
         });
       }
-      
+
       this.databaseSecurity = function() {
         $.showDialog("dialog/_database_security.html", {
           load : function(d) {
@@ -672,7 +674,7 @@
             if (row.id) {
               $("<td class='key'><a href='document.html?" + encodeURIComponent(db.name) +
                 "/" + $.couch.encodeDocId(row.id) + "'><strong></strong><br>" +
-                "<span class='docid'>ID:&nbsp;" + row.id + "</span></a></td>")
+                "<span class='docid'>ID:&nbsp;" + $.futon.escape(row.id) + "</span></a></td>")
                 .find("strong").text(key).end()
                 .appendTo(tr);
             } else {
@@ -764,6 +766,11 @@
               db.query(currentMapCode, currentReduceCode, page.viewLanguage, options);
             } else {
               var viewParts = viewName.split('/');
+
+              if ($.futon.storage.get("stale")) {
+                 options.stale = "ok";
+              }
+
               db.view(viewParts[1] + "/" + viewParts[3], options);
             }
           }
@@ -851,7 +858,7 @@
                   return true;
                 } catch (err) {
                   var msg = err.message;
-                  if (msg == "parseJSON" || msg == "JSON.parse") { 
+                  if (msg == "parseJSON" || msg == "JSON.parse") {
                     msg = "There is a syntax error in the document.";
                   }
                   $("<div class='error'></div>").text(msg).appendTo(this);
@@ -1171,7 +1178,40 @@
               html: true,
               escapeStrings: false
             });
-            return $(html);
+            var n = $(html);
+            if (n.text().length > 140) {
+              // This code reduces a long string in to a summarized string with a link to expand it.
+              // Someone, somewhere, is doing something nasty with the event after it leaves these handlers.
+              // At this time I can't track down the offender, it might actually be a jQuery propogation issue.
+              var fulltext = n.text();
+              var mintext = n.text().slice(0, 140);
+              var e = $('<a href="#expand">...</a>');
+              var m = $('<a href="#min">X</a>');
+              var expand = function (evt) {
+                n.empty();
+                n.text(fulltext);
+                n.append(m);
+                evt.stopPropagation();
+                evt.stopImmediatePropagation();
+                evt.preventDefault();
+              }
+              var minimize = function (evt) {
+                n.empty();
+                n.text(mintext);
+                // For some reason the old element's handler won't fire after removed and added again.
+                e = $('<a href="#expand">...</a>');
+                e.click(expand);
+                n.append(e);
+                evt.stopPropagation();
+                evt.stopImmediatePropagation();
+                evt.preventDefault();
+              }
+              e.click(expand);
+              n.click(minimize);
+              n.text(mintext);
+              n.append(e)
+            }
+            return n;
           }
         }
         var elem = render(value);
@@ -1233,7 +1273,7 @@
     for (var i=0; i < parts.length; i++) {
       encoded.push(encodeURIComponent(parts[i]));
     };
-    return encoded.join('/');
+    return encoded.join('%2f');
   }
 
 })(jQuery);

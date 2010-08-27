@@ -55,7 +55,7 @@ code.null { color: #666; }
 button { font-size: 100%; -webkit-appearance: square-button; }
 button[disabled] { color: #999; }
 input, select, textarea { background: #fff; border: 1px solid;
-  border-color: #999 #ddd #ddd #999; margin: 0; padding: 1px;
+  border-color: #999 #ddd #ddd #999; color: #000; margin: 0; padding: 1px;
 }
 input.placeholder { color: #999; }
 textarea {
@@ -229,6 +229,7 @@ body.fullwidth #wrap { margin-right: 0; }
   margin: 0 0 .5em; padding: 5px 5px 5px 3px;
 }
 #toolbar li { display: inline; }
+#toolbar li.current {float:right;}
 #toolbar button { background: transparent 2px 2px no-repeat; border: none;
   color: #666; margin: 0; padding: 2px 1em 2px 22px; cursor: pointer;
   font-size: 95%; line-height: 16px;
@@ -242,6 +243,7 @@ body.fullwidth #wrap { margin-right: 0; }
 #toolbar button.load { background-image: url(../image/load.png); }
 #toolbar button.run { background-image: url(../image/run.png); }
 #toolbar button.save { background-image: url(../image/save.png); }
+#toolbar button.share { background-image: url(../image/compact.png); }
 
 /* Dialogs */
 
@@ -321,6 +323,13 @@ body.loading #dialog h2 {
   line-height: 16px; padding: 5px;
 }
 #switch select { font-size: 90%; }
+
+/* Stale views checkbox */
+
+#staleviews {
+  color: #666; float: right; font-size: 90%;
+  font-weight: bold; line-height: 16px; padding: 5px;
+}
 
 /* View function editing */
 
@@ -600,4 +609,10 @@ form#replicator p.actions { padding: 1px; clear: left; margin: 0;
 #status td.object, #status td.pid {
   font-family: "DejaVu Sans Mono",Menlo,Courier,monospace;
   font-size: 11px;
+}
+
+
+/* Session */
+#loginSignup {
+  font-size:200%;
 }

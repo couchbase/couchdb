@@ -1,16 +1,16 @@
-% Licensed under the Apache License, Version 2.0 (the "License"); 
-% you may not use this file except in compliance with the License. 
+% Licensed under the Apache License, Version 2.0 (the "License");
+% you may not use this file except in compliance with the License.
 %
 % You may obtain a copy of the License at
 % http://www.apache.org/licenses/LICENSE-2.0
 %
-% Unless required by applicable law or agreed to in writing, 
-% software distributed under the License is distributed on an 
-% "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, 
-% either express or implied. 
+% Unless required by applicable law or agreed to in writing,
+% software distributed under the License is distributed on an
+% "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND,
+% either express or implied.
 %
 % See the License for the specific language governing permissions
-% and limitations under the License. 
+% and limitations under the License.
 %
 % This file drew much inspiration from erlview, which was written by and
 % copyright Michael McDaniel [http://autosys.us], and is also under APL 2.0
@@ -25,14 +25,14 @@
 %
 %  fun({Doc}) ->
 %    % Below, we emit a single record - the _id as key, null as value
-%    DocId = proplists:get_value(Doc, <<"_id">>, null),
+%    DocId = couch_util:get_value(Doc, <<"_id">>, null),
 %    Emit(DocId, null)
 %  end.
 %
 % which should be roughly the same as the javascript:
 %    emit(doc._id, null);
 %
-% This module exposes enough functions such that a native erlang server can 
+% This module exposes enough functions such that a native erlang server can
 % act as a fully-fleged view server, but no 'helper' functions specifically
 % for simplifying your erlang view code.  It is expected other third-party
 % extensions will evolve which offer useful layers on top of this view server
@@ -173,7 +173,7 @@ ddoc(State, {DDoc}, [FunPath, Args]) ->
     % load fun from the FunPath
     BFun = lists:foldl(fun
         (Key, {Props}) when is_list(Props) ->
-            proplists:get_value(Key, Props, nil);
+            couch_util:get_value(Key, Props, nil);
         (_Key, Fun) when is_binary(Fun) ->
             Fun;
         (_Key, nil) ->
@@ -313,11 +313,11 @@ bindings(State, Sig, DDoc) ->
 % thanks to erlview, via:
 % http://erlang.org/pipermail/erlang-questions/2003-November/010544.html
 makefun(State, Source) ->
-    Sig = erlang:md5(Source),
+    Sig = couch_util:md5(Source),
     BindFuns = bindings(State, Sig),
     {Sig, makefun(State, Source, BindFuns)}.
 makefun(State, Source, {DDoc}) ->
-    Sig = erlang:md5(lists:flatten([Source, term_to_binary(DDoc)])),
+    Sig = couch_util:md5(lists:flatten([Source, term_to_binary(DDoc)])),
     BindFuns = bindings(State, Sig, {DDoc}),
     {Sig, makefun(State, Source, BindFuns)};
 makefun(_State, Source, BindFuns) when is_list(BindFuns) ->
@@ -370,7 +370,7 @@ start_list_resp(Self, Sig) ->
                 undefined -> {[{<<"headers">>, {[]}}]};
                 CurrHdrs -> CurrHdrs
             end,
-            Chunks = 
+            Chunks =
             case erlang:get(Sig) of
                 undefined -> [];
                 CurrChunks -> CurrChunks

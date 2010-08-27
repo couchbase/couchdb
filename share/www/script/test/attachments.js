@@ -93,6 +93,7 @@ couchTests.attachments= function(debug) {
   });
   T(xhr.status == 201);
   var rev = JSON.parse(xhr.responseText).rev;
+  TEquals('"' + rev + '"', xhr.getResponseHeader("Etag"));
 
   var xhr = CouchDB.request("GET", "/test_suite_db/bin_doc3/attachment.txt");
   T(xhr.responseText == bin_data);
@@ -110,6 +111,7 @@ couchTests.attachments= function(debug) {
   });
   T(xhr.status == 201);
   var rev = JSON.parse(xhr.responseText).rev;
+  TEquals('"' + rev + '"', xhr.getResponseHeader("Etag"));
 
   var xhr = CouchDB.request("GET", "/test_suite_db/bin_doc3/attachment.txt");
   T(xhr.responseText == bin_data);
@@ -244,4 +246,30 @@ couchTests.attachments= function(debug) {
     body: "THIS IS AN ATTACHMENT. BOOYA!"
   });
   TEquals(400, xhr.status, "should return error code 400 Bad Request");
+
+  // test COUCHDB-809 - stubs should only require the 'stub' field
+  var bin_doc6 = {
+    _id: "bin_doc6",
+    _attachments:{
+      "foo.txt": {
+        content_type:"text/plain",
+        data: "VGhpcyBpcyBhIGJhc2U2NCBlbmNvZGVkIHRleHQ="
+      }
+    }
+  }
+  T(db.save(bin_doc6).ok);
+  // stub out the attachment
+  bin_doc6._attachments["foo.txt"] = { stub: true };
+  T(db.save(bin_doc6).ok == true);
+
+  // wrong rev pos specified
+  
+  // stub out the attachment with the wrong revpos
+  bin_doc6._attachments["foo.txt"] = { stub: true, revpos: 10};
+  try {
+      T(db.save(bin_doc6).ok == true);
+      T(false && "Shouldn't get here!");
+  } catch (e) {
+      T(e.error == "missing_stub")
+  }
 };

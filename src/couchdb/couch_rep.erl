@@ -12,12 +12,18 @@
 
 -module(couch_rep).
 -behaviour(gen_server).
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, 
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
     code_change/3]).
 
 -export([replicate/2, checkpoint/1]).
+-export([ensure_rep_db_exists/0, make_replication_id/2]).
+-export([start_replication/3, end_replication/1, get_result/4]).
+-export([update_rep_doc/2]).
 
 -include("couch_db.hrl").
+-include("couch_js_functions.hrl").
+
+-define(REP_ID_VERSION, 2).
 
 -record(state, {
     changes_feed,
@@ -46,7 +52,8 @@
     committed_seq = 0,
 
     stats = nil,
-    doc_ids = nil
+    doc_ids = nil,
+    rep_doc = nil
 }).
 
 %% convenience function to do a simple replication from the shell
@@ -59,70 +66,81 @@ replicate(Source, Target) when is_binary(Source), is_binary(Target) ->
 
 %% function handling POST to _replicate
 replicate({Props}=PostBody, UserCtx) ->
-    {BaseId, Extension} = make_replication_id(PostBody, UserCtx),
-    Replicator = {BaseId ++ Extension,
-        {gen_server, start_link, [?MODULE, [BaseId, PostBody, UserCtx], []]},
+    RepId = make_replication_id(PostBody, UserCtx),
+    case couch_util:get_value(<<"cancel">>, Props, false) of
+    true ->
+        end_replication(RepId);
+    false ->
+        Server = start_replication(PostBody, RepId, UserCtx),
+        get_result(Server, RepId, PostBody, UserCtx)
+    end.
+
+end_replication({BaseId, Extension}) ->
+    RepId = BaseId ++ Extension,
+    case supervisor:terminate_child(couch_rep_sup, RepId) of
+    {error, not_found} = R ->
+        R;
+    ok ->
+        ok = supervisor:delete_child(couch_rep_sup, RepId),
+        {ok, {cancelled, ?l2b(BaseId)}}
+    end.
+
+start_replication(RepDoc, {BaseId, Extension}, UserCtx) ->
+    Replicator = {
+        BaseId ++ Extension,
+        {gen_server, start_link,
+            [?MODULE, [BaseId, RepDoc, UserCtx], []]},
         temporary,
         1,
         worker,
         [?MODULE]
     },
-
-    case proplists:get_value(<<"cancel">>, Props, false) of
-    true ->
- case supervisor:terminate_child(couch_rep_sup, BaseId ++ Extension) of
-        {error, not_found} ->
-     {error, not_found};
-        ok ->
-     ok = supervisor:delete_child(couch_rep_sup, BaseId ++ Extension),
-            {ok, {cancelled, ?l2b(BaseId)}}
- end;
-    false ->
-        Server = start_replication_server(Replicator),
-
-        case proplists:get_value(<<"continuous">>, Props, false) of
-        true ->
-            {ok, {continuous, ?l2b(BaseId)}};
-        false ->
-            get_result(Server, PostBody, UserCtx)
-        end
-    end.
+    start_replication_server(Replicator).
 
 checkpoint(Server) ->
     gen_server:cast(Server, do_checkpoint).
 
-get_result(Server, PostBody, UserCtx) ->
-    try gen_server:call(Server, get_result, infinity) of
-    retry -> replicate(PostBody, UserCtx);
-    Else -> Else
-    catch
-    exit:{noproc, {gen_server, call, [Server, get_result , infinity]}} ->
-        %% oops, this replication just finished -- restart it.
-        replicate(PostBody, UserCtx);
-    exit:{normal, {gen_server, call, [Server, get_result , infinity]}} ->
-        %% we made the call during terminate
-        replicate(PostBody, UserCtx)
+get_result(Server, {BaseId, _Extension}, {Props} = PostBody, UserCtx) ->
+    case couch_util:get_value(<<"continuous">>, Props, false) of
+    true ->
+        {ok, {continuous, ?l2b(BaseId)}};
+    false ->
+        try gen_server:call(Server, get_result, infinity) of
+        retry -> replicate(PostBody, UserCtx);
+        Else -> Else
+        catch
+        exit:{noproc, {gen_server, call, [Server, get_result, infinity]}} ->
+            %% oops, this replication just finished -- restart it.
+            replicate(PostBody, UserCtx);
+        exit:{normal, {gen_server, call, [Server, get_result, infinity]}} ->
+            %% we made the call during terminate
+            replicate(PostBody, UserCtx)
+        end
     end.
 
 init(InitArgs) ->
     try do_init(InitArgs)
     catch throw:{db_not_found, DbUrl} -> {stop, {db_not_found, DbUrl}} end.
 
-do_init([RepId, {PostProps}, UserCtx] = InitArgs) ->
+do_init([RepId, {PostProps} = RepDoc, UserCtx] = InitArgs) ->
     process_flag(trap_exit, true),
 
-    SourceProps = proplists:get_value(<<"source">>, PostProps),
-    TargetProps = proplists:get_value(<<"target">>, PostProps),
+    SourceProps = couch_util:get_value(<<"source">>, PostProps),
+    TargetProps = couch_util:get_value(<<"target">>, PostProps),
 
-    DocIds = proplists:get_value(<<"doc_ids">>, PostProps, nil),
-    Continuous = proplists:get_value(<<"continuous">>, PostProps, false),
-    CreateTarget = proplists:get_value(<<"create_target">>, PostProps, false),
+    DocIds = couch_util:get_value(<<"doc_ids">>, PostProps, nil),
+    Continuous = couch_util:get_value(<<"continuous">>, PostProps, false),
+    CreateTarget = couch_util:get_value(<<"create_target">>, PostProps, false),
 
-    Source = open_db(SourceProps, UserCtx),
-    Target = open_db(TargetProps, UserCtx, CreateTarget),
+    ProxyParams = parse_proxy_params(
+        couch_util:get_value(<<"proxy">>, PostProps, [])),
+    Source = open_db(SourceProps, UserCtx, ProxyParams),
+    Target = open_db(TargetProps, UserCtx, ProxyParams, CreateTarget),
 
     SourceInfo = dbinfo(Source),
     TargetInfo = dbinfo(Target),
+
+    maybe_set_triggered(RepDoc, RepId),
 
     case DocIds of
     List when is_list(List) ->
@@ -144,8 +162,9 @@ do_init([RepId, {PostProps}, UserCtx] = InitArgs) ->
 
     _ ->
         % Replication using the _changes API (DB sequence update numbers).
-        SourceLog = open_replication_log(Source, RepId),
-        TargetLog = open_replication_log(Target, RepId),
+
+        [SourceLog, TargetLog] = find_replication_logs(
+            [Source, Target], RepId, {PostProps}, UserCtx),
     
         {StartSeq, History} = compare_replication_logs(SourceLog, TargetLog),
 
@@ -190,9 +209,10 @@ do_init([RepId, {PostProps}, UserCtx] = InitArgs) ->
         source_log = SourceLog,
         target_log = TargetLog,
         rep_starttime = httpd_util:rfc1123_date(),
-        src_starttime = proplists:get_value(instance_start_time, SourceInfo),
-        tgt_starttime = proplists:get_value(instance_start_time, TargetInfo),
-        doc_ids = DocIds
+        src_starttime = couch_util:get_value(instance_start_time, SourceInfo),
+        tgt_starttime = couch_util:get_value(instance_start_time, TargetInfo),
+        doc_ids = DocIds,
+        rep_doc = RepDoc
     },
     {ok, State}.
 
@@ -249,28 +269,33 @@ handle_info({'EXIT', _Pid, Reason}, State) ->
     {stop, Reason, State}.
 
 terminate(normal, #state{checkpoint_scheduled=nil} = State) ->
-    do_terminate(State);
+    do_terminate(State),
+    update_rep_doc(State#state.rep_doc, [{<<"state">>, <<"completed">>}]);
     
 terminate(normal, State) ->
     timer:cancel(State#state.checkpoint_scheduled),
-    do_terminate(do_checkpoint(State));
+    do_terminate(do_checkpoint(State)),
+    update_rep_doc(State#state.rep_doc, [{<<"state">>, <<"completed">>}]);
 
-terminate(Reason, State) ->
-    #state{
-        listeners = Listeners,
-        source = Source,
-        target = Target,
-        stats = Stats
-    } = State,
+terminate(shutdown, #state{listeners = Listeners} = State) ->
+    % continuous replication stopped
+    [gen_server:reply(L, {ok, stopped}) || L <- Listeners],
+    do_forced_terminate(State);
+
+terminate(Reason, #state{listeners = Listeners} = State) ->
     [gen_server:reply(L, {error, Reason}) || L <- Listeners],
-    ets:delete(Stats),
-    close_db(Target),
-    close_db(Source).
+    do_forced_terminate(State),
+    update_rep_doc(State#state.rep_doc, [{<<"state">>, <<"error">>}]).
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 % internal funs
+
+do_forced_terminate(#state{source = Source, target = Target, stats = Stats}) ->
+    ets:delete(Stats),
+    close_db(Target),
+    close_db(Source).
 
 start_replication_server(Replicator) ->
     RepId = element(1, Replicator),
@@ -290,7 +315,9 @@ start_replication_server(Replicator) ->
             {error, {already_started, Pid}} =
                 supervisor:start_child(couch_rep_sup, Replicator),
             ?LOG_DEBUG("replication ~p already running at ~p", [RepId, Pid]),
-            Pid
+            Pid;
+        {error, {db_not_found, DbUrl}} ->
+            throw({db_not_found, <<"could not open ", DbUrl/binary>>})
         end;
     {error, {already_started, Pid}} ->
         ?LOG_DEBUG("replication ~p already running at ~p", [RepId, Pid]),
@@ -302,17 +329,17 @@ start_replication_server(Replicator) ->
 compare_replication_logs(SrcDoc, TgtDoc) ->
     #doc{body={RepRecProps}} = SrcDoc,
     #doc{body={RepRecPropsTgt}} = TgtDoc,
-    case proplists:get_value(<<"session_id">>, RepRecProps) ==
-            proplists:get_value(<<"session_id">>, RepRecPropsTgt) of
+    case couch_util:get_value(<<"session_id">>, RepRecProps) ==
+            couch_util:get_value(<<"session_id">>, RepRecPropsTgt) of
     true ->
         % if the records have the same session id,
         % then we have a valid replication history
-        OldSeqNum = proplists:get_value(<<"source_last_seq">>, RepRecProps, 0),
-        OldHistory = proplists:get_value(<<"history">>, RepRecProps, []),
+        OldSeqNum = couch_util:get_value(<<"source_last_seq">>, RepRecProps, 0),
+        OldHistory = couch_util:get_value(<<"history">>, RepRecProps, []),
         {OldSeqNum, OldHistory};
     false ->
-        SourceHistory = proplists:get_value(<<"history">>, RepRecProps, []),
-        TargetHistory = proplists:get_value(<<"history">>, RepRecPropsTgt, []),
+        SourceHistory = couch_util:get_value(<<"history">>, RepRecProps, []),
+        TargetHistory = couch_util:get_value(<<"history">>, RepRecPropsTgt, []),
         ?LOG_INFO("Replication records differ. "
                 "Scanning histories to find a common ancestor.", []),
         ?LOG_DEBUG("Record on source:~p~nRecord on target:~p~n",
@@ -324,18 +351,18 @@ compare_rep_history(S, T) when S =:= [] orelse T =:= [] ->
     ?LOG_INFO("no common ancestry -- performing full replication", []),
     {0, []};
 compare_rep_history([{S}|SourceRest], [{T}|TargetRest]=Target) ->
-    SourceId = proplists:get_value(<<"session_id">>, S),
+    SourceId = couch_util:get_value(<<"session_id">>, S),
     case has_session_id(SourceId, Target) of
     true ->
-        RecordSeqNum = proplists:get_value(<<"recorded_seq">>, S, 0),
+        RecordSeqNum = couch_util:get_value(<<"recorded_seq">>, S, 0),
         ?LOG_INFO("found a common replication record with source_seq ~p",
             [RecordSeqNum]),
         {RecordSeqNum, SourceRest};
     false ->
-        TargetId = proplists:get_value(<<"session_id">>, T),
+        TargetId = couch_util:get_value(<<"session_id">>, T),
         case has_session_id(TargetId, SourceRest) of
         true ->
-            RecordSeqNum = proplists:get_value(<<"recorded_seq">>, T, 0),
+            RecordSeqNum = couch_util:get_value(<<"recorded_seq">>, T, 0),
             ?LOG_INFO("found a common replication record with source_seq ~p",
                 [RecordSeqNum]),
             {RecordSeqNum, TargetRest};
@@ -350,13 +377,19 @@ close_db(Db) ->
     couch_db:close(Db).
 
 dbname(#http_db{url = Url}) ->
-    Url;
+    strip_password(Url);
 dbname(#db{name = Name}) ->
     Name.
 
+strip_password(Url) ->
+    re:replace(Url,
+        "http(s)?://([^:]+):[^@]+@(.*)$",
+        "http\\1://\\2:*****@\\3",
+        [{return, list}]).
+
 dbinfo(#http_db{} = Db) ->
     {DbProps} = couch_rep_httpc:request(Db),
-    [{list_to_atom(?b2l(K)), V} || {K,V} <- DbProps];
+    [{list_to_existing_atom(?b2l(K)), V} || {K,V} <- DbProps];
 dbinfo(Db) ->
     {ok, Info} = couch_db:get_db_info(Db),
     Info.
@@ -427,17 +460,17 @@ terminate_cleanup(#state{source=Source, target=Target, stats=Stats}) ->
 has_session_id(_SessionId, []) ->
     false;
 has_session_id(SessionId, [{Props} | Rest]) ->
-    case proplists:get_value(<<"session_id">>, Props, nil) of
+    case couch_util:get_value(<<"session_id">>, Props, nil) of
     SessionId ->
         true;
     _Else ->
         has_session_id(SessionId, Rest)
     end.
 
-maybe_append_options(Options, Props) ->
+maybe_append_options(Options, {Props}) ->
     lists:foldl(fun(Option, Acc) ->
-        Acc ++ 
-        case proplists:get_value(Option, Props, false) of
+        Acc ++
+        case couch_util:get_value(Option, Props, false) of
         true ->
             "+" ++ ?b2l(Option);
         false ->
@@ -445,36 +478,50 @@ maybe_append_options(Options, Props) ->
         end
     end, [], Options).
 
-make_replication_id({Props}, UserCtx) ->
-    %% funky algorithm to preserve backwards compatibility
+make_replication_id(RepProps, UserCtx) ->
+    BaseId = make_replication_id(RepProps, UserCtx, ?REP_ID_VERSION),
+    Extension = maybe_append_options(
+                  [<<"continuous">>, <<"create_target">>], RepProps),
+    {BaseId, Extension}.
+
+% Versioned clauses for generating replication ids
+% If a change is made to how replications are identified
+% add a new clause and increase ?REP_ID_VERSION at the top
+make_replication_id({Props}, UserCtx, 2) ->
     {ok, HostName} = inet:gethostname(),
-    % Port = mochiweb_socket_server:get(couch_httpd, port),
-    Src = get_rep_endpoint(UserCtx, proplists:get_value(<<"source">>, Props)),
-    Tgt = get_rep_endpoint(UserCtx, proplists:get_value(<<"target">>, Props)),    
-    Base = [HostName, Src, Tgt] ++
-        case proplists:get_value(<<"filter">>, Props) of
+    Port = mochiweb_socket_server:get(couch_httpd, port),
+    Src = get_rep_endpoint(UserCtx, couch_util:get_value(<<"source">>, Props)),
+    Tgt = get_rep_endpoint(UserCtx, couch_util:get_value(<<"target">>, Props)),
+    maybe_append_filters({Props}, [HostName, Port, Src, Tgt]);
+make_replication_id({Props}, UserCtx, 1) ->
+    {ok, HostName} = inet:gethostname(),
+    Src = get_rep_endpoint(UserCtx, couch_util:get_value(<<"source">>, Props)),
+    Tgt = get_rep_endpoint(UserCtx, couch_util:get_value(<<"target">>, Props)),
+    maybe_append_filters({Props}, [HostName, Src, Tgt]).
+
+maybe_append_filters({Props}, Base) ->
+    Base2 = Base ++ 
+        case couch_util:get_value(<<"filter">>, Props) of
         undefined ->
-            case proplists:get_value(<<"doc_ids">>, Props) of
+            case couch_util:get_value(<<"doc_ids">>, Props) of
             undefined ->
                 [];
             DocIds ->
                 [DocIds]
             end;
         Filter ->
-            [Filter, proplists:get_value(<<"query_params">>, Props, {[]})]
+            [Filter, couch_util:get_value(<<"query_params">>, Props, {[]})]
         end,
-    Extension = maybe_append_options(
-        [<<"continuous">>, <<"create_target">>], Props),
-    {couch_util:to_hex(erlang:md5(term_to_binary(Base))), Extension}.
+    couch_util:to_hex(couch_util:md5(term_to_binary(Base2))).
 
 maybe_add_trailing_slash(Url) ->
     re:replace(Url, "[^/]$", "&/", [{return, list}]).
 
 get_rep_endpoint(_UserCtx, {Props}) ->
-    Url = maybe_add_trailing_slash(proplists:get_value(<<"url">>, Props)),
-    {BinHeaders} = proplists:get_value(<<"headers">>, Props, {[]}),
-    {Auth} = proplists:get_value(<<"auth">>, Props, {[]}),
-    case proplists:get_value(<<"oauth">>, Auth) of
+    Url = maybe_add_trailing_slash(couch_util:get_value(<<"url">>, Props)),
+    {BinHeaders} = couch_util:get_value(<<"headers">>, Props, {[]}),
+    {Auth} = couch_util:get_value(<<"auth">>, Props, {[]}),
+    case couch_util:get_value(<<"oauth">>, Auth) of
     undefined ->
         {remote, Url, [{?b2l(K),?b2l(V)} || {K,V} <- BinHeaders]};
     {OAuth} ->
@@ -487,50 +534,77 @@ get_rep_endpoint(_UserCtx, <<"https://",_/binary>>=Url) ->
 get_rep_endpoint(UserCtx, <<DbName/binary>>) ->
     {local, DbName, UserCtx}.
 
-open_replication_log(#http_db{}=Db, RepId) ->
-    DocId = ?LOCAL_DOC_PREFIX ++ RepId,
-    Req = Db#http_db{resource=couch_util:url_encode(DocId)},
+find_replication_logs(DbList, RepId, RepProps, UserCtx) ->
+    LogId = ?l2b(?LOCAL_DOC_PREFIX ++ RepId),
+    fold_replication_logs(DbList, ?REP_ID_VERSION,
+        LogId, LogId, RepProps, UserCtx, []).
+
+% Accumulate the replication logs
+% Falls back to older log document ids and migrates them
+fold_replication_logs([], _Vsn, _LogId, _NewId, _RepProps, _UserCtx, Acc) ->
+    lists:reverse(Acc);
+fold_replication_logs([Db|Rest]=Dbs, Vsn, LogId, NewId,
+        RepProps, UserCtx, Acc) ->
+    case open_replication_log(Db, LogId) of
+    {error, not_found} when Vsn > 1 ->
+        OldRepId = make_replication_id(RepProps, UserCtx, Vsn - 1),
+        fold_replication_logs(Dbs, Vsn - 1,
+            ?l2b(?LOCAL_DOC_PREFIX ++ OldRepId), NewId, RepProps, UserCtx, Acc);
+    {error, not_found} ->
+        fold_replication_logs(Rest, ?REP_ID_VERSION, NewId, NewId,
+            RepProps, UserCtx, [#doc{id=NewId}|Acc]);
+    {ok, Doc} when LogId =:= NewId ->
+        fold_replication_logs(Rest, ?REP_ID_VERSION, NewId, NewId,
+            RepProps, UserCtx, [Doc|Acc]);
+    {ok, Doc} ->
+        MigratedLog = #doc{id=NewId,body=Doc#doc.body},
+        fold_replication_logs(Rest, ?REP_ID_VERSION, NewId, NewId,
+            RepProps, UserCtx, [MigratedLog|Acc])
+    end.
+
+open_replication_log(#http_db{}=Db, DocId) ->
+    Req = Db#http_db{resource=couch_util:url_encode(?b2l(DocId))},
     case couch_rep_httpc:request(Req) of
     {[{<<"error">>, _}, {<<"reason">>, _}]} ->
         ?LOG_DEBUG("didn't find a replication log for ~s", [Db#http_db.url]),
-        #doc{id=?l2b(DocId)};
+        {error, not_found};
     Doc ->
         ?LOG_DEBUG("found a replication log for ~s", [Db#http_db.url]),
-        couch_doc:from_json_obj(Doc)
+        {ok, couch_doc:from_json_obj(Doc)}
     end;
-open_replication_log(Db, RepId) ->
-    DocId = ?l2b(?LOCAL_DOC_PREFIX ++ RepId),
+open_replication_log(Db, DocId) ->
     case couch_db:open_doc(Db, DocId, []) of
     {ok, Doc} ->
         ?LOG_DEBUG("found a replication log for ~s", [Db#db.name]),
-        Doc;
+        {ok, Doc};
     _ ->
         ?LOG_DEBUG("didn't find a replication log for ~s", [Db#db.name]),
-        #doc{id=DocId}
+        {error, not_found}
     end.
 
-open_db(Props, UserCtx) ->
-    open_db(Props, UserCtx, false).
+open_db(Props, UserCtx, ProxyParams) ->
+    open_db(Props, UserCtx, ProxyParams, false).
 
-open_db({Props}, _UserCtx, CreateTarget) ->
-    Url = maybe_add_trailing_slash(proplists:get_value(<<"url">>, Props)),
-    {AuthProps} = proplists:get_value(<<"auth">>, Props, {[]}),
-    {BinHeaders} = proplists:get_value(<<"headers">>, Props, {[]}),
+open_db({Props}, _UserCtx, ProxyParams, CreateTarget) ->
+    Url = maybe_add_trailing_slash(couch_util:get_value(<<"url">>, Props)),
+    {AuthProps} = couch_util:get_value(<<"auth">>, Props, {[]}),
+    {BinHeaders} = couch_util:get_value(<<"headers">>, Props, {[]}),
     Headers = [{?b2l(K),?b2l(V)} || {K,V} <- BinHeaders],
     DefaultHeaders = (#http_db{})#http_db.headers,
-    Db = #http_db{
+    Db1 = #http_db{
         url = Url,
         auth = AuthProps,
         headers = lists:ukeymerge(1, Headers, DefaultHeaders)
     },
+    Db = Db1#http_db{options = Db1#http_db.options ++ ProxyParams},
     couch_rep_httpc:db_exists(Db, CreateTarget);
-open_db(<<"http://",_/binary>>=Url, _, CreateTarget) ->
-    open_db({[{<<"url">>,Url}]}, [], CreateTarget);
-open_db(<<"https://",_/binary>>=Url, _, CreateTarget) ->
-    open_db({[{<<"url">>,Url}]}, [], CreateTarget);
-open_db(<<DbName/binary>>, UserCtx, CreateTarget) ->
+open_db(<<"http://",_/binary>>=Url, _, ProxyParams, CreateTarget) ->
+    open_db({[{<<"url">>,Url}]}, [], ProxyParams, CreateTarget);
+open_db(<<"https://",_/binary>>=Url, _, ProxyParams, CreateTarget) ->
+    open_db({[{<<"url">>,Url}]}, [], ProxyParams, CreateTarget);
+open_db(<<DbName/binary>>, UserCtx, _ProxyParams, CreateTarget) ->
     case CreateTarget of
-    true -> 
+    true ->
         ok = couch_httpd:verify_is_server_admin(UserCtx),
         couch_server:create(DbName, [{user_ctx, UserCtx}]);
     false -> ok
@@ -585,7 +659,7 @@ do_checkpoint(State) ->
             {<<"missing_found">>, ets:lookup_element(Stats, missing_revs, 2)},
             {<<"docs_read">>, ets:lookup_element(Stats, docs_read, 2)},
             {<<"docs_written">>, ets:lookup_element(Stats, docs_written, 2)},
-            {<<"doc_write_failures">>, 
+            {<<"doc_write_failures">>,
                 ets:lookup_element(Stats, doc_write_failures, 2)}
         ]},
         % limit history to 50 entries
@@ -647,14 +721,15 @@ commit_to_both(Source, Target, RequiredSeq) ->
     end,
     {SourceStartTime, TargetStartTime}.
     
-ensure_full_commit(#http_db{} = Target) ->
+ensure_full_commit(#http_db{headers = Headers} = Target) ->
     Req = Target#http_db{
         resource = "_ensure_full_commit",
-        method = post
+        method = post,
+        headers = couch_util:proplist_apply_field({"Content-Type", "application/json"}, Headers)
     },
     {ResultProps} = couch_rep_httpc:request(Req),
-    true = proplists:get_value(<<"ok">>, ResultProps),
-    proplists:get_value(<<"instance_start_time">>, ResultProps);
+    true = couch_util:get_value(<<"ok">>, ResultProps),
+    couch_util:get_value(<<"instance_start_time">>, ResultProps);
 ensure_full_commit(Target) ->
     {ok, NewDb} = couch_db:open_int(Target#db.name, []),
     UpdateSeq = couch_db:get_update_seq(Target),
@@ -671,16 +746,17 @@ ensure_full_commit(Target) ->
         InstanceStartTime
     end.
 
-ensure_full_commit(#http_db{} = Source, RequiredSeq) ->
+ensure_full_commit(#http_db{headers = Headers} = Source, RequiredSeq) ->
     Req = Source#http_db{
         resource = "_ensure_full_commit",
         method = post,
-        qs = [{seq, RequiredSeq}]
+        qs = [{seq, RequiredSeq}],
+        headers = couch_util:proplist_apply_field({"Content-Type", "application/json"}, Headers)
     },
     {ResultProps} = couch_rep_httpc:request(Req),
-    case proplists:get_value(<<"ok">>, ResultProps) of
+    case couch_util:get_value(<<"ok">>, ResultProps) of
     true ->
-        proplists:get_value(<<"instance_start_time">>, ResultProps);
+        couch_util:get_value(<<"instance_start_time">>, ResultProps);
     undefined -> nil end;
 ensure_full_commit(Source, RequiredSeq) ->
     {ok, NewDb} = couch_db:open_int(Source#db.name, []),
@@ -705,7 +781,7 @@ update_local_doc(#http_db{} = Db, #doc{id=DocId} = Doc) ->
         headers = [{"x-couch-full-commit", "false"} | Db#http_db.headers]
     },
     {ResponseMembers} = couch_rep_httpc:request(Req),
-    Rev = proplists:get_value(<<"rev">>, ResponseMembers),
+    Rev = couch_util:get_value(<<"rev">>, ResponseMembers),
     couch_doc:parse_rev(Rev);
 update_local_doc(Db, Doc) ->
     {ok, Result} = couch_db:update_doc(Db, Doc, [delay_commit]),
@@ -718,3 +794,94 @@ up_to_date(Source, Seq) ->
     T = NewDb#db.update_seq == Seq,
     couch_db:close(NewDb),
     T.
+
+parse_proxy_params(ProxyUrl) when is_binary(ProxyUrl) ->
+    parse_proxy_params(?b2l(ProxyUrl));
+parse_proxy_params([]) ->
+    [];
+parse_proxy_params(ProxyUrl) ->
+    {url, _, Base, Port, User, Passwd, _Path, _Proto} =
+        ibrowse_lib:parse_url(ProxyUrl),
+    [{proxy_host, Base}, {proxy_port, Port}] ++
+        case is_list(User) andalso is_list(Passwd) of
+        false ->
+            [];
+        true ->
+            [{proxy_user, User}, {proxy_password, Passwd}]
+        end.
+
+update_rep_doc({Props} = _RepDoc, KVs) ->
+    case couch_util:get_value(<<"_id">>, Props) of
+    undefined ->
+        % replication triggered by POSTing to _replicate/
+        ok;
+    RepDocId ->
+        % replication triggered by adding a Rep Doc to the replicator DB
+        {ok, RepDb} = ensure_rep_db_exists(),
+        case couch_db:open_doc(RepDb, RepDocId, []) of
+        {ok, LatestRepDoc} ->
+            update_rep_doc(RepDb, LatestRepDoc, KVs);
+        _ ->
+            ok
+        end,
+        couch_db:close(RepDb)
+    end.
+
+update_rep_doc(RepDb, #doc{body = {RepDocBody}} = RepDoc, KVs) ->
+    NewRepDocBody = lists:foldl(
+        fun({K, _V} = KV, Body) ->
+            lists:keystore(K, 1, Body, KV)
+        end,
+        RepDocBody,
+        KVs
+    ),
+    % might not succeed - when the replication doc is deleted right
+    % before this update (not an error)
+    couch_db:update_doc(
+        RepDb,
+        RepDoc#doc{body = {NewRepDocBody}},
+        []
+    ).
+
+maybe_set_triggered({RepProps} = RepDoc, RepId) ->
+    case couch_util:get_value(<<"state">>, RepProps) of
+    <<"triggered">> ->
+        ok;
+    _ ->
+        update_rep_doc(
+            RepDoc,
+            [
+                {<<"state">>, <<"triggered">>},
+                {<<"replication_id">>, ?l2b(RepId)}
+            ]
+        )
+    end.
+
+ensure_rep_db_exists() ->
+    DbName = ?l2b(couch_config:get("replicator", "db", "_replicator")),
+    Opts = [
+        {user_ctx, #user_ctx{roles=[<<"_admin">>, <<"_replicator">>]}},
+        sys_db
+    ],
+    case couch_db:open(DbName, Opts) of
+    {ok, Db} ->
+        Db;
+    _Error ->
+        {ok, Db} = couch_db:create(DbName, Opts)
+    end,
+    ok = ensure_rep_ddoc_exists(Db, <<"_design/_replicator">>),
+    {ok, Db}.
+
+ensure_rep_ddoc_exists(RepDb, DDocID) ->
+    case couch_db:open_doc(RepDb, DDocID, []) of
+    {ok, _Doc} ->
+        ok;
+    _ ->
+        DDoc = couch_doc:from_json_obj({[
+            {<<"_id">>, DDocID},
+            {<<"language">>, <<"javascript">>},
+            {<<"validate_doc_update">>, ?REP_DB_DOC_VALIDATE_FUN}
+        ]}),
+        {ok, _Rev} = couch_db:update_doc(RepDb, DDoc, [])
+    end,
+    ok.

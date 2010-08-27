@@ -48,11 +48,11 @@ load_index(Req, Db, {DesignId, SpatialName}) ->
 %output_spatial_index(Req, Index, Group, Db,
 %                     QueryArgs#spatial_query_args{count=true}) ->
 output_spatial_index(Req, Index, Group, Db, QueryArgs) when
-      QueryArgs#spatial_query_args.count == true ->
-    {ok, Count} = vtree:count_lookup(Group#spatial_group.fd,
-                                     Index#spatial.treepos,
-                                     QueryArgs#spatial_query_args.bbox),
-    send_json(Req, Count);
+        QueryArgs#spatial_query_args.count == true ->
+    Count = vtree:count_lookup(Group#spatial_group.fd,
+                               Index#spatial.treepos,
+                               QueryArgs#spatial_query_args.bbox),
+    send_json(Req, {[{"count",Count}]});
 
 % counterpart in couch_httpd_view is output_map_view/6
 output_spatial_index(Req, Index, Group, Db, QueryArgs) ->
@@ -66,9 +66,12 @@ output_spatial_index(Req, Index, Group, Db, QueryArgs) ->
                     Req, QueryArgs, CurrentEtag, Db,
                     Group#spatial_group.current_seq, HelperFuns),
         FoldAccInit = {undefined, ""},
+        % In this case the accumulator consists of the response (which
+        % might be undefined) and the actual accumulator we only care
+        % about in spatiallist functions)
         {ok, {Resp, _Acc}} = couch_spatial:fold(
-                       Group, Index, FoldFun, FoldAccInit,
-                       QueryArgs#spatial_query_args.bbox),
+                                 Group, Index, FoldFun, FoldAccInit,
+                                 QueryArgs#spatial_query_args.bbox),
         finish_spatial_fold(Req, Resp)
     end).
 
@@ -96,8 +99,9 @@ make_spatial_fold_funs(Req, QueryArgs, Etag, Db, UpdateSeq, HelperFuns) ->
 % counterpart in couch_httpd_view is finish_view_fold/5
 finish_spatial_fold(Req, Resp) ->
     case Resp of
+    % no response was sent yet
     undefined ->
-        send_json(Req, 200, {[]});
+        send_json(Req, 200, {[{"rows", []}]});
     Resp ->
         % end the index
         send_chunk(Resp, "\r\n]}"),
@@ -139,8 +143,11 @@ parse_view_param("bbox", Bbox) ->
     [{bbox, list_to_tuple(?JSON_DECODE("[" ++ Bbox ++ "]"))}];
 parse_view_param("stale", "ok") ->
     [{stale, ok}];
+parse_view_param("stale", "update_after") ->
+    [{stale, update_after}];
 parse_view_param("stale", _Value) ->
-    throw({query_parse_error, <<"stale only available as stale=ok">>});
+    throw({query_parse_error,
+            <<"stale only available as stale=ok or as stale=update_after">>});
 parse_view_param("count", "true") ->
     [{count, true}];
 parse_view_param("count", _Value) ->
@@ -152,6 +159,8 @@ validate_spatial_query(bbox, Value, Args) ->
     Args#spatial_query_args{bbox=Value};
 validate_spatial_query(stale, ok, Args) ->
     Args#spatial_query_args{stale=ok};
+validate_spatial_query(stale, update_after, Args) ->
+    Args#spatial_query_args{stale=update_after};
 validate_spatial_query(count, true, Args) ->
     Args#spatial_query_args{count=true};
 validate_spatial_query(stale, _, Args) ->

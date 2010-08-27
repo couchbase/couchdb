@@ -13,11 +13,11 @@
 -module(couch_doc).
 
 -export([to_doc_info/1,to_doc_info_path/1,parse_rev/1,parse_revs/1,rev_to_str/1,revs_to_strs/1]).
--export([att_foldl/3,att_foldl_decode/3,get_validate_doc_fun/1]).
+-export([att_foldl/3,range_att_foldl/5,att_foldl_decode/3,get_validate_doc_fun/1]).
 -export([from_json_obj/1,to_json_obj/2,has_stubs/1, merge_stubs/2]).
 -export([validate_docid/1]).
 -export([doc_from_multi_part_stream/2]).
--export([doc_to_multi_part_stream/6, len_doc_to_multi_part_stream/5]).
+-export([doc_to_multi_part_stream/5, len_doc_to_multi_part_stream/4]).
 
 -include("couch_db.hrl").
 
@@ -27,8 +27,8 @@ to_json_rev(0, []) ->
 to_json_rev(Start, [FirstRevId|_]) ->
     [{<<"_rev">>, ?l2b([integer_to_list(Start),"-",revid_to_str(FirstRevId)])}].
 
-to_json_body(true, _Body) ->
-    [{<<"_deleted">>, true}];
+to_json_body(true, {Body}) ->
+    Body ++ [{<<"_deleted">>, true}];
 to_json_body(false, {Body}) ->
     Body.
 
@@ -73,31 +73,25 @@ to_json_meta(Meta) ->
         end, Meta).
 
 to_json_attachments(Attachments, Options) ->
-    RevPos = case lists:member(attachments, Options) of
-    true -> % return all the binaries
-        0;
-    false ->
-        % note the default is [], because this sorts higher than all numbers.
-        % and will return all the binaries.
-        proplists:get_value(atts_after_revpos, Options, [])
-    end,
     to_json_attachments(
         Attachments,
-        RevPos,
+        lists:member(attachments, Options),
         lists:member(follows, Options),
         lists:member(att_encoding_info, Options)
     ).
 
-to_json_attachments([], _RevPosIncludeAfter, _DataToFollow, _ShowEncInfo) ->
+to_json_attachments([], _OutputData, _DataToFollow, _ShowEncInfo) ->
     [];
-to_json_attachments(Atts, RevPosIncludeAfter, DataToFollow, ShowEncInfo) ->
+to_json_attachments(Atts, OutputData, DataToFollow, ShowEncInfo) ->
     AttProps = lists:map(
         fun(#att{disk_len=DiskLen, att_len=AttLen, encoding=Enc}=Att) ->
             {Att#att.name, {[
                 {<<"content_type">>, Att#att.type},
                 {<<"revpos">>, Att#att.revpos}
                 ] ++
-                if Att#att.revpos > RevPosIncludeAfter ->    
+                if not OutputData orelse Att#att.data == stub ->
+                    [{<<"length">>, DiskLen}, {<<"stub">>, true}];
+                true ->
                     if DataToFollow ->
                         [{<<"length">>, DiskLen}, {<<"follows">>, true}];
                     true ->
@@ -108,9 +102,7 @@ to_json_attachments(Atts, RevPosIncludeAfter, DataToFollow, ShowEncInfo) ->
                             att_to_bin(Att)
                         end,
                         [{<<"data">>, base64:encode(AttData)}]
-                    end;
-                true ->
-                    [{<<"length">>, DiskLen}, {<<"stub">>, true}]
+                    end
                 end ++
                     case {ShowEncInfo, Enc} of
                     {false, _} ->
@@ -203,26 +195,26 @@ transfer_fields([{<<"_rev">>, _Rev} | Rest], Doc) ->
 
 transfer_fields([{<<"_attachments">>, {JsonBins}} | Rest], Doc) ->
     Atts = lists:map(fun({Name, {BinProps}}) ->
-        case proplists:get_value(<<"stub">>, BinProps) of
+        case couch_util:get_value(<<"stub">>, BinProps) of
         true ->
-            Type = proplists:get_value(<<"content_type">>, BinProps),
-            RevPos = proplists:get_value(<<"revpos">>, BinProps, 0),
-            DiskLen = proplists:get_value(<<"length">>, BinProps),
+            Type = couch_util:get_value(<<"content_type">>, BinProps),
+            RevPos = couch_util:get_value(<<"revpos">>, BinProps, nil),
+            DiskLen = couch_util:get_value(<<"length">>, BinProps),
             {Enc, EncLen} = att_encoding_info(BinProps),
             #att{name=Name, data=stub, type=Type, att_len=EncLen,
                 disk_len=DiskLen, encoding=Enc, revpos=RevPos};
         _ ->
-            Type = proplists:get_value(<<"content_type">>, BinProps,
+            Type = couch_util:get_value(<<"content_type">>, BinProps,
                     ?DEFAULT_ATTACHMENT_CONTENT_TYPE),
-            RevPos = proplists:get_value(<<"revpos">>, BinProps, 0),
-            case proplists:get_value(<<"follows">>, BinProps) of
+            RevPos = couch_util:get_value(<<"revpos">>, BinProps, 0),
+            case couch_util:get_value(<<"follows">>, BinProps) of
             true ->
-                DiskLen = proplists:get_value(<<"length">>, BinProps),
+                DiskLen = couch_util:get_value(<<"length">>, BinProps),
                 {Enc, EncLen} = att_encoding_info(BinProps),
                 #att{name=Name, data=follows, type=Type, encoding=Enc,
                     att_len=EncLen, disk_len=DiskLen, revpos=RevPos};
             _ ->
-                Value = proplists:get_value(<<"data">>, BinProps),
+                Value = couch_util:get_value(<<"data">>, BinProps),
                 Bin = base64:decode(Value),
                 LenBin = size(Bin),
                 #att{name=Name, data=Bin, type=Type, att_len=LenBin,
@@ -233,8 +225,8 @@ transfer_fields([{<<"_attachments">>, {JsonBins}} | Rest], Doc) ->
     transfer_fields(Rest, Doc#doc{atts=Atts});
 
 transfer_fields([{<<"_revisions">>, {Props}} | Rest], Doc) ->
-    RevIds = proplists:get_value(<<"ids">>, Props),
-    Start = proplists:get_value(<<"start">>, Props),
+    RevIds = couch_util:get_value(<<"ids">>, Props),
+    Start = couch_util:get_value(<<"start">>, Props),
     if not is_integer(Start) ->
         throw({doc_validation, "_revisions.start isn't an integer."});
     not is_list(RevIds) ->
@@ -269,13 +261,13 @@ transfer_fields([Field | Rest], #doc{body=Fields}=Doc) ->
     transfer_fields(Rest, Doc#doc{body=[Field|Fields]}).
 
 att_encoding_info(BinProps) ->
-    DiskLen = proplists:get_value(<<"length">>, BinProps),
-    case proplists:get_value(<<"encoding">>, BinProps) of
+    DiskLen = couch_util:get_value(<<"length">>, BinProps),
+    case couch_util:get_value(<<"encoding">>, BinProps) of
     undefined ->
         {identity, DiskLen};
     Enc ->
-        EncodedLen = proplists:get_value(<<"encoded_length">>, BinProps, DiskLen),
-        {list_to_atom(?b2l(Enc)), EncodedLen}
+        EncodedLen = couch_util:get_value(<<"encoded_length">>, BinProps, DiskLen),
+        {list_to_existing_atom(?b2l(Enc)), EncodedLen}
     end.
 
 to_doc_info(FullDocInfo) ->
@@ -315,8 +307,13 @@ att_foldl(#att{data={Fd,Sp},md5=Md5}, Fun, Acc) ->
 att_foldl(#att{data=DataFun,att_len=Len}, Fun, Acc) when is_function(DataFun) ->
    fold_streamed_data(DataFun, Len, Fun, Acc).
 
+range_att_foldl(#att{data={Fd,Sp}}, From, To, Fun, Acc) ->
+   couch_stream:range_foldl(Fd, Sp, From, To, Fun, Acc).
+
 att_foldl_decode(#att{data={Fd,Sp},md5=Md5,encoding=Enc}, Fun, Acc) ->
-    couch_stream:foldl_decode(Fd, Sp, Md5, Enc, Fun, Acc).
+    couch_stream:foldl_decode(Fd, Sp, Md5, Enc, Fun, Acc);
+att_foldl_decode(#att{data=Fun2,att_len=Len, encoding=identity}, Fun, Acc) ->
+       fold_streamed_data(Fun2, Len, Fun, Acc).
 
 att_to_bin(#att{data=Bin}) when is_binary(Bin) ->
     Bin;
@@ -341,7 +338,7 @@ att_to_bin(#att{data=DataFun, att_len=Len}) when is_function(DataFun)->
     ).
 
 get_validate_doc_fun(#doc{body={Props}}=DDoc) ->
-    case proplists:get_value(<<"validate_doc_update">>, Props) of
+    case couch_util:get_value(<<"validate_doc_update">>, Props) of
     undefined ->
         nil;
     _Else ->
@@ -363,9 +360,10 @@ has_stubs([_Att|Rest]) ->
 merge_stubs(#doc{id=Id,atts=MemBins}=StubsDoc, #doc{atts=DiskBins}) ->
     BinDict = dict:from_list([{Name, Att} || #att{name=Name}=Att <- DiskBins]),
     MergedBins = lists:map(
-        fun(#att{name=Name, data=stub, revpos=RevPos}) ->
+        fun(#att{name=Name, data=stub, revpos=StubRevPos}) ->
             case dict:find(Name, BinDict) of
-            {ok, #att{revpos=RevPos}=DiskAtt} ->
+            {ok, #att{revpos=DiskRevPos}=DiskAtt} 
+                    when DiskRevPos == StubRevPos orelse StubRevPos == nil ->
                 DiskAtt;
             _ ->
                 throw({missing_stub,
@@ -383,17 +381,13 @@ fold_streamed_data(RcvFun, LenLeft, Fun, Acc) when LenLeft > 0->
     ResultAcc = Fun(Bin, Acc),
     fold_streamed_data(RcvFun, LenLeft - size(Bin), Fun, ResultAcc).
 
-len_doc_to_multi_part_stream(Boundary, JsonBytes, Atts, AttsSinceRevPos,
-    SendEncodedAtts) ->
-    2 + % "--"
-    size(Boundary) +
-    36 + % "\r\ncontent-type: application/json\r\n\r\n"
-    iolist_size(JsonBytes) +
-    4 + % "\r\n--"
-    size(Boundary) +
-    + lists:foldl(fun(#att{revpos=RevPos} = Att, AccAttsSize) ->
-            if RevPos > AttsSinceRevPos ->
-                AccAttsSize +  
+len_doc_to_multi_part_stream(Boundary, JsonBytes, Atts, SendEncodedAtts) ->
+    AttsSize = lists:foldl(fun(#att{data=Data} = Att, AccAttsSize) ->
+            case Data of
+            stub ->
+                AccAttsSize;
+            _ ->
+                AccAttsSize +
                 4 + % "\r\n\r\n"
                 case SendEncodedAtts of
                 true ->
@@ -402,24 +396,43 @@ len_doc_to_multi_part_stream(Boundary, JsonBytes, Atts, AttsSinceRevPos,
                     Att#att.disk_len
                 end +
                 4 + % "\r\n--"
-                size(Boundary);
-            true ->
-                AccAttsSize
+                size(Boundary)
             end
-        end, 0, Atts) +
-    2. % "--"
+        end, 0, Atts),
+    if AttsSize == 0 ->
+        {<<"application/json">>, iolist_size(JsonBytes)};
+    true ->
+        {<<"multipart/related; boundary=\"", Boundary/binary, "\"">>,
+            2 + % "--"
+            size(Boundary) +
+            36 + % "\r\ncontent-type: application/json\r\n\r\n"
+            iolist_size(JsonBytes) +
+            4 + % "\r\n--"
+            size(Boundary) +
+            + AttsSize +
+            2 % "--"
+            }
+    end.
 
-doc_to_multi_part_stream(Boundary, JsonBytes, Atts, AttsSinceRevPos, WriteFun,
+doc_to_multi_part_stream(Boundary, JsonBytes, Atts, WriteFun,
     SendEncodedAtts) ->
-    WriteFun([<<"--", Boundary/binary,
-            "\r\ncontent-type: application/json\r\n\r\n">>,
-            JsonBytes, <<"\r\n--", Boundary/binary>>]),
-    atts_to_mp(Atts, Boundary, WriteFun, AttsSinceRevPos, SendEncodedAtts).
+    case lists:any(fun(#att{data=Data})-> Data /= stub end, Atts) of
+    true ->
+        WriteFun([<<"--", Boundary/binary,
+                "\r\ncontent-type: application/json\r\n\r\n">>,
+                JsonBytes, <<"\r\n--", Boundary/binary>>]),
+        atts_to_mp(Atts, Boundary, WriteFun, SendEncodedAtts);
+    false ->
+        WriteFun(JsonBytes)
+    end.
 
-atts_to_mp([], _Boundary, WriteFun, _AttsSinceRevPos, _SendEncAtts) ->
+atts_to_mp([], _Boundary, WriteFun, _SendEncAtts) ->
     WriteFun(<<"--">>);
-atts_to_mp([#att{revpos=RevPos} = Att | RestAtts], Boundary, WriteFun, 
-        AttsSinceRevPos, SendEncodedAtts) when RevPos > AttsSinceRevPos ->
+atts_to_mp([#att{data=stub} | RestAtts], Boundary, WriteFun,
+        SendEncodedAtts) ->
+    atts_to_mp(RestAtts, Boundary, WriteFun, SendEncodedAtts);
+atts_to_mp([Att | RestAtts], Boundary, WriteFun,
+        SendEncodedAtts)  ->
     WriteFun(<<"\r\n\r\n">>),
     AttFun = case SendEncodedAtts of
     false ->
@@ -427,40 +440,43 @@ atts_to_mp([#att{revpos=RevPos} = Att | RestAtts], Boundary, WriteFun,
     true ->
         fun att_foldl/3
     end,
-    AttFun(Att, fun(Data, ok) -> WriteFun(Data) end, ok),
+    AttFun(Att, fun(Data, _) -> WriteFun(Data) end, ok),
     WriteFun(<<"\r\n--", Boundary/binary>>),
-    atts_to_mp(RestAtts, Boundary, WriteFun, AttsSinceRevPos, SendEncodedAtts);
-atts_to_mp([_ | RestAtts], Boundary, WriteFun, AttsSinceRevPos,
-    SendEncodedAtts) ->
-    atts_to_mp(RestAtts, Boundary, WriteFun, AttsSinceRevPos, SendEncodedAtts).
+    atts_to_mp(RestAtts, Boundary, WriteFun, SendEncodedAtts).
 
 
 doc_from_multi_part_stream(ContentType, DataFun) ->
-    Parser = spawn_link(fun() -> 
+    Self = self(),
+    Parser = spawn_link(fun() ->
         couch_httpd:parse_multipart_request(ContentType, DataFun,
-                fun(Next)-> mp_parse_doc(Next, []) end)
+                fun(Next)-> mp_parse_doc(Next, []) end),
+        unlink(Self)
         end),
     Parser ! {get_doc_bytes, self()},
-    receive {doc_bytes, DocBytes} -> ok end,
-    Doc = from_json_obj(?JSON_DECODE(DocBytes)),
-    % go through the attachments looking for 'follows' in the data,
-    % replace with function that reads the data from MIME stream.
-    ReadAttachmentDataFun = fun() ->
-        Parser ! {get_bytes, self()},
-        receive {bytes, Bytes} -> Bytes end
-    end,
-    Atts2 = lists:map(
-        fun(#att{data=follows}=A) ->
-            A#att{data=ReadAttachmentDataFun};
-        (A) ->
-            A
-        end, Doc#doc.atts),
-    Doc#doc{atts=Atts2}.
+    receive 
+    {doc_bytes, DocBytes} ->
+        Doc = from_json_obj(?JSON_DECODE(DocBytes)),
+        % go through the attachments looking for 'follows' in the data,
+        % replace with function that reads the data from MIME stream.
+        ReadAttachmentDataFun = fun() ->
+            Parser ! {get_bytes, self()},
+            receive {bytes, Bytes} -> Bytes end
+        end,
+        Atts2 = lists:map(
+            fun(#att{data=follows}=A) ->
+                A#att{data=ReadAttachmentDataFun};
+            (A) ->
+                A
+            end, Doc#doc.atts),
+        {ok, Doc#doc{atts=Atts2}}
+    end.
 
 mp_parse_doc({headers, H}, []) ->
-    {"application/json", _} = proplists:get_value("content-type", H),
-    fun (Next) ->
-        mp_parse_doc(Next, [])
+    case couch_util:get_value("content-type", H) of
+    {"application/json", _} ->
+        fun (Next) ->
+            mp_parse_doc(Next, [])
+        end
     end;
 mp_parse_doc({body, Bytes}, AccBytes) ->
     fun (Next) ->

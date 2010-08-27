@@ -34,7 +34,7 @@ do_request(Req) ->
         qs = QS
     } = Req,
     Url = full_url(Req),
-    Headers = case proplists:get_value(<<"oauth">>, Auth) of
+    Headers = case couch_util:get_value(<<"oauth">>, Auth) of
     undefined ->
         Headers0;
     {OAuthProps} ->
@@ -46,7 +46,7 @@ do_request(Req) ->
     nil ->
         [];
     _Else ->
-        iolist_to_binary(?JSON_ENCODE(B)) 
+        iolist_to_binary(?JSON_ENCODE(B))
     end,
     Resp = case Conn of
     nil ->
@@ -75,7 +75,7 @@ db_exists(Req, CanonicalUrl, CreateDB) ->
         url = Url
     } = Req,
     HeadersFun = fun(Method) ->
-        case proplists:get_value(<<"oauth">>, Auth) of
+        case couch_util:get_value(<<"oauth">>, Auth) of
         undefined ->
             Headers0;
         {OAuthProps} ->
@@ -91,17 +91,29 @@ db_exists(Req, CanonicalUrl, CreateDB) ->
     {ok, "200", _, _} ->
         Req#http_db{url = CanonicalUrl};
     {ok, "301", RespHeaders, _} ->
-        MochiHeaders = mochiweb_headers:make(RespHeaders),
-        RedirectUrl = mochiweb_headers:get_value("Location", MochiHeaders),
+        RedirectUrl = redirect_url(RespHeaders, Req#http_db.url),
         db_exists(Req#http_db{url = RedirectUrl}, RedirectUrl);
     {ok, "302", RespHeaders, _} ->
-        MochiHeaders = mochiweb_headers:make(RespHeaders),
-        RedirectUrl = mochiweb_headers:get_value("Location", MochiHeaders),
+        RedirectUrl = redirect_url(RespHeaders, Req#http_db.url),
         db_exists(Req#http_db{url = RedirectUrl}, CanonicalUrl);
     Error ->
         ?LOG_DEBUG("DB at ~s could not be found because ~p", [Url, Error]),
         throw({db_not_found, ?l2b(Url)})
     end.
+
+redirect_url(RespHeaders, OrigUrl) ->
+    MochiHeaders = mochiweb_headers:make(RespHeaders),
+    RedUrl = mochiweb_headers:get_value("Location", MochiHeaders),
+    {url, _, Base, Port, _, _, Path, Proto} = ibrowse_lib:parse_url(RedUrl),
+    {url, _, _, _, User, Passwd, _, _} = ibrowse_lib:parse_url(OrigUrl),
+    Creds = case is_list(User) andalso is_list(Passwd) of
+    true ->
+        User ++ ":" ++ Passwd ++ "@";
+    false ->
+        []
+    end,
+    atom_to_list(Proto) ++ "://" ++ Creds ++ Base ++ ":" ++
+        integer_to_list(Port) ++ Path.
 
 full_url(#http_db{url=Url} = Req) when is_binary(Url) ->
     full_url(Req#http_db{url = ?b2l(Url)});
@@ -115,7 +127,7 @@ full_url(Req) ->
         resource = Resource,
         qs = QS
     } = Req,
-    QStr = lists:map(fun({K,V}) -> io_lib:format("~s=~s", 
+    QStr = lists:map(fun({K,V}) -> io_lib:format("~s=~s",
         [couch_util:to_list(K), couch_util:to_list(V)]) end, QS),
     lists:flatten([Url, Resource, "?", string:join(QStr, "&")]).
 
@@ -124,8 +136,7 @@ process_response({ok, Status, Headers, Body}, Req) ->
     if Code =:= 200; Code =:= 201 ->
         ?JSON_DECODE(maybe_decompress(Headers, Body));
     Code =:= 301; Code =:= 302 ->
-        MochiHeaders = mochiweb_headers:make(Headers),
-        RedirectUrl = mochiweb_headers:get_value("Location", MochiHeaders),
+        RedirectUrl = redirect_url(Headers, Req#http_db.url),
         do_request(redirected_request(Req, RedirectUrl));
     Code =:= 409 ->
         throw(conflict);
@@ -178,7 +189,7 @@ process_response({error, Reason}, Req) ->
 redirected_request(Req, RedirectUrl) ->
     {Base, QStr, _} = mochiweb_util:urlsplit_path(RedirectUrl),
     QS = mochiweb_util:parse_qs(QStr),
-    Hdrs = case proplists:get_value(<<"oauth">>, Req#http_db.auth) of
+    Hdrs = case couch_util:get_value(<<"oauth">>, Req#http_db.auth) of
     undefined ->
         Req#http_db.headers;
     _Else ->
@@ -192,8 +203,7 @@ spawn_worker_process(Req) ->
     Pid.
 
 spawn_link_worker_process(Req) ->
-    Url = ibrowse_lib:parse_url(Req#http_db.url),
-    {ok, Pid} = ibrowse_http_client:start_link(Url),
+    {ok, Pid} = ibrowse:spawn_link_worker_process(Req#http_db.url),
     Pid.
 
 maybe_decompress(Headers, Body) ->
@@ -209,11 +219,11 @@ oauth_header(Url, QS, Action, Props) ->
     % erlang-oauth doesn't like iolists
     QSL = [{couch_util:to_list(K), ?b2l(?l2b(couch_util:to_list(V)))} ||
         {K,V} <- QS],
-    ConsumerKey = ?b2l(proplists:get_value(<<"consumer_key">>, Props)),
-    Token = ?b2l(proplists:get_value(<<"token">>, Props)),
-    TokenSecret = ?b2l(proplists:get_value(<<"token_secret">>, Props)),
-    ConsumerSecret = ?b2l(proplists:get_value(<<"consumer_secret">>, Props)),
-    SignatureMethodStr = ?b2l(proplists:get_value(<<"signature_method">>, Props, <<"HMAC-SHA1">>)),
+    ConsumerKey = ?b2l(couch_util:get_value(<<"consumer_key">>, Props)),
+    Token = ?b2l(couch_util:get_value(<<"token">>, Props)),
+    TokenSecret = ?b2l(couch_util:get_value(<<"token_secret">>, Props)),
+    ConsumerSecret = ?b2l(couch_util:get_value(<<"consumer_secret">>, Props)),
+    SignatureMethodStr = ?b2l(couch_util:get_value(<<"signature_method">>, Props, <<"HMAC-SHA1">>)),
     SignatureMethodAtom = case SignatureMethodStr of
         "PLAINTEXT" ->
             plaintext;

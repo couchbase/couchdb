@@ -13,10 +13,12 @@
 // Used by replication test
 if (typeof window == 'undefined' || !window) {
   CouchDB.host = "127.0.0.1:5984";
+  CouchDB.protocol = "http://";
   CouchDB.inBrowser = false;
 } else {
   CouchDB.host = window.location.host;
   CouchDB.inBrowser = true;
+  CouchDB.protocol = window.location.protocol + "//";
 }
 
 CouchDB.urlPrefix = "..";
@@ -34,7 +36,9 @@ loadTest("attachments.js");
 loadTest("attachments_multipart.js");
 loadTest("attachment_names.js");
 loadTest("attachment_paths.js");
+loadTest("attachment_ranges.js");
 loadTest("attachment_views.js");
+loadTest("auth_cache.js");
 loadTest("batch_save.js");
 loadTest("bulk_docs.js");
 loadTest("changes.js");
@@ -59,6 +63,7 @@ loadTest("large_docs.js");
 loadTest("list_spatial.js");
 loadTest("list_views.js");
 loadTest("lots_of_docs.js");
+loadTest("method_override.js");
 loadTest("multiple_rows.js");
 loadScript("script/oauth.js");
 loadScript("script/sha1.js");
@@ -72,10 +77,12 @@ loadTest("reduce_builtin.js");
 loadTest("reduce_false.js");
 loadTest("reduce_false_temp.js");
 loadTest("replication.js");
+loadTest("replicator_db.js");
 loadTest("rev_stemming.js");
 loadTest("rewrite.js");
 loadTest("security_validation.js");
 loadTest("show_documents.js");
+loadTest("spatial.js");
 loadTest("stats.js");
 loadTest("update_documents.js");
 loadTest("users_db.js");
@@ -84,6 +91,7 @@ loadTest("uuids.js");
 loadTest("view_collation.js");
 loadTest("view_collation_raw.js");
 loadTest("view_conflicts.js");
+loadTest("view_compaction.js");
 loadTest("view_errors.js");
 loadTest("view_include_docs.js");
 loadTest("view_multi_key_all_docs.js");

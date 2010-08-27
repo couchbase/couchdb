@@ -10,14 +10,13 @@ dnl WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 dnl License for the specific language governing permissions and limitations
 dnl under the License.
 
-m4_include([m4/ac_check_icu.m4])
-
 AC_INIT([LOCAL_PACKAGE_NAME], [LOCAL_VERSION], [], [LOCAL_PACKAGE_TARNAME])
 
 AC_PREREQ([2.59])
 
 AC_CONFIG_SRCDIR([CHANGES])
 AC_CONFIG_AUX_DIR([build-aux])
+AC_CONFIG_MACRO_DIR([m4])
 
 AM_CONFIG_HEADER([config.h])
 
@@ -197,7 +196,7 @@ AC_ARG_WITH([win32-icu-binaries], [AC_HELP_STRING([--with-win32-icu-binaries=PAT
     ICU_LOCAL_LDFLAGS="-L$withval/lib"
     ICU_LOCAL_BIN=$withval/bin
 ], [
-    AC_CHECK_ICU([3])
+    AC_CHECK_ICU([3.4.1])
     ICU_LOCAL_CFLAGS=`$ICU_CONFIG --cppflags-searchpath`
     ICU_LOCAL_LDFLAGS=`$ICU_CONFIG --ldflags-searchpath`
     ICU_LOCAL_BIN=
@@ -258,6 +257,12 @@ if test `echo $version | ${AWK} "{print \\$2}"` -eq 6; then
     if test `echo $version | ${AWK} "{print \\$3}"` -lt 5; then
         AC_MSG_ERROR([$erlang_version_error])
     fi
+fi
+
+has_crypto=`${ERL} -eval "case application:load(crypto) of ok -> ok; _ -> exit(no_crypto) end." -noshell -s init stop`
+
+if test -n "$has_crypto"; then
+    AC_MSG_ERROR([Could not find the Erlang crypto library. Has Erlang been compiled with OpenSSL support?])
 fi
 
 AC_PATH_PROG([ERLC], [erlc])
@@ -392,6 +397,7 @@ AC_CONFIG_FILES([etc/launchd/org.apache.couchdb.plist.tpl])
 AC_CONFIG_FILES([etc/launchd/Makefile])
 AC_CONFIG_FILES([etc/logrotate.d/couchdb.tpl])
 AC_CONFIG_FILES([etc/logrotate.d/Makefile])
+AC_CONFIG_FILES([etc/windows/Makefile])
 AC_CONFIG_FILES([etc/Makefile])
 AC_CONFIG_FILES([share/Makefile])
 AC_CONFIG_FILES([src/Makefile])

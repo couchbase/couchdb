@@ -29,7 +29,8 @@ handle_stats_req(#httpd{method='GET', path_parts=[_, _Mod]}) ->
 
 handle_stats_req(#httpd{method='GET', path_parts=[_, Mod, Key]}=Req) ->
     flush(Req),
-    Stats = couch_stats_aggregator:get_json({?b2a(Mod), ?b2a(Key)}, range(Req)),
+    Stats = couch_stats_aggregator:get_json({list_to_atom(binary_to_list(Mod)),
+        list_to_atom(binary_to_list(Key))}, range(Req)),
     send_json(Req, {[{Mod, {[{Key, Stats}]}}]});
 
 handle_stats_req(#httpd{method='GET', path_parts=[_, _Mod, _Key | _Extra]}) ->
@@ -39,7 +40,7 @@ handle_stats_req(Req) ->
     send_method_not_allowed(Req, "GET").
 
 range(Req) ->
-    case proplists:get_value("range", couch_httpd:qs(Req)) of
+    case couch_util:get_value("range", couch_httpd:qs(Req)) of
         undefined ->
             0;
         Value ->
@@ -47,7 +48,7 @@ range(Req) ->
     end.
 
 flush(Req) ->
-    case proplists:get_value("flush", couch_httpd:qs(Req)) of
+    case couch_util:get_value("flush", couch_httpd:qs(Req)) of
         "true" ->
             couch_stats_aggregator:collect_sample();
         _Else ->
