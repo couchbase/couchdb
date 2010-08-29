@@ -120,7 +120,7 @@ os_filter_fun(FilterName, Style, Req, Db) ->
             Docs = [Doc || {ok, Doc} <- [
                     couch_db:open_doc(Db2, DocInfo2, [deleted, conflicts])
                         || DocInfo2 <- DocInfos]],
-            {ok, Passes} = couch_query_servers:filter_docs(
+            {ok, Passes} = couch_app_server:filter_docs(
                 Req, Db2, DDoc, FName, Docs
             ),
             [{[{<<"rev">>, couch_doc:rev_to_str({RevPos,RevId})}]}

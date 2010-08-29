@@ -32,6 +32,9 @@ source_files = \
     couch_api_wrap.erl \
     couch_api_wrap_httpc.erl \
     couch_app.erl \
+    couch_app_server.erl \
+    couch_app_server_emonk.erl \
+    couch_app_server_erlang.erl \
     couch_auth_cache.erl \
     couch_btree.erl \
     couch_changes.erl \
@@ -92,6 +95,10 @@ source_files = \
     couch_view_compactor.erl \
     couch_view_updater.erl \
     couch_view_group.erl \
+    couch_view_server.erl \
+    couch_view_server_emonk.erl \
+    couch_view_server_erlang.erl \
+    couch_view_server_os.erl \
     couch_db_updater.erl \
     couch_work_queue.erl \
     json_stream_parse.erl \
@@ -108,6 +115,9 @@ compiled_files = \
     couch_api_wrap.beam \
     couch_api_wrap_httpc.beam \
     couch_app.beam \
+    couch_app_server.beam \
+    couch_app_server_emonk.beam \
+    couch_app_server_erlang.beam \
     couch_auth_cache.beam \
     couch_btree.beam \
     couch_changes.beam \
@@ -168,6 +178,10 @@ compiled_files = \
     couch_view_compactor.beam \
     couch_view_updater.beam \
     couch_view_group.beam \
+    couch_view_server.beam \
+    couch_view_server_emonk.beam \
+    couch_view_server_erlang.beam \
+    couch_view_server_os.beam \
     couch_db_updater.beam \
     couch_work_queue.beam \
     json_stream_parse.beam \

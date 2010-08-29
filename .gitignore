@@ -34,6 +34,9 @@ share/Makefile
 src/couchdb/.deps/*
 src/couchdb/Makefile
 src/couchdb/priv/Makefile
+src/emonk/.deps/*
+src/emonk/.libs/*
+src/emonk/priv/*.so
 src/mochiweb/Makefile
 stamp-h1
 test/.deps/
@@ -48,6 +51,7 @@ bin/couchdb.1
 bin/couchjs
 bin/couchjs.1
 etc/couchdb/default.ini
+etc/init/couchdb
 etc/launchd/org.apache.couchdb.plist
 etc/logrotate.d/couchdb
 src/couchdb/.libs/*

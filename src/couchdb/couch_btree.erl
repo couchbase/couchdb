@@ -14,7 +14,7 @@
 
 -export([open/2, open/3, query_modify/4, query_modify_raw/2, add/2, add_remove/3]).
 -export([fold/4, full_reduce/1, final_reduce/2, size/1, foldl/3, foldl/4, lookup_sorted/2]).
--export([modify/3, fold_reduce/4, lookup/2, get_state/1, set_options/2]).
+-export([modify/3, fold_reduce/4, lookup/2, get_state/1, get_reduce/1, set_options/2]).
 
 -include("couch_db.hrl").
 -define(CHUNK_THRESHOLD, 16#4ff).
@@ -40,6 +40,7 @@ set_options(Bt, [{join, Assemble}|Rest]) ->
     set_options(Bt#btree{assemble_kv=Assemble}, Rest);
 set_options(Bt, [{less, Less}|Rest]) ->
     set_options(Bt#btree{less=Less}, Rest);
+% set_options(Bt, [{reduce, Reduce}|Rest]) when is_function(Reduce, 2) ->
 set_options(Bt, [{reduce, Reduce}|Rest]) ->
     set_options(Bt#btree{reduce=Reduce}, Rest);
 set_options(Bt, [{compression, Comp}|Rest]) ->
@@ -50,6 +51,9 @@ open(State, Fd, Options) ->
 
 get_state(#btree{root=Root}) ->
     Root.
+
+get_reduce(#btree{reduce=Reduce}) ->
+    Reduce.
 
 final_reduce(#btree{reduce=Reduce}, Val) ->
     final_reduce(Reduce, Val);

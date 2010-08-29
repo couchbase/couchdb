@@ -611,20 +611,18 @@ init_group(Db, Fd, #group{def_lang=Lang,views=Views}=
     {ok, IdBtree} = couch_btree:open(
         IdBtreeState, Fd, [{compression, Db#db.compression}]),
     Views2 = lists:zipwith(
-        fun({BTState, USeq, PSeq}, #view{reduce_funs=RedFuns,options=Options}=View) ->
+        fun({BTState, USeq, PSeq}, #view{id_num=ViewId,reduce_funs=RedFuns,options=Options}=View) ->
             FunSrcs = [FunSrc || {_Name, FunSrc} <- RedFuns],
             ReduceFun =
                 fun(reduce, KVs) ->
                     KVs2 = couch_view:expand_dups(KVs,[]),
                     KVs3 = couch_view:detuple_kvs(KVs2,[]),
-                    {ok, Reduced} = couch_query_servers:reduce(Lang, FunSrcs,
-                        KVs3),
+                    {ok, Reduced} = couch_view_server:reduce(Lang, ViewId, FunSrcs, KVs3),
                     {length(KVs3), Reduced};
                 (rereduce, Reds) ->
                     Count = lists:sum([Count0 || {Count0, _} <- Reds]),
                     UserReds = [UserRedsList || {_, UserRedsList} <- Reds],
-                    {ok, Reduced} = couch_query_servers:rereduce(Lang, FunSrcs,
-                        UserReds),
+                    {ok, Reduced} = couch_view_server:rereduce(Lang, ViewId, FunSrcs, UserReds),
                     {Count, Reduced}
                 end,
             

@@ -379,7 +379,7 @@ get_validate_doc_fun(#doc{body={Props}}=DDoc) ->
         nil;
     _Else ->
         fun(EditDoc, DiskDoc, Ctx, SecObj) ->
-            couch_query_servers:validate_doc_update(DDoc, EditDoc, DiskDoc, Ctx, SecObj)
+            couch_app_server:validate_update(DDoc, EditDoc, DiskDoc, Ctx, SecObj)
         end
     end.
 

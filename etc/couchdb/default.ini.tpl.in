@@ -58,6 +58,26 @@ require_valid_user = false
 timeout = 600 ; number of seconds before automatic logout
 auth_cache_size = 50 ; size is number of cache entries
 
+[view_servers]
+javascript = {couch_view_server_emonk, nil}
+;javascript = {couch_view_server_os, "%bindir%/%couchjs_command_name% %localbuilddatadir%/server/couchjs_mapred.js"}
+erlang = {couch_view_server_erlang, nil}
+
+[view_server_emonk]
+num_threads = 4
+mapred_js = %localbuilddatadir%/server/emonk_mapred.js
+
+[view_servers_os]
+max_processes = 32
+idle_processes = 4
+
+[app_servers]
+javascript = {couch_app_server_emonk, nil}
+erlang = {couch_app_server_erlang, nil}
+
+[app_server_emonk]
+source = %localbuilddatadir%/server/emonk_app.js
+
 [query_servers]
 javascript = %bindir%/%couchjs_command_name% %localbuilddatadir%/server/main.js
 coffeescript = %bindir%/%couchjs_command_name% %localbuilddatadir%/server/main-coffee.js
@@ -75,6 +95,7 @@ view_manager={couch_view, start_link, []}
 external_manager={couch_external_manager, start_link, []}
 query_servers={couch_query_servers, start_link, []}
 vhosts={couch_httpd_vhost, start_link, []}
+view_server_os={couch_view_server_os, start_link, []}
 httpd={couch_httpd, start_link, []}
 stats_aggregator={couch_stats_aggregator, start, []}
 stats_collector={couch_stats_collector, start, []}

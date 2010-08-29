@@ -73,12 +73,11 @@ handle_doc_show(Req, Db, DDoc, ShowName, Doc) ->
 
 handle_doc_show(Req, Db, DDoc, ShowName, Doc, DocId) ->
     % get responder for ddoc/showname
+    JsonReq = {json_req, couch_httpd_external:json_req_obj(Req, Db, DocId)},
     CurrentEtag = show_etag(Req, Doc, DDoc, []),
     couch_httpd:etag_respond(Req, CurrentEtag, fun() ->
-        JsonReq = couch_httpd_external:json_req_obj(Req, Db, DocId),
-        JsonDoc = couch_query_servers:json_doc(Doc),
-        [<<"resp">>, ExternalResp] =
-            couch_query_servers:ddoc_prompt(DDoc, [<<"shows">>, ShowName], [JsonDoc, JsonReq]),
+        {ok, ExternalResp} =
+            couch_app_server:show_doc(JsonReq, Db, DDoc, ShowName, Doc),
         JsonResp = apply_etag(ExternalResp, CurrentEtag),
         couch_httpd_external:send_external_response(Req, JsonResp)
     end).
@@ -124,18 +123,14 @@ handle_doc_update_req(Req, _Db, _DDoc) ->
     send_error(Req, 404, <<"update_error">>, <<"Invalid path.">>).
 
 send_doc_update_response(Req, Db, DDoc, UpdateName, Doc, DocId) ->
-    JsonReq = couch_httpd_external:json_req_obj(Req, Db, DocId),
-    JsonDoc = couch_query_servers:json_doc(Doc),
-    {Code, JsonResp1} = case couch_query_servers:ddoc_prompt(DDoc,
-                [<<"updates">>, UpdateName], [JsonDoc, JsonReq]) of
-        [<<"up">>, {NewJsonDoc}, {JsonResp}] ->
-            Options = case couch_httpd:header_value(Req, "X-Couch-Full-Commit",
-                "false") of
-            "true" ->
-                [full_commit];
-            _ ->
-                []
-            end,
+    JsonReq = {json_req, couch_httpd_external:json_req_obj(Req, Db, DocId)},
+    Options = case couch_httpd:header_value(Req, "X-Couch-Full-Commit", "false") of
+        "true" -> [full_commit];
+        _ -> []
+    end,
+    {Code, JsonResp1} =
+    case couch_app_server:update_doc(JsonReq, Db, DDoc, UpdateName, Doc) of
+        {ok, {NewJsonDoc}, {JsonResp}} ->
             NewDoc = couch_doc:from_json_obj({NewJsonDoc}),
             DbFrontend = Req#httpd.db_frontend,
             {ok, NewRev} = DbFrontend:update_doc(Db, NewDoc, Options),
@@ -143,7 +138,7 @@ send_doc_update_response(Req, Db, DDoc, UpdateName, Doc, DocId) ->
             JsonRespWithRev =  {[{<<"headers">>,
                 {[{<<"X-Couch-Update-NewRev">>, NewRevStr}]}} | JsonResp]},
             {201, JsonRespWithRev};
-        [<<"up">>, _Other, JsonResp] ->
+        {ok, _Other, JsonResp} ->
             {200, JsonResp}
     end,
     
@@ -218,7 +213,7 @@ output_map_list(Req, Db, DDoc, LName, View, QueryArgs, Etag, Keys, Group) ->
     {ok, RowCount} = couch_view:get_row_count(View),
     
 
-    couch_query_servers:with_ddoc_proc(DDoc, fun(QServer) ->
+    couch_app_server:list_view(DDoc, fun(QServer) ->
 
         ListFoldHelpers = #view_fold_helper_funs{
             reduce_count = fun couch_view:reduce_to_count/1,
@@ -257,7 +252,7 @@ output_reduce_list(Req, Db, DDoc, LName, View, QueryArgs, Etag, Keys, Group) ->
 
     CurrentSeq = Group#group.current_seq,
 
-    couch_query_servers:with_ddoc_proc(DDoc, fun(QServer) ->
+    couch_app_server:list_view(DDoc, fun(QServer) ->
         StartListRespFun = make_reduce_start_resp_fun(QServer, Db, LName),
         SendListRowFun = make_reduce_send_row_fun(QServer, Db),
         {ok, GroupRowsFun, RespFun} = couch_httpd_view:make_reduce_fold_funs(Req,
@@ -297,9 +292,8 @@ make_reduce_start_resp_fun(QueryServer, Db, LName) ->
     end.
 
 start_list_resp(QServer, LName, Req, Db, Head, Etag) ->
-    JsonReq = couch_httpd_external:json_req_obj(Req, Db),
-    [<<"start">>,Chunks,JsonResp] = couch_query_servers:ddoc_proc_prompt(QServer,
-        [<<"lists">>, LName], [Head, JsonReq]),
+    {ok, Chunks, JsonResp} =
+        couch_app_server:list_start(QServer, Req, Db, LName, Head),
     JsonResp2 = apply_etag(JsonResp, Etag),
     #extern_resp_args{
         code = Code,
@@ -323,15 +317,12 @@ make_reduce_send_row_fun(QueryServer, Db) ->
 
 send_list_row(Resp, QueryServer, Db, Row, RowFront, IncludeDoc, Conflicts) ->
     try
-        [Go,Chunks] = prompt_list_row(
-            QueryServer, Db, Row, IncludeDoc, Conflicts),
+        {Go, Chunks} = couch_app_server:list_row(QueryServer, Db, Row, IncludeDoc, Conflicts),
         Chunk = RowFront ++ ?b2l(?l2b(Chunks)),
         send_non_empty_chunk(Resp, Chunk),
         case Go of
-            <<"chunks">> ->
-                {ok, ""};
-            <<"end">> ->
-                {stop, stop}
+            ok -> {ok, ""};
+            stop -> {stop, stop}
         end
     catch
         throw:Error ->
@@ -340,14 +331,15 @@ send_list_row(Resp, QueryServer, Db, Row, RowFront, IncludeDoc, Conflicts) ->
     end.
 
 
-prompt_list_row({Proc, _DDocId}, Db, {{_Key, _DocId}, _} = Kv,
-                IncludeDoc, Conflicts) ->
-    JsonRow = couch_httpd_view:view_row_obj(Db, Kv, IncludeDoc, Conflicts),
-    couch_query_servers:proc_prompt(Proc, [<<"list_row">>, JsonRow]);
+% prompt_list_row({Proc, _DDocId}, Db, {{_Key, _DocId}, _} = Kv,
+%                 IncludeDoc, Conflicts) ->
+%     JsonRow = couch_httpd_view:view_row_obj(Db, Kv, IncludeDoc, Conflicts),
+%     couch_query_servers:proc_prompt(Proc, [<<"list_row">>, JsonRow]);
+% 
+% prompt_list_row({Proc, _DDocId}, _, {Key, Value}, _IncludeDoc, _Conflicts) ->
+%     JsonRow = {[{key, Key}, {value, Value}]},
+%     couch_query_servers:proc_prompt(Proc, [<<"list_row">>, JsonRow]).
 
-prompt_list_row({Proc, _DDocId}, _, {Key, Value}, _IncludeDoc, _Conflicts) ->
-    JsonRow = {[{key, Key}, {value, Value}]},
-    couch_query_servers:proc_prompt(Proc, [<<"list_row">>, JsonRow]).
 
 send_non_empty_chunk(Resp, Chunk) ->
     case Chunk of
@@ -355,7 +347,7 @@ send_non_empty_chunk(Resp, Chunk) ->
         _ -> send_chunk(Resp, Chunk)
     end.
 
-finish_list(Req, {Proc, _DDocId}, Etag, FoldResult, StartFun, CurrentSeq, TotalRows) ->
+finish_list(Req, QServer, Etag, FoldResult, StartFun, CurrentSeq, TotalRows) ->
     FoldResult2 = case FoldResult of
         {Limit, SkipCount, Response, RowAcc} ->
             {Limit, SkipCount, Response, RowAcc, nil};
@@ -366,13 +358,13 @@ finish_list(Req, {Proc, _DDocId}, Etag, FoldResult, StartFun, CurrentSeq, TotalR
         {_, _, undefined, _, _} ->
             {ok, Resp, BeginBody} =
                 render_head_for_empty_list(StartFun, Req, Etag, CurrentSeq, TotalRows),
-            [<<"end">>, Chunks] = couch_query_servers:proc_prompt(Proc, [<<"list_end">>]),
+            {ok, Chunks} = couch_app_server:list_end(QServer),
             Chunk = BeginBody ++ ?b2l(?l2b(Chunks)),
             send_non_empty_chunk(Resp, Chunk);
         {_, _, Resp, stop, _} ->
             ok;
         {_, _, Resp, _, _} ->
-            [<<"end">>, Chunks] = couch_query_servers:proc_prompt(Proc, [<<"list_end">>]),
+            {ok, Chunks} = couch_app_server:list_end(QServer),
             send_non_empty_chunk(Resp, ?b2l(?l2b(Chunks)))
     end,
     last_chunk(Resp).
