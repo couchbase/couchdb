@@ -35,13 +35,6 @@ var getQuery = function () {
   }
   return r;
 }
-var queryToString = function (obj) {
-  var l = []
-  for (i in obj) {
-    l.push( i + '=' + escape(obj[i]) );
-  }
-  return l.join('&');
-}
 
 var request = function (options, callback) {
   options.success = function (obj) {
@@ -196,7 +189,7 @@ app.showDatabase = function () {
     } else {
       query = {limit:limit, skip:start}
     }
-    request({url: '/'+db+'/_all_docs?'+queryToString(query)}, function (err, resp) {
+    request({url: '/'+db+'/_all_docs?'+$.param(query)}, function (err, resp) {
       if (err) throw err;
       for (var i=0;i<resp.rows.length;i+=1) {
         row = $('<tr><td><a href="#/'+db+'/'+resp.rows[i].key+'">'+resp.rows[i].key+'</a></td><td>' +
@@ -289,7 +282,7 @@ app.showChanges = function () {
   this.render('templates/changes.mustache').replace('#content').then(function () {
     var query = getQuery()
       , url = '/'+db+'/_changes'
-    if (query) url += ('?' + queryToString(query));
+    if (query) url += ('?' + $.param(query));
     var rowCount = 0;
     request({url:url}, function (err, resp) {
       // Render the response in 10 row chunks for efficiency
