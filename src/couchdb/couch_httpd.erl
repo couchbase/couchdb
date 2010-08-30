@@ -160,36 +160,7 @@ handle_request(MochiReq, DefaultFun, UrlHandlers, DbUrlHandlers,
 
     MochiReq1 = couch_httpd_vhost:match_vhost(MochiReq),
     handle_request_int(MochiReq1, DefaultFun,
-        UrlHandlers, DbUrlHandlers, DesignUrlHandlers).
-
-handle_request(MochiReq, DefaultFun,
-    UrlHandlers, DbUrlHandlers, DesignUrlHandlers, VirtualHosts, VhostGlobals) ->
-
-    % grab Host from Req
-    Vhost = case MochiReq:get_header_value("X-Couch-Vhost") of
-        "false" ->
-            % Vhosting was explicitly requested to be disabled.
-            undefined;
-        _ ->
-            MochiReq:get_header_value("Host")
-    end,
-
-    % find Vhost in config
-    case couch_util:get_value(Vhost, VirtualHosts) of
-    undefined -> % business as usual
-        handle_request_int(MochiReq, DefaultFun,
-            UrlHandlers, DbUrlHandlers, DesignUrlHandlers);
-    VhostTarget ->
-        case vhost_global(VhostGlobals, MochiReq) of
-        true ->% global handler for vhosts
-            handle_request_int(MochiReq, DefaultFun,
-                UrlHandlers, DbUrlHandlers, DesignUrlHandlers);
-        _Else ->
-            % do rewrite
-            redirect_to_vhost(MochiReq, DefaultFun,
-                UrlHandlers, DbUrlHandlers, DesignUrlHandlers, VhostTarget)
-        end
-    end.
+                UrlHandlers, DbUrlHandlers, DesignUrlHandlers).
 
 handle_request_int(MochiReq, DefaultFun,
             UrlHandlers, DbUrlHandlers, DesignUrlHandlers) ->
