@@ -17,7 +17,7 @@ couchlibdir = $(localerlanglibdir)/couch-$(version)
 couchincludedir = $(couchlibdir)/include
 couchebindir = $(couchlibdir)/ebin
 
-couchinclude_DATA = couch_db.hrl couch_js_functions.hrl  couch_spatial.hrl
+couchinclude_DATA = couch_db.hrl couch_js_functions.hrl
 couchebin_DATA = $(compiled_files)
 
 # dist_devdoc_DATA = $(doc_base) $(doc_modules)
@@ -48,8 +48,6 @@ source_files = \
     couch_httpd_oauth.erl \
     couch_httpd_external.erl \
     couch_httpd_show.erl \
-    couch_httpd_spatial.erl \
-    couch_httpd_spatial_list.erl \
     couch_httpd_view.erl \
     couch_httpd_misc_handlers.erl \
 	couch_httpd_rewrite.erl \
@@ -72,9 +70,6 @@ source_files = \
     couch_rep_db_listener.erl \
     couch_server.erl \
     couch_server_sup.erl \
-    couch_spatial.erl \
-    couch_spatial_group.erl \
-    couch_spatial_updater.erl \
     couch_stats_aggregator.erl \
     couch_stats_collector.erl \
     couch_stream.erl \
@@ -88,7 +83,7 @@ source_files = \
     couch_db_updater.erl \
     couch_work_queue.erl
 
-EXTRA_DIST = $(source_files) couch_db.hrl couch_js_functions.hrl couch_spatial.hrl
+EXTRA_DIST = $(source_files) couch_db.hrl couch_js_functions.hrl
 
 compiled_files = \
     couch.app \
@@ -113,8 +108,6 @@ compiled_files = \
     couch_httpd_oauth.beam \
     couch_httpd_external.beam \
     couch_httpd_show.beam \
-    couch_httpd_spatial.beam \
-    couch_httpd_spatial_list.beam \
     couch_httpd_view.beam \
     couch_httpd_misc_handlers.beam \
 	couch_httpd_rewrite.beam \
@@ -137,9 +130,6 @@ compiled_files = \
     couch_rep_db_listener.beam \
     couch_server.beam \
     couch_server_sup.beam \
-    couch_spatial.beam \
-    couch_spatial_group.beam \
-    couch_spatial_updater.beam \
     couch_stats_aggregator.beam \
     couch_stats_collector.beam \
     couch_stream.beam \
@@ -210,6 +200,6 @@ endif
 
 # $(ERL) -noshell -run edoc_run files [\"$<\"]
 
-%.beam: %.erl couch_db.hrl couch_js_functions.hrl couch_spatial.hrl
+%.beam: %.erl couch_db.hrl couch_js_functions.hrl
 	$(ERLC) $(ERLC_FLAGS) ${TEST} $<;
 

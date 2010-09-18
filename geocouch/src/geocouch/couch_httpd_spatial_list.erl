@@ -65,7 +65,7 @@ output_list(Req, Db, DDoc, LName, Index, QueryArgs, Etag, Group) ->
                                QServer, Db, LName),
         CurrentSeq = Group#spatial_group.current_seq,
         {ok, Resp, BeginBody} = StartListRespFun(Req, Etag, [], CurrentSeq),
-        couch_httpd_show:send_non_empty_chunk(Resp, BeginBody),
+        geocouch_duplicates:send_non_empty_chunk(Resp, BeginBody),
         SendRowFun = make_spatial_get_row_fun(QServer, Resp),
         FoldAccInit = {undefined, ""},
         {ok, {_Resp, Go}} = couch_spatial:fold(Group, Index, SendRowFun,
@@ -77,7 +77,7 @@ output_list(Req, Db, DDoc, LName, Index, QueryArgs, Etag, Group) ->
                                       Proc, [<<"list_end">>]),
 %            Chunk = BeginBody ++ ?b2l(?l2b(Chunks)),
             Chunk = ?b2l(?l2b(Chunks)),
-            couch_httpd_show:send_non_empty_chunk(Resp, Chunk);
+            geocouch_duplicates:send_non_empty_chunk(Resp, Chunk);
         stop ->
             ok
         end,
@@ -89,7 +89,8 @@ output_list(Req, Db, DDoc, LName, Index, QueryArgs, Etag, Group) ->
 make_spatial_start_resp_fun(QueryServer, Db, LName) ->
     fun(Req, Etag, _Acc, UpdateSeq) ->
         Head = {[{<<"update_seq">>, UpdateSeq}]},
-        couch_httpd_show:start_list_resp(QueryServer, LName, Req, Db, Head, Etag)
+        geocouch_duplicates:start_list_resp(QueryServer, LName, Req, Db, Head, Etag)
+%        couch_httpd_show:start_list_resp(QueryServer, LName, Req, Db, Head, Etag)
     end.
 
 % Counterpart to make_map_send_row_fun/1 in couch_http_show.
@@ -103,7 +104,7 @@ send_list_row(Resp, QueryServer, Row) ->
     try
         [Go, Chunks] = prompt_list_row(QueryServer, Row),
         Chunk = ?b2l(?l2b(Chunks)),
-        couch_httpd_show:send_non_empty_chunk(Resp, Chunk),
+        geocouch_duplicates:send_non_empty_chunk(Resp, Chunk),
         case Go of
             <<"chunks">> ->
                 {ok, ""};

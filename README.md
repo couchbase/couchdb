@@ -159,3 +159,12 @@ the query will return, not the geometry themselves.
     curl -X GET 'http://localhost:5984/places/_design/main/_spatial/points?bbox=0,0,180,90'
 
     {"count":1}
+
+
+
+
+New stuff
+========
+
+Run from CouchDB dir:
+LD_LIBRARY_PATH=/usr/lib/xulrunner-1.9.2.8 ERL_FLAGS="-pa ../geocouch/ebin" ./utils/run

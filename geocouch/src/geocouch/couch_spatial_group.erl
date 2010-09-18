@@ -328,7 +328,7 @@ delete_index_file(RootDir, DbName, GroupSig) ->
 
 index_file_name(RootDir, DbName, GroupSig) ->
     couch_view_group:design_root(RootDir, DbName) ++
-        couch_view_group:hex_sig(GroupSig) ++".spatial".
+        couch_util:to_hex(?b2l(GroupSig)) ++".spatial".
 
 open_index_file(RootDir, DbName, GroupSig) ->
     FileName = index_file_name(RootDir, DbName, GroupSig),

@@ -138,7 +138,7 @@ spatial_compute(#spatial_group{def_lang=DefLang, query_server=QueryServerIn}=Gro
 
 % Pendant to couch_query_servers:start_doc_map/2
 start_spatial(Lang, Functions) ->
-    Proc = couch_query_servers:get_os_process(Lang),
+    Proc = geocouch_duplicates:get_os_process(Lang),
     lists:foreach(fun(FunctionSource) ->
         true = couch_query_servers:proc_prompt(Proc, [<<"add_fun">>, FunctionSource])
     end, Functions),
