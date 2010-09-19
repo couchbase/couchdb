@@ -164,7 +164,33 @@ the query will return, not the geometry themselves.
 
 
 New stuff
-========
+=========
 
-Run from CouchDB dir:
-LD_LIBRARY_PATH=/usr/lib/xulrunner-1.9.2.8 ERL_FLAGS="-pa ../geocouch/ebin" ./utils/run
+Get it running
+--------------
+
+Note: always replace <vanilla-couch> with the path to your CouchDB source and <geocouch> with
+the location of the GeoCouch source.
+
+ - change "-I" path in <geocouch>/geocouch/Makefile to match <vanilla-couch>/src/couchdb
+ - run "make" in your <geocouch>/geocouch directory
+ - "make dev" your vanilla couch.
+ - add the spatial indexer to you <vanilla-couch>/etc/couchdb/local_dev.ini
+ 
+    [daemons]
+    spatial_manager={couch_spatial, start_link, []}
+
+    [httpd_design_handlers]
+    _spatial = {couch_httpd_spatial, handle_spatial_req}
+    _spatiallist = {couch_httpd_spatial_list, handle_spatial_list_req}
+
+ - copy Futon tests over (from <geocouch>/share/www/script/test to
+   <vanilla-couch>/share/www/script/test)
+ - add them to <vanilla-couch>/share/www/script/test/couch_tests.js
+
+    loadTest("list_spatial.js");
+    loadTest("spatial.js");
+
+ - Now run your CouchDB with GeoCouch in the Erlang path:
+
+    ERL_FLAGS="-pa <geocouch>/geocouch/ebin" <vanilla-couch>/utils/run
