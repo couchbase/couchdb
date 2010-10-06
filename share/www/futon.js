@@ -56,7 +56,7 @@ app.index = function () {
     
     row.addClass(even ? "even" : "odd")    
     row.appendTo('tbody.content');
-    request({url: '/'+name}, function ( err, info ) {
+    request({url: '/'+encodeURIComponent(name)}, function ( err, info ) {
       if (err) info = { disk_size:"can't connect", doc_count:"can't connect"
                       , update_seq:"can't connect"};
       row.append('<td class="size">'+formatSize(info.disk_size)+'</td>' +
@@ -121,19 +121,19 @@ app.showDatabase = function () {
       });
     }
 
-    request({url: '/'+db}, function (err, info) {
+    request({url: '/'+encodeURIComponent(db)}, function (err, info) {
       // Fill out all info from the db query.
       for (i in info) {$('div#'+i).text(info[i])}
       var disk_size = info.disk_size;
       $('div#disk_size').text(formatSize(info.disk_size))
       
       // Query for ddocs to calculate size
-      request({url:'/'+db+'/_all_docs?startkey="_design/"&endkey="_design0"'}, function (err, docs) {
+      request({url:'/'+encodeURIComponent(db)+'/_all_docs?startkey="_design/"&endkey="_design0"'}, function (err, docs) {
         var sizes = [];
         for (var i=0;i<docs.rows.length;i+=1) {
           // Query every db for it's size info
           // Note: because of a current bug this query sometimes causes a view update even with stale=ok
-          request({url:'/'+db+'/'+docs.rows[i].id+'/_info?stale=ok'}, function (err, info) {
+          request({url:'/'+encodeURIComponent(db)+'/'+docs.rows[i].id+'/_info?stale=ok'}, function (err, info) {
             if (err) throw err
             sizes.push(info.view_index.disk_size);
             if (sizes.length === docs.rows.length) {
@@ -189,7 +189,7 @@ app.showDatabase = function () {
     } else {
       query = {limit:limit, skip:start}
     }
-    request({url: '/'+db+'/_all_docs?'+$.param(query)}, function (err, resp) {
+    request({url: '/'+encodeURIComponent(db)+'/_all_docs?'+$.param(query)}, function (err, resp) {
       if (err) throw err;
       for (var i=0;i<resp.rows.length;i+=1) {
         row = $('<tr><td><a href="#/'+db+'/'+resp.rows[i].key+'">'+resp.rows[i].key+'</a></td><td>' +

@@ -187,6 +187,10 @@ function setupAdminParty(fun) {
 };
 
 function updateTestsListing() {
+  var names = [];
+  for (name in couchTests) names.push(name)
+  names.sort
+  
   for (var name in couchTests) {
     var testFunction = couchTests[name];
     var row = $("<tr><th></th><td></td><td></td><td></td></tr>")
