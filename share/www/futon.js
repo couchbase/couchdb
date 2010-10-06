@@ -308,6 +308,27 @@ app.showChanges = function () {
   })
 }
 
+app.showConfig = function () {
+  $('h1#topbar').html('<strong>Configuration</strong>');
+  this.render('templates/config.mustache').replace('#content').then(function () {
+    
+  })
+}
+
+app.showStats = function () {
+  $('h1#topbar').html('<strong>Status</strong>');
+  this.render('templates/stats.mustache').replace('#content').then(function () {
+    
+  })
+}
+
+app.showTests = function () {
+  $('h1#topbar').html('<strong>Test Suite</strong>');
+  this.render('templates/tests.mustache').replace('#content').then(function () {
+    
+  })
+}
+
 app.showViews = function () {
   
 }
@@ -320,11 +341,22 @@ var a = $.sammy(function () {
   // Index of all databases
   this.get('', indexRoute);
   this.get("#/", indexRoute);
+  
+  // Configuration editor.
+  this.get('#/_config', app.showConfig);
+  
+  // Stats page
+  this.get('#/_stats', app.showStats);
+  
+  // Stats page
+  this.get('#/_tests', app.showTests);
+  
   // Database view
   this.get('#/:db', app.showDatabase);
   this.get('#/:db/_all_docs', app.showDatabase);
   // Database _changes feed
   this.get('#/:db/_changes', app.showChanges);
+  
   // Database views viewer
   this.get('#/:db/_views', app.showViews);
   // Document editor/viewer

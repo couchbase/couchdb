@@ -1,0 +1,69 @@
+<script src="script/couch.js"></script>
+<script src="script/couch_test_runner.js"></script>
+<script src="script/couch_tests.js"></script>
+<script src="script/oauth.js"></script>
+<script src="script/sha1.js"></script>
+
+<script>
+
+  $(function() {
+    
+    loadTests(allCouchTests, function () {
+      updateTestsListing();
+      $("#toolbar button.run").click(function() {
+        setupAdminParty(runAllTests) ;
+      });
+      $("#toolbar button.load").click(function() {
+        location.reload(true);
+      });
+      $("#toolbar button.share").click(function() {
+        $.showDialog("dialog/_share_test_reports.html", {
+          submit: function(data, callback) {
+            $.couch.replicate("test_suite_reports", "http://couchdb.couchdb.org/test_suite_reports");
+            callback();
+          }
+        });
+      });
+      $("#toolbar button.add").click(function() {
+        location = "custom_test.html";
+      });
+    });
+  });
+    
+</script>
+
+<ul id="toolbar">
+  <li><button class="run">Run All</button></li>
+  <li><button class="load">Reload</button></li>
+  <li><button class="share">Share Test Reports</button></li>
+  <li><button class="add">Custom Test</button></li>
+  <li class="current"></li>
+</ul>
+<p class="help">
+  <strong>Note:</strong> Each of the tests will block the browser. If the
+  connection to your CouchDB server is slow, running the tests will take
+  some time, and you'll not be able to do much with your browser while
+  a test is being executed. <strong>Also:</strong> The test suite is designed
+  to work with Firefox (with Firebug disabled). Patches are welcome for 
+  convenience compatibility with other browsers, but official support is
+  for Firefox (latest stable version) only.
+</p>
+
+<table class="listing" id="tests" cellspacing="0">
+  <caption>Tests</caption>
+  <thead>
+    <tr>
+      <th class="name">Name</th>
+      <th class="status">Status</th>
+      <th class="duration">Elapsed Time</th>
+      <th class="details">Details</th>
+    </tr>
+  </thead>
+  <tbody class="content">
+  </tbody>
+  <tbody class="footer">
+    <tr>
+      <td colspan="4"></td>
+    </tr>
+  </tbody>
+</table>

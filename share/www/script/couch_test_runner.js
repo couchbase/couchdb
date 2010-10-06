@@ -13,8 +13,14 @@
 // *********************** Test Framework of Sorts ************************* //
 
 
+
 function loadScript(url) {
-  if (typeof document != "undefined") document.write('<script src="'+url+'"></script>');
+  // if (typeof document != "undefined") document.write('<script src="'+url+'"></script>');
+  var head= document.getElementsByTagName('head')[0];
+  var script= document.createElement('script');
+  script.type= 'text/javascript';
+  script.src= url;
+  head.appendChild(script);
 };
 
 function patchTest(fun) {
