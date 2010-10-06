@@ -78,8 +78,9 @@ function runTest(button, callback, debug, noSave) {
   var row = currentRow = $(button).parents("tr").get(0);
   $("td.status", row).removeClass("error").removeClass("failure").removeClass("success");
   $("td", row).text("");
-  $("#toolbar li.current").text("Running: "+row.id);
-  var testFun = couchTests[row.id];
+  var id = row.id.replace('test-', '')
+  $("#toolbar li.current").text("Running: "+id);
+  var testFun = couchTests[id];
   function run() {
     numFailures = 0;
     var start = new Date().getTime();
@@ -110,7 +111,7 @@ function runTest(button, callback, debug, noSave) {
     var duration = new Date().getTime() - start;
     $("td.status", row).removeClass("running").addClass(status).text(status);
     $("td.duration", row).text(duration + "ms");
-    $("#toolbar li.current").text("Finished: "+row.id);
+    $("#toolbar li.current").text("Finished: "+id);
     updateTestsFooter();
     currentRow = null;
     if (callback) callback();
@@ -189,12 +190,14 @@ function setupAdminParty(fun) {
 function updateTestsListing() {
   var names = [];
   for (name in couchTests) names.push(name)
-  names.sort
+  names.sort();
+  names.splice(names.indexOf('basics'), 1);
+  names.unshift('basics');
   
-  for (var name in couchTests) {
-    var testFunction = couchTests[name];
+  for (var i=0;i<names.length;i+=1) {
+    var testFunction = couchTests[names[i]];
     var row = $("<tr><th></th><td></td><td></td><td></td></tr>")
-      .find("th").text(name).attr("title", "Show source").click(function() {
+      .find("th").text(names[i]).attr("title", "Show source").click(function() {
         showSource(this);
       }).end()
       .find("td:nth(0)").addClass("status").text("not run").end()
@@ -209,7 +212,7 @@ function updateTestsListing() {
       });
       return false;
     }).prependTo(row.find("th"));
-    row.attr("id", name).appendTo("#tests tbody.content");
+    row.attr("id", 'test-'+names[i]).appendTo("#tests tbody.content");
   }
   $("#tests tr").removeClass("odd").filter(":odd").addClass("odd");
   updateTestsFooter();
