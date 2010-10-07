@@ -318,13 +318,41 @@ app.showConfig = function () {
 app.showStats = function () {
   $('h1#topbar').html('<strong>Status</strong>');
   this.render('templates/stats.mustache').replace('#content').then(function () {
-    
+    request({url:'/_stats'}, function (err, stats) {
+      var info = $('#content').append('<h2>Raw Info</h2>')
+        , text = ''
+        ;
+      for (i in stats) {
+        text += '<div class="stat-section">'+i+'</div><br>'
+        for (x in stats[i]) {
+          text += '<div class="stat-subsection">'+x+'<span class="stat-subsection-description">'+stats[i][x].description+'</span></div>'
+          for (y in stats[i][x]) {
+            if (y !== 'description') {
+              text += '<span class="stat-title">'+y+'</span>'
+              text += '<span class="stat-value">' + 
+                ((stats[i][x][y] === null) ? 'none' : stats[i][x][y]) + 
+                '</span>'
+            }
+          }
+          text += '<br>'
+        }
+        text += '<br>'
+        info.append(text)
+        text = ''
+      }
+    })
   })
 }
 
 app.showTests = function () {
   $('h1#topbar').html('<strong>Test Suite</strong>');
   this.render('templates/tests.mustache').replace('#content').then(function () {
+    
+  })
+}
+app.showReplicator = function () {
+  $('h1#topbar').html('<strong>Replicator</strong>');
+  this.render('templates/replicator.mustache').replace('#content').then(function () {
     
   })
 }
@@ -342,14 +370,10 @@ var a = $.sammy(function () {
   this.get('', indexRoute);
   this.get("#/", indexRoute);
   
-  // Configuration editor.
   this.get('#/_config', app.showConfig);
-  
-  // Stats page
   this.get('#/_stats', app.showStats);
-  
-  // Stats page
   this.get('#/_tests', app.showTests);
+  this.get('#/_replicate', app.showReplicator)
   
   // Database view
   this.get('#/:db', app.showDatabase);
