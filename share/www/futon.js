@@ -323,15 +323,15 @@ app.showStats = function () {
         , text = ''
         ;
       for (i in stats) {
-        text += '<div class="stat-section">'+i+'</div><br>'
+        text += '<div class="stat-section">'+i+'</div>'
         for (x in stats[i]) {
           text += '<div class="stat-subsection">'+x+'<span class="stat-subsection-description">'+stats[i][x].description+'</span></div>'
           for (y in stats[i][x]) {
             if (y !== 'description') {
               text += '<span class="stat-title">'+y+'</span>'
-              text += '<span class="stat-value">' + 
+              text += '<span class="stat-value"> ' + 
                 ((stats[i][x][y] === null) ? 'none' : stats[i][x][y]) + 
-                '</span>'
+                ' </span>'
             }
           }
           text += '<br>'
