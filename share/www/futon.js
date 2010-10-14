@@ -357,8 +357,81 @@ app.showReplicator = function () {
   })
 }
 
-app.showViews = function () {
+app.showView = function () {
+  var db = this.params['db']
+    , ddoc = this.params['ddoc']
+    , view = this.params['view']
+    ;
   
+  var populateViews = function (ddoc, view) {
+    var v = $('select#view-select');
+    v.css('color', '#1A1A1A')
+    v.attr('loaded', true)
+    if (!ddoc.views) {
+      v.append($('<option value="No Views">No Views</option>'))
+    } else {
+      v.html('')
+      v.attr('disabled', false);
+      if (!view) { v.append('<option value="Select View">Select View</option>') }
+      for (i in ddoc.views) { 
+        if (view && i === view) {
+          v.append('<option value="'+i+'" selected>'+i+'</option>'); 
+        } else {
+          v.append('<option value="'+i+'">'+i+'</option>'); 
+        }
+      }
+      v.change(function () {
+        window.location.hash = '#/' + db + '/' + $('select#ddoc-select').val() + '/_view/' + v.val()
+      })
+    }
+  }
+  
+  var setupViews = function () {
+    if (!$('select#ddoc-select').attr('loaded')) {
+      request({url: '/' + encodeURIComponent(db) + 
+                    '/_all_docs?startkey="_design/"&endkey="_design0"&include_docs=true'}, 
+                    function (err, docs) { 
+        var s = $('select#ddoc-select');
+        s.attr('loaded', true)
+        docs.rows.forEach(function (row) {
+          if (ddoc) {
+            s.append($('<option value="'+row.id+'" selected>'+row.id+'</option>'))
+          } else {
+            s.append($('<option value="'+row.id+'">'+row.id+'</option>'))
+          }
+        })
+        s.change(function () {
+          request({url: '/'+ encodeURIComponent(db) + '/' + s.val()}, function (err, ddoc) {
+            populateViews(ddoc)
+          })
+        })
+      })
+    }
+    
+    var refresh = function () {
+      console.log('asd')
+    }
+    
+    var release = function () {
+       $('*.qinput').css('color', '#1A1A1A');
+       $('*.qinput').attr('disabled', false);
+       $('input.qinput[type=checkbox]').click(refresh)
+       $('input.qinput[type=text]').change(refresh)
+    }
+    
+    if (!$('select#view-select').attr('loaded') && ddoc) {
+      request({url: '/'+ encodeURIComponent(db) + '/_design/' + ddoc}, function (err, ddoc) {
+        populateViews(ddoc, view);
+        release();
+      })
+    } else if (ddoc) { release(); }
+    
+  }
+  
+  $('h1#topbar').html('<a href="#/">Overview</a><a href="#/'+db+'">'+db+'</a><strong>_view</strong>');
+  if ($('div#query-options').length === 0) {
+    this.render('templates/view.mustache').replace('#content').then(setupViews)
+  } else {setupViews();}
 }
 
 var a = $.sammy(function () {
@@ -374,6 +447,9 @@ var a = $.sammy(function () {
   this.get('#/_stats', app.showStats);
   this.get('#/_tests', app.showTests);
   this.get('#/_replicate', app.showReplicator)
+  
+  this.get('#/:db/_views', app.showView);
+  this.get('#/:db/_design/:ddoc/_view/:view', app.showView);
   
   // Database view
   this.get('#/:db', app.showDatabase);

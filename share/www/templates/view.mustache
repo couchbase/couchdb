@@ -1,0 +1,53 @@
+<div id="query-options">
+  <select name="ddoc-select" id="ddoc-select">
+    <option value="Select Design">Select Design</option>
+  </select>
+  <select name="view-select" id="view-select" disabled>
+  </select>
+  <br>
+  <span class="qinput">limit</span><input class="qinput" type="text" value="10" disabled />
+  <br>
+  <span class="qinput">startkey</span><input class="qinput" type="text" disabled />
+  <span class="qinput">startkey_docid</span><input class="qinput" type="text" disabled />
+  <br>
+  <span class="qinput">endkey</span><input class="qinput" type="text" disabled />
+  <span class="qinput">endkey_docid</span><input class="qinput" type="text" disabled />
+  <br>
+  <span class="qinput">group</span><input class="qinput" type=checkbox name="group" disabled />
+  <span class="qinput">group_level</span><input class="qinput" type="text" disabled />
+  <br>
+  <span class="qinput">skip</span><input class="qinput" type=checkbox name="skip" disabled />
+  <span class="qinput">reduce</span><input class="qinput" type=checkbox name="reduce" disabled />
+  <span class="qinput">stale</span><input class="qinput" type=checkbox name="stale" disabled />
+  <span class="qinput">descending</span><input class="qinput" type=checkbox name="descending" disabled />
+  
+  <span class="qinput">include_docs</span><input class="qinput" type=checkbox name="include_docs" disabled />
+  <span class="qinput">inclusive_end</span><input class="qinput" type=checkbox name="inclusive_end" disabled />
+</div>
+
+<table id="documents" class="listing" cellspacing="0">
+  <caption>Documents</caption>
+  <thead>
+    <tr>
+      <th class="key">id</th>
+      <th class="value">rev</th>
+    </tr>
+  </thead>
+  <tbody class="content">
+  </tbody>
+  <tbody class="footer">
+    <tr>
+      <td colspan="4" class="more">
+        <select class="dbquery-select" autocomplete="false">
+          <option value="all">All Documents</option>
+          <option value="ddocs">Design Documents</option>
+          <option value="query">Query</option>
+        </select>
+      </td>
+    </tr>
+  </tbody>
+</table>
+<ul id="toolbar">
+  <li><button class="delete">Delete Database</button></li>
+  <li><button class="compact">Compact &amp; Cleanup</button></li>
+</ul>

@@ -656,8 +656,11 @@ span.stat-subsection-description {font-size:12px; font-weight:normal; padding-le
   font-size: 11px;
 }
 
-
 /* Session */
 #loginSignup {
   font-size:200%;
 }
+
+/* Views */
+.qinput {color:#A1A1A1;}
+select#view-select {color:#A1A1A1;}
