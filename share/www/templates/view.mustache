@@ -1,53 +1,97 @@
 <div id="query-options">
-  <select name="ddoc-select" id="ddoc-select">
-    <option value="Select Design">Select Design</option>
-  </select>
-  <select name="view-select" id="view-select" disabled>
-  </select>
-  <br>
-  <span class="qinput">limit</span><input class="qinput" type="text" value="10" disabled />
-  <br>
-  <span class="qinput">startkey</span><input class="qinput" type="text" disabled />
-  <span class="qinput">startkey_docid</span><input class="qinput" type="text" disabled />
-  <br>
-  <span class="qinput">endkey</span><input class="qinput" type="text" disabled />
-  <span class="qinput">endkey_docid</span><input class="qinput" type="text" disabled />
-  <br>
-  <span class="qinput">group</span><input class="qinput" type=checkbox name="group" disabled />
-  <span class="qinput">group_level</span><input class="qinput" type="text" disabled />
-  <br>
-  <span class="qinput">skip</span><input class="qinput" type=checkbox name="skip" disabled />
-  <span class="qinput">reduce</span><input class="qinput" type=checkbox name="reduce" disabled />
-  <span class="qinput">stale</span><input class="qinput" type=checkbox name="stale" disabled />
-  <span class="qinput">descending</span><input class="qinput" type=checkbox name="descending" disabled />
+  <div id="view-selection">
+    <select name="ddoc-select" id="ddoc-select">
+      <option value="Select Design">Select Design</option>
+    </select>
+    <select name="view-select" id="view-select" disabled>
+    </select>
+  </div>
+  <div class="spacer" />
+  <div class="primary-view-options odd">
+    <span class="qinput">key</span>
+    <input name="key" class="qinput" type="text" disabled />
+    <span class="qinput">limit</span>
+    <input name="limit" class="qinput" type="text" value="10" disabled />
+    <span class="qinput">skip</span>
+    <input name="skip" class="qinput" name="skip" disabled />
+  </div>
+  <div class="main-view-options">
+    
+    <div class="key-options">
+      <div class="key-half-options">
+        <div class="input-left">
+          <span class="qinput">startkey</span>
+        </div>
+        <div class="input-right">
+          <input name="startkey" class="qinput input-right" type="text" disabled />
+        </div>  
+      </div>
+      <div class="key-half-options">
+        <div class="input-left">
+          <span class="qinput">endkey</span>
+        </div>
+        <div class="input-right-nospace">
+          <input name="endkey" class="qinput input-right" type="text" disabled />
+        </div>
+      </div>
+    </div>
+    
+    <div class="spacer" />
+    <div class="key-options">
+      <div class="key-half-options">
+        <div class="docid-input-left">
+          <span class="qinput">startkey_docid</span>
+        </div>
+        <div class="docid-input-right">
+          <input name="startkey_docid" class="qinput input-right" type="text" disabled />
+        </div>
+      </div>
+      <div class="key-half-options">
+        <div class="docid-input-left">
+          <span class="qinput">endkey_docid</span>
+        </div>
+        <div class="docid-input-right-nospace">
+          <input name="endkey_docid" class="qinput input-right" type="text" disabled />
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="spacer" />
+  <div class="reduce-options odd">
+    <span class="qinput">reduce</span>
+    <input name="reduce" class="qinput" type=checkbox name="reduce" disabled />
+    <span class="qinput">group</span>
+    <input name="group" class="qinput" type=checkbox name="group" disabled />
+    <span class="qinput">group_level</span>
+    <input name="group_level" class="qinput" type="text" disabled />
+  </div>
+  <div class="spacer" />
+  <div>
+    <span class="qinput">include_docs</span><input name="include_docs" class="qinput" type=checkbox name="include_docs" disabled />
+    
+    <span class="qinput">descending</span><input name="descending" class="qinput" type=checkbox name="descending" disabled />  
+    <span class="qinput">stale</span><input name="stale" class="qinput" type=checkbox name="stale" disabled />
+    
+    <span class="qinput">inclusive_end</span><input name="inclusive_end" class="qinput" type=checkbox name="inclusive_end" disabled />
   
-  <span class="qinput">include_docs</span><input class="qinput" type=checkbox name="include_docs" disabled />
-  <span class="qinput">inclusive_end</span><input class="qinput" type=checkbox name="inclusive_end" disabled />
+  </div>
+  
 </div>
 
 <table id="documents" class="listing" cellspacing="0">
   <caption>Documents</caption>
   <thead>
-    <tr>
-      <th class="key">id</th>
-      <th class="value">rev</th>
+    <tr class="viewhead">
+      <th class="key">key</th>
+      <th class="value">value</th>
     </tr>
   </thead>
   <tbody class="content">
   </tbody>
   <tbody class="footer">
     <tr>
-      <td colspan="4" class="more">
-        <select class="dbquery-select" autocomplete="false">
-          <option value="all">All Documents</option>
-          <option value="ddocs">Design Documents</option>
-          <option value="query">Query</option>
-        </select>
+      <td colspan="4" class="more" id="viewfoot">
       </td>
     </tr>
   </tbody>
 </table>
-<ul id="toolbar">
-  <li><button class="delete">Delete Database</button></li>
-  <li><button class="compact">Compact &amp; Cleanup</button></li>
-</ul>

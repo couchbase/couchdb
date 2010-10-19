@@ -19,6 +19,8 @@ html, body { color: #000; font: normal 90% Verdana, sans-serif;
   height: 100%; margin: 0; padding: 0; overflow: hidden;
 }
 
+div.spacer {clear:both;}
+
 th { font-weight: ;}
 
 :link, :visited { color: #ba1e16; text-decoration: none; }
@@ -662,5 +664,33 @@ span.stat-subsection-description {font-size:12px; font-weight:normal; padding-le
 }
 
 /* Views */
-.qinput {color:#A1A1A1;}
-select#view-select {color:#A1A1A1;}
+.qinput {color:#A1A1A1; }
+div#query-options {font-size:15px;}
+div#view-selection {padding-bottom:5px;}
+select#ddoc-select { padding-top:5px;  font-size:15px;}
+select#view-select { padding-top:5px; font-size:15px;}
+div.error-type {color:#FF0000; font-weight:bold;}
+div.error-reason {color:#FF0000; font-weight:bold;}
+span.expand-doc {cursor:pointer; color:#CD5555;}
+span.expand-all {cursor:pointer; color:#CD5555;}
+table.listing tbody tr td span.docid { cursor:pointer; color:#CD9B9B }
+table.listing tbody tr.showdoc td.showdoc {font-weight:bold; background: #e9e9e9; color:#000000; }
+div.viewinfo {font-weight:bold; color:#000000; float:left;}
+span.viewinfo-val {color:#FF0000; padding-left:10px; padding-right:30px;}
+span.viewstart {float:right; color:#CD5555; padding-left:5px; padding-right:5px; cursor:pointer;}
+span.viewend {float:right; color:#CD5555; padding-left:5px; cursor:pointer;}
+span.viewkey {color:#CD5555; padding-left:5px; padding-right:20px; cursor:pointer;}
+
+div.primary-view-options {width:100%; padding-top:10px; padding-bottom:10px;}
+div.main-view-options {width:100%; padding-top:5px;}
+div.key-options {float:left; width:100%;}
+div.key-half-options {float:left; width:50%;}
+div.input-left {float:left; width:20%;}
+div.input-right {float:left; width:75%; padding-right:5%; padding:3px;}
+div.input-right-nospace {float:left; width:80%;}
+div.docid-input-left {float:left; width:35%}
+div.docid-input-right {float:left; width:60%; padding-right:5%;}
+div.docid-input-right-nospace {float:left; width:65%;}
+input.input-right {text-align:left; width:100%; }
+div.reduce-options {padding-top:10px; padding-bottom:10px;}
+div.odd {background: #feffea; -moz-border-radius: 5px;  -webkit-border-radius: 5px;}

@@ -36,6 +36,44 @@ var getQuery = function () {
   return r;
 }
 
+var param = function( a ) {
+  // Query param builder from jQuery, had to copy out to remove conversion of spaces to +
+	var s = [];
+	if ( jQuery.isArray(a) || a.jquery ) {
+		jQuery.each( a, function() {
+			add( this.name, this.value );
+		});		
+	} else {
+		for ( var prefix in a ) {
+			buildParams( prefix, a[prefix] );
+		}
+	}
+  return s.join("&");
+
+	function buildParams( prefix, obj ) {
+		if ( jQuery.isArray(obj) ) {
+			jQuery.each( obj, function( i, v ) {
+				if (  /\[\]$/.test( prefix ) ) {
+					add( prefix, v );
+				} else {
+					buildParams( prefix + "[" + ( typeof v === "object" || jQuery.isArray(v) ? i : "" ) + "]", v );
+				}
+			});				
+		} else if (  obj != null && typeof obj === "object" ) {
+			jQuery.each( obj, function( k, v ) {
+				buildParams( prefix + "[" + k + "]", v );
+			});				
+		} else {
+			add( prefix, obj );
+		}
+	}
+
+	function add( key, value ) {
+		value = jQuery.isFunction(value) ? value() : value;
+		s[ s.length ] = encodeURIComponent(key) + "=" + encodeURIComponent(value);
+	}
+}
+
 var request = function (options, callback) {
   options.success = function (obj) {
     callback(null, obj);
@@ -189,7 +227,7 @@ app.showDatabase = function () {
     } else {
       query = {limit:limit, skip:start}
     }
-    request({url: '/'+encodeURIComponent(db)+'/_all_docs?'+$.param(query)}, function (err, resp) {
+    request({url: '/'+encodeURIComponent(db)+'/_all_docs?'+param(query)}, function (err, resp) {
       if (err) throw err;
       for (var i=0;i<resp.rows.length;i+=1) {
         row = $('<tr><td><a href="#/'+db+'/'+resp.rows[i].key+'">'+resp.rows[i].key+'</a></td><td>' +
@@ -282,7 +320,7 @@ app.showChanges = function () {
   this.render('templates/changes.mustache').replace('#content').then(function () {
     var query = getQuery()
       , url = '/'+db+'/_changes'
-    if (query) url += ('?' + $.param(query));
+    if (query) url += ('?' + param(query));
     var rowCount = 0;
     request({url:url}, function (err, resp) {
       // Render the response in 10 row chunks for efficiency
@@ -381,9 +419,40 @@ app.showView = function () {
         }
       }
       v.change(function () {
-        window.location.hash = '#/' + db + '/' + $('select#ddoc-select').val() + '/_view/' + v.val()
+        refresh();
       })
     }
+  }
+  
+  var refresh = function () {
+    var h = '#/' + db + '/' + $('select#ddoc-select').val() + '/_view/' + $('select#view-select').val()
+      , query = {}
+      ;
+    $('input.qinput').each(function (i, n) {
+      n = $(n)
+      var name = n.attr('name')
+        , type = n.attr('type')
+        , val = n.val()
+        ;
+      if (type == "text") {
+        if (val.length > 0) {
+          if (name == "skip" || name == "limit" || name == "group_level") {
+            query[name] = parseInt(n.val())
+          } else if (name == "startkey_docid" || name == "endkey_docid" || name == "key") {
+            if (val[0] == '"') query[name] = val
+            else query[name] = JSON.stringify(val)
+          } else if (name == "startkey" || name == "endkey") {
+            if (val[0] == '"' || val[0] == '[' || val[0] == '{') query[name] = val
+            else query[name] = JSON.stringify(val)
+          }
+        }
+      } else if (type == "checkbox" && n.attr("checked")) {
+        if (name == "stale") query[name] = 'ok'
+        else query[name] = 'true'
+      }
+    })
+    
+    window.location.hash = h + '?' + param(query);
   }
   
   var setupViews = function () {
@@ -406,17 +475,128 @@ app.showView = function () {
           })
         })
       })
-    }
+    } 
     
-    var refresh = function () {
-      console.log('asd')
+    
+    
+    var updateResults = function () {
+      var c = $('tbody.content')
+        , url = window.location.hash.replace('#','')
+        ;
+        
+      c.html('');
+      request({url:url}, function (err, resp) {
+        $('td#viewfoot').html('')
+        if (!resp) {
+          err = JSON.parse(err.responseText);
+          $('td#viewfoot').append($(
+            '<div class="error-type">Error : ' + err.error + '</div>' + 
+            '<div class="error-reason">Reason : '+ err.reason + '</div>'
+          ))
+        } else {
+          $('th.doc').remove()
+          if (getQuery().include_docs) {
+            $('tr.viewhead').append('<th class="doc">doc<span class="expand-all">⟱</span></th>').find('span')
+              .click(function () {$('span.expand-doc').click()})
+          }
+          var odd = 'even';
+          resp.rows.forEach(function (row) {
+            var tr = $('<tr class="' + odd + '">' + 
+                         '<td class="key">' + 
+                           '<div class="viewkey">' + 
+                             '<span><strong>'+JSON.stringify(row.key)+'</strong></span>' +
+                             '<span class="viewkey">^</span>' +
+                             '<span class="viewend">\></span>' + 
+                             '<span class="viewstart">\<</span>' + 
+                           '</div>' + 
+                           '<div class="docid">' + 
+                             '<span class="docid">ID: ' + row.id + '</span>' + 
+                             '<span class="viewend">\></span>' + 
+                             '<span class="viewstart">\<</span>' +
+                           '</div>' +
+                         '</td>' +
+                         '<td class="value"><code>' + row.value + '</code></td>' + 
+                       '</tr>')
+            if (row.doc) {
+              var expand = function () {
+                var d = $('<tr class="showdoc"><td class="showdoc" colspan="4"><code>'  +
+                    $.futon.formatJSON(row.doc) + '</code></td></tr>'
+                  )
+                var collapse = function () {
+                  d.remove();
+                  $(this).text('⟱').css('cursor', 'pointer').unbind('click', collapse);
+                  $(this).click(expand)
+                }
+                $(this).text('⟰').css('cursor', 'pointer').unbind('click', expand);
+                $(this).click(collapse)
+                d.insertAfter(tr)
+              }
+              
+              $('<td>' + '<span class="expand-doc">⟱</span>' + '</td>')
+                .click(expand)
+                .appendTo(tr)
+                ;
+            }
+            if (odd == 'odd') odd = 'even'
+            else odd = 'odd'
+            c.append(tr)
+          })
+          
+          // Add quick links for setting key, startkey, endkey, startkey_docid & endkey_docid
+          $("span.viewstart").click(function () {
+            var c = $(this).parent();
+            if (c.attr('class') == 'viewkey') {
+              $("input[name='startkey']").val(c.text().slice(0, c.text().length - 3)).change();
+            } else if (c.attr('class') == 'docid') {
+              $("input[name='startkey_docid']").val(c.text().slice(4, c.text().length - 2)).change();
+            }
+          })
+          $("span.viewend").click(function () {
+            var c = $(this).parent();
+            if (c.attr('class') == 'viewkey') {
+              $("input[name='endkey']").val(c.text().slice(0, c.text().length - 3)).change();
+            } else if (c.attr('class') == 'docid') {
+              $("input[name='endkey_docid']").val(c.text().slice(4, c.text().length - 2)).change();
+            }
+          })
+          $("span.viewkey").click(function () {
+            var c = $(this).parent();
+            $("input[name='key']").val(c.text().slice(0, c.text().length - 3)).change();
+          })
+          
+          // Add view result info
+          $('td#viewfoot').append(
+            '<div class="viewinfo" >total_rows<span class="viewinfo-val">' + 
+              resp.total_rows + '</span></div>'+
+            '<div class="viewinfo" >offset<span class="viewinfo-val">' + 
+              resp.offset + '</span></div>' +
+            '<div class="viewinfo" >rows<span class="viewinfo-val">' + 
+              resp.rows.length + '</span></div>'
+          )
+        }
+      })
     }
     
     var release = function () {
-       $('*.qinput').css('color', '#1A1A1A');
-       $('*.qinput').attr('disabled', false);
-       $('input.qinput[type=checkbox]').click(refresh)
-       $('input.qinput[type=text]').change(refresh)
+      if (!$('input.quinput[name=limit]').attr('released')) {
+        $('*.qinput').css('color', '#1A1A1A');
+        $('*.qinput').attr('disabled', false);
+        
+        var query = getQuery();
+        for (i in query) {
+          var n = $('input[name='+i+']')
+            , type = n.attr("type")
+            ;
+          if (type == "text") n.val(query[i])          
+          else if (type == 'checkbox' && (query[i] == 'true' || query[i] == 'ok')) n.attr('checked', 'true')
+        }
+        
+        $('input.qinput[type=checkbox]').click(refresh);
+        $('input.qinput[type=text]').change(refresh);
+        $('input.quinput[name=limit]').attr('released', true)
+      }
+      // refresh();
+      updateResults();
     }
     
     if (!$('select#view-select').attr('loaded') && ddoc) {
