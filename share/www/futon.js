@@ -131,8 +131,8 @@ app.showDatabase = function () {
   
   var init = function () {
     $('span#topbar').html('<a href="#/">Overview</a><strong>'+db+'</strong>');
-    $("#toolbar button.add").click( function () { location.href = "/_utils/#/" + db + '/_new';});
-    $("#toolbar button.compact").click(function () { location.href = "/_utils/#/" + db + '/_compact';});
+    $("#toolbar button.add").click( function () { location.hash = "#/" + db + '/_new';});
+    $("#toolbar button.compact").click(function () { location.hash = "#/" + db + '/_compact';});
     $("#toolbar button.delete").click(function (){$.futon.dialogs.deleteDatabase(db)});
     // $("#toolbar button.security").click(page.databaseSecurity); TODO : New security UI
     
