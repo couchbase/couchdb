@@ -438,10 +438,10 @@ app.showView = function () {
         if (val.length > 0) {
           if (name == "skip" || name == "limit" || name == "group_level") {
             query[name] = parseInt(n.val())
-          } else if (name == "startkey_docid" || name == "endkey_docid" || name == "key") {
+          } else if (name == "startkey_docid" || name == "endkey_docid" ) {
             if (val[0] == '"') query[name] = val
             else query[name] = JSON.stringify(val)
-          } else if (name == "startkey" || name == "endkey") {
+          } else if (name == "startkey" || name == "endkey" || name == "key") {
             if (val[0] == '"' || val[0] == '[' || val[0] == '{') query[name] = val
             else query[name] = JSON.stringify(val)
           }
@@ -578,23 +578,28 @@ app.showView = function () {
     }
     
     var release = function () {
+      // Clear all fields
+      $("input.qinput[type='text']").val('');
+      $("input.qinput[type='checkbox']").attr('checked', false);
+      // Repopulate all the fields from the url
+      var query = getQuery();
+      for (i in query) {
+        var n = $('input[name='+i+']')
+          , type = n.attr("type")
+          ;
+        if (type == "text") n.val(query[i])          
+        else if (type == 'checkbox' && (query[i] == 'true' || query[i] == 'ok')) n.attr('checked', 'true')
+      }
+      
       if (!$('input.quinput[name=limit]').attr('released')) {
         $('*.qinput').css('color', '#1A1A1A');
         $('*.qinput').attr('disabled', false);
         
-        var query = getQuery();
-        for (i in query) {
-          var n = $('input[name='+i+']')
-            , type = n.attr("type")
-            ;
-          if (type == "text") n.val(query[i])          
-          else if (type == 'checkbox' && (query[i] == 'true' || query[i] == 'ok')) n.attr('checked', 'true')
-        }
-        
-        $('input.qinput[type=checkbox]').click(refresh);
-        $('input.qinput[type=text]').change(refresh);
-        $('input.quinput[name=limit]').attr('released', true)
+        $("input.qinput[type='checkbox']").click(refresh);
+        $("input[type='text']").change(refresh);
+        $("input.qinput[name='limit']").attr('released', true)
       }
+      
       // refresh();
       updateResults();
     }
@@ -610,7 +615,7 @@ app.showView = function () {
   
   $('h1#topbar').html('<a href="#/">Overview</a><a href="#/'+db+'">'+db+'</a><strong>_view</strong>');
   if ($('div#query-options').length === 0) {
-    this.render('templates/view.mustache').replace('#content').then(setupViews)
+    this.render('templates/view.mustache').replace('#content').then(setupViews);
   } else {setupViews();}
 }
 
