@@ -403,6 +403,7 @@ app.showView = function () {
   
   var populateViews = function (ddoc, view) {
     var v = $('select#view-select');
+    app.ddoc_ = ddoc;
     v.css('color', '#1A1A1A')
     v.attr('loaded', true)
     if (!ddoc.views) {
@@ -594,6 +595,10 @@ app.showView = function () {
       if (!$('input.quinput[name=limit]').attr('released')) {
         $('*.qinput').css('color', '#1A1A1A');
         $('*.qinput').attr('disabled', false);
+        if (!app.ddoc_.views[view].reduce) {
+          $('input.reduce').attr('disabled', true)
+          $('span.reduce').css('color', '#A1A1A1');
+        }
         
         $("input.qinput[type='checkbox']").click(refresh);
         $("input[type='text']").change(refresh);

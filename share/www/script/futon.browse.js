@@ -930,7 +930,7 @@
         if (!page.isNew) {
           db.openDoc(docId, {revs_info: true,
             success: function(doc) {
-              console.log(doc)
+              // console.log(doc)
               var revs = doc._revs_info || [];
               delete doc._revs_info;
               if (docRev != null) {

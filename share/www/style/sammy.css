@@ -681,16 +681,22 @@ span.viewstart {float:right; color:#CD5555; padding-left:5px; padding-right:5px;
 span.viewend {float:right; color:#CD5555; padding-left:5px; cursor:pointer;}
 span.viewkey {color:#CD5555; padding-left:5px; padding-right:20px; cursor:pointer;}
 
-div.primary-view-options {width:100%; padding-top:10px; padding-bottom:10px;}
-div.main-view-options {width:100%; padding-top:5px;}
-div.key-options {float:left; width:100%;}
+div.primary-view-options {padding-left:3px; width:100%; padding-top:10px; padding-bottom:10px; float:left;}
+div.main-view-options {width:100%; padding-top:5px; padding-bottom:5px; float:left;}
+div.key-options {float:left; width:100%; padding-bottom:5px;}
 div.key-half-options {float:left; width:50%;}
-div.input-left {float:left; width:20%;}
-div.input-right {float:left; width:75%; padding-right:5%; padding:3px;}
+div.input-left {float:left; width:19%; padding-left:3px;}
+div.input-right {float:left; width:75%; padding-right:5%; padding-left:3px;}
 div.input-right-nospace {float:left; width:80%;}
-div.docid-input-left {float:left; width:35%}
+div.docid-input-left {float:left; width:34%; padding-left:3px;}
 div.docid-input-right {float:left; width:60%; padding-right:5%;}
 div.docid-input-right-nospace {float:left; width:65%;}
 input.input-right {text-align:left; width:100%; }
-div.reduce-options {padding-top:10px; padding-bottom:10px;}
-div.odd {background: #feffea; -moz-border-radius: 5px;  -webkit-border-radius: 5px;}
+div.reduce-options {padding-left:3px; padding-top:10px; padding-bottom:10px; width:100%; float:left;}
+div.view-options-other {padding-left:3px; padding-top:10px; padding-bottom:10px; width:100%; float:left;}
+div.odd {background: #feffea; -moz-border-radius: 5px;  -webkit-border-radius: 5px; float:left; }
+input.reduce {text-align:right;}
+input.number {width:30px;}
+input.input-key {width:330px;}
+div.main-input {float:left; padding-right:30px;}
+span.main-input {padding-right:7px;}

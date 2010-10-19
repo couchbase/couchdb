@@ -8,13 +8,20 @@
   </div>
   <div class="spacer" />
   <div class="primary-view-options odd">
-    <span class="qinput">key</span>
-    <input name="key" class="qinput" type="text" disabled />
-    <span class="qinput">limit</span>
-    <input name="limit" class="qinput" type="text" value="10" disabled />
-    <span class="qinput">skip</span>
-    <input type="text" class="qinput" name="skip" disabled />
+    <div class="main-input">
+      <span class="qinput main-input">key</span>
+      <input name="key" class="qinput input-key main-input" type="text" disabled />
+    </div>
+    <div class="main-input">
+      <span class="qinput main-input">limit</span>
+      <input name="limit" class="qinput number main-input" type="text" value="10" disabled />
+    </div>
+    <div class="main-input">
+      <span class="qinput main-input">skip</span>
+      <input type="text" class="qinput number main-input" name="skip" disabled />
+    </div>
   </div>
+  <div class="spacer" />
   <div class="main-view-options">
     
     <div class="key-options">
@@ -37,6 +44,7 @@
     </div>
     
     <div class="spacer" />
+    
     <div class="key-options">
       <div class="key-half-options">
         <div class="docid-input-left">
@@ -58,24 +66,39 @@
   </div>
   <div class="spacer" />
   <div class="reduce-options odd">
-    <span class="qinput">reduce</span>
-    <input name="reduce" class="qinput" type=checkbox name="reduce" disabled />
-    <span class="qinput">group</span>
-    <input name="group" class="qinput" type=checkbox name="group" disabled />
-    <span class="qinput">group_level</span>
-    <input name="group_level" class="qinput" type="text" disabled />
+    <div class="main-input">
+      <span class="qinput reduce main-input">reduce</span>
+      <input name="reduce" class="qinput reduce" type=checkbox name="reduce" disabled />
+    </div>
+    <div class="main-input">
+      <span class="qinput reduce main-input">group</span>
+      <input name="group" class="qinput reduce" type=checkbox name="group" disabled />
+    </div>
+    <div class="main-input">
+      <span class="qinput reduce main-input">group_level</span>
+      <input name="group_level" class="qinput reduce number" type="text" disabled />
+    </div>
   </div>
   <div class="spacer" />
-  <div>
-    <span class="qinput">include_docs</span><input name="include_docs" class="qinput" type=checkbox name="include_docs" disabled />
-    
-    <span class="qinput">descending</span><input name="descending" class="qinput" type=checkbox name="descending" disabled />  
-    <span class="qinput">stale</span><input name="stale" class="qinput" type=checkbox name="stale" disabled />
-    
-    <span class="qinput">inclusive_end</span><input name="inclusive_end" class="qinput" type=checkbox name="inclusive_end" disabled />
-  
+  <div class="view-options-other">
+    <div class="main-input">
+      <span class="qinput main-input">include_docs</span>
+      <input name="include_docs" class="qinput" type=checkbox name="include_docs" disabled />
+    </div>
+    <div class="main-input">
+      <span class="qinput main-input">descending</span>
+      <input name="descending" class="qinput" type=checkbox name="descending" disabled />  
+    </div>
+    <div class="main-input">
+      <span class="qinput main-input">stale</span>
+      <input name="stale" class="qinput" type=checkbox name="stale" disabled />
+    </div>
+    <div class="main-input">
+      <span class="qinput main-input">inclusive_end</span>
+      <input name="inclusive_end" class="qinput" type=checkbox name="inclusive_end" disabled />
+    </div>
   </div>
-  
+  <div class="spacer" />
 </div>
 
 <table id="documents" class="listing" cellspacing="0">
