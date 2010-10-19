@@ -87,7 +87,7 @@ var request = function (options, callback) {
 }
   
 app.index = function () {
-  $('h1#topbar').html('<strong>Overview</strong>');
+  $('span#topbar').html('<strong>Overview</strong>');
   $("#toolbar button.add").click($.futon.dialogs.createDatabase);
   var dbRow = function (name, even) {
     var row = $('<tr id=db-"'+name+'"><th><a href="#/'+name+'">'+name+'</a></th></tr>');
@@ -130,7 +130,7 @@ app.showDatabase = function () {
     ;
   
   var init = function () {
-    $('h1#topbar').html('<a href="#/">Overview</a><strong>'+db+'</strong>');
+    $('span#topbar').html('<a href="#/">Overview</a><strong>'+db+'</strong>');
     $("#toolbar button.add").click( function () { location.href = "/_utils/#/" + db + '/_new';});
     $("#toolbar button.compact").click(function () { location.href = "/_utils/#/" + db + '/_compact';});
     $("#toolbar button.delete").click(function (){$.futon.dialogs.deleteDatabase(db)});
@@ -270,7 +270,7 @@ app.showDocument = function () {
   var db = this.params['db']
     , docid = this.params['docid']
     ;
-  $('h1#topbar').html('<a href="#/">Overview</a><a href="#/'+db+'">'+db+'</a><strong>'+docid+'</strong>');  
+  $('span#topbar').html('<a href="#/">Overview</a><a href="#/'+db+'">'+db+'</a><strong>'+docid+'</strong>');  
   // This is a terrible hack to get the old document UI mostly working
   this.render('templates/document.mustache', {db:db,docid:docid}).replace('#content').then(
     $.getScript('script/base64.js', function() {
@@ -316,7 +316,7 @@ app.showDocument = function () {
 
 app.showChanges = function () {
   var db = this.params['db'];
-  $('h1#topbar').html('<a href="#/">Overview</a><a href="#/'+db+'">'+db+'</a><strong>_changes</strong>');  
+  $('span#topbar').html('<a href="#/">Overview</a><a href="#/'+db+'">'+db+'</a><strong>_changes</strong>');  
   this.render('templates/changes.mustache').replace('#content').then(function () {
     var query = getQuery()
       , url = '/'+db+'/_changes'
@@ -347,14 +347,14 @@ app.showChanges = function () {
 }
 
 app.showConfig = function () {
-  $('h1#topbar').html('<strong>Configuration</strong>');
+  $('span#topbar').html('<strong>Configuration</strong>');
   this.render('templates/config.mustache').replace('#content').then(function () {
     
   })
 }
 
 app.showStats = function () {
-  $('h1#topbar').html('<strong>Status</strong>');
+  $('span#topbar').html('<strong>Status</strong>');
   this.render('templates/stats.mustache').replace('#content').then(function () {
     request({url:'/_stats'}, function (err, stats) {
       var info = $('#content').append('<h2>Raw Info</h2>')
@@ -383,13 +383,13 @@ app.showStats = function () {
 }
 
 app.showTests = function () {
-  $('h1#topbar').html('<strong>Test Suite</strong>');
+  $('span#topbar').html('<strong>Test Suite</strong>');
   this.render('templates/tests.mustache').replace('#content').then(function () {
     
   })
 }
 app.showReplicator = function () {
-  $('h1#topbar').html('<strong>Replicator</strong>');
+  $('span#topbar').html('<strong>Replicator</strong>');
   this.render('templates/replicator.mustache').replace('#content').then(function () {
     
   })
@@ -618,7 +618,7 @@ app.showView = function () {
     
   }
   
-  $('h1#topbar').html('<a href="#/">Overview</a><a href="#/'+db+'">'+db+'</a><strong>_view</strong>');
+  $('span#topbar').html('<a href="#/">Overview</a><a href="#/'+db+'">'+db+'</a><strong>_view</strong>');
   if ($('div#query-options').length === 0) {
     this.render('templates/view.mustache').replace('#content').then(setupViews);
   } else {setupViews();}
@@ -653,4 +653,12 @@ var a = $.sammy(function () {
   this.get('#/:db/:docid', app.showDocument);
 })
 
-$(function () {a.use('Mustache'); a.run(); });
+$(function () {
+  $("span#raw-link").click(function () {
+    window.location = window.location.hash.replace('#','');
+  })
+  
+  a.use('Mustache'); 
+  a.run(); 
+  
+});
