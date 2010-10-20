@@ -275,6 +275,7 @@ app.showDatabase = function () {
 }
 
 function getType (obj) {
+  if (obj === null) return 'null'
   if (typeof obj === 'object') {
     if (obj.length) return 'array'
     else return 'object'
@@ -297,6 +298,8 @@ $.expr[":"].exactly = function(obj, index, meta, stack){
 }
 
 function coerceFieldValue (val) {
+  if (val == 'null') return null;
+  
   if (val.indexOf('.') !== -1) {
     if (!isNaN(parseFloat(val))) return parseFloat(val)
   } else {
