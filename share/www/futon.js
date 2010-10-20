@@ -296,117 +296,156 @@ $.expr[":"].exactly = function(obj, index, meta, stack){
   return ($(obj).text() == meta[3])
 }
 
+function coerceFieldValue (val) {
+  if (val.indexOf('.') !== -1) {
+    if (!isNaN(parseFloat(val))) return parseFloat(val)
+  } else {
+    if (!isNaN(parseInt(val))) return parseInt(val)
+  }
+  
+  if (val[0] === '"' && val[val.length - 1] === '"') {
+    return val.slice(1, val.length -1);
+  }
+  if (val[0] === '[' && val[val.length - 1] === ']') {
+    return JSON.parse(val);
+  }
+  if (val[0] === '{' && val[val.length - 1] === '}') {
+    return JSON.parse(val);
+  } else {
+    return val;
+  }
+}
+
 app.showDocument = function () {
   var db = this.params['db']
     , docid = this.params['docid']
+    , _doc
     ;
-  $('span#topbar').html('<a href="#/">Overview</a><a href="#/'+db+'">'+db+'</a><strong>'+docid+'</strong>');  
+  $('span#topbar').html('<a href="#/">Overview</a><a href="#/'+db+'">'+db+'</a><strong>'+docid+'</strong>'); 
+  
+  var getEdit = function (obj, key, val, minWidth) {
+    var edit = function () {
+      $(this).find('span.expand').click();
+      var w = $(this).width();
+      if (w < minWidth) {
+        w = minWidth;
+      }
+      val.html('')
+      val.html(
+        $('<input type="text" />')
+        .val(JSON.stringify(obj[key]))
+        .width(w)
+        .change(function () {
+          obj[key] = coerceFieldValue($(this).val());
+          var url = '/' + db + '/' + docid
+          request({url:url, type:'PUT', data:JSON.stringify(_doc), processData:false}, function (err, newresp) {
+            if (err) console.log(err)
+            _doc._rev = newresp.rev;
+            $("div.doc-key:exactly('_rev')").next().html(createValue.string(_doc, '_rev'));
+            val.parent().append(createValue[getType(obj[key])](obj, key));
+            val.remove();
+          })
+        })
+      )
+    }
+    return edit;
+  }
+  
+  var createValue = {
+    "string": function (obj, key) {
+      var val = $('<div class="doc-value string-type"></div>')
+        , edit = getEdit(obj, key, val, 350)
+        ;
+      console.log(typeof edit)
+      if (obj[key].length > 45) {
+        val.append($('<span class="string-type">'+obj[key].slice(0, 45)+'</span>').click(edit))
+        val.append(
+          $('<span class="expand">...</span>')
+          .click(function () {
+            val.html('')
+            val.append('<span class="string-type">'+obj[key]+'</span>')
+          })
+        )
+      }
+      else {
+        var val = $('<div class="doc-value string-type"></div>')
+          , edit = getEdit(obj, key, val, 350)
+          ;
+        val.append(
+          $('<span class="string-type">' + obj[key] + '</span>')
+          .click(edit)
+        )
+      }
+      return val;
+    }
+    , "number": function (obj, key) {
+      var val = $('<div class="doc-value number"></div>')
+      val.append($('<span class="number-type">' + obj[key] + '</span>').click(getEdit(obj, key, val, 100)))
+      return val;
+    }
+    , "null": function (obj, key) {
+      var val = $('<div class="doc-value null"></div>')
+      val.append($('<span class="null-type">' + obj[key] + '</span>').click(getEdit(obj, key, val,100)))
+      return val;
+    }
+    , "array": function (obj, key, indent) {
+       if (!indent) indent = 1;
+        var val = $('<div class="doc-value array"></div>')
+        $('<span class="array-type">[</span><span class="expand" style="float:left">...</span><span class="array-type">]</span>')
+          .click(function (i, n) {
+            var n = $(this).parent();
+            var cls = 'sub-'+key+'-'+indent
+            n.html('')
+            n.append('<span style="padding-left:'+((indent - 1) * 10)+'px" class="array-type">[</span>')
+            for (i in obj[key]) {
+
+              n.append(
+                $('<div class="doc-field">' +
+                    '<div class="array-key '+cls+'" style="padding-left:'+(indent * 10)+'px">'+i+'</div>' +
+                  '</div>'
+                  )
+                  .append(createValue[getType(obj[key][i])](obj[key], i, indent + 1))
+                )
+            }
+            n.append('<span style="padding-left:'+((indent - 1) * 10)+'px" class="array-type">]</span>')
+            $('div.'+cls).width(largestWidth('div.'+cls))
+          })
+          .appendTo($('<div class="array-type"></div>').appendTo(val))
+        return val;
+    }
+    , "object": function (obj, key, indent) {
+      if (!indent) indent = 1;
+      var val = $('<div class="doc-value object"></div>')
+      $('<span class="object-type">{</span><span class="expand" style="float:left">...</span><span class="object-type">}</span>')
+        .click(function (i, n) {
+          var n = $(this).parent();
+          var cls = 'sub-'+key+'-'+indent
+          n.html('')
+          n.append('<span style="padding-left:'+((indent - 1) * 10)+'px" class="object-type">{</span>')
+          for (i in obj[key]) {
+            // n.append('<br>')
+            // n.append('<div class="spacer" />');
+            n.append(
+              $('<div class="doc-field">' +
+                  '<div class="object-key '+cls+'" style="padding-left:'+(indent * 10)+'px">'+i+'</div>' +
+                '</div>'
+                )
+                .append(createValue[getType(obj[key][i])](obj[key], i, indent + 1))
+              )
+          }
+          n.append('<span style="padding-left:'+((indent - 1) * 10)+'px" class="object-type">}</span>')
+          $('div.'+cls).width(largestWidth('div.'+cls))
+        })
+        .appendTo($('<div class="object-type"></div>').appendTo(val))
+      return val;
+    }
+  }
   
   this.render('templates/document.mustache', {db:db,docid:docid}).replace('#content').then(function () {
     request({url:'/' + db + '/' + docid}, function (err, resp) {
       var setRev = false;
-      var _doc = resp;
-      var createValue = {
-        "string": function (obj, key) {
-          var val = $('<div class="doc-value string-type"></div>')
-          var edit = function () {
-            $(this).find('span.expand').click();
-            var w = $(this).width();
-            val.html('')
-            val.html(
-              $('<input type="text" />')
-              .val(JSON.stringify(obj[key]))
-              .width(w)
-              .change(function () {
-                obj[key] = $(this).val();
-                var url = '/' + db + '/' + docid
-                request({url:url, type:'PUT', data:JSON.stringify(_doc), processData:false}, function (err, newresp) {
-                  if (err) console.log(err)
-                  _doc._rev = newresp.rev;
-                  $("div.doc-key:exactly('_rev')").next().html(createValue.string(_doc, '_rev'));
-                  val.parent().append(createValue[getType(obj[key])](obj, key));
-                  val.remove();
-                })
-              })
-            )
-          }
-          if (obj[key].length > 45) {
-            val.append($('<span class="string-type">'+obj[key].slice(0, 45)+'</span>').click(edit))
-            val.append(
-              $('<span class="expand">...</span>')
-              .click(function () {
-                val.html('')
-                val.append('<span class="string-type">'+obj[key]+'</span>')
-              })
-            )
-          }
-          else {
-            var val = $('<div class="doc-value string-type"></div>')
-            val.append(
-              $('<span class="string-type">' + obj[key] + '</span>')
-              .click(edit)
-            )
-          }
-          return val;
-        }
-        , "number": function (obj, key) {
-          var val = '<div class="doc-value number">' + 
-                      '<span class="number-type">' + obj[key] + '</span>' + 
-                    '</div>'
-          return val;
-        }
-        ,  "array": function (obj, key, indent) {
-           if (!indent) indent = 1;
-            var val = $('<div class="doc-value array"></div>')
-            $('<span class="array-type">[</span><span class="expand" style="float:left">...</span><span class="array-type">]</span>')
-              .click(function (i, n) {
-                var n = $(this).parent();
-                var cls = 'sub-'+key+'-'+indent
-                n.html('')
-                n.append('<span style="padding-left:'+((indent - 1) * 10)+'px" class="array-type">[</span>')
-                for (i in obj[key]) {
-
-                  n.append(
-                    $('<div class="doc-field">' +
-                        '<div class="array-key '+cls+'" style="padding-left:'+(indent * 10)+'px">'+i+'</div>' +
-                      '</div>'
-                      )
-                      .append(createValue[getType(obj[key][i])](obj[key], i, indent + 1))
-                    )
-                }
-                n.append('<span style="padding-left:'+((indent - 1) * 10)+'px" class="array-type">]</span>')
-                $('div.'+cls).width(largestWidth('div.'+cls))
-              })
-              .appendTo($('<div class="array-type"></div>').appendTo(val))
-            return val;
-        }
-        , "object": function (obj, key, indent) {
-          if (!indent) indent = 1;
-          var val = $('<div class="doc-value object"></div>')
-          $('<span class="object-type">{</span><span class="expand" style="float:left">...</span><span class="object-type">}</span>')
-            .click(function (i, n) {
-              var n = $(this).parent();
-              var cls = 'sub-'+key+'-'+indent
-              n.html('')
-              n.append('<span style="padding-left:'+((indent - 1) * 10)+'px" class="object-type">{</span>')
-              for (i in obj[key]) {
-                // n.append('<br>')
-                // n.append('<div class="spacer" />');
-                n.append(
-                  $('<div class="doc-field">' +
-                      '<div class="object-key '+cls+'" style="padding-left:'+(indent * 10)+'px">'+i+'</div>' +
-                    '</div>'
-                    )
-                    .append(createValue[getType(obj[key][i])](obj[key], i, indent + 1))
-                  )
-              }
-              n.append('<span style="padding-left:'+((indent - 1) * 10)+'px" class="object-type">}</span>')
-              $('div.'+cls).width(largestWidth('div.'+cls))
-            })
-            .appendTo($('<div class="object-type"></div>').appendTo(val))
-          return val;
-        }
-      }
+      _doc = resp;
+      
       if (err) console.log(err)
       else {
         var d = $('div#document-editor');
