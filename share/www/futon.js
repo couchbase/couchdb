@@ -131,8 +131,16 @@ app.showDatabase = function () {
   
   var init = function () {
     $('span#topbar').html('<a href="#/">Overview</a><strong>'+db+'</strong>');
-    $("#toolbar button.add").click( function () { location.hash = "#/" + db + '/_new';});
-    $("#toolbar button.compact").click(function () { location.hash = "#/" + db + '/_compact';});
+    $("#toolbar button.add").click( function () { 
+      $("div#content").html('');
+      request({url:'/_uuids'}, function (err, resp) {
+        location.hash = '#/' + db + '/' + resp.uuids[0]
+      })
+      // location.hash = "#/" + db + '/_new';
+    });
+    $("#toolbar button.compact").click(function () { 
+      $.futon.dialogs.compactAndCleanup(db)
+    });
     $("#toolbar button.delete").click(function (){$.futon.dialogs.deleteDatabase(db)});
     // $("#toolbar button.security").click(page.databaseSecurity); TODO : New security UI
     
@@ -266,52 +274,128 @@ app.showDatabase = function () {
   }
 }
 
+function getType (obj) {
+  if (typeof obj === 'object') {
+    if (obj.length) return 'array'
+    else return 'object'
+  } else {return typeof obj}
+}
+
+function largestWidth (selector) {
+  var min_width = 0;
+  $(selector).each(function(i, n){
+      var this_width = $(n).outerWidth();
+      if (this_width > min_width) {
+          min_width = this_width;
+      }
+  });
+  return min_width;
+}
+
 app.showDocument = function () {
   var db = this.params['db']
     , docid = this.params['docid']
     ;
   $('span#topbar').html('<a href="#/">Overview</a><a href="#/'+db+'">'+db+'</a><strong>'+docid+'</strong>');  
-  // This is a terrible hack to get the old document UI mostly working
-  this.render('templates/document.mustache', {db:db,docid:docid}).replace('#content').then(
-    $.getScript('script/base64.js', function() {
-    $.getScript('script/jquery.resizer.js?0.11.0', function() {
-    $.getScript('script/jquery.editinline.js?0.11.0', function() {
-    $.getScript('script/jquery.form.js?2.36', function() {
-      var page = new $.futon.CouchDocumentPage(db, docid);
-
-      $.futon.navigation.ready(function() {
-        this.addDatabase( db );
-        // this.updateSelection(
-        //   location.pathname.replace(/document\.html/, "database.html"),
-        //   "?" + page.db.name
-        // );
-      });
-
-      $(function() {
-        $("h1 a.dbname").text(page.dbName)
-          .attr("href", "database.html?" + encodeURIComponent(docid));
-        $("h1 strong").text(page.docId);
-        $("h1 a.raw").attr("href", "/" + encodeURIComponent(docid) +
-          "/" + encodeURIComponent(docid));
-        page.updateFieldListing();
-
-        $("#tabs li.tabular a").click(page.activateTabularView);
-        $("#tabs li.source a").click(page.activateSourceView);
-
-        $("#toolbar button.save").click(page.saveDocument);
-        $("#toolbar button.add").click(page.addField);
-        $("#toolbar button.load").click(page.uploadAttachment);
-        if (page.isNew) {
-          $("#toolbar button.delete").hide();
-        } else {
-          $("#toolbar button.delete").click(page.deleteDocument);
+  
+  this.render('templates/document.mustache', {db:db,docid:docid}).replace('#content').then(function () {
+    request({url:'/' + db + '/' + docid}, function (err, resp) {
+      var createValue = {
+        "string": function (obj, key) {
+          var val = $('<div class="doc-value string-type"></div>')
+          if (obj[key].length > 45) {
+            console.log(obj[key].slice(0, 45))
+            val.append('<span class="string-type">'+obj[key].slice(0, 45)+'</span>')
+            val.append(
+              $('<span class="expand">...</span>')
+              .click(function () {
+                val.html('')
+                console.log($('<span class="string-type">'+obj[key]+'</span>'))
+                val.append('<span class="string-type">'+obj[key]+'</span>')
+              })
+            )
+          }
+          else {
+            var val = '<div class="doc-value string-type">' + 
+                        '<span class="string-type">' + obj[key] + '</span>' + 
+                      '</div>'
+          }
+          return val;
         }
-      });
-    });
-    });
-    });
-    })
-  )
+        , "number": function (obj, key) {
+          var val = '<div class="doc-value number">' + 
+                      '<span class="number-type">' + obj[key] + '</span>' + 
+                    '</div>'
+          return val;
+        }
+        ,  "array": function (obj, key, indent) {
+           if (!indent) indent = 1;
+            var val = $('<div class="doc-value array"></div>')
+            $('<span class="array-type">[</span><span class="expand" style="float:left">...</span><span class="array-type">]</span>')
+              .click(function (i, n) {
+                var n = $(this).parent();
+                var cls = 'sub-'+key+'-'+indent
+                n.html('')
+                n.append('<span style="padding-left:'+((indent - 1) * 10)+'px" class="array-type">[</span>')
+                for (i in obj[key]) {
+
+                  n.append(
+                    $('<div class="doc-field">' +
+                        '<div class="array-key '+cls+'" style="padding-left:'+(indent * 10)+'px">'+i+'</div>' +
+                      '</div>'
+                      )
+                      .append(createValue[getType(obj[key][i])](obj[key], i, indent + 1))
+                    )
+                }
+                n.append('<span class="array-type">]</span>')
+                console.log($('div.'+cls).length)
+                $('div.'+cls).width(largestWidth('div.'+cls))
+              })
+              .appendTo($('<div class="array-type"></div>').appendTo(val))
+            return val;
+        }
+        , "object": function (obj, key, indent) {
+          if (!indent) indent = 1;
+          var val = $('<div class="doc-value object"></div>')
+          $('<span class="object-type">{</span><span class="expand" style="float:left">...</span><span class="object-type">}</span>')
+            .click(function (i, n) {
+              var n = $(this).parent();
+              var cls = 'sub-'+key+'-'+indent
+              n.html('')
+              n.append('<span style="padding-left:'+((indent - 1) * 10)+'px" class="object-type">{</span>')
+              for (i in obj[key]) {
+                // n.append('<br>')
+                // n.append('<div class="spacer" />');
+                n.append(
+                  $('<div class="doc-field">' +
+                      '<div class="object-key '+cls+'" style="padding-left:'+(indent * 10)+'px">'+i+'</div>' +
+                    '</div>'
+                    )
+                    .append(createValue[getType(obj[key][i])](obj[key], i, indent + 1))
+                  )
+              }
+              n.append('<span class="object-type">}</span>')
+              console.log($('div.'+cls).length)
+              $('div.'+cls).width(largestWidth('div.'+cls))
+            })
+            .appendTo($('<div class="object-type"></div>').appendTo(val))
+          return val;
+        }
+      }
+      if (err) console.log(err)
+      else {
+        var d = $('div#document-editor');
+        for (i in resp) {
+          var field = $('<div class="doc-field"></div>')
+          field.append('<div class="doc-key doc-key-base">'+i+'</div>')
+          field.append(createValue[getType(resp[i])](resp, i))
+          d.append(field)
+        }
+      }
+      
+      $('div.doc-key-base').width(largestWidth('div.doc-key-base'))
+    })  
+  })
 }
 
 app.showChanges = function () {

@@ -138,26 +138,6 @@
         ruby: "lambda {|doc|\n  emit(nil, doc);\n}"
       }
 
-      this.compactAndCleanup = function() {
-        $.showDialog("dialog/_compact_cleanup.html", {
-          submit: function(data, callback) {
-            switch (data.action) {
-              case "compact_database":
-                db.compact({success: function(resp) { callback() }});
-                break;
-              case "compact_views":
-                var groupname = page.viewName.substring(8,
-                    page.viewName.indexOf("/_view"));
-                db.compactView(groupname, {success: function(resp) { callback() }});
-                break;
-              case "view_cleanup":
-                db.viewCleanup({success: function(resp) { callback() }});
-                break;
-            }
-          }
-        });
-      }
-
       this.databaseSecurity = function() {
         $.showDialog("dialog/_database_security.html", {
           load : function(d) {

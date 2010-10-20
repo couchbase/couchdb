@@ -705,3 +705,113 @@ input.number {width:30px;}
 input.input-key {width:330px;}
 div.main-input {float:left; padding-right:30px;}
 span.main-input {padding-right:7px;}
+
+/* Document Editor */
+
+div#document-editor { background: #fff; font-size:14px;}
+div#document-editor span.expand {cursor:pointer; color:#FF0000;}
+div#document-editor div.doc-field {width:100%; padding-bottom:2px;}
+div#document-editor div.doc-field, div.doc-value, div.doc-key {float:left;}
+div#document-editor div.doc-key {padding-right:5px;font-weight:bold;}
+
+div#document-editor div.string-type { white-space: pre-wrap; color:#393;}
+div#document-editor div.string-type:before { color: #ccc; content: "“";
+  left: -4px;
+}
+div#document-editor div.string-type:after { color: #ccc; content: "”"; }
+
+div#document-editor span.number-type { white-space: pre-wrap; color:#339; padding-left:6px;}
+
+div#document-editor span.array-type { color: #BD101D; float:left;}
+div#document-editor span.object-type { color: #BD101D; float:left;}
+div#document-editor div.array-key {font-weight:bold; float:left;}
+div#document-editor div.object-key {font-weight:bold; float:left ;}
+
+/*
+#fields tbody.content th button.delete {
+  background: url(../image/delete-mini.png) no-repeat; border: none;
+  cursor: pointer; float: left; margin: .2em 5px 0 -20px; padding: 0;
+  width: 15px; height: 15px;
+}
+#fields tbody.content th button.delete:hover { background-position: -15px 0; }
+#fields tbody.content th b { display: block; padding: 2px 2px 2px 3px; }
+#fields tbody.content th b.editinline-container { padding: 0; }
+#fields tbody.content td { color: #999; padding-left: 14px;
+  padding-right: 48px;
+}
+#fields tbody.content td code { display: block; font-size: 11px;
+  padding: 2px 2px 2px 3px; position: relative;
+}
+#fields tbody.content td code.string { white-space: pre-wrap; }
+#fields tbody.content td code.string:before { color: #ccc; content: "“";
+  position: absolute; left: -4px;
+}
+#fields tbody.content td code.string:after { color: #ccc; content: "”"; }
+
+#fields tbody.content td dl { margin: 0; padding: 0; }
+#fields tbody.content td dt {
+  background: transparent url(../image/toggle-collapse.gif) 0 3px no-repeat;
+  clear: left; color: #333; cursor: pointer; line-height: 1em;
+  margin-left: -12px; padding-left: 14px;
+}
+#fields tbody.content td dd { line-height: 1em; margin: 0;
+  padding: 0 0 0 1em;
+}
+#fields tbody.content td dt.collapsed {
+  background-image: url(../image/toggle-expand.gif);
+}
+#fields tbody.content td dt.inline { background-image: none; cursor: default;
+  float: left; margin-left: 0; padding-left: 2px; padding-right: .5em;
+  padding-top: 2px;
+}
+#fields tbody.content td dd code.string { left: 4px; text-indent: -6px; }
+#fields tbody.content td dd code.string:before { position: static; }
+#fields tbody.content input, #fields tbody.content textarea,
+#fields tbody.source textarea {
+  background: #fff; border: 1px solid; border-color: #999 #ddd #ddd #999;
+  margin: 0; padding: 1px; width: 100%;
+}
+#fields tbody.content th input { font-family: inherit; font-size: inherit;
+  font-weight: bold;
+}
+#fields tbody.content td input, #fields tbody.content td textarea,
+#fields tbody.source textarea {
+  font: normal 11px "DejaVu Sans Mono",Menlo,Courier,monospace;
+}
+#fields tbody.content input.invalid,
+#fields tbody.content textarea.invalid,
+#fields tbody.source textarea.invalid {
+  background: #f9f4f4; border-color: #b66 #ebb #ebb #b66;
+}
+#fields tbody.content div.grippie, #fields tbody.source div.grippie {
+  padding: 0 1px; width: 100%;
+}
+#fields tbody.content div.error, #fields tbody.source div.error {
+  color: #d33;
+}
+
+#fields tbody.content td ul.attachments { list-style: none; margin: 0;
+  padding: 0;
+}
+#fields tbody.content td ul.attachments li {
+  margin-bottom: .3em; min-height: 20px; padding-left: 20px;
+}
+#fields tbody.content td ul.attachments tt { font-size: 11px; }
+#fields tbody.content td ul.attachments li span.info { color: #666;
+  display: block; font-size: 95%;
+}
+#fields tbody.content td ul.attachments li button {
+  background: transparent no-repeat; border: none; cursor: pointer;
+  float: left; margin: 0 2px 0 -20px; padding: 0; width: 15px; height: 15px;
+  vertical-align: middle;
+}
+#fields tbody.content td ul.attachments li button:hover {
+  background-position: -15px 0;
+}
+#fields tbody.content td ul.attachments li button.delete {
+  background-image: url(../image/delete-mini.png);
+}
+#fields tbody.source td pre { color: #999; font-size: 11px; line-height: 1.6em;
+  margin: 0; overflow: auto; white-space: pre-wrap; width: 100%;
+}
+#fields tbody.source td.editinline-container { padding-left: 14px; padding-right: 48px; }*/
