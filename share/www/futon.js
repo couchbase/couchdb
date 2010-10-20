@@ -284,12 +284,16 @@ function getType (obj) {
 function largestWidth (selector) {
   var min_width = 0;
   $(selector).each(function(i, n){
-      var this_width = $(n).outerWidth();
+      var this_width = $(n).width();
       if (this_width > min_width) {
           min_width = this_width;
       }
   });
   return min_width;
+}
+
+$.expr[":"].exactly = function(obj, index, meta, stack){ 
+  return ($(obj).text() == meta[3])
 }
 
 app.showDocument = function () {
@@ -300,25 +304,48 @@ app.showDocument = function () {
   
   this.render('templates/document.mustache', {db:db,docid:docid}).replace('#content').then(function () {
     request({url:'/' + db + '/' + docid}, function (err, resp) {
+      var setRev = false;
+      var _doc = resp;
       var createValue = {
         "string": function (obj, key) {
           var val = $('<div class="doc-value string-type"></div>')
+          var edit = function () {
+            $(this).find('span.expand').click();
+            var w = $(this).width();
+            val.html('')
+            val.html(
+              $('<input type="text" />')
+              .val(JSON.stringify(obj[key]))
+              .width(w)
+              .change(function () {
+                obj[key] = $(this).val();
+                var url = '/' + db + '/' + docid
+                request({url:url, type:'PUT', data:JSON.stringify(_doc), processData:false}, function (err, newresp) {
+                  if (err) console.log(err)
+                  _doc._rev = newresp.rev;
+                  $("div.doc-key:exactly('_rev')").next().html(createValue.string(_doc, '_rev'));
+                  val.parent().append(createValue[getType(obj[key])](obj, key));
+                  val.remove();
+                })
+              })
+            )
+          }
           if (obj[key].length > 45) {
-            console.log(obj[key].slice(0, 45))
-            val.append('<span class="string-type">'+obj[key].slice(0, 45)+'</span>')
+            val.append($('<span class="string-type">'+obj[key].slice(0, 45)+'</span>').click(edit))
             val.append(
               $('<span class="expand">...</span>')
               .click(function () {
                 val.html('')
-                console.log($('<span class="string-type">'+obj[key]+'</span>'))
                 val.append('<span class="string-type">'+obj[key]+'</span>')
               })
             )
           }
           else {
-            var val = '<div class="doc-value string-type">' + 
-                        '<span class="string-type">' + obj[key] + '</span>' + 
-                      '</div>'
+            var val = $('<div class="doc-value string-type"></div>')
+            val.append(
+              $('<span class="string-type">' + obj[key] + '</span>')
+              .click(edit)
+            )
           }
           return val;
         }
@@ -347,8 +374,7 @@ app.showDocument = function () {
                       .append(createValue[getType(obj[key][i])](obj[key], i, indent + 1))
                     )
                 }
-                n.append('<span class="array-type">]</span>')
-                console.log($('div.'+cls).length)
+                n.append('<span style="padding-left:'+((indent - 1) * 10)+'px" class="array-type">]</span>')
                 $('div.'+cls).width(largestWidth('div.'+cls))
               })
               .appendTo($('<div class="array-type"></div>').appendTo(val))
@@ -374,8 +400,7 @@ app.showDocument = function () {
                     .append(createValue[getType(obj[key][i])](obj[key], i, indent + 1))
                   )
               }
-              n.append('<span class="object-type">}</span>')
-              console.log($('div.'+cls).length)
+              n.append('<span style="padding-left:'+((indent - 1) * 10)+'px" class="object-type">}</span>')
               $('div.'+cls).width(largestWidth('div.'+cls))
             })
             .appendTo($('<div class="object-type"></div>').appendTo(val))

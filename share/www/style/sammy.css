@@ -724,8 +724,8 @@ div#document-editor span.number-type { white-space: pre-wrap; color:#339; paddin
 
 div#document-editor span.array-type { color: #BD101D; float:left;}
 div#document-editor span.object-type { color: #BD101D; float:left;}
-div#document-editor div.array-key {font-weight:bold; float:left;}
-div#document-editor div.object-key {font-weight:bold; float:left ;}
+div#document-editor div.array-key {font-weight:bold; float:left; padding-right:15px;}
+div#document-editor div.object-key {font-weight:bold; float:left; padding-right:15px;}
 
 /*
 #fields tbody.content th button.delete {
