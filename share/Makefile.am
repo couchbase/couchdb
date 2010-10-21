@@ -58,6 +58,7 @@ nobase_dist_localdata_DATA = \
     www/dialog/_upload_attachment.html \
     www/document.html \
     www/favicon.ico \
+    www/futon.js \
     www/image/add.png \
     www/image/apply.gif \
     www/image/bg.png \
@@ -90,6 +91,21 @@ nobase_dist_localdata_DATA = \
     www/image/twisty.gif \
     www/index.html \
     www/replicator.html \
+    www/sammy/sammy.js \
+    www/sammy/plugins/sammy.cache.js \
+    www/sammy/plugins/sammy.data_location_proxy.js \
+    www/sammy/plugins/sammy.ejs.js \
+    www/sammy/plugins/sammy.form.js \
+    www/sammy/plugins/sammy.haml.js \
+    www/sammy/plugins/sammy.json.js \
+    www/sammy/plugins/sammy.meld.js \
+    www/sammy/plugins/sammy.mustache.js \
+    www/sammy/plugins/sammy.nested_params.js \
+    www/sammy/plugins/sammy.path_location_proxy.js \
+    www/sammy/plugins/sammy.pure.js \
+    www/sammy/plugins/sammy.storage.js \
+    www/sammy/plugins/sammy.template.js \
+    www/sammy/plugins/sammy.title.js \
     www/script/couch.js \
     www/script/couch_tests.js \
     www/script/couch_test_runner.js \
@@ -190,4 +206,14 @@ nobase_dist_localdata_DATA = \
     www/spec/jquery_couch_js_instance_methods_3_spec.js \
     www/spec/run.html \
     www/status.html \
-    www/style/layout.css 
+    www/style/layout.css \
+    www/style/sammy.css \
+    www/templates/changes.mustache \
+    www/templates/config.mustache \
+    www/templates/database.mustache \
+    www/templates/document.mustache \
+    www/templates/index.mustache \
+    www/templates/replicator.mustache \
+    www/templates/stats.mustache \
+    www/templates/tests.mustache \
+    www/templates/view.mustache
