@@ -64,7 +64,7 @@ auth_cache={couch_auth_cache, start_link, []}
 / = {couch_httpd_misc_handlers, handle_welcome_req, <<"Welcome">>}
 favicon.ico = {couch_httpd_misc_handlers, handle_favicon_req, "%localdatadir%/www"}
 
-_utils = {couch_httpd_misc_handlers, handle_utils_dir_req, "%localdatadir%/../old_share/www"}
+_utils = {couch_httpd_misc_handlers, handle_utils_dir_req, "%localdatadir%/old_www"}
 _utils2 = {couch_httpd_misc_handlers, handle_utils_dir_req, "%localdatadir%/www"}
 _all_dbs = {couch_httpd_misc_handlers, handle_all_dbs_req}
 _active_tasks = {couch_httpd_misc_handlers, handle_task_status_req}
