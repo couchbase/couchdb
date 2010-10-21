@@ -190,5 +190,4 @@ nobase_dist_localdata_DATA = \
     www/spec/jquery_couch_js_instance_methods_3_spec.js \
     www/spec/run.html \
     www/status.html \
-    www/style/layout.css \
-    www/_sidebar.html
+    www/style/layout.css 

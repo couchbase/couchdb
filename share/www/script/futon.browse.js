@@ -138,49 +138,6 @@
         ruby: "lambda {|doc|\n  emit(nil, doc);\n}"
       }
 
-      this.newDocument = function() {
-        location.href = "document.html?" + encodeURIComponent(db.name);
-      }
-
-      this.compactAndCleanup = function() {
-        $.showDialog("dialog/_compact_cleanup.html", {
-          submit: function(data, callback) {
-            switch (data.action) {
-              case "compact_database":
-                db.compact({success: function(resp) { callback() }});
-                break;
-              case "compact_views":
-                var groupname = page.viewName.substring(8,
-                    page.viewName.indexOf("/_view"));
-                db.compactView(groupname, {success: function(resp) { callback() }});
-                break;
-              case "view_cleanup":
-                db.viewCleanup({success: function(resp) { callback() }});
-                break;
-            }
-          }
-        });
-      }
-
-      this.deleteDatabase = function() {
-        $.showDialog("dialog/_delete_database.html", {
-          submit: function(data, callback) {
-            db.drop({
-              success: function(resp) {
-                callback();
-                location.href = "index.html";
-                if (window !== null) {
-                  $("#dbs li").filter(function(index) {
-                    return $("a", this).text() == dbName;
-                  }).remove();
-                  $.futon.navigation.removeDatabase(dbName);
-                }
-              }
-            });
-          }
-        });
-      }
-
       this.databaseSecurity = function() {
         $.showDialog("dialog/_database_security.html", {
           load : function(d) {
@@ -788,19 +745,25 @@
     },
 
     // Page class for browse/document.html
-    CouchDocumentPage: function() {
-      var urlParts = location.search.substr(1).split("/");
-      var dbName = decodeURIComponent(urlParts.shift());
-      if (urlParts.length) {
-        var idParts = urlParts.join("/").split("@", 2);
-        var docId = decodeURIComponent(idParts[0]);
-        var docRev = (idParts.length > 1) ? idParts[1] : null;
+    CouchDocumentPage: function(dbName, docId) {
+      // var urlParts = location.search.substr(1).split("/");
+      // if (urlParts.length) {
+      //   var idParts = urlParts.join("/").split("@", 2);
+      //   var docId = decodeURIComponent(idParts[0]);
+      //   var docRev = (idParts.length > 1) ? idParts[1] : null;
+      //   this.isNew = false;
+      // } else {
+      //   var docId = $.couch.newUUID();
+      //   var docRev = null;
+      //   this.isNew = true;
+      // }
+      
+      if (docId) {
         this.isNew = false;
       } else {
-        var docId = $.couch.newUUID();
-        var docRev = null;
         this.isNew = true;
       }
+      docRev = null;
       var db = $.couch.db(dbName);
 
       $.futon.storage.declare("tab", {defaultValue: "tabular", scope: "cookie"});
@@ -947,6 +910,7 @@
         if (!page.isNew) {
           db.openDoc(docId, {revs_info: true,
             success: function(doc) {
+              // console.log(doc)
               var revs = doc._revs_info || [];
               delete doc._revs_info;
               if (docRev != null) {

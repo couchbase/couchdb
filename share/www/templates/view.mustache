@@ -1,0 +1,120 @@
+<div id="query-options">
+  <div id="view-selection">
+    <select name="ddoc-select" id="ddoc-select">
+      <option value="Select Design">Select Design</option>
+    </select>
+    <select name="view-select" id="view-select" disabled>
+    </select>
+  </div>
+  <div class="spacer" />
+  <div class="primary-view-options odd">
+    <div class="main-input">
+      <span class="qinput main-input">key</span>
+      <input name="key" class="qinput input-key main-input" type="text" disabled />
+    </div>
+    <div class="main-input">
+      <span class="qinput main-input">limit</span>
+      <input name="limit" class="qinput number main-input" type="text" value="10" disabled />
+    </div>
+    <div class="main-input">
+      <span class="qinput main-input">skip</span>
+      <input type="text" class="qinput number main-input" name="skip" disabled />
+    </div>
+  </div>
+  <div class="spacer" />
+  <div class="main-view-options">
+    
+    <div class="key-options">
+      <div class="key-half-options">
+        <div class="input-left">
+          <span class="qinput">startkey</span>
+        </div>
+        <div class="input-right">
+          <input name="startkey" class="qinput input-right" type="text" disabled />
+        </div>  
+      </div>
+      <div class="key-half-options">
+        <div class="input-left">
+          <span class="qinput">endkey</span>
+        </div>
+        <div class="input-right-nospace">
+          <input name="endkey" class="qinput input-right" type="text" disabled />
+        </div>
+      </div>
+    </div>
+    
+    <div class="spacer" />
+    
+    <div class="key-options">
+      <div class="key-half-options">
+        <div class="docid-input-left">
+          <span class="qinput">startkey_docid</span>
+        </div>
+        <div class="docid-input-right">
+          <input name="startkey_docid" class="qinput input-right" type="text" disabled />
+        </div>
+      </div>
+      <div class="key-half-options">
+        <div class="docid-input-left">
+          <span class="qinput">endkey_docid</span>
+        </div>
+        <div class="docid-input-right-nospace">
+          <input name="endkey_docid" class="qinput input-right" type="text" disabled />
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="spacer" />
+  <div class="reduce-options odd">
+    <div class="main-input">
+      <span class="qinput reduce main-input">reduce</span>
+      <input name="reduce" class="qinput reduce" type=checkbox name="reduce" disabled />
+    </div>
+    <div class="main-input">
+      <span class="qinput reduce main-input">group</span>
+      <input name="group" class="qinput reduce" type=checkbox name="group" disabled />
+    </div>
+    <div class="main-input">
+      <span class="qinput reduce main-input">group_level</span>
+      <input name="group_level" class="qinput reduce number" type="text" disabled />
+    </div>
+  </div>
+  <div class="spacer" />
+  <div class="view-options-other">
+    <div class="main-input">
+      <span class="qinput main-input">include_docs</span>
+      <input name="include_docs" class="qinput" type=checkbox name="include_docs" disabled />
+    </div>
+    <div class="main-input">
+      <span class="qinput main-input">descending</span>
+      <input name="descending" class="qinput" type=checkbox name="descending" disabled />  
+    </div>
+    <div class="main-input">
+      <span class="qinput main-input">stale</span>
+      <input name="stale" class="qinput" type=checkbox name="stale" disabled />
+    </div>
+    <div class="main-input">
+      <span class="qinput main-input">inclusive_end</span>
+      <input name="inclusive_end" class="qinput" type=checkbox name="inclusive_end" disabled />
+    </div>
+  </div>
+  <div class="spacer" />
+</div>
+
+<table id="documents" class="listing" cellspacing="0">
+  <caption>Documents</caption>
+  <thead>
+    <tr class="viewhead">
+      <th class="key">key</th>
+      <th class="value">value</th>
+    </tr>
+  </thead>
+  <tbody class="content">
+  </tbody>
+  <tbody class="footer">
+    <tr>
+      <td colspan="4" class="more" id="viewfoot">
+      </td>
+    </tr>
+  </tbody>
+</table>

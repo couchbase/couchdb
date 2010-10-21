@@ -654,7 +654,7 @@ $.fn.selected = function(select) {
 // set $.fn.ajaxSubmit.debug to true to enable debug logging
 function log() {
 	if ($.fn.ajaxSubmit.debug && window.console && window.console.log)
-		window.console.log('[jquery.form] ' + Array.prototype.join.call(arguments,''));
+    // window.console.log('[jquery.form] ' + Array.prototype.join.call(arguments,''));
 };
 
 })(jQuery);
