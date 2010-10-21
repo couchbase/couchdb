@@ -323,6 +323,7 @@ app.showDocument = function () {
   var db = this.params['db']
     , docid = this.params['docid']
     , _doc
+    , url = '/' + db + '/' + docid
     ;
   $('span#topbar').html('<a href="#/">Overview</a><a href="#/'+db+'">'+db+'</a><strong>'+docid+'</strong>'); 
   
@@ -340,7 +341,6 @@ app.showDocument = function () {
         .width(w)
         .change(function () {
           obj[key] = coerceFieldValue($(this).val());
-          var url = '/' + db + '/' + docid
           request({url:url, type:'PUT', data:JSON.stringify(_doc), processData:false}, function (err, newresp) {
             if (err) console.log(err)
             _doc._rev = newresp.rev;
@@ -359,7 +359,6 @@ app.showDocument = function () {
       var val = $('<div class="doc-value string-type"></div>')
         , edit = getEdit(obj, key, val, 350)
         ;
-      console.log(typeof edit)
       if (obj[key].length > 45) {
         val.append($('<span class="string-type">'+obj[key].slice(0, 45)+'</span>').click(edit))
         val.append(
@@ -428,13 +427,24 @@ app.showDocument = function () {
           for (i in obj[key]) {
             // n.append('<br>')
             // n.append('<div class="spacer" />');
-            n.append(
-              $('<div class="doc-field">' +
-                  '<div class="object-key '+cls+'" style="padding-left:'+(indent * 10)+'px">'+i+'</div>' +
-                '</div>'
-                )
-                .append(createValue[getType(obj[key][i])](obj[key], i, indent + 1))
+            var field = $('<div class="doc-field"></div>')
+            field.append($('<div class="delete-button" style="margin-left:'+(indent * 10)+'px"/>').click((function (field, i) {
+                return function () {
+                  delete obj[key][i]
+                  request({url:url, type:'PUT', data:JSON.stringify(_doc), processData:false}, function (err, newresp) {
+                    if (err) console.log(err);
+                    else {
+                      _doc._rev = newresp.rev;
+                      $("div.doc-key:exactly('_rev')").next().html(createValue.string(_doc, '_rev'));
+                      field.remove();
+                    }
+                  })
+                }
+              })(field, i))
               )
+              .append('<div class="object-key '+cls+'" >'+i+'</div>')
+              .append(createValue[getType(obj[key][i])](obj[key], i, indent + 1))
+            n.append(field)
           }
           n.append('<span style="padding-left:'+((indent - 1) * 10)+'px" class="object-type">}</span>')
           $('div.'+cls).width(largestWidth('div.'+cls))
@@ -445,7 +455,7 @@ app.showDocument = function () {
   }
   
   this.render('templates/document.mustache', {db:db,docid:docid}).replace('#content').then(function () {
-    request({url:'/' + db + '/' + docid}, function (err, resp) {
+    request({url:url}, function (err, resp) {
       var setRev = false;
       _doc = resp;
       
@@ -454,12 +464,34 @@ app.showDocument = function () {
         var d = $('div#document-editor');
         for (i in resp) {
           var field = $('<div class="doc-field"></div>')
+          $('<div class="delete-button" />').click((function (field, i) {
+            return function () {
+              delete _doc[i]
+              request({url:url, type:'PUT', data:JSON.stringify(_doc), processData:false}, function (err, newresp) {
+                if (err) console.log(err);
+                else {
+                  _doc._rev = newresp.rev;
+                  $("div.doc-key:exactly('_rev')").next().html(createValue.string(_doc, '_rev'));
+                  field.remove();
+                }
+              })
+            }
+          })(field, i))
+          .appendTo(field)
           field.append('<div class="doc-key doc-key-base">'+i+'</div>')
           field.append(createValue[getType(resp[i])](resp, i))
           d.append(field)
         }
       }
-      
+      // $("div#document-editor").click(function (e) {
+      //   var n = $(e.target)
+      //   if (n.hasClass('delete-button')) {
+      //     console.log('sadf')
+      //   }
+      // })
+      // document.getElementById("").addEventListener("click", function () {
+      //   
+      // });
       $('div.doc-key-base').width(largestWidth('div.doc-key-base'))
     })  
   })
