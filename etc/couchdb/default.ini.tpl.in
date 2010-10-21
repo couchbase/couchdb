@@ -20,7 +20,7 @@ max_connections = 2048
 authentication_handlers = {couch_httpd_oauth, oauth_authentication_handler}, {couch_httpd_auth, cookie_authentication_handler}, {couch_httpd_auth, default_authentication_handler}
 default_handler = {couch_httpd_db, handle_request}
 secure_rewrites = true
-vhost_global_handlers = _utils, _uuids, _session, _oauth, _users
+vhost_global_handlers = _utils, _utils2, _uuids, _session, _oauth, _users
 allow_jsonp = false
 
 [log]
@@ -64,7 +64,8 @@ auth_cache={couch_auth_cache, start_link, []}
 / = {couch_httpd_misc_handlers, handle_welcome_req, <<"Welcome">>}
 favicon.ico = {couch_httpd_misc_handlers, handle_favicon_req, "%localdatadir%/www"}
 
-_utils = {couch_httpd_misc_handlers, handle_utils_dir_req, "%localdatadir%/www"}
+_utils = {couch_httpd_misc_handlers, handle_utils_dir_req, "%localdatadir%/../old_share/www"}
+_utils2 = {couch_httpd_misc_handlers, handle_utils_dir_req, "%localdatadir%/www"}
 _all_dbs = {couch_httpd_misc_handlers, handle_all_dbs_req}
 _active_tasks = {couch_httpd_misc_handlers, handle_task_status_req}
 _config = {couch_httpd_misc_handlers, handle_config_req}
