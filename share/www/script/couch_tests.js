@@ -10,6 +10,8 @@
 // License for the specific language governing permissions and limitations under
 // the License.
 
+
+
 // Used by replication test
 if (typeof window == 'undefined' || !window) {
   CouchDB.host = "127.0.0.1:5984";
@@ -21,80 +23,111 @@ if (typeof window == 'undefined' || !window) {
 
 CouchDB.urlPrefix = "..";
 var couchTests = {};
+var allCouchTests = [ 
+    "basics.js"
+  , "all_docs.js"
+  , "attachments.js"
+  , "attachments_multipart.js"
+  , "attachment_names.js"
+  , "attachment_paths.js"
+  , "attachment_views.js"
+  , "auth_cache.js"
+  , "batch_save.js"
+  , "bulk_docs.js"
+  , "changes.js"
+  , "compact.js"
+  , "config.js"
+  , "conflicts.js"
+  , "content_negotiation.js"
+  , "cookie_auth.js"
+  , "copy_doc.js"
+  , "delayed_commits.js"
+  , "design_docs.js"
+  , "design_options.js"
+  , "design_paths.js"
+  , "erlang_views.js"
+  , "etags_head.js"
+  , "etags_views.js"
+  , "form_submit.js"
+  , "http.js"
+  , "invalid_docids.js"
+  , "jsonp.js"
+  , "large_docs.js"
+  , "list_views.js"
+  , "lots_of_docs.js"
+  , "method_override.js"
+  , "multiple_rows.js"
+  , "oauth.js"
+  , "proxyauth.js"
+  , "purge.js"
+  , "reader_acl.js"
+  , "recreate_doc.js"
+  , "reduce.js"
+  , "reduce_builtin.js"
+  , "reduce_false.js"
+  , "reduce_false_temp.js"
+  , "replication.js"
+  , "replicator_db.js"
+  , "rev_stemming.js"
+  , "rewrite.js"
+  , "security_validation.js"
+  , "show_documents.js"
+  , "stats.js"
+  , "update_documents.js"
+  , "users_db.js"
+  , "utf8.js"
+  , "uuids.js"
+  , "view_collation.js"
+  , "view_collation_raw.js"
+  , "view_conflicts.js"
+  , "view_compaction.js"
+  , "view_errors.js"
+  , "view_include_docs.js"
+  , "view_multi_key_all_docs.js"
+  , "view_multi_key_design.js"
+  , "view_multi_key_temp.js"
+  , "view_offsets.js"
+  , "view_pagination.js"
+  , "view_sandboxing.js"
+  , "view_update_seq.js"
+  , "view_xml.js"
+]
 
-function loadTest(file) {
-  loadScript("script/test/"+file);
-};
-// keep first
-loadTest("basics.js");
+function loadTests (tests, callback) {
+  // Load a list of tests
+  
+  var loadScript = function (url, callback){
+    // Load a single script, fire callback when finished.
+    var script = document.createElement("script")
+    script.type = "text/javascript";
 
-// keep sorted
-loadTest("all_docs.js");
-loadTest("attachments.js");
-loadTest("attachments_multipart.js");
-loadTest("attachment_names.js");
-loadTest("attachment_paths.js");
-loadTest("attachment_views.js");
-loadTest("auth_cache.js");
-loadTest("batch_save.js");
-loadTest("bulk_docs.js");
-loadTest("changes.js");
-loadTest("compact.js");
-loadTest("config.js");
-loadTest("conflicts.js");
-loadTest("content_negotiation.js");
-loadTest("cookie_auth.js");
-loadTest("copy_doc.js");
-loadTest("delayed_commits.js");
-loadTest("design_docs.js");
-loadTest("design_options.js");
-loadTest("design_paths.js");
-loadTest("erlang_views.js");
-loadTest("etags_head.js");
-loadTest("etags_views.js");
-loadTest("form_submit.js");
-loadTest("http.js");
-loadTest("invalid_docids.js");
-loadTest("jsonp.js");
-loadTest("large_docs.js");
-loadTest("list_views.js");
-loadTest("lots_of_docs.js");
-loadTest("method_override.js");
-loadTest("multiple_rows.js");
-loadScript("script/oauth.js");
-loadScript("script/sha1.js");
-loadTest("oauth.js");
-loadTest("proxyauth.js");
-loadTest("purge.js");
-loadTest("reader_acl.js");
-loadTest("recreate_doc.js");
-loadTest("reduce.js");
-loadTest("reduce_builtin.js");
-loadTest("reduce_false.js");
-loadTest("reduce_false_temp.js");
-loadTest("replication.js");
-loadTest("rev_stemming.js");
-loadTest("rewrite.js");
-loadTest("security_validation.js");
-loadTest("show_documents.js");
-loadTest("stats.js");
-loadTest("update_documents.js");
-loadTest("users_db.js");
-loadTest("utf8.js");
-loadTest("uuids.js");
-loadTest("view_collation.js");
-loadTest("view_collation_raw.js");
-loadTest("view_conflicts.js");
-loadTest("view_compaction.js");
-loadTest("view_errors.js");
-loadTest("view_include_docs.js");
-loadTest("view_multi_key_all_docs.js");
-loadTest("view_multi_key_design.js");
-loadTest("view_multi_key_temp.js");
-loadTest("view_offsets.js");
-loadTest("view_pagination.js");
-loadTest("view_sandboxing.js");
-loadTest("view_update_seq.js");
-loadTest("view_xml.js");
-// keep sorted
-
+    if (script.readyState){  //IE
+        script.onreadystatechange = function(){
+            if (script.readyState == "loaded" ||
+                    script.readyState == "complete"){
+                script.onreadystatechange = null;
+                callback();
+            }
+        };
+    } else {  //Others
+        script.onload = function(){
+            callback();
+        };
+    }
+    
+    script.src = url;
+    document.body.appendChild(script);
+  }
+  
+  var l = tests.length
+    , i = 0
+    , failed = []
+    ;
+  
+  tests.forEach(function (test) {
+    loadScript('script/test/'+test, function () {
+      i += 1;
+      if (i === l) callback()
+    });   
+  })
+}

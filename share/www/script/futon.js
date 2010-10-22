@@ -221,34 +221,38 @@ function $$(node) {
             "</a></li>");
         }
       });
-      if (selection) {
-        this.updateSelection(selection[0], selection[1]);
-      }
+      // if (selection) {
+      //   this.updateSelection(selection[0], selection[1]);
+      // }
       $("#dbs button.remove").click(function() {
         nav.removeDatabase(this.value);
         return false;
       });
     }
 
-    this.updateSelection = function(path, queryString) {
-      function fixupPath(path) { // hack for IE/Win
-        return (path.charAt(0) != "/") ? ("/" + path) : path;
-      }
-      if (!path) {
-        path = location.pathname;
-        if (!queryString) {
-          queryString = location.search;
-        }
-      } else if (!queryString) {
-        queryString = "";
-      }
-      var href = fixupPath(path + queryString);
-      $("#nav li").removeClass("selected");
-      $("#nav li a").each(function() {
-        if (fixupPath(this.pathname) + this.search != href) return;
-        $(this).parent("li").addClass("selected").parents("li").addClass("selected");
-      });
-    }
+    // this.updateSelection = function(path, queryString) {
+    //   function fixupPath(path, queryString, hash) { // hack for IE/Win
+    //     if (!path) {
+    //       path = location.pathname;
+    //       if (!hash && location.has) 
+    //       if (location.hash) path += location.hash;
+    //       if (!queryString) {
+    //         queryString = location.search;
+    //       }
+    //     } else if (!queryString) {
+    //       queryString = "";
+    //     }
+    //     return (path.charAt(0) != "/") ? ("/" + path) : path;
+    //   }
+    //   
+    //   var href = fixupPath();
+    //   $("#nav li").removeClass("selected");
+    //   $("#nav li a").each(function() {
+    //     console.log(location)
+    //     if (fixupPath() + this.search != href) return;
+    //     $(this).parent("li").addClass("selected").parents("li").addClass("selected");
+    //   });
+    // }
 
     this.toggle = function(speed) {
       if (speed === undefined) {
@@ -391,13 +395,76 @@ function $$(node) {
     };
 
   }
+  
+  function Dialogs () {
+    
+    this.createDatabase = function() {
+      $.showDialog("dialog/_create_database.html", {
+        submit: function(data, callback) {
+          if (!data.name || data.name.length == 0) {
+            callback({name: "Please enter a name."});
+            return;
+          }
+          $.couch.db(data.name).create({
+            error: function(status, id, reason) { callback({name: reason}) },
+            success: function(resp) {
+              location.hash = "#/" + encodeURIComponent(data.name);
+              callback();
+            }
+          });
+        }
+      });
+      return false;
+    }
+    
+    this.deleteDatabase = function(dbName) {
+      $.showDialog("dialog/_delete_database.html", {
+        submit: function(data, callback) {
+          $.couch.db(dbName).drop({
+            success: function(resp) {
+              callback();
+              location.href = "index.html";
+              if (window !== null) {
+                $("#dbs li").filter(function(index) {
+                  return $("a", this).text() == dbName;
+                }).remove();
+                $.futon.navigation.removeDatabase(dbName);
+              }
+            }
+          });
+        }
+      });
+    }
+    
+    this.compactAndCleanup = function(dbName) {
+      var db = $.couch.db(dbName);
+      $.showDialog("dialog/_compact_cleanup.html", {
+        submit: function(data, callback) {
+          switch (data.action) {
+            case "compact_database":
+              db.compact({success: function(resp) { callback() }});
+              break;
+            case "compact_views":
+              var groupname = page.viewName.substring(8,
+                  page.viewName.indexOf("/_view"));
+              db.compactView(groupname, {success: function(resp) { callback() }});
+              break;
+            case "view_cleanup":
+              db.viewCleanup({success: function(resp) { callback() }});
+              break;
+          }
+        }
+      });
+    }
+  }
 
   $.couch.urlPrefix = "..";
   $.futon = $.futon || {};
   $.extend($.futon, {
     navigation: new Navigation(),
     session : new Session(),
-    storage: new Storage()
+    storage: new Storage(),
+    dialogs: new Dialogs()
   });
 
   $.fn.addPlaceholder = function() {
@@ -452,28 +519,7 @@ function $$(node) {
     }
     $("input[placeholder]").addPlaceholder();
 
-    $.get("_sidebar.html", function(resp) {
-      $("#wrap").append(resp)
-        .find("#sidebar-toggle").click(function(e) {
-            $.futon.navigation.toggle(e.shiftKey ? 2500 : 500);
-            return false;
-          });
-      if ($.futon.storage.get("sidebar") == "hidden") {
-        $.futon.navigation.toggle(0);
-      }
-
-      $.futon.navigation.updateDatabases();
-      $.futon.navigation.updateSelection();
-      $.futon.navigation.ready();
-      $.futon.session.setupSidebar();
-      $.futon.session.sidebar();
-
-      $.couch.info({
-        success: function(info, status) {
-          $("#version").text(info.version);
-        }
-      });
-    });
+    
   });
 
 })(jQuery);

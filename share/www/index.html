@@ -17,78 +17,100 @@ specific language governing permissions and limitations under the License.
   <head>
     <title>Overview</title>
     <meta http-equiv="Content-Type" content="text/html;charset=utf-8">
-    <link rel="stylesheet" href="style/layout.css?0.11.0" type="text/css">
-    <script src="script/json2.js"></script>
-    <script src="script/sha1.js"></script>
+    <link rel="stylesheet" href="style/sammy.css?0.11.0" type="text/css">
     <script src="script/jquery.js?1.4.2"></script>
     <script src="script/jquery.couch.js?0.11.0"></script>
     <script src="script/jquery.dialog.js?0.11.0"></script>
+    
     <script src="script/futon.js?0.11.0"></script>
     <script src="script/futon.browse.js?0.11.0"></script>
     <script src="script/futon.format.js?0.11.0"></script>
+    
+    <script src="script/json2.js"></script>
+    <script src="script/sha1.js"></script>
+    
+    <script src="sammy/sammy.js"></script>
+    <script src="sammy/plugins/sammy.mustache.js"></script>
+    <script src="futon.js"></script>
     <script>
-      var page = new $.futon.CouchIndexPage();
-      $(document).ready(function() {
-        if (!/index\.html$/.test(location.pathname)) {
-          $.futon.navigation.ready(function() {
-            this.updateSelection(location.pathname + "index.html");
+    
+    $('div#sidebar').ready(function () {
+      $("div#sidebar")
+        .find("#sidebar-toggle").click(function(e) {
+            $.futon.navigation.toggle(e.shiftKey ? 2500 : 500);
+            return false;
           });
+      if ($.futon.storage.get("sidebar") == "hidden") {
+        $.futon.navigation.toggle(0);
+      }
+
+      $.futon.navigation.updateDatabases();
+      // $.futon.navigation.updateSelection();
+      $.futon.navigation.ready();
+      $.futon.session.setupSidebar();
+      $.futon.session.sidebar();
+
+      $.couch.info({
+        success: function(info, status) {
+          $("#version").text(info.version);
         }
-        var dbsPerPage = $.futon.storage.get("per_page");
-        if (dbsPerPage) $("#perpage").val(dbsPerPage);
-        $("#perpage").change(function() {
-          page.updateDatabaseListing();
-          $.futon.storage.set("per_page", this.value);
-        });
-
-        page.updateDatabaseListing();
-
-        $("#toolbar button.add").click(function() {
-          page.addDatabase();
-        });
       });
+    })
+    
     </script>
   </head>
   <body>
     <div id="wrap">
-      <h1><strong>Overview</strong></h1>
-      <div id="content">
-        <ul id="toolbar">
-          <li><button class="add">Create Database …</button></li>
+      <h1 id="topbar">
+        <span id="topbar">&nbsp</span>
+        <span id="raw-link" >&nbsp</span>
+      </h1>
+      <div id="content"></div>
+      <div id="sidebar">
+        <a id="sidebar-toggle" href="#" title="Hide Sidebar"></a>
+        <a href="index.html">
+          <img id="logo" src="image/logo.png" width="175" height="150" alt="Apache CouchDB: Relax">
+        </a>
+        <ul id="nav">
+          <li><span>Tools</span><ul>
+            <li><a href="#/">Overview</a></li>
+            <li><a href="#/_config">Configuration</a></li>
+            <li><a href="#/_replicate">Replicator</a></li>
+            <li><a href="#/_stats">Status</a></li>
+            <li><a href="#/_tests">Test Suite</a></li>
+          </ul></li>
+          <li><span>Recent Databases</span>
+            <ul id="dbs"></ul>
+          </li>
         </ul>
-
-        <table class="listing" id="databases" cellspacing="0">
-          <caption>Databases</caption>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th class="size">Size</th>
-              <th class="count">Number of Documents</th>
-              <th class="seq">Update Seq</th>
-            </tr>
-          </thead>
-          <tbody class="content">
-          </tbody>
-          <tbody class="footer">
-            <tr>
-              <td colspan="5">
-                <div id="paging">
-                  <a class="prev">← Previous Page</a> |
-                  <label>Rows per page: <select id="perpage">
-                    <option selected>10</option>
-                    <option>25</option>
-                    <option>50</option>
-                    <option>100</option>
-                  </select></label> |
-                  <a class="next">Next Page →</a>
-                </div>
-                <span></span>
-              </td>
-            </tr>
-          </tbody>
-        </table>
+        <div id="footer">
+          <span id="userCtx">
+            <span class="loggedout">
+              <a href="#" class="signup">Signup</a> or <a href="#" class="login">Login</a>
+            </span>
+            <span class="loggedin">
+              Welcome <a class="name">?</a>! 
+              <br/>
+              <a href="#" class="logout">Logout</a>
+            </span>
+            <span class="loggedinadmin">
+              Welcome <a class="name">?</a>! 
+              <br/>
+              <a href="#" class="createadmin">Setup more admins</a> or
+              <a href="#" class="logout">Logout</a> 
+            </span>
+            <span class="adminparty">
+              Welcome to Admin Party! 
+              <br/>
+              Everyone is admin. <a href="#" class="createadmin">Fix this</a>
+            </span>
+          </span>
+          <hr/>
+          <span class="couch">
+            <a href="http://couchdb.apache.org/">Apache CouchDB </a><span id="version">?</span>
+          </span>
+        </div>
       </div>
-
     </div>
   </body>
 </html>

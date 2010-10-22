@@ -10,7 +10,7 @@
 ## License for the specific language governing permissions and limitations under
 ## the License.
 
-SUBDIRS = bin etc src share test var utils
+SUBDIRS = bin etc src share old_share test var utils
 
 ACLOCAL_AMFLAGS = -I m4
 
