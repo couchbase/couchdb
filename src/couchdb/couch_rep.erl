@@ -34,6 +34,7 @@
 
     start_seq,
     history,
+    session_id,
     source_log,
     target_log,
     rep_starttime,
@@ -189,6 +190,7 @@ do_init([RepId, {PostProps}, UserCtx] = InitArgs) ->
 
         start_seq = StartSeq,
         history = History,
+        session_id = couch_uuids:random(),
         source_log = SourceLog,
         target_log = TargetLog,
         rep_starttime = httpd_util:rfc1123_date(),
@@ -354,15 +356,9 @@ close_db(Db) ->
     couch_db:close(Db).
 
 dbname(#http_db{url = Url}) ->
-    strip_password(Url);
+    couch_util:url_strip_password(Url);
 dbname(#db{name = Name}) ->
     Name.
-
-strip_password(Url) ->
-    re:replace(Url,
-        "http(s)?://([^:]+):[^@]+@(.*)$",
-        "http\\1://\\2:*****@\\3",
-        [{return, list}]).
 
 dbinfo(#http_db{} = Db) ->
     {DbProps} = couch_rep_httpc:request(Db),
@@ -573,6 +569,7 @@ do_checkpoint(State) ->
         committed_seq = NewSeqNum,
         start_seq = StartSeqNum,
         history = OldHistory,
+        session_id = SessionId,
         source_log = SourceLog,
         target_log = TargetLog,
         rep_starttime = ReplicationStartTime,
@@ -584,7 +581,6 @@ do_checkpoint(State) ->
     {SrcInstanceStartTime, TgtInstanceStartTime} ->
         ?LOG_INFO("recording a checkpoint for ~s -> ~s at source update_seq ~p",
             [dbname(Source), dbname(Target), NewSeqNum]),
-        SessionId = couch_uuids:random(),
         NewHistoryEntry = {[
             {<<"session_id">>, SessionId},
             {<<"start_time">>, list_to_binary(ReplicationStartTime)},

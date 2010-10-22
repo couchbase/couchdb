@@ -72,6 +72,7 @@ db_exists(Req, CanonicalUrl, CreateDB) ->
     #http_db{
         auth = Auth,
         headers = Headers0,
+        options = Options,
         url = Url
     } = Req,
     HeadersFun = fun(Method) ->
@@ -84,10 +85,10 @@ db_exists(Req, CanonicalUrl, CreateDB) ->
     end,
     case CreateDB of
         true ->
-            catch ibrowse:send_req(Url, HeadersFun(put), put);
+            catch ibrowse:send_req(Url, HeadersFun(put), put, [], Options);
         _Else -> ok
     end,
-    case catch ibrowse:send_req(Url, HeadersFun(head), head) of
+    case catch ibrowse:send_req(Url, HeadersFun(head), head, [], Options) of
     {ok, "200", _, _} ->
         Req#http_db{url = CanonicalUrl};
     {ok, "301", RespHeaders, _} ->
@@ -167,7 +168,7 @@ process_response({error, Reason}, Req) ->
         pause = Pause
     } = Req,
     ShortReason = case Reason of
-    connection_closed ->
+    sel_conn_closed ->
         connection_closed;
     {'EXIT', {noproc, _}} ->
         noproc;
@@ -203,8 +204,7 @@ spawn_worker_process(Req) ->
     Pid.
 
 spawn_link_worker_process(Req) ->
-    Url = ibrowse_lib:parse_url(Req#http_db.url),
-    {ok, Pid} = ibrowse_http_client:start_link(Url),
+    {ok, Pid} = ibrowse:spawn_link_worker_process(Req#http_db.url),
     Pid.
 
 maybe_decompress(Headers, Body) ->

@@ -180,6 +180,7 @@ handle_cast({compact_done, #group{current_seq=NewSeq} = NewGroup},
         group = #group{name=GroupId, fd=OldFd, sig=GroupSig} = Group,
         init_args = {RootDir, DbName, _},
         updater_pid = UpdaterPid,
+        compactor_pid = CompactorPid,
         ref_counter = RefCounter
     } = State,
 
@@ -201,6 +202,8 @@ handle_cast({compact_done, #group{current_seq=NewSeq} = NewGroup},
     end,
 
     %% cleanup old group
+    unlink(CompactorPid),
+    receive {'EXIT', CompactorPid, normal} -> ok after 0 -> ok end,
     unlink(OldFd),
     couch_ref_counter:drop(RefCounter),
     {ok, NewRefCounter} = couch_ref_counter:start([NewGroup#group.fd]),
@@ -445,8 +448,8 @@ open_temp_group(DbName, Language, DesignOptions, MapSrc, RedSrc) ->
             def=MapSrc,
             reduce_funs= if RedSrc==[] -> []; true -> [{<<"_temp">>, RedSrc}] end,
             options=DesignOptions},
-
-        {ok, Db, set_view_sig(#group{name = <<"_temp">>, db=Db, views=[View],
+        couch_db:close(Db),
+        {ok, set_view_sig(#group{name = <<"_temp">>, views=[View],
             def_lang=Language, design_options=DesignOptions})};
     Error ->
         Error
@@ -463,7 +466,8 @@ open_db_group(DbName, GroupId) ->
     {ok, Db} ->
         case couch_db:open_doc(Db, GroupId) of
         {ok, Doc} ->
-            {ok, Db, design_doc_to_view_group(Doc)};
+            couch_db:close(Db),
+            {ok, design_doc_to_view_group(Doc)};
         Else ->
             couch_db:close(Db),
             Else
