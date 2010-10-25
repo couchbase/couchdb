@@ -282,7 +282,7 @@ app.showDatabase = function () {
 function getType (obj) {
   if (obj === null) return 'null'
   if (typeof obj === 'object') {
-    if (obj.length) return 'array'
+    if (obj.constructor.toString().indexOf("Array") !== -1) return 'array'
     else return 'object'
   } else {return typeof obj}
 }
@@ -362,17 +362,21 @@ app.showDocument = function () {
   }
   
   var createValue = {
-    "string": function (obj, key) {
+    "string": function (obj, key, editable) {
       var val = $('<div class="doc-value string-type"></div>')
         , edit = getEdit(obj, key, val, 350)
         ;
       if (obj[key].length > 45) {
-        val.append($('<span class="string-type"></span>').click(edit).text(obj[key].slice(0, 45)))
-        val.append(
+        val.append($('<span class="string-type"></span>')
+        .click(editable ? edit : function () {  })
+        .text(obj[key].slice(0, 45)))
+        .append(
           $('<span class="expand">...</span>')
           .click(function () {
             val.html('')
-            val.append($('<span class="string-type"></span>').click(edit).text(obj[key]))
+            .append($('<span class="string-type"></span>')
+            .click(editable ? edit : function () {  })
+            .text(obj[key]))
           })
         )
       }
@@ -381,23 +385,29 @@ app.showDocument = function () {
           , edit = getEdit(obj, key, val, 350)
           ;
         val.append(
-          $('<span class="string-type"></span>').click(edit).text(obj[key])
-          
+          $('<span class="string-type"></span>')
+          .click(editable ? edit : function () {  })
+          .text(obj[key])
         )
       }
       return val;
     }
-    , "number": function (obj, key) {
+    , "number": function (obj, key, editable) {
       var val = $('<div class="doc-value number"></div>')
       val.append($('<span class="number-type">' + obj[key] + '</span>').click(getEdit(obj, key, val, 100)))
       return val;
     }
-    , "null": function (obj, key) {
+    , "null": function (obj, key, editable) {
       var val = $('<div class="doc-value null"></div>')
       val.append($('<span class="null-type">' + obj[key] + '</span>').click(getEdit(obj, key, val,100)))
       return val;
     }
-    , "array": function (obj, key, indent) {
+    , "boolean": function (obj, key, editable) {
+      var val = $('<div class="doc-value null"></div>')
+      val.append($('<span class="null-type">' + obj[key] + '</span>').click(getEdit(obj, key, val,100)))
+      return val;
+    }
+    , "array": function (obj, key, indent, editable) {
        if (!indent) indent = 1;
         var val = $('<div class="doc-value array"></div>')
         $('<span class="array-type">[</span><span class="expand" style="float:left">...</span><span class="array-type">]</span>')
@@ -422,13 +432,13 @@ app.showDocument = function () {
           .appendTo($('<div class="array-type"></div>').appendTo(val))
         return val;
     }
-    , "object": function (obj, key, indent) {
+    , "object": function (obj, key, indent, editable) {
       if (!indent) indent = 1;
       var val = $('<div class="doc-value object"></div>')
       $('<span class="object-type">{</span><span class="expand" style="float:left">...</span><span class="object-type">}</span>')
         .click(function (i, n) {
           var n = $(this).parent();
-          var cls = 'sub-'+key+'-'+indent
+          var cls = hex_sha1('sub-'+key+'-'+indent)
           n.html('')
           n.append('<span style="padding-left:'+((indent - 1) * 10)+'px" class="object-type">{</span>')
           for (i in obj[key]) {
@@ -471,34 +481,31 @@ app.showDocument = function () {
         var d = $('div#document-editor');
         for (i in resp) {
           var field = $('<div class="doc-field"></div>')
-          $('<div class="delete-button" />').click((function (field, i) {
-            return function () {
-              delete _doc[i]
-              request({url:url, type:'PUT', data:JSON.stringify(_doc), processData:false}, function (err, newresp) {
-                if (err) console.log(err);
-                else {
-                  _doc._rev = newresp.rev;
-                  $("div.doc-key:exactly('_rev')").next().html(createValue.string(_doc, '_rev'));
-                  field.remove();
-                }
-              })
-            }
-          })(field, i))
-          .appendTo(field)
+          if (i !== '_rev' && i !== '_id') {
+            $('<div class="delete-button" />').click((function (field, i) {
+              return function () {
+                delete _doc[i]
+                request({url:url, type:'PUT', data:JSON.stringify(_doc), processData:false}, function (err, newresp) {
+                  if (err) console.log(err);
+                  else {
+                    _doc._rev = newresp.rev;
+                    $("div.doc-key:exactly('_rev')").next().html(createValue.string(_doc, '_rev'));
+                    field.remove();
+                  }
+                })
+              }
+            })(field, i))
+            .appendTo(field)
+          } else {
+            $('<div class="id-space" />').appendTo(field);
+          }
+          
           field.append('<div class="doc-key doc-key-base">'+i+'</div>')
-          field.append(createValue[getType(resp[i])](resp, i))
+          field.append(createValue[getType(resp[i], (i !== '_rev' && i !== '_id'))](resp, i))
           d.append(field)
         }
       }
-      // $("div#document-editor").click(function (e) {
-      //   var n = $(e.target)
-      //   if (n.hasClass('delete-button')) {
-      //     console.log('sadf')
-      //   }
-      // })
-      // document.getElementById("").addEventListener("click", function () {
-      //   
-      // });
+
       $('div.doc-key-base').width(largestWidth('div.doc-key-base'))
     })  
   })

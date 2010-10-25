@@ -710,6 +710,10 @@ span.main-input {padding-right:7px;}
 
 div#document-editor { background: #fff; font-size:14px;}
 div#document-editor span.expand {cursor:pointer; color:#FF0000;}
+div#document-editor div.id-space {
+  border: none; float: left; margin: 3px 3px 0 3px; padding: 0;
+  width: 15px; height: 15px;
+}
 div#document-editor div.doc-field {width:100%; padding-bottom:2px;}
 div#document-editor div.doc-field, div.doc-value, div.doc-key {float:left;}
 div#document-editor div.doc-key {padding-right:5px;font-weight:bold;}
