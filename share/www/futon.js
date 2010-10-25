@@ -339,11 +339,13 @@ app.showDocument = function () {
       if (w < minWidth) {
         w = minWidth;
       }
+      var h = $(this).height();
       val.html('')
       val.html(
-        $('<input type="text" />')
+        $('<textarea type="text" />')
         .val(JSON.stringify(obj[key]))
         .width(w)
+        .height(h)
         .change(function () {
           obj[key] = coerceFieldValue($(this).val());
           request({url:url, type:'PUT', data:JSON.stringify(_doc), processData:false}, function (err, newresp) {
@@ -365,12 +367,12 @@ app.showDocument = function () {
         , edit = getEdit(obj, key, val, 350)
         ;
       if (obj[key].length > 45) {
-        val.append($('<span class="string-type">'+obj[key].slice(0, 45)+'</span>').click(edit))
+        val.append($('<span class="string-type"></span>').click(edit).text(obj[key].slice(0, 45)))
         val.append(
           $('<span class="expand">...</span>')
           .click(function () {
             val.html('')
-            val.append('<span class="string-type">'+obj[key]+'</span>')
+            val.append($('<span class="string-type"></span>').click(edit).text(obj[key]))
           })
         )
       }
@@ -379,8 +381,8 @@ app.showDocument = function () {
           , edit = getEdit(obj, key, val, 350)
           ;
         val.append(
-          $('<span class="string-type">' + obj[key] + '</span>')
-          .click(edit)
+          $('<span class="string-type"></span>').click(edit).text(obj[key])
+          
         )
       }
       return val;
@@ -812,6 +814,14 @@ app.showView = function () {
   } else {setupViews();}
 }
 
+app.wildcard = function () {
+  var args = this.path.split('/');
+  args.splice(0,1);
+  this.params.db = args.splice(0,1);
+  this.params.docid = args.join('/')
+  app.showDocument.call(this, arguments)
+}
+
 var a = $.sammy(function () {
   
   var indexRoute = function () {
@@ -839,6 +849,8 @@ var a = $.sammy(function () {
   this.get('#/:db/_views', app.showViews);
   // Document editor/viewer
   this.get('#/:db/:docid', app.showDocument);
+  
+  this.get(/\#\/(*)/, app.wildcard)
 })
 
 $(function () {
