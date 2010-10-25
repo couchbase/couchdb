@@ -351,7 +351,7 @@ app.showDocument = function () {
           request({url:url, type:'PUT', data:JSON.stringify(_doc), processData:false}, function (err, newresp) {
             if (err) console.log(err)
             _doc._rev = newresp.rev;
-            $("div.doc-key:exactly('_rev')").next().html(createValue.string(_doc, '_rev'));
+            $("div.doc-key:exactly('_rev')").next().html(createValue.string(_doc, '_rev', false));
             val.parent().append(createValue[getType(obj[key])](obj, key));
             val.remove();
           })
@@ -407,7 +407,7 @@ app.showDocument = function () {
       val.append($('<span class="null-type">' + obj[key] + '</span>').click(getEdit(obj, key, val,100)))
       return val;
     }
-    , "array": function (obj, key, indent, editable) {
+    , "array": function (obj, key, editable, _attachments, indent) {
        if (!indent) indent = 1;
         var val = $('<div class="doc-value array"></div>')
         $('<span class="array-type">[</span><span class="expand" style="float:left">...</span><span class="array-type">]</span>')
@@ -423,7 +423,7 @@ app.showDocument = function () {
                     '<div class="array-key '+cls+'" style="padding-left:'+(indent * 10)+'px">'+i+'</div>' +
                   '</div>'
                   )
-                  .append(createValue[getType(obj[key][i])](obj[key], i, indent + 1))
+                  .append(createValue[getType(obj[key][i])](obj[key], i, true, false, indent + 1))
                 )
             }
             n.append('<span style="padding-left:'+((indent - 1) * 10)+'px" class="array-type">]</span>')
@@ -432,7 +432,7 @@ app.showDocument = function () {
           .appendTo($('<div class="array-type"></div>').appendTo(val))
         return val;
     }
-    , "object": function (obj, key, indent, editable) {
+    , "object": function (obj, key, editable, _attachments, indent) {
       if (!indent) indent = 1;
       var val = $('<div class="doc-value object"></div>')
       $('<span class="object-type">{</span><span class="expand" style="float:left">...</span><span class="object-type">}</span>')
@@ -442,26 +442,54 @@ app.showDocument = function () {
           n.html('')
           n.append('<span style="padding-left:'+((indent - 1) * 10)+'px" class="object-type">{</span>')
           for (i in obj[key]) {
-            // n.append('<br>')
-            // n.append('<div class="spacer" />');
+
             var field = $('<div class="doc-field"></div>')
-            field.append($('<div class="delete-button" style="margin-left:'+(indent * 10)+'px"/>').click((function (field, i) {
-                return function () {
-                  delete obj[key][i]
-                  request({url:url, type:'PUT', data:JSON.stringify(_doc), processData:false}, function (err, newresp) {
-                    if (err) console.log(err);
-                    else {
-                      _doc._rev = newresp.rev;
-                      $("div.doc-key:exactly('_rev')").next().html(createValue.string(_doc, '_rev'));
-                      field.remove();
+            
+            if (!_attachments) {
+              if (editable !== false) {
+                var p = $('<div class="delete-button" style="margin-left:'+(indent * 10)+'px"/>').click((function (field, i) {
+                    return function () {
+                      delete obj[key][i]
+                      request({url:url, type:'PUT', data:JSON.stringify(_doc), processData:false}, function (err, newresp) {
+                        if (err) console.log(err);
+                        else {
+                          _doc._rev = newresp.rev;
+                          $("div.doc-key:exactly('_rev')").next().html(createValue.string(_doc, '_rev', false));
+                          field.remove();
+                        }
+                      })
                     }
-                  })
-                }
-              })(field, i))
-              )
-              .append('<div class="object-key '+cls+'" >'+i+'</div>')
-              .append(createValue[getType(obj[key][i])](obj[key], i, indent + 1))
-            n.append(field)
+                  })(field, i))
+
+              } else {
+                var p = $('<div class="id-spacer" style="margin-left:'+(indent * 10)+'px"/>')
+              }
+              field.append(p)
+                .append('<div class="object-key '+cls+'" >'+i+'</div>')
+                .append(createValue[getType(obj[key][i])](obj[key], i, editable, false, indent + 1))
+              n.append(field)
+            } else {
+              field.append(
+                $('<div class="delete-button" style="margin-left:'+(indent * 10)+'px"/>')
+                .click((function (field, i) {
+                  return function () {
+                    delete obj[key][i]
+                    request({url:url, type:'PUT', data:JSON.stringify(_doc), processData:false}, function (err, newresp) {
+                      if (err) console.log(err);
+                      else {
+                        _doc._rev = newresp.rev;
+                        $("div.doc-key:exactly('_rev')").next().html(createValue.string(_doc, '_rev', false));
+                        field.remove();
+                      }
+                    })
+                  }
+                })(field, i))
+                )
+                .append('<div class="object-key '+cls+'" ><a href="'+url+'/'+i+'">'+i+'</a></div>')
+                .append(createValue[getType(obj[key][i])](obj[key], i, false, false, indent + 1))
+              n.append(field)
+            }
+            
           }
           n.append('<span style="padding-left:'+((indent - 1) * 10)+'px" class="object-type">}</span>')
           $('div.'+cls).width(largestWidth('div.'+cls))
@@ -489,7 +517,7 @@ app.showDocument = function () {
                   if (err) console.log(err);
                   else {
                     _doc._rev = newresp.rev;
-                    $("div.doc-key:exactly('_rev')").next().html(createValue.string(_doc, '_rev'));
+                    $("div.doc-key:exactly('_rev')").next().html(createValue.string(_doc, '_rev', false));
                     field.remove();
                   }
                 })
@@ -501,7 +529,9 @@ app.showDocument = function () {
           }
           
           field.append('<div class="doc-key doc-key-base">'+i+'</div>')
-          field.append(createValue[getType(resp[i], (i !== '_rev' && i !== '_id'))](resp, i))
+          field.append(createValue[getType(resp[i])](resp, i, (i !== '_rev' && i !== '_id') , 
+            (i == '_attachments'))
+          )
           d.append(field)
         }
       }
