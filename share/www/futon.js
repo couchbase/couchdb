@@ -144,6 +144,11 @@ app.showDatabase = function () {
     $("#toolbar button.delete").click(function (){$.futon.dialogs.deleteDatabase(db)});
     // $("#toolbar button.security").click(page.databaseSecurity); TODO : New security UI
     
+    // JumpToDoc
+    $('input#jumptodoc').change(function () {
+      window.location.hash = '#/' + db + '/' + $(this).val();
+    })
+    
     var addquery = function () {
       // This function adds the _all_docs startkey/endkey query options
       $('select.dbquery-select').before(
