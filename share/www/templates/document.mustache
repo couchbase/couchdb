@@ -42,7 +42,7 @@ var getEdit = function (obj, key, val, minWidth) {
       .height(h)
       .change(function () {
         obj[key] = coerceFieldValue( $(this).val() );
-        request({url:url, type:'PUT', data:JSON.stringify(_doc), processData:false}, function (err, newresp) {
+        request({url:url, type:'PUT', data:_doc,}, function (err, newresp) {
           if (err) console.log(err)
           _doc._rev = newresp.rev;
           $("div.doc-key:exactly('_rev')").next().html(createValue.string(_doc, '_rev', false));
@@ -120,11 +120,30 @@ var createValue = {
           n.append('<span style="padding-left:'+((indent - 1) * 10)+'px" class="array-type">[</span>')
           for (i in obj[key]) {
             n.append(
-              $('<div class="doc-field">' +
-                  '<div class="delete-button" style="margin-left:'+(indent * 10)+'px" />' +
-                  '<div class="array-key '+cls+'" >'+i+'</div>' +
-                '</div>'
+              $('<div class="doc-field"></div>')
+                .append(
+                  $('<div class="delete-button" style="margin-left:'+(indent * 10)+'px" />')
+                  .click(function () {
+                    var entry = $(this).parent()
+                      , i = parseInt($(this).next().text())
+                      ;
+                    obj[key].splice(i, 1)
+                    request({url:url, data:_doc, type:'PUT'}, function (err, resp) {
+                      if (err) console.log(err)
+                      else {
+                        entry.parent().find('div.array-key').each(function (ii, e) {
+                          e = $(e)
+                          var ind = parseInt(e.text());
+                          if (ind > i) {
+                            e.text(ind - 1)
+                          }
+                        })
+                        entry.remove();
+                      }
+                    })
+                  })
                 )
+                .append('<div class="array-key '+cls+'" >'+i+'</div>')
                 .append(createValue[getType(obj[key][i])](obj[key], i, true, false, indent + 1))
               )
           }
