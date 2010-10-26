@@ -505,8 +505,8 @@ function $$(node) {
   }
 
   $(document)
-    .ajaxStart(function() { $(this.body).addClass("loading"); })
-    .ajaxStop(function() { $(this.body).removeClass("loading"); });
+    // .ajaxStart(function() { $(this.body).addClass("loading"); })
+    // .ajaxStop(function() { $(this.body).removeClass("loading"); });
 
   $.futon.storage.declare("sidebar", {scope: "cookie", defaultValue: "show"});
   $.futon.storage.declare("recent", {scope: "cookie", defaultValue: ""});

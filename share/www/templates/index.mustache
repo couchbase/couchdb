@@ -1,3 +1,43 @@
+<script>
+app.loadIndex = function () {
+  $('span#topbar').html('<strong>Overview</strong>');
+  $("#toolbar button.add").click($.futon.dialogs.createDatabase);
+  var dbRow = function (name, even) {
+    var row = $('<tr id=db-"'+name+'"><th><a href="#/'+name+'">'+name+'</a></th></tr>');
+
+    row.addClass(even ? "even" : "odd")    
+    row.appendTo('tbody.content');
+    request({url: '/'+encodeURIComponent(name)}, function ( err, info ) {
+      if (err) info = { disk_size:"can't connect", doc_count:"can't connect"
+                      , update_seq:"can't connect"};
+      row.append('<td class="size">'+formatSize(info.disk_size)+'</td>' +
+                  '<td class="count">'+info.doc_count+'</td>' + 
+                  '<td class="seq">'+info.update_seq+'</td>'
+                  );
+    });
+  }
+
+  request({url: '/_all_dbs'}, function (err, dbs) {
+    if (err) $('tbody.content').append('<tr><td>error</td><td>error</td><td>error</td></tr>');
+    else {
+      var moreRows = function (start, limit) {
+        for (var i=start;i<(start + limit);i+=1) { 
+           if (dbs[i]) dbRow(dbs[i], isEven(i));
+           else {$('div#pagination').remove(); return;}
+        }
+        $('span.more').unbind('click');
+        $('span.more').click(function ( ) { moreRows(i, parseInt($('#pages-input').val())) })
+      }
+      if (dbs.length > 20) {
+        var pagination = '<div id="pagination"><span class="more">Load </span><input type="text" id="pages-input" value=20></input><span class="more"> More Items</span></div>'
+         $('td.more').append(pagination);
+      }
+      moreRows(0, 20);
+    }
+  })
+}
+</script>
+
 <ul id="toolbar">
   <li><button class="add">Create Database …</button></li>
 </ul>
