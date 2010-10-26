@@ -77,7 +77,7 @@ var getAddButton = function (obj, keyClass, array, indent) {
             , v = t.val()
             ;
           t.parent().append(
-            $('<div class="'+keyClass+' object-key" >'+v+'</div>')
+            $('<div class="'+keyClass+' '+(array ? 'array' : 'object')+'-key" >'+v+'</div>')
             .width(largestWidth('div.'+keyClass))
           )
           $('<input type="text" />')
@@ -90,7 +90,7 @@ var getAddButton = function (obj, keyClass, array, indent) {
               p.remove();
               var newField = $('<div class="doc-field"></div>')
               .append('<div class="delete-button" style="margin-left:'+(indent * 10)+'px"/>')
-              .append('<div class="object-key '+keyClass+'">'+v+'</div>')
+              .append('<div class="'+(array ? 'array' : 'object')+'-key '+keyClass+'">'+v+'</div>')
               .append(createValue[getType(obj[v])](obj, v, true , false))
               addButton.before(newField)
               console.log(keyClass)
@@ -106,7 +106,15 @@ var getAddButton = function (obj, keyClass, array, indent) {
     )
     .before('<div class="spacer"></div>')
     var inputs = $(this).parent().find('input.new-field');
-    inputs[inputs.length - 1].select();
+    if (array) {
+      var input = $(inputs[inputs.length - 1])
+      console.log($(input.parent().prev().find('div.array-key')[0]))
+      console.log($(input.parent().prev().find('div.array-key')[0]).text())
+      input.val(parseInt($(input.parent().prev().find('div.array-key')[0]).text()) + 1).change();
+    } else {
+      inputs[inputs.length - 1].select();
+    }
+    
   })    
   return addButton;
 }
@@ -180,6 +188,7 @@ var createValue = {
                     request({url:url, data:_doc, type:'PUT'}, function (err, resp) {
                       if (err) console.log(err)
                       else {
+                        _doc._rev = resp.rev;
                         entry.parent().find('div.array-key').each(function (ii, e) {
                           e = $(e)
                           var ind = parseInt(e.text());
@@ -195,6 +204,10 @@ var createValue = {
                 .append('<div class="array-key '+cls+'" >'+i+'</div>')
                 .append(createValue[getType(obj[key][i])](obj[key], i, true, false, indent + 1))
               )
+          }
+          if (editable) {
+            n.append(getAddButton(obj[key], cls, true, indent).css('margin-left',(indent * 10)))
+            n.append('<div class="spacer"></div>')
           }
           n.append('<span style="padding-left:'+((indent - 1) * 10)+'px" class="array-type">]</span>')
           $('div.'+cls).width(largestWidth('div.'+cls))
