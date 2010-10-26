@@ -82,7 +82,7 @@ var getAddButton = function (obj, keyClass, array, indent) {
           $('<input type="text" />')
           .width(450)
           .change(function () {
-            obj[v] = $(this).val();
+            obj[v] = coerceFieldValue($(this).val());
             var p = $(this).parent();
             request({url:url, type:'PUT', data:_doc}, function (err, resp) {
               _doc._rev = resp.rev;
@@ -92,7 +92,6 @@ var getAddButton = function (obj, keyClass, array, indent) {
               .append('<div class="'+(array ? 'array' : 'object')+'-key '+keyClass+'">'+v+'</div>')
               .append(createValue[getType(obj[v])](obj, v, true , false))
               addButton.before(newField)
-              console.log(keyClass)
               $('div.'+keyClass).width(largestWidth('div.'+keyClass))
             })
           })
@@ -107,8 +106,6 @@ var getAddButton = function (obj, keyClass, array, indent) {
     var inputs = $(this).parent().find('input.new-field');
     if (array) {
       var input = $(inputs[inputs.length - 1])
-      console.log($(input.parent().prev().find('div.array-key')[0]))
-      console.log($(input.parent().prev().find('div.array-key')[0]).text())
       input.val(parseInt($(input.parent().prev().find('div.array-key')[0]).text()) + 1).change();
     } else {
       inputs[inputs.length - 1].select();
