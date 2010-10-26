@@ -740,7 +740,15 @@ div#document-editor div.delete-button {
 }
 
 div#document-editor div.empty {
-  float:left;
+  float:left;  
+}
+
+div#document-editor div.save-button {
+  float:right; cursor:pointer; background-color:#D1D1D1;
+  padding: 2px 5px 2px 5px;
+  -moz-border-radius: 15px;
+  -webkit-border-radius: 15px;
+  border-radius: 15px;
 }
 
 /*

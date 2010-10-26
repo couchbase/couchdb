@@ -304,6 +304,8 @@ $.expr[":"].exactly = function(obj, index, meta, stack){
 
 function coerceFieldValue (val) {
   if (val == 'null') return null;
+  if (val == 'true') return true;
+  if (val == 'false') return false;
   
   if (val.indexOf('.') !== -1) {
     if (!isNaN(parseFloat(val))) return parseFloat(val)
@@ -340,23 +342,33 @@ app.showDocument = function () {
         w = minWidth;
       }
       var h = $(this).height();
+      if (h > $("div.doc-key:exactly('_rev')").height()) {
+        var area = $('<textarea type="text" />')
+      } else {
+        var area = $('<input type="text" />');
+      }
       val.html('')
       val.html(
-        $('<textarea type="text" />')
-        .val(JSON.stringify(obj[key]))
+        area.val(typeof obj[key] == "string" ?  obj[key] : JSON.stringify(obj[key]))
         .width(w)
         .height(h)
         .change(function () {
-          obj[key] = coerceFieldValue($(this).val());
+          obj[key] = coerceFieldValue( $(this).val() );
           request({url:url, type:'PUT', data:JSON.stringify(_doc), processData:false}, function (err, newresp) {
             if (err) console.log(err)
             _doc._rev = newresp.rev;
             $("div.doc-key:exactly('_rev')").next().html(createValue.string(_doc, '_rev', false));
-            val.parent().append(createValue[getType(obj[key])](obj, key));
+            val.parent().append(createValue[getType(obj[key])](obj, key, true));
             val.remove();
           })
         })
       )
+      
+      if (area[0].tagName == 'TEXTAREA') {
+        $('<div class="save-button">Save</div>')
+        .click(area.change)
+        .appendTo(area.parent())
+      }
     }
     return edit;
   }
