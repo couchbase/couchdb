@@ -36,6 +36,25 @@ var getQuery = function () {
   return r;
 }
 
+function getType (obj) {
+  if (obj === null) return 'null'
+  if (typeof obj === 'object') {
+    if (obj.constructor.toString().indexOf("Array") !== -1) return 'array'
+    else return 'object'
+  } else {return typeof obj}
+}
+
+function largestWidth (selector) {
+  var min_width = 0;
+  $(selector).each(function(i, n){
+      var this_width = $(n).width();
+      if (this_width > min_width) {
+          min_width = this_width;
+      }
+  });
+  return min_width;
+}
+
 var param = function( a ) {
   // Query param builder from jQuery, had to copy out to remove conversion of spaces to +
 	var s = [];
@@ -284,25 +303,6 @@ app.showDatabase = function () {
   }
 }
 
-function getType (obj) {
-  if (obj === null) return 'null'
-  if (typeof obj === 'object') {
-    if (obj.constructor.toString().indexOf("Array") !== -1) return 'array'
-    else return 'object'
-  } else {return typeof obj}
-}
-
-function largestWidth (selector) {
-  var min_width = 0;
-  $(selector).each(function(i, n){
-      var this_width = $(n).width();
-      if (this_width > min_width) {
-          min_width = this_width;
-      }
-  });
-  return min_width;
-}
-
 $.expr[":"].exactly = function(obj, index, meta, stack){ 
   return ($(obj).text() == meta[3])
 }
@@ -382,29 +382,7 @@ app.showConfig = function () {
 app.showStats = function () {
   $('span#topbar').html('<strong>Status</strong>');
   this.render('templates/stats.mustache').replace('#content').then(function () {
-    request({url:'/_stats'}, function (err, stats) {
-      var info = $('#content').append('<h2>Raw Info</h2>')
-        , text = ''
-        ;
-      for (i in stats) {
-        text += '<div class="stat-section">'+i+'</div>'
-        for (x in stats[i]) {
-          text += '<div class="stat-subsection">'+x+'<span class="stat-subsection-description">'+stats[i][x].description+'</span></div>'
-          for (y in stats[i][x]) {
-            if (y !== 'description') {
-              text += '<span class="stat-title">'+y+'</span>'
-              text += '<span class="stat-value"> ' + 
-                ((stats[i][x][y] === null) ? 'none' : stats[i][x][y]) + 
-                ' </span>'
-            }
-          }
-          text += '<br>'
-        }
-        text += '<br>'
-        info.append(text)
-        text = ''
-      }
-    })
+    
   })
 }
 
@@ -503,8 +481,6 @@ app.showView = function () {
         })
       })
     } 
-    
-    
     
     var updateResults = function () {
       var c = $('tbody.content')
