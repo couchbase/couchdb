@@ -375,6 +375,7 @@ app.showDocument = function () {
         .click(area.change)
         .appendTo(area.parent())
       }
+      area.select();
     }
     return edit;
   }
@@ -393,8 +394,9 @@ app.showDocument = function () {
           .click(function () {
             val.html('')
             .append($('<span class="string-type"></span>')
-            .click(editable ? edit : function () {  })
-            .text(obj[key]))
+              .click(editable ? edit : function () {  })
+              .text(obj[key].length ? obj[key] : "   ")
+            )
           })
         )
       }
@@ -405,7 +407,7 @@ app.showDocument = function () {
         val.append(
           $('<span class="string-type"></span>')
           .click(editable ? edit : function () {  })
-          .text(obj[key])
+          .text(obj[key].length ? obj[key] : "   ")
         )
       }
       return val;
