@@ -739,6 +739,17 @@ div#document-editor div.delete-button {
   width: 15px; height: 15px;
 }
 
+div#document-editor div.add-button {
+  /* Add button is just the delete button rotated with CSS */
+  background: url(../image/delete-mini.png) no-repeat;
+  rotation: 45deg;
+  -webkit-transform: rotate(45deg);
+  -moz-transform: rotate(45deg);
+  border: none;
+  cursor: pointer; float: left; margin: 3px 3px 0 3px; padding: 0;
+  width: 15px; height: 15px;
+}
+
 div#document-editor div.empty {
   float:left;  
 }
