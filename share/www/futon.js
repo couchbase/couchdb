@@ -82,7 +82,12 @@ var request = function (options, callback) {
     if (err) callback(err);
     else callback(true);
   }
+  if (options.data && typeof options.data == 'object') {
+    options.data = JSON.stringify(options.data)
+  }
+  options.processData = false;
   options.dataType = 'json';
+  options.contentType = 'application/json'
   $.ajax(options)
 }
   
@@ -331,6 +336,7 @@ app.showDocument = function () {
     , docid = this.params['docid']
     , _doc
     , url = '/' + db + '/' + docid
+    , _s = this
     ;
   $('span#topbar').html('<a href="#/">Overview</a><a href="#/'+db+'">'+db+'</a><strong>'+docid+'</strong>'); 
   
@@ -516,18 +522,72 @@ app.showDocument = function () {
       var setRev = false;
       _doc = resp;
       
-      if (err) console.log(err)
-      else {
+      if (err) {
+        if (err.status > 200) {
+          // New document
+          _doc = {_id:docid}
+          var _changed = false;
+          $('div#document-editor')
+            .append("<h2>Create New Document</h2>")
+            .append(
+              $('<div class="doc-value string-type"></div>')
+              .append('<div class="doc-key doc-key-base" style="padding-right:20px">_id</div>')
+              .append(
+                $('<span class="string-type"></span>')
+                .click(function () {
+                  $('<input type="text" />')
+                  .width($(this).width())
+                  .height($(this).height())
+                  .change(function () {
+                    // Handle double change events, prevents conflict errors in console
+                    if (_changed) return
+                    _changed = true
+                    request({url:'/'+db, type:'POST', data:{_id:$(this).val()}}, function (err, resp) {
+                      if (err) {
+                        console.log(err)
+                      } else {
+                        // If it's a differnet docid than the one originally just pump the hash
+                        if (resp.id !== docid) window.location.hash = '#/' + db + '/' + resp.id
+                        else {
+                          // If not then refresh the page and the view of the document
+                          $('div#document-editor').html('')
+                          app.showDocument.apply(_s, _s.arguments)
+                        }
+                      }
+                    })
+                  })
+                  .appendTo($(this).parent())
+                  ;
+                  $(this).remove();
+                  
+                })
+                .text(docid ? docid : '')                
+              )
+            )
+          
+          $("div.doc-key:exactly('_id')").next().click(); 
+          // Handle hitting return in unchanged text field
+          $("div.doc-key:exactly('_id')").next().keypress(function (e) {
+            if (e.keyCode == 13) $(e.target).change();
+          })
+          .val(docid)
+          .select()
+          ;
+        }
+        
+      } else {
         var d = $('div#document-editor');
         for (i in resp) {
           var field = $('<div class="doc-field"></div>')
-          if (i !== '_rev' && i !== '_id') {
+          // Do not allow removal of _id and _rev attributes and _attachments
+          if (i !== '_rev' && i !== '_id' && i !== '_attachments') {
             $('<div class="delete-button" />').click((function (field, i) {
               return function () {
                 delete _doc[i]
                 request({url:url, type:'PUT', data:JSON.stringify(_doc), processData:false}, function (err, newresp) {
                   if (err) console.log(err);
                   else {
+                    // Pump the rev inline and remove the field
                     _doc._rev = newresp.rev;
                     $("div.doc-key:exactly('_rev')").next().html(createValue.string(_doc, '_rev', false));
                     field.remove();
@@ -541,7 +601,9 @@ app.showDocument = function () {
           }
           
           field.append('<div class="doc-key doc-key-base">'+i+'</div>')
-          field.append(createValue[getType(resp[i])](resp, i, (i !== '_rev' && i !== '_id') , 
+          // All top level fields are editable except _id, _rev and _attachments
+          // and make sure that _attachments object is rendered differently.
+          field.append(createValue[getType(resp[i])](resp, i, (i !== '_rev' && i !== '_id' ) , 
             (i == '_attachments'))
           )
           d.append(field)
