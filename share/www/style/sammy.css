@@ -732,6 +732,7 @@ div#document-editor span.null-type { color: #BD101D; float:left; color: #666666;
 
 div#document-editor div.array-key {float:left; padding-right:15px; color:#666666;}
 div#document-editor div.object-key {float:left; padding-right:15px; font-weight:bold; }
+div#document-editor div.doc-key-base {float:left; padding-right:15px; font-weight:bold; }
 
 div#document-editor div.delete-button {
   background: url(../image/delete-mini.png) no-repeat; border: none;

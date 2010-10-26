@@ -62,6 +62,55 @@ var getEdit = function (obj, key, val, minWidth) {
   return edit;
 }
 
+var getAddButton = function (obj, keyClass, array, indent) {
+  var addButton = $('<div class="add-button" />')
+  .click(function () {
+    $(this)
+    .before(
+      $('<div class="doc-field"></div>')
+      .append('<div class="id-space"></div>')
+      .append(
+        $('<input class="new-field" type="text" />')
+        .width(largestWidth('div.'+keyClass))
+        .change(function () {
+          var t = $(this)
+            , v = t.val()
+            ;
+          t.parent().append(
+            $('<div class="'+keyClass+' object-key" >'+v+'</div>')
+            .width(largestWidth('div.'+keyClass))
+          )
+          $('<input type="text" />')
+          .width(450)
+          .change(function () {
+            obj[v] = $(this).val();
+            var p = $(this).parent();
+            request({url:url, type:'PUT', data:_doc}, function (err, resp) {
+              _doc._rev = resp.rev;
+              p.remove();
+              var newField = $('<div class="doc-field"></div>')
+              .append('<div class="delete-button" style="margin-left:'+(indent * 10)+'px"/>')
+              .append('<div class="object-key '+keyClass+'">'+v+'</div>')
+              .append(createValue[getType(obj[v])](obj, v, true , false))
+              addButton.before(newField)
+              console.log(keyClass)
+              $('div.'+keyClass).width(largestWidth('div.'+keyClass))
+            })
+          })
+          .appendTo(t.parent())
+          .select()
+          ;
+          t.remove();
+        })
+      )  
+    )
+    .before('<div class="spacer"></div>')
+    var inputs = $(this).parent().find('input.new-field');
+    inputs[inputs.length - 1].select();
+  })    
+  return addButton;
+}
+
 var createValue = {
   "string": function (obj, key, editable) {
     var val = $('<div class="doc-value string-type"></div>')
@@ -183,7 +232,7 @@ var createValue = {
                 })(field, i))
 
             } else {
-              var p = $('<div class="id-spacer" style="margin-left:'+(indent * 10)+'px"/>')
+              var p = $('<div class="id-space" style="margin-left:'+(indent * 10)+'px"/>')
             }
             field.append(p)
               .append('<div class="object-key '+cls+'" >'+i+'</div>')
@@ -211,6 +260,10 @@ var createValue = {
             n.append(field)
           }
           
+        }
+        if (editable) {
+          n.append(getAddButton(obj[key], cls, false, indent).css('margin-left',(indent * 10)))
+          n.append('<div class="spacer"></div>')
         }
         n.append('<span style="padding-left:'+((indent - 1) * 10)+'px" class="object-type">}</span>')
         $('div.'+cls).width(largestWidth('div.'+cls))
@@ -313,7 +366,8 @@ request({url:url}, function (err, resp) {
   }
 
   $('div.doc-key-base').width(largestWidth('div.doc-key-base'))
-  d.append('<div class="add-button" />')
+  
+  d.append(getAddButton(_doc, 'doc-key-base', false))
 }) 
 // end of loadDocument  
 }
