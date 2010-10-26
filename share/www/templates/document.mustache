@@ -1,3 +1,15 @@
+<div id="content">
+  <ul id="toolbar">
+    <li><button class="add">Add Field</button></li>
+    <li><button class="load">Upload Attachment…</button></li>
+    <li><button class="delete">Delete Document…</button></li>
+  </ul>
+
+  <div id="document-editor">
+    
+  </div>
+</div>
+
 <script>
 app.loadDocument = function ()  {
 
@@ -107,10 +119,10 @@ var createValue = {
           n.html('')
           n.append('<span style="padding-left:'+((indent - 1) * 10)+'px" class="array-type">[</span>')
           for (i in obj[key]) {
-
             n.append(
               $('<div class="doc-field">' +
-                  '<div class="array-key '+cls+'" style="padding-left:'+(indent * 10)+'px">'+i+'</div>' +
+                  '<div class="delete-button" style="margin-left:'+(indent * 10)+'px" />' +
+                  '<div class="array-key '+cls+'" >'+i+'</div>' +
                 '</div>'
                 )
                 .append(createValue[getType(obj[key][i])](obj[key], i, true, false, indent + 1))
@@ -287,16 +299,3 @@ request({url:url}, function (err, resp) {
 // end of loadDocument  
 }
 </script>
-
-<div id="content">
-  <ul id="toolbar">
-    <li><button class="add">Add Field</button></li>
-    <li><button class="load">Upload Attachment…</button></li>
-    <li><button class="delete">Delete Document…</button></li>
-  </ul>
-
-  <div id="document-editor">
-    
-  </div>
-</div>
-
