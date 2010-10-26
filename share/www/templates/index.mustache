@@ -1,3 +1,28 @@
+<ul id="toolbar">
+  <li><button class="add">Create Database …</button></li>
+</ul>
+
+<table class="listing" id="databases" cellspacing="0">
+  <caption>Databases</caption>
+  <thead>
+    <tr>
+      <th class="key"><strong>Name</strong></th>
+      <th class="size"><strong>Size</strong></th>
+      <th class="count"><strong>Number of Documents</strong></th>
+      <th class="seq"><strong>Update Seq</strong></th>
+    </tr>
+  </thead>
+  <tbody class="content">
+    
+  </tbody>
+  <tbody class="footer">
+    <tr>
+      <td class="more" colspan="5">
+      </td>
+    </tr>
+  </tbody>
+</table>
+
 <script>
 app.loadIndex = function () {
   $('span#topbar').html('<strong>Overview</strong>');
@@ -37,28 +62,3 @@ app.loadIndex = function () {
   })
 }
 </script>
-
-<ul id="toolbar">
-  <li><button class="add">Create Database …</button></li>
-</ul>
-
-<table class="listing" id="databases" cellspacing="0">
-  <caption>Databases</caption>
-  <thead>
-    <tr>
-      <th class="key"><strong>Name</strong></th>
-      <th class="size"><strong>Size</strong></th>
-      <th class="count"><strong>Number of Documents</strong></th>
-      <th class="seq"><strong>Update Seq</strong></th>
-    </tr>
-  </thead>
-  <tbody class="content">
-    
-  </tbody>
-  <tbody class="footer">
-    <tr>
-      <td class="more" colspan="5">
-      </td>
-    </tr>
-  </tbody>
-</table>
