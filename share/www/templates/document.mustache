@@ -86,6 +86,7 @@ var getAddButton = function (obj, keyClass, array, indent) {
             var p = $(this).parent();
             request({url:url, type:'PUT', data:_doc}, function (err, resp) {
               _doc._rev = resp.rev;
+              $("div.doc-key:exactly('_rev')").next().html(createValue.string(_doc, '_rev', false));
               p.remove();
               var newField = $('<div class="doc-field"></div>')
               .append('<div class="delete-button" style="margin-left:'+(indent * 10)+'px"/>')
@@ -185,6 +186,7 @@ var createValue = {
                       if (err) console.log(err)
                       else {
                         _doc._rev = resp.rev;
+                        $("div.doc-key:exactly('_rev')").next().html(createValue.string(_doc, '_rev', false));
                         entry.parent().find('div.array-key').each(function (ii, e) {
                           e = $(e)
                           var ind = parseInt(e.text());
