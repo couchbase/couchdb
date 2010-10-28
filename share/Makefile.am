@@ -38,11 +38,6 @@ nobase_localdata_SCRIPTS = \
     $(JS_FILE)
 
 nobase_dist_localdata_DATA = \
-    www/config.html \
-    www/couch_tests.html \
-    www/custom_test.html \
-    www/database.html \
-    www/session.html \
     www/dialog/_admin_party.html \
     www/dialog/_compact_cleanup.html \
     www/dialog/_create_admin.html \
@@ -56,7 +51,6 @@ nobase_dist_localdata_DATA = \
     www/dialog/_share_test_reports.html \
     www/dialog/_save_view_as.html \
     www/dialog/_upload_attachment.html \
-    www/document.html \
     www/favicon.ico \
     www/futon.js \
     www/image/add.png \
@@ -90,7 +84,6 @@ nobase_dist_localdata_DATA = \
     www/image/toggle-expand.gif \
     www/image/twisty.gif \
     www/index.html \
-    www/replicator.html \
     www/sammy/sammy.js \
     www/sammy/plugins/sammy.cache.js \
     www/sammy/plugins/sammy.data_location_proxy.js \
@@ -205,7 +198,6 @@ nobase_dist_localdata_DATA = \
     www/spec/jquery_couch_js_instance_methods_2_spec.js \
     www/spec/jquery_couch_js_instance_methods_3_spec.js \
     www/spec/run.html \
-    www/status.html \
     www/style/layout.css \
     www/style/sammy.css \
     www/templates/changes.mustache \

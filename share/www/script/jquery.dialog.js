@@ -40,7 +40,7 @@
       }
     }
     overlay.appendTo(document.body).fadeTo(100, 0.6);
-    dialog.appendTo(document.body).addClass("loading").centerBox().fadeIn(400);
+    dialog.appendTo(document.body).centerBox().fadeIn(400);
 
     $(document).keydown(function(e) {
       if (e.keyCode == 27) dismiss(); // dismiss on escape key
@@ -61,7 +61,7 @@
 
     $.get(url, function(html) {
       $(html).appendTo(dialog);
-      dialog.removeClass("loading").addClass("loaded").centerBox().each(function() {
+      dialog.centerBox().each(function() {
         options.load(dialog.children()[0]);
         $(":input:first", dialog).each(function() { this.focus() });
         $("button.cancel", dialog).click(function() { // dismiss on cancel

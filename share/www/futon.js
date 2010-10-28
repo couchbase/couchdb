@@ -36,6 +36,25 @@ var getQuery = function () {
   return r;
 }
 
+function getType (obj) {
+  if (obj === null) return 'null'
+  if (typeof obj === 'object') {
+    if (obj.constructor.toString().indexOf("Array") !== -1) return 'array'
+    else return 'object'
+  } else {return typeof obj}
+}
+
+function largestWidth (selector) {
+  var min_width = 0;
+  $(selector).each(function(i, n){
+      var this_width = $(n).width();
+      if (this_width > min_width) {
+          min_width = this_width;
+      }
+  });
+  return min_width;
+}
+
 var param = function( a ) {
   // Query param builder from jQuery, had to copy out to remove conversion of spaces to +
 	var s = [];
@@ -82,215 +101,13 @@ var request = function (options, callback) {
     if (err) callback(err);
     else callback(true);
   }
+  if (options.data && typeof options.data == 'object') {
+    options.data = JSON.stringify(options.data)
+  }
+  options.processData = false;
   options.dataType = 'json';
+  options.contentType = 'application/json'
   $.ajax(options)
-}
-  
-app.index = function () {
-  $('span#topbar').html('<strong>Overview</strong>');
-  $("#toolbar button.add").click($.futon.dialogs.createDatabase);
-  var dbRow = function (name, even) {
-    var row = $('<tr id=db-"'+name+'"><th><a href="#/'+name+'">'+name+'</a></th></tr>');
-    
-    row.addClass(even ? "even" : "odd")    
-    row.appendTo('tbody.content');
-    request({url: '/'+encodeURIComponent(name)}, function ( err, info ) {
-      if (err) info = { disk_size:"can't connect", doc_count:"can't connect"
-                      , update_seq:"can't connect"};
-      row.append('<td class="size">'+formatSize(info.disk_size)+'</td>' +
-                  '<td class="count">'+info.doc_count+'</td>' + 
-                  '<td class="seq">'+info.update_seq+'</td>'
-                  );
-    });
-  }
-  
-  request({url: '/_all_dbs'}, function (err, dbs) {
-    if (err) $('tbody.content').append('<tr><td>error</td><td>error</td><td>error</td></tr>');
-    else {
-      var moreRows = function (start, limit) {
-        for (var i=start;i<(start + limit);i+=1) { 
-           if (dbs[i]) dbRow(dbs[i], isEven(i));
-           else {$('div#pagination').remove(); return;}
-        }
-        $('span.more').unbind('click');
-        $('span.more').click(function ( ) { moreRows(i, parseInt($('#pages-input').val())) })
-      }
-      if (dbs.length > 20) {
-        var pagination = '<div id="pagination"><span class="more">Load </span><input type="text" id="pages-input" value=20></input><span class="more"> More Items</span></div>'
-         $('td.more').append(pagination);
-      }
-      moreRows(0, 20);
-    }
-  })
-
-}
-app.showDatabase = function () {
-  var db = this.params['db']
-    , query = getQuery()
-    ;
-  
-  var init = function () {
-    $('span#topbar').html('<a href="#/">Overview</a><strong>'+db+'</strong>');
-    $("#toolbar button.add").click( function () { 
-      $("div#content").html('');
-      request({url:'/_uuids'}, function (err, resp) {
-        location.hash = '#/' + db + '/' + resp.uuids[0]
-      })
-      // location.hash = "#/" + db + '/_new';
-    });
-    $("#toolbar button.compact").click(function () { 
-      $.futon.dialogs.compactAndCleanup(db)
-    });
-    $("#toolbar button.delete").click(function (){$.futon.dialogs.deleteDatabase(db)});
-    // $("#toolbar button.security").click(page.databaseSecurity); TODO : New security UI
-    
-    var addquery = function () {
-      // This function adds the _all_docs startkey/endkey query options
-      $('select.dbquery-select').before(
-        '<div class="alldoc-query">' + 
-          '<span class="query-option">end<input class="query-option" id="end" type="text"></input></span>' +
-          '<span class="query-option">start<input class="query-option" id="start" type="text"></input></span>' +
-        '</div>'
-      );
-      $('input.query-option').change(function () {
-        var startkey = $('input#start').val()
-          , endkey = $('input#end').val()
-          ;
-        // Check if the keys are properly json encoded as strings, if not do it 
-        if (startkey[0] !== '"' && startkey.length !== 0) startkey = '"'+startkey+'"'
-        if (endkey[0] !== '"' && endkey.length !== 0) endkey = '"'+endkey+'"'
-        // Craft query
-        h = '#/'+db+'/_all_docs?';
-        if (startkey.length > 0) h += ('startkey='+escape(startkey) + '&');
-        if (endkey.length > 0) h += ( 'endkey='+escape(endkey) + '&');
-        window.location.hash = h;
-      });
-    }
-
-    request({url: '/'+encodeURIComponent(db)}, function (err, info) {
-      // Fill out all info from the db query.
-      for (i in info) {$('div#'+i).text(info[i])}
-      var disk_size = info.disk_size;
-      $('div#disk_size').text(formatSize(info.disk_size))
-      
-      // Query for ddocs to calculate size
-      request({url:'/'+encodeURIComponent(db)+'/_all_docs?startkey="_design/"&endkey="_design0"'}, function (err, docs) {
-        var sizes = [];
-        for (var i=0;i<docs.rows.length;i+=1) {
-          // Query every db for it's size info
-          // Note: because of a current bug this query sometimes causes a view update even with stale=ok
-          request({url:'/'+encodeURIComponent(db)+'/'+docs.rows[i].id+'/_info?stale=ok'}, function (err, info) {
-            if (err) throw err
-            sizes.push(info.view_index.disk_size);
-            if (sizes.length === docs.rows.length) {
-              // All queries are finished, update size info
-              var s = sum(sizes)
-              $('div#views_size').text(formatSize(s));
-              $('div#full_size').text(formatSize(s + disk_size));
-            }
-          })
-        }
-        if (docs.rows.length === 0) {
-          // There are no design documents, db size is full size
-          $('div#views_size').text(formatSize(0));
-          $('div#full_size').text(formatSize(disk_size));
-        }
-      })
-    })
-
-    $('select.dbquery-select').change(function (e) {
-      if (e.target.value === 'all') {
-        // All Documents selected, bounce back to dburl
-        $('div.alldoc-query').remove();
-        if (query) {window.location.hash = '#/'+db}
-      } else if (e.target.value === 'ddocs') {
-        // Design doc was selected, pop out query and fill with ddoc query
-        $('div.alldoc-query').remove();
-        addquery();
-        $('input#start').val('_design/');
-        $('input#end').val('_design0').change();
-      } else if (e.target.value === 'query') {
-        // Query selected, pop out query options
-        $('div.alldoc-query').remove();
-        addquery();
-      }
-    })
-    if (query) {
-      if (query.startkey || query.endkey) {
-        // There is an open all docs query, pop out query options and fill in with current query
-        $('option[value=all]').attr('selected', false);
-        $('option[value=query]').attr('selected', true).change();
-        $('input#start').val(query.startkey ? query.startkey : '');
-        $('input#end').val(query.endkey ? query.endkey : '');
-      }
-    }
-  } 
-  
-  var rowCount = 0;
-  var moreRows = function (start, limit) {
-    // This function adds more rows to the current document table
-    if (query) {
-      query.limit = limit
-      query.skip = start
-    } else {
-      query = {limit:limit, skip:start}
-    }
-    request({url: '/'+encodeURIComponent(db)+'/_all_docs?'+param(query)}, function (err, resp) {
-      if (err) throw err;
-      for (var i=0;i<resp.rows.length;i+=1) {
-        row = $('<tr><td><a href="#/'+db+'/'+resp.rows[i].key+'">'+resp.rows[i].key+'</a></td><td>' +
-                 resp.rows[i].value.rev+'</td></tr>'
-               )
-               // rowCount currently breaks on odd pagination values
-               .addClass(isEven(rowCount) ? "even" : "odd")
-               .appendTo('tbody.content')
-               ;
-        rowCount += 1;
-     }
-     if (!$('span.more').length && (resp.rows.length == limit) ) {
-       // The number of rows is less than the limit and we haven't added the pagination element yet 
-       $('td.more').append('<div id="pagination"><span class="more">Load </span><input type="text" id="pages-input" value='+limit+'></input><span class="more"> More Items</span></div>');
-     } else if ( resp.rows.length < limit ) {
-       // If the return rows are less than the limit we can remove pagination
-       $('div#pagination').remove()
-     }
-     // Remove the previous pagination handler and add a new one with the new closure values
-     $('span.more').unbind('click');
-     $('span.more').click(function ( ) { moreRows(start + limit, parseInt($('#pages-input').val())) });
-   })
-  }
-  
-  // Decide whether or not to load the template content
-  if ( $('table#documents').length === 0) {    
-    this.render('templates/database.mustache', {db:db})
-      .replace('#content')
-      .then(function () {init(); moreRows(0,20);})
-      
-  } else {
-    // If the template content is already there, remove the current content
-    $('tr.even').remove();
-    $('tr.odd').remove();
-    moreRows(0, 20);
-  }
-}
-
-function getType (obj) {
-  if (obj === null) return 'null'
-  if (typeof obj === 'object') {
-    if (obj.length) return 'array'
-    else return 'object'
-  } else {return typeof obj}
-}
-
-function largestWidth (selector) {
-  var min_width = 0;
-  $(selector).each(function(i, n){
-      var this_width = $(n).width();
-      if (this_width > min_width) {
-          min_width = this_width;
-      }
-  });
-  return min_width;
 }
 
 $.expr[":"].exactly = function(obj, index, meta, stack){ 
@@ -299,6 +116,8 @@ $.expr[":"].exactly = function(obj, index, meta, stack){
 
 function coerceFieldValue (val) {
   if (val == 'null') return null;
+  if (val == 'true') return true;
+  if (val == 'false') return false;
   
   if (val.indexOf('.') !== -1) {
     if (!isNaN(parseFloat(val))) return parseFloat(val)
@@ -319,213 +138,32 @@ function coerceFieldValue (val) {
   }
 }
 
-app.showDocument = function () {
-  var db = this.params['db']
-    , docid = this.params['docid']
-    , _doc
-    , url = '/' + db + '/' + docid
+app.showIndex = function () {
+  var t = this
+    , a = arguments
     ;
-  $('span#topbar').html('<a href="#/">Overview</a><a href="#/'+db+'">'+db+'</a><strong>'+docid+'</strong>'); 
-  
-  var getEdit = function (obj, key, val, minWidth) {
-    var edit = function () {
-      $(this).find('span.expand').click();
-      var w = $(this).width();
-      if (w < minWidth) {
-        w = minWidth;
-      }
-      val.html('')
-      val.html(
-        $('<input type="text" />')
-        .val(JSON.stringify(obj[key]))
-        .width(w)
-        .change(function () {
-          obj[key] = coerceFieldValue($(this).val());
-          request({url:url, type:'PUT', data:JSON.stringify(_doc), processData:false}, function (err, newresp) {
-            if (err) console.log(err)
-            _doc._rev = newresp.rev;
-            $("div.doc-key:exactly('_rev')").next().html(createValue.string(_doc, '_rev'));
-            val.parent().append(createValue[getType(obj[key])](obj, key));
-            val.remove();
-          })
-        })
-      )
-    }
-    return edit;
-  }
-  
-  var createValue = {
-    "string": function (obj, key) {
-      var val = $('<div class="doc-value string-type"></div>')
-        , edit = getEdit(obj, key, val, 350)
-        ;
-      if (obj[key].length > 45) {
-        val.append($('<span class="string-type">'+obj[key].slice(0, 45)+'</span>').click(edit))
-        val.append(
-          $('<span class="expand">...</span>')
-          .click(function () {
-            val.html('')
-            val.append('<span class="string-type">'+obj[key]+'</span>')
-          })
-        )
-      }
-      else {
-        var val = $('<div class="doc-value string-type"></div>')
-          , edit = getEdit(obj, key, val, 350)
-          ;
-        val.append(
-          $('<span class="string-type">' + obj[key] + '</span>')
-          .click(edit)
-        )
-      }
-      return val;
-    }
-    , "number": function (obj, key) {
-      var val = $('<div class="doc-value number"></div>')
-      val.append($('<span class="number-type">' + obj[key] + '</span>').click(getEdit(obj, key, val, 100)))
-      return val;
-    }
-    , "null": function (obj, key) {
-      var val = $('<div class="doc-value null"></div>')
-      val.append($('<span class="null-type">' + obj[key] + '</span>').click(getEdit(obj, key, val,100)))
-      return val;
-    }
-    , "array": function (obj, key, indent) {
-       if (!indent) indent = 1;
-        var val = $('<div class="doc-value array"></div>')
-        $('<span class="array-type">[</span><span class="expand" style="float:left">...</span><span class="array-type">]</span>')
-          .click(function (i, n) {
-            var n = $(this).parent();
-            var cls = 'sub-'+key+'-'+indent
-            n.html('')
-            n.append('<span style="padding-left:'+((indent - 1) * 10)+'px" class="array-type">[</span>')
-            for (i in obj[key]) {
+  this.render('templates/index.mustache').replace('#content').then(function () {
+    app.loadIndex.apply(t, a)
+  });
+}
 
-              n.append(
-                $('<div class="doc-field">' +
-                    '<div class="array-key '+cls+'" style="padding-left:'+(indent * 10)+'px">'+i+'</div>' +
-                  '</div>'
-                  )
-                  .append(createValue[getType(obj[key][i])](obj[key], i, indent + 1))
-                )
-            }
-            n.append('<span style="padding-left:'+((indent - 1) * 10)+'px" class="array-type">]</span>')
-            $('div.'+cls).width(largestWidth('div.'+cls))
-          })
-          .appendTo($('<div class="array-type"></div>').appendTo(val))
-        return val;
-    }
-    , "object": function (obj, key, indent) {
-      if (!indent) indent = 1;
-      var val = $('<div class="doc-value object"></div>')
-      $('<span class="object-type">{</span><span class="expand" style="float:left">...</span><span class="object-type">}</span>')
-        .click(function (i, n) {
-          var n = $(this).parent();
-          var cls = 'sub-'+key+'-'+indent
-          n.html('')
-          n.append('<span style="padding-left:'+((indent - 1) * 10)+'px" class="object-type">{</span>')
-          for (i in obj[key]) {
-            // n.append('<br>')
-            // n.append('<div class="spacer" />');
-            var field = $('<div class="doc-field"></div>')
-            field.append($('<div class="delete-button" style="margin-left:'+(indent * 10)+'px"/>').click((function (field, i) {
-                return function () {
-                  delete obj[key][i]
-                  request({url:url, type:'PUT', data:JSON.stringify(_doc), processData:false}, function (err, newresp) {
-                    if (err) console.log(err);
-                    else {
-                      _doc._rev = newresp.rev;
-                      $("div.doc-key:exactly('_rev')").next().html(createValue.string(_doc, '_rev'));
-                      field.remove();
-                    }
-                  })
-                }
-              })(field, i))
-              )
-              .append('<div class="object-key '+cls+'" >'+i+'</div>')
-              .append(createValue[getType(obj[key][i])](obj[key], i, indent + 1))
-            n.append(field)
-          }
-          n.append('<span style="padding-left:'+((indent - 1) * 10)+'px" class="object-type">}</span>')
-          $('div.'+cls).width(largestWidth('div.'+cls))
-        })
-        .appendTo($('<div class="object-type"></div>').appendTo(val))
-      return val;
-    }
-  }
-  
-  this.render('templates/document.mustache', {db:db,docid:docid}).replace('#content').then(function () {
-    request({url:url}, function (err, resp) {
-      var setRev = false;
-      _doc = resp;
-      
-      if (err) console.log(err)
-      else {
-        var d = $('div#document-editor');
-        for (i in resp) {
-          var field = $('<div class="doc-field"></div>')
-          $('<div class="delete-button" />').click((function (field, i) {
-            return function () {
-              delete _doc[i]
-              request({url:url, type:'PUT', data:JSON.stringify(_doc), processData:false}, function (err, newresp) {
-                if (err) console.log(err);
-                else {
-                  _doc._rev = newresp.rev;
-                  $("div.doc-key:exactly('_rev')").next().html(createValue.string(_doc, '_rev'));
-                  field.remove();
-                }
-              })
-            }
-          })(field, i))
-          .appendTo(field)
-          field.append('<div class="doc-key doc-key-base">'+i+'</div>')
-          field.append(createValue[getType(resp[i])](resp, i))
-          d.append(field)
-        }
-      }
-      // $("div#document-editor").click(function (e) {
-      //   var n = $(e.target)
-      //   if (n.hasClass('delete-button')) {
-      //     console.log('sadf')
-      //   }
-      // })
-      // document.getElementById("").addEventListener("click", function () {
-      //   
-      // });
-      $('div.doc-key-base').width(largestWidth('div.doc-key-base'))
-    })  
+app.showDocument = function () {
+  var t = this
+    , a = arguments
+    ;
+  this.render('templates/document.mustache', this.params).replace('#content').then(function () {
+    app.loadDocument.apply(t, a);
   })
 }
 
 app.showChanges = function () {
-  var db = this.params['db'];
+  var db = this.params['db']
+    , t = this
+    , a = arguments
+    ;
   $('span#topbar').html('<a href="#/">Overview</a><a href="#/'+db+'">'+db+'</a><strong>_changes</strong>');  
   this.render('templates/changes.mustache').replace('#content').then(function () {
-    var query = getQuery()
-      , url = '/'+db+'/_changes'
-    if (query) url += ('?' + param(query));
-    var rowCount = 0;
-    request({url:url}, function (err, resp) {
-      // Render the response in 10 row chunks for efficiency
-      var pending = []
-        , renderPending = function () {$('table#changes').append(pending.join('')); pending = [];}
-        , c , changes, baseUrl = '#/'+db+'/'
-        ;
-      for (var i=0;i<resp.results.length;i+=1) {
-        c = resp.results[i]; 
-        changes = []
-        $.each(c.changes, function (x, change) {
-          changes.push(change.rev);
-        })
-        pending.push('<tr class="'+(isEven(rowCount) ? "even" : "odd")+'">' + 
-                       '<td><a href="'+baseUrl+'_changes?since='+(c.seq-1)+'">'+c.seq+'</td>'+
-                       '<td><a href="'+baseUrl+c.id+'">'+c.id+'</a><td>['+changes.join(', ')+']</td></tr>'
-                    )
-        if (pending.length > 10) renderPending();
-        rowCount += 1;
-      }
-      renderPending()
-    })
+    app.loadChanges.apply(t, a)
   })
 }
 
@@ -539,29 +177,7 @@ app.showConfig = function () {
 app.showStats = function () {
   $('span#topbar').html('<strong>Status</strong>');
   this.render('templates/stats.mustache').replace('#content').then(function () {
-    request({url:'/_stats'}, function (err, stats) {
-      var info = $('#content').append('<h2>Raw Info</h2>')
-        , text = ''
-        ;
-      for (i in stats) {
-        text += '<div class="stat-section">'+i+'</div>'
-        for (x in stats[i]) {
-          text += '<div class="stat-subsection">'+x+'<span class="stat-subsection-description">'+stats[i][x].description+'</span></div>'
-          for (y in stats[i][x]) {
-            if (y !== 'description') {
-              text += '<span class="stat-title">'+y+'</span>'
-              text += '<span class="stat-value"> ' + 
-                ((stats[i][x][y] === null) ? 'none' : stats[i][x][y]) + 
-                ' </span>'
-            }
-          }
-          text += '<br>'
-        }
-        text += '<br>'
-        info.append(text)
-        text = ''
-      }
-    })
+    
   })
 }
 
@@ -660,8 +276,6 @@ app.showView = function () {
         })
       })
     } 
-    
-    
     
     var updateResults = function () {
       var c = $('tbody.content')
@@ -807,14 +421,173 @@ app.showView = function () {
   } else {setupViews();}
 }
 
-var a = $.sammy(function () {
+app.showDatabase = function () {
+  var db = this.params['db']
+    , query = getQuery()
+    ;
   
-  var indexRoute = function () {
-    this.render('templates/index.mustache').replace('#content').then(app.index);
+  var init = function () {
+    $('span#topbar').html('<a href="#/">Overview</a><strong>'+db+'</strong>');
+    $("#toolbar button.add").click( function () { 
+      $("div#content").html('');
+      request({url:'/_uuids'}, function (err, resp) {
+        location.hash = '#/' + db + '/' + resp.uuids[0]
+      })
+      // location.hash = "#/" + db + '/_new';
+    });
+    $("#toolbar button.compact").click(function () { 
+      $.futon.dialogs.compactAndCleanup(db)
+    });
+    $("#toolbar button.delete").click(function (){$.futon.dialogs.deleteDatabase(db)});
+    // $("#toolbar button.security").click(page.databaseSecurity); TODO : New security UI
+    
+    // JumpToDoc
+    $('input#jumptodoc').change(function () {
+      window.location.hash = '#/' + db + '/' + $(this).val();
+    })
+    
+    var addquery = function () {
+      // This function adds the _all_docs startkey/endkey query options
+      $('select.dbquery-select').before(
+        '<div class="alldoc-query">' + 
+          '<span class="query-option">end<input class="query-option" id="end" type="text"></input></span>' +
+          '<span class="query-option">start<input class="query-option" id="start" type="text"></input></span>' +
+        '</div>'
+      );
+      $('input.query-option').change(function () {
+        var startkey = $('input#start').val()
+          , endkey = $('input#end').val()
+          ;
+        // Check if the keys are properly json encoded as strings, if not do it 
+        if (startkey[0] !== '"' && startkey.length !== 0) startkey = '"'+startkey+'"'
+        if (endkey[0] !== '"' && endkey.length !== 0) endkey = '"'+endkey+'"'
+        // Craft query
+        h = '#/'+db+'/_all_docs?';
+        if (startkey.length > 0) h += ('startkey='+escape(startkey) + '&');
+        if (endkey.length > 0) h += ( 'endkey='+escape(endkey) + '&');
+        window.location.hash = h;
+      });
+    }
+
+    request({url: '/'+encodeURIComponent(db)}, function (err, info) {
+      // Fill out all info from the db query.
+      for (i in info) {$('div#'+i).text(info[i])}
+      var disk_size = info.disk_size;
+      $('div#disk_size').text(formatSize(info.disk_size))
+      
+      // Query for ddocs to calculate size
+      request({url:'/'+encodeURIComponent(db)+'/_all_docs?startkey="_design/"&endkey="_design0"'}, function (err, docs) {
+        var sizes = [];
+        for (var i=0;i<docs.rows.length;i+=1) {
+          // Query every db for it's size info
+          // Note: because of a current bug this query sometimes causes a view update even with stale=ok
+          request({url:'/'+encodeURIComponent(db)+'/'+docs.rows[i].id+'/_info?stale=ok'}, function (err, info) {
+            if (err) throw err
+            sizes.push(info.view_index.disk_size);
+            if (sizes.length === docs.rows.length) {
+              // All queries are finished, update size info
+              var s = sum(sizes)
+              $('div#views_size').text(formatSize(s));
+              $('div#full_size').text(formatSize(s + disk_size));
+            }
+          })
+        }
+        if (docs.rows.length === 0) {
+          // There are no design documents, db size is full size
+          $('div#views_size').text(formatSize(0));
+          $('div#full_size').text(formatSize(disk_size));
+        }
+      })
+    })
+
+    $('select.dbquery-select').change(function (e) {
+      if (e.target.value === 'all') {
+        // All Documents selected, bounce back to dburl
+        $('div.alldoc-query').remove();
+        if (query) {window.location.hash = '#/'+db}
+      } else if (e.target.value === 'ddocs') {
+        // Design doc was selected, pop out query and fill with ddoc query
+        $('div.alldoc-query').remove();
+        addquery();
+        $('input#start').val('_design/');
+        $('input#end').val('_design0').change();
+      } else if (e.target.value === 'query') {
+        // Query selected, pop out query options
+        $('div.alldoc-query').remove();
+        addquery();
+      }
+    })
+    if (query) {
+      if (query.startkey || query.endkey) {
+        // There is an open all docs query, pop out query options and fill in with current query
+        $('option[value=all]').attr('selected', false);
+        $('option[value=query]').attr('selected', true).change();
+        $('input#start').val(query.startkey ? query.startkey : '');
+        $('input#end').val(query.endkey ? query.endkey : '');
+      }
+    }
+  } 
+  
+  var rowCount = 0;
+  var moreRows = function (start, limit) {
+    // This function adds more rows to the current document table
+    if (query) {
+      query.limit = limit
+      query.skip = start
+    } else {
+      query = {limit:limit, skip:start}
+    }
+    request({url: '/'+encodeURIComponent(db)+'/_all_docs?'+param(query)}, function (err, resp) {
+      if (err) throw err;
+      for (var i=0;i<resp.rows.length;i+=1) {
+        row = $('<tr><td><a href="#/'+db+'/'+resp.rows[i].key+'">'+resp.rows[i].key+'</a></td><td>' +
+                 resp.rows[i].value.rev+'</td></tr>'
+               )
+               // rowCount currently breaks on odd pagination values
+               .addClass(isEven(rowCount) ? "even" : "odd")
+               .appendTo('tbody.content')
+               ;
+        rowCount += 1;
+     }
+     if (!$('span.more').length && (resp.rows.length == limit) ) {
+       // The number of rows is less than the limit and we haven't added the pagination element yet 
+       $('td.more').append('<div id="pagination"><span class="more">Load </span><input type="text" id="pages-input" value='+limit+'></input><span class="more"> More Items</span></div>');
+     } else if ( resp.rows.length < limit ) {
+       // If the return rows are less than the limit we can remove pagination
+       $('div#pagination').remove()
+     }
+     // Remove the previous pagination handler and add a new one with the new closure values
+     $('span.more').unbind('click');
+     $('span.more').click(function ( ) { moreRows(start + limit, parseInt($('#pages-input').val())) });
+   })
   }
+  
+  // Decide whether or not to load the template content
+  if ( $('table#documents').length === 0) {    
+    this.render('templates/database.mustache', {db:db})
+      .replace('#content')
+      .then(function () {init(); moreRows(0,20);})
+      
+  } else {
+    // If the template content is already there, remove the current content
+    $('tr.even').remove();
+    $('tr.odd').remove();
+    moreRows(0, 20);
+  }
+}
+
+app.wildcard = function () {
+  var args = this.path.split('/');
+  args.splice(0,1);
+  this.params.db = args.splice(0,1);
+  this.params.docid = args.join('/')
+  app.showDocument.call(this, arguments)
+}
+
+var a = $.sammy(function () {
   // Index of all databases
-  this.get('', indexRoute);
-  this.get("#/", indexRoute);
+  this.get('', app.showIndex);
+  this.get("#/", app.showIndex);
   
   this.get('#/_config', app.showConfig);
   this.get('#/_stats', app.showStats);
@@ -834,6 +607,8 @@ var a = $.sammy(function () {
   this.get('#/:db/_views', app.showViews);
   // Document editor/viewer
   this.get('#/:db/:docid', app.showDocument);
+  
+  this.get(/\#\/(*)/, app.wildcard)
 })
 
 $(function () {
