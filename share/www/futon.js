@@ -608,7 +608,7 @@ var a = $.sammy(function () {
   // Document editor/viewer
   this.get('#/:db/:docid', app.showDocument);
   
-  this.get(/\#\/(*)/, app.wildcard)
+  this.get(/\#\/(.*)/, app.wildcard)
 })
 
 $(function () {
