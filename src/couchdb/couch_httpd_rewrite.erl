@@ -106,6 +106,12 @@
 %% {"from": "/a",           /a?foo=b        /some/b             foo =:= b
 %% "to": "/some/:foo",
 %%  }}
+%%
+%% {"from": "/a/:foo/<b>c<d>ef/g<h>.ijk",     /a/b             /some/?k=b&foo=b    foo =:= b
+%% "to": "/some/<b>/someview?startkey=["<foo>",["<h>",<d>]]"}
+%%                          /a/somefoo/BOBc666ef/ghorror.ijk	
+%%                                           /some/BOB/someview?startkey=["somefoo",["horror",666]]
+%%
 
 
 
@@ -201,6 +207,14 @@ try_bind_path([Dispatch|Rest], Method, PathParts, QueryList) ->
                     Bindings1 = Bindings ++ QueryList,
                     % we parse query args from the rule and fill
                     % it eventually with bindings vars
+
+                    % Bindings1 could be a list of lists, 
+                    % if there are several vars within one Path Part,
+                    % so we need to flatten it 
+                    BindingsFlattened = lists:flatten(Bindings1),
+                    QueryArgs1 = make_query_list(QueryArgs, BindingsFlattened, []),
+
+
                     QueryArgs1 = make_query_list(QueryArgs, Bindings1, []),
                     % remove params in QueryLists1 that are already in
                     % QueryArgs1
@@ -211,7 +225,7 @@ try_bind_path([Dispatch|Rest], Method, PathParts, QueryList) ->
                             _V1 -> []
                         end,
                         Acc ++ KV
-                    end, [], Bindings1),
+                    end, [], BindingsFlattened),
 
                     FinalBindings = Bindings2 ++ QueryArgs1,
                     NewPathParts = make_new_path(RedirectPath, FinalBindings,
@@ -290,10 +304,21 @@ make_new_path([?MATCH_ALL|_Rest], _Bindings, Remaining, Acc) ->
     Acc1 = lists:reverse(Acc) ++ Remaining,
     Acc1;
 make_new_path([{bind, P}|Rest], Bindings, Remaining, Acc) ->
-    P2 = case couch_util:get_value({bind, P}, Bindings) of
-        undefined -> << "undefined">>;
-        P1 -> P1
+
+    P2 = case P of
+        {FlatVars, _MatchCompiled, PathPart} ->
+           lists:foldl(
+                      fun(VarName,PP) -> 
+                         re:replace(PP, "<"++binary_to_list(VarName)++">", couch_util:get_value({bind, VarName}, Bindings), [{return, binary}]) 
+                      end, 
+                      PathPart, 
+                      FlatVars);
+        _-> case couch_util:get_value({bind, P}, Bindings) of
+               undefined -> << "undefined">>;
+               P1 -> P1
+            end
     end,
+	
     make_new_path(Rest, Bindings, Remaining, [P2|Acc]);
 make_new_path([P|Rest], Bindings, Remaining, Acc) ->
     make_new_path(Rest, Bindings, Remaining, [P|Acc]).
@@ -319,6 +344,15 @@ bind_path([?MATCH_ALL], Rest, Bindings) when is_list(Rest) ->
     {ok, Rest, Bindings};
 bind_path(_, [], _) ->
     fail;
+
+bind_path([{bind,{Tokens,MatchRe,_PathPart}}|RestToken],[Match|RestMatch],Bindings) ->
+	case re:run(Match, MatchRe,[{capture, all_but_first, binary}]) of
+		{match, Matches} ->	
+			MoreBindings = lists:reverse(lists:zipwith(fun(Token,Match1)-> {{bind, Token}, Match1} end, Tokens, Matches)), 
+		    bind_path(RestToken,RestMatch,[MoreBindings|Bindings]);
+		_-> fail
+	end;
+
 bind_path([{bind, Token}|RestToken],[Match|RestMatch],Bindings) ->
     bind_path(RestToken, RestMatch, [{{bind, Token}, Match}|Bindings]);
 bind_path([Token|RestToken], [Token|RestMatch], Bindings) ->
@@ -394,13 +428,35 @@ path_to_list([<<"..">>|R], Acc, DotDotCount) when DotDotCount == 2 ->
     end;
 path_to_list([<<"..">>|R], Acc, DotDotCount) ->
     path_to_list(R, [<<"..">>|Acc], DotDotCount+1);
+
 path_to_list([P|R], Acc, DotDotCount) ->
-    P1 = case P of
-        <<":", Var/binary>> ->
-            to_binding(Var);
-        _ -> P
-    end,
-    path_to_list(R, [P1|Acc], DotDotCount).
+	VarReString = "<([^<>]+?)>",
+	{ok,VarReCompiled} = re:compile(VarReString),
+	
+	P1 = case P of
+		<<":",Var/binary>> ->
+		     to_binding(Var);
+		_-> case re:run(P,VarReCompiled, [global,{capture,all_but_first, binary}] ) of
+		    {match, Vars}      ->    
+% Vars is a list of lists of vars: {match,[[<<"<v1>">>],[<<"<v2>">>]]} - so we flatten it
+		        FlatVars =  lists:flatten(Vars),
+	
+% -- prepare the match string to be passed on in the bind:
+% -- first, escape anything that may be considered a regex metacharacter
+
+	            Pescaped = the_great_escape([P],["\\", ".", "^", "$", "[", "|", "(", ")", "?", "*", "+", "{"]),
+
+% -- then replace all ( hence the use of "global") the variables within < >	with the universal placeholder 	"(.+?)"
+				MatchString = re:replace(Pescaped, VarReCompiled, "(.+)",[global,{return, binary}]),			
+		        {ok, MatchCompiled} = re:compile(MatchString),	
+		        {bind, {FlatVars, MatchCompiled, P}};  		
+		
+			_->P
+			
+			end
+		end,
+
+		path_to_list(R,[P1|Acc], DotDotCount).
 
 encode_query(Props) ->
     Props1 = lists:foldl(fun ({{bind, K}, V}, Acc) ->
@@ -423,3 +479,11 @@ to_binding(V) ->
 
 to_json(V) ->
     iolist_to_binary(?JSON_ENCODE(V)).
+
+the_great_escape(AllEscaped, []) ->
+	 AllEscaped;
+the_great_escape(StillNeedsEscaping, [EscapeThisNow|EscapeThis]) ->	
+	 MatchString = "[\\" ++ EscapeThisNow ++  "](?=[^>]*?(<.*|$))",
+	 ReplaceWith = "\\\\" ++ EscapeThisNow, 
+	 OneStepCloser = re:replace([StillNeedsEscaping],MatchString,ReplaceWith,[global,{return,list}]),
+	 the_great_escape(OneStepCloser, EscapeThis).
