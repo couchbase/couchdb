@@ -14,8 +14,10 @@
 -include("couch_db.hrl").
 -include("../ibrowse/ibrowse.hrl").
 
--export([db_exists/1, db_exists/2, full_url/1, request/1, redirected_request/2,
-    redirect_url/2, spawn_worker_process/1, spawn_link_worker_process/1]).
+-export([db_exists/1, db_exists/2]).
+-export([full_url/1, request/1, redirected_request/3]).
+-export([spawn_worker_process/1, spawn_link_worker_process/1]).
+-export([ssl_options/1]).
 
 request(#http_db{} = Req) ->
     do_request(Req).
@@ -97,6 +99,9 @@ db_exists(Req, CanonicalUrl, CreateDB) ->
     {ok, "302", RespHeaders, _} ->
         RedirectUrl = redirect_url(RespHeaders, Req#http_db.url),
         db_exists(Req#http_db{url = RedirectUrl}, CanonicalUrl);
+    {ok, "303", RespHeaders, _} ->
+        RedirectUrl = redirect_url(RespHeaders, Req#http_db.url),
+        db_exists(Req#http_db{method = get, url = RedirectUrl}, CanonicalUrl);
     Error ->
         ?LOG_DEBUG("DB at ~s could not be found because ~p", [Url, Error]),
         throw({db_not_found, ?l2b(Url)})
@@ -105,15 +110,18 @@ db_exists(Req, CanonicalUrl, CreateDB) ->
 redirect_url(RespHeaders, OrigUrl) ->
     MochiHeaders = mochiweb_headers:make(RespHeaders),
     RedUrl = mochiweb_headers:get_value("Location", MochiHeaders),
-    {url, _, Base, Port, _, _, Path, Proto} = ibrowse_lib:parse_url(RedUrl),
-    {url, _, _, _, User, Passwd, _, _} = ibrowse_lib:parse_url(OrigUrl),
+    #url{
+        host = Host, port = Port,
+        path = Path, protocol = Proto
+    } = ibrowse_lib:parse_url(RedUrl),
+    #url{username = User, password = Passwd} = ibrowse_lib:parse_url(OrigUrl),
     Creds = case is_list(User) andalso is_list(Passwd) of
     true ->
         User ++ ":" ++ Passwd ++ "@";
     false ->
         []
     end,
-    atom_to_list(Proto) ++ "://" ++ Creds ++ Base ++ ":" ++
+    atom_to_list(Proto) ++ "://" ++ Creds ++ Host ++ ":" ++
         integer_to_list(Port) ++ Path.
 
 full_url(#http_db{url=Url} = Req) when is_binary(Url) ->
@@ -136,9 +144,8 @@ process_response({ok, Status, Headers, Body}, Req) ->
     Code = list_to_integer(Status),
     if Code =:= 200; Code =:= 201 ->
         ?JSON_DECODE(maybe_decompress(Headers, Body));
-    Code =:= 301; Code =:= 302 ->
-        RedirectUrl = redirect_url(Headers, Req#http_db.url),
-        do_request(redirected_request(Req, RedirectUrl));
+    Code =:= 301; Code =:= 302 ; Code =:= 303 ->
+        do_request(redirected_request(Code, Headers, Req));
     Code =:= 409 ->
         throw(conflict);
     Code >= 400, Code < 500 ->
@@ -168,7 +175,7 @@ process_response({error, Reason}, Req) ->
         pause = Pause
     } = Req,
     ShortReason = case Reason of
-    connection_closed ->
+    sel_conn_closed ->
         connection_closed;
     {'EXIT', {noproc, _}} ->
         noproc;
@@ -187,16 +194,26 @@ process_response({error, Reason}, Req) ->
         do_request(Req#http_db{retries = Retries-1, pause = 2*Pause})
     end.
 
-redirected_request(Req, RedirectUrl) ->
+redirected_request(Code, Headers, Req) ->
+    RedirectUrl = redirect_url(Headers, Req#http_db.url),
     {Base, QStr, _} = mochiweb_util:urlsplit_path(RedirectUrl),
     QS = mochiweb_util:parse_qs(QStr),
-    Hdrs = case couch_util:get_value(<<"oauth">>, Req#http_db.auth) of
+    ReqHeaders = case couch_util:get_value(<<"oauth">>, Req#http_db.auth) of
     undefined ->
         Req#http_db.headers;
     _Else ->
         lists:keydelete("Authorization", 1, Req#http_db.headers)
     end,
-    Req#http_db{url=Base, resource="", qs=QS, headers=Hdrs}.
+    Req#http_db{
+        method = case couch_util:to_integer(Code) of
+            303 -> get;
+            _ -> Req#http_db.method
+            end,
+        url = Base,
+        resource = "",
+        qs = QS,
+        headers = ReqHeaders
+    }.
 
 spawn_worker_process(Req) ->
     Url = ibrowse_lib:parse_url(Req#http_db.url),
@@ -243,3 +260,35 @@ oauth_header(Url, QS, Action, Props) ->
     Params = oauth:signed_params(Method, Url, QSL, Consumer, Token, TokenSecret)
         -- QSL,
     {"Authorization", "OAuth " ++ oauth_uri:params_to_header_string(Params)}.
+
+ssl_options(#http_db{url = Url}) ->
+    case ibrowse_lib:parse_url(Url) of
+    #url{protocol = https} ->
+        Depth = list_to_integer(
+            couch_config:get("replicator", "ssl_certificate_max_depth", "3")
+        ),
+        SslOpts = [{depth, Depth} |
+        case couch_config:get("replicator", "verify_ssl_certificates") of
+        "true" ->
+            ssl_verify_options(true);
+        _ ->
+            ssl_verify_options(false)
+        end],
+        [{is_ssl, true}, {ssl_options, SslOpts}];
+    #url{protocol = http} ->
+        []
+    end.
+
+ssl_verify_options(Value) ->
+    ssl_verify_options(Value, erlang:system_info(otp_release)).
+
+ssl_verify_options(true, OTPVersion) when OTPVersion >= "R14" ->
+    CAFile = couch_config:get("replicator", "ssl_trusted_certificates_file"),
+    [{verify, verify_peer}, {cacertfile, CAFile}];
+ssl_verify_options(false, OTPVersion) when OTPVersion >= "R14" ->
+    [{verify, verify_none}];
+ssl_verify_options(true, _OTPVersion) ->
+    CAFile = couch_config:get("replicator", "ssl_trusted_certificates_file"),
+    [{verify, 2}, {cacertfile, CAFile}];
+ssl_verify_options(false, _OTPVersion) ->
+    [{verify, 0}].

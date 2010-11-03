@@ -228,6 +228,7 @@
     def_lang,
     design_options=[],
     views,
+    lib,
     id_btree=nil,
     current_seq=0,
     purge_seq=0,
@@ -237,6 +238,8 @@
 
 -record(view,
     {id_num,
+    update_seq=0,
+    purge_seq=0,
     map_names=[],
     def,
     btree=nil,

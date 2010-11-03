@@ -40,6 +40,7 @@
 
     start_seq,
     history,
+    session_id,
     source_log,
     target_log,
     rep_starttime,
@@ -206,6 +207,7 @@ do_init([RepId, {PostProps} = RepDoc, UserCtx] = InitArgs) ->
 
         start_seq = StartSeq,
         history = History,
+        session_id = couch_uuids:random(),
         source_log = SourceLog,
         target_log = TargetLog,
         rep_starttime = httpd_util:rfc1123_date(),
@@ -486,14 +488,14 @@ make_replication_id({Props}, UserCtx, 2) ->
     Port = mochiweb_socket_server:get(couch_httpd, port),
     Src = get_rep_endpoint(UserCtx, couch_util:get_value(<<"source">>, Props)),
     Tgt = get_rep_endpoint(UserCtx, couch_util:get_value(<<"target">>, Props)),
-    maybe_append_filters({Props}, [HostName, Port, Src, Tgt]);
+    maybe_append_filters({Props}, [HostName, Port, Src, Tgt], UserCtx);
 make_replication_id({Props}, UserCtx, 1) ->
     {ok, HostName} = inet:gethostname(),
     Src = get_rep_endpoint(UserCtx, couch_util:get_value(<<"source">>, Props)),
     Tgt = get_rep_endpoint(UserCtx, couch_util:get_value(<<"target">>, Props)),
-    maybe_append_filters({Props}, [HostName, Src, Tgt]).
+    maybe_append_filters({Props}, [HostName, Src, Tgt], UserCtx).
 
-maybe_append_filters({Props}, Base) ->
+maybe_append_filters({Props}, Base, UserCtx) ->
     Base2 = Base ++ 
         case couch_util:get_value(<<"filter">>, Props) of
         undefined ->
@@ -504,9 +506,26 @@ maybe_append_filters({Props}, Base) ->
                 [DocIds]
             end;
         Filter ->
-            [Filter, couch_util:get_value(<<"query_params">>, Props, {[]})]
+            [filter_code(Filter, Props, UserCtx),
+                couch_util:get_value(<<"query_params">>, Props, {[]})]
         end,
     couch_util:to_hex(couch_util:md5(term_to_binary(Base2))).
+
+filter_code(Filter, Props, UserCtx) ->
+    {match, [DDocName, FilterName]} =
+        re:run(Filter, "(.*?)/(.*)", [{capture, [1, 2], binary}]),
+    ProxyParams = parse_proxy_params(
+        couch_util:get_value(<<"proxy">>, Props, [])),
+    Source = open_db(
+        couch_util:get_value(<<"source">>, Props), UserCtx, ProxyParams),
+    try
+        {ok, DDoc} = open_doc(Source, <<"_design/", DDocName/binary>>),
+        Code = couch_util:get_nested_json_value(
+            DDoc#doc.body, [<<"filters">>, FilterName]),
+        re:replace(Code, "^\s*(.*?)\s*$", "\\1", [{return, binary}])
+    after
+        close_db(Source)
+    end.
 
 maybe_add_trailing_slash(Url) ->
     re:replace(Url, "[^/]$", "&/", [{return, list}]).
@@ -556,25 +575,26 @@ fold_replication_logs([Db|Rest]=Dbs, Vsn, LogId, NewId,
             RepProps, UserCtx, [MigratedLog|Acc])
     end.
 
-open_replication_log(#http_db{}=Db, DocId) ->
-    Req = Db#http_db{resource=couch_util:url_encode(?b2l(DocId))},
-    case couch_rep_httpc:request(Req) of
-    {[{<<"error">>, _}, {<<"reason">>, _}]} ->
-        ?LOG_DEBUG("didn't find a replication log for ~s", [Db#http_db.url]),
-        {error, not_found};
-    Doc ->
-        ?LOG_DEBUG("found a replication log for ~s", [Db#http_db.url]),
-        {ok, couch_doc:from_json_obj(Doc)}
-    end;
 open_replication_log(Db, DocId) ->
-    case couch_db:open_doc(Db, DocId, []) of
+    case open_doc(Db, DocId) of
     {ok, Doc} ->
-        ?LOG_DEBUG("found a replication log for ~s", [Db#db.name]),
+        ?LOG_DEBUG("found a replication log for ~s", [dbname(Db)]),
         {ok, Doc};
     _ ->
-        ?LOG_DEBUG("didn't find a replication log for ~s", [Db#db.name]),
+        ?LOG_DEBUG("didn't find a replication log for ~s", [dbname(Db)]),
         {error, not_found}
     end.
+
+open_doc(#http_db{} = Db, DocId) ->
+    Req = Db#http_db{resource = couch_util:encode_doc_id(DocId)},
+    case couch_rep_httpc:request(Req) of
+    {[{<<"error">>, _}, {<<"reason">>, _}]} ->
+        {error, not_found};
+    Doc ->
+        {ok, couch_doc:from_json_obj(Doc)}
+    end;
+open_doc(Db, DocId) ->
+    couch_db:open_doc(Db, DocId).
 
 open_db(Props, UserCtx, ProxyParams) ->
     open_db(Props, UserCtx, ProxyParams, false).
@@ -590,7 +610,10 @@ open_db({Props}, _UserCtx, ProxyParams, CreateTarget) ->
         auth = AuthProps,
         headers = lists:ukeymerge(1, Headers, DefaultHeaders)
     },
-    Db = Db1#http_db{options = Db1#http_db.options ++ ProxyParams},
+    Db = Db1#http_db{
+        options = Db1#http_db.options ++ ProxyParams ++
+            couch_rep_httpc:ssl_options(Db1)
+    },
     couch_rep_httpc:db_exists(Db, CreateTarget);
 open_db(<<"http://",_/binary>>=Url, _, ProxyParams, CreateTarget) ->
     open_db({[{<<"url">>,Url}]}, [], ProxyParams, CreateTarget);
@@ -630,6 +653,7 @@ do_checkpoint(State) ->
         committed_seq = NewSeqNum,
         start_seq = StartSeqNum,
         history = OldHistory,
+        session_id = SessionId,
         source_log = SourceLog,
         target_log = TargetLog,
         rep_starttime = ReplicationStartTime,
@@ -641,7 +665,6 @@ do_checkpoint(State) ->
     {SrcInstanceStartTime, TgtInstanceStartTime} ->
         ?LOG_INFO("recording a checkpoint for ~s -> ~s at source update_seq ~p",
             [dbname(Source), dbname(Target), NewSeqNum]),
-        SessionId = couch_uuids:random(),
         NewHistoryEntry = {[
             {<<"session_id">>, SessionId},
             {<<"start_time">>, list_to_binary(ReplicationStartTime)},
@@ -767,9 +790,9 @@ ensure_full_commit(Source, RequiredSeq) ->
         InstanceStartTime
     end.
 
-update_local_doc(#http_db{} = Db, #doc{id=DocId} = Doc) ->
+update_local_doc(#http_db{} = Db, Doc) ->
     Req = Db#http_db{
-        resource = couch_util:url_encode(DocId),
+        resource = couch_util:encode_doc_id(Doc),
         method = put,
         body = couch_doc:to_json_obj(Doc, [attachments]),
         headers = [{"x-couch-full-commit", "false"} | Db#http_db.headers]
