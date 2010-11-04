@@ -453,6 +453,7 @@ function $$(node) {
     $("input[placeholder]").addPlaceholder();
 
     $.get("_sidebar.html", function(resp) {
+      $.getScript($(resp).find('script').attr('src'));
       $("#wrap").append(resp)
         .find("#sidebar-toggle").click(function(e) {
             $.futon.navigation.toggle(e.shiftKey ? 2500 : 500);
