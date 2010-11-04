@@ -18,52 +18,39 @@
   var refreshTimeout = null;
 
   var poll_interval = 5;
-
-  function refresh() {
-    $.couch.activeTasks({
-      success: function(tasks) {
-        clearTimeout(refreshTimeout);
-        $("#status tbody.content").empty();
-        if (!tasks.length) {
-          $("<tr class='none'><th colspan='4'>No tasks running</th></tr>")
+  
+  var refresh = function () {
+    request({url:"/_active_tasks"}, function (err, tasks) {
+      $("#status tbody.content").empty();
+      if (!tasks.length) {
+        $("<tr class='none'><th colspan='4'>No tasks running</th></tr>")
+          .appendTo("#status tbody.content");
+      } else {
+        $.each(tasks, function(idx, task) {
+          $("<tr><th></th><td class='object'></td><td class='pid'></td><td class='status'></td></tr>")
+            .find("th").text(task.type).end()
+            .find("td.object").text(task.task).end()
+            .find("td.pid").text(task.pid).end()
+            .find("td.status").text(task.status).end()
             .appendTo("#status tbody.content");
-        } else {
-          $.each(tasks, function(idx, task) {
-            $("<tr><th></th><td class='object'></td><td class='pid'></td><td class='status'></td></tr>")
-              .find("th").text(task.type).end()
-              .find("td.object").text(task.task).end()
-              .find("td.pid").text(task.pid).end()
-              .find("td.status").text(task.status).end()
-              .appendTo("#status tbody.content");
-          });
-        }
-        refreshTimeout = setTimeout(refresh,
-          parseInt($("#interval input").val(), 10) * 1000);
+        });
       }
-    });
-  }
-
-  function updateInterval(value) {
-    if (isNaN(value)) {
-      value = 5;
-      $("#interval input").val(value);
-    }
-    $("#interval .secs").text(value);
-    refresh();
-    poll_interval = value
-  }
-
+      if (window.location.hash == '#/_stats') setTimeout(refresh, $("#interval input").val() * 1000);
+    })
+  };
+  refresh();
+  
   $(function() {
     var slider = $("#interval input");
     slider.val(parseInt(poll_interval));
     if (slider[0].type == "range") {
       slider.bind("input", function() {
-        updateInterval(this.value);
+        $("#interval .secs").text(this.value);
       });
       $("#interval .secs").text($("#interval input").val());
     } else {
       slider.bind("change", function() {
-        updateInterval(this.value);
+        $("#interval .secs").text(this.value);
       });
       $("#interval .secs").hide();
     }
