@@ -3,7 +3,11 @@
     <li><button class="load">Upload Attachment…</button></li>
     <li><button class="delete">Delete Document…</button></li>
   </ul>
-
+  <div id="autosave">
+    <input id="autosave-input" type="checkbox" checked></input>
+    <span id="autosave-txt">auto-save</span>
+  </div>  
+  
   <div id="document-editor">
     
   </div>
@@ -20,6 +24,20 @@ var db = this.params['db']
   ;
   
 $('span#topbar').html('<a href="#/">Overview</a><a href="#/'+db+'">'+db+'</a><strong>'+docid+'</strong>'); 
+
+$('button.delete').click(function () {
+  $.showDialog("dialog/_delete_document.html", {
+    submit: function(data, callback) {
+      _doc._deleted = true;
+      request({url:url, type:'PUT', data:_doc}, function (err, resp) {
+        if (!err) {
+          location.hash = "#/"+db;
+        }
+        callback();
+      })
+    }
+  });
+})
 
 var getEdit = function (obj, key, val, minWidth) {
   var edit = function () {
@@ -116,6 +134,22 @@ var getAddButton = function (obj, keyClass, array, indent) {
   return addButton;
 }
 
+var save = function (cb) {
+  if ($("div#save-button").length) {
+    $("autosave-input").attr('disabled', true);
+    $("div#save-button").removeClass('')
+  }
+  
+  request({url:url, data:_doc, type:'PUT'}, function (err, resp) {
+    if (err) console.log(err)
+    else {
+      _doc._rev = resp.rev;
+      $("div.doc-key:exactly('_rev')").next().html(createValue.string(_doc, '_rev', false));
+      cb()
+    }
+  })
+}
+
 var createValue = {
   "string": function (obj, key, editable) {
     var val = $('<div class="doc-value string-type"></div>')
@@ -182,21 +216,18 @@ var createValue = {
                       , i = parseInt($(this).next().text())
                       ;
                     obj[key].splice(i, 1)
-                    request({url:url, data:_doc, type:'PUT'}, function (err, resp) {
-                      if (err) console.log(err)
-                      else {
-                        _doc._rev = resp.rev;
-                        $("div.doc-key:exactly('_rev')").next().html(createValue.string(_doc, '_rev', false));
-                        entry.parent().find('div.array-key').each(function (ii, e) {
-                          e = $(e)
-                          var ind = parseInt(e.text());
-                          if (ind > i) {
-                            e.text(ind - 1)
-                          }
-                        })
-                        entry.remove();
-                      }
+                    
+                    save(function () {
+                      entry.parent().find('div.array-key').each(function (ii, e) {
+                        e = $(e)
+                        var ind = parseInt(e.text());
+                        if (ind > i) {
+                          e.text(ind - 1)
+                        }
+                      })
+                      entry.remove();
                     })
+                    
                   })
                 )
                 .append('<div class="array-key '+cls+'" >'+i+'</div>')
@@ -231,13 +262,8 @@ var createValue = {
               var p = $('<div class="delete-button" style="margin-left:'+(indent * 10)+'px"/>').click((function (field, i) {
                   return function () {
                     delete obj[key][i]
-                    request({url:url, type:'PUT', data:JSON.stringify(_doc), processData:false}, function (err, newresp) {
-                      if (err) console.log(err);
-                      else {
-                        _doc._rev = newresp.rev;
-                        $("div.doc-key:exactly('_rev')").next().html(createValue.string(_doc, '_rev', false));
-                        field.remove();
-                      }
+                    save(function () {
+                      field.remove();
                     })
                   }
                 })(field, i))
@@ -255,13 +281,8 @@ var createValue = {
               .click((function (field, i) {
                 return function () {
                   delete obj[key][i]
-                  request({url:url, type:'PUT', data:JSON.stringify(_doc), processData:false}, function (err, newresp) {
-                    if (err) console.log(err);
-                    else {
-                      _doc._rev = newresp.rev;
-                      $("div.doc-key:exactly('_rev')").next().html(createValue.string(_doc, '_rev', false));
-                      field.remove();
-                    }
+                  save(function () {
+                    field.remove();
                   })
                 }
               })(field, i))
@@ -342,6 +363,30 @@ request({url:url}, function (err, resp) {
     }
     
   } else {
+    // Autosave enable and disable
+    $("input#autosave-input").click( function () {
+      if ($("span#autosave-txt").length) {
+        $("span#autosave-txt").remove();
+        $('<div id="save-button" class="save-button"></div>')
+        .click(function () {
+          request({url:url, data:_doc, type:'PUT'}, function (err, resp) {
+            if (err) console.log(err)
+            else {
+              _doc._rev = resp.rev;
+              $("div.doc-key:exactly('_rev')").next().html(createValue.string(_doc, '_rev', false));
+              $("div#")
+            }
+          })
+          $("autosave-input").attr('disabled', false);
+        })
+        .addClass('save-disabled')
+      } else {
+        $("div#autosave").append('<span id=>')
+        $("div.save-button").remove();
+      }
+      
+    })
+  
     var d = $('div#document-editor');
     for (i in resp) {
       var field = $('<div class="doc-field"></div>')
@@ -350,14 +395,8 @@ request({url:url}, function (err, resp) {
         $('<div class="delete-button" />').click((function (field, i) {
           return function () {
             delete _doc[i]
-            request({url:url, type:'PUT', data:JSON.stringify(_doc), processData:false}, function (err, newresp) {
-              if (err) console.log(err);
-              else {
-                // Pump the rev inline and remove the field
-                _doc._rev = newresp.rev;
-                $("div.doc-key:exactly('_rev')").next().html(createValue.string(_doc, '_rev', false));
-                field.remove();
-              }
+            save(function () {
+              field.remove();
             })
           }
         })(field, i))
