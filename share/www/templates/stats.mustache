@@ -17,7 +17,7 @@
 <script>
   var refreshTimeout = null;
 
-  $.futon.storage.declare("poll_interval", {defaultValue: 5});
+  var poll_interval = 5;
 
   function refresh() {
     $.couch.activeTasks({
@@ -50,12 +50,12 @@
     }
     $("#interval .secs").text(value);
     refresh();
-    $.futon.storage.set("poll_interval", value);
+    poll_interval = value
   }
 
   $(function() {
     var slider = $("#interval input");
-    slider.val(parseInt($.futon.storage.get("poll_interval")));
+    slider.val(parseInt(poll_interval));
     if (slider[0].type == "range") {
       slider.bind("input", function() {
         updateInterval(this.value);

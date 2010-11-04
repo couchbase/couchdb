@@ -48,10 +48,10 @@ specific language governing permissions and limitations under the License.
           // a note about you are logged in but you can't access this
         }
         // do the sidebar but in the middle without the sidebar
-        $.futon.storage.set("sidebar", "hidden");
+        // $.futon.storage.set("sidebar", "hidden");
         setTimeout(function() {
           var ctx = $$("#userCtx").userCtx;
-          $.futon.storage.set("sidebar", "show");
+          // $.futon.storage.set("sidebar", "show");
           if (ctx && ctx.name) {
             $("#aboutSession").append("<p>It looks like you are logged in, maybe you don't have access to that url.</p>");
           }
