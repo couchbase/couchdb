@@ -166,7 +166,7 @@ function setupAdminParty(fun) {
                   adminConfs.unshift(meAdmin);
                   removeAdmins(adminConfs, function() {
                     callback();
-                    $.futon.session.sidebar();
+                    $.futonSidebar();
                     readyToRun = true;
                     setTimeout(fun, 500);
                   });
