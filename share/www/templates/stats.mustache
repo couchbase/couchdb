@@ -16,8 +16,6 @@
 </table>
 <script>
   var refreshTimeout = null;
-
-  var poll_interval = 5;
   
   var refresh = function () {
     request({url:"/_active_tasks"}, function (err, tasks) {
@@ -40,22 +38,19 @@
   };
   refresh();
   
-  $(function() {
-    var slider = $("#interval input");
-    slider.val(parseInt(poll_interval));
-    if (slider[0].type == "range") {
-      slider.bind("input", function() {
-        $("#interval .secs").text(this.value);
-      });
-      $("#interval .secs").text($("#interval input").val());
-    } else {
-      slider.bind("change", function() {
-        $("#interval .secs").text(this.value);
-      });
-      $("#interval .secs").hide();
-    }
-    refresh();
-  });
+  var slider = $("#interval input");
+  slider.val(5);
+  if (slider[0].type == "range") {
+    slider.bind("input", function() {
+      $("#interval .secs").text(this.value);
+    });
+    $("#interval .secs").text($("#interval input").val());
+  } else {
+    slider.bind("change", function() {
+      $("#interval .secs").text(this.value);
+    });
+    $("#interval .secs").hide();
+  }
   
   request({url:'/_stats'}, function (err, stats) {
     var info = $('#content').append('<h2>Raw Info</h2>')
