@@ -41,18 +41,17 @@ nobase_dist_localdata_DATA = \
     www/dialog/_admin_party.html \
     www/dialog/_compact_cleanup.html \
     www/dialog/_create_admin.html \
-    www/dialog/_login.html \
-    www/dialog/_signup.html \
-    www/dialog/_create_database.html \
     www/dialog/_create_config.html \
+    www/dialog/_create_database.html \
+    www/dialog/_database_security.html \
     www/dialog/_delete_database.html \
     www/dialog/_delete_document.html \
-    www/dialog/_database_security.html \
-    www/dialog/_share_test_reports.html \
+    www/dialog/_login.html \
     www/dialog/_save_view_as.html \
+    www/dialog/_share_test_reports.html \
+    www/dialog/_signup.html \
     www/dialog/_upload_attachment.html \
     www/favicon.ico \
-    www/futon.js \
     www/image/add.png \
     www/image/apply.gif \
     www/image/bg.png \
@@ -84,48 +83,44 @@ nobase_dist_localdata_DATA = \
     www/image/toggle-expand.gif \
     www/image/twisty.gif \
     www/index.html \
-    www/sammy/sammy.js \
-    www/sammy/plugins/sammy.cache.js \
-    www/sammy/plugins/sammy.data_location_proxy.js \
-    www/sammy/plugins/sammy.ejs.js \
-    www/sammy/plugins/sammy.form.js \
-    www/sammy/plugins/sammy.haml.js \
-    www/sammy/plugins/sammy.json.js \
-    www/sammy/plugins/sammy.meld.js \
-    www/sammy/plugins/sammy.mustache.js \
-    www/sammy/plugins/sammy.nested_params.js \
-    www/sammy/plugins/sammy.path_location_proxy.js \
-    www/sammy/plugins/sammy.pure.js \
-    www/sammy/plugins/sammy.storage.js \
-    www/sammy/plugins/sammy.template.js \
-    www/sammy/plugins/sammy.title.js \
+    www/old.layout.css \
+    www/script/base64.js \
     www/script/couch.js \
-    www/script/couch_tests.js \
     www/script/couch_test_runner.js \
-    www/script/futon.browse.js \
-    www/script/futon.format.js \
+    www/script/couch_tests.js \
+    www/script/futon-dialogs.js \
     www/script/futon.js \
     www/script/jquery.couch.js \
-    www/script/jquery.dialog.js \
-    www/script/jquery.editinline.js \
-    www/script/jquery.form.js \
     www/script/jquery.js \
-    www/script/jquery.resizer.js \
-    www/script/jquery.suggest.js \
     www/script/json2.js \
     www/script/jspec/jspec.css \
     www/script/jspec/jspec.jquery.js \
     www/script/jspec/jspec.js \
     www/script/jspec/jspec.xhr.js \
     www/script/oauth.js \
+    www/script/old-futon.js \
+    www/script/sammy/plugins/sammy.cache.js \
+    www/script/sammy/plugins/sammy.data_location_proxy.js \
+    www/script/sammy/plugins/sammy.ejs.js \
+    www/script/sammy/plugins/sammy.form.js \
+    www/script/sammy/plugins/sammy.haml.js \
+    www/script/sammy/plugins/sammy.json.js \
+    www/script/sammy/plugins/sammy.meld.js \
+    www/script/sammy/plugins/sammy.mustache.js \
+    www/script/sammy/plugins/sammy.nested_params.js \
+    www/script/sammy/plugins/sammy.path_location_proxy.js \
+    www/script/sammy/plugins/sammy.pure.js \
+    www/script/sammy/plugins/sammy.storage.js \
+    www/script/sammy/plugins/sammy.template.js \
+    www/script/sammy/plugins/sammy.title.js \
+    www/script/sammy/sammy.js \
     www/script/sha1.js \
-    www/script/base64.js \
     www/script/test/all_docs.js \
-    www/script/test/attachments.js \
-    www/script/test/attachments_multipart.js \
     www/script/test/attachment_names.js \
     www/script/test/attachment_paths.js \
     www/script/test/attachment_views.js \
+    www/script/test/attachments.js \
+    www/script/test/attachments_multipart.js \
     www/script/test/auth_cache.js \
     www/script/test/basics.js \
     www/script/test/batch_save.js \
@@ -176,18 +171,19 @@ nobase_dist_localdata_DATA = \
     www/script/test/uuids.js \
     www/script/test/view_collation.js \
     www/script/test/view_collation_raw.js \
-    www/script/test/view_conflicts.js \
     www/script/test/view_compaction.js \
+    www/script/test/view_conflicts.js \
     www/script/test/view_errors.js \
     www/script/test/view_include_docs.js \
     www/script/test/view_multi_key_all_docs.js \
     www/script/test/view_multi_key_design.js \
     www/script/test/view_multi_key_temp.js \
     www/script/test/view_offsets.js \
-    www/script/test/view_update_seq.js \
     www/script/test/view_pagination.js \
     www/script/test/view_sandboxing.js \
+    www/script/test/view_update_seq.js \
     www/script/test/view_xml.js \
+    www/session.html \
     www/spec/couch_js_class_methods_spec.js \
     www/spec/couch_js_instance_methods_1_spec.js \
     www/spec/couch_js_instance_methods_2_spec.js \
@@ -199,7 +195,6 @@ nobase_dist_localdata_DATA = \
     www/spec/jquery_couch_js_instance_methods_3_spec.js \
     www/spec/run.html \
     www/style/layout.css \
-    www/style/sammy.css \
     www/templates/changes.mustache \
     www/templates/config.mustache \
     www/templates/database.mustache \

@@ -15,21 +15,15 @@ specific language governing permissions and limitations under the License.
 
 /* General styles */
 
-html, body { color: #000; font: normal 90% Verdana, sans-serif;
+html, body { color: #000; font: normal 90% Arial,Helvetica,sans-serif;
   height: 100%; margin: 0; padding: 0; overflow: hidden;
 }
-
-div.spacer {clear:both;}
-
-th { font-weight: ;}
-
 :link, :visited { color: #ba1e16; text-decoration: none; }
 :link img, :visited img { border: none; }
-span.more { text-align: center; color: #ba1e16; cursor:pointer;}
 
 h1 { background: #333; border-right: 2px solid #111;
   border-bottom: 1px solid #333; color: #999;
-  font: normal 125% Verdana, sans-serif; height: 32px;
+  font: normal 125% Arial,Helvetica,sans-serif; height: 32px;
   line-height: 32px; margin: 0; padding: 0 0 0 .5em; position: relative;
 }
 h1 :link, h1 :visited, h1 strong { padding: .4em .5em; }
@@ -43,11 +37,6 @@ h1 strong a {color:#fff !important;background:none !important;}
 h1 :link.raw, h1 :visited.raw {
   background: url(../image/rarrow.png) 100% 50% no-repeat; position: absolute;
   right: 20px; width: 35px; height: 100%; padding: 0; margin: 0;
-}
-h1 span#raw-link {
-  background: url(../image/rarrow.png) 100% 50% no-repeat; position: absolute;
-  right: 20px; width: 35px; height: 100%; padding: 0; margin: 0;
-  cursor: pointer;
 }
 body.loading h1 strong {
   background: url(../image/spinner.gif) right center no-repeat;
@@ -89,7 +78,7 @@ table.listing caption { display: none; }
 table.listing th, table.listing td { padding: .2em .5em; }
 table.listing thead th { background: #dadada url(../image/thead.gif) repeat-x;
   border: 1px solid #a7a7a7; border-width: 0 0 1px 1px; color: #333;
-  font-size: 95%; text-align: left;
+  font-size: 95%; font-weight: normal; text-align: left;
   text-shadow: #999 2px 1px 2px; white-space: nowrap;
 }
 table.listing thead th:first-child { border-left: none; }
@@ -230,26 +219,26 @@ body.fullwidth #sidebar { border-bottom: 1px solid #333; right: 0;
   height: 100%; margin-right: 210px; position: relative;
 }
 body.fullwidth #wrap { margin-right: 0; }
-#content { padding: 0.6em 16px 3em 10px; overflow: auto; overflow-y: scroll;
+#content { padding: 1em 16px 3em 10px; overflow: auto; overflow-y: scroll;
   position: absolute; top: 33px; bottom: 0; left: 0; right: 0;
 }
 
 /* Toolbar */
 
 #toolbar { font-size: 90%; line-height: 16px; list-style: none;
-  margin: 0 0 .5em; padding: 1px 5px 5px 3px;
+  margin: 0 0 .5em; padding: 5px 5px 5px 3px;
 }
 #toolbar li { display: inline; }
 #toolbar li.current {float:right;}
 #toolbar button { background: transparent 2px 2px no-repeat; border: none;
-  color: #666; margin: 0; padding: 2px 0em 2px 22px; cursor: pointer;
+  color: #666; margin: 0; padding: 2px 1em 2px 22px; cursor: pointer;
   font-size: 95%; line-height: 16px;
 }
 #toolbar button:hover { background-position: 2px -30px; color: #000; }
 #toolbar button:active { background-position: 2px -62px; color: #000; }
 #toolbar button.add { background-image: url(../image/add.png); }
 #toolbar button.security { background-image: url(../image/key.png); }
-#toolbar button.compact { background-image: url(../image/compact.png); float:right;}
+#toolbar button.compact { background-image: url(../image/compact.png); }
 #toolbar button.delete { background-image: url(../image/delete.png); }
 #toolbar button.load { background-image: url(../image/load.png); }
 #toolbar button.run { background-image: url(../image/run.png); }
@@ -333,9 +322,6 @@ body.loading #dialog h2 {
 #switch { color: #666; float: right; font-size: 90%; font-weight: bold;
   line-height: 16px; padding: 5px;
 }
-#changes { color: #666; float: right; font-size: 90%; font-weight: bold;
-  line-height: 16px; ;
-}
 #switch select { font-size: 90%; }
 
 /* Stale views checkbox */
@@ -409,36 +395,6 @@ body.loading #dialog h2 {
   text-align: right;
 }
 
-div#dbinfo {margin-bottom:8px;}
-.dbquery-select {float:right;}
-#pagination {float:left;}
-#pages-input {width:18px;}
-span.to-views { color: #FF0000; font-weight: bold;
-  line-height: 16px; padding: 5px;
-}
-span.query-option { float:right; margin-left:8px;}
-input.query-option { float:right; margin-left:5px; width:70px;}
-div.info-title { float:left; color: #666; margin-right:8px; }
-div.info-value { float:left; margin-right:30px; }
-
-/* Changes table */
-
-#changes thead th label { color: #333; float: right; font-size: 90%;
-  text-shadow: none;
-}
-#changes thead th label.disabled { color: #777; }
-#changes thead th label input { vertical-align: middle; }
-#changes tbody.content td { color: #999;
-  font: normal 11px "DejaVu Sans Mono",Menlo,Courier,monospace;
-}
-#changes tbody.content td.key { color: #333; }
-#changes tbody.content td.key a { display: block; }
-#changes tbody.content td.key a strong { font-weight: normal; }
-#changes tbody.content td.key span.docid { color: #999;
-  font: normal 10px Verdana, sans-serif;
-}
-#changes tbody.content td.value { font-size: 10px; }
-
 /* Documents table */
 
 #documents thead th { line-height: 150%; width: 50%; }
@@ -456,7 +412,7 @@ div.info-value { float:left; margin-right:30px; }
 #documents tbody.content td.key a { display: block; }
 #documents tbody.content td.key a strong { font-weight: normal; }
 #documents tbody.content td.key span.docid { color: #999;
-  font: normal 10px Verdana, sans-serif;
+  font: normal 10px Arial,Helvetica,sans-serif;
 }
 #documents tbody.content td.value { font-size: 10px; }
 
@@ -641,14 +597,6 @@ form#replicator p.actions { padding: 1px; clear: left; margin: 0;
   text-align: right;
 }
 
-/* Stats */
-
-div.stat-section {font-weight:bold; font-size:18px;}
-div.stat-subsection {font-weight:bold; font-size:14px; padding-bottom:1px; padding-top:3px;}
-span.stat-title {font-weight:bold; font-size:12px; float:left; color: #FF0000;}
-span.stat-value {font-size:12px; float:left; padding-left:5px; padding-right:20px;}
-span.stat-subsection-description {font-size:12px; font-weight:normal; padding-left:8px;}
-
 /* Active tasks */
 
 #interval { color: #666; float: right; font-size: 90%; font-weight: bold;
@@ -663,195 +611,8 @@ span.stat-subsection-description {font-size:12px; font-weight:normal; padding-le
   font-size: 11px;
 }
 
+
 /* Session */
 #loginSignup {
   font-size:200%;
 }
-
-/* Views */
-.qinput {color:#A1A1A1; }
-div#query-options {font-size:15px;}
-div#view-selection {padding-bottom:5px;}
-select#ddoc-select { padding-top:5px;  font-size:15px;}
-select#view-select { padding-top:5px; font-size:15px;}
-div.error-type {color:#FF0000; font-weight:bold;}
-div.error-reason {color:#FF0000; font-weight:bold;}
-span.expand-doc {cursor:pointer; color:#CD5555;}
-span.expand-all {cursor:pointer; color:#CD5555;}
-table.listing tbody tr td span.docid { cursor:pointer; color:#CD9B9B }
-table.listing tbody tr.showdoc td.showdoc {font-weight:bold; background: #e9e9e9; color:#000000; }
-div.viewinfo {font-weight:bold; color:#000000; float:left;}
-span.viewinfo-val {color:#FF0000; padding-left:10px; padding-right:30px;}
-span.viewstart {float:right; color:#CD5555; padding-left:5px; padding-right:5px; cursor:pointer;}
-span.viewend {float:right; color:#CD5555; padding-left:5px; cursor:pointer;}
-span.viewkey {color:#CD5555; padding-left:5px; padding-right:20px; cursor:pointer;}
-
-div.primary-view-options {padding-left:3px; width:100%; padding-top:10px; padding-bottom:10px; float:left;}
-div.main-view-options {width:100%; padding-top:5px; padding-bottom:5px; float:left;}
-div.key-options {float:left; width:100%; padding-bottom:5px;}
-div.key-half-options {float:left; width:50%;}
-div.input-left {float:left; width:19%; padding-left:3px;}
-div.input-right {float:left; width:75%; padding-right:5%; padding-left:3px;}
-div.input-right-nospace {float:left; width:80%;}
-div.docid-input-left {float:left; width:34%; padding-left:3px;}
-div.docid-input-right {float:left; width:60%; padding-right:5%;}
-div.docid-input-right-nospace {float:left; width:65%;}
-input.input-right {text-align:left; width:100%; }
-div.reduce-options {padding-left:3px; padding-top:10px; padding-bottom:10px; width:100%; float:left;}
-div.view-options-other {padding-left:3px; padding-top:10px; padding-bottom:10px; width:100%; float:left;}
-div.odd {background: #feffea; -moz-border-radius: 5px;  -webkit-border-radius: 5px; float:left; }
-input.reduce {text-align:right;}
-input.number {width:30px;}
-input.input-key {width:330px;}
-div.main-input {float:left; padding-right:30px;}
-span.main-input {padding-right:7px;}
-
-/* Document Editor */
-
-div#document-editor { background: #fff; font-size:14px;}
-div#document-editor span.expand {cursor:pointer; color:#FF0000;}
-div#document-editor div.id-space {
-  border: none; float: left; margin: 3px 3px 0 3px; padding: 0;
-  width: 15px; height: 15px;
-}
-div#document-editor div.doc-field {width:100%; padding-bottom:2px;}
-div#document-editor div.doc-field, div.doc-value, div.doc-key {float:left;}
-div#document-editor div.doc-key {padding-right:5px;font-weight:bold;}
-
-div#document-editor div.string-type { white-space: pre-wrap; color:#393;}
-div#document-editor div.string-type:before { color: #ccc; content: "“";
-  left: -4px;
-}
-div#document-editor div.string-type:after { color: #ccc; content: "”"; }
-
-div#document-editor span.number-type { white-space: pre-wrap; color:#339; padding-left:6px;}
-
-div#document-editor span.array-type { color: #BD101D; float:left;}
-div#document-editor span.object-type { color: #BD101D; float:left;}
-div#document-editor span.null-type { color: #BD101D; float:left; color: #666666; padding-left:6px;}
-
-div#document-editor div.array-key {float:left; padding-right:15px; color:#666666;}
-div#document-editor div.object-key {float:left; padding-right:15px; font-weight:bold; }
-div#document-editor div.doc-key-base {float:left; padding-right:15px; font-weight:bold; }
-
-div#document-editor div.delete-button {
-  background: url(../image/delete-mini.png) no-repeat; border: none;
-  cursor: pointer; float: left; margin: 3px 3px 0 3px; padding: 0;
-  width: 15px; height: 15px;
-}
-
-div#document-editor div.add-button {
-  /* Add button is just the delete button rotated with CSS */
-  background: url(../image/delete-mini.png) no-repeat;
-  rotation: 45deg;
-  -webkit-transform: rotate(45deg);
-  -moz-transform: rotate(45deg);
-  border: none;
-  cursor: pointer; float: left; margin: 3px 3px 0 3px; padding: 0;
-  width: 15px; height: 15px;
-}
-
-div#document-editor div.empty {
-  float:left;  
-}
-
-div#document-editor input {
-  font: normal 90% Verdana, sans-serif;
-}
-
-div#document-editor div.save-button {
-  float:right; cursor:pointer; background-color:#D1D1D1;
-  padding: 2px 5px 2px 5px;
-  -moz-border-radius: 15px;
-  -webkit-border-radius: 15px;
-  border-radius: 15px;
-}
-
-/*
-#fields tbody.content th button.delete {
-  background: url(../image/delete-mini.png) no-repeat; border: none;
-  cursor: pointer; float: left; margin: .2em 5px 0 -20px; padding: 0;
-  width: 15px; height: 15px;
-}
-#fields tbody.content th button.delete:hover { background-position: -15px 0; }
-#fields tbody.content th b { display: block; padding: 2px 2px 2px 3px; }
-#fields tbody.content th b.editinline-container { padding: 0; }
-#fields tbody.content td { color: #999; padding-left: 14px;
-  padding-right: 48px;
-}
-#fields tbody.content td code { display: block; font-size: 11px;
-  padding: 2px 2px 2px 3px; position: relative;
-}
-#fields tbody.content td code.string { white-space: pre-wrap; }
-#fields tbody.content td code.string:before { color: #ccc; content: "“";
-  position: absolute; left: -4px;
-}
-#fields tbody.content td code.string:after { color: #ccc; content: "”"; }
-
-#fields tbody.content td dl { margin: 0; padding: 0; }
-#fields tbody.content td dt {
-  background: transparent url(../image/toggle-collapse.gif) 0 3px no-repeat;
-  clear: left; color: #333; cursor: pointer; line-height: 1em;
-  margin-left: -12px; padding-left: 14px;
-}
-#fields tbody.content td dd { line-height: 1em; margin: 0;
-  padding: 0 0 0 1em;
-}
-#fields tbody.content td dt.collapsed {
-  background-image: url(../image/toggle-expand.gif);
-}
-#fields tbody.content td dt.inline { background-image: none; cursor: default;
-  float: left; margin-left: 0; padding-left: 2px; padding-right: .5em;
-  padding-top: 2px;
-}
-#fields tbody.content td dd code.string { left: 4px; text-indent: -6px; }
-#fields tbody.content td dd code.string:before { position: static; }
-#fields tbody.content input, #fields tbody.content textarea,
-#fields tbody.source textarea {
-  background: #fff; border: 1px solid; border-color: #999 #ddd #ddd #999;
-  margin: 0; padding: 1px; width: 100%;
-}
-#fields tbody.content th input { font-family: inherit; font-size: inherit;
-  font-weight: bold;
-}
-#fields tbody.content td input, #fields tbody.content td textarea,
-#fields tbody.source textarea {
-  font: normal 11px "DejaVu Sans Mono",Menlo,Courier,monospace;
-}
-#fields tbody.content input.invalid,
-#fields tbody.content textarea.invalid,
-#fields tbody.source textarea.invalid {
-  background: #f9f4f4; border-color: #b66 #ebb #ebb #b66;
-}
-#fields tbody.content div.grippie, #fields tbody.source div.grippie {
-  padding: 0 1px; width: 100%;
-}
-#fields tbody.content div.error, #fields tbody.source div.error {
-  color: #d33;
-}
-
-#fields tbody.content td ul.attachments { list-style: none; margin: 0;
-  padding: 0;
-}
-#fields tbody.content td ul.attachments li {
-  margin-bottom: .3em; min-height: 20px; padding-left: 20px;
-}
-#fields tbody.content td ul.attachments tt { font-size: 11px; }
-#fields tbody.content td ul.attachments li span.info { color: #666;
-  display: block; font-size: 95%;
-}
-#fields tbody.content td ul.attachments li button {
-  background: transparent no-repeat; border: none; cursor: pointer;
-  float: left; margin: 0 2px 0 -20px; padding: 0; width: 15px; height: 15px;
-  vertical-align: middle;
-}
-#fields tbody.content td ul.attachments li button:hover {
-  background-position: -15px 0;
-}
-#fields tbody.content td ul.attachments li button.delete {
-  background-image: url(../image/delete-mini.png);
-}
-#fields tbody.source td pre { color: #999; font-size: 11px; line-height: 1.6em;
-  margin: 0; overflow: auto; white-space: pre-wrap; width: 100%;
-}
-#fields tbody.source td.editinline-container { padding-left: 14px; padding-right: 48px; }*/

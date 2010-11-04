@@ -17,47 +17,7 @@ specific language governing permissions and limitations under the License.
   <head>
     <title>Overview</title>
     <meta http-equiv="Content-Type" content="text/html;charset=utf-8">
-    <link rel="stylesheet" href="style/sammy.css?0.11.0" type="text/css">
-    <script src="script/jquery.js"></script>
-    <script src="script/jquery.couch.js"></script>
-    <script src="script/jquery.dialog.js"></script>
-    
-    <script src="script/futon.js"></script>
-    <script src="script/futon.browse.js"></script>
-    <script src="script/futon.format.js"></script>
-    
-    <script src="script/json2.js"></script>
-    <script src="script/sha1.js"></script>
-    
-    <script src="sammy/sammy.js"></script>
-    <script src="sammy/plugins/sammy.mustache.js"></script>
-    <script src="futon.js"></script>
-    <script>
-    
-    $('div#sidebar').ready(function () {
-      $("div#sidebar")
-        .find("#sidebar-toggle").click(function(e) {
-            $.futon.navigation.toggle(e.shiftKey ? 2500 : 500);
-            return false;
-          });
-      if ($.futon.storage.get("sidebar") == "hidden") {
-        $.futon.navigation.toggle(0);
-      }
-
-      $.futon.navigation.updateDatabases();
-      // $.futon.navigation.updateSelection();
-      $.futon.navigation.ready();
-      $.futon.session.setupSidebar();
-      $.futon.session.sidebar();
-
-      $.couch.info({
-        success: function(info, status) {
-          $("#version").text(info.version);
-        }
-      });
-    })
-    
-    </script>
+    <link rel="stylesheet" href="style/layout.css" type="text/css">
   </head>
   <body>
     <div id="wrap">
@@ -67,7 +27,7 @@ specific language governing permissions and limitations under the License.
       </h1>
       <div id="content"></div>
       <div id="sidebar">
-        <a id="sidebar-toggle" href="#" title="Hide Sidebar"></a>
+        <!-- <a id="sidebar-toggle" href="#" title="Hide Sidebar"></a> -->
         <a href="index.html">
           <img id="logo" src="image/logo.png" width="175" height="150" alt="Apache CouchDB: Relax">
         </a>
@@ -113,4 +73,43 @@ specific language governing permissions and limitations under the License.
       </div>
     </div>
   </body>
+  <script src="script/jquery.js"></script>
+  <script src="script/jquery.couch.js"></script>
+  <script src="script/futon-dialogs.js"></script>
+  
+  <script src="script/json2.js"></script>
+  <script src="script/sha1.js"></script>
+  <script src="script/sammy/sammy.js"></script>
+  <script src="script/sammy/plugins/sammy.mustache.js"></script>
+  <script src="script/futon.js"></script>
+  
+  <script>
+  // Old futon code.    
+  // Toggling the sidebar is current disabled
+  
+  $('div#sidebar').ready(function () {
+    //   $("div#sidebar")
+    //     .find("#sidebar-toggle").click(function(e) {
+    //         $.futon.navigation.toggle(e.shiftKey ? 2500 : 500);
+    //         return false;
+    //       });
+    //   if ($.futon.storage.get("sidebar") == "hidden") {
+    //     $.futon.navigation.toggle(0);
+    //   }
+    // 
+    // $.futon.navigation.updateDatabases();
+    // $.futon.navigation.updateSelection();
+    // $.futon.navigation.ready();
+    $.futonSession.setupSidebar();
+    $.futonSession.sidebar();
+  
+    $.couch.info({
+      success: function(info, status) {
+        $("#version").text(info.version);
+      }
+    });
+  })
+  </script>
+  
+  
 </html>
