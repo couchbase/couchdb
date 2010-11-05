@@ -177,6 +177,7 @@ body.fullwidth #sidebar { border-bottom: 1px solid #333; right: 0;
 #sidebar-toggle { background: url(../image/sidebar-toggle.png) 0 0 no-repeat;
   color: #999; cursor: pointer; display: block; position: absolute; right: 0;
   top: 0; font-size: 110%; width: 26px; height: 32px; text-indent: -9999px;
+  cursor:pointer;
 }
 #sidebar-toggle:hover { background-position: -26px 0; }
 #sidebar-toggle:focus { outline: none; }
