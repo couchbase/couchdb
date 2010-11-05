@@ -101,7 +101,6 @@ specific language governing permissions and limitations under the License.
       }
       var c = $("ul#dbs");
       c.html('')
-      console.log(recents)
       for (var i=recents.length;i>0;i-=1) {
         c.append('<li><a href="#/'+encodeURIComponent(recents[i - 1])+'" title="'+recents[i - 1]+'">'+recents[i - 1]+'</a></li>')
       }
