@@ -19,7 +19,7 @@ app.loadDocument = function ()  {
 var db = this.params['db']
   , docid = this.params['docid']
   , _doc
-  , url = '/' + db + '/' + docid
+  , url = '/' + encodeURIComponent(db) + '/' + encodeURIComponent(docid)
   , _s = this
   ;
   

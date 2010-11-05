@@ -161,7 +161,7 @@ app.showChanges = function () {
     , t = this
     , a = arguments
     ;
-  $('span#topbar').html('<a href="#/">Overview</a><a href="#/'+db+'">'+db+'</a><strong>_changes</strong>');  
+  $('span#topbar').html('<a href="#/">Overview</a><a href="#/'+encodeURIComponent(db)+'">'+db+'</a><strong>_changes</strong>');  
   this.render('templates/changes.mustache').replace('#content').then(function () {
     app.loadChanges.apply(t, a)
   })
@@ -415,7 +415,7 @@ app.showView = function () {
     
   }
   
-  $('span#topbar').html('<a href="#/">Overview</a><a href="#/'+db+'">'+db+'</a><strong>_view</strong>');
+  $('span#topbar').html('<a href="#/">Overview</a><a href="#/'+encodeURIComponent(db)+'">'+db+'</a><strong>_view</strong>');
   if ($('div#query-options').length === 0) {
     this.render('templates/view.mustache').replace('#content').then(setupViews);
   } else {setupViews();}
@@ -541,7 +541,7 @@ app.showDatabase = function () {
     request({url: '/'+encodeURIComponent(db)+'/_all_docs?'+param(query)}, function (err, resp) {
       if (err) throw err;
       for (var i=0;i<resp.rows.length;i+=1) {
-        row = $('<tr><td><a href="#/'+db+'/'+resp.rows[i].key+'">'+resp.rows[i].key+'</a></td><td>' +
+        row = $('<tr><td><a href="#/'+db+'/'+encodeURIComponent(resp.rows[i].key)+'">'+resp.rows[i].key+'</a></td><td>' +
                  resp.rows[i].value.rev+'</td></tr>'
                )
                // rowCount currently breaks on odd pagination values
