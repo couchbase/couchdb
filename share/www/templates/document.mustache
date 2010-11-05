@@ -19,7 +19,7 @@ app.loadDocument = function ()  {
 var db = this.params['db']
   , docid = this.params['docid']
   , _doc
-  , url = '/' + db + '/' + docid
+  , url = '/' + encodeURIComponent(db) + '/' + encodeURIComponent(docid)
   , _s = this
   ;
   
@@ -79,7 +79,7 @@ var getEdit = function (obj, key, val, minWidth) {
   return edit;
 }
 
-var getAddButton = function (obj, keyClass, array, indent) {
+var getAddfButton = function (obj, keyClass, array, indent) {
   var addButton = $('<div class="add-button" />')
   .click(function () {
     $(this)
