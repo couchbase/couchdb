@@ -28,7 +28,7 @@ app.loadIndex = function () {
   $('span#topbar').html('<strong>Overview</strong>');
   $("#toolbar button.add").click($.futonDialogs.createDatabase);
   var dbRow = function (name, even) {
-    var row = $('<tr id=db-"'+name+'"><th><a href="#/'+name+'">'+name+'</a></th></tr>');
+    var row = $('<tr id=db-"'+name+'"><th><a href="#/'+encodeURIComponent(name)+'">'+name+'</a></th></tr>');
 
     row.addClass(even ? "even" : "odd")    
     row.appendTo('tbody.content');
