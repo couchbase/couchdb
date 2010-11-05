@@ -760,12 +760,16 @@ div#document-editor input {
   font: normal 90% Verdana, sans-serif;
 }
 
-div#document-editor div.save-button {
-  float:right; cursor:pointer; background-color:#D1D1D1;
+div#document-editor span#save-button {
+  cursor:pointer; background-color:#ddd;
   padding: 2px 5px 2px 5px;
   -moz-border-radius: 15px;
   -webkit-border-radius: 15px;
   border-radius: 15px;
+}
+
+div#autosave {
+  float:right;
 }
 
 /*
