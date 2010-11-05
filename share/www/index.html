@@ -27,7 +27,7 @@ specific language governing permissions and limitations under the License.
       </h1>
       <div id="content"></div>
       <div id="sidebar">
-        <!-- <a id="sidebar-toggle" href="#" title="Hide Sidebar"></a> -->
+        <span id="sidebar-toggle" title="Hide Sidebar"></span>
         <a href="index.html">
           <img id="logo" src="image/logo.png" width="175" height="150" alt="Apache CouchDB: Relax">
         </a>
@@ -84,163 +84,163 @@ specific language governing permissions and limitations under the License.
   <script src="script/futon.js"></script>
   
   <script>
-  // Old futon code.    
-  // Toggling the sidebar is current disabled
-  
-  // $('div#sidebar').ready(function () {
-    //   $("div#sidebar")
-    //     .find("#sidebar-toggle").click(function(e) {
-    //         $.futon.navigation.toggle(e.shiftKey ? 2500 : 500);
-    //         return false;
-    //       });
-    //   if ($.futon.storage.get("sidebar") == "hidden") {
-    //     $.futon.navigation.toggle(0);
-    //   }
-    // 
-    // $.futon.navigation.updateDatabases();
-    // $.futon.navigation.updateSelection();
-    // $.futon.navigation.ready();
+  $('div#sidebar span#sidebar-toggle').click(function (e) {
+    var hide = !$("#sidebar").is(".x-hidden");
+    $("#wrap").css({"margin-right": hide ? 0 : 210});
+    $('#sidebar')
+    .toggleClass("x-hidden", hide)
+    .css({
+      width: hide ? 26 : 210,
+      height: hide ? $("h1").outerHeight() - 1 : "100%",
+      right: hide ? 0 : -210
+    })
+    .children(":not(#sidebar-toggle)")[hide ? "hide" : "show"]()
+    ;
+    $("h1").css({"margin-right": hide ? 26 : 0});
     
-    var doLogin = function (name, password, callback) {
-      $.couch.login({
-        name : name,
-        password : password,
-        success : function() {
-          sidebar();
-          callback();
-        },
-        error : function(code, error, reason) {
-          sidebar();
-          callback({name : "Error logging in: "+reason});
-        }
-      });
-    };
-
-    var doSignup = function (name, password, callback, runLogin) {
-      $.couch.signup({
-        name : name
-      }, password, {
-        success : function() {
-          if (runLogin) {
-            doLogin(name, password, callback);            
-          } else {
-            callback();
-          }
-        },
-        error : function(status, error, reason) {
-          sidebar();
-          if (error == "conflict") {
-            callback({name : "Name '"+name+"' is taken"});
-          } else {
-            callback({name : "Signup error:  "+reason});
-          }
-        }
-      });
-    };
-
-    var validateUsernameAndPassword = function (data, callback) {
-      if (!data.name || data.name.length == 0) {
-        callback({name: "Please enter a name."});
-        return false;
-      };
-      if (!data.password || data.password.length == 0) {
-        callback({password: "Please enter a password."});
-        return false;
-      };
-      return true;
-    };
-
-   var createAdmin = function () {
-      $.showDialog("dialog/_create_admin.html", {
-        submit: function(data, callback) {
-          if (!validateUsernameAndPassword(data, callback)) return;
-          $.couch.config({
-            success : function() {
-              doLogin(data.name, data.password, function(errors) {
-                if(!$.isEmptyObject(errors)) {
-                  callback(errors);
-                  return;
-                }
-                doSignup(data.name, null, function(errors) {
-                  if (errors && errors.name && errors.name.indexOf && errors.name.indexOf("taken") == -1) {
-                    callback(errors);
-                  } else {
-                    callback();
-                  }
-                  }, false);
-                });            
-            }
-          }, "admins", data.name, data.password);
-        }
-      });
-      return false;
-    };
-
-    var login = function () {
-      $.showDialog("dialog/_login.html", {
-        submit: function(data, callback) {
-          if (!validateUsernameAndPassword(data, callback)) return;
-          doLogin(data.name, data.password, callback);
-        }
-      });
-      return false;
-    };
-
-    var logout = function () {
-      $.couch.logout({
-        success : function(resp) {
-          sidebar();
-        }
-      })
-    };
-
-    var signup = function () {
-      $.showDialog("dialog/_signup.html", {
-        submit: function(data, callback) {
-          if (!validateUsernameAndPassword(data, callback)) return;
-          doSignup(data.name, data.password, callback, true);
-        }
-      });
-      return false;
-    };
-
-    var setupSidebar = function() {
-      $("#userCtx .login").click(login);
-      $("#userCtx .logout").click(logout);
-      $("#userCtx .signup").click(signup);
-      $("#userCtx .createadmin").click(createAdmin);
-    };
-
-    var sidebar = function() {
-      // get users db info?
-    $("#userCtx span").hide();      
-      request({url:'/_session'}, function (err, r) {
-        var userCtx = r.userCtx;
-        $("#userCtx").userCtx = userCtx;
-        if (userCtx.name) {
-          $("#userCtx .name").text(userCtx.name).attr({href : $.couch.urlPrefix + "/_utils/document.html?"+encodeURIComponent(r.info.authentication_db)+"/org.couchdb.user%3A"+encodeURIComponent(userCtx.name)});
-          if (userCtx.roles.indexOf("_admin") != -1) {
-            $("#userCtx .loggedinadmin").show();
-          } else {
-            $("#userCtx .loggedin").show();
-          }
-        } else if (userCtx.roles.indexOf("_admin") != -1) {
-          $("#userCtx .adminparty").show();
-        } else {
-          $("#userCtx .loggedout").show();
-        };
-      })
-    };    
+    $(document.body).toggleClass("fullwidth", hide);
+  })
     
-    setupSidebar();
-    sidebar();
-    $.futonSidebar = sidebar;
-  
-    $.couch.info({
-      success: function(info, status) {
-        $("#version").text(info.version);
+  var doLogin = function (name, password, callback) {
+    $.couch.login({
+      name : name,
+      password : password,
+      success : function() {
+        sidebar();
+        callback();
+      },
+      error : function(code, error, reason) {
+        sidebar();
+        callback({name : "Error logging in: "+reason});
       }
     });
+  };
+
+  var doSignup = function (name, password, callback, runLogin) {
+    $.couch.signup({
+      name : name
+    }, password, {
+      success : function() {
+        if (runLogin) {
+          doLogin(name, password, callback);            
+        } else {
+          callback();
+        }
+      },
+      error : function(status, error, reason) {
+        sidebar();
+        if (error == "conflict") {
+          callback({name : "Name '"+name+"' is taken"});
+        } else {
+          callback({name : "Signup error:  "+reason});
+        }
+      }
+    });
+  };
+
+  var validateUsernameAndPassword = function (data, callback) {
+    if (!data.name || data.name.length == 0) {
+      callback({name: "Please enter a name."});
+      return false;
+    };
+    if (!data.password || data.password.length == 0) {
+      callback({password: "Please enter a password."});
+      return false;
+    };
+    return true;
+  };
+
+ var createAdmin = function () {
+    $.showDialog("dialog/_create_admin.html", {
+      submit: function(data, callback) {
+        if (!validateUsernameAndPassword(data, callback)) return;
+        $.couch.config({
+          success : function() {
+            doLogin(data.name, data.password, function(errors) {
+              if(!$.isEmptyObject(errors)) {
+                callback(errors);
+                return;
+              }
+              doSignup(data.name, null, function(errors) {
+                if (errors && errors.name && errors.name.indexOf && errors.name.indexOf("taken") == -1) {
+                  callback(errors);
+                } else {
+                  callback();
+                }
+                }, false);
+              });            
+          }
+        }, "admins", data.name, data.password);
+      }
+    });
+    return false;
+  };
+
+  var login = function () {
+    $.showDialog("dialog/_login.html", {
+      submit: function(data, callback) {
+        if (!validateUsernameAndPassword(data, callback)) return;
+        doLogin(data.name, data.password, callback);
+      }
+    });
+    return false;
+  };
+
+  var logout = function () {
+    $.couch.logout({
+      success : function(resp) {
+        sidebar();
+      }
+    })
+  };
+
+  var signup = function () {
+    $.showDialog("dialog/_signup.html", {
+      submit: function(data, callback) {
+        if (!validateUsernameAndPassword(data, callback)) return;
+        doSignup(data.name, data.password, callback, true);
+      }
+    });
+    return false;
+  };
+
+  var setupSidebar = function() {
+    $("#userCtx .login").click(login);
+    $("#userCtx .logout").click(logout);
+    $("#userCtx .signup").click(signup);
+    $("#userCtx .createadmin").click(createAdmin);
+  };
+
+  var sidebar = function() {
+    // get users db info?
+  $("#userCtx span").hide();      
+    request({url:'/_session'}, function (err, r) {
+      var userCtx = r.userCtx;
+      $("#userCtx").userCtx = userCtx;
+      if (userCtx.name) {
+        $("#userCtx .name").text(userCtx.name).attr({href : $.couch.urlPrefix + "/_utils/document.html?"+encodeURIComponent(r.info.authentication_db)+"/org.couchdb.user%3A"+encodeURIComponent(userCtx.name)});
+        if (userCtx.roles.indexOf("_admin") != -1) {
+          $("#userCtx .loggedinadmin").show();
+        } else {
+          $("#userCtx .loggedin").show();
+        }
+      } else if (userCtx.roles.indexOf("_admin") != -1) {
+        $("#userCtx .adminparty").show();
+      } else {
+        $("#userCtx .loggedout").show();
+      };
+    })
+  };    
+  
+  setupSidebar();
+  sidebar();
+  $.futonSidebar = sidebar;
+
+  $.couch.info({
+    success: function(info, status) {
+      $("#version").text(info.version);
+    }
+  });
   
   </script>
   
