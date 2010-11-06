@@ -35,7 +35,7 @@ get_os_process(Lang) ->
     {ok, Proc, {QueryConfig}} ->
         case (catch couch_query_servers:proc_prompt(Proc, [<<"reset">>, {QueryConfig}])) of
         true ->
-            proc_set_timeout(Proc, couch_util:get_value(<<"timeout">>, QueryConfig)),
+            proc_set_timeout(Proc, couch_util:get_value(<<"timeout">>, QueryConfig, 5000)),
             link(Proc#proc.pid),
             gen_server:call(couch_query_servers, {unlink_proc, Proc#proc.pid}),
             Proc;
