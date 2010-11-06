@@ -3,13 +3,14 @@
     <li><button class="load">Upload Attachment…</button></li>
     <li><button class="delete">Delete Document…</button></li>
   </ul>
-  <div id="autosave">
-    <input id="autosave-input" type="checkbox" checked></input>
-    <span id="autosave-txt">auto-save</span>
-  </div>  
+    
   
   <div id="document-editor">
-    
+    <div id="autosave">
+      <input id="autosave-input" type="checkbox" checked></input>
+      <span id="autosave-txt">auto-save</span>
+      <span id="save-button" style="display:none" class="save-disabled">save</span>
+    </div>
   </div>
 </div>
 
@@ -32,12 +33,46 @@ $('button.delete').click(function () {
       request({url:url, type:'PUT', data:_doc}, function (err, resp) {
         if (!err) {
           location.hash = "#/"+db;
+        } else {
+          console.log(err) // TODO: Add err to UI
         }
         callback();
       })
     }
   });
 })
+
+var saveDisabled = {cursor:"default", "background-color": "#ddd", color:"white"};
+var saveEnabled = {cursor:"pointer", "background-color": "#D1D1D1", color:"#575757"};
+$("span#save-button").css(saveDisabled)
+
+var save = function (cb, force) {
+  var doSave = function () {
+    request({url:url, data:_doc, type:'PUT'}, function (err, resp) {
+      if (err) console.log(err) // TODO: Add error message.
+      else {
+        _doc._rev = resp.rev;
+        $("div.doc-key:exactly('_rev')").next().html(createValue.string(_doc, '_rev', false));
+        cb()
+      }
+    })
+  }
+  
+  if (!$("input#autosave-input").attr('checked')) {
+    $("input#autosave-input").attr('disabled', true);
+    $("span#save-button")
+    .css(saveEnabled)
+    .unbind('click')
+    .click( function () {
+      save(function () {
+        $("input#autosave-input").attr('disabled', false);
+        $("span#save-button").unbind('click').css(saveDisabled);
+      }, true)
+    })
+    if (force) {doSave()}
+    else (cb())
+  } else {doSave();}   
+}
 
 var getEdit = function (obj, key, val, minWidth) {
   var edit = function () {
@@ -59,10 +94,7 @@ var getEdit = function (obj, key, val, minWidth) {
       .height(h)
       .change(function () {
         obj[key] = coerceFieldValue( $(this).val() );
-        request({url:url, type:'PUT', data:_doc,}, function (err, newresp) {
-          if (err) console.log(err)
-          _doc._rev = newresp.rev;
-          $("div.doc-key:exactly('_rev')").next().html(createValue.string(_doc, '_rev', false));
+        save(function (){
           val.parent().append(createValue[getType(obj[key])](obj, key, true));
           val.remove();
         })
@@ -102,9 +134,7 @@ var getAddButton = function (obj, keyClass, array, indent) {
           .change(function () {
             obj[v] = coerceFieldValue($(this).val());
             var p = $(this).parent();
-            request({url:url, type:'PUT', data:_doc}, function (err, resp) {
-              _doc._rev = resp.rev;
-              $("div.doc-key:exactly('_rev')").next().html(createValue.string(_doc, '_rev', false));
+            save(function () {
               p.remove();
               var newField = $('<div class="doc-field"></div>')
               .append('<div class="delete-button" style="margin-left:'+(indent * 10)+'px"/>')
@@ -132,22 +162,6 @@ var getAddButton = function (obj, keyClass, array, indent) {
     
   })    
   return addButton;
-}
-
-var save = function (cb) {
-  if ($("div#save-button").length) {
-    $("autosave-input").attr('disabled', true);
-    $("div#save-button").removeClass('')
-  }
-  
-  request({url:url, data:_doc, type:'PUT'}, function (err, resp) {
-    if (err) console.log(err)
-    else {
-      _doc._rev = resp.rev;
-      $("div.doc-key:exactly('_rev')").next().html(createValue.string(_doc, '_rev', false));
-      cb()
-    }
-  })
 }
 
 var createValue = {
@@ -331,7 +345,7 @@ request({url:url}, function (err, resp) {
                 _changed = true
                 request({url:'/'+db, type:'POST', data:{_id:$(this).val()}}, function (err, resp) {
                   if (err) {
-                    console.log(err)
+                    console.log(err) // TODO: Add error message to UI
                   } else {
                     // If it's a differnet docid than the one originally just pump the hash
                     if (resp.id !== docid) window.location.hash = '#/' + db + '/' + resp.id
@@ -365,26 +379,9 @@ request({url:url}, function (err, resp) {
   } else {
     // Autosave enable and disable
     $("input#autosave-input").click( function () {
-      if ($("span#autosave-txt").length) {
-        $("span#autosave-txt").remove();
-        $('<div id="save-button" class="save-button"></div>')
-        .click(function () {
-          request({url:url, data:_doc, type:'PUT'}, function (err, resp) {
-            if (err) console.log(err)
-            else {
-              _doc._rev = resp.rev;
-              $("div.doc-key:exactly('_rev')").next().html(createValue.string(_doc, '_rev', false));
-              $("div#")
-            }
-          })
-          $("autosave-input").attr('disabled', false);
-        })
-        .addClass('save-disabled')
-      } else {
-        $("div#autosave").append('<span id=>')
-        $("div.save-button").remove();
-      }
-      
+      var disable = !$("input#autosave-input").attr('checked');
+      $("span#autosave-txt")[disable ? "hide" : "show"]()
+      $("span#save-button")[disable ? "show" : "hide"]()
     })
   
     var d = $('div#document-editor');
