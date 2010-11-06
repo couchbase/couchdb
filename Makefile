@@ -20,7 +20,7 @@ compile: ${MODS:%=%.beam}
 	@echo "make clean - clean up"
 
 builddir:
-	@mkdir build
+	@mkdir -p build
 
 clean:	
 	rm -rf build
