@@ -11,7 +11,7 @@
 ## the License.
 
 noinst_SCRIPTS = run
-noinst_DATA = test_util.beam
+noinst_DATA = test_util.beam test_web.beam
 
 %.beam: %.erl
 	$(ERLC) $<
@@ -27,6 +27,7 @@ DISTCLEANFILES = temp.*
 
 EXTRA_DIST = \
 	run.tpl \
+	test_web.erl \
     001-load.t \
     002-icu-driver.t \
     010-file-basics.t \
@@ -66,4 +67,17 @@ EXTRA_DIST = \
     130-attachments-md5.t \
     140-attachment-comp.t \
     150-invalid-view-seq.t \
-    160-vhosts.t
+    160-vhosts.t \
+    170-os-daemons.es \
+	170-os-daemons.t \
+    171-os-daemons-config.es \
+    171-os-daemons-config.t \
+    172-os-daemon-errors.1.es \
+    172-os-daemon-errors.2.es \
+    172-os-daemon-errors.3.es \
+    172-os-daemon-errors.4.es \
+    172-os-daemon-errors.t \
+	173-os-daemon-cfg-register.es \
+	173-os-daemon-cfg-register.t \
+	180-http-proxy.ini \
+	180-http-proxy.t

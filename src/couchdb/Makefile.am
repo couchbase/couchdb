@@ -51,12 +51,14 @@ source_files = \
     couch_httpd_show.erl \
     couch_httpd_view.erl \
     couch_httpd_misc_handlers.erl \
+    couch_httpd_proxy.erl \
 	couch_httpd_rewrite.erl \
     couch_httpd_stats_handlers.erl \
 	couch_httpd_vhost.erl \
     couch_key_tree.erl \
     couch_log.erl \
     couch_native_process.erl \
+    couch_os_daemons.erl \
     couch_os_process.erl \
     couch_query_servers.erl \
     couch_ref_counter.erl \
@@ -108,6 +110,7 @@ compiled_files = \
     couch_httpd_auth.beam \
     couch_httpd_oauth.beam \
     couch_httpd_hosting_auth.beam \
+    couch_httpd_proxy.beam \
     couch_httpd_external.beam \
     couch_httpd_show.beam \
     couch_httpd_view.beam \
@@ -118,6 +121,7 @@ compiled_files = \
     couch_key_tree.beam \
     couch_log.beam \
     couch_native_process.beam \
+    couch_os_daemons.beam \
     couch_os_process.beam \
     couch_query_servers.beam \
     couch_ref_counter.beam \
