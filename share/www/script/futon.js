@@ -114,30 +114,6 @@ $.expr[":"].exactly = function(obj, index, meta, stack){
   return ($(obj).text() == meta[3])
 }
 
-function coerceFieldValue (val) {
-  if (val == 'null') return null;
-  if (val == 'true') return true;
-  if (val == 'false') return false;
-  
-  if (val.indexOf('.') !== -1) {
-    if (!isNaN(parseFloat(val))) return parseFloat(val)
-  } else {
-    if (!isNaN(parseInt(val))) return parseInt(val)
-  }
-  
-  if (val[0] === '"' && val[val.length - 1] === '"') {
-    return val.slice(1, val.length -1);
-  }
-  if (val[0] === '[' && val[val.length - 1] === ']') {
-    return JSON.parse(val);
-  }
-  if (val[0] === '{' && val[val.length - 1] === '}') {
-    return JSON.parse(val);
-  } else {
-    return val;
-  }
-}
-
 app.showIndex = function () {
   var t = this
     , a = arguments
