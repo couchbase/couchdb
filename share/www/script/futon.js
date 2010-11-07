@@ -540,7 +540,7 @@ app.showDatabase = function () {
   }
   
   // Decide whether or not to load the template content
-  if ( $('table#documents').length === 0) {    
+  if ( $('div#dbinfo').length === 0) {    
     this.render('templates/database.mustache', {db:db})
       .replace('#content')
       .then(function () {init(); moreRows(0,20);})
