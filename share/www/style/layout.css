@@ -179,6 +179,11 @@ body.fullwidth #sidebar { border-bottom: 1px solid #333; right: 0;
   top: 0; font-size: 110%; width: 26px; height: 32px; text-indent: -9999px;
   cursor:pointer;
 }
+.sidebar-toggle-expand {
+  -webkit-transform: rotate(180deg);
+  -moz-transform: rotate(180deg);
+}
+
 #sidebar-toggle:hover { background-position: -26px 0; }
 #sidebar-toggle:focus { outline: none; }
 #sidebar.hidden #sidebar-toggle { background-position: 0 -32px; }
