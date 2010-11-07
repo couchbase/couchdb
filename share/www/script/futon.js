@@ -289,7 +289,7 @@ app.showView = function () {
                              '<span class="viewstart">\<</span>' +
                            '</div>' +
                          '</td>' +
-                         '<td class="value"><code>' + row.value + '</code></td>' + 
+                         '<td class="value"><code>' + $.formatJSON(row.value) + '</code></td>' + 
                        '</tr>')
             if (row.doc) {
               var expand = function () {
