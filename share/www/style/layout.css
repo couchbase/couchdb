@@ -714,6 +714,10 @@ span.main-input {padding-right:7px;}
 
 /* Document Editor */
 
+div#document-container span#expand-all {
+  cursor:pointer; color:#FF0000;
+}
+
 div#document-editor { background: #fff; font-size:14px;}
 div#document-editor span.expand {cursor:pointer; color:#FF0000;}
 div#document-editor div.id-space {
@@ -801,10 +805,48 @@ span#document-revisions-title {
 }
 span.current-revision {
   font-weight:bold;
-  color:red;
   padding-right:10px;
   float:left;
   margin-bottom:10px;
+}
+span.revision {
+  padding-right:10px;
+  cursor:default;
+  float:left;
+  margin-bottom:10px;
+}
+span.revision-status-missing {
+  color:#8C8C8C;
+}
+span.revision-status-disk {
+  cursor:pointer;
+}
+span.revision-status-available {
+  cursor:pointer;
+}
+span.revision-status-deleted {
+  color:#8C8C8C;
+}
+
+.tooltip {
+  position:absolute;
+  font-size:12px;
+  padding:2px;
+  background-color:#B3B3B3;
+  border:checked;
+  color:black;
+  -moz-border-radius: 5px;
+  -webkit-border-radius: 5px;
+}
+span.tooltip-status-title {
+  color:black;
+  font-weight:normal;
+  text-align:center;
+}
+span.tooltip-status {
+  font-weight:bold;
+  color:red;
+  text-align:center;
 }
 
 /*
