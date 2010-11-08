@@ -6,6 +6,7 @@
   
   <div id="document-container">
     <div id="document-editor">
+      <span id="expand-all">...</span>
       <div id="autosave">
         <input id="autosave-input" type="checkbox" checked></input>
         <span id="autosave-txt">auto-save</span>
@@ -28,6 +29,29 @@ var db = this.params['db']
   , url = '/' + encodeURIComponent(db) + '/' + encodeURIComponent(docid)
   , _s = this
   ;
+
+function coerceFieldValue (val) {
+  if (val == 'null') return null;
+  if (val == 'true') return true;
+  if (val == 'false') return false;
+
+  if (val.match(/^[-+]?([0-9]*\.[0-9]+|[0-9]+)$/)) {
+    if (val.indexOf('.') !== -1) return parseFloat(val)
+    else return parseInt(val)
+  }
+  
+  if (val[0] === '"' && val[val.length - 1] === '"') {
+    return val.slice(1, val.length -1);
+  }
+  if (val[0] === '[' && val[val.length - 1] === ']') {
+    return JSON.parse(val);
+  }
+  if (val[0] === '{' && val[val.length - 1] === '}') {
+    return JSON.parse(val);
+  } else {
+    return val;
+  }
+}
   
 $('span#topbar').html('<a href="#/">Overview</a><a href="#/'+encodeURIComponent(db)+'">'+db+'</a><strong><a href="#'+url+'">'+docid+'</a></strong>');  
 
@@ -47,6 +71,9 @@ $('button.delete').click(function () {
   });
 })
 
+$('span#expand-all').click(function () {
+  $('span.expand').click(); 
+})
 var saveDisabled = {cursor:"default", "background-color": "#ddd", color:"white"};
 var saveEnabled = {cursor:"pointer", "background-color": "#D1D1D1", color:"#575757"};
 $("span#save-button").css(saveDisabled)
@@ -440,12 +467,35 @@ request({url:url+'?'+param(docQuery)}, function (err, resp) {
           if (resp._revs_info[x].rev == resp._rev) {
             h += '<span class="current-revision">'+resp._revs_info[x].rev.slice(0, resp._revs_info[x].rev.indexOf('-'))+'</span>'
           } else {
-            h += '<span class="revision" revision="'+resp._revs_info[x].rev+'">'+resp._revs_info[x].rev.slice(0, resp._revs_info[x].rev.indexOf('-'))+'</span>'
+            h += '<span class="revision revision-status-' + resp._revs_info[x].status + 
+                   '" rev_info_index="'+x+'" revision="' + resp._revs_info[x].rev + '">' + 
+                   resp._revs_info[x].rev.slice(0, resp._revs_info[x].rev.indexOf('-')) +
+                   '</span>'
           }
         }
         $('div#document-revisions').append(h)
-        $('span.revision').click(function () {
+        $('span.revision-status-available,span.revision-status-disk').click(function () {
           window.location.hash = '#' + url + '?rev=' + $(this).attr('revision')
+        })
+        $('span.revision').hover(function () {
+          var r = resp._revs_info[$(this).attr('rev_info_index')];
+          var t = $('<span class="tooltip">' +
+            '<span class="tooltip-rev">'+r.rev+'</span><br>' +
+            '<span class="tooltip-status"><span class="tooltip-status-title">status: </span>'+r.status+'</span>' +
+          '</span>')
+          var w = $("#content").width();
+          $(this).append(t);
+          t.css('left', t.position().left + 4) 
+          if ((t.position().left + t.width()) > w) {
+            t.css('top', t.position().top + $(this).height())
+            t.css('left', t.position().left - t.width())
+          }
+          if ( t.position().top !== $(this).position().top ) {
+            t.css('top', $(this).position().top - t.height() )
+          }
+          if (t.position().top + t.height() > w) t.css('top', t.position().top - t.height())
+        }, function () {
+          $(this).find('span.tooltip').remove();
         })
       }
     }
