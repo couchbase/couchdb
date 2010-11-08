@@ -114,30 +114,6 @@ $.expr[":"].exactly = function(obj, index, meta, stack){
   return ($(obj).text() == meta[3])
 }
 
-function coerceFieldValue (val) {
-  if (val == 'null') return null;
-  if (val == 'true') return true;
-  if (val == 'false') return false;
-  
-  if (val.indexOf('.') !== -1) {
-    if (!isNaN(parseFloat(val))) return parseFloat(val)
-  } else {
-    if (!isNaN(parseInt(val))) return parseInt(val)
-  }
-  
-  if (val[0] === '"' && val[val.length - 1] === '"') {
-    return val.slice(1, val.length -1);
-  }
-  if (val[0] === '[' && val[val.length - 1] === ']') {
-    return JSON.parse(val);
-  }
-  if (val[0] === '{' && val[val.length - 1] === '}') {
-    return JSON.parse(val);
-  } else {
-    return val;
-  }
-}
-
 app.showIndex = function () {
   var t = this
     , a = arguments
@@ -313,7 +289,7 @@ app.showView = function () {
                              '<span class="viewstart">\<</span>' +
                            '</div>' +
                          '</td>' +
-                         '<td class="value"><code>' + row.value + '</code></td>' + 
+                         '<td class="value"><code>' + $.formatJSON(row.value) + '</code></td>' + 
                        '</tr>')
             if (row.doc) {
               var expand = function () {
@@ -564,7 +540,7 @@ app.showDatabase = function () {
   }
   
   // Decide whether or not to load the template content
-  if ( $('table#documents').length === 0) {    
+  if ( $('div#dbinfo').length === 0) {    
     this.render('templates/database.mustache', {db:db})
       .replace('#content')
       .then(function () {init(); moreRows(0,20);})
