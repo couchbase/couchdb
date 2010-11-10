@@ -63,6 +63,7 @@ nobase_dist_localdata_DATA = \
     www/image/bg.png \
     www/image/cancel.gif \
     www/image/compact.png \
+    www/image/couchone.png \
     www/image/delete-mini.png \
     www/image/delete.png \
     www/image/grippie.gif \
