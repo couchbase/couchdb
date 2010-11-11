@@ -203,7 +203,8 @@ var getAddButton = function (obj, keyClass, array, indent) {
     var inputs = $(this).parent().find('input.new-field');
     if (array) {
       var input = $(inputs[inputs.length - 1])
-      input.val(parseInt($(input.parent().prev().find('div.array-key')[0]).text()) + 1).change();
+      var l = $(input.parent().prev().find('div.array-key')[0]).text();
+      input.val(parseInt(l.length ? l : "-1") + 1).change();
     } else {
       inputs[inputs.length - 1].select();
     }
