@@ -2,11 +2,14 @@
 
 <div id="query-options">
   <div id="view-selection">
-    <select name="ddoc-select" id="ddoc-select">
-      <option value="Select Design">Select Design</option>
-    </select>
-    <select name="view-select" id="view-select" disabled>
-    </select>
+    <div id="ddoc-selection"></div>
+    <div id="ddoc-view-selection"></div>
+  </div>
+  <div class="spacer"></div>
+  <div id="view-editor">
+    <textarea id="view-editor-map"></textarea>
+    <textarea id="view-editor-reduce"></textarea>
+    <span class="save-view-button">save</span>
   </div>
   <div class="spacer" />
   <div class="primary-view-options odd">

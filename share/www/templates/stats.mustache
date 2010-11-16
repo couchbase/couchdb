@@ -19,6 +19,7 @@
   
   var refresh = function () {
     request({url:"/_active_tasks"}, function (err, tasks) {
+      if (err) console.log(err)
       $("#status tbody.content").empty();
       if (!tasks.length) {
         $("<tr class='none'><th colspan='4'>No tasks running</th></tr>")
