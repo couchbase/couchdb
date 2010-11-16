@@ -119,7 +119,7 @@
           $.couch.db(dbName).drop({
             success: function(resp) {
               callback();
-              location.href = "index.html";
+              location.href = "#/";
               if (window !== null) {
                 $("#dbs li").filter(function(index) {
                   return $("a", this).text() == dbName;
