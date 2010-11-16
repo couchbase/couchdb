@@ -1,5 +1,5 @@
 <ul id="toolbar">
-  <li><button class="add">Create Database …</button></li>
+  <input id="create-db-input"></input><span id="add-db-button">Create Database</span>
 </ul>
 
 <table class="listing" id="databases" cellspacing="0">
@@ -25,8 +25,23 @@
 
 <script>
 app.loadIndex = function () {
-  $('span#topbar').html('<strong>Overview</strong>');
-  $("#toolbar button.add").click($.futonDialogs.createDatabase);
+  $('span#topbar').html('<strong>Overview</strong>');  
+  
+  $('span#add-db-button').hover(
+    function () {$(this).css({'background-color':"#D3D3D3", 'border-color':"#E0E0E0"})}, 
+    function () {$(this).css({'background-color':"#E0E0E0", 'border-color':"#D3D3D3"})}
+  )
+  .click(function () {
+    request({url:'/'+$('input#create-db-input').val(), type:'PUT'}, function (err, resp) {
+      if (err) console.log(err);
+      else {
+        console.log(resp);
+        window.location.hash = "#/"+$('input#create-db-input').val()
+      }
+    })
+  })
+  $('input#create-db-input').change(function(){$('span#add-db-button').click()})
+  
   var dbRow = function (name, even) {
     var row = $('<tr id=db-"'+name+'"><th><a href="#/'+encodeURIComponent(name)+'">'+name+'</a></th></tr>');
 
