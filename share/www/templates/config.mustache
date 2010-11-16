@@ -31,15 +31,9 @@
           row.find("th").attr("rowspan", options.length);
         });
         $("#config tbody tr").removeClass("odd").filter(":odd").addClass("odd");
-        $("#config tbody td.value code").makeEditable({
-          accept: function(newValue) {
-            var row = $(this).parents("tr").eq(0);
-            $.couch.config({
-              success: function(resp) {
-                row.find("td.value code").text(newValue);
-            }}, row.data("section"), row.data("option"), newValue);
-          }
-        }).parent().parent()
+        $("#config tbody td.value code").click() // Fill in with editable code
+        $("#config tbody td.value code")
+        .parent().parent()
           .append($('<td><div style="text-align:center;""><a class="remove" href="#remove">x</a></div></td>'))
           .click(function (ev) {
             // There is a listener that stops all events below this element which is
@@ -67,7 +61,7 @@
                 fail = true;
               }
               if (fail) {return}
-              $.couch.config({ success: function () {callback();location = location.href.split('#')[0]} }
+              $.couch.config({ success: function () {callback(); app.showConfig.apply(_this, _args);} }
                              , data.section, data.option, data.val);
             }
           });
