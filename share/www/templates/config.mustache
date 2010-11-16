@@ -31,7 +31,26 @@
           row.find("th").attr("rowspan", options.length);
         });
         $("#config tbody tr").removeClass("odd").filter(":odd").addClass("odd");
-        $("#config tbody td.value code").click() // Fill in with editable code
+        $("#config tbody td.value code").click(function () {
+          $(this).hide().parent().append(
+            $('<input class="config-editor-input" value="'+$(this).text()+'"></input>')
+            .change(function () {
+              var self = $(this)
+                , p = self.parent().parent().find("td.name")
+                , section = encodeURIComponent(p.attr('section'))
+                , key = encodeURIComponent(p.text())
+                , val = JSON.stringify(self.val())
+                ;
+              request({url:'/_config/'+section+'/'+key, data:val, type:'PUT'}, function (err, resp) {
+                if (err) console.log(err)
+                else {
+                  self.parent().find('code').show().text(JSON.parse(val))
+                  self.remove();
+                }
+              })
+            })
+          )
+        })
         $("#config tbody td.value code")
         .parent().parent()
           .append($('<td><div style="text-align:center;""><a class="remove" href="#remove">x</a></div></td>'))
