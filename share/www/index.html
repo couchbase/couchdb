@@ -90,6 +90,9 @@ specific language governing permissions and limitations under the License.
   // Recent databases
   
   (function () {
+    // Start Sammy app
+    futonApp.use('Mustache'); 
+    futonApp.run();
     
     var store = window.localStorage;
     if (!store) var recents = []
@@ -275,6 +278,9 @@ specific language governing permissions and limitations under the License.
       }
     });
     
+    $("span#raw-link").click(function () {
+      window.location = window.location.hash.replace('#','');
+    })
   })()
   
   </script>

@@ -673,7 +673,7 @@ app.wildcard = function () {
   app.showDocument.call(this, arguments)
 }
 
-var a = $.sammy(function () {
+var futonApp = $.sammy(function () {
   // Index of all databases
   this.get('', app.showIndex);
   this.get("#/", app.showIndex);
@@ -701,13 +701,3 @@ var a = $.sammy(function () {
   
   this.get(/\#\/(.*)/, app.wildcard)
 })
-
-$(function () {
-  $("span#raw-link").click(function () {
-    window.location = window.location.hash.replace('#','');
-  })
-  
-  a.use('Mustache'); 
-  a.run(); 
-  
-});
