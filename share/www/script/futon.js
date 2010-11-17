@@ -94,8 +94,9 @@ var param = function( a ) {
 }
 
 var request = function (options, callback) {
-  options.success = function (obj) {
-    callback(null, obj);
+  options.success = function (obj, t, xhr) {
+    if (xhr.status === 0) callback(xhr);
+    else callback(null, obj);
   }
   options.error = function (err) {
     if (err) callback(err);
@@ -116,8 +117,10 @@ var handleError = function (err, resp) {
   catch(e) {}
   var e = $('<div class="error-bubble"></div>')
   if (err.status) e.append('<span class="error-code">'+err.status+'</span>')
+  else if (err.status === 0) e.append('<span class="error-code">Lost Connection</span>')
   
-  e.append('<span class="error-title">'+resp.error || err.statusText || resp+'</span>')
+  e.append('<span class="error-title">'+resp.error || err.statusText || resp +'</span>')
+  if (e.find('span.error-title').text() == "undefined") e.find('span.error-title').text('')
   if (resp.error) e.append('<br>').append('<span class="error-text">'+resp.reason+'</span>')
   
   // Because of futon's crazy scroll constraints we can't leave the error
