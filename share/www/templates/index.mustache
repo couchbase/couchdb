@@ -33,7 +33,7 @@ app.loadIndex = function () {
   )
   .click(function () {
     request({url:'/'+$('input#create-db-input').val(), type:'PUT'}, function (err, resp) {
-      if (err) console.log(err);
+      if (err) handleError(err, resp);
       else {
         console.log(resp);
         window.location.hash = "#/"+$('input#create-db-input').val()
@@ -58,22 +58,20 @@ app.loadIndex = function () {
   }
 
   request({url: '/_all_dbs'}, function (err, dbs) {
-    if (err) $('tbody.content').append('<tr><td>error</td><td>error</td><td>error</td></tr>');
-    else {
-      var moreRows = function (start, limit) {
-        for (var i=start;i<(start + limit);i+=1) { 
-           if (dbs[i]) dbRow(dbs[i], isEven(i));
-           else {$('div#pagination').remove(); return;}
-        }
-        $('span.more').unbind('click');
-        $('span.more').click(function ( ) { moreRows(i, parseInt($('#pages-input').val())) })
+    if (err) handleError(err, dbs)    
+    var moreRows = function (start, limit) {
+      for (var i=start;i<(start + limit);i+=1) { 
+         if (dbs[i]) dbRow(dbs[i], isEven(i));
+         else {$('div#pagination').remove(); return;}
       }
-      if (dbs.length > 20) {
-        var pagination = '<div id="pagination"><span class="more">Load </span><input type="text" id="pages-input" value=20></input><span class="more"> More Items</span></div>'
-         $('td.more').append(pagination);
-      }
-      moreRows(0, 20);
+      $('span.more').unbind('click');
+      $('span.more').click(function ( ) { moreRows(i, parseInt($('#pages-input').val())) })
     }
+    if (dbs.length > 20) {
+      var pagination = '<div id="pagination"><span class="more">Load </span><input type="text" id="pages-input" value=20></input><span class="more"> More Items</span></div>'
+       $('td.more').append(pagination);
+    }
+    moreRows(0, 20);
   })
 }
 </script>

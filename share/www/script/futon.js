@@ -110,6 +110,35 @@ var request = function (options, callback) {
   $.ajax(options)
 }
 
+var handleError = function (err, resp) {
+  if (!resp) resp = err.responseText
+  try {resp = JSON.parse(resp)}
+  catch(e) {}
+  var e = $('<div class="error-bubble"></div>')
+  if (err.status) e.append('<span class="error-code">'+err.status+'</span>')
+  
+  e.append('<span class="error-title">'+resp.error || err.statusText || resp+'</span>')
+  if (resp.error) e.append('<br>').append('<span class="error-text">'+resp.reason+'</span>')
+  
+  // Because of futon's crazy scroll constraints we can't leave the error
+  // container in the default html and have to append it to content when it's not there
+  
+  if (!$('div#error-container').length) {
+    $('div#content').prepend('<div id="error-container"></div>')
+  }
+  e.appendTo('div#error-container')
+  var r = $('<span class="remove-error"></span>')
+  .click(function () {
+    $(this).remove();
+    e.remove();
+  })
+  e.parent().append(r);
+  var p = e.position();
+  r.css({left:p.left+e.outerWidth()+5, top:p.top + (e.outerHeight() / 2) - (r.outerHeight()/2)})
+  if (console) console.log(err)
+  throw {err:err, resp:resp, e:e}
+}
+
 $.expr[":"].exactly = function(obj, index, meta, stack){ 
   return ($(obj).text() == meta[3])
 }
@@ -347,6 +376,7 @@ app.showView = function () {
       request({url: '/' + encodeURIComponent(db) + 
                     '/_all_docs?startkey="_design/"&endkey="_design0"&include_docs=true'}, 
                     function (err, docs) {
+        if (err) handleError(err, docs);
         $("div#view-selection").attr('loaded', true); 
         var s = $('div#ddoc-selection');
         var getAddView = function () {
@@ -452,6 +482,7 @@ app.showView = function () {
         if (m.length) ddoc_.views[view].map = m;
         if (r.length) ddoc_.views[view].reduce = r;
         request({url:'/'+encodeURIComponent(db), type:'POST', data:ddoc_}, function (err, resp) {
+          if (err) handleError(err, resp);
           $('div#content').html('');
           var oldHash = window.location.hash
             , h = '#/' + encodeURIComponent(db) + '/_design/' + ddoc + '/_view/' + view + "?limit=10"
@@ -482,6 +513,7 @@ app.showDatabase = function () {
     $("#toolbar button.add").click( function () { 
       $("div#content").html('');
       request({url:'/_uuids'}, function (err, resp) {
+        if (err) handleError(err, resp);
         location.hash = '#/' + db + '/' + resp.uuids[0]
       })
       // location.hash = "#/" + db + '/_new';
@@ -522,6 +554,7 @@ app.showDatabase = function () {
     }
 
     request({url: '/'+encodeURIComponent(db)}, function (err, info) {
+      if (err) handleError(err, info);
       // Fill out all info from the db query.
       for (i in info) {$('div#'+i).text(info[i])}
       var disk_size = info.disk_size;
@@ -529,12 +562,13 @@ app.showDatabase = function () {
       
       // Query for ddocs to calculate size
       request({url:'/'+encodeURIComponent(db)+'/_all_docs?startkey="_design/"&endkey="_design0"'}, function (err, docs) {
+        if (err) handleError(err, docs)
         var sizes = [];
         for (var i=0;i<docs.rows.length;i+=1) {
           // Query every db for it's size info
           // Note: because of a current bug this query sometimes causes a view update even with stale=ok
           request({url:'/'+encodeURIComponent(db)+'/'+docs.rows[i].id+'/_info?stale=ok'}, function (err, info) {
-            if (err) throw err
+            if (err) handleError(err, info);
             sizes.push(info.view_index.disk_size);
             if (sizes.length === docs.rows.length) {
               // All queries are finished, update size info
@@ -590,7 +624,7 @@ app.showDatabase = function () {
       query = {limit:limit, skip:start}
     }
     request({url: '/'+encodeURIComponent(db)+'/_all_docs?'+param(query)}, function (err, resp) {
-      if (err) throw err;
+      if (err) handleError(err, resp);
       for (var i=0;i<resp.rows.length;i+=1) {
         row = $('<tr><td><a href="#/'+db+'/'+encodeURIComponent(resp.rows[i].key)+'">'+resp.rows[i].key+'</a></td><td>' +
                  resp.rows[i].value.rev+'</td></tr>'

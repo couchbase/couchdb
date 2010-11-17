@@ -42,11 +42,9 @@
                 , val = JSON.stringify(self.val())
                 ;
               request({url:'/_config/'+section+'/'+key, data:val, type:'PUT'}, function (err, resp) {
-                if (err) console.log(err)
-                else {
-                  self.parent().find('code').show().text(JSON.parse(val))
-                  self.remove();
-                }
+                if (err) handleError(err, resp);
+                self.parent().find('code').show().text(JSON.parse(val))
+                self.remove();
               })
             })
           )

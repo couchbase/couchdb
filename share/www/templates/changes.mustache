@@ -27,6 +27,7 @@ app.loadChanges = function () {
   if (query) url += ('?' + param(query));
   var rowCount = 0;
   request({url:url}, function (err, resp) {
+    if (err) handleError(err, resp);
     // Render the response in 10 row chunks for efficiency
     var pending = []
       , renderPending = function () {$('table#changes').append(pending.join('')); pending = [];}

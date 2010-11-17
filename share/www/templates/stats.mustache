@@ -19,7 +19,7 @@
   
   var refresh = function () {
     request({url:"/_active_tasks"}, function (err, tasks) {
-      if (err) console.log(err)
+      if (err) handleError(err, tasks);
       $("#status tbody.content").empty();
       if (!tasks.length) {
         $("<tr class='none'><th colspan='4'>No tasks running</th></tr>")
@@ -54,6 +54,7 @@
   }
   
   request({url:'/_stats'}, function (err, stats) {
+    if (err) handleError(err, stats);
     var info = $('#content').append('<h2>Raw Info</h2>')
       , text = ''
       ;

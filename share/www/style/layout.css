@@ -928,6 +928,43 @@ span#add-db-button {
   border-color:#D3D3D3;
 }
 
+/* Error Panels */
+
+div#error-container {
+  width:90%;
+  padding-bottom:5px;
+}
+
+div#error-container div.error-bubble {
+  padding: 2px 15px 2px 15px;
+  -moz-border-radius: 35px;
+  -webkit-border-radius: 35px;
+  width:100%;
+  background-color:#E0E0E0;
+  border-color:#D3D3D3;
+  border-style:solid;
+  border-width:2px;
+  display:normal;
+  margin-bottom:2px;
+}
+
+div#error-container span.error-code {
+  color:red;
+  font-weight:bold;
+  height:100%;
+  padding-right:10px;
+}
+div#error-container span.error-title {
+  font-weight:bold;
+}
+span.remove-error {
+  position:absolute;
+  background: url(../image/delete-mini.png) no-repeat;
+  cursor:pointer;
+  width: 15px; height: 15px;
+  border:none;
+}
+
 /*
 #fields tbody.content th button.delete {
   background: url(../image/delete-mini.png) no-repeat; border: none;

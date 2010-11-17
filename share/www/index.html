@@ -25,7 +25,6 @@ specific language governing permissions and limitations under the License.
         <span id="topbar">&nbsp</span>
         <span id="raw-link" >&nbsp</span>
       </h1>
-      <div id="error-container"></div>
       <div id="content"></div>
       <div id="sidebar">
         <span id="sidebar-toggle" title="Hide Sidebar">△</span>
@@ -246,6 +245,7 @@ specific language governing permissions and limitations under the License.
       // get users db info?
       $("#userCtx span").hide();      
       request({url:'/_session'}, function (err, r) {
+        if (err) handleError(err, r);
         var userCtx = r.userCtx;
         $("#userCtx").userCtx = userCtx;
         if (userCtx.name) {
