@@ -27,11 +27,7 @@
 app.loadIndex = function () {
   $('span#topbar').html('<strong>Overview</strong>');  
   
-  $('span#add-db-button').hover(
-    function () {$(this).css({'background-color':"#D3D3D3", 'border-color':"#E0E0E0"})}, 
-    function () {$(this).css({'background-color':"#E0E0E0", 'border-color':"#D3D3D3"})}
-  )
-  .click(function () {
+  var createDatabase = function () {
     request({url:'/'+$('input#create-db-input').val(), type:'PUT'}, function (err, resp) {
       if (err) handleError(err, resp);
       else {
@@ -39,8 +35,14 @@ app.loadIndex = function () {
         window.location.hash = "#/"+$('input#create-db-input').val()
       }
     })
-  })
-  $('input#create-db-input').change(function(){$('span#add-db-button').click()})
+  }
+  $('span#add-db-button').hover(
+    function () {$(this).css({'background-color':"#D3D3D3", 'border-color':"#E0E0E0"})}, 
+    function () {$(this).css({'background-color':"#E0E0E0", 'border-color':"#D3D3D3"})}
+  )
+  .click(createDatabase)
+  ;
+  $('input#create-db-input').change(createDatabase);
   
   var dbRow = function (name, even) {
     var row = $('<tr id=db-"'+name+'"><th><a href="#/'+encodeURIComponent(name)+'">'+name+'</a></th></tr>');
