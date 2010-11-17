@@ -161,15 +161,15 @@ var getAddButton = function (obj, keyClass, array, indent) {
       .append('<div class="id-space"></div>')
       .append(
         $('<input class="new-field" type="text" />')
-        .width(largestWidth('div.'+keyClass))
+        .width(largestWidth('div.'+keyClass, 100))
         .change(function () {
           var t = $(this)
             , v = t.val()
             ;
           t.parent().append(
-            $('<div class="'+keyClass+' '+(array ? 'array' : 'object')+'-key" >'+v+'</div>')
-            .width(largestWidth('div.'+keyClass))
+            $('<div class="'+keyClass+' '+(array ? 'array' : 'object')+'-key" >'+v+'</div>') 
           )
+          $('div.'+keyClass).width(largestWidth('div.'+keyClass))
           $('<input type="text" />')
           .width(450)
           .change(function () {

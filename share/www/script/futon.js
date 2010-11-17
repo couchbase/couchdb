@@ -44,8 +44,8 @@ function getType (obj) {
   } else {return typeof obj}
 }
 
-function largestWidth (selector) {
-  var min_width = 0;
+function largestWidth (selector, min) {
+  var min_width = min || 0;
   $(selector).each(function(i, n){
       var this_width = $(n).width();
       if (this_width > min_width) {
