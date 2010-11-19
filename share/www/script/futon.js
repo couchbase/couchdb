@@ -1,3 +1,17 @@
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not
+// use this file except in compliance with the License. You may obtain a copy of
+// the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+// WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+// License for the specific language governing permissions and limitations under
+// the License.
+
+// A simple class to represent a database. Uses XMLHttpRequest to interface with
+// the CouchDB server.
   
 var app = {};
 window.app = app;
@@ -44,8 +58,8 @@ function getType (obj) {
   } else {return typeof obj}
 }
 
-function largestWidth (selector) {
-  var min_width = 0;
+function largestWidth (selector, min) {
+  var min_width = min || 0;
   $(selector).each(function(i, n){
       var this_width = $(n).width();
       if (this_width > min_width) {
@@ -94,8 +108,9 @@ var param = function( a ) {
 }
 
 var request = function (options, callback) {
-  options.success = function (obj) {
-    callback(null, obj);
+  options.success = function (obj, t, xhr) {
+    if (xhr.status === 0) callback(xhr);
+    else callback(null, obj);
   }
   options.error = function (err) {
     if (err) callback(err);
@@ -108,6 +123,37 @@ var request = function (options, callback) {
   options.dataType = 'json';
   options.contentType = 'application/json'
   $.ajax(options)
+}
+
+var handleError = function (err, resp) {
+  if (!resp) resp = err.responseText
+  try {resp = JSON.parse(resp)}
+  catch(e) {}
+  var e = $('<div class="error-bubble"></div>')
+  if (err.status) e.append('<span class="error-code">'+err.status+'</span>')
+  else if (err.status === 0) e.append('<span class="error-code">Lost Connection</span>')
+  
+  e.append('<span class="error-title">'+resp.error || err.statusText || resp +'</span>')
+  if (e.find('span.error-title').text() == "undefined") e.find('span.error-title').text('')
+  if (resp.error) e.append('<br>').append('<span class="error-text">'+resp.reason+'</span>')
+  
+  // Because of futon's crazy scroll constraints we can't leave the error
+  // container in the default html and have to append it to content when it's not there
+  
+  if (!$('div#error-container').length) {
+    $('div#content').prepend('<div id="error-container"></div>')
+  }
+  e.appendTo('div#error-container')
+  var r = $('<span class="remove-error"></span>')
+  .click(function () {
+    $(this).remove();
+    e.remove();
+  })
+  e.parent().append(r);
+  var p = e.position();
+  r.css({left:p.left+e.outerWidth()+5, top:p.top + (e.outerHeight() / 2) - (r.outerHeight()/2)})
+  if (console) console.log(err)
+  throw {err:err, resp:resp, e:e}
 }
 
 $.expr[":"].exactly = function(obj, index, meta, stack){ 
@@ -169,39 +215,18 @@ app.showReplicator = function () {
     
   })
 }
+var ddoc_;
 
 app.showView = function () {
   var db = this.params['db']
     , ddoc = this.params['ddoc']
     , view = this.params['view']
+    , _this = this
+    , _args = arguments
     ;
   
-  var populateViews = function (ddoc, view) {
-    var v = $('select#view-select');
-    app.ddoc_ = ddoc;
-    v.css('color', '#1A1A1A')
-    v.attr('loaded', true)
-    if (!ddoc.views) {
-      v.append($('<option value="No Views">No Views</option>'))
-    } else {
-      v.html('')
-      v.attr('disabled', false);
-      if (!view) { v.append('<option value="Select View">Select View</option>') }
-      for (i in ddoc.views) { 
-        if (view && i === view) {
-          v.append('<option value="'+i+'" selected>'+i+'</option>'); 
-        } else {
-          v.append('<option value="'+i+'">'+i+'</option>'); 
-        }
-      }
-      v.change(function () {
-        refresh();
-      })
-    }
-  }
-  
   var refresh = function () {
-    var h = '#/' + db + '/' + $('select#ddoc-select').val() + '/_view/' + $('select#view-select').val()
+    var h = '#/' + encodeURIComponent(db) + '/_design/' + ddoc + '/_view/' + view
       , query = {}
       ;
     $('input.qinput').each(function (i, n) {
@@ -232,26 +257,6 @@ app.showView = function () {
   }
   
   var setupViews = function () {
-    if (!$('select#ddoc-select').attr('loaded')) {
-      request({url: '/' + encodeURIComponent(db) + 
-                    '/_all_docs?startkey="_design/"&endkey="_design0"&include_docs=true'}, 
-                    function (err, docs) { 
-        var s = $('select#ddoc-select');
-        s.attr('loaded', true)
-        docs.rows.forEach(function (row) {
-          if (ddoc) {
-            s.append($('<option value="'+row.id+'" selected>'+row.id+'</option>'))
-          } else {
-            s.append($('<option value="'+row.id+'">'+row.id+'</option>'))
-          }
-        })
-        s.change(function () {
-          request({url: '/'+ encodeURIComponent(db) + '/' + s.val()}, function (err, ddoc) {
-            populateViews(ddoc)
-          })
-        })
-      })
-    } 
     
     var updateResults = function () {
       var c = $('tbody.content')
@@ -269,7 +274,7 @@ app.showView = function () {
           ))
         } else {
           $('th.doc').remove()
-          if (getQuery().include_docs) {
+          if (getQuery() && getQuery().include_docs) {
             $('tr.viewhead').append('<th class="doc">doc<span class="expand-all">⟱</span></th>').find('span')
               .click(function () {$('span.expand-doc').click()})
           }
@@ -368,7 +373,8 @@ app.showView = function () {
       if (!$('input.quinput[name=limit]').attr('released')) {
         $('*.qinput').css('color', '#1A1A1A');
         $('*.qinput').attr('disabled', false);
-        if (!app.ddoc_.views[view].reduce) {
+        
+        if (!ddoc_.views[view] && !ddoc_.views[view].reduce) {
           $('input.reduce').attr('disabled', true)
           $('span.reduce').css('color', '#A1A1A1');
         }
@@ -382,12 +388,129 @@ app.showView = function () {
       updateResults();
     }
     
-    if (!$('select#view-select').attr('loaded') && ddoc) {
-      request({url: '/'+ encodeURIComponent(db) + '/_design/' + ddoc}, function (err, ddoc) {
-        populateViews(ddoc, view);
-        release();
+    if (!$("div.view-ddoc").length) {
+      // No views in the list, populat
+      request({url: '/' + encodeURIComponent(db) + 
+                    '/_all_docs?startkey="_design/"&endkey="_design0"&include_docs=true'}, 
+                    function (err, docs) {
+        if (err) handleError(err, docs);
+        $("div#view-selection").attr('loaded', true); 
+        var s = $('div#ddoc-selection');
+        var getAddView = function () {
+          var addView = $('<div class="ddoc-view-select"><span class="add-view">new</span></div>')
+          addView.click(function () {
+            var self = $(this)
+            $('<input class="new-view-field"></input>')
+            .change(function () {
+              view = $(this).val();
+              $("span.add-view").parent().before('<div class="ddoc-view-select">'+view+'</div>');
+              $('div#view-editor').show();
+              $('textarea#view-editor-reduce').val('')
+              $('textarea#view-editor-map').val('').focus();
+              $(this).remove();
+              self.show();
+            })
+            .appendTo(self.parent())
+            .focus()
+            ;
+            self.hide();
+          })
+          return addView;  
+        }
+        
+        docs.rows.forEach(function (row) {
+          var populate = function () {
+            var v = $("div#ddoc-view-selection");
+            v.html('')
+            if (row.doc.views) {
+              for (viewName in row.doc.views) {
+                $('<div class="ddoc-view-select">'+viewName+'<span class="edit-view">edit</span></div>')
+                .appendTo(v)
+                .click(function () {
+                  window.location.hash = "#/"+encodeURIComponent(db)+'/'+row.id+'/_view/'+encodeURIComponent(viewName)+'?limit=10'
+                })
+              }
+            }
+            v.append(getAddView());
+            $("span.edit-view")
+            .click(function () {
+              var v = $(this).parent().text()
+              v = v.slice(0, v.length -4)
+              $('div#view-editor').show();
+              $('textarea#view-editor-map').val(ddoc_.views[v].map)
+              $('textarea#view-editor-reduce').val(ddoc_.views[v].reduce)
+            })
+            ddoc_ = row.doc;
+            if (view) {
+              release();
+            }             
+          }
+          
+          $('<div class="view-ddoc">'+row.id+'</div>')
+          .click(function () {
+            populate();
+            $("div.view-ddoc-selected").removeClass("view-ddoc-selected");
+            $(this).addClass("view-ddoc-selected");
+            $("*.qinput").attr('disabled', true).css('color', '#A1A1A1');
+            $("tbody.content").html('')
+            $('td#viewfoot').html('')
+            $('div#view-editor').hide();
+            window.location.hash = "#/"+encodeURIComponent(db)+'/'+row.id+'/_view/'
+          })
+          .appendTo(s)
+          if ('_design/'+ddoc == row.id) {
+            populate();
+          } 
+        })
+        $('<div class="view-ddoc"><span class="add-ddoc">new</span></div>')
+        .click(function () {
+          $('<input class="new-view-field"></input>')
+          .appendTo($(this).parent())
+          .change(function () {
+            var id = $(this).val();
+            if (id.slice(0, '_design/'.length) !== '_design/') id = '_design/'+id
+            
+            $(this).parent().append('<div class="view-ddoc">'+id+'</div>')
+            $(this).remove();
+            ddoc = id.replace('_design/', '')
+            ddoc_ = {_id:id, views:{}}
+            var av = getAddView();
+            $("div#ddoc-view-selection")
+            .html('')
+            .append(av)
+            ;
+            av.click();
+          })
+          .focus()
+          ;
+          $(this).remove()
+        })
+        .appendTo(s)
+        ;
       })
-    } else if (ddoc) { release(); }
+      $('span.save-view-button')
+      .unbind('click')
+      .click(function () {
+        var m = $('textarea#view-editor-map').val()
+          , r = $('textarea#view-editor-reduce').val()
+          ;
+        if (!ddoc_.views) ddoc_.views = {}
+        ddoc_.views[view] = {}
+        if (m.length) ddoc_.views[view].map = m;
+        if (r.length) ddoc_.views[view].reduce = r;
+        request({url:'/'+encodeURIComponent(db), type:'POST', data:ddoc_}, function (err, resp) {
+          if (err) handleError(err, resp);
+          $('div#content').html('');
+          var oldHash = window.location.hash
+            , h = '#/' + encodeURIComponent(db) + '/_design/' + ddoc + '/_view/' + view + "?limit=10"
+            ;
+          if (oldHash !== h) window.location.hash = h;
+          else {app.showView.apply(_this, _args)}
+        })
+      })
+      ;
+      
+    } else if (view) {release()}
     
   }
   
@@ -407,6 +530,7 @@ app.showDatabase = function () {
     $("#toolbar button.add").click( function () { 
       $("div#content").html('');
       request({url:'/_uuids'}, function (err, resp) {
+        if (err) handleError(err, resp);
         location.hash = '#/' + db + '/' + resp.uuids[0]
       })
       // location.hash = "#/" + db + '/_new';
@@ -447,6 +571,7 @@ app.showDatabase = function () {
     }
 
     request({url: '/'+encodeURIComponent(db)}, function (err, info) {
+      if (err) handleError(err, info);
       // Fill out all info from the db query.
       for (i in info) {$('div#'+i).text(info[i])}
       var disk_size = info.disk_size;
@@ -454,12 +579,13 @@ app.showDatabase = function () {
       
       // Query for ddocs to calculate size
       request({url:'/'+encodeURIComponent(db)+'/_all_docs?startkey="_design/"&endkey="_design0"'}, function (err, docs) {
+        if (err) handleError(err, docs)
         var sizes = [];
         for (var i=0;i<docs.rows.length;i+=1) {
           // Query every db for it's size info
           // Note: because of a current bug this query sometimes causes a view update even with stale=ok
           request({url:'/'+encodeURIComponent(db)+'/'+docs.rows[i].id+'/_info?stale=ok'}, function (err, info) {
-            if (err) throw err
+            if (err) handleError(err, info);
             sizes.push(info.view_index.disk_size);
             if (sizes.length === docs.rows.length) {
               // All queries are finished, update size info
@@ -515,7 +641,7 @@ app.showDatabase = function () {
       query = {limit:limit, skip:start}
     }
     request({url: '/'+encodeURIComponent(db)+'/_all_docs?'+param(query)}, function (err, resp) {
-      if (err) throw err;
+      if (err) handleError(err, resp);
       for (var i=0;i<resp.rows.length;i+=1) {
         row = $('<tr><td><a href="#/'+db+'/'+encodeURIComponent(resp.rows[i].key)+'">'+resp.rows[i].key+'</a></td><td>' +
                  resp.rows[i].value.rev+'</td></tr>'
@@ -561,7 +687,7 @@ app.wildcard = function () {
   app.showDocument.call(this, arguments)
 }
 
-var a = $.sammy(function () {
+var futonApp = $.sammy(function () {
   // Index of all databases
   this.get('', app.showIndex);
   this.get("#/", app.showIndex);
@@ -572,7 +698,9 @@ var a = $.sammy(function () {
   this.get('#/_replicate', app.showReplicator)
   
   this.get('#/:db/_views', app.showView);
+  this.get('#/:db/_design/:ddoc/_view/', app.showView);
   this.get('#/:db/_design/:ddoc/_view/:view', app.showView);
+  
   
   // Database view
   this.get('#/:db', app.showDatabase);
@@ -587,13 +715,3 @@ var a = $.sammy(function () {
   
   this.get(/\#\/(.*)/, app.wildcard)
 })
-
-$(function () {
-  $("span#raw-link").click(function () {
-    window.location = window.location.hash.replace('#','');
-  })
-  
-  a.use('Mustache'); 
-  a.run(); 
-  
-});

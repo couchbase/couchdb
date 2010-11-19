@@ -1,4 +1,6 @@
 \.svn
+\.git
+\.DS_Store
 ^AUTHORS
 ^BUGS
 ^CHANGES
@@ -58,11 +60,12 @@
 ^share/Makefile.in
 ^share/server/json2.js
 ^share/server/mimeparse.js
-^share/www/favicon.ico
+^share/www/favicon.*
 ^share/www/image/*
 ^share/www/script/jquery.*
 ^share/www/script/json2.js
 ^share/www/script/jspec/*
+^share/www/script/sammy/*
 ^share/www/script/sha1.js
 ^share/www/script/base64.js
 ^share/www/script/test/lorem*

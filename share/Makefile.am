@@ -42,7 +42,6 @@ nobase_dist_localdata_DATA = \
     www/dialog/_compact_cleanup.html \
     www/dialog/_create_admin.html \
     www/dialog/_create_config.html \
-    www/dialog/_create_database.html \
     www/dialog/_database_security.html \
     www/dialog/_delete_database.html \
     www/dialog/_delete_document.html \
@@ -52,6 +51,7 @@ nobase_dist_localdata_DATA = \
     www/dialog/_signup.html \
     www/dialog/_upload_attachment.html \
     www/favicon.ico \
+    www/favicon.png \
     www/image/add.png \
     www/image/apply.gif \
     www/image/bg.png \
@@ -84,7 +84,6 @@ nobase_dist_localdata_DATA = \
     www/image/toggle-expand.gif \
     www/image/twisty.gif \
     www/index.html \
-    www/old.layout.css \
     www/script/base64.js \
     www/script/couch.js \
     www/script/couch_test_runner.js \
@@ -99,7 +98,6 @@ nobase_dist_localdata_DATA = \
     www/script/jspec/jspec.js \
     www/script/jspec/jspec.xhr.js \
     www/script/oauth.js \
-    www/script/old-futon.js \
     www/script/sammy/plugins/sammy.cache.js \
     www/script/sammy/plugins/sammy.data_location_proxy.js \
     www/script/sammy/plugins/sammy.ejs.js \
@@ -119,6 +117,7 @@ nobase_dist_localdata_DATA = \
     www/script/test/all_docs.js \
     www/script/test/attachment_names.js \
     www/script/test/attachment_paths.js \
+    www/script/test/attachment_ranges.js \
     www/script/test/attachment_views.js \
     www/script/test/attachments.js \
     www/script/test/attachments_multipart.js \
@@ -161,6 +160,7 @@ nobase_dist_localdata_DATA = \
     www/script/test/reduce_false.js \
     www/script/test/reduce_false_temp.js \
     www/script/test/replication.js \
+    www/script/test/replicator_db.js \
     www/script/test/rev_stemming.js \
     www/script/test/rewrite.js \
     www/script/test/security_validation.js \
@@ -204,4 +204,4 @@ nobase_dist_localdata_DATA = \
     www/templates/replicator.mustache \
     www/templates/stats.mustache \
     www/templates/tests.mustache \
-    www/templates/view.mustache
+    www/templates/view.mustache 

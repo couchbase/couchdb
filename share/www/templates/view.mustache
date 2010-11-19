@@ -1,12 +1,30 @@
+<!--
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use
+this file except in compliance with the License. You may obtain a copy of the
+License at
+
+   http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed
+under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.
+
+-->
+
 <!-- The js code for this is in futon.js at app.showView() -->
 
 <div id="query-options">
   <div id="view-selection">
-    <select name="ddoc-select" id="ddoc-select">
-      <option value="Select Design">Select Design</option>
-    </select>
-    <select name="view-select" id="view-select" disabled>
-    </select>
+    <div id="ddoc-selection"></div>
+    <div id="ddoc-view-selection"></div>
+  </div>
+  <div class="spacer"></div>
+  <div id="view-editor">
+    <textarea id="view-editor-map"></textarea>
+    <textarea id="view-editor-reduce"></textarea>
+    <span class="save-view-button">save</span>
   </div>
   <div class="spacer" />
   <div class="primary-view-options odd">
