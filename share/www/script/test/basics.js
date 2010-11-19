@@ -192,12 +192,12 @@ couchTests.basics = function(debug) {
   T(xhr.status == 404);
   
   // Check for invalid document members
-  bad_docs = [
+  var bad_docs = [
     ["goldfish", {"_zing": 4}],
     ["zebrafish", {"_zoom": "hello"}],
     ["mudfish", {"zane": "goldfish", "_fan": "something smells delicious"}],
     ["tastyfish", {"_bing": {"wha?": "soda can"}}]
-  ]
+  ];
   var test_doc = function(info) {
   var data = JSON.stringify(info[1]);
     xhr = CouchDB.request("PUT", "/test_suite_db/" + info[0], {body: data});
