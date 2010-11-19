@@ -97,7 +97,10 @@
     // Page class for browse/database.html
     CouchDatabasePage: function() {
       var urlParts = location.search.substr(1).split("/");
-      var dbName = decodeURIComponent(urlParts.shift());
+      var dbName = decodeURIComponent(urlParts.shift())
+
+      var dbNameRegExp = new RegExp("[^a-z0-9\_\$\(\)\+\/\-]", "g");
+      dbName = dbName.replace(dbNameRegExp, "");
 
       $.futon.storage.declareWithPrefix(dbName + ".", {
         desc: {},
@@ -119,7 +122,7 @@
         if (viewName) {
           this.redirecting = true;
           location.href = "database.html?" + encodeURIComponent(dbName) +
-            "/" + viewName;
+            "/" + encodeURIComponent(viewName);
         }
       }
       var db = $.couch.db(dbName);
@@ -150,9 +153,13 @@
                 db.compact({success: function(resp) { callback() }});
                 break;
               case "compact_views":
-                var groupname = page.viewName.substring(8,
-                    page.viewName.indexOf("/_view"));
-                db.compactView(groupname, {success: function(resp) { callback() }});
+                var idx = page.viewName.indexOf("/_view");
+                if (idx == -1) {
+                    alert("Compact Views requires focus on a view!");
+                } else {
+                    var groupname = page.viewName.substring(8, idx);
+                    db.compactView(groupname, {success: function(resp) { callback() }});
+                }
                 break;
               case "view_cleanup":
                 db.viewCleanup({success: function(resp) { callback() }});
@@ -372,7 +379,8 @@
                 var path = $.couch.encodeDocId(doc._id) + "/_view/" +
                   encodeURIComponent(viewNames[j]);
                 var option = $(document.createElement("option"))
-                  .attr("value", path).text(viewNames[j]).appendTo(optGroup);
+                  .attr("value", path).text(encodeURIComponent(viewNames[j]))
+                  .appendTo(optGroup);
                 if (path == viewName) {
                   option[0].selected = true;
                 }
@@ -408,7 +416,7 @@
               }
               var viewCode = resp.views[localViewName];
               page.viewLanguage = resp.language || "javascript";
-              $("#language").val(page.viewLanguage);
+              $("#language").val(encodeURIComponent(page.viewLanguage));
               page.updateViewEditor(viewCode.map, viewCode.reduce || "");
               $("#viewcode button.revert, #viewcode button.save").attr("disabled", "disabled");
               page.storedViewCode = viewCode;
@@ -420,7 +428,7 @@
           page.updateViewEditor(page.storedViewCode.map,
             page.storedViewCode.reduce || "");
           page.viewLanguage = page.storedViewLanguage;
-          $("#language").val(page.viewLanguage);
+          $("#language").val(encodeURIComponent(page.viewLanguage));
           $("#viewcode button.revert, #viewcode button.save").attr("disabled", "disabled");
           page.isDirty = false;
           if (callback) callback();
@@ -504,7 +512,8 @@
                     callback({
                       docid: "Cannot save to " + data.docid +
                              " because its language is \"" + doc.language +
-                             "\", not \"" + page.viewLanguage + "\"."
+                             "\", not \"" +
+                             encodeURIComponent(page.viewLanguage) + "\"."
                     });
                     return;
                   }

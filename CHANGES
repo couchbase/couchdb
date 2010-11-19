@@ -1,6 +1,45 @@
 Apache CouchDB CHANGES
 ======================
 
+Version 1.0.2
+-------------
+
+Note: This version has not been released yet.
+
+Futon:
+
+ * Make test suite work with Safari and Chrome.
+
+Storage System:
+
+ * Fix leaking file handles after compacting databases and views.
+ * Fix databases forgetting their validation function after compaction.
+ * Fix occasional timeout errors after successfully compacting large databases.
+ * Fix ocassional error when writing to a database that has just been compacted.
+ * Fix occasional timeout errors on systems with slow or heavily loaded IO.
+
+Log System:
+
+ * Reduce lengthy stack traces.
+ * Allow logging of native <xml> types.
+
+HTTP Interface:
+
+ * Allow reduce=false parameter in map-only views.
+ * Fix parsing of Accept headers.
+
+Replicator:
+
+ * Updated ibrowse library to 2.1.0 fixing numerous replication issues.
+ * Fix authenticated replication (with HTTP basic auth) of design documents
+   with attachments.
+ * Various fixes to make replication more resilient for edge-cases.
+
+View Server:
+
+ * Don't trigger view updates when requesting `_design/doc/_info`.
+ * Fix for circular references in CommonJS requires.
+
 Version 1.0.1
 -------------
 
