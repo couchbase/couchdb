@@ -20,12 +20,12 @@ specific language governing permissions and limitations under the License.
     <link rel="stylesheet" href="style/layout.css?0.11.0" type="text/css">
     <script src="script/json2.js"></script>
     <script src="script/sha1.js"></script>
-    <script src="script/jquery.js?1.4.2"></script>
-    <script src="script/jquery.couch.js?0.11.0"></script>
-    <script src="script/jquery.dialog.js?0.11.0"></script>
-    <script src="script/futon.js?0.11.0"></script>
-    <script src="script/futon.browse.js?0.11.0"></script>
-    <script src="script/futon.format.js?0.11.0"></script>
+    <script src="script/jquery.js"></script>
+    <script src="script/jquery.couch.js"></script>
+    <script src="script/futon-dialogs.js"></script>
+    <script src="script/sammy/sammy.js"></script>
+    <script src="script/sammy/plugins/sammy.mustache.js"></script>
+    <script src="script/futon.js"></script>
     <script>
       $(function() {
         var ret, reason, q = window.location.search, qps = q.split("&");
@@ -49,19 +49,30 @@ specific language governing permissions and limitations under the License.
         }
         // do the sidebar but in the middle without the sidebar
         // $.futon.storage.set("sidebar", "hidden");
-        setTimeout(function() {
-          var ctx = $$("#userCtx").userCtx;
-          // $.futon.storage.set("sidebar", "show");
-          if (ctx && ctx.name) {
+        request({url:'/_session'}, function (err, session) {
+          console.log(session.userCtx)
+          if (session.userCtx && session.userCtx.name) {
             $("#aboutSession").append("<p>It looks like you are logged in, maybe you don't have access to that url.</p>");
+            $('span.loggedin').show();
+          } else if (session.userCtx && session.userCtx.name === null) {
+            if (session.userCtx.roles.indexOf('_admin') !== -1) {
+              $("#aboutSession").append("<p>It looks like you are in admin party, maybe you don't have access to that url.</p>");
+              $('span.adminparty').show();
+            } else {
+              $('span.loggedout').show();
+            }
+          } else if (session.userCtx.roles.indexOf('_admin') !== -1) {
+            $('span.loggedinadmin').show();
           }
-        },100);
+          
+        })
+        
       });
     </script>
   </head>
   <body>
     <div id="wrap">
-      <h1><a href="index.html">Overview</a>
+      <h1><a href="#/">Overview</a>
       <strong>Session</strong></h1>
       <div id="content">
         <h2>Establish or Modify Your Session</h2>

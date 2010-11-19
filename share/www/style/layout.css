@@ -447,7 +447,7 @@ div.info-value { float:left; margin-right:30px; }
 
 /* Documents table */
 
-#documents thead th { line-height: 150%; width: 50%; }
+#documents thead th { line-height: 150%; }
 #documents thead th label { color: #333; float: right; font-size: 90%;
   text-shadow: none;
 }
@@ -712,6 +712,63 @@ input.input-key {width:330px;}
 div.main-input {float:left; padding-right:30px;}
 span.main-input {padding-right:7px;}
 
+div#view-selection {
+  width:100%;
+}
+div#ddoc-selection {
+  width:50%;
+  float:left;
+  cursor:pointer;
+}
+div#ddoc-view-selection {
+  width:50%;
+  float:left;
+  cursor:pointer;
+}
+div#view-editor {
+  width:100%;
+  display:none;
+}
+textarea#view-editor-map {
+  width:49%;
+  height:200px;
+  float:left;
+}
+textarea#view-editor-reduce {
+  width:49%;
+  height:200px;
+  float:left;
+}
+span.edit-view {
+  color:blue;
+  font-size:10px;
+  padding-left:8px;
+  cursor:pointer;
+}
+span.add-view {
+  color:blue;
+  cursor:pointer;
+}
+span.add-ddoc {
+  color:blue;
+  cursor:pointer;
+}
+span.save-view-button {
+  float:right;
+  cursor:pointer;
+  background-color:#E0E0E0;
+  padding: 2px 2px 2px 2px;
+  -moz-border-radius: 35px;
+  -webkit-border-radius: 35px;
+  border-radius: 35px;
+  border-style:solid;
+  border-width:2px;
+  border-color:#D3D3D3;
+  margin-top:5px;
+  margin-right:5px;
+  margin-bottom:5px;
+}
+
 /* Document Editor */
 
 div#document-container span#expand-all {
@@ -847,6 +904,65 @@ span.tooltip-status {
   font-weight:bold;
   color:red;
   text-align:center;
+}
+
+/* New Index Page */
+
+input#create-db-input {
+  margin-right:10px;
+  padding-top:2px;
+  padding-bottom:2px;
+  font:  normal Verdana, sans-serif;
+  font-size:16px;
+}
+span#add-db-button {
+  cursor:pointer;
+  background-color:#E0E0E0;
+  padding: 2px 2px 2px 2px;
+  -moz-border-radius: 35px;
+  -webkit-border-radius: 35px;
+  border-radius: 35px;
+  border-style:solid;
+  border-width:2px;
+  font-size:12px;
+  border-color:#D3D3D3;
+}
+
+/* Error Panels */
+
+div#error-container {
+  width:90%;
+  padding-bottom:5px;
+}
+
+div#error-container div.error-bubble {
+  padding: 2px 15px 2px 15px;
+  -moz-border-radius: 35px;
+  -webkit-border-radius: 35px;
+  width:100%;
+  background-color:#E0E0E0;
+  border-color:#D3D3D3;
+  border-style:solid;
+  border-width:2px;
+  display:normal;
+  margin-bottom:2px;
+}
+
+div#error-container span.error-code {
+  color:red;
+  font-weight:bold;
+  height:100%;
+  padding-right:10px;
+}
+div#error-container span.error-title {
+  font-weight:bold;
+}
+span.remove-error {
+  position:absolute;
+  background: url(../image/delete-mini.png) no-repeat;
+  cursor:pointer;
+  width: 15px; height: 15px;
+  border:none;
 }
 
 /*

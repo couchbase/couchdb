@@ -1,23 +1,35 @@
-<div id="content">
-  <ul id="toolbar">
-    <li><button class="load">Upload Attachment…</button></li>
-    <li><button class="delete">Delete Document…</button></li>
-  </ul>
-  
-  <div id="document-container">
-    <div id="document-editor">
-      <span id="expand-all">...</span>
-      <div id="autosave">
-        <input id="autosave-input" type="checkbox" checked></input>
-        <span id="autosave-txt">auto-save</span>
-        <span id="save-button" style="display:none" class="save-disabled">save</span>
-      </div>
+<!--
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use
+this file except in compliance with the License. You may obtain a copy of the
+License at
+
+   http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed
+under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.
+
+-->
+<ul id="toolbar">
+  <li><button class="load">Upload Attachment…</button></li>
+  <li><button class="delete">Delete Document…</button></li>
+</ul>
+
+<div id="document-container">
+  <div id="document-editor">
+    <span id="expand-all">...</span>
+    <div id="autosave">
+      <input id="autosave-input" type="checkbox" checked></input>
+      <span id="autosave-txt">auto-save</span>
+      <span id="save-button" style="display:none" class="save-disabled">save</span>
     </div>
   </div>
-  <div class="spacer"></div>
-  <div id="document-revisions">
-    <span id="document-revisions-title">Revisions:</div>
-  </div>
+</div>
+<div class="spacer"></div>
+<div id="document-revisions">
+  <span id="document-revisions-title">Revisions:</div>
 </div>
 
 <script>
@@ -60,12 +72,9 @@ $('button.delete').click(function () {
     submit: function(data, callback) {
       _doc._deleted = true;
       request({url:url, type:'PUT', data:_doc}, function (err, resp) {
-        if (!err) {
-          location.hash = "#/"+db;
-        } else {
-          console.log(err) // TODO: Add err to UI
-        }
         callback();
+        if (err) handleError(err, resp);
+        location.hash = "#/"+db;
       })
     }
   });
@@ -82,27 +91,25 @@ var save = function (cb, force) {
   var doSave = function () {
     var previousRevision = _doc._rev;
     request({url:url, data:_doc, type:'PUT'}, function (err, resp) {
-      if (err) console.log(err) // TODO: Add error message.
-      else {
-        _doc._rev = resp.rev;
-        $("div.doc-key:exactly('_rev')").next().html(createValue.string(_doc, '_rev', false));
-        $("span.current-revision")
-        .removeClass('current-revision')
-        .addClass("revision")
-        .attr('revision', previousRevision)
-        .click(function () {
-          window.location.hash = '#' + url + '?rev=' + $(this).attr('revision');
-        })
-        ;
-        $("span#document-revisions-title")
-        .after(
-          '<span class="current-revision">' + 
-            resp.rev.slice(0, resp.rev.indexOf('-')) + 
-          '</span>'
-        )
-        ;
-        cb()
-      }
+      if (err) handleError(err, resp)
+      _doc._rev = resp.rev;
+      $("div.doc-key:exactly('_rev')").next().html(createValue.string(_doc, '_rev', false));
+      $("span.current-revision")
+      .removeClass('current-revision')
+      .addClass("revision")
+      .attr('revision', previousRevision)
+      .click(function () {
+        window.location.hash = '#' + url + '?rev=' + $(this).attr('revision');
+      })
+      ;
+      $("span#document-revisions-title")
+      .after(
+        '<span class="current-revision">' + 
+          resp.rev.slice(0, resp.rev.indexOf('-')) + 
+        '</span>'
+      )
+      ;
+      cb()
     })
   }
   
@@ -168,15 +175,15 @@ var getAddButton = function (obj, keyClass, array, indent) {
       .append('<div class="id-space"></div>')
       .append(
         $('<input class="new-field" type="text" />')
-        .width(largestWidth('div.'+keyClass))
+        .width(largestWidth('div.'+keyClass, 100))
         .change(function () {
           var t = $(this)
             , v = t.val()
             ;
           t.parent().append(
-            $('<div class="'+keyClass+' '+(array ? 'array' : 'object')+'-key" >'+v+'</div>')
-            .width(largestWidth('div.'+keyClass))
+            $('<div class="'+keyClass+' '+(array ? 'array' : 'object')+'-key" >'+v+'</div>') 
           )
+          $('div.'+keyClass).width(largestWidth('div.'+keyClass))
           $('<input type="text" />')
           .width(450)
           .change(function () {
@@ -396,16 +403,13 @@ request({url:url+'?'+param(docQuery)}, function (err, resp) {
                 if (_changed) return
                 _changed = true
                 request({url:'/'+db, type:'POST', data:{_id:$(this).val()}}, function (err, resp) {
-                  if (err) {
-                    console.log(err) // TODO: Add error message to UI
-                  } else {
-                    // If it's a differnet docid than the one originally just pump the hash
-                    if (resp.id !== docid) window.location.hash = '#/' + db + '/' + resp.id
-                    else {
-                      // If not then refresh the page and the view of the document
-                      $('div#document-editor').html('')
-                      app.showDocument.apply(_s, _s.arguments)
-                    }
+                  if (err) handleError(err, resp)
+                  // If it's a differnet docid than the one originally just pump the hash
+                  if (resp.id !== docid) window.location.hash = '#/' + db + '/' + resp.id
+                  else {
+                    // If not then refresh the page and the view of the document
+                    $('div#document-editor').html('')
+                    app.showDocument.apply(_s, _s.arguments)
                   }
                 })
               })
@@ -512,11 +516,11 @@ request({url:url+'?'+param(docQuery)}, function (err, resp) {
     .append('<div id="restore-button"><span id="restore">restore</span></div>')
     .click(function () {
       request({url:url}, function (err, resp) {
+        if (err) handleError(err, resp);
         _doc._rev = resp._rev;
         request({url:url, type:'PUT', data:_doc}, function (err, resp) {
-          if (!err) {
-            window.location.hash = '#' + url
-          } else {console.log(err)} // TODO: Add error handler
+          if (err) handleError(err, resp);
+          window.location.hash = '#' + url
         })
       })
     })
