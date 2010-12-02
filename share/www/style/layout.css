@@ -616,3 +616,6 @@ form#replicator p.actions { padding: 1px; clear: left; margin: 0;
 #loginSignup {
   font-size:200%;
 }
+
+/* GetSatisfaction overrides */
+a#fdbk_tab{left:10px !important}
