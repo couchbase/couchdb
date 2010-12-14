@@ -489,16 +489,16 @@ send_result(Client, Id, OriginalRevs, NewResult) ->
     % used to send a result to the client
     catch(Client ! {result, self(), {{Id, OriginalRevs}, NewResult}}).
 
-merge_rev_trees(_MergeConflicts, [], [], AccNewInfos, AccRemoveSeqs, AccSeq) ->
+merge_rev_trees(_Limit, _Merge, [], [], AccNewInfos, AccRemoveSeqs, AccSeq) ->
     {ok, lists:reverse(AccNewInfos), AccRemoveSeqs, AccSeq};
-merge_rev_trees(MergeConflicts, [NewDocs|RestDocsList],
+merge_rev_trees(Limit, MergeConflicts, [NewDocs|RestDocsList],
         [OldDocInfo|RestOldInfo], AccNewInfos, AccRemoveSeqs, AccSeq) ->
     #full_doc_info{id=Id,rev_tree=OldTree,deleted=OldDeleted,update_seq=OldSeq}
             = OldDocInfo,
-    NewRevTree = lists:foldl(
+    NewRevTree0 = lists:foldl(
         fun({Client, #doc{revs={Pos,[_Rev|PrevRevs]}}=NewDoc}, AccTree) ->
             if not MergeConflicts ->
-                case couch_key_tree:merge(AccTree, [couch_db:doc_to_tree(NewDoc)]) of
+                case couch_key_tree:merge(AccTree, couch_db:doc_to_tree(NewDoc)) of
                 {_NewTree, conflicts} when (not OldDeleted) ->
                     send_result(Client, Id, {Pos-1,PrevRevs}, conflict),
                     AccTree;
@@ -529,7 +529,7 @@ merge_rev_trees(MergeConflicts, [NewDocs|RestDocsList],
                                 NewDoc#doc{revs={OldPos, [OldRev]}}),
                         NewDoc2 = NewDoc#doc{revs={OldPos + 1, [NewRevId, OldRev]}},
                         {NewTree2, _} = couch_key_tree:merge(AccTree,
-                                [couch_db:doc_to_tree(NewDoc2)]),
+                                couch_db:doc_to_tree(NewDoc2)),
                         % we changed the rev id, this tells the caller we did
                         send_result(Client, Id, {Pos-1,PrevRevs},
                                 {ok, {OldPos + 1, NewRevId}}),
@@ -543,15 +543,16 @@ merge_rev_trees(MergeConflicts, [NewDocs|RestDocsList],
                 end;
             true ->
                 {NewTree, _} = couch_key_tree:merge(AccTree,
-                            [couch_db:doc_to_tree(NewDoc)]),
+                            couch_db:doc_to_tree(NewDoc)),
                 NewTree
             end
         end,
         OldTree, NewDocs),
+    NewRevTree = couch_key_tree:stem(NewRevTree0, Limit),
     if NewRevTree == OldTree ->
         % nothing changed
-        merge_rev_trees(MergeConflicts, RestDocsList, RestOldInfo, AccNewInfos,
-                AccRemoveSeqs, AccSeq);
+        merge_rev_trees(Limit, MergeConflicts, RestDocsList, RestOldInfo,
+            AccNewInfos, AccRemoveSeqs, AccSeq);
     true ->
         % we have updated the document, give it a new seq #
         NewInfo = #full_doc_info{id=Id,update_seq=AccSeq+1,rev_tree=NewRevTree},
@@ -559,8 +560,8 @@ merge_rev_trees(MergeConflicts, [NewDocs|RestDocsList],
             0 -> AccRemoveSeqs;
             _ -> [OldSeq | AccRemoveSeqs]
         end,
-        merge_rev_trees(MergeConflicts, RestDocsList, RestOldInfo,
-                [NewInfo|AccNewInfos], RemoveSeqs, AccSeq+1)
+        merge_rev_trees(Limit, MergeConflicts, RestDocsList, RestOldInfo,
+            [NewInfo|AccNewInfos], RemoveSeqs, AccSeq+1)
     end.
 
 
@@ -583,7 +584,8 @@ update_docs_int(Db, DocsList, NonRepDocs, MergeConflicts, FullCommit) ->
     #db{
         fulldocinfo_by_id_btree = DocInfoByIdBTree,
         docinfo_by_seq_btree = DocInfoBySeqBTree,
-        update_seq = LastSeq
+        update_seq = LastSeq,
+        revs_limit = RevsLimit
         } = Db,
     Ids = [Id || [{_Client, #doc{id=Id}}|_] <- DocsList],
     % lookup up the old documents, if they exist.
@@ -596,10 +598,8 @@ update_docs_int(Db, DocsList, NonRepDocs, MergeConflicts, FullCommit) ->
         end,
         Ids, OldDocLookups),
     % Merge the new docs into the revision trees.
-    {ok, NewDocInfos0, RemoveSeqs, NewSeq} = merge_rev_trees(
+    {ok, NewFullDocInfos, RemoveSeqs, NewSeq} = merge_rev_trees(RevsLimit,
             MergeConflicts, DocsList, OldDocInfos, [], [], LastSeq),
-
-    NewFullDocInfos = stem_full_doc_infos(Db, NewDocInfos0),
 
     % All documents are now ready to write.
 
@@ -775,7 +775,10 @@ copy_rev_tree_attachments(SrcDb, DestFd, Tree) ->
         end, Tree).
             
 
-copy_docs(Db, #db{fd=DestFd}=NewDb, InfoBySeq, Retry) ->
+copy_docs(Db, #db{fd=DestFd}=NewDb, InfoBySeq0, Retry) ->
+    % COUCHDB-968, make sure we prune duplicates during compaction
+    InfoBySeq = lists:usort(fun(#doc_info{id=A}, #doc_info{id=B}) -> A =< B end,
+        InfoBySeq0),
     Ids = [Id || #doc_info{id=Id} <- InfoBySeq],
     LookupResults = couch_btree:lookup(Db#db.fulldocinfo_by_id_btree, Ids),
 
@@ -866,7 +869,12 @@ start_copy_compact(#db{name=Name,filepath=Filepath}=Db) ->
     {ok, Fd} ->
         couch_task_status:add_task(<<"Database Compaction">>, <<Name/binary, " retry">>, <<"Starting">>),
         Retry = true,
-        {ok, Header} = couch_file:read_header(Fd);
+        case couch_file:read_header(Fd) of
+        {ok, Header} ->
+            ok;
+        no_valid_header ->
+            ok = couch_file:write_header(Fd, Header=#db_header{})
+        end;
     {error, enoent} ->
         couch_task_status:add_task(<<"Database Compaction">>, Name, <<"Starting">>),
         {ok, Fd} = couch_file:open(CompactFile, [create]),

@@ -17,6 +17,11 @@ Storage System:
  * Fix occasional timeout errors after successfully compacting large databases.
  * Fix ocassional error when writing to a database that has just been compacted.
  * Fix occasional timeout errors on systems with slow or heavily loaded IO.
+ * Fix for frequently edited documents in multi-master deployments being
+   duplicated in _changes and _all_docs.  See COUCHDDB-968 for details on how
+   to repair.
+ * Significantly higher read and write throughput against database and
+   view index files.
 
 Log System:
 
@@ -39,6 +44,8 @@ View Server:
 
  * Don't trigger view updates when requesting `_design/doc/_info`.
  * Fix for circular references in CommonJS requires.
+ * Made isArray() function available to functions executed in the query server.
+ * Documents are now sealed before being passed to map functions.
 
 Version 1.0.1
 -------------
