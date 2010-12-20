@@ -112,6 +112,11 @@ loop(Socket, Body) ->
             case Data of
                 <<131, 108, 0, 0, _/binary>> ->
                     try binary_to_term(Data) of
+                        Term when is_list(Term) =:= false ->
+                            % Should never happen since 108 above means "list"
+                            gen_event:sync_notify(error_logger,
+                                          {self(), couch_error,
+                                           {"Bad term", []}});
                         Term when is_list(Term) ->
                             % Unfortunately, the only thing I know to do at
                             % this point is *re-convert* back to binary to
