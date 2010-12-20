@@ -3,7 +3,7 @@
 
 %% @doc MochiWeb HTTP Request abstraction.
 
--module(mochiweb_request, [Socket, Method, RawPath, Version, Headers]).
+-module(mochiweb_request, [Socket, Method, RawPath, Version, Oob, Headers]).
 -author('bob@mochimedia.com').
 
 -include_lib("kernel/include/file.hrl").
@@ -66,6 +66,8 @@ get(raw_path) ->
     RawPath;
 get(version) ->
     Version;
+get(oob) ->
+    Oob;
 get(headers) ->
     Headers;
 get(peer) ->
