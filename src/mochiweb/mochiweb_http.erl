@@ -95,8 +95,60 @@ default_body(Req) ->
     default_body(Req, Req:get(method), Req:get(path)).
 
 loop(Socket, Body) ->
-    inet:setopts(Socket, [{packet, http}]),
-    request(Socket, Body).
+    % Look for possible out-of-band information, which is a list (maximum 64k
+    % elements) in term_to_binary format.
+    Request = fun() ->
+        inet:setopts(Socket, [{packet, http}]),
+        request(Socket, Body)
+    end,
+
+    inet:setopts(Socket, [{active, once}]),
+    receive
+        {error, Error} ->
+            gen_event:sync_notify(error_logger, {self(), couch_error,
+                {"Aborting due to error during socket receive: ~p",
+                 [Error]}});
+        {tcp, Socket, Data} ->
+            case Data of
+                <<131, 108, 0, 0, _/binary>> ->
+                    try binary_to_term(Data) of
+                        Term when is_list(Term) ->
+                            % Unfortunately, the only thing I know to do at
+                            % this point is *re-convert* back to binary to
+                            % see how long it was.
+                            TermLength = size(term_to_binary(Term)),
+                            Remainder = erlang:binary_part(Data,
+                                         {TermLength, size(Data) - TermLength}),
+
+                            % Continue with remainder.
+                            ok = gen_tcp:unrecv(Socket, Remainder),
+                            Request()
+                    catch error:badarg ->
+                        gen_event:sync_notify(error_logger,
+                                      {self(), couch_error,
+                                       {"Ignoring parse error (badarg)", []}}),
+
+                        % Continue with all data because it failed to parse.
+                        ok = gen_tcp:unrecv(Socket, Data),
+                        Request();
+                    Type:Er ->
+                        gen_event:sync_notify(error_logger,
+                                      {self(), couch_error,
+                                       {"Failed to parse query: ~p:~p",
+                                        [Type, Er]}})
+                    end;
+                NormalData ->
+                    % Continue with all (non-OOB) data.
+                    ok = gen_tcp:unrecv(Socket, NormalData),
+                    Request()
+            end;
+        _Other ->
+            gen_tcp:close(Socket),
+            exit(normal)
+    after ?IDLE_TIMEOUT ->
+        gen_tcp:close(Socket),
+        exit(normal)
+    end.
 
 request(Socket, Body) ->
     case gen_tcp:recv(Socket, 0, ?IDLE_TIMEOUT) of
