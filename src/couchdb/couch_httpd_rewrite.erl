@@ -171,6 +171,7 @@ handle_rewrite_req(#httpd{
                                              MochiReq:get(method),
                                              RawPath1,
                                              MochiReq:get(version),
+                                             MochiReq:get(oob),
                                              MochiReq:get(headers)),
 
             % cleanup, It force mochiweb to reparse raw uri.

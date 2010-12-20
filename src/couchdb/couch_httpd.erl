@@ -153,6 +153,7 @@ redirect_to_vhost(MochiReq, DefaultFun,
                                       MochiReq:get(method),
                                       Target,
                                       MochiReq:get(version),
+                                      MochiReq:get(oob),
                                       MochiReq:get(headers)),
     % cleanup, It force mochiweb to reparse raw uri.
     MochiReq1:cleanup(),
