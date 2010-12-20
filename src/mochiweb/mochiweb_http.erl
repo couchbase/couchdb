@@ -108,7 +108,8 @@ loop(Socket, Body, FirstBytes, Size) when Size > ?MAX_OOB_SIZE ->
     exit(normal);
 
 loop(Socket, Body, FirstBytes, Size) ->
-    Request = fun(Oob) ->
+    Request = fun(Unwanted, Oob) ->
+        ok = gen_tcp:unrecv(Socket, Unwanted),
         inet:setopts(Socket, [{packet, http}]),
         request(Socket, Oob, Body)
     end,
@@ -140,8 +141,7 @@ loop(Socket, Body, FirstBytes, Size) ->
                                          {TermLength, size(Data) - TermLength}),
 
                             % Continue with remainder.
-                            ok = gen_tcp:unrecv(Socket, Remainder),
-                            Request(Term)
+                            Request(Remainder, Term)
                     catch error:badarg ->
                         % Probably not enough data collected.
                         loop(Socket, Body, Data, size(Data));
@@ -153,8 +153,7 @@ loop(Socket, Body, FirstBytes, Size) ->
                     end;
                 NormalData ->
                     % Continue with all (non-OOB) data.
-                    ok = gen_tcp:unrecv(Socket, NormalData),
-                    Request(null)
+                    Request(NormalData, null)
             end;
         _Other ->
             gen_tcp:close(Socket),
