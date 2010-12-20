@@ -11,6 +11,7 @@
 
 -define(IDLE_TIMEOUT, 30000).
 
+-define(MAX_OOB_SIZE, 4096).
 -define(MAX_HEADERS, 1000).
 -define(DEFAULTS, [{name, ?MODULE},
                    {port, 8888}]).
@@ -95,20 +96,33 @@ default_body(Req) ->
     default_body(Req, Req:get(method), Req:get(path)).
 
 loop(Socket, Body) ->
-    % Look for possible out-of-band information, which is a list (maximum 64k
-    % elements) in term_to_binary format.
+    loop(Socket, Body, <<"">>, 0).
+
+loop(Socket, Body, FirstBytes, Size) when Size > ?MAX_OOB_SIZE ->
+    %% Too much OOB data, bad request.
+    inet:setopts(Socket, [{packet, raw}]),
+    DummyReq = {'GET', {abs_path, "/"}, {1,0}, <<"">>},
+    Req = mochiweb:new_request({Socket, DummyReq, []}),
+    Req:respond({400, [], []}),
+    gen_tcp:close(Socket),
+    exit(normal);
+
+loop(Socket, Body, FirstBytes, Size) ->
     Request = fun(Oob) ->
         inet:setopts(Socket, [{packet, http}]),
         request(Socket, Oob, Body)
     end,
 
+    % Look for possible out-of-band information, which is a list (maximum 64k
+    % elements) in term_to_binary format.
     inet:setopts(Socket, [{active, once}]),
     receive
         {error, Error} ->
             gen_event:sync_notify(error_logger, {self(), couch_error,
                 {"Aborting due to error during socket receive: ~p",
                  [Error]}});
-        {tcp, Socket, Data} ->
+        {tcp, Socket, Chunk} ->
+            Data = <<FirstBytes/binary, Chunk/binary>>,
             case Data of
                 <<131, 108, 0, 0, _/binary>> ->
                     try binary_to_term(Data) of
@@ -129,13 +143,8 @@ loop(Socket, Body) ->
                             ok = gen_tcp:unrecv(Socket, Remainder),
                             Request(Term)
                     catch error:badarg ->
-                        gen_event:sync_notify(error_logger,
-                                      {self(), couch_error,
-                                       {"Ignoring parse error (badarg)", []}}),
-
-                        % Continue with all data because it failed to parse.
-                        ok = gen_tcp:unrecv(Socket, Data),
-                        Request(null);
+                        % Probably not enough data collected.
+                        loop(Socket, Body, Data, size(Data));
                     Type:Er ->
                         gen_event:sync_notify(error_logger,
                                       {self(), couch_error,
