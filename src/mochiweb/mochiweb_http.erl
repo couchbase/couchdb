@@ -97,9 +97,9 @@ default_body(Req) ->
 loop(Socket, Body) ->
     % Look for possible out-of-band information, which is a list (maximum 64k
     % elements) in term_to_binary format.
-    Request = fun() ->
+    Request = fun(Oob) ->
         inet:setopts(Socket, [{packet, http}]),
-        request(Socket, Body)
+        request(Socket, Oob, Body)
     end,
 
     inet:setopts(Socket, [{active, once}]),
@@ -122,7 +122,7 @@ loop(Socket, Body) ->
 
                             % Continue with remainder.
                             ok = gen_tcp:unrecv(Socket, Remainder),
-                            Request()
+                            Request(Term)
                     catch error:badarg ->
                         gen_event:sync_notify(error_logger,
                                       {self(), couch_error,
@@ -130,7 +130,7 @@ loop(Socket, Body) ->
 
                         % Continue with all data because it failed to parse.
                         ok = gen_tcp:unrecv(Socket, Data),
-                        Request();
+                        Request(null);
                     Type:Er ->
                         gen_event:sync_notify(error_logger,
                                       {self(), couch_error,
@@ -140,7 +140,7 @@ loop(Socket, Body) ->
                 NormalData ->
                     % Continue with all (non-OOB) data.
                     ok = gen_tcp:unrecv(Socket, NormalData),
-                    Request()
+                    Request(null)
             end;
         _Other ->
             gen_tcp:close(Socket),
@@ -150,14 +150,14 @@ loop(Socket, Body) ->
         exit(normal)
     end.
 
-request(Socket, Body) ->
+request(Socket, Oob, Body) ->
     case gen_tcp:recv(Socket, 0, ?IDLE_TIMEOUT) of
         {ok, {http_request, Method, Path, Version}} ->
-            headers(Socket, {Method, Path, Version}, [], Body, 0);
+            headers(Socket, {Method, Path, Version, Oob}, [], Body, 0);
         {error, {http_error, "\r\n"}} ->
-            request(Socket, Body);
+            request(Socket, Oob, Body);
         {error, {http_error, "\n"}} ->
-            request(Socket, Body);
+            request(Socket, Oob, Body);
         _Other ->
             gen_tcp:close(Socket),
             exit(normal)
