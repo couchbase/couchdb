@@ -11,6 +11,7 @@
 
 -define(IDLE_TIMEOUT, 30000).
 
+-define(MAX_OOB_SIZE, 4096).
 -define(MAX_HEADERS, 1000).
 -define(DEFAULTS, [{name, ?MODULE},
                    {port, 8888}]).
@@ -95,17 +96,81 @@ default_body(Req) ->
     default_body(Req, Req:get(method), Req:get(path)).
 
 loop(Socket, Body) ->
-    inet:setopts(Socket, [{packet, http}]),
-    request(Socket, Body).
+    loop(Socket, Body, <<"">>, 0).
 
-request(Socket, Body) ->
+loop(Socket, Body, FirstBytes, Size) when Size > ?MAX_OOB_SIZE ->
+    %% Too much OOB data, bad request.
+    inet:setopts(Socket, [{packet, raw}]),
+    DummyReq = {'GET', {abs_path, "/"}, {1,0}, <<"">>},
+    Req = mochiweb:new_request({Socket, DummyReq, []}),
+    Req:respond({400, [], []}),
+    gen_tcp:close(Socket),
+    exit(normal);
+
+loop(Socket, Body, FirstBytes, Size) ->
+    Request = fun(Unwanted, Oob) ->
+        ok = gen_tcp:unrecv(Socket, Unwanted),
+        inet:setopts(Socket, [{packet, http}]),
+        request(Socket, Oob, Body)
+    end,
+
+    % Look for possible out-of-band information, which is a list (maximum 64k
+    % elements) in term_to_binary format.
+    inet:setopts(Socket, [{active, once}]),
+    receive
+        {error, Error} ->
+            gen_event:sync_notify(error_logger, {self(), couch_error,
+                {"Aborting due to error during socket receive: ~p",
+                 [Error]}});
+        {tcp, Socket, Chunk} ->
+            Data = <<FirstBytes/binary, Chunk/binary>>,
+            case Data of
+                <<131, 108, 0, 0, _/binary>> ->
+                    try binary_to_term(Data) of
+                        Term when is_list(Term) =:= false ->
+                            % Should never happen since 108 above means "list"
+                            gen_event:sync_notify(error_logger,
+                                          {self(), couch_error,
+                                           {"Bad term", []}});
+                        Term when is_list(Term) ->
+                            % Unfortunately, the only thing I know to do at
+                            % this point is *re-convert* back to binary to
+                            % see how long it was.
+                            TermLength = size(term_to_binary(Term)),
+                            Remainder = erlang:binary_part(Data,
+                                         {TermLength, size(Data) - TermLength}),
+
+                            % Continue with remainder.
+                            Request(Remainder, Term)
+                    catch error:badarg ->
+                        % Probably not enough data collected.
+                        loop(Socket, Body, Data, size(Data));
+                    Type:Er ->
+                        gen_event:sync_notify(error_logger,
+                                      {self(), couch_error,
+                                       {"Failed to parse query: ~p:~p",
+                                        [Type, Er]}})
+                    end;
+                NormalData ->
+                    % Continue with all (non-OOB) data.
+                    Request(NormalData, null)
+            end;
+        _Other ->
+            gen_tcp:close(Socket),
+            exit(normal)
+    after ?IDLE_TIMEOUT ->
+        gen_tcp:close(Socket),
+        exit(normal)
+    end.
+
+request(Socket, Oob, Body) ->
     case gen_tcp:recv(Socket, 0, ?IDLE_TIMEOUT) of
         {ok, {http_request, Method, Path, Version}} ->
-            headers(Socket, {Method, Path, Version}, [], Body, 0);
+            headers(Socket, {Method, Path, Version, Oob}, [], Body, 0);
         {error, {http_error, "\r\n"}} ->
-            request(Socket, Body);
+            request(Socket, Oob, Body);
         {error, {http_error, "\n"}} ->
-            request(Socket, Body);
+            request(Socket, Oob, Body);
         _Other ->
             gen_tcp:close(Socket),
             exit(normal)

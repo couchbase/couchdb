@@ -64,27 +64,30 @@ all_loaded(Base) ->
 
 %% @spec new_request({Socket, Request, Headers}) -> MochiWebRequest
 %% @doc Return a mochiweb_request data structure.
-new_request({Socket, {Method, {abs_path, Uri}, Version}, Headers}) ->
+new_request({Socket, {Method, {abs_path, Uri}, Version, Oob}, Headers}) ->
     mochiweb_request:new(Socket,
                          Method,
                          Uri,
                          Version,
+                         Oob,
                          mochiweb_headers:make(Headers));
 % this case probably doesn't "exist".
 new_request({Socket, {Method, {absoluteURI, _Protocol, _Host, _Port, Uri},
-                      Version}, Headers}) ->
+                      Version, Oob}, Headers}) ->
     mochiweb_request:new(Socket,
                          Method,
                          Uri,
                          Version,
+                         Oob,
                          mochiweb_headers:make(Headers));
 %% Request-URI is "*"
 %% From http://www.w3.org/Protocols/rfc2616/rfc2616-sec5.html#sec5.1.2
-new_request({Socket, {Method, '*'=Uri, Version}, Headers}) ->
+new_request({Socket, {Method, '*'=Uri, Version, Oob}, Headers}) ->
     mochiweb_request:new(Socket,
                          Method,
                          Uri,
                          Version,
+                         Oob,
                          mochiweb_headers:make(Headers)).
 
 %% @spec new_response({Request, integer(), Headers}) -> MochiWebResponse
