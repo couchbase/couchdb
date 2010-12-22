@@ -109,7 +109,12 @@ loop(Socket, Body, FirstBytes, Size) when Size > ?MAX_OOB_SIZE ->
 
 loop(Socket, Body, FirstBytes, Size) ->
     Request = fun(Unwanted, Oob) ->
-        ok = gen_tcp:unrecv(Socket, Unwanted),
+        case Unwanted of
+            <<"">> ->
+                ok; % Don't unrecv <<"">> or it breaks {packet, http}.
+            _ ->
+                ok = gen_tcp:unrecv(Socket, Unwanted)
+        end,
         inet:setopts(Socket, [{packet, http}]),
         request(Socket, Oob, Body)
     end,
