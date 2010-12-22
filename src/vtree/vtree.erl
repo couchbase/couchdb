@@ -48,7 +48,8 @@ add_remove(Fd, Pos, AddKeyValues, KeysToRemove) ->
     % XXX vmx not sure about the structure of "KeysToRemove"
     NewPos = lists:foldl(fun({Mbr, DocId}, CurPos) ->
         io:format("vtree: delete (~p:~p): ~p~n", [Fd, CurPos, DocId]),
-        {ok, CurPos2} = delete(Fd, DocId, Mbr, CurPos),
+        % delete/4 returns {ok, integer()} or {empty, nil}
+        {_, CurPos2} = delete(Fd, DocId, Mbr, CurPos),
         CurPos2
     end, Pos, KeysToRemove),
     NewPos2 = lists:foldl(fun({{Mbr, DocId}, Value}, CurPos) ->
@@ -557,7 +558,7 @@ delete(Fd, DeleteId, DeleteMbr, RootPos) when not is_list(RootPos) ->
         {ok, RootNewPos};
     % Tree is completely empty
     {empty, RootPos} ->
-        empty;
+        {empty, nil};
     not_found ->
         not_found
     end;
