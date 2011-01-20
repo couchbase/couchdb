@@ -57,6 +57,8 @@ add_remove(Fd, Pos, TargetTreeHeight, AddKeyValues, KeysToRemove) ->
         CurPos2
     end, Pos, KeysToRemove),
     T1 = get_timestamp(),
+
+io:format("vtree: delete: NewPos: ~p~n", [NewPos]),
 %    {NewPos2, TreeHeight} = lists:foldl(fun({{Mbr, DocId}, Value}, {CurPos, _}) ->
 %        %io:format("vtree: add (~p:~p): {~p,~p}~n", [Fd, CurPos, DocId, Value]),
 %        {ok, _NewMbr, CurPos2, TreeHeight} = insert(Fd, CurPos, DocId,
@@ -74,7 +76,7 @@ add_remove(Fd, Pos, TargetTreeHeight, AddKeyValues, KeysToRemove) ->
         [{Mbr, #node{type=leaf}, {DocId, Value}}|Acc]
     end, [], AddKeyValues),
     {ok, NewPos2, TreeHeight} = vtree_bulk:bulk_load(
-            Fd, Pos, TargetTreeHeight, AddKeyValues2),
+            Fd, NewPos, TargetTreeHeight, AddKeyValues2),
     T2 = get_timestamp(),
     io:format(user, "It took: ~ps~n", [T2-T1]),
     io:format(user, "Tree height: ~p~n", [TreeHeight]),
@@ -104,6 +106,7 @@ count_total(Fd, RootPos) ->
 
 % @doc Folds through all leaf nodes. Fun takes a leaf child node (that
 % contains the catual data) as first argument, the accumulator as second.
+% Returns the accumulator.
 -spec foldl(Fd::file:io_device(), RootPos::integer(), Fun::fun(),
         InitAcc::any()) -> any().
 foldl(Fd, RootPos, Fun, InitAcc) ->
