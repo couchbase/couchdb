@@ -55,6 +55,11 @@ add_remove(Fd, Pos, TargetTreeHeight, AddKeyValues, KeysToRemove) ->
         {_, CurPos2} = delete(Fd, DocId, Mbr, CurPos),
         CurPos2
     end, Pos, KeysToRemove),
+    NewTargetTreeHeight = case NewPos of
+        % Tree is empty (that's the only reason the height might change)
+        nil -> 0;
+        _ -> TargetTreeHeight
+    end,
     T1 = get_timestamp(),
 %    {NewPos2, TreeHeight} = lists:foldl(fun({{Mbr, DocId}, Value}, {CurPos, _}) ->
 %        %io:format("vtree: add (~p:~p): {~p,~p}~n", [Fd, CurPos, DocId, Value]),
@@ -73,7 +78,7 @@ add_remove(Fd, Pos, TargetTreeHeight, AddKeyValues, KeysToRemove) ->
         [{Mbr, #node{type=leaf}, {DocId, Value}}|Acc]
     end, [], AddKeyValues),
     {ok, NewPos2, TreeHeight} = vtree_bulk:bulk_load(
-            Fd, NewPos, TargetTreeHeight, AddKeyValues2),
+            Fd, NewPos, NewTargetTreeHeight, AddKeyValues2),
     T2 = get_timestamp(),
     io:format(user, "It took: ~ps~n", [T2-T1]),
     io:format(user, "Tree height: ~p~n", [TreeHeight]),
