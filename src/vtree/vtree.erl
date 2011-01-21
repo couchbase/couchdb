@@ -679,7 +679,8 @@ delete(Fd, DeleteId, DeleteMbr, [NodePos|NodePosTail]) ->
                     {ok, NodeNewPos, NodePos}
                 end;
             false ->
-                not_found
+                % not found, go on with sibling nodes
+                delete(Fd, DeleteId, DeleteMbr, NodePosTail)
             end
         end;
     false ->
