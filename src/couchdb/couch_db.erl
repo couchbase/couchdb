@@ -555,7 +555,8 @@ prep_and_validate_replicated_updates(Db, [Bucket|RestBuckets], [OldInfo|RestOldI
     {ok, #full_doc_info{rev_tree=OldTree}} ->
         NewRevTree = lists:foldl(
             fun(NewDoc, AccTree) ->
-                {NewTree, _} = couch_key_tree:merge(AccTree, couch_db:doc_to_tree(NewDoc)),
+                {NewTree, _} = couch_key_tree:merge(AccTree,
+                    couch_db:doc_to_tree(NewDoc), Db#db.revs_limit),
                 NewTree
             end,
             OldTree, Bucket),
@@ -919,7 +920,7 @@ with_stream(Fd, #att{md5=InMd5,type=Type,encoding=Enc}=Att, Fun) ->
 
 write_streamed_attachment(_Stream, _F, 0) ->
     ok;
-write_streamed_attachment(Stream, F, LenLeft) ->
+write_streamed_attachment(Stream, F, LenLeft) when LenLeft > 0 ->
     Bin = F(),
     ok = couch_stream:write(Stream, Bin),
     write_streamed_attachment(Stream, F, LenLeft - size(Bin)).

@@ -191,6 +191,14 @@ handle_info({stream_next, Req_id}, #state{socket = Socket,
     {noreply, State};
 
 handle_info({stream_next, _Req_id}, State) ->
+    _Cur_req_id = case State#state.cur_req of
+                     #request{req_id = Cur} ->
+                         Cur;
+                     _ ->
+                         undefined
+                 end,
+%%     io:format("Ignoring stream_next as ~1000.p is not cur req (~1000.p)~n",
+%%               [_Req_id, _Cur_req_id]),
     {noreply, State};
 
 handle_info({stream_close, _Req_id}, State) ->
@@ -279,10 +287,14 @@ handle_sock_data(Data, #state{status = get_header}=State) ->
         {error, _Reason} ->
             shutting_down(State),
             {stop, normal, State};
-        State_1 ->
-            active_once(State_1),
-            State_2 = set_inac_timer(State_1),
-            {noreply, State_2}
+        #state{socket = Socket, status = Status, cur_req = CurReq} = State_1 ->
+            case {Status, CurReq} of
+                {get_header, #request{caller_controls_socket = true}} ->
+                    do_setopts(Socket, [{active, once}], State_1);
+                _ ->
+                    active_once(State_1)
+            end,
+            {noreply, set_inac_timer(State_1)}
     end;
 
 handle_sock_data(Data, #state{status           = get_body,
@@ -625,7 +637,7 @@ send_req_1(From,
     Path = [Server_host, $:, integer_to_list(Server_port)],
     {Req, Body_1} = make_request(connect, Pxy_auth_headers,
                                  Path, Path,
-                                 [], Options, State_1),
+                                 [], Options, State_1, undefined),
     TE = is_chunked_encoding_specified(Options),
     trace_request(Req),
     case do_send(Req, State) of
@@ -675,6 +687,7 @@ send_req_1(From,
            Headers, Method, Body, Options, Timeout,
            #state{status    = Status,
                   socket    = Socket} = State) ->
+    cancel_timer(State#state.inactivity_timer_ref, {eat_message, timeout}),
     ReqId = make_req_id(),
     Resp_format = get_value(response_format, Options, list),
     Caller_socket_options = get_value(socket_options, Options, []),
@@ -711,7 +724,8 @@ send_req_1(From,
     Headers_1 = maybe_modify_headers(Url, Method, Options, Headers, State_1),
     {Req, Body_1} = make_request(Method,
                                  Headers_1,
-                                 AbsPath, RelPath, Body, Options, State_1),
+                                 AbsPath, RelPath, Body, Options, State_1,
+                                 ReqId),
     trace_request(Req),
     do_setopts(Socket, Caller_socket_options, State_1),
     TE = is_chunked_encoding_specified(Options),
@@ -811,7 +825,7 @@ http_auth_digest(Username, Password) ->
     ibrowse_lib:encode_base64(Username ++ [$: | Password]).
 
 make_request(Method, Headers, AbsPath, RelPath, Body, Options,
-             #state{use_proxy = UseProxy, is_ssl = Is_ssl}) ->
+             #state{use_proxy = UseProxy, is_ssl = Is_ssl}, ReqId) ->
     HttpVsn = http_vsn_string(get_value(http_vsn, Options, {1,1})),
     Fun1 = fun({X, Y}) when is_atom(X) ->
                    {to_lower(atom_to_list(X)), X, Y};
@@ -847,7 +861,13 @@ make_request(Method, Headers, AbsPath, RelPath, Body, Options,
                  [{"Transfer-Encoding", "chunked"}],
                  chunk_request_body(Body, Chunk_size_1)}
         end,
-    Headers_3 = cons_headers(Headers_2),
+    Headers_3 = case lists:member({include_ibrowse_req_id, true}, Options) of
+                    true ->
+                        [{"x-ibrowse-request-id", io_lib:format("~1000.p",[ReqId])} | Headers_2];
+                    false ->
+                        Headers_2
+                end,
+    Headers_4 = cons_headers(Headers_3),
     Uri = case get_value(use_absolute_uri, Options, false) or UseProxy of
               true ->
                   case Is_ssl of
@@ -859,7 +879,7 @@ make_request(Method, Headers, AbsPath, RelPath, Body, Options,
               false ->
                   RelPath
           end,
-    {[method(Method), " ", Uri, " ", HttpVsn, crnl(), Headers_3, crnl()], Body_1}.
+    {[method(Method), " ", Uri, " ", HttpVsn, crnl(), Headers_4, crnl()], Body_1}.
 
 is_chunked_encoding_specified(Options) ->
     case get_value(transfer_encoding, Options, false) of
@@ -1303,11 +1323,17 @@ reset_state(State) ->
                 transfer_encoding = undefined
                }.
 
-set_cur_request(#state{reqs = Reqs} = State) ->
+set_cur_request(#state{reqs = Reqs, socket = Socket} = State) ->
     case queue:to_list(Reqs) of
         [] ->
             State#state{cur_req = undefined};
-        [NextReq | _] ->
+        [#request{caller_controls_socket = Ccs} = NextReq | _] ->
+            case Ccs of
+                true ->
+                    do_setopts(Socket, [{active, once}], State);
+                _ ->
+                    ok
+            end,
             State#state{cur_req = NextReq}
     end.
 
