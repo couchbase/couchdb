@@ -29,6 +29,12 @@ Version 1.0.2
  * Fix spurious conflict generation during attachment uploads.
  * Fix for various bugs in Futon.
 
+This version has not been released yet.
+
+ * Updated budled erlang_oauth library to the latest version.
+ * cURL is no longer required to build CouchDB as it is only
+   required by the command line JS test runner.
+
 Version 1.0.1
 -------------
 

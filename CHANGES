@@ -52,6 +52,15 @@ Replicator:
 
 View Server:
 
+Build System:
+
+ * cURL is no longer required to build CouchDB as it is only
+   used by the command line JS test runner. If cURL is available
+   when building CouchJS you can enable the HTTP bindings by
+   passing -H on the command line.
+
+OAuth:
+
  * Don't trigger view updates when requesting `_design/doc/_info`.
  * Fix for circular references in CommonJS requires.
  * Made isArray() function available to functions executed in the query server.
