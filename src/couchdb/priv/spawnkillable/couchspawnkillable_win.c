@@ -130,7 +130,7 @@ int main(int argc, char **argv)
         return rc;
     // Write the 'terminate' command, which includes this PID, back to couch.
     // *sob* - what about spaces etc?
-    sprintf_s(out_buf, sizeof(out_buf), "%s --kill %d\n", 
+    _snprintf(out_buf, sizeof(out_buf), "%s --kill %d\n",
               argv[0], pi.dwProcessId);
     WriteFile(GetStdHandle(STD_OUTPUT_HANDLE), out_buf, strlen(out_buf), 
               &cbwritten, NULL);

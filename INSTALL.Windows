@@ -11,27 +11,33 @@ You will need the following installed:
  * Erlang OTP (>=R12B5)       (http://erlang.org/)
  * ICU                        (http://icu.sourceforge.net/)
  * OpenSSL                    (http://www.openssl.org/)
- * Mozilla SpiderMonkey (1.8) (http://www.mozilla.org/js/spidermonkey/)
+ * Mozilla SpiderMonkey (1.8) (https://github.com/couchbase/spidermonkey)
  * libcurl                    (http://curl.haxx.se/libcurl/)
  * Cygwin                     (http://www.cygwin.com/)
  * Visual Studio 2008         (http://msdn.microsoft.com/en-gb/vstudio/default.aspx)
+ * Windows .NET Framework 4   (http://msdn.microsoft.com/en-us/netframework/aa569263)
 
 General Notes
 -------------
 
- * When installing Erlang, you must build it from source.
+ * For Windows + Cygwin, when installing Erlang, you must build it from source.
 
    The CouchDB build makes use of a number of the Erlang build scripts.
 
+ * For Windows + MinGW + MSYS, you should copy your Erlang setup to a temp directory
+   and use it to build your Couchdb application.
+
  * When installing ICU, select the binaries built with Visual Studio 2008.
+   Please select icu4c-4_2_1-Win32-msvc9.zip even though the latest one is 4.6
 
  * When installing Cygwin, be sure to select all the `development` tools.
+   It is not needed on Windows + MinGW + Msys environemnt.
 
  * When installing libcurl, be sure to install by hand.
 
    The Cygwin binaries are incompatible and will not work with Erlang.
 
-Setting Up Cygwin
+Setting Up Cygwin  (Skip the step on minGW environment)
 -----------------
 
 Before starting any Cygwin terminals, run:
@@ -52,7 +58,7 @@ You must check that:
 
 If you do not do this, the ones found in `/usr/bin` may be used instead.
 
-Building Erlang
+Building Erlang (Skip the step on minGW environment)
 ---------------
 
 You must include OpenSSL.
@@ -95,11 +101,31 @@ If everything was successful, you should be ready to build CouchDB.
 
 Relax.
 
+Clone Erlang setup (only needed on minGW environement)
+-----------------------------------------------------
+The CouchDB build makes use of a number of the Erlang build scripts.
+You can clone an existed Erlang setup to a temp directory for build purpose.
+For example, run the following command
+c:\> xcopy /e c:/erl5.7.4 c:/temp/couch_dist
+
+Build Mozilla SpiderMonkey
+--------------------------
+You need MozillaBuild to build spidermonkey successfully.  You can get it from
+http://ftp.mozilla.org/pub/mozilla.org/mozilla/libraries/win32/MozillaBuildSetup-Latest.exe
+
+After the prerequisites are installed, launch one of the following batch files from the c:\mozilla-build directory:
+start-msvc8.bat  (VS 2005)
+start-msvc9.bat  (VS 2008)
+start-msvc10.bat (VS 2010)
+
+On Windows7 platform, you need to clone the ref-config\WINNT6.0.mk as ref-config\WINNT6.1.mk in order to build.
+
 Building CouchDB
 ----------------
 
 Once you have satisfied the dependencies you should run:
 
+on Cygwin
     ./configure \
         --with-js-include=/cygdrive/c/path_to_seamonkey_include \
         --with-js-lib=/cygdrive/c/path_to_seamonkey_lib \
@@ -111,6 +137,17 @@ Once you have satisfied the dependencies you should run:
         --prefix=$ERL_TOP/release/win32
 
 This command could take a while to complete.
+
+On minGW + MSYS
+    ./configure \
+        --with-js-include=/c/devtest/spidermonkey/dist/include \
+        --with-js-lib=/c/devtest/spidermonkey/dist/lib \
+        --with-win32-icu-binaries=/c/icu4c-4_2_1-Win32-msvc9/icu \
+        --with-erlang=/c/erl5.7.4/usr/include \
+        --with-win32-curl=/c/dev/grommit/curl-7.20.1 \
+        --with-msvc-redist-dir=/c/erl5.7.4/vcredist_x86.exe \
+        --with-msbuild-dir=/c/Windows/Microsoft.NET/Framework/v4.0.30319
+        --prefix=/c/temp/couch_dist
 
 If everything was successful you should see the following message:
 

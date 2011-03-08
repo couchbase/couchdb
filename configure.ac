@@ -69,6 +69,7 @@ AC_ARG_WITH([js-include], [AC_HELP_STRING([--with-js-include=PATH],
     JS_FLAGS="$JS_FLAGS -I/usr/local/include/js"
     JS_FLAGS="$JS_FLAGS -I/opt/local/include/js"
 ])
+AC_SUBST(JS_INCLUDE)
 
 AC_ARG_WITH([js-lib], [AC_HELP_STRING([--with-js-lib=PATH],
     [set PATH to the SpiderMonkey library directory])],
@@ -92,6 +93,18 @@ case "$(uname -s)" in
     CPPFLAGS="$FLAGS $CPPFLAGS"
     LDFLAGS="$FLAGS $LDFLAGS"
     IS_WINDOWS="TRUE"
+    IS_CYGWIN="TRUE"
+    # The erlang cc.sh/ld.sh scripts will convert a -O option
+    # into the same optimization flags erlang itself uses.
+    CFLAGS="-O2"
+    LTCFLAGS="$CFLAGS"
+    ;;
+  MINGW*)
+    FLAGS="$LIB_FLAGS $ERLANG_FLAGS $JS_FLAGS -DXP_WIN $FLAGS"
+    CPPFLAGS="$FLAGS $CPPFLAGS"
+    LDFLAGS="$FLAGS $LDFLAGS"
+    IS_WINDOWS="TRUE"
+    IS_MINGW="TRUE"
     # The erlang cc.sh/ld.sh scripts will convert a -O option
     # into the same optimization flags erlang itself uses.
     CFLAGS="-O2"
@@ -107,6 +120,8 @@ case "$(uname -s)" in
 esac
 
 AM_CONDITIONAL([WINDOWS], [test x$IS_WINDOWS = xTRUE])
+
+AM_CONDITIONAL([MINGW], [test x$IS_MINGW = xTRUE])
 
 AC_CHECK_LIB([mozjs], [JS_NewContext], [JS_LIB_BASE=mozjs], [
     AC_CHECK_LIB([js], [JS_NewContext], [JS_LIB_BASE=js], [
@@ -132,32 +147,48 @@ if test x${IS_WINDOWS} = xTRUE; then
     fi
     AC_SUBST(JS_LIB_BINARY)
 
-    # On windows we need to know the path to the openssl binaries.
-    AC_ARG_WITH([openssl-bin-dir], [AC_HELP_STRING([--with-openssl-bin-dir=PATH],
-        [path to the open ssl binaries for distribution on Windows])], [
-        openssl_bin_dir=`cygpath -m "$withval"`
-        AC_SUBST(openssl_bin_dir)
-    ], [])
+    if test x${IS_CYGWIN} = xTRUE; then
+        # On windows we need to know the path to the openssl binaries.
+        AC_ARG_WITH([openssl-bin-dir], [AC_HELP_STRING([--with-openssl-bin-dir=PATH],
+            [path to the open ssl binaries for distribution on Windows])], [
+            openssl_bin_dir=`cygpath -m "$withval"`
+            AC_SUBST(openssl_bin_dir)
+        ], [])
 
-    # Windows uses Inno setup - look for its compiler.
-    AC_PATH_PROG([INNO_COMPILER_EXECUTABLE], [iscc])
-    if test x${INNO_COMPILER_EXECUTABLE} = x; then
-        AC_MSG_WARN([You will be unable to build the Windows installer.])
+        # Windows uses Inno setup - look for its compiler.
+        AC_PATH_PROG([INNO_COMPILER_EXECUTABLE], [iscc])
+        if test x${INNO_COMPILER_EXECUTABLE} = x; then
+            AC_MSG_WARN([You will be unable to build the Windows installer.])
+        fi
+
+        # We need the msvc redistributables for this platform too
+        # (in theory we could just install the assembly locally - but
+        # there are at least 4 directories with binaries, meaning 4 copies;
+        # so using the redist .exe means it ends up installed globally...)
+        AC_ARG_WITH([msvc-redist-dir], [AC_HELP_STRING([--with-msvc-redist-dir=PATH],
+            [path to the msvc redistributables for the Windows platform])], [
+            msvc_redist_dir=`cygpath -m "$withval"`
+            msvc_redist_name="vcredist_x86.exe"
+            AC_SUBST(msvc_redist_dir)
+            AC_SUBST(msvc_redist_name)
+        ], [])
+        if test ! -f ${msvc_redist_dir}/${msvc_redist_name}; then
+            AC_MSG_WARN([The MSVC redistributable seems to be missing; expect the installer to fail.])
+        fi
     fi
 
-    # We need the msvc redistributables for this platform too
-    # (in theory we could just install the assembly locally - but
-    # there are at least 4 directories with binaries, meaning 4 copies;
-    # so using the redist .exe means it ends up installed globally...)
-    AC_ARG_WITH([msvc-redist-dir], [AC_HELP_STRING([--with-msvc-redist-dir=PATH],
-        [path to the msvc redistributables for the Windows platform])], [
-        msvc_redist_dir=`cygpath -m "$withval"`
-        msvc_redist_name="vcredist_x86.exe"
-        AC_SUBST(msvc_redist_dir)
-        AC_SUBST(msvc_redist_name)
-    ], [])
-    if test ! -f ${msvc_redist_dir}/${msvc_redist_name}; then
-        AC_MSG_WARN([The MSVC redistributable seems to be missing; expect the installer to fail.])
+    if test x${IS_MINGW} = xTRUE; then
+        # On windows we need to know the path to the MSBuild
+        AC_ARG_WITH([msbuild-dir], [AC_HELP_STRING([--with-msbuild-dir=PATH],
+            [path to the .NET Framework 4 which contains MSBuild.exe])], [
+            msbuild_dir=$withval
+            msbuild_name="MSBuild.exe"
+            AC_SUBST(msbuild_dir)
+            AC_SUBST(msbuild_name)
+        ], [])
+        if test ! -f ${msbuild_dir}/${msbuild_name}; then
+            AC_MSG_WARN([The .NET Framework 4.0 seems to be missing; expect the couchjs module to fail.])
+        fi
     fi
 fi
 
@@ -248,7 +279,7 @@ fi
 
 erlang_version_error="The installed Erlang version is less than 5.6.5 (R12B05)."
 
-version="`${ERL} -version 2>&1 | ${SED} "s/[[^0-9]]/ /g"`"
+version="`${ERL} -version 2>&1 | ${SED} 's/[[^0-9]]/ /g'`"
 
 if test `echo $version | ${AWK} "{print \\$1}"` -lt 5; then
     AC_MSG_ERROR([$erlang_version_error])
@@ -417,7 +448,10 @@ AC_CONFIG_FILES([test/javascript/Makefile])
 AC_CONFIG_FILES([test/view_server/Makefile])
 AC_CONFIG_FILES([utils/Makefile])
 AC_CONFIG_FILES([var/Makefile])
-
+if test x${IS_MINGW} = xTRUE; then
+    AC_CONFIG_FILES([src/couchdb/priv/couch_js/win32/msbuild.bat.tpl])
+    AC_CONFIG_FILES([src/couchdb/priv/couch_js/win32/couchjs.vcxproj.tpl])
+fi
 AC_OUTPUT
 
 # *sob* - on Windows libtool fails as 'libname_spec' isn't correct (it
