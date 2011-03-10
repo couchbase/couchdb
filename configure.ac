@@ -240,6 +240,21 @@ if test x${IS_WINDOWS} = xTRUE; then
     fi
 
     if test x${IS_MINGW} = xTRUE; then
+        # We need the msvc redistributables for this platform too
+        # (in theory we could just install the assembly locally - but
+        # there are at least 4 directories with binaries, meaning 4 copies;
+        # so using the redist .exe means it ends up installed globally...)
+        AC_ARG_WITH([msvc-redist-dir], [AC_HELP_STRING([--with-msvc-redist-dir=PATH],
+            [path to the msvc redistributables for the Windows platform])], [
+            msvc_redist_dir=$withval
+            msvc_redist_name="vcredist_x86.exe"
+            AC_SUBST(msvc_redist_dir)
+            AC_SUBST(msvc_redist_name)
+        ], [])
+        if test ! -f ${msvc_redist_dir}/${msvc_redist_name}; then
+            AC_MSG_WARN([The MSVC redistributable seems to be missing; expect the installer to fail.])
+        fi
+
         # On windows we need to know the path to the MSBuild
         AC_ARG_WITH([msbuild-dir], [AC_HELP_STRING([--with-msbuild-dir=PATH],
             [path to the .NET Framework 4 which contains MSBuild.exe])], [
