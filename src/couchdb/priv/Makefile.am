@@ -20,6 +20,17 @@ EXTRA_DIST = \
 
 CLEANFILES = stat_descriptions.cfg
 
+if MINGW
+ICU_OUTPUT_DIR = icu_driver/win32
+icu_driver_msbuild = $(ICU_OUTPUT_DIR)/msbuild.bat
+icu_driver_vcproj = $(ICU_OUTPUT_DIR)/couch_icu_driver.vcxproj
+WIN_ICU_INCLUDE = $(ICU_OUTPUT_DIR)/win_icu_include.tmp
+WIN_ICU_LIB_DIR = $(ICU_OUTPUT_DIR)/win_icu_dir.tmp
+WIN_ERL_INCLUDE = $(ICU_OUTPUT_DIR)/win_erl_include.tmp
+COUCH_ICU_DRIVER = $(ICU_OUTPUT_DIR)/couch_icu_driver.dll
+endif
+
+if !MINGW
 ICU_LOCAL_FLAGS = $(ICU_LOCAL_CFLAGS) $(ICU_LOCAL_LDFLAGS)
 if WINDOWS
 ICU_LOCAL_LIBS=-licuuc -licudt -licuin
@@ -35,6 +46,7 @@ couch_icu_driver_la_LIBADD = $(ICU_LOCAL_LIBS)
 
 if WINDOWS
 couch_icu_driver_la_LDFLAGS += -no-undefined
+endif
 endif
 
 if MINGW
@@ -73,6 +85,34 @@ couchspawnkillable: spawnkillable/couchspawnkillable.sh
 endif
 
 if MINGW
+$(COUCH_ICU_DRIVER) : icu_driver/couch_icu_driver.c $(icu_driver_msbuild) $(icu_driver_vcproj)
+	$(MKDIR_P) "$(couchprivlibdir)" || true
+	(cd icu_driver/win32 && msbuild.bat)
+	cp $(ICU_OUTPUT_DIR)/couch_icu_driver.dll $(couchprivlibdir)
+	cp $(ICU_OUTPUT_DIR)/couch_icu_driver.lib $(couchprivlibdir)
+
+all: $(COUCH_ICU_DRIVER)
+
+$(icu_driver_msbuild): $(icu_driver_msbuild).tpl
+	sed -e "s|%msbuild_dir%|$(msbuild_dir)|" \
+	    -e "s|%msbuild_name%|$(msbuild_name)|" \
+	< $< > $@
+
+$(icu_driver_vcproj): $(icu_driver_vcproj).tpl $(WIN_ICU_INCLUDE) $(WIN_ICU_LIB_DIR) $(WIN_ERL_INCLUDE)
+	sed -e "s|%ICU_INCLUDE%|`cat $(WIN_ICU_INCLUDE)`|" \
+	    -e "s|%ERLANG_INCLUDE%|`cat $(WIN_ERL_INCLUDE)`|" \
+	    -e "s|%ICU_LIB_DIR%|`cat $(WIN_ICU_LIB_DIR)`|" \
+	< $< > $@
+
+$(WIN_ICU_INCLUDE):$(ICU_INCLUDE)
+	echo $< | sed -e "s|^/\([a-zA-Z]\)|\1:|" > $@
+
+$(WIN_ICU_LIB_DIR):$(ICU_LIB_DIR)
+	echo $< | sed -e "s|^/\([a-zA-Z]\)|\1:|" > $@
+
+$(WIN_ERL_INCLUDE):$(ERLANG_INCLUDE)
+	echo $< | sed -e "s|^/\([a-zA-Z]\)|\1:|" > $@
+
 couchjs$(EXEEXT): $(COUCHJS_SRCS) $(couchjs_msbuild) $(couchjs_vcproj)
 	@rm -f couchjs$(EXEEXT)
 	(cd couch_js/win32 && msbuild.bat)
