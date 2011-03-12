@@ -48,7 +48,9 @@ fi
 
 AC_ARG_WITH([erlang], [AC_HELP_STRING([--with-erlang=PATH],
     [set PATH to the Erlang include directory])], [
-    ERLANG_FLAGS="-I$withval"
+    ERLANG_INCLUDE="$withval"
+    ERLANG_FLAGS="-I$ERLANG_INCLUDE"
+    AC_SUBST(ERLANG_INCLUDE)
 ], [
     ERLANG_FLAGS="-I${libdir}/erlang/usr/include"
     ERLANG_FLAGS="$ERLANG_FLAGS -I/usr/lib/erlang/usr/include"
@@ -238,9 +240,13 @@ AC_LANG_POP(C)
 AC_ARG_WITH([win32-icu-binaries], [AC_HELP_STRING([--with-win32-icu-binaries=PATH],
     [set PATH to the Win32 native ICU binaries directory])], [
     ICU_CONFIG="" # supposed to be a command to query options...
-    ICU_LOCAL_CFLAGS="-I$withval/include"
-    ICU_LOCAL_LDFLAGS="-L$withval/lib"
+    ICU_INCLUDE="$withval/include"
+    ICU_LOCAL_CFLAGS="-I$ICU_INCLUDE"
+    ICU_LIB_DIR="$withval/lib"
+    ICU_LOCAL_LDFLAGS="-L$ICU_LIB_DIR"
     ICU_LOCAL_BIN=$withval/bin
+    AC_SUBST(ICU_INCLUDE)
+    AC_SUBST(ICU_LIB_DIR)
 ], [
     AC_CHECK_ICU([3.4.1])
     ICU_LOCAL_CFLAGS=`$ICU_CONFIG --cppflags-searchpath`
@@ -472,6 +478,8 @@ AC_CONFIG_FILES([var/Makefile])
 if test x${IS_MINGW} = xTRUE; then
     AC_CONFIG_FILES([src/couchdb/priv/couch_js/win32/msbuild.bat.tpl])
     AC_CONFIG_FILES([src/couchdb/priv/couch_js/win32/couchjs.vcxproj.tpl])
+    AC_CONFIG_FILES([src/couchdb/priv/icu_driver/win32/msbuild.bat.tpl])
+    AC_CONFIG_FILES([src/couchdb/priv/icu_driver/win32/couch_icu_driver.vcxproj.tpl])
 fi
 AC_OUTPUT
 
