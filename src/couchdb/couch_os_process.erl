@@ -107,9 +107,10 @@ init([Command, Options, PortOptions]) ->
     process_flag(trap_exit, true),
     PrivDir = couch_util:priv_dir(),
     Spawnkiller = filename:join(PrivDir, "couchspawnkillable"),
+    CompleteCmd = "'" ++ Spawnkiller ++ "' " ++ Command,
     BaseProc = #os_proc{
         command=Command,
-        port=open_port({spawn, Spawnkiller ++ " " ++ Command}, PortOptions),
+        port=open_port({spawn, CompleteCmd}, PortOptions),
         writer=fun writejson/2,
         reader=fun readjson/1
     },
