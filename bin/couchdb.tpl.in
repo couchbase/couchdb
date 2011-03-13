@@ -17,7 +17,7 @@ DEFAULT_CONFIG_DIR=%localconfdir%/default.d
 DEFAULT_CONFIG_FILE=%localconfdir%/%defaultini%
 ERL_START_OPTIONS="-sasl errlog_type error +K true"
 HEART_BEAT_TIMEOUT=11
-HEART_COMMAND="%bindir%/%couchdb_command_name% -k"
+HEART_COMMAND="'%bindir%/%couchdb_command_name%' -k"
 INTERACTIVE=false
 KILL=false
 LOCAL_CONFIG_DIR=%localconfdir%/local.d
@@ -36,7 +36,7 @@ print_arguments=""
 start_arguments=""
 background_start_arguments=""
 
-basename=`basename $0`
+basename=${0##*/}
 
 display_version () {
     cat << EOF
@@ -124,8 +124,8 @@ $1
 EOF
 `"
     fi
-    start_arguments="$start_arguments $1"
-    background_start_arguments="$background_start_arguments -a $1"
+    start_arguments="$start_arguments '$1'"
+    background_start_arguments="$background_start_arguments -a '$1'"
 }
 
 _add_config_dir () {
@@ -222,8 +222,25 @@ start_couchdb () {
         touch $PID_FILE
         interactive_option="+Bd -noinput"
     fi
-    command="%ERL% $interactive_option $ERL_START_OPTIONS \
-        -env ERL_LIBS %localerlanglibdir% -couch_ini $start_arguments -s couch"
+    command="'%ERL%' $interactive_option $ERL_START_OPTIONS \
+        -env ERL_LIBS '%localerlanglibdir%' -couch_ini $start_arguments -s couch"
+
+    # Find plugins and add them to the Erlang path.
+    if test -d "%localerlanglibdir%/../../plugins"; then
+        for plugin in "%localerlanglibdir%/../../plugins"/*; do
+            if echo "$ERL_ZFLAGS" | grep "$plugin/ebin" > /dev/null 2> /dev/null; then
+                : # It's already loaded.
+            else
+                if echo "$COUCH_PLUGIN_BLACKLIST" | grep "$plugin" > /dev/null 2> /dev/null; then
+                    : # Do not use this plugin.
+                else
+                    ERL_ZFLAGS="$ERL_ZFLAGS -pz '$plugin/ebin'"
+                fi
+            fi
+        done
+        export ERL_ZFLAGS
+    fi
+
     if test "$BACKGROUND" = "true" -a "$RECURSED" = "false"; then
         $0 $background_start_arguments -b -r $RESPAWN_TIMEOUT -p $PID_FILE \
             -o $STDOUT_FILE -e $STDERR_FILE -R &
@@ -255,7 +272,7 @@ EOF
                 sleep $RESPAWN_TIMEOUT
             done
         else
-            eval exec $command
+            eval exec "$command"
         fi
     fi
 }
