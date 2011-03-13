@@ -17,4 +17,4 @@
 # processes.
 
 echo "kill -9 $$"
-exec $*
+exec "$@"
