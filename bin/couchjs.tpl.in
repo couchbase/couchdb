@@ -17,7 +17,7 @@ SCRIPT_ERROR=1
 
 DEFAULT_VERSION=170
 
-basename=`basename $0`
+basename=${0##*/}
 
 display_version () {
     cat << EOF
@@ -65,7 +65,7 @@ display_error () {
 }
 
 run_couchjs () {
-    exec %locallibbindir%/%couchjs_command_name% $@
+    exec "%locallibbindir%/%couchjs_command_name%" "$@"
 }
 
 parse_script_option_list () {
@@ -84,12 +84,12 @@ parse_script_option_list () {
             *) break;;
         esac
     done
-    script_name=`echo $@ | sed -e 's/.*--[[:blank:]]*//'`
+    script_name=`echo "$@" | sed -e 's/.*--[[:blank:]]*//'`
     if test -z "$script_name"; then
         display_error "You must specify a FILE."
     fi
-    options=`echo $@ | sed -e 's/--//'`
-    run_couchjs $options
+    options=`echo "$@" | sed -e 's/--//'`
+    run_couchjs "$options"
 }
 
 parse_script_option_list $@
