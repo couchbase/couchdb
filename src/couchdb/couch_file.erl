@@ -19,11 +19,15 @@
 
 -record(file, {
     fd,
-    eof = 0
+    writer = nil,
+    real_eof = 0,
+    eof = 0,
+    pos_to_flush_req = dict:new(),
+    pid_to_pos = dict:new()
 }).
 
 % public API
--export([open/1, open/2, close/1, bytes/1, sync/1, truncate/2]).
+-export([open/1, open/2, close/1, bytes/1, flush/1, sync/1, truncate/2]).
 -export([pread_term/2, pread_iolist/2, pread_binary/2]).
 -export([append_binary/2, append_binary_md5/2]).
 -export([append_term/2, append_term_md5/2]).
@@ -177,11 +181,17 @@ truncate(Fd, Pos) ->
 %%  or {error, Reason}.
 %%----------------------------------------------------------------------
 
-sync(Filepath) when is_list(Filepath) ->
-    {ok, Fd} = file:open(Filepath, [append, raw]),
-    try file:sync(Fd) after file:close(Fd) end;
 sync(Fd) ->
     gen_server:call(Fd, sync, infinity).
+
+%%----------------------------------------------------------------------
+%% Purpose: Ensure that all the data the caller previously asked to write
+%% to the file were flushed to disk (not necessarily fsync'ed).
+%% Returns: ok
+%%----------------------------------------------------------------------
+
+flush(Fd) ->
+    gen_server:call(Fd, flush, infinity).
 
 %%----------------------------------------------------------------------
 %% Purpose: Close the file.
@@ -246,12 +256,28 @@ init_status_error(ReturnPid, Ref, Error) ->
 % server functions
 
 init({Filepath, Options, ReturnPid, Ref}) ->
-    process_flag(trap_exit, true),
-    OpenOptions = file_open_options(Options),
+   try
+       maybe_create_file(Filepath, Options),
+       ReadFd = case file:open(Filepath, [read, binary]) of
+       {ok, Fd} ->
+           Fd;
+       Error ->
+           throw({error, Error})
+       end,
+       Writer = spawn_writer(Filepath, Options),
+       Size = filelib:file_size(Filepath),
+       maybe_track_open_os_files(Options),
+       {ok, #file{fd = ReadFd, writer = Writer, real_eof = Size, eof = Size}}
+   catch
+   throw:{error, Err} ->
+       init_status_error(ReturnPid, Ref, Err)
+   end.
+
+maybe_create_file(Filepath, Options) ->
     case lists:member(create, Options) of
     true ->
         filelib:ensure_dir(Filepath),
-        case file:open(Filepath, OpenOptions) of
+        case file:open(Filepath, [write, binary]) of
         {ok, Fd} ->
             {ok, Length} = file:position(Fd, eof),
             case Length > 0 of
@@ -263,40 +289,32 @@ init({Filepath, Options, ReturnPid, Ref}) ->
                 true ->
                     {ok, 0} = file:position(Fd, 0),
                     ok = file:truncate(Fd),
-                    ok = file:sync(Fd),
-                    maybe_track_open_os_files(Options),
-                    {ok, #file{fd=Fd}};
+                    ok = file:sync(Fd);
                 false ->
                     ok = file:close(Fd),
-                    init_status_error(ReturnPid, Ref, file_exists)
+                    throw({error, file_exists})
                 end;
             false ->
-                maybe_track_open_os_files(Options),
-                {ok, #file{fd=Fd}}
+                ok
             end;
         Error ->
-            init_status_error(ReturnPid, Ref, Error)
+            throw({error, Error})
         end;
     false ->
-        % open in read mode first, so we don't create the file if it doesn't exist.
-        case file:open(Filepath, [read, raw]) of
-        {ok, Fd_Read} ->
-            {ok, Fd} = file:open(Filepath, OpenOptions),
-            ok = file:close(Fd_Read),
-            maybe_track_open_os_files(Options),
-            {ok, Eof} = file:position(Fd, eof),
-            {ok, #file{fd=Fd, eof=Eof}};
-        Error ->
-            init_status_error(ReturnPid, Ref, Error)
-        end
+        ok
     end.
 
-file_open_options(Options) ->
-    [read, binary] ++ case lists:member(read_only, Options) of
+spawn_writer(Filepath, Options) ->
+    case lists:member(read_only, Options) of
     true ->
-        [];
+        nil;
     false ->
-        [append]
+        case couch_file_writer:start_link(Filepath) of
+        {ok, Pid} ->
+            Pid;
+        Error ->
+            throw({error, {file_writer_creation, Error}})
+        end
     end.
 
 maybe_track_open_os_files(FileOptions) ->
@@ -307,38 +325,40 @@ maybe_track_open_os_files(FileOptions) ->
         couch_stats_collector:track_process_count({couchdb, open_os_files})
     end.
 
-terminate(_Reason, #file{fd = Fd}) ->
-    ok = file:close(Fd).
+terminate(_Reason, #file{fd = Fd, writer = nil}) ->
+    ok = file:close(Fd);
+terminate(_Reason, #file{fd = Fd, writer = Writer}) ->
+    ok = file:close(Fd),
+    ok = couch_file_writer:close(Writer).
 
 
 handle_call(get_fd, _From, #file{fd = Fd} = File) ->
     {reply, {ok, Fd}, File};
 
-handle_call(bytes, _From, #file{fd = Fd} = File) ->
-    {reply, file:position(Fd, eof), File};
+handle_call(bytes, _From, #file{eof = Eof} = File) ->
+    {reply, {ok, Eof}, File};
 
-handle_call(sync, _From, #file{fd=Fd}=File) ->
-    {reply, file:sync(Fd), File};
+handle_call(sync, _From, #file{writer = Writer, eof = Eof} = File) ->
+    % TODO: maybe flush before sync, assume for now the caller has invoked
+    % flush before this call
+    ok = couch_file_writer:sync(Writer),
+    {reply, ok, File#file{real_eof = Eof}};
 
-handle_call({truncate, Pos}, _From, #file{fd=Fd}=File) ->
-    {ok, Pos} = file:position(Fd, Pos),
-    case file:truncate(Fd) of
-    ok ->
-        {reply, ok, File#file{eof = Pos}};
-    Error ->
-        {reply, Error, File}
-    end;
+handle_call({truncate, Pos}, _From, #file{writer = Writer} = File) ->
+    ok = couch_file_writer:truncate(Writer, Pos),
+    {reply, ok, File#file{eof = Pos, real_eof = Pos}};
 
-handle_call({append_bin, Bin}, _From, #file{fd = Fd, eof = Pos} = File) ->
+handle_call({append_bin, Bin}, {Pid, _} = From, #file{writer = W, eof = Pos} = File) ->
     Blocks = make_blocks(Pos rem ?SIZE_BLOCK, Bin),
-    case file:write(Fd, Blocks) of
-    ok ->
-        {reply, {ok, Pos}, File#file{eof = Pos + iolist_size(Blocks)}};
-    Error ->
-        {reply, Error, File}
-    end;
+    ok = couch_file_writer:write_chunk(W, {Pos, Blocks}),
+    gen_server:reply(From, {ok, Pos}),
+    File2 = File#file{
+        eof = Pos + iolist_size(Blocks),
+        pid_to_pos = dict:store(Pid, Pos, File#file.pid_to_pos)
+    },
+    {noreply, File2};
 
-handle_call({write_header, Bin}, _From, #file{fd = Fd, eof = Pos} = File) ->
+handle_call({write_header, Bin}, {Pid, _} = From, #file{writer = W, eof = Pos} = File) ->
     BinSize = byte_size(Bin),
     case Pos rem ?SIZE_BLOCK of
     0 ->
@@ -347,11 +367,28 @@ handle_call({write_header, Bin}, _From, #file{fd = Fd, eof = Pos} = File) ->
         Padding = <<0:(8*(?SIZE_BLOCK-BlockOffset))>>
     end,
     FinalBin = [Padding, <<1, BinSize:32/integer>> | make_blocks(5, [Bin])],
-    case file:write(Fd, FinalBin) of
-    ok ->
-        {reply, ok, File#file{eof = Pos + iolist_size(FinalBin)}};
-    Error ->
-        {reply, Error, File}
+    ok = couch_file_writer:write_chunk(W, {Pos, FinalBin}),
+    gen_server:reply(From, ok),
+    File2 = File#file{
+        eof = Pos + iolist_size(FinalBin),
+        pid_to_pos = dict:store(Pid, Pos, File#file.pid_to_pos)
+    },
+    {noreply, File2};
+
+handle_call(flush, {Pid, _} = From, #file{writer = W} = File) ->
+    #file{pid_to_pos = PidPos, pos_to_flush_req = FlushReqs} = File,
+    case dict:find(Pid, PidPos) of
+    error ->
+        {reply, ok, File};
+    {ok, Pos} ->
+        case couch_file_writer:flush(W, Pos) of
+        ok ->
+            gen_server:reply(From, ok),
+            {noreply, File#file{pid_to_pos = dict:erase(Pid, PidPos)}};
+        wait ->
+            FlushReqs2 = dict:store(Pos, From, FlushReqs),
+            {noreply, File#file{pos_to_flush_req = FlushReqs2}}
+        end
     end;
 
 handle_call(find_header, _From, #file{fd = Fd, eof = Pos} = File) ->
@@ -362,6 +399,16 @@ handle_cast(close, Fd) ->
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
+
+
+handle_info({flushed, Pos}, #file{pos_to_flush_req = FlushReqs} = File) ->
+    {Pid, _} = FlushReq = dict:fetch(Pos, FlushReqs),
+    gen_server:reply(FlushReq, ok),
+    File2 = File#file{
+        pos_to_flush_req = dict:erase(Pos, FlushReqs),
+        pid_to_pos = dict:erase(Pid, File#file.pid_to_pos)
+    },
+    {noreply, File2};
 
 handle_info({'EXIT', _, normal}, Fd) ->
     {noreply, Fd};
