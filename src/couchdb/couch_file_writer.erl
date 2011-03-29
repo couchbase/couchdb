@@ -134,7 +134,7 @@ handle_cast(Msg, State) ->
 
 
 handle_info({'EXIT', Pid, normal}, #state{sync_pid = Pid} = State) ->
-    {noreply, State};
+    {noreply, State#state{sync_pid = nil}};
 
 handle_info({'EXIT', Pid, normal}, #state{writer_pid = Pid} = State) ->
     {noreply, State};
