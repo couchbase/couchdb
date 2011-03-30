@@ -23,7 +23,6 @@
 -record(file, {
     fd,
     writer = nil,
-    real_eof = 0,
     eof = 0,
     pos_to_flush_req = dict:new(),
     pid_to_pos = dict:new()
@@ -262,6 +261,7 @@ init_status_error(ReturnPid, Ref, Error) ->
 init({Filepath, Options, ReturnPid, Ref}) ->
    try
        maybe_create_file(Filepath, Options),
+       process_flag(trap_exit, true),
        ReadFd = case file:open(Filepath, [read, binary]) of
        {ok, Fd} ->
            Fd;
@@ -269,9 +269,9 @@ init({Filepath, Options, ReturnPid, Ref}) ->
            throw({error, Error})
        end,
        Writer = spawn_writer(Filepath, Options),
-       Size = filelib:file_size(Filepath),
+       {ok, Eof} = file:position(ReadFd, eof),
        maybe_track_open_os_files(Options),
-       {ok, #file{fd = ReadFd, writer = Writer, real_eof = Size, eof = Size}}
+       {ok, #file{fd = ReadFd, writer = Writer, eof = Eof}}
    catch
    throw:{error, Err} ->
        init_status_error(ReturnPid, Ref, Err)
@@ -308,19 +308,6 @@ maybe_create_file(Filepath, Options) ->
         ok
     end.
 
-spawn_writer(Filepath, Options) ->
-    case lists:member(read_only, Options) of
-    true ->
-        nil;
-    false ->
-        case couch_file_writer:start_link(Filepath) of
-        {ok, Pid} ->
-            Pid;
-        Error ->
-            throw({error, {file_writer_creation, Error}})
-        end
-    end.
-
 maybe_track_open_os_files(FileOptions) ->
     case lists:member(sys_db, FileOptions) of
     true ->
@@ -332,8 +319,8 @@ maybe_track_open_os_files(FileOptions) ->
 terminate(_Reason, #file{fd = Fd, writer = nil}) ->
     ok = file:close(Fd);
 terminate(_Reason, #file{fd = Fd, writer = Writer}) ->
-    ok = file:close(Fd),
-    ok = couch_file_writer:close(Writer).
+    Writer ! stop,
+    ok = file:close(Fd).
 
 % TODO remove this clause, it's here only for debugging purposes
 handle_call(get_state, _From, File) ->
@@ -345,19 +332,18 @@ handle_call(get_fd, _From, #file{fd = Fd} = File) ->
 handle_call(bytes, _From, #file{eof = Eof} = File) ->
     {reply, {ok, Eof}, File};
 
-handle_call(sync, _From, #file{writer = Writer, eof = Eof} = File) ->
-    % TODO: maybe flush before sync, assume for now the caller has invoked
-    % flush before this call
-    ok = couch_file_writer:sync(Writer),
-    {reply, ok, File#file{real_eof = Eof}};
+handle_call(sync, _From, #file{writer = Writer} = File) ->
+    % TODO: maybe make this call a synchronous call
+    Writer ! sync,
+    {reply, ok, File};
 
 handle_call({truncate, Pos}, _From, #file{writer = Writer} = File) ->
     ok = couch_file_writer:truncate(Writer, Pos),
-    {reply, ok, File#file{eof = Pos, real_eof = Pos}};
+    {reply, ok, File#file{eof = Pos}};
 
 handle_call({append_bin, Bin}, {Pid, _} = From, #file{writer = W, eof = Pos} = File) ->
     gen_server:reply(From, {ok, Pos}),
-    ok = couch_file_writer:write_chunk(W, Bin),
+    W ! {chunk, Bin},
     File2 = File#file{
         eof = Pos + calculate_total_read_len(Pos rem ?SIZE_BLOCK, iolist_size(Bin)),
         pid_to_pos = dict:store(Pid, Pos, File#file.pid_to_pos)
@@ -366,7 +352,7 @@ handle_call({append_bin, Bin}, {Pid, _} = From, #file{writer = W, eof = Pos} = F
 
 handle_call({write_header, Bin}, {Pid, _} = From, #file{writer = W, eof = Pos} = File) ->
     gen_server:reply(From, ok),
-    ok = couch_file_writer:write_header(W, Bin),
+    W ! {header, Bin},
     Pos2 = case Pos rem ?SIZE_BLOCK of
     0 ->
         Pos + 5;
@@ -379,20 +365,17 @@ handle_call({write_header, Bin}, {Pid, _} = From, #file{writer = W, eof = Pos} =
     },
     {noreply, File2};
 
-handle_call(flush, {Pid, _} = From, #file{writer = W} = File) ->
+handle_call(flush, {Pid, _} = From, #file{eof = Eof} = File) ->
     #file{pid_to_pos = PidPos, pos_to_flush_req = FlushReqs} = File,
     case dict:find(Pid, PidPos) of
     error ->
         {reply, ok, File};
+    {ok, Pos} when Pos < Eof ->
+        gen_server:reply(From, ok),
+        {noreply, File#file{pid_to_pos = dict:erase(Pid, PidPos)}};
     {ok, Pos} ->
-        case couch_file_writer:flush(W, Pos) of
-        ok ->
-            gen_server:reply(From, ok),
-            {noreply, File#file{pid_to_pos = dict:erase(Pid, PidPos)}};
-        wait ->
-            FlushReqs2 = dict:store(Pos, From, FlushReqs),
-            {noreply, File#file{pos_to_flush_req = FlushReqs2}}
-        end
+        FlushReqs2 = dict:store(Pos, From, FlushReqs),
+        {noreply, File#file{pos_to_flush_req = FlushReqs2}}
     end;
 
 handle_call(find_header, _From, #file{fd = Fd, eof = Pos} = File) ->
@@ -405,14 +388,30 @@ code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 
-handle_info({flushed, Pos}, #file{pos_to_flush_req = FlushReqs} = File) ->
-    {Pid, _} = FlushReq = dict:fetch(Pos, FlushReqs),
-    gen_server:reply(FlushReq, ok),
-    File2 = File#file{
-        pos_to_flush_req = dict:erase(Pos, FlushReqs),
-        pid_to_pos = dict:erase(Pid, File#file.pid_to_pos)
-    },
-    {noreply, File2};
+handle_info({new_eof, NewEof}, #file{eof = Eof} = File) when Eof >= NewEof ->
+    io:format("new eof when Eof (~p) >= NewEof (~p)~n", [Eof, NewEof]),
+    {noreply, File};
+handle_info({new_eof, NewEof}, File) ->
+    io:format("new eof when Eof (~p) < NewEof (~p)~n", [File#file.eof, NewEof]),
+    {PidPos2, PidReqs2} = dict:fold(
+        fun(Pid, Pos, {Pp, Pr}) when Pos =< NewEof ->
+            case dict:find(Pos, Pr) of
+            error ->
+                {Pp, Pr};
+            {ok, {Pid, _} = FlushReq} ->
+                gen_server:reply(FlushReq, ok),
+                { Pp, dict:erase(Pos, Pr) }
+            end;
+        (Pid, Pos, {Pp, Pr}) ->
+            { [{Pid, Pos} | Pp], Pr }
+        end,
+        {[], File#file.pos_to_flush_req},
+        File#file.pid_to_pos),
+    {noreply, File#file{
+        eof = NewEof,
+        pid_to_pos = dict:from_list(PidPos2),
+        pos_to_flush_req = PidReqs2
+    }};
 
 handle_info({'EXIT', _, normal}, Fd) ->
     {noreply, Fd};
@@ -533,3 +532,91 @@ split_iolist([Sublist| Rest], SplitAt, BeginAcc) when is_list(Sublist) ->
     end;
 split_iolist([Byte | Rest], SplitAt, BeginAcc) when is_integer(Byte) ->
     split_iolist(Rest, SplitAt - 1, [Byte | BeginAcc]).
+
+
+spawn_writer(Filepath, Options) ->
+    case lists:member(read_only, Options) of
+    true ->
+        nil;
+    false ->
+        case file:open(Filepath, [binary, append]) of
+        {ok, Fd} ->
+            {ok, Eof} = file:position(Fd, eof),
+            Parent = self(),
+            spawn_link(fun() -> writer_loop(Fd, Parent, Eof) end);
+        Error ->
+            throw({error, Error})
+        end
+    end.
+
+writer_loop(Fd, Parent, Eof) ->
+    receive
+    {chunk, Chunk} ->
+        writter_collect_chunks(Fd, Parent, Eof, [Chunk]);
+    {header, Header} ->
+        Eof2 = write_header_blocks(Fd, Eof, Header),
+        Parent ! {new_eof, Eof2},
+        writer_loop(Fd, Parent, Eof2);
+    {truncate, Pos} ->
+        {ok, Pos} = file:position(Fd, Pos),
+        ok = file:truncate(Fd),
+        Parent ! {new_eof, Pos},
+        writer_loop(Fd, Parent, Pos);
+    sync ->
+        io:format("sync, eof ~p~n", [Eof]),
+        ok = file:sync(Fd),
+        writer_loop(Fd, Parent, Eof);
+    stop ->
+        ok
+    end.
+
+writter_collect_chunks(Fd, Parent, Eof, Acc) ->
+    receive
+    {chunk, Chunk} ->
+        writter_collect_chunks(Fd, Parent, Eof, [Chunk | Acc]);
+    {header, Header} ->
+        io:format("header right after write_blocks, eof ~p~n", [Eof]),
+        Eof2 = write_blocks(Fd, Eof, Acc),
+        Eof3 = write_header_blocks(Fd, Eof2, Header),
+        Parent ! {new_eof, Eof3},
+        writer_loop(Fd, Parent, Eof3);
+    {truncate, Pos} ->
+        _ = write_blocks(Fd, Eof, Acc),
+        {ok, Pos} = file:position(Fd, Pos),
+        ok = file:truncate(Fd),
+        Parent ! {new_eof, Pos},
+        writer_loop(Fd, Parent, Pos);
+    sync ->
+        io:format("fsync right after write_blocks, eof ~p~n", [Eof]),
+        Eof2 = write_blocks(Fd, Eof, Acc),
+        ok = file:sync(Fd),
+        Parent ! {new_eof, Eof2},
+        writer_loop(Fd, Parent, Eof2)
+    after 0 ->
+        Eof2 = write_blocks(Fd, Eof, Acc),
+        Parent ! {new_eof, Eof2},
+        writer_loop(Fd, Parent, Eof2)
+    end.
+
+write_blocks(Fd, Eof, Data) ->
+    Blocks = make_blocks(Eof rem ?SIZE_BLOCK, lists:reverse(Data)),
+    ok = file:write(Fd, Blocks),
+    Eof2 = Eof + iolist_size(Blocks),
+    io:format("write_blocks wrote ~p bytes, eof ~p, eof2 ~p~n", [iolist_size(Blocks), Eof, Eof2]),
+    Eof2.
+
+write_header_blocks(Fd, Eof, Header) ->
+    case Eof rem ?SIZE_BLOCK of
+    0 ->
+        Padding = <<>>;
+    BlockOffset ->
+        Padding = <<0:(8 * (?SIZE_BLOCK - BlockOffset))>>
+    end,
+    FinalHeader = [
+        Padding,
+        <<1, (byte_size(Header)):32/integer>> | make_blocks(5, [Header])
+    ],
+    ok = file:write(Fd, FinalHeader),
+    Eof2 = Eof + iolist_size(FinalHeader),
+    io:format("write_header_blocks, wrote ~p bytes, eof ~p, eof2 ~p~n", [iolist_size(FinalHeader), Eof, Eof2]),
+    Eof2.
