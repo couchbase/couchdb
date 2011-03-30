@@ -13,6 +13,9 @@
 -module(couch_file).
 -behaviour(gen_server).
 
+% TODO remove this directive, it's here only for debugging purposes
+-compile(export_all).
+
 -include("couch_db.hrl").
 
 -define(SIZE_BLOCK, 4096).
@@ -95,15 +98,16 @@ append_term_md5(Fd, Term) ->
 %%----------------------------------------------------------------------
 
 append_binary(Fd, Bin) ->
-    Size = iolist_size(Bin),
-    gen_server:call(Fd, {append_bin,
-            [<<0:1/integer,Size:31/integer>>, Bin]}, infinity).
+    gen_server:call(Fd, {append_bin, assemble_iolist(Bin, <<>>)}, infinity).
     
 append_binary_md5(Fd, Bin) ->
-    Size = iolist_size(Bin),
-    gen_server:call(Fd, {append_bin,
-            [<<1:1/integer,Size:31/integer>>, couch_util:md5(Bin), Bin]}, infinity).
+    Md5 = couch_util:md5(Bin),
+    gen_server:call(Fd, {append_bin, assemble_iolist(Bin, Md5)}, infinity).
 
+assemble_iolist(Bin, <<>>) ->
+    [<<0:1/integer, (iolist_size(Bin)):31/integer>>, Bin];
+assemble_iolist(Bin, Md5) ->
+    [<<1:1/integer, (iolist_size(Bin)):31/integer>>, Md5, Bin].
 
 %%----------------------------------------------------------------------
 %% Purpose: Reads a term from a file that was written with append_term
@@ -331,6 +335,9 @@ terminate(_Reason, #file{fd = Fd, writer = Writer}) ->
     ok = file:close(Fd),
     ok = couch_file_writer:close(Writer).
 
+% TODO remove this clause, it's here only for debugging purposes
+handle_call(get_state, _From, File) ->
+    {reply, File, File};
 
 handle_call(get_fd, _From, #file{fd = Fd} = File) ->
     {reply, {ok, Fd}, File};
@@ -349,28 +356,25 @@ handle_call({truncate, Pos}, _From, #file{writer = Writer} = File) ->
     {reply, ok, File#file{eof = Pos, real_eof = Pos}};
 
 handle_call({append_bin, Bin}, {Pid, _} = From, #file{writer = W, eof = Pos} = File) ->
-    Blocks = make_blocks(Pos rem ?SIZE_BLOCK, Bin),
-    ok = couch_file_writer:write_chunk(W, {Pos, Blocks}),
     gen_server:reply(From, {ok, Pos}),
+    ok = couch_file_writer:write_chunk(W, Bin),
     File2 = File#file{
-        eof = Pos + iolist_size(Blocks),
+        eof = Pos + calculate_total_read_len(Pos rem ?SIZE_BLOCK, iolist_size(Bin)),
         pid_to_pos = dict:store(Pid, Pos, File#file.pid_to_pos)
     },
     {noreply, File2};
 
 handle_call({write_header, Bin}, {Pid, _} = From, #file{writer = W, eof = Pos} = File) ->
-    BinSize = byte_size(Bin),
-    case Pos rem ?SIZE_BLOCK of
-    0 ->
-        Padding = <<>>;
-    BlockOffset ->
-        Padding = <<0:(8*(?SIZE_BLOCK-BlockOffset))>>
-    end,
-    FinalBin = [Padding, <<1, BinSize:32/integer>> | make_blocks(5, [Bin])],
-    ok = couch_file_writer:write_chunk(W, {Pos, FinalBin}),
     gen_server:reply(From, ok),
+    ok = couch_file_writer:write_header(W, Bin),
+    Pos2 = case Pos rem ?SIZE_BLOCK of
+    0 ->
+        Pos + 5;
+    BlockOffset ->
+        Pos + 5 + (?SIZE_BLOCK - BlockOffset)
+    end,
     File2 = File#file{
-        eof = Pos + iolist_size(FinalBin),
+        eof = Pos2 + calculate_total_read_len(5, byte_size(Bin)),
         pid_to_pos = dict:store(Pid, Pos, File#file.pid_to_pos)
     },
     {noreply, File2};

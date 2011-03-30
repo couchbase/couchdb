@@ -37,6 +37,7 @@ init({MainPid, DbName, Filepath, Fd, Options}) ->
             % create a new header and writes it to the file
             Header =  #db_header{},
             ok = couch_file:write_header(Fd, Header),
+            ok = couch_file:flush(Fd),
             % delete any old compaction files that might be hanging around
             file:delete(Filepath ++ ".compact")
         end
