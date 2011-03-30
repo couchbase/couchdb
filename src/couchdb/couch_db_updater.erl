@@ -614,7 +614,6 @@ update_docs_int(Db, DocsList, NonRepDocs, MergeConflicts, FullCommit) ->
     {IndexFullDocInfos, IndexDocInfos} =
             new_index_entries(FlushedFullDocInfos, [], []),
 
-    ok = couch_file:flush(Db2#db.updater_fd),
     % and the indexes
     {ok, DocInfoByIdBTree2} = couch_btree:add_remove(DocInfoByIdBTree, IndexFullDocInfos, []),
     {ok, DocInfoBySeqBTree2} = couch_btree:add_remove(DocInfoBySeqBTree, IndexDocInfos, RemoveSeqs),
@@ -631,6 +630,7 @@ update_docs_int(Db, DocsList, NonRepDocs, MergeConflicts, FullCommit) ->
     false ->
         Db4 = Db3;
     true ->
+        ok = couch_file:flush(Db#db.updater_fd),
         Db4 = refresh_validate_doc_funs(Db3)
     end,
 
