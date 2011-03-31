@@ -621,6 +621,7 @@ update_docs_int(Db, DocsList, NonRepDocs, MergeConflicts, FullCommit) ->
         fulldocinfo_by_id_btree = DocInfoByIdBTree2,
         docinfo_by_seq_btree = DocInfoBySeqBTree2,
         update_seq = NewSeq},
+    ok = couch_file:flush(Db#db.updater_fd),
 
     % Check if we just updated any design documents, and update the validation
     % funs if we did.
@@ -629,7 +630,6 @@ update_docs_int(Db, DocsList, NonRepDocs, MergeConflicts, FullCommit) ->
     false ->
         Db4 = Db3;
     true ->
-        ok = couch_file:flush(Db#db.updater_fd),
         Db4 = refresh_validate_doc_funs(Db3)
     end,
 

@@ -258,6 +258,7 @@ init_status_error(ReturnPid, Ref, Error) ->
 % server functions
 
 init({Filepath, Options, ReturnPid, Ref}) ->
+    io:format("Open Filepath (~p):~s~n", [self(), Filepath]),
    try
        maybe_create_file(Filepath, Options),
        process_flag(trap_exit, true),
@@ -315,11 +316,13 @@ maybe_track_open_os_files(FileOptions) ->
         couch_stats_collector:track_process_count({couchdb, open_os_files})
     end.
 
-terminate(_Reason, #file{fd = Fd, writer = nil}) ->
+terminate(_Reason, #file{fd = Fd, writer = nil}) ->    
+    io:format("Close file ~p~n", [self()]),
     ok = file:close(Fd);
 terminate(_Reason, #file{fd = Fd, writer = Writer}) ->
     exit(Writer, kill),
     receive {'EXIT', Writer, _} -> ok end,
+    io:format("Close file ~p~n", [self()]),
     ok = file:close(Fd).
 
 % TODO remove this clause, it's here only for debugging purposes
@@ -336,8 +339,8 @@ handle_call(sync, From, #file{writer = W} = File) ->
     W ! {sync, From},
     {noreply, File};
 
-handle_call({truncate, Pos}, _From, #file{writer = Writer} = File) ->
-    ok = couch_file_writer:truncate(Writer, Pos),
+handle_call({truncate, Pos}, _From, #file{writer = W} = File) ->
+    W ! {truncate, Pos},
     {reply, ok, File#file{eof = Pos}};
 
 handle_call({append_bin, Bin}, From, #file{writer = W, eof = Pos} = File) ->
@@ -520,9 +523,10 @@ writer_loop(Fd, Parent, Eof) ->
     {header, Header} ->
         Eof2 = write_header_blocks(Fd, Eof, Header),
         writer_loop(Fd, Parent, Eof2);
-    {truncate, Pos} ->
+    {truncate, Pos, From} ->
         {ok, Pos} = file:position(Fd, Pos),
         ok = file:truncate(Fd),
+        gen_server:reply(From, ok),
         writer_loop(Fd, Parent, Pos);
     {flush, From} ->
         gen_server:reply(From, ok),
@@ -543,10 +547,11 @@ writer_collect_chunks(Fd, Parent, Eof, Acc) ->
         Eof2 = write_blocks(Fd, Eof, Acc),
         Eof3 = write_header_blocks(Fd, Eof2, Header),
         writer_loop(Fd, Parent, Eof3);
-    {truncate, Pos} ->
+    {truncate, Pos, From} ->
         _ = write_blocks(Fd, Eof, Acc),
         {ok, Pos} = file:position(Fd, Pos),
         ok = file:truncate(Fd),
+        gen_server:reply(From, ok),
         writer_loop(Fd, Parent, Pos);
     {flush, From} ->
         Eof2 = write_blocks(Fd, Eof, Acc),
