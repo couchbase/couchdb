@@ -245,7 +245,8 @@ write_header(Fd, Data) ->
     Md5 = couch_util:md5(Bin),
     % now we assemble the final header binary and write to disk
     FinalBin = <<Md5/binary, Bin/binary>>,
-    gen_server:call(Fd, {write_header, FinalBin}, infinity).
+    ok = gen_server:call(Fd, {write_header, FinalBin}, infinity),
+    flush(Fd).
 
 
 
@@ -317,7 +318,8 @@ maybe_track_open_os_files(FileOptions) ->
 terminate(_Reason, #file{fd = Fd, writer = nil}) ->
     ok = file:close(Fd);
 terminate(_Reason, #file{fd = Fd, writer = Writer}) ->
-    Writer ! stop,
+    exit(Writer, kill),
+    receive {'EXIT', Writer, _} -> ok end,
     ok = file:close(Fd).
 
 % TODO remove this clause, it's here only for debugging purposes
@@ -375,6 +377,8 @@ code_change(_OldVsn, State, _Extra) ->
 
 handle_info({'EXIT', _, normal}, Fd) ->
     {noreply, Fd};
+handle_info({'EXIT', From, Reason}, #file{writer = W} = Fd) when From == W ->
+    {stop, Reason, Fd#file{writer=nil}};
 handle_info({'EXIT', _, Reason}, Fd) ->
     {stop, Reason, Fd}.
 
@@ -521,16 +525,14 @@ writer_loop(Fd, Parent, Eof) ->
         ok = file:truncate(Fd),
         writer_loop(Fd, Parent, Pos);
     {flush, From} ->
-        io:format("flush eof ~p~n", [Eof]),
         gen_server:reply(From, ok),
         writer_loop(Fd, Parent, Eof);
     {sync, From} ->
-        io:format("sync, eof ~p~n", [Eof]),
         ok = file:sync(Fd),
         gen_server:reply(From, ok),
         writer_loop(Fd, Parent, Eof);
     stop ->
-        ok
+        exit(done)
     end.
 
 writer_collect_chunks(Fd, Parent, Eof, Acc) ->
@@ -538,7 +540,6 @@ writer_collect_chunks(Fd, Parent, Eof, Acc) ->
     {chunk, Chunk} ->
         writer_collect_chunks(Fd, Parent, Eof, [Chunk | Acc]);
     {header, Header} ->
-        io:format("header right after write_blocks, eof ~p~n", [Eof]),
         Eof2 = write_blocks(Fd, Eof, Acc),
         Eof3 = write_header_blocks(Fd, Eof2, Header),
         writer_loop(Fd, Parent, Eof3);
@@ -548,12 +549,10 @@ writer_collect_chunks(Fd, Parent, Eof, Acc) ->
         ok = file:truncate(Fd),
         writer_loop(Fd, Parent, Pos);
     {flush, From} ->
-        io:format("fsync right after write_blocks, eof ~p~n", [Eof]),
         Eof2 = write_blocks(Fd, Eof, Acc),
         gen_server:reply(From, ok),
         writer_loop(Fd, Parent, Eof2);
     {sync, From} ->
-        io:format("fsync right after write_blocks, eof ~p~n", [Eof]),
         Eof2 = write_blocks(Fd, Eof, Acc),
         ok = file:sync(Fd),
         gen_server:reply(From, ok),
@@ -567,7 +566,6 @@ write_blocks(Fd, Eof, Data) ->
     Blocks = make_blocks(Eof rem ?SIZE_BLOCK, lists:reverse(Data)),
     ok = file:write(Fd, Blocks),
     Eof2 = Eof + iolist_size(Blocks),
-    io:format("write_blocks wrote ~p bytes, eof ~p, eof2 ~p~n", [iolist_size(Blocks), Eof, Eof2]),
     Eof2.
 
 write_header_blocks(Fd, Eof, Header) ->
@@ -583,5 +581,4 @@ write_header_blocks(Fd, Eof, Header) ->
     ],
     ok = file:write(Fd, FinalHeader),
     Eof2 = Eof + iolist_size(FinalHeader),
-    io:format("write_header_blocks, wrote ~p bytes, eof ~p, eof2 ~p~n", [iolist_size(FinalHeader), Eof, Eof2]),
     Eof2.

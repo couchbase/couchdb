@@ -38,7 +38,8 @@ compact_group(Group, EmptyGroup) ->
     #group{
         db = Db,
         id_btree = EmptyIdBtree,
-        views = EmptyViews
+        views = EmptyViews,
+        fd = Fd
     } = EmptyGroup,
 
     {ok, {Count, _}} = couch_btree:full_reduce(Db#db.fulldocinfo_by_id_btree),
@@ -69,7 +70,7 @@ compact_group(Group, EmptyGroup) ->
     NewViews = lists:map(fun({View, EmptyView}) ->
         compact_view(View, EmptyView)
     end, lists:zip(Views, EmptyViews)),
-
+    ok = couch_file:flush(Fd),
     NewGroup = EmptyGroup#group{
         id_btree=NewIdBtree,
         views=NewViews,

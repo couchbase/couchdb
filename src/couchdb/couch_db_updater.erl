@@ -37,7 +37,6 @@ init({MainPid, DbName, Filepath, Fd, Options}) ->
             % create a new header and writes it to the file
             Header =  #db_header{},
             ok = couch_file:write_header(Fd, Header),
-            ok = couch_file:flush(Fd),
             % delete any old compaction files that might be hanging around
             file:delete(Filepath ++ ".compact")
         end
@@ -634,7 +633,6 @@ update_docs_int(Db, DocsList, NonRepDocs, MergeConflicts, FullCommit) ->
         Db4 = refresh_validate_doc_funs(Db3)
     end,
 
-    ok = couch_file:flush(Db4#db.updater_fd),
     {ok, commit_data(Db4, not FullCommit)}.
 
 
@@ -711,7 +709,6 @@ commit_data(Db, _) ->
     OldHeader ->
         Db#db{waiting_delayed_commit=nil};
     Header ->
-        ok = couch_file:flush(Fd),
         case lists:member(before_header, FsyncOptions) of
         true -> ok = couch_file:sync(Fd);
         _    -> ok
