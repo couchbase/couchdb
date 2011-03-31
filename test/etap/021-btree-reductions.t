@@ -47,6 +47,7 @@ test()->
     end, {"odd", []}, lists:seq(1, rows())),
 
     {ok, Btree2} = couch_btree:add_remove(Btree, EvenOddKVs, []),
+    ok = couch_file:flush(Fd),
 
     GroupFun = fun({K1, _}, {K2, _}) -> K1 == K2 end,
     FoldFun = fun(GroupedKey, Unreduced, Acc) ->

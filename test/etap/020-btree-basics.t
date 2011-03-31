@@ -80,6 +80,7 @@ test_kvs(KeyValues) ->
         "Removing all keys at once returns an empty btree."),
 
     Btree4 = lists:foldl(fun(KV, BtAcc) ->
+        ok = couch_file:flush(Fd),
         {ok, BtAcc2} = couch_btree:add_remove(BtAcc, [KV], []),
         BtAcc2
     end, Btree3, KeyValues),
@@ -123,13 +124,15 @@ test_kvs(KeyValues) ->
     etap:is(couch_file:close(Fd), ok, "closing out"),
     true.
 
-test_btree(Btree, KeyValues) ->
+test_btree(#btree{fd = Fd} = Btree, KeyValues) ->
+    ok = couch_file:flush(Fd),
     ok = test_key_access(Btree, KeyValues),
     ok = test_lookup_access(Btree, KeyValues),
     ok = test_final_reductions(Btree, KeyValues),
     true.
 
-test_add_remove(Btree, OutKeyValues, RemainingKeyValues) ->
+test_add_remove(#btree{fd = Fd} = Btree, OutKeyValues, RemainingKeyValues) ->
+    ok = couch_file:flush(Fd),
     Btree2 = lists:foldl(fun({K, _}, BtAcc) ->
         {ok, BtAcc2} = couch_btree:add_remove(BtAcc, [], [K]),
         BtAcc2
@@ -142,7 +145,7 @@ test_add_remove(Btree, OutKeyValues, RemainingKeyValues) ->
     end, Btree2, OutKeyValues),
     true = test_btree(Btree3, OutKeyValues ++ RemainingKeyValues).
 
-test_key_access(Btree, List) ->
+test_key_access(#btree{fd = Fd} = Btree, List) ->
     FoldFun = fun(Element, {[HAcc|TAcc], Count}) ->
         case Element == HAcc of
             true -> {ok, {TAcc, Count + 1}};
@@ -151,18 +154,21 @@ test_key_access(Btree, List) ->
     end,
     Length = length(List),
     Sorted = lists:sort(List),
+    ok = couch_file:flush(Fd),
     {ok, _, {[], Length}} = couch_btree:foldl(Btree, FoldFun, {Sorted, 0}),
     {ok, _, {[], Length}} = couch_btree:fold(Btree, FoldFun, {Sorted, 0}, [{dir, rev}]),
     ok.
 
-test_lookup_access(Btree, KeyValues) ->
+test_lookup_access(#btree{fd = Fd} = Btree, KeyValues) ->
+    ok = couch_file:flush(Fd),
     FoldFun = fun({Key, Value}, {Key, Value}) -> {stop, true} end,
     lists:foreach(fun({Key, Value}) ->
         [{ok, {Key, Value}}] = couch_btree:lookup(Btree, [Key]),
         {ok, _, true} = couch_btree:foldl(Btree, FoldFun, {Key, Value}, [{start_key, Key}])
     end, KeyValues).
 
-test_final_reductions(Btree, KeyValues) ->
+test_final_reductions(#btree{fd = Fd} = Btree, KeyValues) ->
+    ok = couch_file:flush(Fd),
     KVLen = length(KeyValues),
     FoldLFun = fun(_X, LeadingReds, Acc) ->
         CountToStart = KVLen div 3 + Acc,
