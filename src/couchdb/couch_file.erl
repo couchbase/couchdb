@@ -338,6 +338,7 @@ handle_call(sync, From, #file{writer = W} = File) ->
 
 handle_call({truncate, Pos}, _From, #file{writer = W} = File) ->
     W ! {truncate, Pos},
+    receive {W, truncated, Pos} -> ok end,
     {reply, ok, File#file{eof = Pos}};
 
 handle_call({append_bin, Bin}, From, #file{writer = W, eof = Pos} = File) ->
@@ -377,7 +378,7 @@ code_change(_OldVsn, State, _Extra) ->
 
 handle_info({'EXIT', _, normal}, Fd) ->
     {noreply, Fd};
-handle_info({'EXIT', From, Reason}, #file{writer = W} = Fd) when From == W ->
+handle_info({'EXIT', W, Reason}, #file{writer = W} = Fd) ->
     {stop, Reason, Fd#file{writer=nil}};
 handle_info({'EXIT', _, Reason}, Fd) ->
     {stop, Reason, Fd}.
@@ -520,10 +521,10 @@ writer_loop(Fd, Parent, Eof) ->
     {header, Header} ->
         Eof2 = write_header_blocks(Fd, Eof, Header),
         writer_loop(Fd, Parent, Eof2);
-    {truncate, Pos, From} ->
+    {truncate, Pos} ->
         {ok, Pos} = file:position(Fd, Pos),
         ok = file:truncate(Fd),
-        gen_server:reply(From, ok),
+        Parent ! {self(), truncated, Pos},
         writer_loop(Fd, Parent, Pos);
     {flush, From} ->
         gen_server:reply(From, ok),
@@ -544,11 +545,11 @@ writer_collect_chunks(Fd, Parent, Eof, Acc) ->
         Eof2 = write_blocks(Fd, Eof, Acc),
         Eof3 = write_header_blocks(Fd, Eof2, Header),
         writer_loop(Fd, Parent, Eof3);
-    {truncate, Pos, From} ->
+    {truncate, Pos} ->
         _ = write_blocks(Fd, Eof, Acc),
         {ok, Pos} = file:position(Fd, Pos),
         ok = file:truncate(Fd),
-        gen_server:reply(From, ok),
+        Parent ! {self(), truncated, Pos},
         writer_loop(Fd, Parent, Pos);
     {flush, From} ->
         Eof2 = write_blocks(Fd, Eof, Acc),
