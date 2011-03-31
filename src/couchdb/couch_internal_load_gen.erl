@@ -34,7 +34,8 @@
           starttime,
           total_arg,
           batch_arg,
-          concurrency_arg
+          concurrency_arg,
+          delayed_commits = "false"
          }).
 
 parse_load_qs_args(Req) ->
@@ -47,16 +48,21 @@ parse_load_qs_args(Req) ->
         {"batch", Value} ->
             Load#load{batch_arg=list_to_integer(Value)};
         {"concurrency", Value} ->
-            Load#load{concurrency_arg=list_to_integer(Value)}
+            Load#load{concurrency_arg=list_to_integer(Value)};
+        {"delayed_commits", Value} ->
+            Load#load{delayed_commits=Value}
         end
     end, #load{}, couch_httpd:qs(Req)).
 
 
 handle_req(#httpd{method = 'POST'} = Req) ->
     process_flag(trap_exit, true),
-    #load{dbname=DbName} = Load0 = parse_load_qs_args(Req),
+    #load{dbname=DbName, delayed_commits=DelayedCommits} = Load0 = parse_load_qs_args(Req),
+    PrevDelayedCommits = couch_config:get("couchdb", "delayed_commits", "true"),
+    ok = couch_config:set("couchdb", "delayed_commits", DelayedCommits),
     DocBody = couch_httpd:json_body_obj(Req),
     io:format("DocBody:~p~n", [DocBody]),
+    io:format("Delayed commits set to ~s~n", [couch_config:get("couchdb", "delayed_commits")]),
     couch_server:delete(DbName, []),
     {ok, Db} = couch_server:create(DbName, []),
     Load = Load0#load{doc=couch_doc:from_json_obj(DocBody),db=Db},
@@ -64,6 +70,7 @@ handle_req(#httpd{method = 'POST'} = Req) ->
     generate_full_load(Load),
     End = erlang:now(),
     couch_db:close(Db),
+    ok = couch_config:set("couchdb", "delayed_commits", PrevDelayedCommits),
     send_json(Req, 200,{[
         {<<"db">>, Load#load.dbname},
         {<<"total">>, Load#load.total_arg},
