@@ -237,7 +237,7 @@ write_changes(Group, ViewKeyValuesToAdd, DocIdViewIdKeys, NewSeq, InitialBuild) 
     true ->
         RemoveDocIds = [DocId || {DocId, ViewIdKeys} <- DocIdViewIdKeys, ViewIdKeys == []],
         LookupDocIds = [DocId || {DocId, _ViewIdKeys} <- DocIdViewIdKeys]
-    end,    
+    end,
     couch_file:flush(Fd),
     {ok, LookupResults, IdBtree2}
         = couch_btree:query_modify(IdBtree, LookupDocIds, AddDocIdViewIdKeys, RemoveDocIds),

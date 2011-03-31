@@ -258,7 +258,6 @@ init_status_error(ReturnPid, Ref, Error) ->
 % server functions
 
 init({Filepath, Options, ReturnPid, Ref}) ->
-    io:format("Open Filepath (~p):~s~n", [self(), Filepath]),
    try
        maybe_create_file(Filepath, Options),
        process_flag(trap_exit, true),
@@ -316,13 +315,11 @@ maybe_track_open_os_files(FileOptions) ->
         couch_stats_collector:track_process_count({couchdb, open_os_files})
     end.
 
-terminate(_Reason, #file{fd = Fd, writer = nil}) ->    
-    io:format("Close file ~p~n", [self()]),
+terminate(_Reason, #file{fd = Fd, writer = nil}) ->
     ok = file:close(Fd);
 terminate(_Reason, #file{fd = Fd, writer = Writer}) ->
     exit(Writer, kill),
     receive {'EXIT', Writer, _} -> ok end,
-    io:format("Close file ~p~n", [self()]),
     ok = file:close(Fd).
 
 % TODO remove this clause, it's here only for debugging purposes
