@@ -246,7 +246,7 @@ get_last_purged(#db{fd=Fd, header=#db_header{purged_docs=PurgedPointer}}) ->
     couch_file:pread_term(Fd, PurgedPointer).
 
 get_db_info(Db) ->
-    #db{fd=Fd,
+    #db{updater_fd=Fd,
         header=#db_header{disk_version=DiskVersion},
         compactor_pid=Compactor,
         update_seq=SeqNum,
