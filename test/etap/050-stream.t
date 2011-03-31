@@ -26,6 +26,7 @@ main(_) ->
     ok.
 
 read_all(Fd, PosList) ->
+    ok = couch_file:flush(Fd),
     Data = couch_stream:foldl(Fd, PosList, fun(Bin, Acc) -> [Bin, Acc] end, []),
     iolist_to_binary(Data).
 
