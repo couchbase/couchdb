@@ -337,7 +337,7 @@ handle_call(sync, From, #file{writer = W} = File) ->
     {noreply, File};
 
 handle_call({truncate, Pos}, _From, #file{writer = W} = File) ->
-    W ! {truncate, Pos},
+    W ! {truncate, Pos, self()},
     receive {W, truncated, Pos} -> ok end,
     {reply, ok, File#file{eof = Pos}};
 
@@ -504,72 +504,68 @@ spawn_writer(Filepath, Options) ->
     true ->
         nil;
     false ->
-        case file:open(Filepath, [binary, append]) of
-        {ok, Fd} ->
+        spawn_link(fun() ->
+            {ok, Fd} = file:open(Filepath, [binary, append, raw]),
             {ok, Eof} = file:position(Fd, eof),
-            Parent = self(),
-            spawn_link(fun() -> writer_loop(Fd, Parent, Eof) end);
-        Error ->
-            throw({error, Error})
-        end
+            writer_loop(Fd, Eof)
+        end)
     end.
 
-writer_loop(Fd, Parent, Eof) ->
+writer_loop(Fd, Eof) ->
     receive
     {chunk, Chunk} ->
-        writer_collect_chunks(Fd, Parent, Eof, [Chunk]);
+        writer_collect_chunks(Fd, Eof, [Chunk]);
     {header, Header} ->
         Eof2 = write_header_blocks(Fd, Eof, Header),
-        writer_loop(Fd, Parent, Eof2);
-    {truncate, Pos} ->
+        writer_loop(Fd, Eof2);
+    {truncate, Pos, From} ->
         {ok, Pos} = file:position(Fd, Pos),
         ok = file:truncate(Fd),
-        Parent ! {self(), truncated, Pos},
-        writer_loop(Fd, Parent, Pos);
+        From ! {self(), truncated, Pos},
+        writer_loop(Fd, Pos);
     {flush, From} ->
         gen_server:reply(From, ok),
-        writer_loop(Fd, Parent, Eof);
+        writer_loop(Fd, Eof);
     {sync, From} ->
         ok = file:sync(Fd),
         gen_server:reply(From, ok),
-        writer_loop(Fd, Parent, Eof);
+        writer_loop(Fd, Eof);
     stop ->
         exit(done)
     end.
 
-writer_collect_chunks(Fd, Parent, Eof, Acc) ->
+writer_collect_chunks(Fd, Eof, Acc) ->
     receive
     {chunk, Chunk} ->
-        writer_collect_chunks(Fd, Parent, Eof, [Chunk | Acc]);
+        writer_collect_chunks(Fd, Eof, [Chunk | Acc]);
     {header, Header} ->
         Eof2 = write_blocks(Fd, Eof, Acc),
         Eof3 = write_header_blocks(Fd, Eof2, Header),
-        writer_loop(Fd, Parent, Eof3);
-    {truncate, Pos} ->
+        writer_loop(Fd, Eof3);
+    {truncate, Pos, From} ->
         _ = write_blocks(Fd, Eof, Acc),
         {ok, Pos} = file:position(Fd, Pos),
         ok = file:truncate(Fd),
-        Parent ! {self(), truncated, Pos},
-        writer_loop(Fd, Parent, Pos);
+        From ! {self(), truncated, Pos},
+        writer_loop(Fd, Pos);
     {flush, From} ->
         Eof2 = write_blocks(Fd, Eof, Acc),
         gen_server:reply(From, ok),
-        writer_loop(Fd, Parent, Eof2);
+        writer_loop(Fd, Eof2);
     {sync, From} ->
         Eof2 = write_blocks(Fd, Eof, Acc),
         ok = file:sync(Fd),
         gen_server:reply(From, ok),
-        writer_loop(Fd, Parent, Eof2)
+        writer_loop(Fd, Eof2)
     after 0 ->
         Eof2 = write_blocks(Fd, Eof, Acc),
-        writer_loop(Fd, Parent, Eof2)
+        writer_loop(Fd, Eof2)
     end.
 
 write_blocks(Fd, Eof, Data) ->
     Blocks = make_blocks(Eof rem ?SIZE_BLOCK, lists:reverse(Data)),
     ok = file:write(Fd, Blocks),
-    Eof2 = Eof + iolist_size(Blocks),
-    Eof2.
+    Eof + iolist_size(Blocks).
 
 write_header_blocks(Fd, Eof, Header) ->
     case Eof rem ?SIZE_BLOCK of
@@ -583,5 +579,4 @@ write_header_blocks(Fd, Eof, Header) ->
         <<1, (byte_size(Header)):32/integer>> | make_blocks(5, [Header])
     ],
     ok = file:write(Fd, FinalHeader),
-    Eof2 = Eof + iolist_size(FinalHeader),
-    Eof2.
+    Eof + iolist_size(FinalHeader).
