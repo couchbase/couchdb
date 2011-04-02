@@ -12,8 +12,8 @@
 
 -module(couch_btree).
 
--export([open/2, open/3, query_modify/4, add/2, add_remove/3]).
--export([fold/4, full_reduce/1, final_reduce/2, foldl/3, foldl/4]).
+-export([open/2, open/3, query_modify/4, query_modify/5, add/2, add_remove/3]).
+-export([fold/4, full_reduce/1, final_reduce/2, foldl/3, foldl/4,lookup_sorted/2]).
 -export([fold_reduce/4, lookup/2, get_state/1, set_options/2]).
 
 -include("couch_db.hrl").
@@ -164,6 +164,9 @@ add_remove(Bt, InsertKeyValues, RemoveKeys) ->
     {ok, Bt2}.
 
 query_modify(Bt, LookupKeys, InsertValues, RemoveKeys) ->
+    query_modify(Bt, LookupKeys, InsertValues, RemoveKeys, unsorted).
+
+query_modify(Bt, LookupKeys, InsertValues, RemoveKeys, Sorted) ->
     #btree{root=Root} = Bt,
     InsertActions = lists:map(
         fun(KeyValue) ->
@@ -181,7 +184,13 @@ query_modify(Bt, LookupKeys, InsertValues, RemoveKeys) ->
                 less(Bt, A, B)
             end
         end,
-    Actions = lists:sort(SortFun, lists:append([InsertActions, RemoveActions, FetchActions])),
+    Actions =
+    case Sorted of
+    sorted when RemoveActions == [] andalso FetchActions == [] ->
+        InsertActions;
+    unsorted ->
+        lists:sort(SortFun, lists:append([InsertActions, RemoveActions, FetchActions]))
+    end,
     {ok, KeyPointers, QueryResults, Bt2} = modify_node(Bt, Root, Actions, []),
     {ok, NewRoot, Bt3} = complete_root(Bt2, KeyPointers),
     {ok, QueryResults, Bt3#btree{root=NewRoot}}.
@@ -192,6 +201,11 @@ op_order(fetch) -> 1;
 op_order(remove) -> 2;
 op_order(insert) -> 3.
 
+
+lookup_sorted(#btree{root=Root}=Bt, Keys) ->
+    {ok, KeyResults} = lookup(Bt, Root, Keys),
+    KeyResults.
+    
 lookup(#btree{root=Root, less=Less}=Bt, Keys) ->
     SortedKeys = lists:sort(Less, Keys),
     {ok, SortedResults} = lookup(Bt, Root, SortedKeys),

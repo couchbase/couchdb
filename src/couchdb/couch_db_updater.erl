@@ -477,7 +477,7 @@ flush_trees(#db{updater_fd = Fd} = Db,
                     throw(retry)
                 end,
                 {ok, NewSummaryPointer} =
-                    couch_file:append_term_md5(Fd, {Doc#doc.body, DiskAtts}),
+                    couch_file:append_term(Fd, {Doc#doc.body, DiskAtts}),
                 {IsDeleted, NewSummaryPointer, UpdateSeq};
             _ ->
                 Value
@@ -590,20 +590,19 @@ update_docs_int(Db, DocsList, NonRepDocs, MergeConflicts, FullCommit) ->
         } = Db,
     Ids = [Id || [{_Client, #doc{id=Id}}|_] <- DocsList],
     % lookup up the old documents, if they exist.
-    OldDocLookups = couch_btree:lookup(DocInfoByIdBTree, Ids),
-    OldDocInfos = lists:zipwith(
-        fun(_Id, {ok, FullDocInfo}) ->
+    OldDocLookups = couch_btree:lookup_sorted(DocInfoByIdBTree, Ids),
+    OldDocInfos = lists:map(
+        fun({_Id, {ok, FullDocInfo}}) ->
             FullDocInfo;
-        (Id, not_found) ->
+        ({Id, not_found}) ->
             #full_doc_info{id=Id}
         end,
-        Ids, OldDocLookups),
+        OldDocLookups),
     % Merge the new docs into the revision trees.
     {ok, NewFullDocInfos, RemoveSeqs, NewSeq} = merge_rev_trees(RevsLimit,
             MergeConflicts, DocsList, OldDocInfos, [], [], LastSeq),
 
     % All documents are now ready to write.
-
     {ok, Db2}  = update_local_docs(Db, NonRepDocs),
 
     % Write out the document summaries (the bodies are stored in the nodes of
@@ -614,14 +613,15 @@ update_docs_int(Db, DocsList, NonRepDocs, MergeConflicts, FullCommit) ->
             new_index_entries(FlushedFullDocInfos, [], []),
 
     % and the indexes
-    {ok, DocInfoByIdBTree2} = couch_btree:add_remove(DocInfoByIdBTree, IndexFullDocInfos, []),
+    {ok, [], DocInfoByIdBTree2} = couch_btree:query_modify(DocInfoByIdBTree, [], IndexFullDocInfos, [], sorted),
     {ok, DocInfoBySeqBTree2} = couch_btree:add_remove(DocInfoBySeqBTree, IndexDocInfos, RemoveSeqs),
 
     Db3 = Db2#db{
         fulldocinfo_by_id_btree = DocInfoByIdBTree2,
         docinfo_by_seq_btree = DocInfoBySeqBTree2,
         update_seq = NewSeq},
-    ok = couch_file:flush(Db#db.updater_fd),
+
+    %ok = couch_file:flush(Db#db.updater_fd),
 
     % Check if we just updated any design documents, and update the validation
     % funs if we did.
