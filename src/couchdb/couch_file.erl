@@ -361,7 +361,7 @@ handle_call({write_header, Bin}, From, #file{writer = W, eof = Pos} = File) ->
     },
     {noreply, File2};
 
-handle_call(flush, From, #file{writer =  nil} = File) ->
+handle_call(flush, _From, #file{writer =  nil} = File) ->
     {reply, ok, File};
 handle_call(flush, From, #file{writer =  W} = File) ->
     W ! {flush, From},
