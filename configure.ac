@@ -14,6 +14,9 @@ AC_INIT([LOCAL_PACKAGE_NAME], [LOCAL_VERSION], [], [LOCAL_PACKAGE_TARNAME])
 
 AC_PREREQ([2.59])
 
+AC_PROG_CXX
+AC_LANG([C++])
+
 AC_CONFIG_SRCDIR([CHANGES])
 AC_CONFIG_AUX_DIR([build-aux])
 AC_CONFIG_MACRO_DIR([m4])
@@ -419,6 +422,7 @@ AC_CONFIG_FILES([src/erlang-oauth/Makefile])
 AC_CONFIG_FILES([src/etap/Makefile])
 AC_CONFIG_FILES([src/ibrowse/Makefile])
 AC_CONFIG_FILES([src/mochiweb/Makefile])
+AC_CONFIG_FILES([src/snappy/Makefile])
 AC_CONFIG_FILES([test/Makefile])
 AC_CONFIG_FILES([test/bench/Makefile])
 AC_CONFIG_FILES([test/etap/Makefile])
@@ -427,6 +431,8 @@ AC_CONFIG_FILES([test/javascript/Makefile])
 AC_CONFIG_FILES([test/view_server/Makefile])
 AC_CONFIG_FILES([utils/Makefile])
 AC_CONFIG_FILES([var/Makefile])
+
+AC_CONFIG_SUBDIRS([src/snappy/google-snappy])
 
 AC_OUTPUT
 
