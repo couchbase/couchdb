@@ -12,7 +12,7 @@
 
 -module(couch_btree).
 
--export([open/2, open/3, query_modify/4, query_modify/5, add/2, add_remove/3]).
+-export([open/2, open/3, query_modify/4, query_modify_raw/2, add/2, add_remove/3]).
 -export([fold/4, full_reduce/1, final_reduce/2, foldl/3, foldl/4,lookup_sorted/2]).
 -export([fold_reduce/4, lookup/2, get_state/1, set_options/2]).
 
@@ -163,10 +163,9 @@ add_remove(Bt, InsertKeyValues, RemoveKeys) ->
     {ok, [], Bt2} = query_modify(Bt, [], InsertKeyValues, RemoveKeys),
     {ok, Bt2}.
 
-query_modify(Bt, LookupKeys, InsertValues, RemoveKeys) ->
-    query_modify(Bt, LookupKeys, InsertValues, RemoveKeys, unsorted).
 
-query_modify(Bt, LookupKeys, InsertValues, RemoveKeys, Sorted) ->
+
+query_modify(Bt, LookupKeys, InsertValues, RemoveKeys) ->
     #btree{root=Root} = Bt,
     InsertActions = lists:map(
         fun(KeyValue) ->
@@ -184,16 +183,20 @@ query_modify(Bt, LookupKeys, InsertValues, RemoveKeys, Sorted) ->
                 less(Bt, A, B)
             end
         end,
-    Actions =
-    case Sorted of
-    sorted when RemoveActions == [] andalso FetchActions == [] ->
-        InsertActions;
-    unsorted ->
-        lists:sort(SortFun, lists:append([InsertActions, RemoveActions, FetchActions]))
-    end,
+    Actions = lists:sort(SortFun, lists:append([InsertActions, RemoveActions, FetchActions])) ,
     {ok, KeyPointers, QueryResults, Bt2} = modify_node(Bt, Root, Actions, []),
     {ok, NewRoot, Bt3} = complete_root(Bt2, KeyPointers),
     {ok, QueryResults, Bt3#btree{root=NewRoot}}.
+
+
+% Similar to query_modify, except the keys values must be sorted and tagged
+% tuples of {action, Key, Value} and sorted by the sorted by Key, then by
+% the rules in the function op_order.
+query_modify_raw(#btree{root=Root} = Bt, SortedActions) ->
+    {ok, KeyPointers, QueryResults, Bt2} = modify_node(Bt, Root, SortedActions, []),
+    {ok, NewRoot, Bt3} = complete_root(Bt2, KeyPointers),
+    {ok, QueryResults, Bt3#btree{root=NewRoot}}.
+
 
 % for ordering different operations with the same key.
 % fetch < remove < insert
@@ -205,7 +208,7 @@ op_order(insert) -> 3.
 lookup_sorted(#btree{root=Root}=Bt, Keys) ->
     {ok, KeyResults} = lookup(Bt, Root, Keys),
     KeyResults.
-    
+
 lookup(#btree{root=Root, less=Less}=Bt, Keys) ->
     SortedKeys = lists:sort(Less, Keys),
     {ok, SortedResults} = lookup(Bt, Root, SortedKeys),

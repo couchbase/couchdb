@@ -613,8 +613,13 @@ update_docs_int(Db, DocsList, NonRepDocs, MergeConflicts, FullCommit) ->
             new_index_entries(FlushedFullDocInfos, [], []),
 
     % and the indexes
-    {ok, [], DocInfoByIdBTree2} = couch_btree:query_modify(DocInfoByIdBTree, [], IndexFullDocInfos, [], sorted),
-    {ok, DocInfoBySeqBTree2} = couch_btree:add_remove(DocInfoBySeqBTree, IndexDocInfos, RemoveSeqs),
+    InsertByIds = [begin {K,V}= btree_by_id_split(I), {insert, K, V} end || I <- IndexFullDocInfos],
+    InsertBySeq = [begin {K,V}= btree_by_seq_split(I), {insert, K, V} end || I <- lists:reverse(IndexDocInfos)],
+    RemoveBySeq = [{remove, Seq, nil} || Seq <- lists:sort(RemoveSeqs)],
+    
+    
+    {ok, [], DocInfoByIdBTree2} = couch_btree:query_modify_raw(DocInfoByIdBTree, InsertByIds),
+    {ok, [], DocInfoBySeqBTree2} = couch_btree:query_modify_raw(DocInfoBySeqBTree, RemoveBySeq ++ InsertBySeq),
 
     Db3 = Db2#db{
         fulldocinfo_by_id_btree = DocInfoByIdBTree2,
