@@ -265,6 +265,10 @@ if test `echo $version | ${AWK} "{print \\$2}"` -eq 6; then
     fi
 fi
 
+otp_release="`${ERL} -noshell -eval 'io:put_chars(erlang:system_info(otp_release)).' -s erlang halt`"
+AC_SUBST(otp_release)
+AM_CONDITIONAL([USE_OTP_NIFS], [test x$otp_release \> xR13B03])
+
 has_crypto=`${ERL} -eval "case application:load(crypto) of ok -> ok; _ -> exit(no_crypto) end." -noshell -s init stop`
 
 if test -n "$has_crypto"; then

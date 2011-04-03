@@ -19,7 +19,9 @@ CLEANFILES = \
 	$(snappyebin_make_generated_file_list) \
 	$(snappypriv_make_generated_file_list)
 
+if USE_OTP_NIFS
 snappypriv_LTLIBRARIES = snappy.la
+endif
 
 SNAPPY_CXX_SRCS = \
 	snappy.cc
@@ -29,12 +31,14 @@ SNAPPY_OBJECTS = \
 	google-snappy/snappy-sinksource.o \
 	google-snappy/snappy-stubs-internal.o
 
+if USE_OTP_NIFS
 snappy_la_SOURCES = $(SNAPPY_CXX_SRCS)
 snappy_la_LDFLAGS = -module -avoid-version
 snappy_la_LIBADD = $(SNAPPY_OBJECTS)
 
 if WINDOWS
 snappy_la_LDFLAGS += -no-undefined
+endif
 endif
 
 snappy_file_collection = \
@@ -54,10 +58,12 @@ EXTRA_DIST =  \
     erl_nif_compat.h \
     priv
 
+if USE_OTP_NIFS
 priv/snappy.so: .libs/snappy.so
 	$(LN_S) .libs priv
 
 all: priv/snappy.so
+endif
 
 %.app: %.app.in
 	cp $< $@
