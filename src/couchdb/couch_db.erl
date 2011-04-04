@@ -1174,7 +1174,14 @@ make_doc(#db{updater_fd = Fd} = Db, Id, Deleted, Bp, RevisionPath) ->
     nil ->
         {[], []};
     _ ->
-        {ok, {BodyData0, Atts0}} = read_doc(Db, Bp),
+        {ok, {BodyData0, Atts00}} = read_doc(Db, Bp),
+        Atts0 = case Atts00 of
+        Bin when is_binary(Bin) ->
+            % 1.2 upgrade code
+            couch_util:decompress(Bin);
+        L when is_list(L) ->
+            Atts00
+        end,
         {BodyData0,
             lists:map(
                 fun({Name,Type,Sp,AttLen,DiskLen,RevPos,Md5,Enc}) ->

@@ -476,8 +476,8 @@ flush_trees(#db{updater_fd = Fd} = Db,
                             " changed. Possibly retrying.", []),
                     throw(retry)
                 end,
-                {ok, NewSummaryPointer} =
-                    couch_file:append_term_md5(Fd, {Doc#doc.body, DiskAtts}),
+                NewSummaryPointer =
+                    append_doc_summary(Fd, {Doc#doc.body, DiskAtts}),
                 {IsDeleted, NewSummaryPointer, UpdateSeq};
             _ ->
                 Value
@@ -751,14 +751,7 @@ copy_doc_attachments(#db{updater_fd = SrcFd} = SrcDb, SrcSp, DestFd) ->
             end,
             {Name, Type, NewBinSp, AttLen, DiskLen, RevPos, Md5, Enc}
         end, BinInfos),
-    case BodyData of
-    {_} ->
-        %% 1.2.0 upgrade code, EJSON doc body to binary EJSON doc body
-        {term_to_binary(BodyData, [{compress, 1}, {minor_version, 1}]),
-            NewBinInfos};
-    EJsonBin when is_binary(EJsonBin) ->
-        {BodyData, NewBinInfos}
-    end.
+    {BodyData, NewBinInfos}.
 
 copy_docs(Db, #db{updater_fd = DestFd} = NewDb, InfoBySeq0, Retry) ->
     % COUCHDB-968, make sure we prune duplicates during compaction
@@ -772,7 +765,7 @@ copy_docs(Db, #db{updater_fd = DestFd} = NewDb, InfoBySeq0, Retry) ->
             Info#full_doc_info{rev_tree=couch_key_tree:map(
                 fun(_Rev, {IsDel, Sp, Seq}, leaf) ->
                     DocBody = copy_doc_attachments(Db, Sp, DestFd),
-                    {ok, Pos} = couch_file:append_term_md5(DestFd, DocBody),
+                    Pos = append_doc_summary(DestFd, DocBody),
                     {IsDel, Pos, Seq};
                 (_, _, branch) ->
                     ?REV_MISSING
@@ -876,3 +869,15 @@ start_copy_compact(#db{name=Name,filepath=Filepath,header=#db_header{purge_seq=P
     close_db(NewDb3),
     gen_server:cast(Db#db.update_pid, {compact_done, CompactFile}).
 
+
+append_doc_summary(Fd, {Body, DiskAtts}) when is_binary(Body) andalso
+                                              is_binary(DiskAtts) ->
+    {ok, NewSummaryPointer} =
+        couch_file:append_term_md5(Fd, {Body, DiskAtts}, false),
+    NewSummaryPointer;
+append_doc_summary(Fd, {Body, DiskAtts}) when is_binary(Body) ->
+    append_doc_summary(Fd, {Body, couch_util:compress(DiskAtts)});
+append_doc_summary(Fd, {Body, DiskAtts}) ->
+    % 1.2 upgrade code
+    append_doc_summary(
+        Fd, {couch_util:compress(Body), couch_util:compress(DiskAtts)}).
