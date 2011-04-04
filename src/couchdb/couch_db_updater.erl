@@ -728,7 +728,14 @@ commit_data(Db, _) ->
 
 
 copy_doc_attachments(#db{updater_fd = SrcFd} = SrcDb, SrcSp, DestFd) ->
-    {ok, {BodyData, BinInfos}} = couch_db:read_doc(SrcDb, SrcSp),
+    {ok, {BodyData, BinInfos0}} = couch_db:read_doc(SrcDb, SrcSp),
+    BinInfos = case BinInfos0 of
+    _ when is_binary(BinInfos0) ->
+        couch_util:decompress(BinInfos0);
+    _ when is_list(BinInfos0) ->
+        % pre 1.2 file format
+        BinInfos0
+    end,
     % copy the bin values
     NewBinInfos = lists:map(
         fun({Name, Type, BinSp, AttLen, RevPos, Md5}) ->
