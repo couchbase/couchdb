@@ -27,9 +27,9 @@ SNAPPY_CXX_SRCS = \
 	snappy.cc
 
 SNAPPY_OBJECTS = \
-	google-snappy/snappy.o \
-	google-snappy/snappy-sinksource.o \
-	google-snappy/snappy-stubs-internal.o
+	google-snappy/snappy.lo \
+	google-snappy/snappy-sinksource.lo \
+	google-snappy/snappy-stubs-internal.lo
 
 if USE_OTP_NIFS
 snappy_la_SOURCES = $(SNAPPY_CXX_SRCS)
