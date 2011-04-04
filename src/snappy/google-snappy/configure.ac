@@ -24,25 +24,6 @@ AC_CHECK_HEADERS([stdint.h stddef.h sys/mman.h])
 # which we don't need (and does not exist on Windows).
 AC_CHECK_FUNC([mmap])
 
-GTEST_LIB_CHECK([], [true], [true # Ignore; we can live without it.])
-
-AC_ARG_WITH([gflags],
-  [AS_HELP_STRING(
-    [--with-gflags],
-    [use Google Flags package to enhance the unit test @<:@default=check@:>@])],
-    [],
-    [with_gflags=check])
-
-if test "x$with_gflags" != "xno"; then
-  PKG_CHECK_MODULES(
-    [gflags],
-    [libgflags],
-    [AC_DEFINE([HAVE_GFLAGS], [1], [Use the gflags package for command-line parsing.])],
-    [if test "x$with_gflags" != "xcheck"; then
-      AC_MSG_FAILURE([--with-gflags was given, but test for gflags failed])
-    fi])
-fi
-
 # See if we have __builtin_expect.
 # TODO: Use AC_CACHE.
 AC_MSG_CHECKING([if the compiler supports __builtin_expect])
