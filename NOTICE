@@ -46,6 +46,14 @@ This product also includes the following third-party components:
 
    Copyright 1999, Masanao Izumo <iz@onicos.co.jp>
 
-* jspec.js (http://visionmedia.github.com/jspec/)
+ * jspec.js (http://visionmedia.github.com/jspec/)
 
   Copyright 2010 TJ Holowaychuk <tj@vision-media.ca>
+
+ * snappy (http://code.google.com/p/snappy/)
+
+  Copyright 2005 and onwards Google Inc.
+
+ * snappy-erlang-nif (https://github.com/fdmanana/snappy-erlang-nif)
+
+  Copyright 2011, Filipe Manana <fdmanana@apache.org>

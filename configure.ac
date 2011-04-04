@@ -14,6 +14,9 @@ AC_INIT([LOCAL_PACKAGE_NAME], [LOCAL_VERSION], [], [LOCAL_PACKAGE_TARNAME])
 
 AC_PREREQ([2.59])
 
+AC_PROG_CXX
+AC_LANG([C++])
+
 AC_CONFIG_SRCDIR([CHANGES])
 AC_CONFIG_AUX_DIR([build-aux])
 AC_CONFIG_MACRO_DIR([m4])
@@ -212,20 +215,18 @@ AC_ARG_WITH([win32-curl], [AC_HELP_STRING([--with-win32-curl=PATH],
     [set PATH to the Win32 native curl directory])], [
     # default build on windows is a static lib, and that's what we want too
     CURL_CFLAGS="-I$withval/include -DCURL_STATICLIB"
-    CURL_LIBS="$withval/lib/libcurl"
-    CURL_LDFLAGS="-l$CURL_LIBS -lWs2_32 -lkernel32 -luser32 -ladvapi32 -lWldap32"
+    CURL_LIBS="-L$withval/lib -lcurl -lWs2_32 -lkernel32 -luser32 -ladvapi32 -lWldap32"
 ], [
     AC_CHECK_CURL([7.18.0],
         [AC_DEFINE([HAVE_CURL], [1], ["Provide HTTP support to couchjs"])], [
         AC_MSG_WARN([You will be unable to run some JavaScript unit tests.])
         use_curl=no
+        CURL_LIBS=
     ])
-    CURL_LDFLAGS=-lcurl
 ])
 
 AC_SUBST(CURL_CFLAGS)
 AC_SUBST(CURL_LIBS)
-AC_SUBST(CURL_LDFLAGS)
 
 case "$(uname -s)" in
   Linux)
@@ -263,6 +264,10 @@ if test `echo $version | ${AWK} "{print \\$2}"` -eq 6; then
         AC_MSG_ERROR([$erlang_version_error])
     fi
 fi
+
+otp_release="`${ERL} -noshell -eval 'io:put_chars(erlang:system_info(otp_release)).' -s erlang halt`"
+AC_SUBST(otp_release)
+AM_CONDITIONAL([USE_OTP_NIFS], [test x$otp_release \> xR13B03])
 
 has_crypto=`${ERL} -eval "case application:load(crypto) of ok -> ok; _ -> exit(no_crypto) end." -noshell -s init stop`
 
@@ -421,6 +426,7 @@ AC_CONFIG_FILES([src/erlang-oauth/Makefile])
 AC_CONFIG_FILES([src/etap/Makefile])
 AC_CONFIG_FILES([src/ibrowse/Makefile])
 AC_CONFIG_FILES([src/mochiweb/Makefile])
+AC_CONFIG_FILES([src/snappy/Makefile])
 AC_CONFIG_FILES([test/Makefile])
 AC_CONFIG_FILES([test/bench/Makefile])
 AC_CONFIG_FILES([test/etap/Makefile])
@@ -429,6 +435,8 @@ AC_CONFIG_FILES([test/javascript/Makefile])
 AC_CONFIG_FILES([test/view_server/Makefile])
 AC_CONFIG_FILES([utils/Makefile])
 AC_CONFIG_FILES([var/Makefile])
+
+AC_CONFIG_SUBDIRS([src/snappy/google-snappy])
 
 AC_OUTPUT
 

@@ -510,7 +510,7 @@ sort_lib([{LName, LCode}|Rest], LAcc) ->
 open_db_group(DbName, GroupId) ->
     case couch_db:open_int(DbName, []) of
     {ok, Db} ->
-        case couch_db:open_doc(Db, GroupId) of
+        case couch_db:open_doc(Db, GroupId, [ejson_body]) of
         {ok, Doc} ->
             couch_db:close(Db),
             {ok, design_doc_to_view_group(Doc)};

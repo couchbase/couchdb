@@ -17,6 +17,8 @@
 -define(MIN_STR, <<"">>).
 -define(MAX_STR, <<255>>). % illegal utf string
 
+-define(term_to_bin(T), term_to_binary(T, [{minor_version, 1}])).
+
 % the lowest possible database sequence number
 -define(LOWEST_SEQ, 0).
 
