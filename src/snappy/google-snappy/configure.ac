@@ -24,6 +24,25 @@ AC_CHECK_HEADERS([stdint.h stddef.h sys/mman.h])
 # which we don't need (and does not exist on Windows).
 AC_CHECK_FUNC([mmap])
 
+GTEST_LIB_CHECK([], [true], [true # Ignore; we can live without it.])
+
+AC_ARG_WITH([gflags],
+  [AS_HELP_STRING(
+    [--with-gflags],
+    [use Google Flags package to enhance the unit test @<:@default=check@:>@])],
+    [],
+    [with_gflags=check])
+
+if test "x$with_gflags" != "xno"; then
+  PKG_CHECK_MODULES(
+    [gflags],
+    [libgflags],
+    [AC_DEFINE([HAVE_GFLAGS], [1], [Use the gflags package for command-line parsing.])],
+    [if test "x$with_gflags" != "xcheck"; then
+      AC_MSG_FAILURE([--with-gflags was given, but test for gflags failed])
+    fi])
+fi
+
 # See if we have __builtin_expect.
 # TODO: Use AC_CACHE.
 AC_MSG_CHECKING([if the compiler supports __builtin_expect])
@@ -57,6 +76,14 @@ AC_TRY_COMPILE(, [
 if test x$snappy_have_builtin_ctz = xyes ; then
     AC_DEFINE([HAVE_BUILTIN_CTZ], [1], [Define to 1 if the compiler supports __builtin_ctz and friends.])
 fi
+
+# Other compression libraries; the unit test can use these for comparison
+# if they are available. If they are not found, just ignore.
+AC_CHECK_LIB([z], [zlibVersion],, [true])
+AC_CHECK_LIB([lzo2], [lzo1x_1_15_compress],, [true])
+AC_CHECK_LIB([lzf], [lzf_compress],, [true])
+AC_CHECK_LIB([fastlz], [fastlz_compress],, [true])
+AC_CHECK_LIB([quicklz], [qlz_compress],, [true])
 
 # These are used by snappy-stubs-public.h.in.
 if test "$ac_cv_header_stdint_h" = "yes"; then

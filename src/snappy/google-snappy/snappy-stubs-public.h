@@ -22,17 +22,17 @@
 #ifndef UTIL_SNAPPY_OPENSOURCE_SNAPPY_STUBS_PUBLIC_H_
 #define UTIL_SNAPPY_OPENSOURCE_SNAPPY_STUBS_PUBLIC_H_
 
-#if @ac_cv_have_stdint_h@
+#if 1
 #include <stdint.h>
 #endif
 
-#if @ac_cv_have_stddef_h@
+#if 1
 #include <stddef.h>
 #endif
 
-#define SNAPPY_MAJOR @SNAPPY_MAJOR@
-#define SNAPPY_MINOR @SNAPPY_MINOR@
-#define SNAPPY_PATCHLEVEL @SNAPPY_PATCHLEVEL@
+#define SNAPPY_MAJOR 1
+#define SNAPPY_MINOR 0
+#define SNAPPY_PATCHLEVEL 1
 #define SNAPPY_VERSION \
     ((SNAPPY_MAJOR << 16) | (SNAPPY_MINOR << 8) | SNAPPY_PATCHLEVEL)
 
@@ -40,7 +40,7 @@
 
 namespace snappy {
 
-#if @ac_cv_have_stdint_h@
+#if 1
 typedef int8_t int8;
 typedef uint8_t uint8;
 typedef int16_t int16;
