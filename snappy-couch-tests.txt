@@ -17,6 +17,7 @@ The databases have the following design document:
 database file size after compaction:  7.5 Gb
 view index file size after compaction:  257 Mb
 
+** Before JSON nif:
 $ time curl 'http://localhost:5985/trunk_db_1m/_design/test/_view/simple?limit=1'
 {"total_rows":1000000,"offset":0,"rows":[
 {"id":"00000632-d25d-49c6-9b4e-e038b78ff97d","key":76.572,"value":["jURcBZ0vrJcmf2roZUMzZJQoTsKZDIdj7KhO7itskKvM80jBU9","fKYYthv8iFvaYoFoYZyB"]}
@@ -26,13 +27,24 @@ real	58m28.599s
 user	0m0.036s
 sys	0m0.056s
 
+** After JSON nif:
+fdmanana 12:45:55 /opt/couchdb > time curl 'http://localhost:5985/trunk_db_1m/_design/test/_view/simple?limit=1'
+{"total_rows":1000000,"offset":0,"rows":[
+{"id":"00000632-d25d-49c6-9b4e-e038b78ff97d","key":76.572,"value":["jURcBZ0vrJcmf2roZUMzZJQoTsKZDIdj7KhO7itskKvM80jBU9","fKYYthv8iFvaYoFoYZyB"]}
+]}
+
+real	51m14.738s
+user	0m0.040s
+sys	0m0.044s
+
+
 
 * snappy branch *
 
 database file size after compaction:  3.2 Gb
 view index file size after compaction:  100 Mb
 
-
+** Before JSON nif:
 $ time curl 'http://localhost:5984/snappy_db_1m/_design/test/_view/simple?limit=1'
 {"total_rows":1000000,"offset":0,"rows":[
 {"id":"00000632-d25d-49c6-9b4e-e038b78ff97d","key":76.572,"value":["jURcBZ0vrJcmf2roZUMzZJQoTsKZDIdj7KhO7itskKvM80jBU9","fKYYthv8iFvaYoFoYZyB"]}
@@ -42,8 +54,19 @@ real	32m29.854s
 user	0m0.008s
 sys	0m0.052s
 
+** After JSON nif:
+fdmanana 15:40:39 /opt/couchdb > time curl 'http://localhost:5984/snappy_db_1m/_design/test/_view/simple?limit=1'
+{"total_rows":1000000,"offset":0,"rows":[
+{"id":"00000632-d25d-49c6-9b4e-e038b78ff97d","key":76.572,"value":["jURcBZ0vrJcmf2roZUMzZJQoTsKZDIdj7KhO7itskKvM80jBU9","fKYYthv8iFvaYoFoYZyB"]}
+]}
 
-writes relaximation test:  http://graphs.mikeal.couchone.com/#/graph/698bf36b6c64dbd19aa2bef634054672
+real	18m39.240s
+user	0m0.012s
+sys	0m0.020s
+
+
+
+writes relaximation test:  http://graphs.mikeal.couchone.com/#/graph/698bf36b6c64dbd19aa2bef63405480d
 
 
 

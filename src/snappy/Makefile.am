@@ -55,12 +55,13 @@ snappyebin_DATA = \
 
 EXTRA_DIST =  \
     $(snappy_file_collection) \
-    erl_nif_compat.h \
-    priv
+    erl_nif_compat.h
 
 if USE_OTP_NIFS
-priv/snappy.so: .libs/snappy.so
-	$(LN_S) .libs priv
+
+priv/snappy.so: snappy.la
+	@mkdir -p ./priv
+	cp .libs/snappy.so $@
 
 all: priv/snappy.so
 endif
