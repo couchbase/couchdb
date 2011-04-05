@@ -455,29 +455,27 @@ flush_trees(#db{updater_fd = Fd} = Db,
     Flushed = couch_key_tree:map(
         fun(_Rev, Value) ->
             case Value of
-            #doc{atts=Atts,deleted=IsDeleted}=Doc ->
+            #doc{deleted = IsDeleted, body = {summary, Summary, Md5, AttsFd}} ->
                 % this node value is actually an unwritten document summary,
                 % write to disk.
                 % make sure the Fd in the written bins is the same Fd we are
                 % and convert bins, removing the FD.
                 % All bins should have been written to disk already.
-                DiskAtts =
-                case Atts of
-                [] -> [];
-                [#att{data={BinFd, _Sp}} | _ ] when BinFd == Fd ->
-                    [{N,T,P,AL,DL,R,M,E}
-                        || #att{name=N,type=T,data={_,P},md5=M,revpos=R,
-                               att_len=AL,disk_len=DL,encoding=E}
-                        <- Atts];
+                case {AttsFd, Fd} of
+                {nil, _} ->
+                    ok;
+                {SameFd, SameFd} ->
+                    ok;
                 _ ->
-                    % BinFd must not equal our Fd. This can happen when a database
-                    % is being switched out during a compaction
+                    % Fd where the attachments were written to is not the same
+                    % as our Fd. This can happen when a database is being
+                    % switched out during a compaction.
                     ?LOG_DEBUG("File where the attachments are written has"
                             " changed. Possibly retrying.", []),
                     throw(retry)
                 end,
-                NewSummaryPointer =
-                    append_doc_summary(Fd, {Doc#doc.body, DiskAtts}),
+                {ok, NewSummaryPointer} =
+                        couch_file:append_binary_md5(Fd, Summary, Md5),
                 {IsDeleted, NewSummaryPointer, UpdateSeq};
             _ ->
                 Value
@@ -728,7 +726,7 @@ commit_data(Db, _) ->
 
 
 copy_doc_attachments(#db{updater_fd = SrcFd} = SrcDb, SrcSp, DestFd) ->
-    {ok, {BodyData, BinInfos0}} = couch_db:read_doc(SrcDb, SrcSp),
+    {ok, {BodyData0, BinInfos0}} = couch_db:read_doc(SrcDb, SrcSp),
     BinInfos = case BinInfos0 of
     _ when is_binary(BinInfos0) ->
         couch_util:decompress(BinInfos0);
@@ -758,7 +756,14 @@ copy_doc_attachments(#db{updater_fd = SrcFd} = SrcDb, SrcSp, DestFd) ->
             end,
             {Name, Type, NewBinSp, AttLen, DiskLen, RevPos, Md5, Enc}
         end, BinInfos),
-    {BodyData, NewBinInfos}.
+    BodyData = case BodyData0 of
+    _ when is_binary(BodyData0) ->
+        BodyData0;
+    {_} = _EJson ->
+        % pre 1.2 file format
+        couch_util:compress(BodyData0)
+    end,
+    {BodyData, couch_util:compress(NewBinInfos)}.
 
 copy_docs(Db, #db{updater_fd = DestFd} = NewDb, InfoBySeq0, Retry) ->
     % COUCHDB-968, make sure we prune duplicates during compaction
@@ -772,7 +777,8 @@ copy_docs(Db, #db{updater_fd = DestFd} = NewDb, InfoBySeq0, Retry) ->
             Info#full_doc_info{rev_tree=couch_key_tree:map(
                 fun(_Rev, {IsDel, Sp, Seq}, leaf) ->
                     DocBody = copy_doc_attachments(Db, Sp, DestFd),
-                    Pos = append_doc_summary(DestFd, DocBody),
+                    {ok, Pos} = couch_file:append_binary_md5(
+                        DestFd, ?term_to_bin(DocBody)),
                     {IsDel, Pos, Seq};
                 (_, _, branch) ->
                     ?REV_MISSING
@@ -875,16 +881,3 @@ start_copy_compact(#db{name=Name,filepath=Filepath,header=#db_header{purge_seq=P
     NewDb3 = copy_compact(Db, NewDb2, Retry),
     close_db(NewDb3),
     gen_server:cast(Db#db.update_pid, {compact_done, CompactFile}).
-
-
-append_doc_summary(Fd, {Body, DiskAtts}) when is_binary(Body) andalso
-                                              is_binary(DiskAtts) ->
-    {ok, NewSummaryPointer} =
-        couch_file:append_term_md5(Fd, {Body, DiskAtts}, false),
-    NewSummaryPointer;
-append_doc_summary(Fd, {Body, DiskAtts}) when is_binary(Body) ->
-    append_doc_summary(Fd, {Body, couch_util:compress(DiskAtts)});
-append_doc_summary(Fd, {Body, DiskAtts}) ->
-    % 1.2 upgrade code
-    append_doc_summary(
-        Fd, {couch_util:compress(Body), couch_util:compress(DiskAtts)}).
