@@ -776,8 +776,7 @@ collect_results(UpdatePid, MRef, ResultsAcc) ->
 
 write_and_commit(#db{update_pid=UpdatePid}=Db, DocBuckets1,
         NonRepDocs, Options0) ->
-    DocBuckets = [lists:map(fun couch_doc:with_bin_body/1, Bucket) ||
-        Bucket <- DocBuckets1],
+    DocBuckets = prepare_doc_summaries(DocBuckets1),
     Options = set_commit_option(Options0),
     MergeConflicts = lists:member(merge_conflicts, Options),
     FullCommit = lists:member(full_commit, Options),
@@ -792,7 +791,7 @@ write_and_commit(#db{update_pid=UpdatePid}=Db, DocBuckets1,
             {ok, Db2} = open_ref_counted(Db#db.main_pid, self()),
             DocBuckets2 = [
                 [doc_flush_atts(Doc, Db2#db.updater_fd) || Doc <- Bucket] ||
-                Bucket <- DocBuckets
+                Bucket <- DocBuckets1
             ],
             % We only retry once
             close(Db2),
@@ -805,6 +804,28 @@ write_and_commit(#db{update_pid=UpdatePid}=Db, DocBuckets1,
     after
         erlang:demonitor(MRef, [flush])
     end.
+
+
+prepare_doc_summaries(BucketList) ->
+    [lists:map(
+        fun(#doc{atts = Atts, body = Body} = Doc) ->
+            DiskAtts = [{N, T, P, AL, DL, R, M, E} ||
+                #att{name = N, type = T, data = {_, P}, md5 = M, revpos = R,
+                    att_len = AL, disk_len = DL, encoding = E} <- Atts],
+            Summary = case is_binary(Body) of
+            false ->
+                ?term_to_bin(
+                    {couch_util:compress(Body), couch_util:compress(DiskAtts)});
+            true ->
+                ?term_to_bin({Body, couch_util:compress(DiskAtts)})
+            end,
+            AttsFd = case Atts of
+            [#att{data = {Fd, _}} | _] -> Fd;
+            [] -> nil
+            end,
+            Doc#doc{body = {summary, Summary, couch_util:md5(Summary), AttsFd}}
+        end,
+        Bucket) || Bucket <- BucketList].
 
 
 set_new_att_revpos(#doc{revs={RevPos,_Revs},atts=Atts}=Doc) ->

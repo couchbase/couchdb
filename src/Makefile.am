@@ -10,4 +10,4 @@
 ## License for the specific language governing permissions and limitations under
 ## the License.
 
-SUBDIRS = couchdb erlang-oauth etap ibrowse mochiweb snappy
+SUBDIRS = couchdb erlang-oauth etap ibrowse mochiweb ejson snappy
