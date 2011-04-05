@@ -69,16 +69,9 @@ src/snappy/google-snappy/.deps/
 src/snappy/google-snappy/.libs/
 src/snappy/google-snappy/autom4te.cache/
 src/snappy/google-snappy/config.h
-src/snappy/google-snappy/config.guess
-src/snappy/google-snappy/config.sub
 src/snappy/google-snappy/config.log
 src/snappy/google-snappy/config.status
-src/snappy/google-snappy/configure
-src/snappy/google-snappy/depcomp
-src/snappy/google-snappy/install-sh
-src/snappy/google-snappy/ltmain.sh
-src/snappy/google-snappy/missing
-src/snappy/google-snappy/snappy-stubs-public.h
+src/snappy/google-snappy/snappy_unittest
 src/snappy/.deps/
 src/snappy/.libs/
 src/snappy/priv
