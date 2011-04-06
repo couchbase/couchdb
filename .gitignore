@@ -73,6 +73,9 @@ src/snappy/.deps/
 src/snappy/.libs/
 src/snappy/priv
 src/snappy/snappy.app
+src/snappy/google-snappy/.deps/
+src/snappy/google-snappy/.libs/
+src/snappy/google-snappy/snappy_unittest
 test/local.ini
 test/etap/run
 test/etap/test_util.erl
