@@ -69,14 +69,6 @@ src/ejson/.deps/
 src/ejson/.libs/
 src/ejson/priv
 src/mochiweb/mochiweb.app
-src/snappy/google-snappy/.deps/
-src/snappy/google-snappy/.libs/
-src/snappy/google-snappy/autom4te.cache/
-src/snappy/google-snappy/config.h
-src/snappy/google-snappy/config.log
-src/snappy/google-snappy/config.status
-src/snappy/google-snappy/configure
-src/snappy/google-snappy/snappy_unittest
 src/snappy/.deps/
 src/snappy/.libs/
 src/snappy/priv
