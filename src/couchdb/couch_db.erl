@@ -808,22 +808,29 @@ write_and_commit(#db{update_pid=UpdatePid}=Db, DocBuckets1,
 
 prepare_doc_summaries(BucketList) ->
     [lists:map(
-        fun(#doc{atts = Atts, body = Body} = Doc) ->
+        fun(#doc{atts = Atts, body = Body0} = Doc) ->
             DiskAtts = [{N, T, P, AL, DL, R, M, E} ||
                 #att{name = N, type = T, data = {_, P}, md5 = M, revpos = R,
                     att_len = AL, disk_len = DL, encoding = E} <- Atts],
-            Summary = case is_binary(Body) of
-            false ->
-                ?term_to_bin(
-                    {couch_util:compress(Body), couch_util:compress(DiskAtts)});
+            Body = case is_binary(Body0) of
             true ->
-                ?term_to_bin({Body, couch_util:compress(DiskAtts)})
+                Body0;
+            false ->
+                couch_util:compress(Body0)
+            end,
+            Summary = ?term_to_bin({Body, couch_util:compress(DiskAtts)}),
+            SummaryChunk = case couch_util:is_compressed(Body) of
+            true ->
+                % snappy does integrity check on decompression
+                couch_file:assemble_file_chunk(Summary);
+            false ->
+                couch_file:assemble_file_chunk(Summary, couch_util:md5(Summary))
             end,
             AttsFd = case Atts of
             [#att{data = {Fd, _}} | _] -> Fd;
             [] -> nil
             end,
-            Doc#doc{body = {summary, Summary, couch_util:md5(Summary), AttsFd}}
+            Doc#doc{body = {summary, SummaryChunk, AttsFd}}
         end,
         Bucket) || Bucket <- BucketList].
 

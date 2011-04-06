@@ -25,7 +25,8 @@
 % public API
 -export([open/1, open/2, close/1, bytes/1, sync/1, truncate/2]).
 -export([pread_term/2, pread_iolist/2, pread_binary/2]).
--export([append_binary/2, append_binary_md5/2, append_binary_md5/3]).
+-export([append_binary/2, append_binary_md5/2]).
+-export([append_raw_chunk/2, assemble_file_chunk/1, assemble_file_chunk/2]).
 -export([append_term/2, append_term_md5/2]).
 -export([write_header/2, read_header/1]).
 -export([delete/2, delete/3, init_delete_dir/1]).
@@ -79,7 +80,13 @@ append_term(Fd, Term) ->
     append_binary(Fd, couch_util:compress(Term)).
 
 append_term_md5(Fd, Term) ->
-    append_binary_md5(Fd, couch_util:compress(Term)).
+    Bin = couch_util:compress(Term),
+    case couch_util:is_compressed(Bin) of
+    true ->
+        append_binary(Fd, Bin);
+    false ->
+        append_binary_md5(Fd, Bin)
+    end.
 
 %%----------------------------------------------------------------------
 %% Purpose: To append an Erlang binary to the end of the file.
@@ -90,17 +97,20 @@ append_term_md5(Fd, Term) ->
 %%----------------------------------------------------------------------
 
 append_binary(Fd, Bin) ->
-    append_binary_md5(Fd, Bin, <<>>).
+    gen_server:call(Fd, {append_bin, assemble_file_chunk(Bin)}, infinity).
     
 append_binary_md5(Fd, Bin) ->
-    append_binary_md5(Fd, Bin, couch_util:md5(Bin)).
+    gen_server:call(Fd,
+        {append_bin, assemble_file_chunk(Bin, couch_util:md5(Bin))}, infinity).
 
-append_binary_md5(Fd, Bin, Md5) ->
-    gen_server:call(Fd, {append_bin, assemble_iolist(Bin, Md5)}, infinity).
+append_raw_chunk(Fd, Chunk) ->
+    gen_server:call(Fd, {append_bin, Chunk}, infinity).
 
-assemble_iolist(Bin, <<>>) ->
-    [<<0:1/integer, (iolist_size(Bin)):31/integer>>, Bin];
-assemble_iolist(Bin, Md5) ->
+
+assemble_file_chunk(Bin) ->
+    [<<0:1/integer, (iolist_size(Bin)):31/integer>>, Bin].
+
+assemble_file_chunk(Bin, Md5) ->
     [<<1:1/integer, (iolist_size(Bin)):31/integer>>, Md5, Bin].
 
 %%----------------------------------------------------------------------

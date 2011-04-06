@@ -455,7 +455,7 @@ flush_trees(#db{updater_fd = Fd} = Db,
     Flushed = couch_key_tree:map(
         fun(_Rev, Value) ->
             case Value of
-            #doc{deleted = IsDeleted, body = {summary, Summary, Md5, AttsFd}} ->
+            #doc{deleted = IsDeleted, body = {summary, Summary, AttsFd}} ->
                 % this node value is actually an unwritten document summary,
                 % write to disk.
                 % make sure the Fd in the written bins is the same Fd we are
@@ -475,7 +475,7 @@ flush_trees(#db{updater_fd = Fd} = Db,
                     throw(retry)
                 end,
                 {ok, NewSummaryPointer} =
-                        couch_file:append_binary_md5(Fd, Summary, Md5),
+                    couch_file:append_raw_chunk(Fd, Summary),
                 {IsDeleted, NewSummaryPointer, UpdateSeq};
             _ ->
                 Value

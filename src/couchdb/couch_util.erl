@@ -27,7 +27,7 @@
 -export([reorder_results/2]).
 -export([url_strip_password/1]).
 -export([encode_doc_id/1]).
--export([compress/1, decompress/1]).
+-export([compress/1, decompress/1, is_compressed/1]).
 
 -include("couch_db.hrl").
 
@@ -453,3 +453,8 @@ decompress(<<?SNAPPY_PREFIX, Rest/binary>>) ->
     binary_to_term(TermBin);
 decompress(<<?TERM_PREFIX, _/binary>> = Bin) ->
     binary_to_term(Bin).
+
+is_compressed(<<?SNAPPY_PREFIX, _/binary>>) ->
+    true;
+is_compressed(<<?TERM_PREFIX, _/binary>>) ->
+    false.
