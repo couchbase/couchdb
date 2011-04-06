@@ -818,14 +818,8 @@ prepare_doc_summaries(BucketList) ->
             false ->
                 couch_util:compress(Body0)
             end,
-            Summary = ?term_to_bin({Body, couch_util:compress(DiskAtts)}),
-            SummaryChunk = case couch_util:is_compressed(Body) of
-            true ->
-                % snappy does integrity check on decompression
-                couch_file:assemble_file_chunk(Summary);
-            false ->
-                couch_file:assemble_file_chunk(Summary, couch_util:md5(Summary))
-            end,
+            SummaryChunk = couch_db_updater:assemble_summary_chunk(
+                {Body, couch_util:compress(DiskAtts)}),
             AttsFd = case Atts of
             [#att{data = {Fd, _}} | _] -> Fd;
             [] -> nil
