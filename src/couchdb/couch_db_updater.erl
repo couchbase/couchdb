@@ -366,6 +366,7 @@ init_db(DbName, Filepath, Fd, ReaderFd, Header0, Options) ->
     2 -> throw({database_disk_version_error, ?OLD_DISK_VERSION_ERROR});
     3 -> throw({database_disk_version_error, ?OLD_DISK_VERSION_ERROR});
     4 -> Header1#db_header{security_ptr = nil}; % 0.10 and pre 0.11
+    5 -> Header1; % pre 1.2
     ?LATEST_DISK_VERSION -> Header1;
     _ -> throw({database_disk_version_error, "Incorrect disk header version"})
     end,
