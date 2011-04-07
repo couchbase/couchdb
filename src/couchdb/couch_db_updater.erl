@@ -252,35 +252,48 @@ code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 
-merge_updates([], RestB, AccOutGroups) ->
-    lists:reverse(AccOutGroups, RestB);
-merge_updates(RestA, [], AccOutGroups) ->
-    lists:reverse(AccOutGroups, RestA);
-merge_updates([[{_, #doc{id=IdA}}|_]=GroupA | RestA],
-        [[{_, #doc{id=IdB}}|_]=GroupB | RestB], AccOutGroups) ->
-    if IdA == IdB ->
-        merge_updates(RestA, RestB, [GroupA ++ GroupB | AccOutGroups]);
-    IdA < IdB ->
-        merge_updates(RestA, [GroupB | RestB], [GroupA | AccOutGroups]);
+collect_updates(SortedDocs, ClientsAcc, MergeConflicts, FullCommit) ->
+    {UnsortedDocs, Clients, FullCommit1} =
+        collect_unsorted_updates([], ClientsAcc, MergeConflicts, FullCommit),
+    GroupedDocs = case UnsortedDocs of
+    [] ->
+        SortedDocs;
+    _ ->
+        sort_grouped_updates(SortedDocs ++ UnsortedDocs)
+    end,
+    {GroupedDocs, Clients, FullCommit1}.
+
+sort_grouped_updates(BucketList) ->
+    Sorted = lists:sort(
+        fun([{_, #doc{id = A}} | _], [{_, #doc{id = B}} | _]) -> A < B end,
+        BucketList),
+    group_buckets(Sorted, []).
+
+group_buckets([], Buckets) ->
+    lists:reverse(Buckets);
+group_buckets([Bucket | Rest], []) ->
+    group_buckets(Rest, [Bucket]);
+group_buckets([[{_, Doc1} | _] = B1 | Rest1], [[{_, Doc2} | _] = B2 | Rest2]) ->
+    case Doc1#doc.id =:= Doc2#doc.id of
     true ->
-        merge_updates([GroupA | RestA], RestB, [GroupB | AccOutGroups])
+        group_buckets(Rest1, [B1 ++ B2 | Rest2]);
+    false ->
+        group_buckets(Rest1, [B1, B2 | Rest2])
     end.
 
-collect_updates(GroupedDocsAcc, ClientsAcc, MergeConflicts, FullCommit) ->
+collect_unsorted_updates(DocsAcc, ClientsAcc, MergeConflicts, FullCommit) ->
     receive
         % Only collect updates with the same MergeConflicts flag and without
         % local docs. It's easier to just avoid multiple _local doc
         % updaters than deal with their possible conflicts, and local docs
         % writes are relatively rare. Can be optmized later if really needed.
         {update_docs, Client, GroupedDocs, [], MergeConflicts, FullCommit2} ->
-            GroupedDocs2 = [[{Client, Doc} || Doc <- DocGroup]
+            DocsAcc2 = DocsAcc ++ [[{Client, Doc} || Doc <- DocGroup]
                     || DocGroup <- GroupedDocs],
-            GroupedDocsAcc2 =
-                merge_updates(GroupedDocsAcc, GroupedDocs2, []),
-            collect_updates(GroupedDocsAcc2, [Client | ClientsAcc],
+            collect_unsorted_updates(DocsAcc2, [Client | ClientsAcc],
                     MergeConflicts, (FullCommit or FullCommit2))
     after 0 ->
-        {GroupedDocsAcc, ClientsAcc, FullCommit}
+        {DocsAcc, ClientsAcc, FullCommit}
     end.
 
 
@@ -618,7 +631,18 @@ update_docs_int(Db, DocsList, NonRepDocs, MergeConflicts, FullCommit) ->
     
     
     {ok, [], DocInfoByIdBTree2} = couch_btree:query_modify_raw(DocInfoByIdBTree, InsertByIds),
+    %% Parent = self(),
+    %% Pid = spawn_link(fun() ->
+    %%     {ok, [], NewByIdBTree} = couch_btree:query_modify_raw(DocInfoByIdBTree, InsertByIds),
+    %%     Parent ! {self(), btree, NewByIdBTree},
+    %%     unlink(Parent)
+    %% end),
     {ok, [], DocInfoBySeqBTree2} = couch_btree:query_modify_raw(DocInfoBySeqBTree, RemoveBySeq ++ InsertBySeq),
+
+    %% receive
+    %% {Pid, btree, DocInfoByIdBTree2} ->
+    %%     ok
+    %% end,
 
     Db3 = Db2#db{
         fulldocinfo_by_id_btree = DocInfoByIdBTree2,
