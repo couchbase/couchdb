@@ -281,7 +281,7 @@ handle_request_int(MochiReq, DefaultFun,
             exit(normal);
         exit:snappy_nif_not_loaded ->
             ErrorReason = "Erlang OTP release R13B04 (or higher) is required to"
-                " access the database.",
+                " access the database or view index.",
             ?LOG_ERROR("~s", [ErrorReason]),
             send_error(HttpReq, {bad_otp_release, ErrorReason});
         throw:Error ->
