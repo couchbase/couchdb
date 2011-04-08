@@ -14,14 +14,14 @@ couchTests.generate_load = function(debug) {
     xhr = CouchDB.newXhr();
 
     //verify the hearbeat newlines are sent
-    xhr.open("POST", "/_generate_load?total=100000&db=test&concurrency=3&batch=5000&delayed_commits=true", false);
+    xhr.open("POST", "/_generate_load?total=100000&db=test&concurrency=30&batch=100&delayed_commits=true", false);
     var base64bin = "";
     for (var i=0; i<34; i++) {
         base64bin += "MTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEx\r\n"
     }
     base64bin += "MTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEx";
     
-    xhr.send(JSON.stringify({damien:"rules",
-        _attachments:{"foo.txt": {content_type:"text/plain",data:base64bin}}
+    xhr.send(JSON.stringify({
+        _attachments:{"foo.txt": {content_type:"application/binary",data:base64bin}}
             }));
 };

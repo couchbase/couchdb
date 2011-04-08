@@ -42,14 +42,12 @@ init({MainPid, DbName, Filepath, Fd, Options}) ->
             file:delete(Filepath ++ ".compact")
         end
     end,
-    ReaderFd = open_reader_fd(Filepath, Options),
-    Db = init_db(DbName, Filepath, Fd, ReaderFd, Header, Options),
+    Db = init_db(DbName, Filepath, Fd, Header, Options),
     Db2 = refresh_validate_doc_funs(Db),
     {ok, Db2#db{main_pid = MainPid}}.
 
 
 terminate(_Reason, Db) ->
-    couch_file:close(Db#db.updater_fd),
     couch_file:close(Db#db.fd),
     couch_util:shutdown_sync(Db#db.compactor_pid),
     couch_util:shutdown_sync(Db#db.fd_ref_counter),
@@ -68,7 +66,7 @@ handle_call(increment_update_seq, _From, Db) ->
     {reply, {ok, Db2#db.update_seq}, Db2};
 
 handle_call({set_security, NewSec}, _From, Db) ->
-    {ok, Ptr} = couch_file:append_term(Db#db.updater_fd, NewSec),
+    {ok, Ptr} = couch_file:append_term(Db#db.fd, NewSec),
     Db2 = commit_data(Db#db{security=NewSec, security_ptr=Ptr,
             update_seq=Db#db.update_seq+1}),
     ok = gen_server:call(Db2#db.main_pid, {db_updated, Db2}),
@@ -85,7 +83,7 @@ handle_call({purge_docs, _IdRevs}, _From,
     {reply, {error, purge_during_compaction}, Db};
 handle_call({purge_docs, IdRevs}, _From, Db) ->
     #db{
-        updater_fd = Fd,
+        fd = Fd,
         fulldocinfo_by_id_btree = DocInfoByIdBTree,
         docinfo_by_seq_btree = DocInfoBySeqBTree,
         update_seq = LastSeq,
@@ -163,10 +161,9 @@ handle_call(start_compact, _From, Db) ->
 
 handle_cast({compact_done, CompactFilepath}, #db{filepath=Filepath}=Db) ->
     {ok, NewFd} = couch_file:open(CompactFilepath),
-    ReaderFd = open_reader_fd(CompactFilepath, Db#db.options),
     {ok, NewHeader} = couch_file:read_header(NewFd),
     #db{update_seq=NewSeq} = NewDb =
-        init_db(Db#db.name, Filepath, NewFd, ReaderFd, NewHeader, Db#db.options),
+        init_db(Db#db.name, Filepath, NewFd, NewHeader, Db#db.options),
     unlink(NewFd),
     case Db#db.update_seq == NewSeq of
     true ->
@@ -358,7 +355,7 @@ simple_upgrade_record(Old, _New) ->
 -define(OLD_DISK_VERSION_ERROR,
     "Database files from versions smaller than 0.10.0 are no longer supported").
 
-init_db(DbName, Filepath, Fd, ReaderFd, Header0, Options) ->
+init_db(DbName, Filepath, Fd, Header0, Options) ->
     Header1 = simple_upgrade_record(Header0, #db_header{}),
     Header =
     case element(2, Header1) of
@@ -399,11 +396,10 @@ init_db(DbName, Filepath, Fd, ReaderFd, Header0, Options) ->
     {MegaSecs, Secs, MicroSecs} = now(),
     StartTime = ?l2b(io_lib:format("~p",
             [(MegaSecs*1000000*1000000) + (Secs*1000000) + MicroSecs])),
-    {ok, RefCntr} = couch_ref_counter:start([Fd, ReaderFd]),
+    {ok, RefCntr} = couch_ref_counter:start([Fd]),
     #db{
         update_pid=self(),
-        fd = ReaderFd,
-        updater_fd = Fd,
+        fd = Fd,
         fd_ref_counter = RefCntr,
         header=Header,
         fulldocinfo_by_id_btree = IdBtree,
@@ -421,15 +417,6 @@ init_db(DbName, Filepath, Fd, ReaderFd, Header0, Options) ->
         options = Options
         }.
 
-open_reader_fd(Filepath, Options) ->
-    {ok, Fd} = case lists:member(sys_db, Options) of
-    true ->
-        couch_file:open(Filepath, [read_only, sys_db]);
-    false ->
-        couch_file:open(Filepath, [read_only])
-    end,
-    unlink(Fd),
-    Fd.
 
 close_db(#db{fd_ref_counter = RefCntr}) ->
     couch_ref_counter:drop(RefCntr).
@@ -450,7 +437,7 @@ refresh_validate_doc_funs(Db) ->
 
 flush_trees(_Db, [], AccFlushedTrees) ->
     {ok, lists:reverse(AccFlushedTrees)};
-flush_trees(#db{updater_fd = Fd} = Db,
+flush_trees(#db{fd = Fd} = Db,
         [InfoUnflushed | RestUnflushed], AccFlushed) ->
     #full_doc_info{update_seq=UpdateSeq, rev_tree=Unflushed} = InfoUnflushed,
     Flushed = couch_key_tree:map(
@@ -490,7 +477,7 @@ send_result(Client, Id, OriginalRevs, NewResult) ->
     catch(Client ! {result, self(), {{Id, OriginalRevs}, NewResult}}).
 
 merge_rev_trees(_Limit, _Merge, [], [], AccNewInfos, AccRemoveSeqs, AccSeq) ->
-    {ok, lists:reverse(AccNewInfos), AccRemoveSeqs, AccSeq};
+    {ok, AccNewInfos, AccRemoveSeqs, AccSeq};
 merge_rev_trees(Limit, MergeConflicts, [NewDocs|RestDocsList],
         [OldDocInfo|RestOldInfo], AccNewInfos, AccRemoveSeqs, AccSeq) ->
     #full_doc_info{id=Id,rev_tree=OldTree,deleted=OldDeleted,update_seq=OldSeq}
@@ -585,7 +572,8 @@ update_docs_int(Db, DocsList, NonRepDocs, MergeConflicts, FullCommit) ->
         fulldocinfo_by_id_btree = DocInfoByIdBTree,
         docinfo_by_seq_btree = DocInfoBySeqBTree,
         update_seq = LastSeq,
-        revs_limit = RevsLimit
+        revs_limit = RevsLimit,
+        fd=Fd
         } = Db,
     Ids = [Id || [{_Client, #doc{id=Id}}|_] <- DocsList],
     % lookup up the old documents, if they exist.
@@ -602,7 +590,7 @@ update_docs_int(Db, DocsList, NonRepDocs, MergeConflicts, FullCommit) ->
             MergeConflicts, DocsList, OldDocInfos, [], [], LastSeq),
 
     % All documents are now ready to write.
-    {ok, Db2}  = update_local_docs(Db, NonRepDocs),
+    {ok, Db2} = update_local_docs(Db, NonRepDocs),
 
     % Write out the document summaries (the bodies are stored in the nodes of
     % the trees, the attachments are already written to disk)
@@ -610,22 +598,28 @@ update_docs_int(Db, DocsList, NonRepDocs, MergeConflicts, FullCommit) ->
 
     {IndexFullDocInfos, IndexDocInfos} =
             new_index_entries(FlushedFullDocInfos, [], []),
-
     % and the indexes
     InsertByIds = [begin {K,V}= btree_by_id_split(I), {insert, K, V} end || I <- IndexFullDocInfos],
-    InsertBySeq = [begin {K,V}= btree_by_seq_split(I), {insert, K, V} end || I <- lists:reverse(IndexDocInfos)],
-    RemoveBySeq = [{remove, Seq, nil} || Seq <- lists:sort(RemoveSeqs)],
-    
+    Self = self(),
+    BySeqUpdater = spawn_link(fun() ->
+            InsertBySeq = [begin {K,V}= btree_by_seq_split(I), {insert, K, V} end || I <- lists:reverse(IndexDocInfos)],
+            RemoveBySeq = [{remove, Seq, nil} || Seq <- lists:sort(RemoveSeqs)],
+            {ok, [], DocInfoBySeqBTree2} = couch_btree:query_modify_raw(DocInfoBySeqBTree, RemoveBySeq ++ InsertBySeq),
+            Self ! {done, self(), DocInfoBySeqBTree2}
+        end),
     
     {ok, [], DocInfoByIdBTree2} = couch_btree:query_modify_raw(DocInfoByIdBTree, InsertByIds),
-    {ok, [], DocInfoBySeqBTree2} = couch_btree:query_modify_raw(DocInfoBySeqBTree, RemoveBySeq ++ InsertBySeq),
+    
+    DocInfoBySeqBTree2 =
+    receive
+    {done, BySeqUpdater, DocInfoBySeqBTree0} -> DocInfoBySeqBTree0;
+    {'EXIT', BySeqUpdater, Reason} -> exit(Reason)
+    end,
 
     Db3 = Db2#db{
         fulldocinfo_by_id_btree = DocInfoByIdBTree2,
         docinfo_by_seq_btree = DocInfoBySeqBTree2,
         update_seq = NewSeq},
-
-    %ok = couch_file:flush(Db#db.updater_fd),
 
     % Check if we just updated any design documents, and update the validation
     % funs if we did.
@@ -703,7 +697,7 @@ commit_data(Db, true) ->
     Db;
 commit_data(Db, _) ->
     #db{
-        updater_fd = Fd,
+        fd = Fd,
         header = OldHeader,
         fsync_options = FsyncOptions,
         waiting_delayed_commit = Timer
@@ -731,7 +725,7 @@ commit_data(Db, _) ->
     end.
 
 
-copy_doc_attachments(#db{updater_fd = SrcFd} = SrcDb, SrcSp, DestFd) ->
+copy_doc_attachments(#db{fd = SrcFd} = SrcDb, SrcSp, DestFd) ->
     {ok, {BodyData0, BinInfos0}} = couch_db:read_doc(SrcDb, SrcSp),
     BinInfos = case BinInfos0 of
     _ when is_binary(BinInfos0) ->
@@ -771,7 +765,7 @@ copy_doc_attachments(#db{updater_fd = SrcFd} = SrcDb, SrcSp, DestFd) ->
     end,
     {BodyData, couch_util:compress(NewBinInfos)}.
 
-copy_docs(Db, #db{updater_fd = DestFd} = NewDb, InfoBySeq0, Retry) ->
+copy_docs(Db, #db{fd = DestFd} = NewDb, InfoBySeq0, Retry) ->
     % COUCHDB-968, make sure we prune duplicates during compaction
     InfoBySeq = lists:usort(fun(#doc_info{id=A}, #doc_info{id=B}) -> A =< B end,
         InfoBySeq0),
@@ -846,7 +840,7 @@ copy_compact(Db, NewDb0, Retry) ->
 
     % copy misc header values
     if NewDb3#db.security /= Db#db.security ->
-        {ok, Ptr} = couch_file:append_term(NewDb3#db.updater_fd, Db#db.security),
+        {ok, Ptr} = couch_file:append_term(NewDb3#db.fd, Db#db.security),
         NewDb4 = NewDb3#db{security=Db#db.security, security_ptr=Ptr};
     true ->
         NewDb4 = NewDb3
@@ -873,8 +867,7 @@ start_copy_compact(#db{name=Name,filepath=Filepath,header=#db_header{purge_seq=P
         Retry = false,
         ok = couch_file:write_header(Fd, Header=#db_header{})
     end,
-    ReaderFd = open_reader_fd(CompactFile, Db#db.options),
-    NewDb = init_db(Name, CompactFile, Fd, ReaderFd, Header, Db#db.options),
+    NewDb = init_db(Name, CompactFile, Fd, Header, Db#db.options),
     NewDb2 = if PurgeSeq > 0 ->
         {ok, PurgedIdsRevs} = couch_db:get_last_purged(Db),
         {ok, Pointer} = couch_file:append_term(Fd, PurgedIdsRevs),

@@ -79,7 +79,6 @@ handle_req(#httpd{method = 'POST'} = Req) ->
         {<<"total_time_ms">>, timer:now_diff(End, Start) div 1000}
         ]});
 
-
 handle_req(Req) ->
     send_method_not_allowed(Req, "POST").
 

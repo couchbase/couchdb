@@ -248,7 +248,7 @@ get_last_purged(#db{fd=Fd, header=#db_header{purged_docs=PurgedPointer}}) ->
     couch_file:pread_term(Fd, PurgedPointer).
 
 get_db_info(Db) ->
-    #db{updater_fd=Fd,
+    #db{fd=Fd,
         header=#db_header{disk_version=DiskVersion},
         compactor_pid=Compactor,
         update_seq=SeqNum,
@@ -664,7 +664,7 @@ update_docs(Db, Docs, Options, replicated_changes) ->
         DocErrors = [],
         DocBuckets3 = DocBuckets
     end,
-    DocBuckets4 = [[doc_flush_atts(check_dup_atts(Doc), Db#db.updater_fd)
+    DocBuckets4 = [[doc_flush_atts(check_dup_atts(Doc), Db#db.fd)
             || Doc <- Bucket] || Bucket <- DocBuckets3],
     {ok, []} = write_and_commit(Db, DocBuckets4, [], [merge_conflicts | Options]),
     {ok, DocErrors};
@@ -720,7 +720,7 @@ update_docs(Db, Docs, Options, interactive_edit) ->
                 true -> [] end ++ Options,
         DocBuckets3 = [[
                 doc_flush_atts(set_new_att_revpos(
-                        check_dup_atts(Doc)), Db#db.updater_fd)
+                        check_dup_atts(Doc)), Db#db.fd)
                 || Doc <- B] || B <- DocBuckets2],
         {DocBuckets4, IdRevs} = new_revs(DocBuckets3, [], []),
         
@@ -790,7 +790,7 @@ write_and_commit(#db{update_pid=UpdatePid}=Db, DocBuckets1,
             % compaction. Retry by reopening the db and writing to the current file
             {ok, Db2} = open_ref_counted(Db#db.main_pid, self()),
             DocBuckets2 = [
-                [doc_flush_atts(Doc, Db2#db.updater_fd) || Doc <- Bucket] ||
+                [doc_flush_atts(Doc, Db2#db.fd) || Doc <- Bucket] ||
                 Bucket <- DocBuckets1
             ],
             % We only retry once
@@ -1190,7 +1190,7 @@ read_doc(#db{fd=Fd}, Pos) ->
     couch_file:pread_term(Fd, Pos).
 
 
-make_doc(#db{updater_fd = Fd} = Db, Id, Deleted, Bp, RevisionPath) ->
+make_doc(#db{fd = Fd} = Db, Id, Deleted, Bp, RevisionPath) ->
     {BodyData, Atts} =
     case Bp of
     nil ->
