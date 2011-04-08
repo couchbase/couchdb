@@ -380,6 +380,23 @@ code_change(_OldVsn, State, _Extra) ->
     
 handle_info({'EXIT', _Pid, config_change}, Server) ->
     {noreply, shutdown, Server};
+handle_info({'EXIT', Pid, snappy_nif_not_loaded}, Server) ->
+    Server2 = case ets:lookup(couch_dbs_by_pid, Pid) of
+    [{Pid, DbName}] ->
+        ?LOG_ERROR("Erlang OTP R13B04 (or higher) is required to be able "
+            "to open the database `~s`", [DbName]),
+        true = ets:delete(couch_dbs_by_name, DbName),
+        true = ets:delete(couch_dbs_by_pid, Pid),
+        case ets:lookup(couch_sys_dbs, DbName) of
+        [{DbName, _}] ->
+            Server;
+        [] ->
+            Server#server{dbs_open = Server#server.dbs_open - 1}
+        end;
+    _ ->
+        Server
+    end,
+    {noreply, Server2};
 handle_info(Error, _Server) ->
     ?LOG_ERROR("Unexpected message, restarting couch_server: ~p", [Error]),
     exit(kill).

@@ -279,6 +279,11 @@ handle_request_int(MochiReq, DefaultFun,
             send_error(HttpReq, bad_request);
         exit:normal ->
             exit(normal);
+        exit:snappy_nif_not_loaded ->
+            ErrorReason = "Erlang OTP release R13B04 (or higher) is required to"
+                " access the database.",
+            ?LOG_ERROR("~s", [ErrorReason]),
+            send_error(HttpReq, {bad_otp_release, ErrorReason});
         throw:Error ->
             ?LOG_DEBUG("Minor error in HTTP request: ~p",[Error]),
             ?LOG_DEBUG("Stacktrace: ~p",[erlang:get_stacktrace()]),
