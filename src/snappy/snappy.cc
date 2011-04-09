@@ -202,14 +202,12 @@ extern "C" {
     }
 
 
+    static ErlNifFunc nif_functions[] = {
+        {"compress", 1, snappy_compress},
+        {"decompress", 1, snappy_decompress},
+        {"get_uncompressed_length", 1, snappy_get_uncompressed_length},
+        {"is_valid_compressed_buffer", 1, snappy_is_valid_compressed_buffer}
+    };
+
+    ERL_NIF_INIT(snappy, nif_functions, &on_load, &on_reload, &on_upgrade, NULL);
 }
-
-
-static ErlNifFunc nif_functions[] = {
-    {"compress", 1, snappy_compress},
-    {"decompress", 1, snappy_decompress},
-    {"get_uncompressed_length", 1, snappy_get_uncompressed_length},
-    {"is_valid_compressed_buffer", 1, snappy_is_valid_compressed_buffer}
-};
-
-ERL_NIF_INIT(snappy, nif_functions, &on_load, &on_reload, &on_upgrade, NULL);

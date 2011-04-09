@@ -34,7 +34,11 @@ init() ->
     Dir ->
         filename:join(Dir, ?MODULE)
     end,
-    erlang:load_nif(SoName, 0).
+    (catch erlang:load_nif(SoName, 0)),
+    case erlang:system_info(otp_release) of
+    "R13B03" -> true;
+    _ -> ok
+    end.
 
 
 compress(_IoList) ->
