@@ -149,13 +149,12 @@ pread_iolist(File, Pos) ->
         put(File, Fd);
     Fd -> ok
     end,
-    {RawData, NextPos} = read_raw_iolist_int(File, Fd, Pos, 4),
-    <<Prefix:1/integer, Len:31/integer, RestRawData/binary>> =
-        iolist_to_binary(RawData),
+    {IoListLen, NextPos} = read_raw_iolist_int(File, Fd, Pos, 4),
+    <<Prefix:1/integer, Len:31/integer>> = iolist_to_binary(IoListLen),
     case Prefix of
     1 ->
         {Md5, IoList} = extract_md5(
-            maybe_read_more_iolist(RestRawData, 16 + Len, NextPos, File, Fd)),
+            read_raw_iolist_int(File, Fd, NextPos, 16 + Len)),
         case couch_util:md5(IoList) of
         Md5 ->
             {ok, IoList};
@@ -163,7 +162,8 @@ pread_iolist(File, Pos) ->
             exit({file_corruption, <<"file corruption">>})
         end;
     0 ->
-        {ok, maybe_read_more_iolist(RestRawData, Len, NextPos, File, Fd)}
+        {IoList, _} = read_raw_iolist_int(File, Fd, NextPos, Len),
+        {ok, IoList}
     end.
 
 
@@ -270,6 +270,7 @@ init({Filepath, Options, ReturnPid, Ref}) ->
    try
        maybe_create_file(Filepath, Options),
        process_flag(trap_exit, true),
+       process_flag(priority, high),
        ReadFd = case file:open(Filepath, [read, binary]) of
        {ok, Fd} ->
            Fd;
@@ -422,15 +423,6 @@ load_header(Fd, Block) ->
         iolist_to_binary(remove_block_prefixes(1, RawBin)),
     Md5Sig = couch_util:md5(HeaderBin),
     {ok, HeaderBin}.
-
-maybe_read_more_iolist(Buffer, DataSize, _, _, _)
-    when DataSize =< byte_size(Buffer) ->
-    <<Data:DataSize/binary, _/binary>> = Buffer,
-    [Data];
-maybe_read_more_iolist(Buffer, DataSize, NextPos, MainFd, ReadFd) ->
-    {Missing, _} =
-        read_raw_iolist_int(MainFd, ReadFd, NextPos, DataSize - byte_size(Buffer)),
-    [Buffer, Missing].
 
 read_raw_iolist_int(MainFd, ReadFd, {Pos, _Size}, Len) -> % 0110 UPGRADE CODE
     read_raw_iolist_int(MainFd, ReadFd, Pos, Len);

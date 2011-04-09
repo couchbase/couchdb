@@ -42,7 +42,9 @@ init({MainPid, DbName, Filepath, Fd, Options}) ->
             file:delete(Filepath ++ ".compact")
         end
     end,
+    
     Db = init_db(DbName, Filepath, Fd, Header, Options),
+    
     Db2 = refresh_validate_doc_funs(Db),
     {ok, Db2#db{main_pid = MainPid}}.
 
@@ -205,6 +207,7 @@ handle_cast({compact_done, CompactFilepath}, #db{filepath=Filepath}=Db) ->
 handle_info({update_docs, Client, GroupedDocs, NonRepDocs, MergeConflicts,
         FullCommit}, Db) ->
     GroupedDocs2 = [[{Client, D} || D <- DocGroup] || DocGroup <- GroupedDocs],
+    CollectStart = erlang:now(),
     if NonRepDocs == [] ->
         {GroupedDocs3, Clients, FullCommit2} = collect_updates(GroupedDocs2,
                 [Client], MergeConflicts, FullCommit);
@@ -214,16 +217,19 @@ handle_info({update_docs, Client, GroupedDocs, NonRepDocs, MergeConflicts,
         Clients = [Client]
     end,
     NonRepDocs2 = [{Client, NRDoc} || NRDoc <- NonRepDocs],
+    CollectTime = timer:now_diff(erlang:now(), CollectStart),
     try update_docs_int(Db, GroupedDocs3, NonRepDocs2, MergeConflicts,
                 FullCommit2) of
     {ok, Db2} ->
+        NotifyStart = erlang:now(),
         ok = gen_server:call(Db#db.main_pid, {db_updated, Db2}),
         if Db2#db.update_seq /= Db#db.update_seq ->
             couch_db_update_notifier:notify({updated, Db2#db.name});
         true -> ok
         end,
         [catch(ClientPid ! {done, self()}) || ClientPid <- Clients],
-        {noreply, Db2}
+        NotifyDone = timer:now_diff(erlang:now(), NotifyStart),
+        {noreply, Db2#db{notify_t=NotifyDone+Db#db.notify_t,collect_t=CollectTime+Db#db.collect_t}}
     catch
         throw: retry ->
             [catch(ClientPid ! {retry, self()}) || ClientPid <- Clients],
@@ -249,35 +255,48 @@ code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 
-merge_updates([], RestB, AccOutGroups) ->
-    lists:reverse(AccOutGroups, RestB);
-merge_updates(RestA, [], AccOutGroups) ->
-    lists:reverse(AccOutGroups, RestA);
-merge_updates([[{_, #doc{id=IdA}}|_]=GroupA | RestA],
-        [[{_, #doc{id=IdB}}|_]=GroupB | RestB], AccOutGroups) ->
-    if IdA == IdB ->
-        merge_updates(RestA, RestB, [GroupA ++ GroupB | AccOutGroups]);
-    IdA < IdB ->
-        merge_updates(RestA, [GroupB | RestB], [GroupA | AccOutGroups]);
+collect_updates(SortedDocs, ClientsAcc, MergeConflicts, FullCommit) ->
+    {UnsortedDocs, Clients, FullCommit1} =
+        collect_unsorted_updates([], ClientsAcc, MergeConflicts, FullCommit),
+    GroupedDocs = case UnsortedDocs of
+    [] ->
+        SortedDocs;
+    _ ->
+        sort_grouped_updates(SortedDocs ++ UnsortedDocs)
+    end,
+    {GroupedDocs, Clients, FullCommit1}.
+
+sort_grouped_updates(BucketList) ->
+    Sorted = lists:sort(
+        fun([{_, #doc{id = A}} | _], [{_, #doc{id = B}} | _]) -> A < B end,
+        BucketList),
+    group_buckets(Sorted, []).
+
+group_buckets([], Buckets) ->
+    lists:reverse(Buckets);
+group_buckets([Bucket | Rest], []) ->
+    group_buckets(Rest, [Bucket]);
+group_buckets([[{_, Doc1} | _] = B1 | Rest1], [[{_, Doc2} | _] = B2 | Rest2]) ->
+    case Doc1#doc.id =:= Doc2#doc.id of
     true ->
-        merge_updates([GroupA | RestA], RestB, [GroupB | AccOutGroups])
+        group_buckets(Rest1, [B1 ++ B2 | Rest2]);
+    false ->
+        group_buckets(Rest1, [B1, B2 | Rest2])
     end.
 
-collect_updates(GroupedDocsAcc, ClientsAcc, MergeConflicts, FullCommit) ->
+collect_unsorted_updates(DocsAcc, ClientsAcc, MergeConflicts, FullCommit) ->
     receive
         % Only collect updates with the same MergeConflicts flag and without
         % local docs. It's easier to just avoid multiple _local doc
         % updaters than deal with their possible conflicts, and local docs
         % writes are relatively rare. Can be optmized later if really needed.
         {update_docs, Client, GroupedDocs, [], MergeConflicts, FullCommit2} ->
-            GroupedDocs2 = [[{Client, Doc} || Doc <- DocGroup]
+            DocsAcc2 = DocsAcc ++ [[{Client, Doc} || Doc <- DocGroup]
                     || DocGroup <- GroupedDocs],
-            GroupedDocsAcc2 =
-                merge_updates(GroupedDocsAcc, GroupedDocs2, []),
-            collect_updates(GroupedDocsAcc2, [Client | ClientsAcc],
+            collect_unsorted_updates(DocsAcc2, [Client | ClientsAcc],
                     MergeConflicts, (FullCommit or FullCommit2))
     after 0 ->
-        {GroupedDocsAcc, ClientsAcc, FullCommit}
+        {DocsAcc, ClientsAcc, FullCommit}
     end.
 
 
@@ -577,7 +596,10 @@ update_docs_int(Db, DocsList, NonRepDocs, MergeConflicts, FullCommit) ->
         } = Db,
     Ids = [Id || [{_Client, #doc{id=Id}}|_] <- DocsList],
     % lookup up the old documents, if they exist.
-    OldDocLookups = couch_btree:lookup_sorted(DocInfoByIdBTree, Ids),
+    LookupStart = erlang:now(),
+    %OldDocLookups = couch_btree:lookup_sorted(DocInfoByIdBTree, Ids),
+    OldDocLookups = [{Id, not_found} || Id <- Ids],
+    LookupDone = timer:now_diff(erlang:now(), LookupStart),
     OldDocInfos = lists:map(
         fun({_Id, {ok, FullDocInfo}}) ->
             FullDocInfo;
@@ -594,10 +616,14 @@ update_docs_int(Db, DocsList, NonRepDocs, MergeConflicts, FullCommit) ->
 
     % Write out the document summaries (the bodies are stored in the nodes of
     % the trees, the attachments are already written to disk)
+    TransformWriteStart = erlang:now(),
     {ok, FlushedFullDocInfos} = flush_trees(Db2, NewFullDocInfos, []),
+    TransformWriteDone = timer:now_diff(erlang:now(),TransformWriteStart),
+    
 
     {IndexFullDocInfos, IndexDocInfos} =
             new_index_entries(FlushedFullDocInfos, [], []),
+    UpdateIndexStart = erlang:now(),
     % and the indexes
     InsertByIds = [begin {K,V}= btree_by_id_split(I), {insert, K, V} end || I <- IndexFullDocInfos],
     Self = self(),
@@ -607,19 +633,24 @@ update_docs_int(Db, DocsList, NonRepDocs, MergeConflicts, FullCommit) ->
             {ok, [], DocInfoBySeqBTree2} = couch_btree:query_modify_raw(DocInfoBySeqBTree, RemoveBySeq ++ InsertBySeq),
             Self ! {done, self(), DocInfoBySeqBTree2}
         end),
-    
+
     {ok, [], DocInfoByIdBTree2} = couch_btree:query_modify_raw(DocInfoByIdBTree, InsertByIds),
-    
+
     DocInfoBySeqBTree2 =
     receive
     {done, BySeqUpdater, DocInfoBySeqBTree0} -> DocInfoBySeqBTree0;
     {'EXIT', BySeqUpdater, Reason} -> exit(Reason)
     end,
 
+    UpdateIndexDone = timer:now_diff(erlang:now(), UpdateIndexStart),
     Db3 = Db2#db{
         fulldocinfo_by_id_btree = DocInfoByIdBTree2,
         docinfo_by_seq_btree = DocInfoBySeqBTree2,
-        update_seq = NewSeq},
+        update_seq = NewSeq,
+        lookup_t = LookupDone + Db#db.lookup_t,
+        transform_write_t = TransformWriteDone + Db#db.transform_write_t,
+        update_index_t = UpdateIndexDone + Db#db.update_index_t
+        },
 
     % Check if we just updated any design documents, and update the validation
     % funs if we did.

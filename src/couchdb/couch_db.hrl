@@ -167,7 +167,12 @@
     waiting_delayed_commit = nil,
     revs_limit = 1000,
     fsync_options = [],
-    options = []
+    options = [],
+    collect_t=0,
+    notify_t=0,
+    lookup_t=0,
+    transform_write_t=0,
+    update_index_t=0
     }).
 
 

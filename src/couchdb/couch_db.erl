@@ -254,7 +254,13 @@ get_db_info(Db) ->
         update_seq=SeqNum,
         name=Name,
         instance_start_time=StartTime,
-        committed_update_seq=CommittedUpdateSeq} = Db,
+        committed_update_seq=CommittedUpdateSeq,
+        collect_t=Collect_t,
+        notify_t=Notify_t,
+        lookup_t=Lookup_t,
+        transform_write_t=Transform_write_t,
+        update_index_t=Update_index_t
+        } = Db,
     {ok, Size} = couch_file:bytes(Fd),
     {ok, {Count, DelCount}} = couch_btree:full_reduce(by_id_btree(Db)),
     InfoList = [
@@ -267,7 +273,12 @@ get_db_info(Db) ->
         {disk_size, Size},
         {instance_start_time, StartTime},
         {disk_format_version, DiskVersion},
-        {committed_update_seq, CommittedUpdateSeq}
+        {committed_update_seq, CommittedUpdateSeq},
+        {collect_t,Collect_t/1000},
+        {notify_t,Notify_t/1000},
+        {lookup_t,Lookup_t/1000},
+        {transform_write_t,Transform_write_t/1000},
+        {update_index_t,Update_index_t/1000}
         ],
     {ok, InfoList}.
 
