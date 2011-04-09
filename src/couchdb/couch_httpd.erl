@@ -280,8 +280,8 @@ handle_request_int(MochiReq, DefaultFun,
         exit:normal ->
             exit(normal);
         exit:snappy_nif_not_loaded ->
-            ErrorReason = "Erlang OTP release R13B04 (or higher) is required to"
-                " access the database or view index.",
+            ErrorReason = "To access the database or view index, Apache CouchDB"
+                " must be built with Erlang OTP R13B04 or higher.",
             ?LOG_ERROR("~s", [ErrorReason]),
             send_error(HttpReq, {bad_otp_release, ErrorReason});
         throw:Error ->
