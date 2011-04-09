@@ -597,8 +597,8 @@ update_docs_int(Db, DocsList, NonRepDocs, MergeConflicts, FullCommit) ->
     Ids = [Id || [{_Client, #doc{id=Id}}|_] <- DocsList],
     % lookup up the old documents, if they exist.
     LookupStart = erlang:now(),
-    %OldDocLookups = couch_btree:lookup_sorted(DocInfoByIdBTree, Ids),
-    OldDocLookups = [{Id, not_found} || Id <- Ids],
+    OldDocLookups = couch_btree:lookup_sorted(DocInfoByIdBTree, Ids),
+    
     LookupDone = timer:now_diff(erlang:now(), LookupStart),
     OldDocInfos = lists:map(
         fun({_Id, {ok, FullDocInfo}}) ->
