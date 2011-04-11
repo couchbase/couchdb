@@ -818,8 +818,9 @@ prepare_doc_summaries(BucketList) ->
             false ->
                 couch_util:compress(Body0)
             end,
-            SummaryChunk = couch_db_updater:assemble_summary_chunk(
-                {Body, couch_util:compress(DiskAtts)}),
+            SummaryBin = ?term_to_bin({Body, couch_util:compress(DiskAtts)}),
+            SummaryChunk = couch_file:assemble_file_chunk(
+                SummaryBin, couch_util:md5(SummaryBin)),
             AttsFd = case Atts of
             [#att{data = {Fd, _}} | _] -> Fd;
             [] -> nil
