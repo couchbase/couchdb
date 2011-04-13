@@ -37,8 +37,8 @@ PRE_UNINSTALL = :
 POST_UNINSTALL = :
 build_triplet = @build@
 host_triplet = @host@
-TESTS = snappy_unittest$(EXEEXT)
-noinst_PROGRAMS = $(am__EXEEXT_1)
+@WINDOWS_FALSE@TESTS = snappy_unittest$(EXEEXT)
+@WINDOWS_FALSE@noinst_PROGRAMS = $(am__EXEEXT_1)
 subdir = .
 DIST_COMMON = README $(am__configure_deps) $(dist_doc_DATA) \
 	$(include_HEADERS) $(noinst_HEADERS) $(srcdir)/Makefile.am \
@@ -48,7 +48,9 @@ DIST_COMMON = README $(am__configure_deps) $(dist_doc_DATA) \
 	depcomp install-sh ltmain.sh missing
 ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
 am__aclocal_m4_deps = $(top_srcdir)/m4/gtest.m4 \
-	$(top_srcdir)/configure.ac
+	$(top_srcdir)/m4/libtool.m4 $(top_srcdir)/m4/ltoptions.m4 \
+	$(top_srcdir)/m4/ltsugar.m4 $(top_srcdir)/m4/ltversion.m4 \
+	$(top_srcdir)/m4/lt~obsolete.m4 $(top_srcdir)/configure.ac
 am__configure_deps = $(am__aclocal_m4_deps) $(CONFIGURE_DEPENDENCIES) \
 	$(ACLOCAL_M4)
 am__CONFIG_DISTCLEAN_FILES = config.status config.cache config.log \
@@ -83,20 +85,21 @@ am__installdirs = "$(DESTDIR)$(libdir)" "$(DESTDIR)$(docdir)" \
 LTLIBRARIES = $(lib_LTLIBRARIES)
 libsnappy_la_LIBADD =
 am_libsnappy_la_OBJECTS = snappy.lo snappy-sinksource.lo \
-	snappy-stubs-internal.lo
+	snappy-stubs-internal.lo snappy-c.lo
 libsnappy_la_OBJECTS = $(am_libsnappy_la_OBJECTS)
 libsnappy_la_LINK = $(LIBTOOL) --tag=CXX $(AM_LIBTOOLFLAGS) \
 	$(LIBTOOLFLAGS) --mode=link $(CXXLD) $(AM_CXXFLAGS) \
 	$(CXXFLAGS) $(libsnappy_la_LDFLAGS) $(LDFLAGS) -o $@
-am__EXEEXT_1 = snappy_unittest$(EXEEXT)
+@WINDOWS_FALSE@am__EXEEXT_1 = snappy_unittest$(EXEEXT)
 PROGRAMS = $(noinst_PROGRAMS)
-am_snappy_unittest_OBJECTS =  \
-	snappy_unittest-snappy_unittest.$(OBJEXT) \
-	snappy_unittest-snappy-test.$(OBJEXT)
+am__snappy_unittest_SOURCES_DIST = snappy_unittest.cc snappy-test.cc
+@WINDOWS_FALSE@am_snappy_unittest_OBJECTS =  \
+@WINDOWS_FALSE@	snappy_unittest-snappy_unittest.$(OBJEXT) \
+@WINDOWS_FALSE@	snappy_unittest-snappy-test.$(OBJEXT)
 snappy_unittest_OBJECTS = $(am_snappy_unittest_OBJECTS)
 am__DEPENDENCIES_1 =
-snappy_unittest_DEPENDENCIES = libsnappy.la $(am__DEPENDENCIES_1) \
-	$(am__DEPENDENCIES_1)
+@WINDOWS_FALSE@snappy_unittest_DEPENDENCIES = libsnappy.la \
+@WINDOWS_FALSE@	$(am__DEPENDENCIES_1) $(am__DEPENDENCIES_1)
 snappy_unittest_LINK = $(LIBTOOL) --tag=CXX $(AM_LIBTOOLFLAGS) \
 	$(LIBTOOLFLAGS) --mode=link $(CXXLD) $(AM_CXXFLAGS) \
 	$(CXXFLAGS) $(snappy_unittest_LDFLAGS) $(LDFLAGS) -o $@
@@ -114,7 +117,8 @@ CXXLINK = $(LIBTOOL) --tag=CXX $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) \
 	--mode=link $(CXXLD) $(AM_CXXFLAGS) $(CXXFLAGS) $(AM_LDFLAGS) \
 	$(LDFLAGS) -o $@
 SOURCES = $(libsnappy_la_SOURCES) $(snappy_unittest_SOURCES)
-DIST_SOURCES = $(libsnappy_la_SOURCES) $(snappy_unittest_SOURCES)
+DIST_SOURCES = $(libsnappy_la_SOURCES) \
+	$(am__snappy_unittest_SOURCES_DIST)
 DATA = $(dist_doc_DATA)
 HEADERS = $(include_HEADERS) $(noinst_HEADERS)
 ETAGS = etags
@@ -198,6 +202,8 @@ PACKAGE_URL = @PACKAGE_URL@
 PACKAGE_VERSION = @PACKAGE_VERSION@
 PATH_SEPARATOR = @PATH_SEPARATOR@
 PKG_CONFIG = @PKG_CONFIG@
+PKG_CONFIG_LIBDIR = @PKG_CONFIG_LIBDIR@
+PKG_CONFIG_PATH = @PKG_CONFIG_PATH@
 RANLIB = @RANLIB@
 SED = @SED@
 SET_MAKE = @SET_MAKE@
@@ -269,16 +275,16 @@ ACLOCAL_AMFLAGS = -I m4
 
 # Library.
 lib_LTLIBRARIES = libsnappy.la
-libsnappy_la_SOURCES = snappy.cc snappy-sinksource.cc snappy-stubs-internal.cc
+libsnappy_la_SOURCES = snappy.cc snappy-sinksource.cc snappy-stubs-internal.cc snappy-c.cc
 libsnappy_la_LDFLAGS = -version-info $(SNAPPY_LTVERSION)
-include_HEADERS = snappy.h snappy-sinksource.h snappy-stubs-public.h
+include_HEADERS = snappy.h snappy-sinksource.h snappy-stubs-public.h snappy-c.h
 noinst_HEADERS = snappy-internal.h snappy-stubs-internal.h snappy-test.h
 
 # Unit tests and benchmarks.
-snappy_unittest_CPPFLAGS = $(gflags_CFLAGS) $(GTEST_CPPFLAGS)
-snappy_unittest_SOURCES = snappy_unittest.cc snappy-test.cc
-snappy_unittest_LDFLAGS = $(GTEST_LDFLAGS)
-snappy_unittest_LDADD = libsnappy.la $(gflags_LIBS) $(GTEST_LIBS)
+@WINDOWS_FALSE@snappy_unittest_CPPFLAGS = $(gflags_CFLAGS) $(GTEST_CPPFLAGS)
+@WINDOWS_FALSE@snappy_unittest_SOURCES = snappy_unittest.cc snappy-test.cc
+@WINDOWS_FALSE@snappy_unittest_LDFLAGS = $(GTEST_LDFLAGS)
+@WINDOWS_FALSE@snappy_unittest_LDADD = libsnappy.la $(gflags_LIBS) $(GTEST_LIBS)
 EXTRA_DIST = autogen.sh testdata/alice29.txt testdata/asyoulik.txt testdata/baddata1.snappy testdata/baddata2.snappy testdata/baddata3.snappy testdata/cp.html testdata/fields.c testdata/geo.protodata testdata/grammar.lsp testdata/house.jpg testdata/html testdata/html_x_4 testdata/kennedy.xls testdata/kppkn.gtb testdata/lcet10.txt testdata/mapreduce-osdi-1.pdf testdata/plrabn12.txt testdata/ptt5 testdata/sum testdata/urls.10K testdata/xargs.1 
 dist_doc_DATA = ChangeLog COPYING INSTALL NEWS README
 all: config.h
@@ -391,6 +397,7 @@ mostlyclean-compile:
 distclean-compile:
 	-rm -f *.tab.c
 
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/snappy-c.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/snappy-sinksource.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/snappy-stubs-internal.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/snappy.Plo@am__quote@

@@ -18,11 +18,21 @@ AC_SUBST([LIBTOOL_DEPS])
 AC_PROG_CXX
 AC_LANG([C++])
 AC_C_BIGENDIAN
-AC_CHECK_HEADERS([stdint.h stddef.h sys/mman.h])
+AC_CHECK_HEADERS([stdint.h stddef.h sys/mman.h sys/resource.h windows.h])
 
 # Don't use AC_FUNC_MMAP, as it checks for mappings of already-mapped memory,
 # which we don't need (and does not exist on Windows).
 AC_CHECK_FUNC([mmap])
+
+# Specific for Apache CouchDB (don't build unit tests on Windows/Cygwin)
+case "$(uname -s)" in
+  CYGWIN*)
+    IS_WINDOWS="TRUE"
+    ;;
+  *)
+    ;;
+esac
+AM_CONDITIONAL([WINDOWS], [test x$IS_WINDOWS = xTRUE])
 
 GTEST_LIB_CHECK([], [true], [true # Ignore; we can live without it.])
 

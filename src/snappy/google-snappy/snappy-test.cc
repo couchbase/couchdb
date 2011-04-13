@@ -1,20 +1,38 @@
 // Copyright 2011 Google Inc. All Rights Reserved.
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are
+// met:
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//     * Redistributions of source code must retain the above copyright
+// notice, this list of conditions and the following disclaimer.
+//     * Redistributions in binary form must reproduce the above
+// copyright notice, this list of conditions and the following disclaimer
+// in the documentation and/or other materials provided with the
+// distribution.
+//     * Neither the name of Google Inc. nor the names of its
+// contributors may be used to endorse or promote products derived from
+// this software without specific prior written permission.
 //
-//      Unless required by applicable law or agreed to in writing, software
-//      distributed under the License is distributed on an "AS IS" BASIS,
-//      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-//      See the License for the specific language governing permissions and
-//      limitations under the License.
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 // Various stubs for the unit tests for the open-source version of Snappy.
 
 #include "snappy-test.h"
+
+#ifdef HAVE_WINDOWS_H
+#include <windows.h>
+#endif
 
 #include <algorithm>
 
@@ -50,20 +68,31 @@ int64 benchmark_cpu_time_us = 0;
 string *benchmark_label = NULL;
 int64 benchmark_bytes_processed = 0;
 
-struct timeval benchmark_start_real;
-struct rusage benchmark_start_cpu;
-
 void ResetBenchmarkTiming() {
   benchmark_real_time_us = 0;
   benchmark_cpu_time_us = 0;
 }
 
+struct timeval benchmark_start_real;
+
+#ifdef WIN32
+FILETIME benchmark_start_cpu;
+#else  // WIN32
+struct rusage benchmark_start_cpu;
+#endif  // WIN32
+
 void StartBenchmarkTiming() {
   gettimeofday(&benchmark_start_real, NULL);
+#ifdef WIN32
+  FILETIME dummy;
+  CHECK(GetProcessTimes(
+      GetCurrentProcess(), &dummy, &dummy, &dummy, &benchmark_start_cpu));
+#else
   if (getrusage(RUSAGE_SELF, &benchmark_start_cpu) == -1) {
     perror("getrusage(RUSAGE_SELF)");
     exit(1);
   }
+#endif
   benchmark_running = true;
 }
 
@@ -78,6 +107,22 @@ void StopBenchmarkTiming() {
   benchmark_real_time_us +=
       (benchmark_stop_real.tv_usec - benchmark_start_real.tv_usec);
 
+#ifdef WIN32
+  FILETIME benchmark_stop_cpu, dummy;
+  CHECK(GetProcessTimes(
+      GetCurrentProcess(), &dummy, &dummy, &dummy, &benchmark_stop_cpu));
+
+  ULARGE_INTEGER start_ulargeint;
+  start_ulargeint.LowPart = benchmark_start_cpu.dwLowDateTime;
+  start_ulargeint.HighPart = benchmark_start_cpu.dwHighDateTime;
+
+  ULARGE_INTEGER stop_ulargeint;
+  stop_ulargeint.LowPart = benchmark_stop_cpu.dwLowDateTime;
+  stop_ulargeint.HighPart = benchmark_stop_cpu.dwHighDateTime;
+
+  benchmark_cpu_time_us +=
+      (stop_ulargeint.QuadPart - start_ulargeint.QuadPart + 5) / 10;
+#else  // WIN32
   struct rusage benchmark_stop_cpu;
   if (getrusage(RUSAGE_SELF, &benchmark_stop_cpu) == -1) {
     perror("getrusage(RUSAGE_SELF)");
@@ -87,6 +132,8 @@ void StopBenchmarkTiming() {
                                       benchmark_start_cpu.ru_utime.tv_sec);
   benchmark_cpu_time_us += (benchmark_stop_cpu.ru_utime.tv_usec -
                             benchmark_start_cpu.ru_utime.tv_usec);
+#endif  // WIN32
+
   benchmark_running = false;
 }
 

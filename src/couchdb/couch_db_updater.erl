@@ -14,7 +14,6 @@
 -behaviour(gen_server).
 
 -export([btree_by_id_reduce/2,btree_by_seq_reduce/2]).
--export([assemble_summary_chunk/1]).
 -export([init/1,terminate/2,handle_call/3,handle_cast/2,code_change/3,handle_info/2]).
 
 -include("couch_db.hrl").
@@ -808,8 +807,10 @@ copy_docs(Db, #db{fd = DestFd} = NewDb, InfoBySeq0, Retry) ->
         fun({ok, #full_doc_info{rev_tree=RevTree}=Info}) ->
             Info#full_doc_info{rev_tree=couch_key_tree:map(
                 fun(_Rev, {IsDel, Sp, Seq}, leaf) ->
-                    Summary = copy_doc_attachments(Db, Sp, DestFd),
-                    SummaryChunk = assemble_summary_chunk(Summary),
+                    SummaryBin = ?term_to_bin(
+                        copy_doc_attachments(Db, Sp, DestFd)),
+                    SummaryChunk = couch_file:assemble_file_chunk(
+                        SummaryBin, couch_util:md5(SummaryBin)),
                     {ok, Pos} = couch_file:append_raw_chunk(DestFd, SummaryChunk),
                     {IsDel, Pos, Seq};
                 (_, _, branch) ->
@@ -912,15 +913,3 @@ start_copy_compact(#db{name=Name,filepath=Filepath,header=#db_header{purge_seq=P
     NewDb3 = copy_compact(Db, NewDb2, Retry),
     close_db(NewDb3),
     gen_server:cast(Db#db.update_pid, {compact_done, CompactFile}).
-
-
-assemble_summary_chunk({Body, DiskAtts} = Summary) when is_binary(Body),
-                                                        is_binary(DiskAtts) ->
-    Bin = ?term_to_bin(Summary),
-    case couch_util:is_compressed(Body) of
-    true ->
-        % snappy does integrity check on decompression
-        couch_file:assemble_file_chunk(Bin);
-    false ->
-        couch_file:assemble_file_chunk(Bin, couch_util:md5(Bin))
-    end.

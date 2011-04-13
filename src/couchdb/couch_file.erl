@@ -84,13 +84,7 @@ append_term(Fd, Term) ->
     append_binary(Fd, couch_util:compress(Term)).
 
 append_term_md5(Fd, Term) ->
-    Bin = couch_util:compress(Term),
-    case couch_util:is_compressed(Bin) of
-    true ->
-        append_binary(Fd, Bin);
-    false ->
-        append_binary_md5(Fd, Bin)
-    end.
+    append_binary_md5(Fd, couch_util:compress(Term)).
 
 %%----------------------------------------------------------------------
 %% Purpose: To append an Erlang binary to the end of the file.

@@ -87,6 +87,7 @@
 ^src/etap/*
 ^src/ibrowse/*
 ^src/mochiweb/*
+^src/snappy/google-snappy/*
 ^stamp-h1
 ^test/Makefile
 ^test/Makefile.in
