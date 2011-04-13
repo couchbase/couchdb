@@ -225,7 +225,7 @@ get_full_doc_info(Db, Id) ->
     Result.
 
 get_full_doc_infos(Db, Ids) ->
-    couch_btree:lookup(by_id_btree(Db), Ids).
+    couch_btree:lookup(Db#db.fulldocinfo_by_id_btree, Ids).
 
 increment_update_seq(#db{update_pid=UpdatePid}) ->
     gen_server:call(UpdatePid, increment_update_seq).
@@ -250,6 +250,7 @@ get_last_purged(#db{fd=Fd, header=#db_header{purged_docs=PurgedPointer}}) ->
 get_db_info(Db) ->
     #db{fd=Fd,
         header=#db_header{disk_version=DiskVersion},
+        fulldocinfo_by_id_btree = IdBTree,
         compactor_pid=Compactor,
         update_seq=SeqNum,
         name=Name,
@@ -262,7 +263,7 @@ get_db_info(Db) ->
         update_index_t=Update_index_t
         } = Db,
     {ok, Size} = couch_file:bytes(Fd),
-    {ok, {Count, DelCount}} = couch_btree:full_reduce(by_id_btree(Db)),
+    {ok, {Count, DelCount}} = couch_btree:full_reduce(IdBTree),
     InfoList = [
         {db_name, Name},
         {doc_count, Count},
@@ -283,7 +284,7 @@ get_db_info(Db) ->
     {ok, InfoList}.
 
 get_design_docs(Db) ->
-    {ok,_, Docs} = couch_btree:fold(by_id_btree(Db),
+    {ok,_, Docs} = couch_btree:fold(Db#db.fulldocinfo_by_id_btree,
         fun(#full_doc_info{id= <<"_design/",_/binary>>}=FullDocInfo, _Reds, AccDocs) ->
             {ok, Doc} = open_doc_int(Db, FullDocInfo, [ejson_body]),
             {ok, [Doc | AccDocs]};
@@ -1013,12 +1014,12 @@ changes_since(Db, Style, StartSeq, Fun, Options, Acc) ->
             end,
             Fun(DocInfo2, Acc2)
         end,
-    {ok, _LastReduction, AccOut} = couch_btree:fold(by_seq_btree(Db),
+    {ok, _LastReduction, AccOut} = couch_btree:fold(Db#db.docinfo_by_seq_btree,
         Wrapper, Acc, [{start_key, StartSeq + 1}] ++ Options),
     {ok, AccOut}.
 
 count_changes_since(Db, SinceSeq) ->
-    BTree = by_seq_btree(Db),
+    BTree = Db#db.docinfo_by_seq_btree,
     {ok, Changes} =
     couch_btree:fold_reduce(BTree,
         fun(_SeqStart, PartialReds, 0) ->
@@ -1029,12 +1030,13 @@ count_changes_since(Db, SinceSeq) ->
 
 enum_docs_since(Db, SinceSeq, InFun, Acc, Options) ->
     {ok, LastReduction, AccOut} = couch_btree:fold(
-        by_seq_btree(Db), InFun, Acc, [{start_key, SinceSeq + 1} | Options]),
+        Db#db.docinfo_by_seq_btree, InFun, Acc,
+        [{start_key, SinceSeq + 1} | Options]),
     {ok, enum_docs_since_reduce_to_count(LastReduction), AccOut}.
 
 enum_docs(Db, InFun, InAcc, Options) ->
     {ok, LastReduce, OutAcc} = couch_btree:fold(
-        by_id_btree(Db), InFun, InAcc, Options),
+        Db#db.fulldocinfo_by_id_btree, InFun, InAcc, Options),
     {ok, enum_docs_reduce_to_count(LastReduce), OutAcc}.
 
 % server functions
@@ -1134,7 +1136,7 @@ open_doc_revs_int(Db, IdRevs, Options) ->
         IdRevs, LookupResults).
 
 open_doc_int(Db, <<?LOCAL_DOC_PREFIX, _/binary>> = Id, Options) ->
-    case couch_btree:lookup(local_btree(Db), [Id]) of
+    case couch_btree:lookup(Db#db.local_docs_btree, [Id]) of
     [{ok, {_, {Rev, BodyData}}}] ->
         Doc = #doc{id=Id, revs={0, [?l2b(integer_to_list(Rev))]}, body=BodyData},
         apply_open_options({ok, Doc}, Options);
@@ -1272,12 +1274,3 @@ increment_stat(#db{options = Options}, Stat) ->
     false ->
         couch_stats_collector:increment(Stat)
     end.
-
-local_btree(#db{local_docs_btree = BTree, fd = ReaderFd}) ->
-    BTree#btree{fd = ReaderFd}.
-
-by_seq_btree(#db{docinfo_by_seq_btree = BTree, fd = ReaderFd}) ->
-    BTree#btree{fd = ReaderFd}.
-
-by_id_btree(#db{fulldocinfo_by_id_btree = BTree, fd = ReaderFd}) ->
-    BTree#btree{fd = ReaderFd}.
