@@ -55,6 +55,7 @@ test() ->
     etap:is_greater(Size2, Size1,
         "Writing a second header allocates more space."),
 
+    ok = couch_file:flush(Fd),
     etap:is({ok, [foo, <<"more">>]}, couch_file:read_header(Fd),
         "Reading the second header does not return the first header."),
 
@@ -75,6 +76,7 @@ test() ->
 
     % Destroy the 0x1 byte that marks a header
     check_header_recovery(fun(CouchFd, RawFd, Expect, HeaderPos) ->
+        ok = couch_file:flush(CouchFd),
         etap:isnt(Expect, couch_file:read_header(CouchFd),
             "Should return a different header before corruption."),
         file:pwrite(RawFd, HeaderPos, <<0>>),
@@ -84,6 +86,7 @@ test() ->
 
     % Corrupt the size.
     check_header_recovery(fun(CouchFd, RawFd, Expect, HeaderPos) ->
+        ok = couch_file:flush(CouchFd),
         etap:isnt(Expect, couch_file:read_header(CouchFd),
             "Should return a different header before corruption."),
         % +1 for 0x1 byte marker
@@ -94,6 +97,7 @@ test() ->
 
     % Corrupt the MD5 signature
     check_header_recovery(fun(CouchFd, RawFd, Expect, HeaderPos) ->
+        ok = couch_file:flush(CouchFd),
         etap:isnt(Expect, couch_file:read_header(CouchFd),
             "Should return a different header before corruption."),
         % +5 = +1 for 0x1 byte and +4 for term size.
@@ -104,6 +108,7 @@ test() ->
 
     % Corrupt the data
     check_header_recovery(fun(CouchFd, RawFd, Expect, HeaderPos) ->
+        ok = couch_file:flush(CouchFd),
         etap:isnt(Expect, couch_file:read_header(CouchFd),
             "Should return a different header before corruption."),
         % +21 = +1 for 0x1 byte, +4 for term size and +16 for MD5 sig
