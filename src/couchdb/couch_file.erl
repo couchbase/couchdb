@@ -147,8 +147,8 @@ pread_iolist(File, Pos) ->
     <<Prefix:1/integer, Len:31/integer>> = iolist_to_binary(IoListLen),
     case Prefix of
     1 ->
-        {Md5, IoList} = extract_md5(
-            read_raw_iolist_int(File, Fd, NextPos, 16 + Len)),
+        {Bin, _} = read_raw_iolist_int(File, Fd, NextPos, 16 + Len),
+        {Md5, IoList} = extract_md5(Bin),
         case couch_util:md5(IoList) of
         Md5 ->
             {ok, IoList};
