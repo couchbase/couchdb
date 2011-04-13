@@ -240,6 +240,14 @@ read_header(Fd) ->
     case gen_server:call(Fd, find_header, infinity) of
     {ok, Bin} ->
         {ok, binary_to_term(Bin)};
+    no_valid_header ->
+        flush(Fd),
+        case gen_server:call(Fd, find_header, infinity) of
+        {ok, Bin} ->
+            {ok, binary_to_term(Bin)};
+        Else ->
+            Else
+        end;
     Else ->
         Else
     end.
