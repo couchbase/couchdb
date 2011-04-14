@@ -491,7 +491,7 @@ prep_and_validate_update(Db, #doc{id=Id,revs={RevStart, Revs}}=Doc,
 
 prep_and_validate_updates(_Db, [], [], _AllowConflict, AccPrepped,
         AccFatalErrors) ->
-   {AccPrepped, AccFatalErrors};
+   {lists:reverse(AccPrepped), lists:reverse(AccFatalErrors)};
 prep_and_validate_updates(Db, [DocBucket|RestBuckets], [not_found|RestLookups],
         AllowConflict, AccPrepped, AccErrors) ->
     [#doc{id=Id}|_]=DocBucket,

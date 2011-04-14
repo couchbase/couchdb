@@ -627,7 +627,7 @@ update_docs_int(Db, DocsList, NonRepDocs, MergeConflicts, FullCommit) ->
     InsertByIds = [begin {K,V}= btree_by_id_split(I), {insert, K, V} end || I <- IndexFullDocInfos],
     Self = self(),
     BySeqUpdater = spawn_link(fun() ->
-            InsertBySeq = [begin {K,V}= btree_by_seq_split(I), {insert, K, V} end || I <- lists:reverse(IndexDocInfos)],
+            InsertBySeq = [begin {K,V}= btree_by_seq_split(I), {insert, K, V} end || I <- IndexDocInfos],
             RemoveBySeq = [{remove, Seq, nil} || Seq <- lists:sort(RemoveSeqs)],
             {ok, [], DocInfoBySeqBTree2} = couch_btree:query_modify_raw(DocInfoBySeqBTree, RemoveBySeq ++ InsertBySeq),
             Self ! {done, self(), DocInfoBySeqBTree2}
