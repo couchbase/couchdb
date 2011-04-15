@@ -14,6 +14,7 @@
 -behaviour(gen_server).
 
 -export([btree_by_id_reduce/2,btree_by_seq_reduce/2]).
+-export([make_doc_summary/1]).
 -export([init/1,terminate/2,handle_call/3,handle_cast/2,code_change/3,handle_info/2]).
 
 -include("couch_db.hrl").
@@ -777,10 +778,8 @@ copy_docs(Db, #db{updater_fd = DestFd} = NewDb, InfoBySeq0, Retry) ->
         fun({ok, #full_doc_info{rev_tree=RevTree}=Info}) ->
             Info#full_doc_info{rev_tree=couch_key_tree:map(
                 fun(_Rev, {IsDel, Sp, Seq}, leaf) ->
-                    SummaryBin = ?term_to_bin(
-                        copy_doc_attachments(Db, Sp, DestFd)),
-                    SummaryChunk = couch_file:assemble_file_chunk(
-                        SummaryBin, couch_util:md5(SummaryBin)),
+                    Summary = copy_doc_attachments(Db, Sp, DestFd),
+                    SummaryChunk = make_doc_summary(Summary),
                     {ok, Pos} = couch_file:append_raw_chunk(DestFd, SummaryChunk),
                     {IsDel, Pos, Seq};
                 (_, _, branch) ->
@@ -884,3 +883,27 @@ start_copy_compact(#db{name=Name,filepath=Filepath,header=#db_header{purge_seq=P
     NewDb3 = copy_compact(Db, NewDb2, Retry),
     close_db(NewDb3),
     gen_server:cast(Db#db.update_pid, {compact_done, CompactFile}).
+
+
+make_doc_summary(#doc{body = Body, atts = Atts}) ->
+    DiskAtts = [{N, T, P, AL, DL, R, M, E} ||
+        #att{name = N, type = T, data = {_, P}, md5 = M, revpos = R,
+            att_len = AL, disk_len = DL, encoding = E} <- Atts],
+    make_doc_summary({Body, DiskAtts});
+
+make_doc_summary({Body0, Atts0}) ->
+    Body = case couch_util:is_compressed(Body0) of
+    true ->
+        Body0;
+    false ->
+        couch_util:compress(Body0)
+    end,
+    Atts = case couch_util:is_compressed(Atts0) of
+    true ->
+        Atts0;
+    false ->
+        couch_util:compress(Atts0)
+    end,
+    SummaryBin = ?term_to_bin({Body, Atts}),
+    SummaryChunk = couch_file:assemble_file_chunk(
+        SummaryBin, couch_util:md5(SummaryBin)).
