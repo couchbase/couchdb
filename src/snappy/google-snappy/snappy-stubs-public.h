@@ -36,11 +36,11 @@
 #ifndef UTIL_SNAPPY_OPENSOURCE_SNAPPY_STUBS_PUBLIC_H_
 #define UTIL_SNAPPY_OPENSOURCE_SNAPPY_STUBS_PUBLIC_H_
 
-#if 1
+#ifdef HAVE_STDINT_H
 #include <stdint.h>
 #endif
 
-#if 1
+#ifdef HAVE_STDDEF_H
 #include <stddef.h>
 #endif
 
@@ -54,7 +54,7 @@
 
 namespace snappy {
 
-#if 1
+#ifdef HAVE_STDINT_H
 typedef int8_t int8;
 typedef uint8_t uint8;
 typedef int16_t int16;

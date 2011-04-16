@@ -10,34 +10,30 @@
 ## License for the specific language governing permissions and limitations under
 ## the License.
 
-SUBDIRS = google-snappy
-
 snappyebindir = $(localerlanglibdir)/snappy-1.0.1/ebin
 snappyprivdir = $(localerlanglibdir)/snappy-1.0.1/priv
 
 CLEANFILES = \
 	$(snappyebin_make_generated_file_list) \
-	$(snappypriv_make_generated_file_list)
+	$(snappypriv_make_generated_file_list) \
+	priv/snappy_nif.so
 
 if USE_OTP_NIFS
-snappypriv_LTLIBRARIES = snappy.la
+snappypriv_LTLIBRARIES = snappy_nif.la
 endif
 
 SNAPPY_CXX_SRCS = \
-	snappy.cc
-
-SNAPPY_OBJECTS = \
-	google-snappy/snappy.lo \
-	google-snappy/snappy-sinksource.lo \
-	google-snappy/snappy-stubs-internal.lo
+	snappy_nif.cc \
+	google-snappy/snappy.cc \
+	google-snappy/snappy-sinksource.cc \
+	google-snappy/snappy-stubs-internal.cc
 
 if USE_OTP_NIFS
-snappy_la_SOURCES = $(SNAPPY_CXX_SRCS)
-snappy_la_LDFLAGS = -module -avoid-version
-snappy_la_LIBADD = $(SNAPPY_OBJECTS)
+snappy_nif_la_SOURCES = $(SNAPPY_CXX_SRCS)
+snappy_nif_la_LDFLAGS = -module -avoid-version
 
 if WINDOWS
-snappy_la_LDFLAGS += -no-undefined
+snappy_nif_la_LDFLAGS += -no-undefined
 endif
 endif
 
@@ -55,15 +51,19 @@ snappyebin_DATA = \
 
 EXTRA_DIST =  \
     $(snappy_file_collection) \
-    erl_nif_compat.h
+    erl_nif_compat.h \
+	google-snappy/snappy.h \
+	google-snappy/snappy-internal.h \
+	google-snappy/snappy-stubs-internal.h \
+	google-snappy/snappy-stubs-public.h
 
 if USE_OTP_NIFS
 
-priv/snappy.so: snappy.la
+priv/snappy_nif.so: snappy_nif.la
 	@mkdir -p ./priv
-	cp .libs/snappy.so $@
+	cp .libs/snappy_nif.so $@
 
-all: priv/snappy.so
+all: priv/snappy_nif.so
 endif
 
 %.app: %.app.in
