@@ -728,10 +728,10 @@ commit_data(Db, _) ->
 
 
 copy_doc_attachments(#db{updater_fd = SrcFd} = SrcDb, SrcSp, DestFd) ->
-    {ok, {BodyData0, BinInfos0}} = couch_db:read_doc(SrcDb, SrcSp),
+    {ok, {BodyData, BinInfos0}} = couch_db:read_doc(SrcDb, SrcSp),
     BinInfos = case BinInfos0 of
     _ when is_binary(BinInfos0) ->
-        couch_util:decompress(BinInfos0);
+        couch_compress:decompress(BinInfos0);
     _ when is_list(BinInfos0) ->
         % pre 1.2 file format
         BinInfos0
@@ -758,14 +758,7 @@ copy_doc_attachments(#db{updater_fd = SrcFd} = SrcDb, SrcSp, DestFd) ->
             end,
             {Name, Type, NewBinSp, AttLen, DiskLen, RevPos, Md5, Enc}
         end, BinInfos),
-    BodyData = case BodyData0 of
-    _ when is_binary(BodyData0) ->
-        BodyData0;
-    {_} = _EJson ->
-        % pre 1.2 file format
-        couch_util:compress(BodyData0)
-    end,
-    {BodyData, couch_util:compress(NewBinInfos)}.
+    {BodyData, NewBinInfos}.
 
 copy_docs(Db, #db{updater_fd = DestFd} = NewDb, InfoBySeq0, Retry) ->
     % COUCHDB-968, make sure we prune duplicates during compaction
@@ -892,17 +885,18 @@ make_doc_summary(#doc{body = Body, atts = Atts}) ->
     make_doc_summary({Body, DiskAtts});
 
 make_doc_summary({Body0, Atts0}) ->
-    Body = case couch_util:is_compressed(Body0) of
+    Body = case couch_compress:is_compressed(Body0) of
     true ->
         Body0;
     false ->
-        couch_util:compress(Body0)
+        % pre 1.2 database file format
+        couch_compress:compress(Body0)
     end,
-    Atts = case couch_util:is_compressed(Atts0) of
+    Atts = case couch_compress:is_compressed(Atts0) of
     true ->
         Atts0;
     false ->
-        couch_util:compress(Atts0)
+        couch_compress:compress(Atts0)
     end,
     SummaryBin = ?term_to_bin({Body, Atts}),
     couch_file:assemble_file_chunk(SummaryBin, couch_util:md5(SummaryBin)).

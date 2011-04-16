@@ -534,10 +534,10 @@ mp_parse_atts(body_end) ->
 with_bin_body(#doc{body = Json} = Doc) when is_binary(Json) ->
     Doc;
 with_bin_body(#doc{body = EJson} = Doc) ->
-    Doc#doc{body = couch_util:compress(EJson)}.
+    Doc#doc{body = couch_compress:compress(EJson)}.
 
 
 with_ejson_body(#doc{body = Body} = Doc) when is_binary(Body) ->
-    Doc#doc{body = couch_util:decompress(Body)};
+    Doc#doc{body = couch_compress:decompress(Body)};
 with_ejson_body(#doc{body = {_}} = Doc) ->
     Doc.

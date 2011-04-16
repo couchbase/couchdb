@@ -77,10 +77,10 @@ open(Filepath, Options) ->
 %%----------------------------------------------------------------------
 
 append_term(Fd, Term) ->
-    append_binary(Fd, couch_util:compress(Term)).
+    append_binary(Fd, couch_compress:compress(Term)).
 
 append_term_md5(Fd, Term) ->
-    append_binary_md5(Fd, couch_util:compress(Term)).
+    append_binary_md5(Fd, couch_compress:compress(Term)).
 
 %%----------------------------------------------------------------------
 %% Purpose: To append an Erlang binary to the end of the file.
@@ -117,7 +117,7 @@ assemble_file_chunk(Bin, Md5) ->
 
 pread_term(Fd, Pos) ->
     {ok, Bin} = pread_binary(Fd, Pos),
-    {ok, couch_util:decompress(Bin)}.
+    {ok, couch_compress:decompress(Bin)}.
 
 
 %%----------------------------------------------------------------------

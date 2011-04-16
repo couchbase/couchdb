@@ -1191,7 +1191,7 @@ make_doc(#db{updater_fd = Fd} = Db, Id, Deleted, Bp, RevisionPath) ->
         {ok, {BodyData0, Atts00}} = read_doc(Db, Bp),
         Atts0 = case Atts00 of
         _ when is_binary(Atts00) ->
-            couch_util:decompress(Atts00);
+            couch_compress:decompress(Atts00);
         _ when is_list(Atts00) ->
             % pre 1.2 format
             Atts00
