@@ -905,5 +905,4 @@ make_doc_summary({Body0, Atts0}) ->
         couch_util:compress(Atts0)
     end,
     SummaryBin = ?term_to_bin({Body, Atts}),
-    SummaryChunk = couch_file:assemble_file_chunk(
-        SummaryBin, couch_util:md5(SummaryBin)).
+    couch_file:assemble_file_chunk(SummaryBin, couch_util:md5(SummaryBin)).
