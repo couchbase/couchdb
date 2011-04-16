@@ -32,6 +32,10 @@ AC_PROG_LIBTOOL
 AC_PROG_LN_S
 
 dnl Config for google snappy
+m4_define([snappy_major], [1])
+m4_define([snappy_minor], [0])
+m4_define([snappy_patchlevel], [1])
+
 AC_PROG_CXX
 AC_LANG([C++])
 AC_C_BIGENDIAN
@@ -67,6 +71,25 @@ AC_TRY_COMPILE(, [
 if test x$snappy_have_builtin_ctz = xyes ; then
     AC_DEFINE([HAVE_BUILTIN_CTZ], [1], [Define to 1 if the compiler supports __builtin_ctz and friends.])
 fi
+
+if test "$ac_cv_header_stdint_h" = "yes"; then
+    AC_SUBST([ac_cv_have_stdint_h], [1])
+else
+    AC_SUBST([ac_cv_have_stdint_h], [0])
+fi
+if test "$ac_cv_header_stddef_h" = "yes"; then
+    AC_SUBST([ac_cv_have_stddef_h], [1])
+else
+    AC_SUBST([ac_cv_have_stddef_h], [0])
+fi
+
+SNAPPY_MAJOR="snappy_major"
+SNAPPY_MINOR="snappy_minor"
+SNAPPY_PATCHLEVEL="snappy_patchlevel"
+
+AC_SUBST([SNAPPY_MAJOR])
+AC_SUBST([SNAPPY_MINOR])
+AC_SUBST([SNAPPY_PATCHLEVEL])
 dnl End of google snappy specific config
 
 AC_MSG_CHECKING([for pthread_create in -lpthread])
@@ -463,6 +486,7 @@ AC_CONFIG_FILES([src/etap/Makefile])
 AC_CONFIG_FILES([src/ibrowse/Makefile])
 AC_CONFIG_FILES([src/mochiweb/Makefile])
 AC_CONFIG_FILES([src/snappy/Makefile])
+AC_CONFIG_FILES([src/snappy/google-snappy/snappy-stubs-public.h])
 AC_CONFIG_FILES([src/ejson/Makefile])
 AC_CONFIG_FILES([test/Makefile])
 AC_CONFIG_FILES([test/bench/Makefile])
