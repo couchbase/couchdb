@@ -14,7 +14,7 @@
 
 -export([open/2, open/3, query_modify/4, query_modify_raw/2, add/2, add_remove/3]).
 -export([fold/4, full_reduce/1, final_reduce/2, foldl/3, foldl/4,lookup_sorted/2]).
--export([fold_reduce/4, lookup/2, get_state/1, set_options/2]).
+-export([modify/3, fold_reduce/4, lookup/2, get_state/1, set_options/2]).
 
 -include("couch_db.hrl").
 -define(CHUNK_THRESHOLD, 16#4ff).
@@ -184,7 +184,7 @@ query_modify(Bt, LookupKeys, InsertValues, RemoveKeys) ->
             end
         end,
     Actions = lists:sort(SortFun, lists:append([InsertActions, RemoveActions, FetchActions])) ,
-    {ok, KeyPointers, QueryResults, Bt2} = modify_node(Bt, Root, Actions, []),
+    {ok, KeyPointers, QueryResults, nil, Bt2} = modify_node(Bt, Root, Actions, [], nil),
     {ok, NewRoot, Bt3} = complete_root(Bt2, KeyPointers),
     {ok, QueryResults, Bt3#btree{root=NewRoot}}.
 
@@ -193,9 +193,18 @@ query_modify(Bt, LookupKeys, InsertValues, RemoveKeys) ->
 % tuples of {action, Key, Value} and sorted by the sorted by Key, then by
 % the rules in the function op_order.
 query_modify_raw(#btree{root=Root} = Bt, SortedActions) ->
-    {ok, KeyPointers, QueryResults, Bt2} = modify_node(Bt, Root, SortedActions, []),
+    {ok, KeyPointers, QueryResults, nil, Bt2} = modify_node(Bt, Root, SortedActions, [], nil),
     {ok, NewRoot, Bt3} = complete_root(Bt2, KeyPointers),
     {ok, QueryResults, Bt3#btree{root=NewRoot}}.
+
+
+modify(Bt, KeyFuns, Acc) ->
+    #btree{root=Root} = Bt,
+    Actions = [{modify, Key, Fun} || {Key, Fun} <- KeyFuns],
+    {ok, KeyPointers, BeforeAfterResults, Acc2, Bt2} =
+            modify_node(Bt, Root, Actions, [], Acc),
+    {ok, NewRoot, Bt3} = complete_root(Bt2, KeyPointers),
+    {ok, BeforeAfterResults, Acc2, Bt3#btree{root=NewRoot}}.
 
 
 % for ordering different operations with the same key.
@@ -304,7 +313,7 @@ chunkify([InElement | RestInList], ChunkThreshold, OutList, OutListSize, OutputC
         chunkify(RestInList, ChunkThreshold, [InElement | OutList], OutListSize + Size, OutputChunks)
     end.
 
-modify_node(Bt, RootPointerInfo, Actions, QueryOutput) ->
+modify_node(Bt, RootPointerInfo, Actions, QueryOutput, Acc) ->
     case RootPointerInfo of
     nil ->
         NodeType = kv_node,
@@ -314,21 +323,22 @@ modify_node(Bt, RootPointerInfo, Actions, QueryOutput) ->
     end,
     NodeTuple = list_to_tuple(NodeList),
 
-    {ok, NewNodeList, QueryOutput2, Bt2} =
+    {ok, NewNodeList, QueryOutput2, Acc2, Bt2} =
     case NodeType of
-    kp_node -> modify_kpnode(Bt, NodeTuple, 1, Actions, [], QueryOutput);
-    kv_node -> modify_kvnode(Bt, NodeTuple, 1, Actions, [], QueryOutput)
+    kp_node -> modify_kpnode(Bt, NodeTuple, 1, Actions, [], QueryOutput, Acc);
+    kv_node -> modify_kvnode(Bt, NodeTuple, 1, Actions, [], QueryOutput, Acc)
     end,
     case NewNodeList of
     [] ->  % no nodes remain
-        {ok, [], QueryOutput2, Bt2};
+        {ok, [], QueryOutput2, Acc2, Bt2};
     NodeList ->  % nothing changed
         {LastKey, _LastValue} = element(tuple_size(NodeTuple), NodeTuple),
-        {ok, [{LastKey, RootPointerInfo}], QueryOutput2, Bt2};
+        {ok, [{LastKey, RootPointerInfo}], QueryOutput2, Acc2, Bt2};
     _Else2 ->
         {ok, ResultList, Bt3} = write_node(Bt2, NodeType, NewNodeList),
-        {ok, ResultList, QueryOutput2, Bt3}
+        {ok, ResultList, QueryOutput2, Acc2, Bt3}
     end.
+
 
 reduce_node(#btree{reduce=nil}, _NodeType, _NodeList) ->
     [];
@@ -357,35 +367,35 @@ write_node(Bt, NodeType, NodeList) ->
     ],
     {ok, ResultList, Bt}.
 
-modify_kpnode(Bt, {}, _LowerBound, Actions, [], QueryOutput) ->
-    modify_node(Bt, nil, Actions, QueryOutput);
-modify_kpnode(Bt, NodeTuple, LowerBound, [], ResultNode, QueryOutput) ->
+modify_kpnode(Bt, {}, _LowerBound, Actions, [], QueryOutput, Acc) ->
+    modify_node(Bt, nil, Actions, QueryOutput, Acc);
+modify_kpnode(Bt, NodeTuple, LowerBound, [], ResultNode, QueryOutput, Acc) ->
     {ok, lists:reverse(ResultNode, bounded_tuple_to_list(NodeTuple, LowerBound,
-            tuple_size(NodeTuple), [])), QueryOutput, Bt};
+            tuple_size(NodeTuple), [])), QueryOutput, Acc, Bt};
 modify_kpnode(Bt, NodeTuple, LowerBound,
-        [{_, FirstActionKey, _}|_]=Actions, ResultNode, QueryOutput) ->
+        [{_, FirstActionKey, _}|_]=Actions, ResultNode, QueryOutput, Acc) ->
     Sz = tuple_size(NodeTuple),
     N = find_first_gteq(Bt, NodeTuple, LowerBound, Sz, FirstActionKey),
     case N =:= Sz of
     true  ->
         % perform remaining actions on last node
         {_, PointerInfo} = element(Sz, NodeTuple),
-        {ok, ChildKPs, QueryOutput2, Bt2} =
-            modify_node(Bt, PointerInfo, Actions, QueryOutput),
+        {ok, ChildKPs, QueryOutput2, Acc2, Bt2} =
+            modify_node(Bt, PointerInfo, Actions, QueryOutput, Acc),
         NodeList = lists:reverse(ResultNode, bounded_tuple_to_list(NodeTuple, LowerBound,
             Sz - 1, ChildKPs)),
-        {ok, NodeList, QueryOutput2, Bt2};
+        {ok, NodeList, QueryOutput2, Acc2, Bt2};
     false ->
         {NodeKey, PointerInfo} = element(N, NodeTuple),
         SplitFun = fun({_ActionType, ActionKey, _ActionValue}) ->
                 not less(Bt, NodeKey, ActionKey)
             end,
         {LessEqQueries, GreaterQueries} = lists:splitwith(SplitFun, Actions),
-        {ok, ChildKPs, QueryOutput2, Bt2} =
-                modify_node(Bt, PointerInfo, LessEqQueries, QueryOutput),
+        {ok, ChildKPs, QueryOutput2, Acc2, Bt2} =
+                modify_node(Bt, PointerInfo, LessEqQueries, QueryOutput, Acc),
         ResultNode2 = lists:reverse(ChildKPs, bounded_tuple_to_revlist(NodeTuple,
                 LowerBound, N - 1, ResultNode)),
-        modify_kpnode(Bt2, NodeTuple, N+1, GreaterQueries, ResultNode2, QueryOutput2)
+        modify_kpnode(Bt2, NodeTuple, N+1, GreaterQueries, ResultNode2, QueryOutput2, Acc2)
     end.
 
 bounded_tuple_to_revlist(_Tuple, Start, End, Tail) when Start > End ->
@@ -413,20 +423,36 @@ find_first_gteq(Bt, Tuple, Start, End, Key) ->
         find_first_gteq(Bt, Tuple, Start, Mid, Key)
     end.
 
-modify_kvnode(Bt, NodeTuple, LowerBound, [], ResultNode, QueryOutput) ->
-    {ok, lists:reverse(ResultNode, bounded_tuple_to_list(NodeTuple, LowerBound, tuple_size(NodeTuple), [])), QueryOutput, Bt};
-modify_kvnode(Bt, NodeTuple, LowerBound, [{ActionType, ActionKey, ActionValue} | RestActions], ResultNode, QueryOutput) when LowerBound > tuple_size(NodeTuple) ->
+
+modify_value(Bt, ModFun, OldValue, UserAcc, ResultNodeAcc) ->
+    case ModFun(OldValue, UserAcc) of
+    {nil, UserAcc2} ->
+        {ResultNodeAcc, nil, UserAcc2};
+    {NewValue, UserAcc2} ->
+        {[extract(Bt, NewValue)|ResultNodeAcc], NewValue, UserAcc2}
+    end.
+
+
+modify_kvnode(Bt, NodeTuple, LowerBound, [], ResultNode, QueryOutput, Acc) ->
+    {ok, lists:reverse(ResultNode, bounded_tuple_to_list(NodeTuple, LowerBound, tuple_size(NodeTuple), [])), QueryOutput, Acc, Bt};
+modify_kvnode(Bt, NodeTuple, LowerBound, [{ActionType, ActionKey, ActionValue} | RestActions], ResultNode, QueryOutput, Acc) when LowerBound > tuple_size(NodeTuple) ->
     case ActionType of
     insert ->
-        modify_kvnode(Bt, NodeTuple, LowerBound, RestActions, [{ActionKey, ActionValue} | ResultNode], QueryOutput);
+        modify_kvnode(Bt, NodeTuple, LowerBound, RestActions, [{ActionKey, ActionValue} | ResultNode], QueryOutput, Acc);
     remove ->
         % just drop the action
-        modify_kvnode(Bt, NodeTuple, LowerBound, RestActions, ResultNode, QueryOutput);
+        modify_kvnode(Bt, NodeTuple, LowerBound, RestActions, ResultNode, QueryOutput, Acc);
+    modify ->
+        ModFun = ActionValue,
+        {ResultNode2, ResultValue2, Acc2} =
+                modify_value(Bt, ModFun, nil, Acc, ResultNode),
+        modify_kvnode(Bt, NodeTuple, LowerBound, RestActions, ResultNode2,
+                    [{nil, ResultValue2} | QueryOutput], Acc2);
     fetch ->
         % the key/value must not exist in the tree
-        modify_kvnode(Bt, NodeTuple, LowerBound, RestActions, ResultNode, [{not_found, {ActionKey, nil}} | QueryOutput])
+        modify_kvnode(Bt, NodeTuple, LowerBound, RestActions, ResultNode, [{not_found, {ActionKey, nil}} | QueryOutput], Acc)
     end;
-modify_kvnode(Bt, NodeTuple, LowerBound, [{ActionType, ActionKey, ActionValue} | RestActions], AccNode, QueryOutput) ->
+modify_kvnode(Bt, NodeTuple, LowerBound, [{ActionType, ActionKey, ActionValue} | RestActions], AccNode, QueryOutput, Acc) ->
     N = find_first_gteq(Bt, NodeTuple, LowerBound, tuple_size(NodeTuple), ActionKey),
     {Key, Value} = element(N, NodeTuple),
     ResultNode =  bounded_tuple_to_revlist(NodeTuple, LowerBound, N - 1, AccNode),
@@ -435,13 +461,19 @@ modify_kvnode(Bt, NodeTuple, LowerBound, [{ActionType, ActionKey, ActionValue} |
         case ActionType of
         insert ->
             % ActionKey is less than the Key, so insert
-            modify_kvnode(Bt, NodeTuple, N, RestActions, [{ActionKey, ActionValue} | ResultNode], QueryOutput);
+            modify_kvnode(Bt, NodeTuple, N, RestActions, [{ActionKey, ActionValue} | ResultNode], QueryOutput, Acc);
         remove ->
             % ActionKey is less than the Key, just drop the action
-            modify_kvnode(Bt, NodeTuple, N, RestActions, ResultNode, QueryOutput);
+            modify_kvnode(Bt, NodeTuple, N, RestActions, ResultNode, QueryOutput, Acc);
+        modify ->
+            ModFun = ActionValue,
+            {ResultNode2, ResultValue2, Acc2} =
+                    modify_value(Bt, ModFun, nil, Acc, ResultNode),
+            modify_kvnode(Bt, NodeTuple, N, RestActions, ResultNode2,
+                        [{nil, ResultValue2} | QueryOutput], Acc2);
         fetch ->
             % ActionKey is less than the Key, the key/value must not exist in the tree
-            modify_kvnode(Bt, NodeTuple, N, RestActions, ResultNode, [{not_found, {ActionKey, nil}} | QueryOutput])
+            modify_kvnode(Bt, NodeTuple, N, RestActions, ResultNode, [{not_found, {ActionKey, nil}} | QueryOutput], Acc)
         end;
     false ->
         % ActionKey and Key are maybe equal.
@@ -449,16 +481,23 @@ modify_kvnode(Bt, NodeTuple, LowerBound, [{ActionType, ActionKey, ActionValue} |
         false ->
             case ActionType of
             insert ->
-                modify_kvnode(Bt, NodeTuple, N+1, RestActions, [{ActionKey, ActionValue} | ResultNode], QueryOutput);
+                modify_kvnode(Bt, NodeTuple, N+1, RestActions, [{ActionKey, ActionValue} | ResultNode], QueryOutput, Acc);
             remove ->
-                modify_kvnode(Bt, NodeTuple, N+1, RestActions, ResultNode, QueryOutput);
+                modify_kvnode(Bt, NodeTuple, N+1, RestActions, ResultNode, QueryOutput, Acc);
+            modify ->
+                OldValue = assemble(Bt, Key, Value),
+                ModFun = ActionValue,
+                {ResultNode2, ResultValue2, Acc2} =
+                        modify_value(Bt, ModFun, OldValue, Acc, ResultNode),
+                modify_kvnode(Bt, NodeTuple, N+1, RestActions, ResultNode2,
+                            [{OldValue, ResultValue2} | QueryOutput], Acc2);
             fetch ->
                 % ActionKey is equal to the Key, insert into the QueryOuput, but re-process the node
                 % since an identical action key can follow it.
-                modify_kvnode(Bt, NodeTuple, N, RestActions, ResultNode, [{ok, assemble(Bt, Key, Value)} | QueryOutput])
+                modify_kvnode(Bt, NodeTuple, N, RestActions, ResultNode, [{ok, assemble(Bt, Key, Value)} | QueryOutput], Acc)
             end;
         true ->
-            modify_kvnode(Bt, NodeTuple, N + 1, [{ActionType, ActionKey, ActionValue} | RestActions], [{Key, Value} | ResultNode], QueryOutput)
+            modify_kvnode(Bt, NodeTuple, N + 1, [{ActionType, ActionKey, ActionValue} | RestActions], [{Key, Value} | ResultNode], QueryOutput, Acc)
         end
     end.
 
