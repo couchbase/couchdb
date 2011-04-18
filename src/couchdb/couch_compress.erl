@@ -44,6 +44,6 @@ is_compressed(<<?SNAPPY_PREFIX, _/binary>>) ->
     true;
 is_compressed(<<?TERM_PREFIX, _/binary>>) ->
     true;
-is_compressed(_Term) ->
+is_compressed(Term) when not is_binary(Term) ->
     false.
 
