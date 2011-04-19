@@ -95,6 +95,14 @@
     }).
 
 
+-record(doc_update_info,
+    {
+    id,
+    revs,
+    deleted,
+    summary,
+    fd}).
+
 -record(att,
     {
     name,
@@ -170,9 +178,9 @@
     options = [],
     collect_t=0,
     notify_t=0,
-    lookup_t=0,
-    transform_write_t=0,
-    update_index_t=0
+    prep_fun_t=0,
+    mod_by_id_t=0,
+    update_by_seq_t=0
     }).
 
 

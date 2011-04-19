@@ -21,6 +21,7 @@
 
 init({MainPid, DbName, Filepath, Fd, Options}) ->
     process_flag(trap_exit, true),
+    process_flag(priority, high),
     case lists:member(create, Options) of
     true ->
         % create a new header and writes it to the file
@@ -267,7 +268,7 @@ collect_updates(SortedDocs, ClientsAcc, MergeConflicts, FullCommit) ->
 
 sort_grouped_updates(BucketList) ->
     Sorted = lists:sort(
-        fun([{_, #doc{id = A}} | _], [{_, #doc{id = B}} | _]) -> A < B end,
+        fun([{_, #doc_update_info{id = A}} | _], [{_, #doc_update_info{id = B}} | _]) -> A < B end,
         BucketList),
     group_buckets(Sorted, []).
 
@@ -276,7 +277,7 @@ group_buckets([], Buckets) ->
 group_buckets([Bucket | Rest], []) ->
     group_buckets(Rest, [Bucket]);
 group_buckets([[{_, Doc1} | _] = B1 | Rest1], [[{_, Doc2} | _] = B2 | Rest2]) ->
-    case Doc1#doc.id =:= Doc2#doc.id of
+    case Doc1#doc_update_info.id =:= Doc2#doc_update_info.id of
     true ->
         group_buckets(Rest1, [B1 ++ B2 | Rest2]);
     false ->
@@ -454,57 +455,49 @@ refresh_validate_doc_funs(Db) ->
 
 % rev tree functions
 
-flush_trees(_Db, [], AccFlushedTrees) ->
-    {ok, lists:reverse(AccFlushedTrees)};
-flush_trees(#db{fd = Fd} = Db,
-        [InfoUnflushed | RestUnflushed], AccFlushed) ->
-    #full_doc_info{update_seq=UpdateSeq, rev_tree=Unflushed} = InfoUnflushed,
-    Flushed = couch_key_tree:map(
-        fun(_Rev, Value) ->
-            case Value of
-            #doc{deleted = IsDeleted, body = {summary, Summary, AttsFd}} ->
-                % this node value is actually an unwritten document summary,
-                % write to disk.
-                % make sure the Fd in the written bins is the same Fd we are
-                % and convert bins, removing the FD.
-                % All bins should have been written to disk already.
-                case {AttsFd, Fd} of
-                {nil, _} ->
-                    ok;
-                {SameFd, SameFd} ->
-                    ok;
-                _ ->
-                    % Fd where the attachments were written to is not the same
-                    % as our Fd. This can happen when a database is being
-                    % switched out during a compaction.
-                    ?LOG_DEBUG("File where the attachments are written has"
-                            " changed. Possibly retrying.", []),
-                    throw(retry)
-                end,
-                {ok, NewSummaryPointer} =
-                    couch_file:append_raw_chunk(Fd, Summary),
-                {IsDeleted, NewSummaryPointer, UpdateSeq};
-            _ ->
-                Value
-            end
-        end, Unflushed),
-    flush_trees(Db, RestUnflushed, [InfoUnflushed#full_doc_info{rev_tree=Flushed} | AccFlushed]).
-
 
 send_result(Client, Id, OriginalRevs, NewResult) ->
     % used to send a result to the client
     catch(Client ! {result, self(), {{Id, OriginalRevs}, NewResult}}).
 
-merge_rev_trees(_Limit, _Merge, [], [], AccNewInfos, AccRemoveSeqs, AccSeq) ->
-    {ok, AccNewInfos, AccRemoveSeqs, AccSeq};
-merge_rev_trees(Limit, MergeConflicts, [NewDocs|RestDocsList],
-        [OldDocInfo|RestOldInfo], AccNewInfos, AccRemoveSeqs, AccSeq) ->
-    #full_doc_info{id=Id,rev_tree=OldTree,deleted=OldDeleted,update_seq=OldSeq}
-            = OldDocInfo,
+
+by_seq_index_entries([], AccNewBySeqEntries, AccRemoveBySeqs) ->
+    {AccNewBySeqEntries, AccRemoveBySeqs};
+by_seq_index_entries([{nil, NewFullInfo}|Rest], AccNewBySeqEntries, AccRemoveBySeqs) ->
+    by_seq_index_entries(Rest, [couch_doc:to_doc_info(NewFullInfo) | AccNewBySeqEntries], AccRemoveBySeqs);
+by_seq_index_entries([{#full_doc_info{update_seq=Seq}, #full_doc_info{update_seq=Seq}} | Rest], AccNewBySeqEntries, AccRemoveBySeqs) ->
+by_seq_index_entries(Rest, AccNewBySeqEntries, AccRemoveBySeqs);
+by_seq_index_entries([{#full_doc_info{update_seq=OldSeq}, NewFullInfo} | Rest], AccNewBySeqEntries, AccRemoveBySeqs) ->
+    by_seq_index_entries(Rest,
+            [couch_doc:to_doc_info(NewFullInfo) | AccNewBySeqEntries],
+            [OldSeq | AccRemoveBySeqs]).
+
+
+stem_full_doc_infos(#db{revs_limit=Limit}, DocInfos) ->
+    [Info#full_doc_info{rev_tree=couch_key_tree:stem(Tree, Limit)} ||
+            #full_doc_info{rev_tree=Tree}=Info <- DocInfos].
+
+-spec to_path(#doc_update_info{}) -> path().
+to_path(#doc_update_info{revs={Start, RevIds}}=Doc) ->
+    [Branch] = to_branch(Doc, lists:reverse(RevIds)),
+    {Start - length(RevIds) + 1, Branch}.
+
+-spec to_branch(#doc_update_info{}, [RevId::binary()]) -> [branch()].
+to_branch(Doc, [RevId]) ->
+    [{RevId, Doc, []}];
+to_branch(Doc, [RevId | Rest]) ->
+    [{RevId, ?REV_MISSING, to_branch(Doc, Rest)}].
+                
+modify_full_doc_info(Db, Id, MergeConflicts, nil, Docs, AccSeq) ->
+    modify_full_doc_info(Db, Id, MergeConflicts, #full_doc_info{id=Id}, Docs, AccSeq);
+modify_full_doc_info(Db, Id, MergeConflicts, OldDocInfo,
+        NewDocs, AccSeq) ->
+    #db{fd=Fd,revs_limit=Limit}=Db,
+    #full_doc_info{id=Id,rev_tree=OldTree,deleted=OldDeleted} = OldDocInfo,
     NewRevTree = lists:foldl(
-        fun({Client, #doc{revs={Pos,[_Rev|PrevRevs]}}=NewDoc}, AccTree) ->
+        fun({Client, #doc_update_info{revs={Pos,[_Rev|PrevRevs]}}=NewDoc}, AccTree) ->
             if not MergeConflicts ->
-                case couch_key_tree:merge(AccTree, couch_doc:to_path(NewDoc),
+                case couch_key_tree:merge(AccTree, to_path(NewDoc),
                     Limit) of
                 {_NewTree, conflicts} when (not OldDeleted) ->
                     send_result(Client, Id, {Pos-1,PrevRevs}, conflict),
@@ -532,11 +525,13 @@ merge_rev_trees(Limit, MergeConflicts, [NewDocs|RestDocsList],
                         % put the rev into a subsequent edit of the deletion
                         #doc_info{revs=[#rev_info{rev={OldPos,OldRev}}|_]} =
                                 couch_doc:to_doc_info(OldDocInfo),
-                        NewRevId = couch_db:new_revid(
-                                NewDoc#doc{revs={OldPos, [OldRev]}}),
-                        NewDoc2 = NewDoc#doc{revs={OldPos + 1, [NewRevId, OldRev]}},
+                        % note for expediencey we are just creating a 
+                        % a random rev id in this case instead of a deterministic
+                        % one.
+                        NewRevId = couch_util:md5(couch_util:rand32()),
+                        NewDoc2 = NewDoc#doc_update_info{revs={OldPos + 1, [NewRevId, OldRev]}},
                         {NewTree2, _} = couch_key_tree:merge(AccTree,
-                                couch_doc:to_path(NewDoc2), Limit),
+                                to_path(NewDoc2), Limit),
                         % we changed the rev id, this tells the caller we did
                         send_result(Client, Id, {Pos-1,PrevRevs},
                                 {ok, {OldPos + 1, NewRevId}}),
@@ -550,111 +545,109 @@ merge_rev_trees(Limit, MergeConflicts, [NewDocs|RestDocsList],
                 end;
             true ->
                 {NewTree, _} = couch_key_tree:merge(AccTree,
-                            couch_doc:to_path(NewDoc), Limit),
+                            to_path(NewDoc), Limit),
                 NewTree
             end
         end,
         OldTree, NewDocs),
     if NewRevTree == OldTree ->
         % nothing changed
-        merge_rev_trees(Limit, MergeConflicts, RestDocsList, RestOldInfo,
-            AccNewInfos, AccRemoveSeqs, AccSeq);
+        {OldDocInfo, AccSeq};
     true ->
-        % we have updated the document, give it a new seq #
-        NewInfo = #full_doc_info{id=Id,update_seq=AccSeq+1,rev_tree=NewRevTree},
-        RemoveSeqs = case OldSeq of
-            0 -> AccRemoveSeqs;
-            _ -> [OldSeq | AccRemoveSeqs]
-        end,
-        merge_rev_trees(Limit, MergeConflicts, RestDocsList, RestOldInfo,
-            [NewInfo|AccNewInfos], RemoveSeqs, AccSeq+1)
+        NewSeq = AccSeq+1,
+        FlushedRevTree = couch_key_tree:map(
+            fun(_Rev, Value) ->
+                case Value of
+                #doc_update_info{deleted = IsDeleted, summary = Summary, fd = SummaryFd} ->
+                    % this node value is actually an unwritten document summary,
+                    % write to disk.
+                    % make sure the Fd in the written bins is the same Fd we are
+                    % and convert bins, removing the FD.
+                    % All bins should have been written to disk already.
+                    case {SummaryFd, Fd} of
+                    {nil, _} ->
+                        ok;
+                    {SameFd, SameFd} ->
+                        ok;
+                    _ ->
+                        % Fd where the attachments were written to is not the same
+                        % as our Fd. This can happen when a database is being
+                        % switched out during a compaction.
+                        ?LOG_DEBUG("File where the attachments are written has"
+                                " changed. Possibly retrying.", []),
+                        throw(retry)
+                    end,
+                    {ok, NewSummaryPointer} =
+                        couch_file:append_raw_chunk(Fd, Summary),
+                    {IsDeleted, NewSummaryPointer, NewSeq};
+                _ ->
+                    Value
+                end
+            end, NewRevTree),
+        NewFullDocInfo = #full_doc_info{id=Id,
+                    update_seq=NewSeq,
+                    rev_tree=FlushedRevTree},
+        % get the deleted flag
+        #doc_info{revs=[#rev_info{deleted=Deleted}|_]} =
+                        couch_doc:to_doc_info(NewFullDocInfo),
+        {NewFullDocInfo#full_doc_info{deleted=Deleted}, NewSeq}
     end.
 
 
-
-new_index_entries([], AccById, AccBySeq) ->
-    {AccById, AccBySeq};
-new_index_entries([FullDocInfo|RestInfos], AccById, AccBySeq) ->
-    #doc_info{revs=[#rev_info{deleted=Deleted}|_]} = DocInfo =
-            couch_doc:to_doc_info(FullDocInfo),
-    new_index_entries(RestInfos,
-        [FullDocInfo#full_doc_info{deleted=Deleted}|AccById],
-        [DocInfo|AccBySeq]).
-
-
-stem_full_doc_infos(#db{revs_limit=Limit}, DocInfos) ->
-    [Info#full_doc_info{rev_tree=couch_key_tree:stem(Tree, Limit)} ||
-            #full_doc_info{rev_tree=Tree}=Info <- DocInfos].
 
 update_docs_int(Db, DocsList, NonRepDocs, MergeConflicts, FullCommit) ->
     #db{
         fulldocinfo_by_id_btree = DocInfoByIdBTree,
         docinfo_by_seq_btree = DocInfoBySeqBTree,
-        update_seq = LastSeq,
-        revs_limit = RevsLimit
+        update_seq = LastSeq
         } = Db,
-    Ids = [Id || [{_Client, #doc{id=Id}}|_] <- DocsList],
     % lookup up the old documents, if they exist.
-    LookupStart = erlang:now(),
-    OldDocLookups = couch_btree:lookup_sorted(DocInfoByIdBTree, Ids),
-    
-    LookupDone = timer:now_diff(erlang:now(), LookupStart),
-    OldDocInfos = lists:map(
-        fun({_Id, {ok, FullDocInfo}}) ->
-            FullDocInfo;
-        ({Id, not_found}) ->
-            #full_doc_info{id=Id}
-        end,
-        OldDocLookups),
-    % Merge the new docs into the revision trees.
-    {ok, NewFullDocInfos, RemoveSeqs, NewSeq} = merge_rev_trees(RevsLimit,
-            MergeConflicts, DocsList, OldDocInfos, [], [], LastSeq),
+    PrepFunctionsStart = erlang:now(),
+    KeyModFuns = lists:map(fun([{_Client, #doc_update_info{id=Id}}|_] = Docs) ->
+            {Id, fun(PrevValue, LastSeqAcc) ->
+                modify_full_doc_info(Db, Id, MergeConflicts, PrevValue, Docs, LastSeqAcc)
+            end}
+        end, DocsList),
 
-    % All documents are now ready to write.
-    {ok, Db2} = update_local_docs(Db, NonRepDocs),
+    PrepFunctionsDone = timer:now_diff(erlang:now(), PrepFunctionsStart),
+    
+    ModifyByIdStart = erlang:now(),
+    {ok, KeyResults, NewSeq, DocInfoByIdBTree2} =
+            couch_btree:modify(DocInfoByIdBTree, KeyModFuns, LastSeq),
 
     % Write out the document summaries (the bodies are stored in the nodes of
     % the trees, the attachments are already written to disk)
-    TransformWriteStart = erlang:now(),
-    {ok, FlushedFullDocInfos} = flush_trees(Db2, NewFullDocInfos, []),
-    TransformWriteDone = timer:now_diff(erlang:now(),TransformWriteStart),
     
-
-    {IndexFullDocInfos, IndexDocInfos} =
-            new_index_entries(FlushedFullDocInfos, [], []),
-    UpdateIndexStart = erlang:now(),
+    ModifyByIdDone = timer:now_diff(erlang:now(),ModifyByIdStart),
+    
+    UpdateBySeqIndexStart = erlang:now(),
     % and the indexes
-    InsertByIds = [begin {K,V}= btree_by_id_split(I), {insert, K, V} end || I <- IndexFullDocInfos],
-    Self = self(),
-    BySeqUpdater = spawn_link(fun() ->
-            InsertBySeq = [begin {K,V}= btree_by_seq_split(I), {insert, K, V} end || I <- IndexDocInfos],
-            RemoveBySeq = [{remove, Seq, nil} || Seq <- lists:sort(RemoveSeqs)],
-            {ok, [], DocInfoBySeqBTree2} = couch_btree:query_modify_raw(DocInfoBySeqBTree, RemoveBySeq ++ InsertBySeq),
-            Self ! {done, self(), DocInfoBySeqBTree2}
-        end),
+    {NewBySeqEntries, RemoveSeqs} =
+                by_seq_index_entries(KeyResults, [], []),
+    InsertBySeq = [begin {K,V}= btree_by_seq_split(I), {insert, K, V} end || I <- NewBySeqEntries],
+    
+    RemoveBySeq = [{remove, Seq, nil} || Seq <- lists:sort(RemoveSeqs)],
 
-    {ok, [], DocInfoByIdBTree2} = couch_btree:query_modify_raw(DocInfoByIdBTree, InsertByIds),
+    {ok, [], DocInfoBySeqBTree2} = couch_btree:query_modify_raw(DocInfoBySeqBTree, RemoveBySeq ++ InsertBySeq),
 
-    DocInfoBySeqBTree2 =
-    receive
-    {done, BySeqUpdater, DocInfoBySeqBTree0} -> DocInfoBySeqBTree0;
-    {'EXIT', BySeqUpdater, Reason} -> exit(Reason)
-    end,
+    UpdateBySeqIndexDone = timer:now_diff(erlang:now(), UpdateBySeqIndexStart),
 
-    UpdateIndexDone = timer:now_diff(erlang:now(), UpdateIndexStart),
+    {ok, Db2} = update_local_docs(Db, NonRepDocs),
+    
     Db3 = Db2#db{
         fulldocinfo_by_id_btree = DocInfoByIdBTree2,
         docinfo_by_seq_btree = DocInfoBySeqBTree2,
         update_seq = NewSeq,
-        lookup_t = LookupDone + Db#db.lookup_t,
-        transform_write_t = TransformWriteDone + Db#db.transform_write_t,
-        update_index_t = UpdateIndexDone + Db#db.update_index_t
+        prep_fun_t = PrepFunctionsDone + Db#db.prep_fun_t,
+        mod_by_id_t = ModifyByIdDone + Db#db.mod_by_id_t,
+        update_by_seq_t = UpdateBySeqIndexDone + Db#db.update_by_seq_t
         },
 
     % Check if we just updated any design documents, and update the validation
     % funs if we did.
     case lists:any(
-        fun(<<"_design/", _/binary>>) -> true; (_) -> false end, Ids) of
+        fun(<<"_design/", _/binary>>) -> true; (_) -> false end,
+            [Id || [{_Client, #doc_update_info{id=Id}}|_] <- DocsList]) of
     false ->
         Db4 = Db3;
     true ->
