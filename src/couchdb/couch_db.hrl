@@ -57,7 +57,8 @@
     {id = <<"">>,
     update_seq = 0,
     deleted = false,
-    rev_tree = []
+    rev_tree = [],
+    leafs_size = 0
     }).
 
 -record(httpd,
