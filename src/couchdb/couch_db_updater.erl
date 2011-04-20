@@ -21,7 +21,6 @@
 
 init({MainPid, DbName, Filepath, Fd, Options}) ->
     process_flag(trap_exit, true),
-    process_flag(priority, high),
     case lists:member(create, Options) of
     true ->
         % create a new header and writes it to the file
@@ -42,9 +41,8 @@ init({MainPid, DbName, Filepath, Fd, Options}) ->
             file:delete(Filepath ++ ".compact")
         end
     end,
-    
+
     Db = init_db(DbName, Filepath, Fd, Header, Options),
-    
     Db2 = refresh_validate_doc_funs(Db),
     {ok, Db2#db{main_pid = MainPid}}.
 
@@ -206,6 +204,7 @@ handle_cast({compact_done, CompactFilepath}, #db{filepath=Filepath}=Db) ->
 
 handle_info({update_docs, Client, GroupedDocs, NonRepDocs, MergeConflicts,
         FullCommit}, Db) ->
+    garbage_collect(),
     GroupedDocs2 = [[{Client, D} || D <- DocGroup] || DocGroup <- GroupedDocs],
     CollectStart = erlang:now(),
     if NonRepDocs == [] ->
@@ -577,9 +576,13 @@ modify_full_doc_info(Db, Id, MergeConflicts, OldDocInfo,
                                 " changed. Possibly retrying.", []),
                         throw(retry)
                     end,
-                    {ok, NewSummaryPointer} =
-                        couch_file:append_raw_chunk(Fd, Summary),
-                    {IsDeleted, NewSummaryPointer, NewSeq};
+                    if is_list(Summary) orelse is_binary(Summary) ->
+                        {ok, SummaryPointer} =
+                            couch_file:append_raw_chunk(Fd, Summary);
+                    true ->
+                        SummaryPointer = Summary
+                    end,
+                    {IsDeleted, SummaryPointer, NewSeq};
                 _ ->
                     Value
                 end

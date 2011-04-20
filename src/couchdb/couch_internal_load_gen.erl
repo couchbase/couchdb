@@ -89,9 +89,9 @@ generate_full_load(Load) ->
     [receive {'EXIT', Pid, Reason} -> Reason end || Pid <- Pids].
 
 
-write_a_batch_of_docs(Db, DocBatch, MaxToWrite) ->    
+write_a_batch_of_docs(Db, DocBatch, MaxToWrite) ->
     DocBatch2 = [Doc#doc{id=couch_uuids:new()} || Doc <- lists:sublist(DocBatch, MaxToWrite)],
-    {ok, _ } = couch_db:update_docs(Db, DocBatch2, []).
+    {ok, _ } = couch_db:update_docs(Db, DocBatch2, [optimistic]).
     
 
 generate_load(Load) ->

@@ -516,7 +516,6 @@ spawn_writer(Filepath, Options) ->
         nil;
     false ->
         spawn_link(fun() ->
-            process_flag(priority, high),
             {ok, Fd} = file:open(Filepath, [binary, append, raw]),
             {ok, Eof} = file:position(Fd, eof),
             writer_loop(Fd, Eof)

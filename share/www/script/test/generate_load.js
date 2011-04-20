@@ -14,7 +14,7 @@ couchTests.generate_load = function(debug) {
     xhr = CouchDB.newXhr();
 
     //verify the hearbeat newlines are sent
-    xhr.open("POST", "/_generate_load?total=100000&db=test&concurrency=12&batch=2000&delayed_commits=true", false);
+    xhr.open("POST", "/_generate_load?total=100000&db=test&concurrency=10&batch=500&delayed_commits=true", false);
     var base64bin = "";
     for (var i=0; i<34; i++) {
         base64bin += "MTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEx\r\n"
