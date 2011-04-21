@@ -28,6 +28,13 @@ SNAPPY_CXX_SRCS = \
 	google-snappy/snappy-sinksource.cc \
 	google-snappy/snappy-stubs-internal.cc
 
+SNAPPY_CXX_HDRS = \
+	erl_nif_compat.h \
+	google-snappy/snappy.h \
+	google-snappy/snappy-internal.h \
+	google-snappy/snappy-stubs-internal.h \
+	google-snappy/snappy-stubs-public.h
+
 if USE_OTP_NIFS
 snappy_nif_la_SOURCES = $(SNAPPY_CXX_SRCS)
 snappy_nif_la_LDFLAGS = -module -avoid-version
@@ -39,26 +46,20 @@ endif
 
 snappy_file_collection = \
     snappy.app.in \
-    snappy.erl \
-    $(SNAPPY_CXX_SRCS)
+    snappy.erl
 
 snappyebin_make_generated_file_list = \
     snappy.app \
     snappy.beam
 
+EXTRA_DIST = \
+	$(SNAPPY_CXX_HDRS)
+	$(snappy_file_collection)
+
 snappyebin_DATA = \
     $(snappyebin_make_generated_file_list)
 
-EXTRA_DIST =  \
-    $(snappy_file_collection) \
-    erl_nif_compat.h \
-	google-snappy/snappy.h \
-	google-snappy/snappy-internal.h \
-	google-snappy/snappy-stubs-internal.h \
-	google-snappy/snappy-stubs-public.h
-
 if USE_OTP_NIFS
-
 priv/snappy_nif.so: snappy_nif.la
 	@mkdir -p ./priv
 	cp .libs/snappy_nif.so $@
