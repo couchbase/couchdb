@@ -601,7 +601,8 @@ update_docs_int(Db, DocsList, NonRepDocs, MergeConflicts, FullCommit) ->
     #db{
         fulldocinfo_by_id_btree = DocInfoByIdBTree,
         docinfo_by_seq_btree = DocInfoBySeqBTree,
-        update_seq = LastSeq
+        update_seq = LastSeq,
+        fd = Fd
         } = Db,
     % lookup up the old documents, if they exist.
     PrepFunctionsStart = erlang:now(),
@@ -644,7 +645,7 @@ update_docs_int(Db, DocsList, NonRepDocs, MergeConflicts, FullCommit) ->
         mod_by_id_t = ModifyByIdDone + Db#db.mod_by_id_t,
         update_by_seq_t = UpdateBySeqIndexDone + Db#db.update_by_seq_t
         },
-
+    couch_file:flush(Fd),
     % Check if we just updated any design documents, and update the validation
     % funs if we did.
     case lists:any(
