@@ -35,6 +35,7 @@
           total_arg,
           batch_arg,
           concurrency_arg,
+          rounds_arg=10,
           delayed_commits = "false"
          }).
 
@@ -49,6 +50,8 @@ parse_load_qs_args(Req) ->
             Load#load{batch_arg=list_to_integer(Value)};
         {"concurrency", Value} ->
             Load#load{concurrency_arg=list_to_integer(Value)};
+        {"rounds", Value} ->
+            Load#load{rounds_arg=list_to_integer(Value)};
         {"delayed_commits", Value} ->
             Load#load{delayed_commits=Value}
         end
@@ -61,10 +64,10 @@ handle_req(#httpd{method = 'POST'} = Req) ->
     PrevDelayedCommits = couch_config:get("couchdb", "delayed_commits", "true"),
     ok = couch_config:set("couchdb", "delayed_commits", DelayedCommits),
     DocBody = couch_httpd:json_body_obj(Req),
-    io:format("DocBody:~p~n", [DocBody]),
     io:format("Delayed commits set to ~s~n", [couch_config:get("couchdb", "delayed_commits")]),
     couch_server:delete(DbName, []),
-    {ok, Db} = couch_server:create(DbName, []),
+    {ok, Db} = couch_server:create(DbName, [{user_ctx, #user_ctx{roles=[<<"_admin">>]}}]),
+    ok = couch_db:set_revs_limit(Db, 1),
     Load = Load0#load{doc=couch_doc:from_json_obj(DocBody),db=Db},
     Start = erlang:now(),
     generate_full_load(Load),
@@ -76,6 +79,7 @@ handle_req(#httpd{method = 'POST'} = Req) ->
         {<<"total">>, Load#load.total_arg},
         {<<"batch">>, Load#load.batch_arg},
         {<<"concurrency">>, Load#load.concurrency_arg},
+        {<<"rounds">>, Load#load.rounds_arg},
         {<<"total_time_ms">>, timer:now_diff(End, Start) div 1000}
         ]});
 
@@ -83,32 +87,68 @@ handle_req(Req) ->
     send_method_not_allowed(Req, "POST").
 
 
-generate_full_load(Load) ->
-    #load{concurrency_arg=Concurrency} = Load,
-    Pids = [spawn_link(fun() -> generate_load(Load) end) || _ <- lists:seq(1, Concurrency)],
-    [receive {'EXIT', Pid, Reason} -> Reason end || Pid <- Pids].
+generate_full_load(#load{concurrency_arg=Concurrency,rounds_arg=Rounds}=Load) ->
+    Self = self(),
+    Pids = [spawn_link(fun() -> prep_and_generate_load(Load, N, Self) end) || N <- lists:seq(1, Concurrency)],
+    generate_full_load(Load,Pids,Rounds,[]).
 
+generate_full_load(_Load, Pids, 0, TimesAcc) ->    
+    [Pid ! stop || Pid <- Pids],
+    [receive {'EXIT', Pid, _} -> ok end || Pid <- Pids],
+    lists:reverse(TimesAcc);
+generate_full_load(Load, Pids, RoundsLeft, TimesAcc) ->
+    Start = erlang:now(),
+    [Pid ! do_round || Pid <- Pids],
+    [receive {Pid, batch_complete} -> ok end || Pid <- Pids],
+    Time = timer:now_diff(erlang:now(), Start)/1000,
+    io:format("Updated in ~p ms~n", [Time]),
+    generate_full_load(Load, Pids, RoundsLeft-1, [Time|TimesAcc]).
 
-write_a_batch_of_docs(Db, DocBatch, MaxToWrite) ->
-    DocBatch2 = [Doc#doc{id=couch_uuids:new()} || Doc <- lists:sublist(DocBatch, MaxToWrite)],
-    {ok, _ } = couch_db:update_docs(Db, DocBatch2, [optimistic]).
-    
-
-generate_load(Load) ->
+prep_batches(Load, WorkerNum) ->
     #load{total_arg=TotalArg,
             batch_arg=BatchArg,
             concurrency_arg=ConcurrencyArg,
-            doc=Doc,
-            db=Db} = Load,
+            doc=Doc} = Load,
     Total = TotalArg div ConcurrencyArg,
-    DocBatch =lists:duplicate(BatchArg, Doc),
+    TotalBatches = Total div BatchArg,
+    DocBatchUnprepped = lists:duplicate(BatchArg, Doc),
+    BatchesUnprepped0 = lists:duplicate(TotalBatches, DocBatchUnprepped),
+    case Total rem BatchArg of
+    0 ->
+        BatchesUnprepped = BatchesUnprepped0;
+    Rem ->
+        BatchesUnprepped =
+                [BatchesUnprepped0, lists:sublist(DocBatchUnprepped, Rem)]
+    end,
+    {DocBatches, _} =
+    lists:mapfoldl(fun(DocBatch, DocNum) ->
+            lists:mapfoldl(fun(Doc2, DocNum2) ->
+                    B = ?l2b(integer_to_list(DocNum2)),
+                    {Doc2#doc{id= <<"key-", B/binary>>}, DocNum2 + 1}
+                end, DocNum, DocBatch)
+        end, WorkerNum * Total, BatchesUnprepped),
+    DocBatches.
 
-    lists:foreach(fun(_I) ->
-            write_a_batch_of_docs(Db, DocBatch, BatchArg)
-        end, lists:seq(1, Total div BatchArg)),
-    write_a_batch_of_docs(Db, DocBatch, Total rem BatchArg),
-    exit(done).
-    
+prep_and_generate_load(Load, WorkerNum, Parent) ->
+    Batches = prep_batches(Load, WorkerNum),
+    generate_load(Load, Batches, Parent).
+
+generate_load(#load{db=Db}=Load, Batches, Parent) ->    
+    receive
+    do_round ->
+        ok;
+    stop ->
+        exit(done)
+    end,
+    Batches2 =
+    lists:map(fun(DocBatch) ->
+            {ok, Results} = couch_db:update_docs(Db, DocBatch, [optimistic]),
+            lists:zipwith(fun(Doc,{ok, {Pos, RevId}}) ->
+                Doc#doc{revs={Pos,[RevId]}}
+                end, DocBatch, Results)
+        end, Batches),
+    Parent ! {self(), batch_complete},
+    generate_load(Load, Batches2, Parent).
 
 do_it() ->
     {ok, Fd} = couch_file:open("test.foo",[create,overwrite]),
