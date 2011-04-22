@@ -96,12 +96,18 @@ generate_full_load(_Load, Pids, 0, TimesAcc) ->
     [Pid ! stop || Pid <- Pids],
     [receive {'EXIT', Pid, _} -> ok end || Pid <- Pids],
     lists:reverse(TimesAcc);
-generate_full_load(Load, Pids, RoundsLeft, TimesAcc) ->
+generate_full_load(#load{total_arg=Total,rounds_arg=Rounds,db=Db}=Load,
+        Pids, RoundsLeft, TimesAcc) ->
     Start = erlang:now(),
     [Pid ! do_round || Pid <- Pids],
     [receive {Pid, batch_complete} -> ok end || Pid <- Pids],
-    Time = timer:now_diff(erlang:now(), Start)/1000,
-    io:format("Updated in ~p ms~n", [Time]),
+    couch_db:ensure_full_commit(Db),
+    Time = timer:now_diff(erlang:now(), Start) div 1000,
+    if Rounds == RoundsLeft ->
+        io:format("Initialized and committed ~p docs in ~p ms (~p/s)~n", [Total, Time, (1000 * Total) div Time]);
+    true ->
+        io:format("Updated and committed ~p docs in ~p ms (~p/s)~n", [Total, Time, (1000 * Total) div Time])
+    end,
     generate_full_load(Load, Pids, RoundsLeft-1, [Time|TimesAcc]).
 
 prep_batches(Load, WorkerNum) ->

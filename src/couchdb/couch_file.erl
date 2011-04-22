@@ -143,11 +143,11 @@ pread_iolist(File, Pos) ->
         put(File, Fd);
     Fd -> ok
     end,
-    {IoListLen, NextPos} = read_raw_iolist_int(File, Fd, Pos, 4),
+    {IoListLen, NextPos} = read_raw_iolist_int(Fd, Pos, 4),
     <<Prefix:1/integer, Len:31/integer>> = iolist_to_binary(IoListLen),
     case Prefix of
     1 ->
-        {Bin, _} = read_raw_iolist_int(File, Fd, NextPos, 16 + Len),
+        {Bin, _} = read_raw_iolist_int(Fd, NextPos, 16 + Len),
         {Md5, IoList} = extract_md5(Bin),
         case couch_util:md5(IoList) of
         Md5 ->
@@ -156,7 +156,7 @@ pread_iolist(File, Pos) ->
             exit({file_corruption, <<"file corruption">>})
         end;
     0 ->
-        {IoList, _} = read_raw_iolist_int(File, Fd, NextPos, Len),
+        {IoList, _} = read_raw_iolist_int(Fd, NextPos, Len),
         {ok, IoList}
     end.
 
@@ -425,20 +425,12 @@ load_header(Fd, Block) ->
     Md5Sig = couch_util:md5(HeaderBin),
     {ok, HeaderBin}.
 
-read_raw_iolist_int(MainFd, ReadFd, {Pos, _Size}, Len) -> % 0110 UPGRADE CODE
-    read_raw_iolist_int(MainFd, ReadFd, Pos, Len);
-read_raw_iolist_int(MainFd, ReadFd, Pos, Len) ->
+read_raw_iolist_int(ReadFd, {Pos, _Size}, Len) -> % 0110 UPGRADE CODE
+    read_raw_iolist_int(ReadFd, Pos, Len);
+read_raw_iolist_int(ReadFd, Pos, Len) ->
     BlockOffset = Pos rem ?SIZE_BLOCK,
     TotalBytes = calculate_total_read_len(BlockOffset, Len),
-    Start = erlang:now(),
-    case file:pread(ReadFd, Pos, TotalBytes) of
-    {ok, <<RawBin:TotalBytes/binary>>} -> ok;
-    _ ->
-        ?LOG_DEBUG("read_raw_iolist_int fault!", []),
-        flush(MainFd),
-        {ok, <<RawBin:TotalBytes/binary>>} =
-                file:pread(ReadFd, Pos, TotalBytes)
-    end,
+    {ok, <<RawBin:TotalBytes/binary>>} = file:pread(ReadFd, Pos, TotalBytes),
     {remove_block_prefixes(BlockOffset, RawBin), Pos + TotalBytes}.
 
 -spec extract_md5(iolist()) -> {binary(), iolist()}.
