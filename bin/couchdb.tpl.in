@@ -15,7 +15,7 @@
 BACKGROUND=false
 DEFAULT_CONFIG_DIR=%localconfdir%/default.d
 DEFAULT_CONFIG_FILE=%localconfdir%/%defaultini%
-ERL_START_OPTIONS="-sasl errlog_type error +K true +A 4"
+ERL_START_OPTIONS="-sasl errlog_type error +K true"
 HEART_BEAT_TIMEOUT=11
 HEART_COMMAND="%bindir%/%couchdb_command_name% -k"
 INTERACTIVE=false

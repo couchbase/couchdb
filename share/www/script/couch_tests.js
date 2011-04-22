@@ -58,7 +58,6 @@ loadTest("etags_views.js");
 loadTest("form_submit.js");
 loadTest("http.js");
 loadTest("invalid_docids.js");
-loadTest("generate_load.js");
 loadTest("jsonp.js");
 loadTest("large_docs.js");
 loadTest("list_views.js");

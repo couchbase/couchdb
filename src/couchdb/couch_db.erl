@@ -546,6 +546,16 @@ update_docs(Db, Docs, Options) ->
     update_docs(Db, Docs, Options, interactive_edit).
 
 
+to_path({Start, RevIds}) ->
+    [Branch] = to_branch(lists:reverse(RevIds)),
+    {Start - length(RevIds) + 1, Branch}.
+
+to_branch([RevId]) ->
+    [{RevId, ?REV_MISSING, []}];
+to_branch([RevId | Rest]) ->
+    [{RevId, ?REV_MISSING, to_branch(Rest)}].
+
+
 prep_and_validate_replicated_updates(_Db, [], [], AccPrepped, AccErrors) ->
     Errors2 = [{{Id, {Pos, Rev}}, Error} ||
             {#doc{id=Id,revs={Pos,[Rev|_]}}, Error} <- AccErrors],
@@ -571,9 +581,9 @@ prep_and_validate_replicated_updates(Db, [Bucket|RestBuckets], [OldInfo|RestOldI
         prep_and_validate_replicated_updates(Db, RestBuckets, RestOldInfo, [ValidatedBucket | AccPrepped], AccErrors3);
     {ok, #full_doc_info{rev_tree=OldTree}} ->
         NewRevTree = lists:foldl(
-            fun(NewDoc, AccTree) ->
+            fun(#doc{revs=Revs}=NewDoc, AccTree) ->
                 {NewTree, _} = couch_key_tree:merge(AccTree,
-                    couch_doc:to_path(NewDoc), Db#db.revs_limit),
+                    to_path(Revs), Db#db.revs_limit),
                 NewTree
             end,
             OldTree, Bucket),
