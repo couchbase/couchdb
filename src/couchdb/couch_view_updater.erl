@@ -148,7 +148,7 @@ do_maps(Group, MapQueue, WriteQueue, ViewEmptyKVs) ->
         do_maps(Group1, MapQueue, WriteQueue, ViewEmptyKVs)
     end.
 
-do_writes(Parent, Owner, #group{fd=Fd}=Group, WriteQueue, InitialBuild) ->
+do_writes(Parent, Owner, Group, WriteQueue, InitialBuild) ->
     case couch_work_queue:dequeue(WriteQueue) of
     closed ->
         Parent ! {new_group, Group};
