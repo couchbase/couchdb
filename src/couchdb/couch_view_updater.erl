@@ -151,7 +151,6 @@ do_maps(Group, MapQueue, WriteQueue, ViewEmptyKVs) ->
 do_writes(Parent, Owner, #group{fd=Fd}=Group, WriteQueue, InitialBuild) ->
     case couch_work_queue:dequeue(WriteQueue) of
     closed ->
-        ok = couch_file:flush(Fd),
         Parent ! {new_group, Group};
     {ok, Queue} ->
         {NewSeq, ViewKeyValues, DocIdViewIdKeys} = lists:foldl(
@@ -171,7 +170,6 @@ do_writes(Parent, Owner, #group{fd=Fd}=Group, WriteQueue, InitialBuild) ->
         case Owner of
         nil -> ok;
         _ ->
-            ok = couch_file:flush(Fd),
             ok = gen_server:cast(Owner, {partial_update, Parent, Group2})
         end,
         do_writes(Parent, Owner, Group2, WriteQueue, InitialBuild)
@@ -238,7 +236,6 @@ write_changes(Group, ViewKeyValuesToAdd, DocIdViewIdKeys, NewSeq, InitialBuild) 
         RemoveDocIds = [DocId || {DocId, ViewIdKeys} <- DocIdViewIdKeys, ViewIdKeys == []],
         LookupDocIds = [DocId || {DocId, _ViewIdKeys} <- DocIdViewIdKeys]
     end,
-    couch_file:flush(Fd),
     {ok, LookupResults, IdBtree2}
         = couch_btree:query_modify(IdBtree, LookupDocIds, AddDocIdViewIdKeys, RemoveDocIds),
     KeysToRemoveByView = lists:foldl(
