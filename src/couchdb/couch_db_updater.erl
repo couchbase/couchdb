@@ -204,7 +204,6 @@ handle_cast({compact_done, CompactFilepath}, #db{filepath=Filepath}=Db) ->
 
 handle_info({update_docs, Client, GroupedDocs, NonRepDocs, MergeConflicts,
         FullCommit}, Db) ->
-    garbage_collect(),
     GroupedDocs2 = [[{Client, D} || D <- DocGroup] || DocGroup <- GroupedDocs],
     CollectStart = erlang:now(),
     if NonRepDocs == [] ->
