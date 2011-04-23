@@ -77,7 +77,9 @@ src/snappy/google-snappy/snappy-stubs-public.h
 src/snappy/google-snappy/stamp-h2
 src/snappy/google-snappy/.deps/
 test/local.ini
+test/etap/.deps/
 test/etap/run
+test/etap/test_cfg_register
 test/etap/test_util.erl
 test/javascript/run
 share/server/main.js
