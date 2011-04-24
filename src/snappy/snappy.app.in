@@ -8,5 +8,5 @@
                   stdlib
                  ]},
   {env, []},
-  {modules, []}
+  {modules, [snappy]}
  ]}.

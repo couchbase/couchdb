@@ -27,16 +27,8 @@
 -export([reorder_results/2]).
 -export([url_strip_password/1]).
 -export([encode_doc_id/1]).
--export([compress/1, decompress/1, is_compressed/1]).
 
 -include("couch_db.hrl").
-
-% binaries compressed with snappy have their first byte set to this value
--define(SNAPPY_PREFIX, 1).
-% binaries that are a result of an erlang:term_to_binary/1,2 call have this
-% value as their first byte
--define(TERM_PREFIX, 131).
-
 
 % arbitrarily chosen amount of memory to use before flushing to disk
 -define(FLUSH_MAX_MEM, 10000000).
@@ -437,24 +429,3 @@ encode_doc_id(<<"_local/", Rest/binary>>) ->
     "_local/" ++ url_encode(Rest);
 encode_doc_id(Id) ->
     url_encode(Id).
-
-
-compress(Term) ->
-    Bin = ?term_to_bin(Term),
-    try
-        {ok, CompressedBin} = snappy:compress(Bin),
-        <<?SNAPPY_PREFIX, CompressedBin/binary>>
-    catch exit:snappy_nif_not_loaded ->
-        Bin
-    end.
-
-decompress(<<?SNAPPY_PREFIX, Rest/binary>>) ->
-    {ok, TermBin} = snappy:decompress(Rest),
-    binary_to_term(TermBin);
-decompress(<<?TERM_PREFIX, _/binary>> = Bin) ->
-    binary_to_term(Bin).
-
-is_compressed(<<?SNAPPY_PREFIX, _/binary>>) ->
-    true;
-is_compressed(<<?TERM_PREFIX, _/binary>>) ->
-    false.

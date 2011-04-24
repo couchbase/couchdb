@@ -95,7 +95,7 @@ reopen(#db{main_pid = Pid, fd_ref_counter = OldRefCntr, user_ctx = UserCtx}) ->
         ok;
     false ->
         couch_ref_counter:add(NewRefCntr),
-        couch_ref_counter:drop(OldRefCntr)
+        catch couch_ref_counter:drop(OldRefCntr)
     end,
     {ok, NewDb#db{user_ctx = UserCtx}}.
 
@@ -250,7 +250,8 @@ get_last_purged(#db{fd=Fd, header=#db_header{purged_docs=PurgedPointer}}) ->
 get_db_info(Db) ->
     #db{fd=Fd,
         header=#db_header{disk_version=DiskVersion},
-        fulldocinfo_by_id_btree = IdBTree,
+        fulldocinfo_by_id_btree = IdBtree,
+        docinfo_by_seq_btree = SeqBtree,
         compactor_pid=Compactor,
         update_seq=SeqNum,
         name=Name,
@@ -261,17 +262,19 @@ get_db_info(Db) ->
         prep_fun_t=Prep_fun_t,
         mod_by_id_t=Mod_by_id_t,
         update_by_seq_t=Update_by_seq_t
-        } = Db,
+    } = Db,
     {ok, Size} = couch_file:bytes(Fd),
-    {ok, {Count, DelCount}} = couch_btree:full_reduce(IdBTree),
+    {ok, DbReduction} = couch_btree:full_reduce(IdBtree),
     InfoList = [
         {db_name, Name},
-        {doc_count, Count},
-        {doc_del_count, DelCount},
+        {doc_count, element(1, DbReduction)},
+        {doc_del_count, element(2, DbReduction)},
         {update_seq, SeqNum},
         {purge_seq, couch_db:get_purge_seq(Db)},
         {compact_running, Compactor/=nil},
         {disk_size, Size},
+        {data_size, db_data_size(
+            couch_btree:size(SeqBtree), couch_btree:size(IdBtree), DbReduction)},
         {instance_start_time, StartTime},
         {disk_format_version, DiskVersion},
         {committed_update_seq, CommittedUpdateSeq},
@@ -282,6 +285,18 @@ get_db_info(Db) ->
         {update_by_seq_t,Update_by_seq_t/1000}
         ],
     {ok, InfoList}.
+
+db_data_size(nil, _, _) ->
+    null;
+db_data_size(_, nil, _) ->
+    null;
+db_data_size(_, _, {_Count, _DelCount}) ->
+    % pre 1.2 format, upgraded on compaction
+    null;
+db_data_size(_, _, {_Count, _DelCount, nil}) ->
+    null;
+db_data_size(SeqBtreeSize, IdBtreeSize, {_Count, _DelCount, DocAndAttsSize}) ->
+    SeqBtreeSize + IdBtreeSize + DocAndAttsSize.
 
 get_design_docs(Db) ->
     {ok,_, Docs} = couch_btree:fold(Db#db.fulldocinfo_by_id_btree,
@@ -524,8 +539,14 @@ prep_and_validate_updates(Db, [DocBucket|RestBuckets],
         [{ok, #full_doc_info{rev_tree=OldRevTree}=OldFullDocInfo}|RestLookups],
         AllowConflict, AccPrepped, AccErrors) ->
     Leafs = couch_key_tree:get_all_leafs(OldRevTree),
-    LeafRevsDict = dict:from_list([{{Start, RevId}, {Deleted, Sp, Revs}} ||
-            {{Deleted, Sp, _Seq}, {Start, [RevId|_]}=Revs} <- Leafs]),
+    LeafRevsDict = dict:from_list([
+        begin
+            Deleted = element(1, LeafVal),
+            Sp = element(2, LeafVal),
+            {{Start, RevId}, {Deleted, Sp, Revs}}
+        end ||
+        {LeafVal, {Start, [RevId | _]} = Revs} <- Leafs
+    ]),
     {PreppedBucket, AccErrors3} = lists:foldl(
         fun(Doc, {Docs2Acc, AccErrors2}) ->
             case prep_and_validate_update(Db, Doc, OldFullDocInfo,
@@ -581,7 +602,7 @@ prep_and_validate_replicated_updates(Db, [Bucket|RestBuckets], [OldInfo|RestOldI
         prep_and_validate_replicated_updates(Db, RestBuckets, RestOldInfo, [ValidatedBucket | AccPrepped], AccErrors3);
     {ok, #full_doc_info{rev_tree=OldTree}} ->
         NewRevTree = lists:foldl(
-            fun(#doc{revs=Revs}=NewDoc, AccTree) ->
+            fun(#doc{revs=Revs}, AccTree) ->
                 {NewTree, _} = couch_key_tree:merge(AccTree,
                     to_path(Revs), Db#db.revs_limit),
                 NewTree
@@ -772,7 +793,9 @@ make_first_doc_on_disk(_Db, _Id, _Pos, []) ->
     nil;
 make_first_doc_on_disk(Db, Id, Pos, [{_Rev, ?REV_MISSING}|RestPath]) ->
     make_first_doc_on_disk(Db, Id, Pos - 1, RestPath);
-make_first_doc_on_disk(Db, Id, Pos, [{_Rev, {IsDel, Sp, _Seq}} |_]=DocPath) ->
+make_first_doc_on_disk(Db, Id, Pos, [{_Rev, RevValue} |_]=DocPath) ->
+    IsDel = element(1, RevValue),
+    Sp = element(2, RevValue),
     Revs = [Rev || {Rev, _} <- DocPath],
     make_doc(Db, Id, IsDel, Sp, {Pos, Revs}).
 
@@ -841,34 +864,33 @@ write_and_commit(#db{update_pid=UpdatePid, fd=Fd}=Db, DocBuckets1,
 prepare_doc_summaries(BucketList, Fd, Options) ->
     Optimstic = lists:member(optimistic, Options),
     [lists:map(
-        fun(#doc{atts = Atts, body = Body0} = Doc) ->
-            DiskAtts = [{N, T, P, AL, DL, R, M, E} ||
-                #att{name = N, type = T, data = {_, P}, md5 = M, revpos = R,
-                    att_len = AL, disk_len = DL, encoding = E} <- Atts],
-            Body = case is_binary(Body0) of
-            true ->
-                Body0;
-            false ->
-                couch_util:compress(Body0)
-            end,
-            SummaryBin = ?term_to_bin({Body, couch_util:compress(DiskAtts)}),
-            SummaryChunk = couch_file:assemble_file_chunk(
-                SummaryBin, couch_util:md5(SummaryBin)),
+        fun(#doc{atts = Atts, body = Body} = Doc) ->
+            {DiskAtts, SizeAtts} = lists:mapfoldl(
+                fun(#att{name = N, type = T, data = {_, P}, md5 = M, revpos = R,
+                    att_len = AL, disk_len = DL, encoding = E}, SizeAcc) ->
+                    {{N, T, P, AL, DL, R, M, E}, SizeAcc + AL}
+                end,
+                0, Atts),
+            SummaryChunk = couch_db_updater:make_doc_summary({Body, DiskAtts}),
             if Optimstic ->
-                {ok, Summary} =
-                    couch_file:append_raw_chunk(Fd, SummaryChunk);
+                {ok, SummaryPos, SummarySize} =
+                    couch_file:append_raw_chunk(Fd, SummaryChunk),
+                Summary = {SummaryPos, SummarySize};
             true ->
                 Summary = SummaryChunk
             end,
             AttsFd = case Atts of
-            [#att{data = {Fd, _}} | _] -> Fd;
-            [] -> nil
+            [#att{data = {Fd, _}} | _] ->
+                Fd;
+            [] ->
+                nil
             end,
             #doc_update_info{
                 id=Doc#doc.id,
                 revs=Doc#doc.revs,
                 deleted=Doc#doc.deleted,
                 summary=Summary,
+                size_atts=SizeAtts,
                 fd=AttsFd}
         end,
         Bucket) || Bucket <- BucketList].
@@ -1008,9 +1030,9 @@ enum_docs_since_reduce_to_count(Reds) ->
             fun couch_db_updater:btree_by_seq_reduce/2, Reds).
 
 enum_docs_reduce_to_count(Reds) ->
-    {Count, _DelCount} = couch_btree:final_reduce(
+    FinalRed = couch_btree:final_reduce(
             fun couch_db_updater:btree_by_id_reduce/2, Reds),
-    Count.
+    element(1, FinalRed).
 
 changes_since(Db, Style, StartSeq, Fun, Acc) ->
     changes_since(Db, Style, StartSeq, Fun, [], Acc).
@@ -1136,7 +1158,9 @@ open_doc_revs_int(Db, IdRevs, Options) ->
                     ?REV_MISSING ->
                         % we have the rev in our list but know nothing about it
                         {{not_found, missing}, {Pos, Rev}};
-                    {IsDeleted, SummaryPtr, _UpdateSeq} ->
+                    RevValue ->
+                        IsDeleted = element(1, RevValue),
+                        SummaryPtr = element(2, RevValue),
                         {ok, make_doc(Db, Id, IsDeleted, SummaryPtr, FoundRevPath)}
                     end
                 end, FoundRevs),
@@ -1186,12 +1210,15 @@ doc_meta_info(#doc_info{high_seq=Seq,revs=[#rev_info{rev=Rev}|RestInfo]}, RevTre
             couch_key_tree:get_full_key_paths(RevTree, [Rev]),
 
         [{revs_info, Pos, lists:map(
-            fun({Rev1, {true, _Sp, _UpdateSeq}}) ->
-                {Rev1, deleted};
-            ({Rev1, {false, _Sp, _UpdateSeq}}) ->
-                {Rev1, available};
-            ({Rev1, ?REV_MISSING}) ->
-                {Rev1, missing}
+            fun({Rev1, ?REV_MISSING}) ->
+                {Rev1, missing};
+            ({Rev1, RevValue}) ->
+                case element(1, RevValue) of
+                true ->
+                    {Rev1, deleted};
+                false ->
+                    {Rev1, available}
+                end
             end, RevPath)}]
     end ++
     case lists:member(conflicts, Options) of
@@ -1228,7 +1255,7 @@ make_doc(#db{fd = Fd} = Db, Id, Deleted, Bp, RevisionPath) ->
         {ok, {BodyData0, Atts00}} = read_doc(Db, Bp),
         Atts0 = case Atts00 of
         _ when is_binary(Atts00) ->
-            couch_util:decompress(Atts00);
+            couch_compress:decompress(Atts00);
         _ when is_list(Atts00) ->
             % pre 1.2 format
             Atts00

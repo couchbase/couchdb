@@ -36,7 +36,7 @@ start_link(http) ->
     Port = couch_config:get("httpd", "port", "5984"),
     start_link(?MODULE, [{port, Port}]);
 start_link(https) ->
-    Port = couch_config:get("ssl", "port", "5984"),
+    Port = couch_config:get("ssl", "port", "6984"),
     CertFile = couch_config:get("ssl", "cert_file", nil),
     KeyFile = couch_config:get("ssl", "key_file", nil),
     Options = case CertFile /= nil andalso KeyFile /= nil of
@@ -120,7 +120,7 @@ start_link(Name, Options) ->
 stop() ->
     mochiweb_http:stop(?MODULE).
 
-config_change("httpd", "bind_addres") ->
+config_change("httpd", "bind_address") ->
     ?MODULE:stop();
 config_change("httpd", "port") ->
     ?MODULE:stop();
@@ -849,9 +849,8 @@ negotiate_content_type(#httpd{mochi_req=MochiReq}) ->
     end.
 
 server_header() ->
-    OTPVersion = "R" ++ integer_to_list(erlang:system_info(compat_rel)) ++ "B",
     [{"Server", "CouchDB/" ++ couch_server:get_version() ++
-                " (Erlang OTP/" ++ OTPVersion ++ ")"}].
+                " (Erlang OTP/" ++ erlang:system_info(otp_release) ++ ")"}].
 
 
 -record(mp, {boundary, buffer, data_fun, callback}).

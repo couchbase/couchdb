@@ -27,12 +27,12 @@ init() ->
     {error, bad_name} ->
         case filelib:is_dir(filename:join(["..", "priv"])) of
         true ->
-            filename:join(["..", "priv", ?MODULE]);
+            filename:join(["..", "priv", "snappy_nif"]);
         false ->
-            filename:join(["priv", ?MODULE])
+            filename:join(["priv", "snappy_nif"])
         end;
     Dir ->
-        filename:join(Dir, ?MODULE)
+        filename:join(Dir, "snappy_nif")
     end,
     (catch erlang:load_nif(SoName, 0)),
     case erlang:system_info(otp_release) of

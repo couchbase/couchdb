@@ -17,8 +17,6 @@
 -define(MIN_STR, <<"">>).
 -define(MAX_STR, <<255>>). % illegal utf string
 
--define(term_to_bin(T), term_to_binary(T, [{minor_version, 1}])).
-
 % the lowest possible database sequence number
 -define(LOWEST_SEQ, 0).
 
@@ -27,6 +25,7 @@
 
 -define(b2l(V), binary_to_list(V)).
 -define(l2b(V), list_to_binary(V)).
+-define(term_to_bin(T), term_to_binary(T, [{minor_version, 1}])).
 
 -define(DEFAULT_ATTACHMENT_CONTENT_TYPE, <<"application/octet-stream">>).
 
@@ -58,7 +57,8 @@
     {id = <<"">>,
     update_seq = 0,
     deleted = false,
-    rev_tree = []
+    rev_tree = [],
+    leafs_size = 0
     }).
 
 -record(httpd,
@@ -101,6 +101,7 @@
     revs,
     deleted,
     summary,
+    size_atts,
     fd}).
 
 -record(att,

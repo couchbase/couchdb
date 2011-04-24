@@ -439,12 +439,35 @@ couchTests.list_views = function(debug) {
     }
   };
 
-  
-
   run_on_modified_server([{
     section: "native_query_servers",
     key: "erlang",
     value: "{couch_native_process, start_link, []}"
   }], erlViewTest);
 
+  // COUCHDB-1113
+  var ddoc = {
+    _id: "_design/test",
+    views: {
+      me: {
+        map: (function(doc) { emit(null,null)}).toString()
+      }
+    },
+    lists: {
+      you: (function(head, req) {
+        var row;
+        while(row = getRow()) {
+          send(row);
+        }
+      }).toString()
+    }
+  };
+  db.save(ddoc);
+
+  var resp = CouchDB.request("GET", "/" + db.name + "/_design/test/_list/you/me", {
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded"
+    }
+  });
+  TEquals(200, resp.status, "should return a 200 response");
 };

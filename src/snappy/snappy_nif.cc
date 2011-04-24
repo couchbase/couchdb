@@ -27,15 +27,12 @@
 #endif
 
 
-class OutOfMem {};
-
-
 class SnappyNifSink : public snappy::Sink {
 public:
     SnappyNifSink(ErlNifEnv* e) : env(e), length(0)  {
         if (!enif_alloc_binary_compat(env, 0, &bin)) {
             enif_release_binary_compat(env, &bin);
-            throw OutOfMem();
+            throw std::bad_alloc();
         }
     }
 
@@ -52,7 +49,7 @@ public:
 
             if (!enif_realloc_binary_compat(env, &bin, bin.size + sz)) {
                 enif_release_binary_compat(env, &bin);
-                throw OutOfMem();
+                throw std::bad_alloc();
             }
         }
 
@@ -64,7 +61,7 @@ public:
             if (!enif_realloc_binary_compat(env, &bin, length)) {
                 // shouldn't happen
                 enif_release_binary_compat(env, &bin);
-                throw OutOfMem();
+                throw std::bad_alloc();
             }
         }
         return bin;
@@ -97,10 +94,14 @@ extern "C" {
             return enif_make_tuple(env, 2,
                                    enif_make_atom(env, "ok"),
                                    enif_make_binary(env, &sink.getBin()));
-        } catch(OutOfMem e) {
+        } catch(std::bad_alloc e) {
             return enif_make_tuple(env, 2,
                                    enif_make_atom(env, "error"),
                                    enif_make_atom(env, "insufficient_memory"));
+        } catch(...) {
+            return enif_make_tuple(env, 2,
+                                   enif_make_atom(env, "error"),
+                                   enif_make_atom(env, "unknown"));
         }
     }
 
@@ -112,37 +113,43 @@ extern "C" {
             return enif_make_badarg(env);
         }
 
-        size_t len = -1;
-        bool isCompressed = snappy::GetUncompressedLength(
-            reinterpret_cast<const char *>(input.data), input.size, &len);
+        try {
+            size_t len = -1;
+            bool isCompressed = snappy::GetUncompressedLength(
+                reinterpret_cast<const char *>(input.data), input.size, &len);
 
-        if (!isCompressed) {
+            if (!isCompressed) {
+                return enif_make_tuple(env, 2,
+                                       enif_make_atom(env, "error"),
+                                       enif_make_atom(env, "not_compressed_data"));
+            }
+
+            ErlNifBinary retBin;
+
+            if (!enif_alloc_binary_compat(env, len, &retBin)) {
+                return enif_make_tuple(env, 2,
+                                       enif_make_atom(env, "error"),
+                                       enif_make_atom(env, "insufficient_memory"));
+            }
+
+            bool valid = snappy::RawUncompress(reinterpret_cast<const char *>(input.data),
+                                               input.size,
+                                               reinterpret_cast<char *>(retBin.data));
+
+            if (!valid) {
+                return enif_make_tuple(env, 2,
+                                       enif_make_atom(env, "error"),
+                                       enif_make_atom(env, "corrupted_data"));
+            }
+
+            return enif_make_tuple(env, 2,
+                                   enif_make_atom(env, "ok"),
+                                   enif_make_binary(env, &retBin));
+        } catch(...) {
             return enif_make_tuple(env, 2,
                                    enif_make_atom(env, "error"),
-                                   enif_make_atom(env, "not_compressed_data"));
+                                   enif_make_atom(env, "unknown"));
         }
-
-        ErlNifBinary retBin;
-
-        if (!enif_alloc_binary_compat(env, len, &retBin)) {
-            return enif_make_tuple(env, 2,
-                                   enif_make_atom(env, "error"),
-                                   enif_make_atom(env, "insufficient_memory"));
-        }
-
-        bool valid = snappy::RawUncompress(reinterpret_cast<const char *>(input.data),
-                                           input.size,
-                                           reinterpret_cast<char *>(retBin.data));
-
-        if (!valid) {
-            return enif_make_tuple(env, 2,
-                                   enif_make_atom(env, "error"),
-                                   enif_make_atom(env, "corrupted_data"));
-        }
-
-        return enif_make_tuple(env, 2,
-                               enif_make_atom(env, "ok"),
-                               enif_make_binary(env, &retBin));
     }
 
 
@@ -153,18 +160,24 @@ extern "C" {
             return enif_make_badarg(env);
         }
 
-        size_t len = -1;
-        bool isCompressed = snappy::GetUncompressedLength(
-            reinterpret_cast<const char *>(input.data), input.size, &len);
+        try {
+            size_t len = -1;
+            bool isCompressed = snappy::GetUncompressedLength(
+                reinterpret_cast<const char *>(input.data), input.size, &len);
 
-        if (isCompressed) {
-            return enif_make_tuple(env, 2,
-                                   enif_make_atom(env, "ok"),
-                                   enif_make_ulong(env, len));
-        } else {
+            if (isCompressed) {
+                return enif_make_tuple(env, 2,
+                                       enif_make_atom(env, "ok"),
+                                       enif_make_ulong(env, len));
+            } else {
+                return enif_make_tuple(env, 2,
+                                       enif_make_atom(env, "error"),
+                                       enif_make_atom(env, "not_compressed_data"));
+            }
+        } catch(...) {
             return enif_make_tuple(env, 2,
                                    enif_make_atom(env, "error"),
-                                   enif_make_atom(env, "not_compressed_data"));
+                                   enif_make_atom(env, "unknown"));
         }
     }
 
@@ -176,13 +189,19 @@ extern "C" {
             return enif_make_badarg(env);
         }
 
-        bool valid = snappy::IsValidCompressedBuffer(
-            reinterpret_cast<const char *>(input.data), input.size);
+        try {
+            bool valid = snappy::IsValidCompressedBuffer(
+                reinterpret_cast<const char *>(input.data), input.size);
 
-        if (valid) {
-            return enif_make_atom(env, "true");
-        } else {
-            return enif_make_atom(env, "false");
+            if (valid) {
+                return enif_make_atom(env, "true");
+            } else {
+                return enif_make_atom(env, "false");
+            }
+        } catch(...) {
+            return enif_make_tuple(env, 2,
+                                   enif_make_atom(env, "error"),
+                                   enif_make_atom(env, "unknown"));
         }
     }
 

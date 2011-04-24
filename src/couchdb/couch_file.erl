@@ -75,22 +75,23 @@ open(Filepath, Options) ->
 %%----------------------------------------------------------------------
 %% Purpose: To append an Erlang term to the end of the file.
 %% Args:    Erlang term to serialize and append to the file.
-%% Returns: {ok, Pos} where Pos is the file offset to the beginning the
-%%  serialized  term. Use pread_term to read the term back.
+%% Returns: {ok, Pos, NumBytesWritten} where Pos is the file offset to
+%%  the beginning the serialized  term. Use pread_term to read the term
+%%  back.
 %%  or {error, Reason}.
 %%----------------------------------------------------------------------
 
 append_term(Fd, Term) ->
-    append_binary(Fd, couch_util:compress(Term)).
+    append_binary(Fd, couch_compress:compress(Term)).
 
 append_term_md5(Fd, Term) ->
-    append_binary_md5(Fd, couch_util:compress(Term)).
+    append_binary_md5(Fd, couch_compress:compress(Term)).
 
 %%----------------------------------------------------------------------
 %% Purpose: To append an Erlang binary to the end of the file.
 %% Args:    Erlang term to serialize and append to the file.
-%% Returns: {ok, Pos} where Pos is the file offset to the beginning the
-%%  serialized  term. Use pread_term to read the term back.
+%% Returns: {ok, Pos, NumBytesWritten} where Pos is the file offset to the
+%%  beginning the serialized term. Use pread_term to read the term back.
 %%  or {error, Reason}.
 %%----------------------------------------------------------------------
 
@@ -121,7 +122,7 @@ assemble_file_chunk(Bin, Md5) ->
 
 pread_term(Fd, Pos) ->
     {ok, Bin} = pread_binary(Fd, Pos),
-    {ok, couch_util:decompress(Bin)}.
+    {ok, couch_compress:decompress(Bin)}.
 
 
 %%----------------------------------------------------------------------
@@ -353,12 +354,10 @@ handle_call({truncate, Pos}, _From, #file{writer = W} = File) ->
     {reply, ok, File#file{eof = Pos}};
 
 handle_call({append_bin, Bin}, From, #file{writer = W, eof = Pos} = File) ->
-    gen_server:reply(From, {ok, Pos}),
+    Size = calculate_total_read_len(Pos rem ?SIZE_BLOCK, iolist_size(Bin)),
+    gen_server:reply(From, {ok, Pos, Size}),
     W ! {chunk, Bin},
-    File2 = File#file{
-        eof = Pos + calculate_total_read_len(Pos rem ?SIZE_BLOCK, iolist_size(Bin))
-    },
-    {noreply, File2};
+    {noreply, File#file{eof = Pos + Size}};
 
 handle_call({write_header, Bin}, From, #file{writer = W, eof = Pos} = File) ->
     gen_server:reply(From, ok),
