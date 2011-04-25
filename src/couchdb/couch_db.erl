@@ -864,7 +864,7 @@ write_and_commit(#db{update_pid=UpdatePid, fd=Fd}=Db, DocBuckets1,
 prepare_doc_summaries(BucketList, Fd, Options) ->
     Optimstic = lists:member(optimistic, Options),
     [lists:map(
-        fun(#doc{atts = Atts, body = Body} = Doc) ->
+        fun(#doc{body = Body, atts = Atts} = Doc) ->
             {DiskAtts, SizeAtts} = lists:mapfoldl(
                 fun(#att{name = N, type = T, data = {_, P}, md5 = M, revpos = R,
                     att_len = AL, disk_len = DL, encoding = E}, SizeAcc) ->
