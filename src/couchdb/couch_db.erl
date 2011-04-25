@@ -833,14 +833,17 @@ write_and_commit(#db{update_pid=UpdatePid}=Db, DocBuckets1,
 
 prepare_doc_summaries(BucketList) ->
     [lists:map(
-        fun(#doc{atts = Atts} = Doc) ->
+        fun(#doc{body = Body, atts = Atts} = Doc) ->
+            DiskAtts = [{N, T, P, AL, DL, R, M, E} ||
+                #att{name = N, type = T, data = {_, P}, md5 = M, revpos = R,
+                    att_len = AL, disk_len = DL, encoding = E} <- Atts],
             AttsFd = case Atts of
             [#att{data = {Fd, _}} | _] ->
                 Fd;
             [] ->
                 nil
             end,
-            SummaryChunk = couch_db_updater:make_doc_summary(Doc),
+            SummaryChunk = couch_db_updater:make_doc_summary({Body, DiskAtts}),
             Doc#doc{body = {summary, SummaryChunk, AttsFd}}
         end,
         Bucket) || Bucket <- BucketList].

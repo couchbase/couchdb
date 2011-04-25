@@ -940,13 +940,6 @@ start_copy_compact(#db{name=Name,filepath=Filepath,header=#db_header{purge_seq=P
     close_db(NewDb3),
     gen_server:cast(Db#db.update_pid, {compact_done, CompactFile}).
 
-
-make_doc_summary(#doc{body = Body, atts = Atts}) ->
-    DiskAtts = [{N, T, P, AL, DL, R, M, E} ||
-        #att{name = N, type = T, data = {_, P}, md5 = M, revpos = R,
-            att_len = AL, disk_len = DL, encoding = E} <- Atts],
-    make_doc_summary({Body, DiskAtts});
-
 make_doc_summary({Body0, Atts0}) ->
     Body = case couch_compress:is_compressed(Body0) of
     true ->
