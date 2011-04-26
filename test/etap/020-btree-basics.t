@@ -17,7 +17,7 @@
 filename() -> test_util:build_file("test/etap/temp.020").
 rows() -> 250.
 
--record(btree, {fd, root, extract_kv, assemble_kv, less, reduce}).
+-record(btree, {fd, root, extract_kv, assemble_kv, less, reduce, term_append_options}).
 
 main(_) ->
     test_util:init_code_path(),

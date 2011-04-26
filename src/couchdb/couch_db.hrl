@@ -168,7 +168,8 @@
     waiting_delayed_commit = nil,
     revs_limit = 1000,
     fsync_options = [],
-    options = []
+    options = [],
+    append_term_options = []
     }).
 
 
@@ -272,5 +273,6 @@
     extract_kv = fun({_Key, _Value} = KV) -> KV end,
     assemble_kv = fun(Key, Value) -> {Key, Value} end,
     less = fun(A, B) -> A < B end,
-    reduce = nil
+    reduce = nil,
+    append_term_options = []
 }).

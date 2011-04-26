@@ -14,7 +14,7 @@
 -behaviour(gen_server).
 
 -export([btree_by_id_reduce/2,btree_by_seq_reduce/2]).
--export([make_doc_summary/1]).
+-export([make_doc_summary/2]).
 -export([init/1,terminate/2,handle_call/3,handle_cast/2,code_change/3,handle_info/2]).
 
 -include("couch_db.hrl").
@@ -420,14 +420,18 @@ init_db(DbName, Filepath, Fd, ReaderFd, Header0, Options) ->
     _ -> ok
     end,
 
+    AppendTermOpts = [{compression, couch_compress:get_compression_method()}],
+
     {ok, IdBtree} = couch_btree:open(Header#db_header.fulldocinfo_by_id_btree_state, Fd,
         [{split, fun(X) -> btree_by_id_split(X) end},
         {join, fun(X,Y) -> btree_by_id_join(X,Y) end},
-        {reduce, fun(X,Y) -> btree_by_id_reduce(X,Y) end}]),
+        {reduce, fun(X,Y) -> btree_by_id_reduce(X,Y) end},
+        {append_term_options, AppendTermOpts}]),
     {ok, SeqBtree} = couch_btree:open(Header#db_header.docinfo_by_seq_btree_state, Fd,
             [{split, fun(X) -> btree_by_seq_split(X) end},
             {join, fun(X,Y) -> btree_by_seq_join(X,Y) end},
-            {reduce, fun(X,Y) -> btree_by_seq_reduce(X,Y) end}]),
+            {reduce, fun(X,Y) -> btree_by_seq_reduce(X,Y) end},
+            {append_term_options, AppendTermOpts}]),
     {ok, LocalDocsBtree} = couch_btree:open(Header#db_header.local_docs_btree_state, Fd),
     case Header#db_header.security_ptr of
     nil ->
@@ -459,7 +463,8 @@ init_db(DbName, Filepath, Fd, ReaderFd, Header0, Options) ->
         instance_start_time = StartTime,
         revs_limit = Header#db_header.revs_limit,
         fsync_options = FsyncOptions,
-        options = Options
+        options = Options,
+        append_term_options = AppendTermOpts
         }.
 
 open_reader_fd(Filepath, Options) ->
@@ -833,7 +838,7 @@ copy_docs(Db, #db{updater_fd = DestFd} = NewDb, InfoBySeq0, Retry) ->
                     Seq = element(3, LeafVal),
                     {_Body, AttsInfo} = Summary = copy_doc_attachments(
                         Db, Sp, DestFd),
-                    SummaryChunk = make_doc_summary(Summary),
+                    SummaryChunk = make_doc_summary(NewDb, Summary),
                     {ok, Pos, SummarySize} = couch_file:append_raw_chunk(
                         DestFd, SummaryChunk),
                     TotalLeafSize = lists:foldl(
@@ -940,19 +945,20 @@ start_copy_compact(#db{name=Name,filepath=Filepath,header=#db_header{purge_seq=P
     close_db(NewDb3),
     gen_server:cast(Db#db.update_pid, {compact_done, CompactFile}).
 
-make_doc_summary({Body0, Atts0}) ->
+make_doc_summary(#db{append_term_options = Opts}, {Body0, Atts0}) ->
+    Method = couch_util:get_value(compression, Opts),
     Body = case couch_compress:is_compressed(Body0) of
     true ->
         Body0;
     false ->
         % pre 1.2 database file format
-        couch_compress:compress(Body0)
+        couch_compress:compress(Body0, Method)
     end,
     Atts = case couch_compress:is_compressed(Atts0) of
     true ->
         Atts0;
     false ->
-        couch_compress:compress(Atts0)
+        couch_compress:compress(Atts0, Method)
     end,
     SummaryBin = ?term_to_bin({Body, Atts}),
     couch_file:assemble_file_chunk(SummaryBin, couch_util:md5(SummaryBin)).

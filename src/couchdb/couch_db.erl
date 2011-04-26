@@ -801,7 +801,7 @@ collect_results(UpdatePid, MRef, ResultsAcc) ->
 
 write_and_commit(#db{update_pid=UpdatePid}=Db, DocBuckets1,
         NonRepDocs, Options0) ->
-    DocBuckets = prepare_doc_summaries(DocBuckets1),
+    DocBuckets = prepare_doc_summaries(Db, DocBuckets1),
     Options = set_commit_option(Options0),
     MergeConflicts = lists:member(merge_conflicts, Options),
     FullCommit = lists:member(full_commit, Options),
@@ -831,7 +831,7 @@ write_and_commit(#db{update_pid=UpdatePid}=Db, DocBuckets1,
     end.
 
 
-prepare_doc_summaries(BucketList) ->
+prepare_doc_summaries(Db, BucketList) ->
     [lists:map(
         fun(#doc{body = Body, atts = Atts} = Doc) ->
             DiskAtts = [{N, T, P, AL, DL, R, M, E} ||
@@ -843,7 +843,7 @@ prepare_doc_summaries(BucketList) ->
             [] ->
                 nil
             end,
-            SummaryChunk = couch_db_updater:make_doc_summary({Body, DiskAtts}),
+            SummaryChunk = couch_db_updater:make_doc_summary(Db, {Body, DiskAtts}),
             Doc#doc{body = {summary, SummaryChunk, AttsFd}}
         end,
         Bucket) || Bucket <- BucketList].

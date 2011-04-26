@@ -41,7 +41,9 @@ set_options(Bt, [{join, Assemble}|Rest]) ->
 set_options(Bt, [{less, Less}|Rest]) ->
     set_options(Bt#btree{less=Less}, Rest);
 set_options(Bt, [{reduce, Reduce}|Rest]) ->
-    set_options(Bt#btree{reduce=Reduce}, Rest).
+    set_options(Bt#btree{reduce=Reduce}, Rest);
+set_options(Bt, [{append_term_options, Opts}|Rest]) ->
+    set_options(Bt#btree{append_term_options=Opts}, Rest).
 
 open(State, Fd, Options) ->
     {ok, set_options(#btree{root=State, fd=Fd}, Options)}.
@@ -346,13 +348,13 @@ get_node(#btree{fd = Fd}, NodePos) ->
     {ok, {NodeType, NodeList}} = couch_file:pread_term(Fd, NodePos),
     {NodeType, NodeList}.
 
-write_node(Bt, NodeType, NodeList) ->
+write_node(#btree{fd = Fd, append_term_options = Opts} = Bt, NodeType, NodeList) ->
     % split up nodes into smaller sizes
     NodeListList = chunkify(NodeList),
     % now write out each chunk and return the KeyPointer pairs for those nodes
     ResultList = [
         begin
-            {ok, Pointer, Size} = couch_file:append_term(Bt#btree.fd, {NodeType, ANodeList}),
+            {ok, Pointer, Size} = couch_file:append_term(Fd, {NodeType, ANodeList}, Opts),
             {LastKey, _} = lists:last(ANodeList),
             SubTreeSize = reduce_tree_size(NodeType, Size, ANodeList),
             {LastKey, {Pointer, reduce_node(Bt, NodeType, ANodeList), SubTreeSize}}

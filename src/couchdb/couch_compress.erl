@@ -12,7 +12,8 @@
 
 -module(couch_compress).
 
--export([compress/1, decompress/1, is_compressed/1]).
+-export([compress/2, decompress/1, is_compressed/1]).
+-export([get_compression_method/0]).
 
 -include("couch_db.hrl").
 
@@ -23,7 +24,23 @@
 -define(TERM_PREFIX, 131).
 
 
-compress(Term) ->
+get_compression_method() ->
+    Method1 = couch_config:get("couchdb", "file_compression_method", "snappy"),
+    case string:tokens(Method1, "_") of
+    ["deflate"] ->
+        {deflate, 1};
+    [Method] ->
+        list_to_existing_atom(Method);
+    [Method, Level] ->
+        {list_to_existing_atom(Method), list_to_integer(Level)}
+    end.
+
+
+compress(Term, none) ->
+    term_to_binary(Term, [{minor_version, 1}]);
+compress(Term, {deflate, Level}) ->
+    term_to_binary(Term, [{minor_version, 1}, {compressed, Level}]);
+compress(Term, snappy) ->
     Bin = ?term_to_bin(Term),
     try
         {ok, CompressedBin} = snappy:compress(Bin),
