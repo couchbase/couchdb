@@ -25,10 +25,8 @@
 
 
 get_compression_method() ->
-    Method1 = couch_config:get("couchdb", "file_compression_method", "snappy"),
+    Method1 = couch_config:get("couchdb", "file_compression", "snappy"),
     case string:tokens(Method1, "_") of
-    ["deflate"] ->
-        {deflate, 1};
     [Method] ->
         list_to_existing_atom(Method);
     [Method, Level] ->
