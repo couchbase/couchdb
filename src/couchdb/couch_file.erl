@@ -463,16 +463,24 @@ remove_block_prefixes(BlockOffset, Bin) ->
         [Bin]
     end.
 
-make_blocks(_BlockOffset, []) ->
-    [];
 make_blocks(0, IoList) ->
-    [<<0>> | make_blocks(1, IoList)];
+    case iolist_size(IoList) of
+    0 ->
+        [];
+    _ ->
+        [<<0>> | make_blocks(1, IoList)]
+    end;
 make_blocks(BlockOffset, IoList) ->
-    case split_iolist(IoList, (?SIZE_BLOCK - BlockOffset), []) of
-    {Begin, End} ->
-        [Begin | make_blocks(0, End)];
-    _SplitRemaining ->
-        IoList
+    case iolist_size(IoList) of
+    0 ->
+        [];
+    _ ->
+        case split_iolist(IoList, (?SIZE_BLOCK - BlockOffset), []) of
+        {Begin, End} ->
+            [Begin | make_blocks(0, End)];
+        _SplitRemaining ->
+            IoList
+        end
     end.
 
 %% @doc Returns a tuple where the first element contains the leading SplitAt
