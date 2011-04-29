@@ -81,15 +81,15 @@ append_term(Fd, Term) ->
     append_term(Fd, Term, []).
 
 append_term(Fd, Term, Options) ->
-    Compression = couch_util:get_value(compression, Options, snappy),
-    append_binary(Fd, couch_compress:compress(Term, Compression)).
+    Comp = couch_util:get_value(compression, Options, ?DEFAULT_COMPRESSION),
+    append_binary(Fd, couch_compress:compress(Term, Comp)).
 
 append_term_md5(Fd, Term) ->
     append_term_md5(Fd, Term, []).
 
 append_term_md5(Fd, Term, Options) ->
-    Compression = couch_util:get_value(compression, Options, snappy),
-    append_binary_md5(Fd, couch_compress:compress(Term, Compression)).
+    Comp = couch_util:get_value(compression, Options, ?DEFAULT_COMPRESSION),
+    append_binary_md5(Fd, couch_compress:compress(Term, Comp)).
 
 %%----------------------------------------------------------------------
 %% Purpose: To append an Erlang binary to the end of the file.
