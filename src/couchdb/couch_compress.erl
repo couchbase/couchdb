@@ -42,7 +42,12 @@ compress(Term, snappy) ->
     Bin = ?term_to_bin(Term),
     try
         {ok, CompressedBin} = snappy:compress(Bin),
-        <<?SNAPPY_PREFIX, CompressedBin/binary>>
+        case byte_size(CompressedBin) < byte_size(Bin) of
+        true ->
+            <<?SNAPPY_PREFIX, CompressedBin/binary>>;
+        false ->
+            Bin
+        end
     catch exit:snappy_nif_not_loaded ->
         Bin
     end.
