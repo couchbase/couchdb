@@ -39,7 +39,7 @@ get_compression_method() ->
 
 
 compress(Term, none) ->
-    term_to_binary(Term, [{minor_version, 1}]);
+    ?term_to_bin(Term);
 compress(Term, {deflate, Level}) ->
     term_to_binary(Term, [{minor_version, 1}, {compressed, Level}]);
 compress(Term, snappy) ->
