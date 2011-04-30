@@ -58,7 +58,7 @@
     revs_limit = 1000,
     fsync_options = [],
     options = [],
-    term_append_options = []
+    compression
 }).
 
 test_db_name() -> <<"couch_test_view_group_db_leaks">>.
