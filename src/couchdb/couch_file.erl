@@ -287,7 +287,7 @@ init({Filepath, Options, ReturnPid, Ref}) ->
        Error ->
            throw({error, Error})
        end,
-       Writer = spawn_writer(Filepath, Options),
+       Writer = spawn_writer(Filepath),
        {ok, Eof} = file:position(ReadFd, eof),
        maybe_track_open_os_files(Options),
        {ok, #file{fd = ReadFd, writer = Writer, eof = Eof}}
@@ -335,16 +335,10 @@ maybe_track_open_os_files(FileOptions) ->
         couch_stats_collector:track_process_count({couchdb, open_os_files})
     end.
 
-terminate(_Reason, #file{fd = Fd, writer = nil}) ->
-    ok = file:close(Fd);
 terminate(_Reason, #file{fd = Fd, writer = Writer}) ->
     exit(Writer, kill),
     receive {'EXIT', Writer, _} -> ok end,
     ok = file:close(Fd).
-
-% TODO remove this clause, it's here only for debugging purposes
-handle_call(get_state, _From, File) ->
-    {reply, File, File};
 
 handle_call(get_fd, _From, #file{fd = Fd} = File) ->
     {reply, {ok, Fd}, File};
@@ -381,8 +375,6 @@ handle_call({write_header, Bin}, From, #file{writer = W, eof = Pos} = File) ->
     },
     {noreply, File2};
 
-handle_call(flush, _From, #file{writer =  nil} = File) ->
-    {reply, ok, File};
 handle_call(flush, From, #file{writer =  W} = File) ->
     W ! {flush, From},
     {noreply, File};
@@ -399,7 +391,7 @@ code_change(_OldVsn, State, _Extra) ->
 handle_info({'EXIT', _, normal}, Fd) ->
     {noreply, Fd};
 handle_info({'EXIT', W, Reason}, #file{writer = W} = Fd) ->
-    {stop, Reason, Fd#file{writer=nil}};
+    {stop, {write_loop_died, Reason}, Fd};
 handle_info({'EXIT', _, Reason}, Fd) ->
     {stop, Reason, Fd}.
 
@@ -516,17 +508,12 @@ split_iolist([Byte | Rest], SplitAt, BeginAcc) when is_integer(Byte) ->
     split_iolist(Rest, SplitAt - 1, [Byte | BeginAcc]).
 
 
-spawn_writer(Filepath, Options) ->
-    case lists:member(read_only, Options) of
-    true ->
-        nil;
-    false ->
-        spawn_link(fun() ->
-            {ok, Fd} = file:open(Filepath, [binary, append, raw]),
-            {ok, Eof} = file:position(Fd, eof),
-            writer_loop(Fd, Eof)
-        end)
-    end.
+spawn_writer(Filepath) ->
+    spawn_link(fun() ->
+        {ok, Fd} = file:open(Filepath, [binary, append, raw]),
+        {ok, Eof} = file:position(Fd, eof),
+        writer_loop(Fd, Eof)
+    end).
 
 writer_loop(Fd, Eof) ->
     receive
