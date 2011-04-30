@@ -571,7 +571,7 @@ modify_full_doc_info(Db, Id, MergeConflicts, OldDocInfo,
                         % note for expediencey we are just creating a 
                         % a random rev id in this case instead of a deterministic
                         % one.
-                        NewRevId = couch_util:md5(couch_util:rand32()),
+                        NewRevId = couch_util:md5(integer_to_list(couch_util:rand32())),
                         NewDoc2 = NewDoc#doc_update_info{revs={OldPos + 1, [NewRevId, OldRev]}},
                         {NewTree2, _} = couch_key_tree:merge(AccTree,
                                 to_path(NewDoc2), Limit),
