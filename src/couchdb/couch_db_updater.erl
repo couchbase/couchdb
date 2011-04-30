@@ -14,7 +14,7 @@
 -behaviour(gen_server).
 
 -export([btree_by_id_reduce/2,btree_by_seq_reduce/2]).
--export([make_doc_summary/1]).
+-export([make_doc_summary/2]).
 -export([init/1,terminate/2,handle_call/3,handle_cast/2,code_change/3,handle_info/2]).
 
 -include("couch_db.hrl").
@@ -66,8 +66,9 @@ handle_call(increment_update_seq, _From, Db) ->
     couch_db_update_notifier:notify({updated, Db#db.name}),
     {reply, {ok, Db2#db.update_seq}, Db2};
 
-handle_call({set_security, NewSec}, _From, Db) ->
-    {ok, Ptr, _} = couch_file:append_term(Db#db.fd, NewSec),
+handle_call({set_security, NewSec}, _From, #db{compression = Comp} = Db) ->
+    {ok, Ptr, _} = couch_file:append_term(
+        Db#db.fd, NewSec, [{compression, Comp}]),
     Db2 = commit_data(Db#db{security=NewSec, security_ptr=Ptr,
             update_seq=Db#db.update_seq+1}),
     ok = gen_server:call(Db2#db.main_pid, {db_updated, Db2}),
@@ -88,7 +89,8 @@ handle_call({purge_docs, IdRevs}, _From, Db) ->
         fulldocinfo_by_id_btree = DocInfoByIdBTree,
         docinfo_by_seq_btree = DocInfoBySeqBTree,
         update_seq = LastSeq,
-        header = Header = #db_header{purge_seq=PurgeSeq}
+        header = Header = #db_header{purge_seq=PurgeSeq},
+        compression = Comp
         } = Db,
     DocLookups = couch_btree:lookup(DocInfoByIdBTree,
             [Id || {Id, _Revs} <- IdRevs]),
@@ -135,7 +137,8 @@ handle_call({purge_docs, IdRevs}, _From, Db) ->
             DocInfoToUpdate, SeqsToRemove),
     {ok, DocInfoByIdBTree2} = couch_btree:add_remove(DocInfoByIdBTree,
             FullDocInfoToUpdate, IdsToRemove),
-    {ok, Pointer, _} = couch_file:append_term(Fd, IdRevsPurged),
+    {ok, Pointer, _} = couch_file:append_term(
+            Fd, IdRevsPurged, [{compression, Comp}]),
 
     Db2 = commit_data(
         Db#db{
@@ -208,7 +211,6 @@ handle_cast({compact_done, CompactFilepath}, #db{filepath=Filepath}=Db) ->
 handle_info({update_docs, Client, GroupedDocs, NonRepDocs, MergeConflicts,
         FullCommit}, Db) ->
     GroupedDocs2 = [[{Client, D} || D <- DocGroup] || DocGroup <- GroupedDocs],
-    CollectStart = erlang:now(),
     if NonRepDocs == [] ->
         {GroupedDocs3, Clients, FullCommit2} = collect_updates(GroupedDocs2,
                 [Client], MergeConflicts, FullCommit);
@@ -218,19 +220,16 @@ handle_info({update_docs, Client, GroupedDocs, NonRepDocs, MergeConflicts,
         Clients = [Client]
     end,
     NonRepDocs2 = [{Client, NRDoc} || NRDoc <- NonRepDocs],
-    CollectTime = timer:now_diff(erlang:now(), CollectStart),
     try update_docs_int(Db, GroupedDocs3, NonRepDocs2, MergeConflicts,
                 FullCommit2) of
     {ok, Db2} ->
-        NotifyStart = erlang:now(),
         ok = gen_server:call(Db#db.main_pid, {db_updated, Db2}),
         if Db2#db.update_seq /= Db#db.update_seq ->
             couch_db_update_notifier:notify({updated, Db2#db.name});
         true -> ok
         end,
         [catch(ClientPid ! {done, self()}) || ClientPid <- Clients],
-        NotifyDone = timer:now_diff(erlang:now(), NotifyStart),
-        {noreply, Db2#db{notify_t=NotifyDone+Db#db.notify_t,collect_t=CollectTime+Db#db.collect_t}}
+        {noreply, Db2}
     catch
         throw: retry ->
             [catch(ClientPid ! {retry, self()}) || ClientPid <- Clients],
@@ -435,15 +434,20 @@ init_db(DbName, Filepath, Fd, Header0, Options) ->
     _ -> ok
     end,
 
+    Compression = couch_compress:get_compression_method(),
+
     {ok, IdBtree} = couch_btree:open(Header#db_header.fulldocinfo_by_id_btree_state, Fd,
         [{split, fun(X) -> btree_by_id_split(X) end},
         {join, fun(X,Y) -> btree_by_id_join(X,Y) end},
-        {reduce, fun(X,Y) -> btree_by_id_reduce(X,Y) end}]),
+        {reduce, fun(X,Y) -> btree_by_id_reduce(X,Y) end},
+        {compression, Compression}]),
     {ok, SeqBtree} = couch_btree:open(Header#db_header.docinfo_by_seq_btree_state, Fd,
             [{split, fun(X) -> btree_by_seq_split(X) end},
             {join, fun(X,Y) -> btree_by_seq_join(X,Y) end},
-            {reduce, fun(X,Y) -> btree_by_seq_reduce(X,Y) end}]),
-    {ok, LocalDocsBtree} = couch_btree:open(Header#db_header.local_docs_btree_state, Fd),
+            {reduce, fun(X,Y) -> btree_by_seq_reduce(X,Y) end},
+            {compression, Compression}]),
+    {ok, LocalDocsBtree} = couch_btree:open(Header#db_header.local_docs_btree_state, Fd,
+        [{compression, Compression}]),
     case Header#db_header.security_ptr of
     nil ->
         Security = [],
@@ -473,7 +477,8 @@ init_db(DbName, Filepath, Fd, Header0, Options) ->
         instance_start_time = StartTime,
         revs_limit = Header#db_header.revs_limit,
         fsync_options = FsyncOptions,
-        options = Options
+        options = Options,
+        compression = Compression
         }.
 
 
@@ -659,45 +664,33 @@ update_docs_int(Db, DocsList, NonRepDocs, MergeConflicts, FullCommit) ->
         fd = Fd
         } = Db,
     % lookup up the old documents, if they exist.
-    PrepFunctionsStart = erlang:now(),
     KeyModFuns = lists:map(fun([{_Client, #doc_update_info{id=Id}}|_] = Docs) ->
             {Id, fun(PrevValue, LastSeqAcc) ->
                 modify_full_doc_info(Db, Id, MergeConflicts, PrevValue, Docs, LastSeqAcc)
             end}
         end, DocsList),
 
-    PrepFunctionsDone = timer:now_diff(erlang:now(), PrepFunctionsStart),
-    
-    ModifyByIdStart = erlang:now(),
     {ok, KeyResults, NewSeq, DocInfoByIdBTree2} =
             couch_btree:modify(DocInfoByIdBTree, KeyModFuns, LastSeq),
 
     % Write out the document summaries (the bodies are stored in the nodes of
     % the trees, the attachments are already written to disk)
-    
-    ModifyByIdDone = timer:now_diff(erlang:now(),ModifyByIdStart),
-    
-    UpdateBySeqIndexStart = erlang:now(),
+
     % and the indexes
     {NewBySeqEntries, RemoveSeqs} =
                 by_seq_index_entries(KeyResults, [], []),
-    InsertBySeq = [begin {K,V}= btree_by_seq_split(I), {insert, K, V} end || I <- NewBySeqEntries],
+    InsertBySeq = [begin {K, V} = btree_by_seq_split(I), {insert, K, V} end || I <- NewBySeqEntries],
     
     RemoveBySeq = [{remove, Seq, nil} || Seq <- lists:sort(RemoveSeqs)],
 
     {ok, [], DocInfoBySeqBTree2} = couch_btree:query_modify_raw(DocInfoBySeqBTree, RemoveBySeq ++ InsertBySeq),
-
-    UpdateBySeqIndexDone = timer:now_diff(erlang:now(), UpdateBySeqIndexStart),
 
     {ok, Db2} = update_local_docs(Db, NonRepDocs),
     
     Db3 = Db2#db{
         fulldocinfo_by_id_btree = DocInfoByIdBTree2,
         docinfo_by_seq_btree = DocInfoBySeqBTree2,
-        update_seq = NewSeq,
-        prep_fun_t = PrepFunctionsDone + Db#db.prep_fun_t,
-        mod_by_id_t = ModifyByIdDone + Db#db.mod_by_id_t,
-        update_by_seq_t = UpdateBySeqIndexDone + Db#db.update_by_seq_t
+        update_seq = NewSeq
         },
     couch_file:flush(Fd),
     % Check if we just updated any design documents, and update the validation
@@ -856,7 +849,7 @@ copy_docs(Db, #db{fd = DestFd} = NewDb, InfoBySeq0, Retry) ->
                     Seq = element(3, LeafVal),
                     {_Body, AttsInfo} = Summary = copy_doc_attachments(
                         Db, Sp, DestFd),
-                    SummaryChunk = make_doc_summary(Summary),
+                    SummaryChunk = make_doc_summary(NewDb, Summary),
                     {ok, Pos, SummarySize} = couch_file:append_raw_chunk(
                         DestFd, SummaryChunk),
                     TotalLeafSize = lists:foldl(
@@ -921,7 +914,9 @@ copy_compact(Db, NewDb0, Retry) ->
 
     % copy misc header values
     if NewDb3#db.security /= Db#db.security ->
-        {ok, Ptr, _} = couch_file:append_term(NewDb3#db.fd, Db#db.security),
+        {ok, Ptr, _} = couch_file:append_term(
+            NewDb3#db.fd, Db#db.security,
+            [{compression, NewDb3#db.compression}]),
         NewDb4 = NewDb3#db{security=Db#db.security, security_ptr=Ptr};
     true ->
         NewDb4 = NewDb3
@@ -951,7 +946,8 @@ start_copy_compact(#db{name=Name,filepath=Filepath,header=#db_header{purge_seq=P
     NewDb = init_db(Name, CompactFile, Fd, Header, Db#db.options),
     NewDb2 = if PurgeSeq > 0 ->
         {ok, PurgedIdsRevs} = couch_db:get_last_purged(Db),
-        {ok, Pointer, _} = couch_file:append_term(Fd, PurgedIdsRevs),
+        {ok, Pointer, _} = couch_file:append_term(
+            Fd, PurgedIdsRevs, [{compression, NewDb#db.compression}]),
         NewDb#db{header=Header#db_header{purge_seq=PurgeSeq, purged_docs=Pointer}};
     true ->
         NewDb
@@ -962,19 +958,19 @@ start_copy_compact(#db{name=Name,filepath=Filepath,header=#db_header{purge_seq=P
     close_db(NewDb3),
     gen_server:cast(Db#db.update_pid, {compact_done, CompactFile}).
 
-make_doc_summary({Body0, Atts0}) ->
+make_doc_summary(#db{compression = Comp}, {Body0, Atts0}) ->
     Body = case couch_compress:is_compressed(Body0) of
     true ->
         Body0;
     false ->
         % pre 1.2 database file format
-        couch_compress:compress(Body0)
+        couch_compress:compress(Body0, Comp)
     end,
     Atts = case couch_compress:is_compressed(Atts0) of
     true ->
         Atts0;
     false ->
-        couch_compress:compress(Atts0)
+        couch_compress:compress(Atts0, Comp)
     end,
     SummaryBin = ?term_to_bin({Body, Atts}),
     couch_file:assemble_file_chunk(SummaryBin, couch_util:md5(SummaryBin)).

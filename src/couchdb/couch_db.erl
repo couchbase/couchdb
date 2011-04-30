@@ -255,11 +255,6 @@ get_db_info(Db) ->
         name=Name,
         instance_start_time=StartTime,
         committed_update_seq=CommittedUpdateSeq,
-        collect_t=Collect_t,
-        notify_t=Notify_t,
-        prep_fun_t=Prep_fun_t,
-        mod_by_id_t=Mod_by_id_t,
-        update_by_seq_t=Update_by_seq_t,
         fulldocinfo_by_id_btree = IdBtree,
         docinfo_by_seq_btree = SeqBtree,
         local_docs_btree = LocalBtree
@@ -277,12 +272,7 @@ get_db_info(Db) ->
         {data_size, db_data_size(DbReduction, [SeqBtree, IdBtree, LocalBtree])},
         {instance_start_time, StartTime},
         {disk_format_version, DiskVersion},
-        {committed_update_seq, CommittedUpdateSeq},
-        {collect_t,Collect_t/1000},
-        {notify_t,Notify_t/1000},
-        {prep_fun_t,Prep_fun_t/1000},
-        {mod_by_id_t,Mod_by_id_t/1000},
-        {update_by_seq_t,Update_by_seq_t/1000}
+        {committed_update_seq, CommittedUpdateSeq}
         ],
     {ok, InfoList}.
 
@@ -835,10 +825,10 @@ collect_results(UpdatePid, MRef, ResultsAcc) ->
         exit(Reason)
     end.
 
-write_and_commit(#db{update_pid=UpdatePid, fd=Fd}=Db, DocBuckets1,
+write_and_commit(#db{update_pid=UpdatePid}=Db, DocBuckets1,
         NonRepDocs, Options0) ->
     Options = set_commit_option(Options0),
-    DocBuckets = prepare_doc_summaries(DocBuckets1, Fd, Options),
+    DocBuckets = prepare_doc_summaries(Db, DocBuckets1, Options),
     MergeConflicts = lists:member(merge_conflicts, Options),
     FullCommit = lists:member(full_commit, Options),
     MRef = erlang:monitor(process, UpdatePid),
@@ -856,7 +846,7 @@ write_and_commit(#db{update_pid=UpdatePid, fd=Fd}=Db, DocBuckets1,
             ],
             % We only retry once
             close(Db2),
-            UpdatePid ! {update_docs, self(), prepare_doc_summaries(DocBuckets2, Fd, Options), NonRepDocs, MergeConflicts, FullCommit},
+            UpdatePid ! {update_docs, self(), prepare_doc_summaries(Db2, DocBuckets2, Options), NonRepDocs, MergeConflicts, FullCommit},
             case collect_results(UpdatePid, MRef, []) of
             {ok, Results} -> {ok, Results};
             retry -> throw({update_error, compaction_retry})
@@ -867,8 +857,8 @@ write_and_commit(#db{update_pid=UpdatePid, fd=Fd}=Db, DocBuckets1,
     end.
 
 
-prepare_doc_summaries(BucketList, Fd, Options) ->
-    Optimstic = lists:member(optimistic, Options),
+prepare_doc_summaries(Db, BucketList, Options) ->
+    Optimistic = lists:member(optimistic, Options),
     [lists:map(
         fun(#doc{body = Body, atts = Atts} = Doc) ->
             {DiskAtts, SizeAtts} = lists:mapfoldl(
@@ -877,10 +867,10 @@ prepare_doc_summaries(BucketList, Fd, Options) ->
                     {{N, T, P, AL, DL, R, M, E}, SizeAcc + AL}
                 end,
                 0, Atts),
-            SummaryChunk = couch_db_updater:make_doc_summary({Body, DiskAtts}),
-            if Optimstic ->
+            SummaryChunk = couch_db_updater:make_doc_summary(Db, {Body, DiskAtts}),
+            if Optimistic ->
                 {ok, SummaryPos, SummarySize} =
-                    couch_file:append_raw_chunk(Fd, SummaryChunk),
+                    couch_file:append_raw_chunk(Db#db.fd, SummaryChunk),
                 Summary = {SummaryPos, SummarySize};
             true ->
                 Summary = SummaryChunk
@@ -897,7 +887,8 @@ prepare_doc_summaries(BucketList, Fd, Options) ->
                 deleted=Doc#doc.deleted,
                 summary=Summary,
                 size_atts=SizeAtts,
-                fd=AttsFd}
+                fd=AttsFd
+            }
         end,
         Bucket) || Bucket <- BucketList].
 

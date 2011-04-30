@@ -17,7 +17,15 @@
 filename() -> test_util:build_file("test/etap/temp.020").
 rows() -> 250.
 
--record(btree, {fd, root, extract_kv, assemble_kv, less, reduce}).
+-record(btree, {
+    fd,
+    root,
+    extract_kv,
+    assemble_kv,
+    less,
+    reduce,
+    compression
+}).
 
 main(_) ->
     test_util:init_code_path(),
@@ -52,7 +60,7 @@ test_kvs(KeyValues) ->
     Keys = [K || {K, _} <- KeyValues],
 
     {ok, Fd} = couch_file:open(filename(), [create,overwrite]),
-    {ok, Btree} = couch_btree:open(nil, Fd),
+    {ok, Btree} = couch_btree:open(nil, Fd, [{compression, none}]),
     etap:ok(is_record(Btree, btree), "Created btree is really a btree record"),
     etap:is(Btree#btree.fd, Fd, "Btree#btree.fd is set correctly."),
     etap:is(Btree#btree.root, nil, "Btree#btree.root is set correctly."),
@@ -94,8 +102,7 @@ test_kvs(KeyValues) ->
         true ->
             ok;
         false ->
-            etap:is(false, true,
-                   "After inserting a value, btree size did not increase.")
+            etap:bail("After inserting a value, btree size did not increase.")
         end,
         {BtAcc2, couch_btree:size(BtAcc2)}
     end, {Btree3, couch_btree:size(Btree3)}, KeyValues),
@@ -111,8 +118,7 @@ test_kvs(KeyValues) ->
         true ->
             ok;
         false ->
-            etap:is(false, true,
-                   "After removing a key, btree size did not decrease.")
+            etap:bail("After removing a key, btree size did not decrease.")
         end,
         {BtAcc2, couch_btree:size(BtAcc2)}
     end, {Btree4, couch_btree:size(Btree4)}, KeyValues),

@@ -31,7 +31,7 @@
 -export([pread_term/2, pread_iolist/2, pread_binary/2]).
 -export([append_binary/2, append_binary_md5/2]).
 -export([append_raw_chunk/2, assemble_file_chunk/1, assemble_file_chunk/2]).
--export([append_term/2, append_term_md5/2]).
+-export([append_term/2, append_term/3, append_term_md5/2, append_term_md5/3]).
 -export([write_header/2, read_header/1]).
 -export([delete/2, delete/3, init_delete_dir/1]).
 
@@ -82,10 +82,18 @@ open(Filepath, Options) ->
 %%----------------------------------------------------------------------
 
 append_term(Fd, Term) ->
-    append_binary(Fd, couch_compress:compress(Term)).
+    append_term(Fd, Term, []).
+
+append_term(Fd, Term, Options) ->
+    Comp = couch_util:get_value(compression, Options, ?DEFAULT_COMPRESSION),
+    append_binary(Fd, couch_compress:compress(Term, Comp)).
 
 append_term_md5(Fd, Term) ->
-    append_binary_md5(Fd, couch_compress:compress(Term)).
+    append_term_md5(Fd, Term, []).
+
+append_term_md5(Fd, Term, Options) ->
+    Comp = couch_util:get_value(compression, Options, ?DEFAULT_COMPRESSION),
+    append_binary_md5(Fd, couch_compress:compress(Term, Comp)).
 
 %%----------------------------------------------------------------------
 %% Purpose: To append an Erlang binary to the end of the file.
