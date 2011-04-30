@@ -13,67 +13,69 @@
 % This stores information about the mime types that are compressable.
 
 -module(couch_compress_types).
--include("couch_db.hrl").
 
-
--export([start_link/0,is_compressible/1]).
+-export([start_link/0, is_compressible/1]).
 
 % gen_server callbacks
 -export([init/1, terminate/2]).
 -export([handle_call/3, handle_cast/2, code_change/3, handle_info/2]).
 
 
+-include("couch_db.hrl").
+-define(MIME_TYPES, couch_compressible_mime_types).
+
+
 start_link() ->
-    gen_server:start_link(?MODULE, [], []).
+    gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
 
-is_compressible(MimeType) when is_binary(MimeType)->
+is_compressible(MimeType) when is_binary(MimeType) ->
     is_compressible(?b2l(MimeType));
-is_compressible(MimeType) ->
-    case ets:lookup(couch_compress_types, MimeType) /= [] of
+is_compressible(FullMimeType) ->
+    [MimeType0 | _] = string:tokens(FullMimeType, ";"),
+    MimeType = couch_util:trim(MimeType0),
+    case ets:lookup(?MIME_TYPES, MimeType) /= [] of
     true ->
         true;
     false ->
-        [MainType|_] = string:tokens(MimeType,"/"),
-        ets:lookup(couch_compress_types, MainType ++ "/*") /= []
+        [MainType | _] = string:tokens(MimeType, "/"),
+        ets:lookup(?MIME_TYPES, MainType ++ "/*") /= []
     end.
         
 
-init([]) ->
-    ets:new(couch_compress_types, [set, protected, named_table]),
-    load(),
+init(_) ->
+    ?MIME_TYPES = ets:new(?MIME_TYPES, [named_table, set, protected]),
+    load(couch_config:get("attachments", "compressible_types", "")),
+    Parent = self(),
     ok = couch_config:register(
-        fun("couchdb", "max_dbs_open", Max) ->
-            gen_server:call(couch_server,
-                    {set_max_dbs_open, list_to_integer(Max)})
+        fun("attachments", "compressible_types", Types) ->
+            ok = gen_server:cast(Parent, {reload, Types})
         end),
     {ok, nil}.
 
-terminate(_Reason, _) ->
-    ok.
-
     
-handle_call(foo, _From, _) ->
-    exit(cant_get_here).
+handle_call(Msg, _From, State) ->
+    {stop, {unexpected_call, Msg}, State}.
 
 
-handle_cast(reload, _) ->
-    ets:delete_all_objects(couch_compress_types),
-    load(),
-    {noreply, nil}.
+handle_cast({reload, Types}, State) ->
+    true = ets:delete_all_objects(?MIME_TYPES),
+    load(Types),
+    {noreply, State}.
+
+
+handle_info(Msg, State) ->
+    {stop, {unexpected_msg, Msg}, State}.
+
+
+terminate(_Reason, _State) ->
+    true = ets:delete(?MIME_TYPES).
 
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-handle_info(X, Q) ->
-    {stop, X, Q}.
 
-
-load() ->
-    CompressTypes =
-        string:tokens(
-            couch_config:get("attachments", "compressible_types", ""), ", "),
-
-    CompressTypesKVs = [{Type, 0} || Type <- CompressTypes],
-    ets:insert(couch_compress_types, CompressTypesKVs).
+load(Types) ->
+    CompressTypes = re:split(Types, "\\s*,\\s*", [{return, list}]),
+    true = ets:insert(?MIME_TYPES, [{Type, 0} || Type <- CompressTypes]).
