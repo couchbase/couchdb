@@ -872,6 +872,7 @@ copy_docs(Db, #db{fd = DestFd} = NewDb, InfoBySeq0, Retry) ->
         [Seq || {ok, #full_doc_info{update_seq=Seq}} <- Existing]
     end,
 
+    ok = couch_file:flush(NewDb#db.fd),
     {ok, DocInfoBTree} = couch_btree:add_remove(
             NewDb#db.docinfo_by_seq_btree, NewDocInfos, RemoveSeqs),
     {ok, FullDocInfoBTree} = couch_btree:add_remove(
@@ -884,6 +885,8 @@ copy_docs(Db, #db{fd = DestFd} = NewDb, InfoBySeq0, Retry) ->
 copy_compact(Db, NewDb0, Retry) ->
     FsyncOptions = [Op || Op <- NewDb0#db.fsync_options, Op == before_header],
     NewDb = NewDb0#db{fsync_options=FsyncOptions},
+    ok = couch_file:flush(Db#db.fd),
+    ok = couch_file:flush(NewDb#db.fd),
     TotalChanges = couch_db:count_changes_since(Db, NewDb#db.update_seq),
     EnumBySeqFun =
     fun(#doc_info{high_seq=Seq}=DocInfo, _Offset, {AccNewDb, AccUncopied, TotalCopied}) ->
@@ -922,6 +925,7 @@ copy_compact(Db, NewDb0, Retry) ->
         NewDb4 = NewDb3
     end,
 
+    ok = couch_file:flush(NewDb4#db.fd),
     commit_data(NewDb4#db{update_seq=Db#db.update_seq}).
 
 start_copy_compact(#db{name=Name,filepath=Filepath,header=#db_header{purge_seq=PurgeSeq}}=Db) ->
