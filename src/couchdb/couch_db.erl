@@ -732,15 +732,13 @@ update_docs(Db, Docs, Options, interactive_edit) ->
                 true;
             (#doc{atts=[]}) ->
                 false;
-            (Doc) ->
-                if Optimistic ->
-                    % if we are optimistically committing, we don't do any
-                    % lookup before we write the attachments or the bodies
-                    %, unless there are stubs, then we have to.
-                    couch_doc:has_stubs(Doc);
-                true ->
-                    true
-                end
+            (Doc) when Optimistic ->
+                % if we are optimistically committing, we don't do any
+                % lookup before we write the attachments or the bodies
+                % unless there are stubs, then we have to.
+                couch_doc:has_stubs(Doc);
+            (_Doc) ->
+                true
             end, Docs2) of
     true ->
         % lookup the doc by id and get the most recent
