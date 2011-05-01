@@ -575,11 +575,7 @@ couchTests.replication = function(debug) {
 
     TEquals(true, repResult.history instanceof Array);
     TEquals(1, repResult.history.length);
-    // NOT 31 (31 is db seq for last doc - the ddoc, which was not replicated)
-    TEquals(30, repResult.source_last_seq);
     TEquals(0, repResult.history[0].start_last_seq);
-    TEquals(30, repResult.history[0].end_last_seq);
-    TEquals(30, repResult.history[0].recorded_seq);
     // 16 => 15 docs with even integer field  + 1 doc with string field "7"
     TEquals(16, repResult.history[0].missing_checked);
     TEquals(16, repResult.history[0].missing_found);
@@ -622,12 +618,8 @@ couchTests.replication = function(debug) {
     }
 
     // last doc has even integer field, so last replicated seq is 36
-    TEquals(36, repResult.source_last_seq);
     TEquals(true, repResult.history instanceof Array);
     TEquals(2, repResult.history.length);
-    TEquals(30, repResult.history[0].start_last_seq);
-    TEquals(36, repResult.history[0].end_last_seq);
-    TEquals(36, repResult.history[0].recorded_seq);
     TEquals(3, repResult.history[0].missing_checked);
     TEquals(3, repResult.history[0].missing_found);
     TEquals(3, repResult.history[0].docs_read);
