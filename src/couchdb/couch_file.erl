@@ -13,9 +13,6 @@
 -module(couch_file).
 -behaviour(gen_server).
 
-% TODO remove this directive, it's here only for debugging purposes
--compile(export_all).
-
 -include("couch_db.hrl").
 
 -define(SIZE_BLOCK, 4096).
