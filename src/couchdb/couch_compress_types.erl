@@ -41,7 +41,7 @@ is_compressible(FullMimeType) ->
         [MainType | _] = string:tokens(MimeType, "/"),
         ets:lookup(?MIME_TYPES, MainType ++ "/*") /= []
     end.
-        
+
 
 init(_) ->
     ?MIME_TYPES = ets:new(?MIME_TYPES, [named_table, set, protected]),
@@ -53,7 +53,7 @@ init(_) ->
         end),
     {ok, nil}.
 
-    
+
 handle_call(Msg, _From, State) ->
     {stop, {unexpected_call, Msg}, State}.
 

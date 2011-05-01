@@ -530,7 +530,7 @@ to_branch(Doc, [RevId]) ->
     [{RevId, Doc, []}];
 to_branch(Doc, [RevId | Rest]) ->
     [{RevId, ?REV_MISSING, to_branch(Doc, Rest)}].
-                
+
 modify_full_doc_info(Db, Id, MergeConflicts, nil, Docs, AccSeq) ->
     modify_full_doc_info(Db, Id, MergeConflicts, #full_doc_info{id=Id}, Docs, AccSeq);
 modify_full_doc_info(Db, Id, MergeConflicts, OldDocInfo,
@@ -568,7 +568,7 @@ modify_full_doc_info(Db, Id, MergeConflicts, OldDocInfo,
                         % put the rev into a subsequent edit of the deletion
                         #doc_info{revs=[#rev_info{rev={OldPos,OldRev}}|_]} =
                                 couch_doc:to_doc_info(OldDocInfo),
-                        % note for expediencey we are just creating a 
+                        % note for expediencey we are just creating a
                         % a random rev id in this case instead of a deterministic
                         % one.
                         NewRevId = couch_util:md5(integer_to_list(couch_util:rand32())),
@@ -677,16 +677,14 @@ update_docs_int(Db, DocsList, NonRepDocs, MergeConflicts, FullCommit) ->
     % the trees, the attachments are already written to disk)
 
     % and the indexes
-    {NewBySeqEntries, RemoveSeqs} =
-                by_seq_index_entries(KeyResults, [], []),
+    {NewBySeqEntries, RemoveSeqs} = by_seq_index_entries(KeyResults, [], []),
     InsertBySeq = [begin {K, V} = btree_by_seq_split(I), {insert, K, V} end || I <- NewBySeqEntries],
-    
     RemoveBySeq = [{remove, Seq, nil} || Seq <- lists:sort(RemoveSeqs)],
 
     {ok, [], DocInfoBySeqBTree2} = couch_btree:query_modify_raw(DocInfoBySeqBTree, RemoveBySeq ++ InsertBySeq),
 
     {ok, Db2} = update_local_docs(Db, NonRepDocs),
-    
+
     Db3 = Db2#db{
         fulldocinfo_by_id_btree = DocInfoByIdBTree2,
         docinfo_by_seq_btree = DocInfoBySeqBTree2,

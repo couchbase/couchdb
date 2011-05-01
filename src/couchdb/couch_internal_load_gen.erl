@@ -92,7 +92,7 @@ generate_full_load(#load{concurrency_arg=Concurrency,rounds_arg=Rounds}=Load) ->
     Pids = [spawn_link(fun() -> prep_and_generate_load(Load, N, Self) end) || N <- lists:seq(1, Concurrency)],
     generate_full_load(Load,Pids,Rounds,[]).
 
-generate_full_load(_Load, Pids, 0, TimesAcc) ->    
+generate_full_load(_Load, Pids, 0, TimesAcc) ->
     [Pid ! stop || Pid <- Pids],
     [receive {'EXIT', Pid, _} -> ok end || Pid <- Pids],
     lists:reverse(TimesAcc);
@@ -139,7 +139,7 @@ prep_and_generate_load(Load, WorkerNum, Parent) ->
     Batches = prep_batches(Load, WorkerNum),
     generate_load(Load, Batches, Parent).
 
-generate_load(#load{db=Db}=Load, Batches, Parent) ->    
+generate_load(#load{db=Db}=Load, Batches, Parent) ->
     receive
     do_round ->
         ok;
@@ -161,8 +161,6 @@ do_it() ->
     write_to_file(Fd, <<1:800000>>, 2700),
     couch_file:sync(Fd),
     couch_file:close(Fd).
-
-    
 
 do_it2() ->
     file:delete("test.foo"),
