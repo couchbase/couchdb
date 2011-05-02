@@ -843,8 +843,9 @@ write_and_commit(#db{update_pid=UpdatePid}=Db, DocBuckets1,
                 Bucket <- DocBuckets1
             ],
             % We only retry once
+            DocBuckets3 = prepare_doc_summaries(Db2, DocBuckets2, Options),
             close(Db2),
-            UpdatePid ! {update_docs, self(), prepare_doc_summaries(Db2, DocBuckets2, Options), NonRepDocs, MergeConflicts, FullCommit},
+            UpdatePid ! {update_docs, self(), DocBuckets3, NonRepDocs, MergeConflicts, FullCommit},
             case collect_results(UpdatePid, MRef, []) of
             {ok, Results} -> {ok, Results};
             retry -> throw({update_error, compaction_retry})
