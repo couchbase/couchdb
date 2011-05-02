@@ -83,10 +83,9 @@ extern "C" {
             return enif_make_badarg(env);
         }
 
-        snappy::ByteArraySource source(reinterpret_cast<const char *>(input.data),
-                                       input.size);
-
         try {
+            snappy::ByteArraySource source(reinterpret_cast<const char *>(input.data),
+                                           input.size);
             SnappyNifSink sink(env);
 
             snappy::Compress(&source, &sink);
