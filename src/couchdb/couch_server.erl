@@ -394,6 +394,7 @@ handle_info({'EXIT', Pid, snappy_nif_not_loaded}, Server) ->
         true = ets:delete(couch_dbs_by_pid, Pid),
         case ets:lookup(couch_sys_dbs, Db) of
         [{Db, _}] ->
+            true = ets:delete(couch_sys_dbs, Db),
             Server;
         [] ->
             Server#server{dbs_open = Server#server.dbs_open - 1}
