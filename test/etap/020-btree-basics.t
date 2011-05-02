@@ -106,6 +106,7 @@ test_kvs(KeyValues) ->
         end,
         {BtAcc2, couch_btree:size(BtAcc2)}
     end, {Btree3, couch_btree:size(Btree3)}, KeyValues),
+    ok = couch_file:flush(Fd),
 
     etap:ok(test_btree(Btree4, KeyValues),
         "Adding all keys one at a time returns a complete btree."),
@@ -122,6 +123,8 @@ test_kvs(KeyValues) ->
         end,
         {BtAcc2, couch_btree:size(BtAcc2)}
     end, {Btree4, couch_btree:size(Btree4)}, KeyValues),
+    ok = couch_file:flush(Fd),
+
     etap:ok(test_btree(Btree5, []),
         "Removing all keys one at a time returns an empty btree."),
     etap:is(0, couch_btree:size(Btree5),
