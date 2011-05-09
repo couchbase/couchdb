@@ -32,14 +32,22 @@ start_link() ->
 is_compressible(MimeType) when is_binary(MimeType) ->
     is_compressible(?b2l(MimeType));
 is_compressible(FullMimeType) ->
-    [MimeType0 | _] = string:tokens(FullMimeType, ";"),
-    MimeType = couch_util:trim(MimeType0),
+    MimeType = case string:tokens(FullMimeType, ";") of
+    [T | _] ->
+        couch_util:trim(T);
+    [] ->
+        FullMimeType
+    end,
     case ets:lookup(?MIME_TYPES, MimeType) /= [] of
     true ->
         true;
     false ->
-        [MainType | _] = string:tokens(MimeType, "/"),
-        ets:lookup(?MIME_TYPES, MainType ++ "/*") /= []
+        case string:tokens(MimeType, "/") of
+        [MainType | _]  ->
+            ets:lookup(?MIME_TYPES, MainType ++ "/*") /= [];
+        [] ->
+            false
+        end
     end.
 
 
