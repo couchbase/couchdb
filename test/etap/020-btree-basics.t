@@ -114,6 +114,7 @@ test_kvs(KeyValues) ->
             "Non empty btrees have a size > 0."),
 
     {Btree5, _} = lists:foldl(fun({K, _}, {BtAcc, PrevSize}) ->
+        ok = couch_file:flush(Fd),
         {ok, BtAcc2} = couch_btree:add_remove(BtAcc, [], [K]),
         case couch_btree:size(BtAcc2) < PrevSize of
         true ->
@@ -132,6 +133,7 @@ test_kvs(KeyValues) ->
 
     KeyValuesRev = lists:reverse(KeyValues),
     {Btree6, _} = lists:foldl(fun(KV, {BtAcc, PrevSize}) ->
+        ok = couch_file:flush(Fd),
         {ok, BtAcc2} = couch_btree:add_remove(BtAcc, [KV], []),
         case couch_btree:size(BtAcc2) > PrevSize of
         true ->
