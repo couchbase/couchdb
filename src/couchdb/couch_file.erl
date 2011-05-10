@@ -110,7 +110,6 @@ append_binary_md5(Fd, Bin) ->
 append_raw_chunk(Fd, Chunk) ->
     gen_server:call(Fd, {append_bin, Chunk}, infinity).
 
-
 assemble_file_chunk(Bin) ->
     [<<0:1/integer, (iolist_size(Bin)):31/integer>>, Bin].
 
