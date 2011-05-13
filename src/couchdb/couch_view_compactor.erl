@@ -14,13 +14,17 @@
 
 -include ("couch_db.hrl").
 
--export([start_compact/2]).
+-export([start_compact/2, abort_compact/2]).
 
 %% @spec start_compact(DbName::binary(), GroupId:binary()) -> ok
 %% @doc Compacts the views.  GroupId must not include the _design/ prefix
 start_compact(DbName, GroupId) ->
     Pid = couch_view:get_group_server(DbName, <<"_design/",GroupId/binary>>),
-    gen_server:cast(Pid, {start_compact, fun compact_group/2}).
+    gen_server:call(Pid, {start_compact, fun compact_group/2}).
+
+abort_compact(DbName, GroupId) ->
+    Pid = couch_view:get_group_server(DbName, <<"_design/", GroupId/binary>>),
+    gen_server:call(Pid, abort_compact).
 
 %%=============================================================================
 %% internal functions
@@ -81,9 +85,24 @@ compact_group(Group, EmptyGroup) ->
         views=NewViews,
         current_seq=Seq
     },
+    maybe_retry_compact(DbName, GroupId, NewGroup).
 
+maybe_retry_compact(DbName, GroupId, NewGroup) ->
     Pid = couch_view:get_group_server(DbName, GroupId),
-    gen_server:cast(Pid, {compact_done, NewGroup}).
+    case gen_server:call(Pid, {compact_done, NewGroup}) of
+    ok ->
+        ok;
+    update ->
+        {ok, Db} = couch_db:open_int(DbName, []),
+        {_, Ref} = erlang:spawn_monitor(fun() ->
+            couch_view_updater:update(nil, NewGroup#group{db = Db})
+        end),
+        receive
+        {'DOWN', Ref, _, _, {new_group, NewGroup2}} ->
+            couch_db:close(Db),
+            maybe_retry_compact(DbName, GroupId, NewGroup2#group{db = nil})
+        end
+    end.
 
 %% @spec compact_view(View, EmptyView, Retry) -> CompactView
 compact_view(View, EmptyView, BufferSize) ->

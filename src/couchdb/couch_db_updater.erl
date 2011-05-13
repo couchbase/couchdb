@@ -157,11 +157,17 @@ handle_call(start_compact, _From, Db) ->
         Pid = spawn_link(fun() -> start_copy_compact(Db) end),
         Db2 = Db#db{compactor_pid=Pid},
         ok = gen_server:call(Db#db.main_pid, {db_updated, Db2}),
-        {reply, ok, Db2};
+        {reply, {ok, Pid}, Db2};
     _ ->
         % compact currently running, this is a no-op
-        {reply, ok, Db}
-    end.
+        {reply, {ok, Db#db.compactor_pid}, Db}
+    end;
+handle_call(abort_compact, _From, #db{compactor_pid = nil} = Db) ->
+    {reply, ok, Db};
+handle_call(abort_compact, _From, #db{compactor_pid = Pid} = Db) ->
+    unlink(Pid),
+    exit(Pid, kill),
+    {reply, ok, Db#db{compactor_pid = nil}}.
 
 
 

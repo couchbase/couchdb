@@ -79,6 +79,7 @@ uuids={couch_uuids, start, []}
 auth_cache={couch_auth_cache, start_link, []}
 replication_manager={couch_replication_manager, start_link, []}
 os_daemons={couch_os_daemons, start_link, []}
+compaction_daemon={couch_compaction_daemon, start_link, []}
 
 [httpd_global_handlers]
 / = {couch_httpd_misc_handlers, handle_welcome_req, <<"Welcome">>}
@@ -182,3 +183,54 @@ verify_ssl_certificates = false
 ; ssl_trusted_certificates_file = /etc/ssl/certs/ca-certificates.crt
 ; maximum peer certificate depth (must be set even if certificate validation is off)
 ssl_certificate_max_depth = 3
+
+[compaction_daemon]
+; This daemon compacts databases and they're respective view groups when all the condition
+; parameters are satisfied. Configuration can be per database or global, and it has the
+; following format:
+;
+; database_name = parameter=value [, parameter=value]*
+; _default = parameter=value [, parameter=value]*
+;
+; Possible parameters:
+;
+; * db_fragmentation - If the ratio (as an integer percentage), of the amount of old data
+;                      (and its supporting metadata) over the database file size is equal
+;                      to or greater then this value, this database compaction condition is
+;                      satisfied.
+;                      This value is computed as: (disk_size - data_size) / disk_size * 100
+;                      The data_size and disk_size values can be obtained when querying a
+;                      database's information URI (GET /dbname/).
+;
+; * view_fragmentation - If the ratio (as an integer percentage), of the amount of old data
+;                        (and its supporting metadata) over the view index (view group) file
+;                        size is equal to or greater then this value, then this view index
+;                        compaction condition is satisfied.
+;                        This value is computed as: (disk_size - data_size) / disk_size * 100
+;                        The data_size and disk_size values can be obtained when querying a
+;                        view group's information URI (GET /dbname/_design/groupname/_info).
+;
+; * period - The period for which a database (and its view groups) compaction is allowed.
+;            This value's format is:  HH:MM - HH:MM  (HH in [0..23], MM in [0..59])
+;
+; * abortion - If a compaction is still running after the end of the allowed period, it will
+;              be aborted if this parameter is set to "yes". It defaults to "no" and it's
+;              meaningful only if the *period* parameter is also specified.
+;
+; Examples:
+;
+; 1) foo = db_fragmentation = 70%, view_fragmentation = 60%
+;    The `foo` database is compacted if its fragmentation is 70% or more. Any view group (index)
+;    of this database is compacted only if its fragmentation is 60% or more.
+;
+; 2) foo = db_fragmentation = 70%, view_fragmentation = 60%, period = 00:00-04:00
+;    Similar to the preceding example but a compaction (database or view group) is only triggered
+;    if the current time is in the period from midnight to 4 AM.
+;
+; 3) foo = db_fragmentation = 70%, view_fragmentation = 60%, period = 00:00-04:00, abortion = yes
+;    Similar to the preceding example - a compaction (database or view group) is only triggered
+;    if the current time is in the period from midnight to 4 AM. If at 4 AM the database or one of
+;    its view groups is still compacting, the compaction process will be aborted.
+;
+;_default = db_fragmentation = 70%, view_fragmentation = 60%, period = 23:00 - 04:00
+

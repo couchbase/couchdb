@@ -154,9 +154,9 @@ handle_call({request_group, RequestSeq}, From,
 
 handle_call(request_group_info, _From, State) ->
     GroupInfo = get_group_info(State),
-    {reply, {ok, GroupInfo}, State}.
+    {reply, {ok, GroupInfo}, State};
 
-handle_cast({start_compact, CompactFun}, #group_state{compactor_pid=nil}
+handle_call({start_compact, CompactFun}, _From, #group_state{compactor_pid=nil}
         = State) ->
     #group_state{
         group = #group{name = GroupId, sig = GroupSig} = Group,
@@ -167,12 +167,12 @@ handle_cast({start_compact, CompactFun}, #group_state{compactor_pid=nil}
     {ok, Fd} = open_index_file(compact, RootDir, DbName, GroupSig),
     NewGroup = reset_file(Db, Fd, DbName, Group),
     Pid = spawn_link(fun() -> CompactFun(Group, NewGroup) end),
-    {noreply, State#group_state{compactor_pid = Pid}};
-handle_cast({start_compact, _}, State) ->
+    {reply, {ok, Pid}, State#group_state{compactor_pid = Pid}};
+handle_call({start_compact, _}, _From, State) ->
     %% compact already running, this is a no-op
-    {noreply, State};
+    {reply, {ok, State#group_state.compactor_pid}, State};
 
-handle_cast({compact_done, #group{current_seq=NewSeq} = NewGroup},
+handle_call({compact_done, #group{current_seq=NewSeq} = NewGroup}, _From,
         #group_state{group = #group{current_seq=OldSeq}} = State)
         when NewSeq >= OldSeq ->
     #group_state{
@@ -217,13 +217,13 @@ handle_cast({compact_done, #group{current_seq=NewSeq} = NewGroup},
     end,
 
     self() ! delayed_commit,
-    {noreply, State#group_state{
+    {reply, ok, State#group_state{
         group=NewGroup#group{db = nil},
         ref_counter=NewRefCounter,
         compactor_pid=nil,
         updater_pid=NewUpdaterPid
     }};
-handle_cast({compact_done, NewGroup}, State) ->
+handle_call({compact_done, NewGroup}, _From, State) ->
     #group_state{
         group = #group{name = GroupId, current_seq = CurrentSeq},
         init_args={_RootDir, DbName, _}
@@ -231,20 +231,15 @@ handle_cast({compact_done, NewGroup}, State) ->
     ?LOG_INFO("View index compaction still behind for ~s ~s -- current: ~p " ++
         "compact: ~p", [DbName, GroupId, CurrentSeq, NewGroup#group.current_seq]),
     couch_db:close(NewGroup#group.db),
-    Pid = spawn_link(fun() ->
-        {ok, Db} = couch_db:open_int(DbName, []),
-        {_,Ref} = erlang:spawn_monitor(fun() ->
-            couch_view_updater:update(nil, NewGroup#group{db = Db})
-        end),
-        receive
-            {'DOWN', Ref, _, _, {new_group, NewGroup2}} ->
-                couch_db:close(Db),
-                #group{name=GroupId} = NewGroup2,
-                Pid2 = couch_view:get_group_server(DbName, GroupId),
-                gen_server:cast(Pid2, {compact_done, NewGroup2#group{db = nil}})
-        end
-    end),
-    {noreply, State#group_state{compactor_pid = Pid}};
+    {reply, update, State};
+
+handle_call(abort_compact, _From, #group_state{compactor_pid = nil} = State) ->
+    {reply, ok, State};
+handle_call(abort_compact, _From, #group_state{compactor_pid = Pid} = State) ->
+    unlink(Pid),
+    exit(Pid, kill),
+    {reply, ok, State#group_state{compactor_pid = nil}}.
+
 
 handle_cast({partial_update, Pid, NewGroup}, #group_state{updater_pid=Pid}
         = State) ->
