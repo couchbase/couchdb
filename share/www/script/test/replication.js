@@ -1236,6 +1236,7 @@ couchTests.replication = function(debug) {
 
   var tasksAfter = JSON.parse(xhr.responseText);
   TEquals(tasks.length, tasksAfter.length);
+  waitForSeq(sourceDb, targetDb);
   T(sourceDb.open("30") !== null);
 
   // cancel replication
