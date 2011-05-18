@@ -18,7 +18,7 @@
 -define(SIZE_BLOCK, 4096).
 
 -record(file, {
-    fd,
+    reader = nil,
     writer = nil,
     eof = 0
 }).
@@ -141,28 +141,19 @@ pread_binary(Fd, Pos) ->
     {ok, iolist_to_binary(L)}.
 
 
-pread_iolist(File, Pos) ->
-    case get(File) of
-    undefined ->
-        {ok, Fd} = gen_server:call(File, get_fd, infinity),
-        put(File, Fd);
-    Fd -> ok
-    end,
-    {IoListLen, NextPos} = read_raw_iolist_int(Fd, Pos, 4),
-    <<Prefix:1/integer, Len:31/integer>> = iolist_to_binary(IoListLen),
-    case Prefix of
-    1 ->
-        {Bin, _} = read_raw_iolist_int(Fd, NextPos, 16 + Len),
-        {Md5, IoList} = extract_md5(Bin),
+pread_iolist(Fd, Pos) ->
+    case gen_server:call(Fd, {pread_iolist, Pos}, infinity) of
+    {ok, _IoList} = Ok ->
+        Ok;
+    {ok, IoList, Md5} ->
         case couch_util:md5(IoList) of
         Md5 ->
             {ok, IoList};
         _ ->
             exit({file_corruption, <<"file corruption">>})
         end;
-    0 ->
-        {IoList, _} = read_raw_iolist_int(Fd, NextPos, Len),
-        {ok, IoList}
+    Error ->
+        Error
     end.
 
 
@@ -277,16 +268,10 @@ init({Filepath, Options, ReturnPid, Ref}) ->
    try
        maybe_create_file(Filepath, Options),
        process_flag(trap_exit, true),
-       ReadFd = case file:open(Filepath, [read, binary]) of
-       {ok, Fd} ->
-           Fd;
-       Error ->
-           throw({error, Error})
-       end,
-       Writer = spawn_writer(Filepath),
-       {ok, Eof} = file:position(ReadFd, eof),
+       Reader = spawn_reader(Filepath),
+       {Writer, Eof} = spawn_writer(Filepath),
        maybe_track_open_os_files(Options),
-       {ok, #file{fd = ReadFd, writer = Writer, eof = Eof}}
+       {ok, #file{reader = Reader, writer = Writer, eof = Eof}}
    catch
    throw:{error, Err} ->
        init_status_error(ReturnPid, Ref, Err)
@@ -331,13 +316,15 @@ maybe_track_open_os_files(FileOptions) ->
         couch_stats_collector:track_process_count({couchdb, open_os_files})
     end.
 
-terminate(_Reason, #file{fd = Fd, writer = Writer}) ->
+terminate(_Reason, #file{reader = Reader, writer = Writer}) ->
+    exit(Reader, kill),
+    receive {'EXIT', Reader, _} -> ok end,
     exit(Writer, kill),
-    receive {'EXIT', Writer, _} -> ok end,
-    ok = file:close(Fd).
+    receive {'EXIT', Writer, _} -> ok end.
 
-handle_call(get_fd, _From, #file{fd = Fd} = File) ->
-    {reply, {ok, Fd}, File};
+handle_call({pread_iolist, Pos}, From, #file{reader = Reader} = File) ->
+    Reader ! {read, Pos, From},
+    {noreply, File};
 
 handle_call(bytes, _From, #file{eof = Eof} = File) ->
     {reply, {ok, Eof}, File};
@@ -375,8 +362,9 @@ handle_call(flush, From, #file{writer =  W} = File) ->
     W ! {flush, From},
     {noreply, File};
 
-handle_call(find_header, _From, #file{fd = Fd, eof = Pos} = File) ->
-    {reply, find_header(Fd, Pos div ?SIZE_BLOCK), File}.
+handle_call(find_header, From, #file{reader = Reader, eof = Eof} = File) ->
+    Reader ! {find_header, Eof, From},
+    {noreply, File}.
 
 handle_cast(close, Fd) ->
     {stop,normal,Fd}.
@@ -386,8 +374,10 @@ code_change(_OldVsn, State, _Extra) ->
 
 handle_info({'EXIT', _, normal}, Fd) ->
     {noreply, Fd};
-handle_info({'EXIT', W, Reason}, #file{writer = W} = Fd) ->
+handle_info({'EXIT', Pid, Reason}, #file{writer = Pid} = Fd) ->
     {stop, {write_loop_died, Reason}, Fd};
+handle_info({'EXIT', Pid, Reason}, #file{reader = Pid} = Fd) ->
+    {stop, {read_loop_died, Reason}, Fd};
 handle_info({'EXIT', _, Reason}, Fd) ->
     {stop, Reason, Fd}.
 
@@ -419,6 +409,15 @@ load_header(Fd, Block) ->
         iolist_to_binary(remove_block_prefixes(1, RawBin)),
     Md5Sig = couch_util:md5(HeaderBin),
     {ok, HeaderBin}.
+
+maybe_read_more_iolist(Buffer, DataSize, _, _)
+    when DataSize =< byte_size(Buffer) ->
+    <<Data:DataSize/binary, _/binary>> = Buffer,
+    [Data];
+maybe_read_more_iolist(Buffer, DataSize, NextPos, Fd) ->
+    {Missing, _} =
+        read_raw_iolist_int(Fd, NextPos, DataSize - byte_size(Buffer)),
+    [Buffer, Missing].
 
 read_raw_iolist_int(ReadFd, {Pos, _Size}, Len) -> % 0110 UPGRADE CODE
     read_raw_iolist_int(ReadFd, Pos, Len);
@@ -505,11 +504,43 @@ split_iolist([Byte | Rest], SplitAt, BeginAcc) when is_integer(Byte) ->
 
 
 spawn_writer(Filepath) ->
-    spawn_link(fun() ->
-        {ok, Fd} = file:open(Filepath, [binary, append, raw]),
-        {ok, Eof} = file:position(Fd, eof),
-        writer_loop(Fd, Eof)
-    end).
+    Parent = self(),
+    Pid = spawn_link(fun() ->
+        case file:open(Filepath, [binary, append, raw]) of
+        {ok, Fd} ->
+            {ok, Eof} = file:position(Fd, eof),
+            Parent ! {self(), {ok, Eof}},
+            writer_loop(Fd, Eof);
+        Error ->
+            Parent ! {self(), Error}
+        end
+    end),
+    receive
+    {Pid, {ok, Eof}} ->
+         {Pid, Eof};
+    {Pid, Error} ->
+         throw({error, Error})
+    end.
+
+
+spawn_reader(Filepath) ->
+    Parent = self(),
+    Pid = spawn_link(fun() ->
+        case file:open(Filepath, [binary, read, raw]) of
+        {ok, Fd} ->
+            Parent ! {self(), ok},
+            reader_loop(Fd);
+        Error ->
+            Parent ! {self(), Error}
+        end
+    end),
+    receive
+    {Pid, ok} ->
+         Pid;
+    {Pid, Error} ->
+         throw({error, Error})
+    end.
+
 
 writer_loop(Fd, Eof) ->
     receive
@@ -581,3 +612,39 @@ write_header_blocks(Fd, Eof, Header) ->
     ],
     ok = file:write(Fd, FinalHeader),
     Eof + iolist_size(FinalHeader).
+
+
+reader_loop(Fd) ->
+    receive
+    {read, Pos, From} ->
+        read_iolist(Fd, Pos, From),
+        reader_loop(Fd);
+    {find_header, Eof, From} ->
+        gen_server:reply(From, find_header(Fd, Eof div ?SIZE_BLOCK)),
+        reader_loop(Fd);
+    stop ->
+        exit(done)
+    end.
+
+
+-compile({inline, [read_iolist/3]}).
+
+read_iolist(Fd, Pos, From) ->
+    {RawData, NextPos} = try
+        % up to 8Kbs of read ahead
+        read_raw_iolist_int(Fd, Pos, 2 * ?SIZE_BLOCK - (Pos rem ?SIZE_BLOCK))
+    catch
+    _:_ ->
+        read_raw_iolist_int(Fd, Pos, 4)
+    end,
+    <<Prefix:1/integer, Len:31/integer, RestRawData/binary>> =
+        iolist_to_binary(RawData),
+    case Prefix of
+    1 ->
+        {Md5, IoList} = extract_md5(
+            maybe_read_more_iolist(RestRawData, 16 + Len, NextPos, Fd)),
+        gen_server:reply(From, {ok, IoList, Md5});
+    0 ->
+        IoList = maybe_read_more_iolist(RestRawData, Len, NextPos, Fd),
+        gen_server:reply(From, {ok, IoList})
+    end.
