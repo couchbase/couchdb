@@ -3,12 +3,13 @@
 TOTAL_DOCS=100000
 BATCH_SIZE=500
 CONCURRENCY=10
-DELAYED_COMMITS=true
+DELAYED_COMMITS=false
+OPTIMISTIC=false
 DB=load_test
 HOST=localhost
 PORT=5984
 
-URL="http://$HOST:$PORT/_generate_load?total=$TOTAL_DOCS&db=$DB&concurrency=$CONCURRENCY&batch=$BATCH_SIZE&delayed_commits=$DELAYED_COMMITS"
+URL="http://$HOST:$PORT/_generate_load?total=$TOTAL_DOCS&db=$DB&concurrency=$CONCURRENCY&batch=$BATCH_SIZE&delayed_commits=$DELAYED_COMMITS&optimistic=$OPTIMISTIC"
 
 curl -X POST \
         $URL \

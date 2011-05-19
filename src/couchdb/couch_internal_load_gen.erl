@@ -25,7 +25,7 @@
     get_value/3
 ]).
 
--export([handle_req/1, generate_full_load/1,do_it/0,do_it2/0]).
+-export([handle_req/1, generate_full_load/1]).
 
 -record(load, {
           dbname,
@@ -36,7 +36,8 @@
           batch_arg,
           concurrency_arg,
           rounds_arg=10,
-          delayed_commits = "false"
+          delayed_commits = false,
+          optimistic = false
          }).
 
 parse_load_qs_args(Req) ->
@@ -53,7 +54,9 @@ parse_load_qs_args(Req) ->
         {"rounds", Value} ->
             Load#load{rounds_arg=list_to_integer(Value)};
         {"delayed_commits", Value} ->
-            Load#load{delayed_commits=Value}
+            Load#load{delayed_commits = (Value =:= "true")};
+        {"optimistic", Value} ->
+            Load#load{optimistic = (Value =:= "true")}
         end
     end, #load{}, couch_httpd:qs(Req)).
 
@@ -62,9 +65,8 @@ handle_req(#httpd{method = 'POST'} = Req) ->
     process_flag(trap_exit, true),
     #load{dbname=DbName, delayed_commits=DelayedCommits} = Load0 = parse_load_qs_args(Req),
     PrevDelayedCommits = couch_config:get("couchdb", "delayed_commits", "true"),
-    ok = couch_config:set("couchdb", "delayed_commits", DelayedCommits),
+    ok = couch_config:set("couchdb", "delayed_commits", atom_to_list(DelayedCommits)),
     DocBody = couch_httpd:json_body_obj(Req),
-    io:format("Delayed commits set to ~s~n", [couch_config:get("couchdb", "delayed_commits")]),
     couch_server:delete(DbName, []),
     {ok, Db} = couch_server:create(DbName, [{user_ctx, #user_ctx{roles=[<<"_admin">>]}}]),
     ok = couch_db:set_revs_limit(Db, 1),
@@ -73,6 +75,7 @@ handle_req(#httpd{method = 'POST'} = Req) ->
     generate_full_load(Load),
     End = erlang:now(),
     couch_db:close(Db),
+    couch_server:delete(DbName, []),
     ok = couch_config:set("couchdb", "delayed_commits", PrevDelayedCommits),
     send_json(Req, 200,{[
         {<<"db">>, Load#load.dbname},
@@ -80,6 +83,8 @@ handle_req(#httpd{method = 'POST'} = Req) ->
         {<<"batch">>, Load#load.batch_arg},
         {<<"concurrency">>, Load#load.concurrency_arg},
         {<<"rounds">>, Load#load.rounds_arg},
+        {<<"delayed_commits">>, Load#load.delayed_commits},
+        {<<"optimistic">>, Load#load.optimistic},
         {<<"total_time_ms">>, timer:now_diff(End, Start) div 1000}
         ]});
 
@@ -139,12 +144,19 @@ prep_and_generate_load(Load, WorkerNum, Parent) ->
     Batches = prep_batches(Load, WorkerNum),
     generate_load(Load, Batches, Parent).
 
-generate_load(#load{db=Db}=Load, Batches, Parent) ->
+generate_load(#load{db=OldDb}=Load, Batches, Parent) ->
     receive
     do_round ->
         ok;
     stop ->
         exit(done)
+    end,
+    case Load#load.optimistic of
+    true ->
+        Db = OldDb;
+    false ->
+        {ok, Db} = couch_db:open(
+            OldDb#db.name, [{user_ctx, #user_ctx{roles=[<<"_admin">>]}}])
     end,
     Batches2 =
     lists:map(fun(DocBatch) ->
@@ -154,32 +166,10 @@ generate_load(#load{db=Db}=Load, Batches, Parent) ->
                 end, DocBatch, Results)
         end, Batches),
     Parent ! {self(), batch_complete},
+    case Load#load.optimistic of
+    true ->
+        ok;
+    false ->
+        couch_db:close(Db)
+    end,
     generate_load(Load, Batches2, Parent).
-
-do_it() ->
-    {ok, Fd} = couch_file:open("test.foo",[create,overwrite]),
-    write_to_file(Fd, <<1:800000>>, 2700),
-    couch_file:sync(Fd),
-    couch_file:close(Fd).
-
-do_it2() ->
-    file:delete("test.foo"),
-    {ok, Fd} = file:open("test.foo",[binary, raw, append]),
-    write_to_file2(Fd, <<1:800000>>, 2700),
-    file:sync(Fd),
-    file:close(Fd).
-
-write_to_file(_Fd, _Doc, 0) ->
-    ok;
-write_to_file(Fd, Data, N) ->
-    {ok, _} = couch_file:append_binary(Fd, Data),
-    write_to_file(Fd, Data, N -1).
-
-write_to_file2(_Fd, _Doc, 0) ->
-    ok;
-write_to_file2(Fd, Data, N) ->
-    ok = file:write(Fd, Data),
-    write_to_file2(Fd, Data, N -1).
-
-
-
