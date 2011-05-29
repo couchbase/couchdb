@@ -69,9 +69,7 @@ var Couch = {
       if(typeof CoffeeScript === "undefined") {
         return evalFunction(source, sandbox);
       } else {
-        coffee = CoffeeScript.compile(source);
-        coffee = coffee.substr(17, coffee.length - 1); // get rid of the preamble
-        coffee = coffee.substr(0, coffee.length - 18); // get rid of the postamble
+        coffee = CoffeeScript.compile(source, {bare: true});
         return evalFunction(coffee, sandbox);
       }
     }
