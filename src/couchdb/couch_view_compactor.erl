@@ -65,6 +65,7 @@ compact_group(Group, EmptyGroup) ->
         AccSize2 = AccSize + ?term_size(KV),
         if AccSize2 >= BufferSize ->
             {ok, Bt2} = couch_btree:add(Bt, lists:reverse([KV|Acc])),
+            ok = couch_file:flush(Fd),
             couch_task_status:update("Copied ~p of ~p Ids (~p%)",
                 [TotalCopied, Count, (TotalCopied*100) div Count]),
             {ok, {Bt2, [], 0, TotalCopied + 1 + length(Acc), DocId}};
@@ -77,7 +78,7 @@ compact_group(Group, EmptyGroup) ->
     {ok, NewIdBtree} = couch_btree:add(Bt3, lists:reverse(Uncopied)),
 
     NewViews = lists:map(fun({View, EmptyView}) ->
-        compact_view(View, EmptyView, BufferSize)
+        compact_view(Fd, View, EmptyView, BufferSize)
     end, lists:zip(Views, EmptyViews)),
     ok = couch_file:flush(Fd),
     NewGroup = EmptyGroup#group{
@@ -104,8 +105,8 @@ maybe_retry_compact(DbName, GroupId, NewGroup) ->
         end
     end.
 
-%% @spec compact_view(View, EmptyView, Retry) -> CompactView
-compact_view(View, EmptyView, BufferSize) ->
+%% @spec compact_view(Fd, View, EmptyView, Retry) -> CompactView
+compact_view(Fd, View, EmptyView, BufferSize) ->
     {ok, Count} = couch_view:get_row_count(View),
 
     %% Key is {Key,DocId}
@@ -113,6 +114,7 @@ compact_view(View, EmptyView, BufferSize) ->
         AccSize2 = AccSize + ?term_size(KV),
         if AccSize2 >= BufferSize ->
             {ok, Bt2} = couch_btree:add(Bt, lists:reverse([KV|Acc])),
+            ok = couch_file:flush(Fd),
             couch_task_status:update("View #~p: copied ~p of ~p KVs (~p%)",
                 [View#view.id_num, TotalCopied, Count,
                     (TotalCopied*100) div Count]),
