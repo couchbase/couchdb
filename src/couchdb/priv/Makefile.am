@@ -37,6 +37,13 @@ if WINDOWS
 couch_icu_driver_la_LDFLAGS += -no-undefined
 endif
 
+if MINGW
+couchjs_msbuild = couch_js/win32/msbuild.bat
+couchjs_vcproj = couch_js/win32/couchjs.vcxproj
+WIN_JS_INCLUDE = couch_js/win32/win_js_include.tmp
+WIN_JS_LIB_DIR = couch_js/win32/win_js_dir.tmp
+endif
+
 COUCHJS_SRCS = \
 	couch_js/http.c \
 	couch_js/http.h \
@@ -63,6 +70,28 @@ if !WINDOWS
 couchspawnkillable: spawnkillable/couchspawnkillable.sh
 	cp $< $@
 	chmod +x $@
+endif
+
+if MINGW
+couchjs$(EXEEXT): $(COUCHJS_SRCS) $(couchjs_msbuild) $(couchjs_vcproj)
+	@rm -f couchjs$(EXEEXT)
+	(cd couch_js/win32 && msbuild.bat)
+
+$(couchjs_msbuild): $(couchjs_msbuild).tpl
+	sed -e "s|%msbuild_dir%|$(msbuild_dir)|" \
+	    -e "s|%msbuild_name%|$(msbuild_name)|" \
+	< $< > $@
+
+$(couchjs_vcproj): $(couchjs_vcproj).tpl $(WIN_JS_INCLUDE) $(WIN_JS_LIB_DIR)
+	sed -e "s|%JS_INCLUDE%|`cat $(WIN_JS_INCLUDE)`|" \
+	    -e "s|%JS_LIB_DIR%|`cat $(WIN_JS_LIB_DIR)`|" \
+	< $< > $@
+
+$(WIN_JS_INCLUDE):$(JS_INCLUDE)
+	echo $< | sed -e "s|^/\([a-zA-Z]\)|\1:|" > $@
+
+$(WIN_JS_LIB_DIR):$(JS_LIB_DIR)
+	echo $< | sed -e "s|^/\([a-zA-Z]\)|\1:|" > $@
 endif
 
 # libtool and automake have defeated markh.  For each of our executables
