@@ -13,6 +13,14 @@
 ejsonebindir = $(localerlanglibdir)/ejson-0.1.0/ebin
 ejsonprivdir = $(localerlanglibdir)/ejson-0.1.0/priv
 
+if WINDOWS
+EJSON_OUTPUT_DIR = win32
+ejson_msbuild = $(EJSON_OUTPUT_DIR)/msbuild.bat
+ejson_vcproj = $(EJSON_OUTPUT_DIR)/ejson.vcxproj
+WIN_ERL_INCLUDE = $(EJSON_OUTPUT_DIR)/win_erl_include.tmp
+EJSON = $(EJSON_OUTPUT_DIR)/ejson.dll
+endif
+
 CLEANFILES = \
     $(ejsonebin_make_generated_file_list) \
     $(ejsonpriv_make_generated_file_list) \
@@ -61,21 +69,41 @@ EXTRA_DIST = \
 ejsonebin_DATA = \
     $(ejsonebin_make_generated_file_list)
 
+if !WINDOWS
 if USE_OTP_NIFS
 ejsonpriv_LTLIBRARIES = ejson.la
 
 ejson_la_SOURCES = $(EJSON_C_SRCS)
 ejson_la_LDFLAGS = -module -avoid-version
 
-if WINDOWS
-ejson_la_LDFLAGS += -no-undefined
-endif
-
 priv/ejson.so: ejson.la
 	@mkdir -p ./priv
 	cp .libs/ejson.so $@
 
 all: priv/ejson.so
+endif
+endif
+
+if WINDOWS
+$(EJSON) : $(ejson_msbuild) $(ejson_vcproj)
+	$(MKDIR_P) "$(ejsonprivdir)" || true
+	(cd win32 && ./msbuild.bat)
+	cp $(EJSON) $(ejsonprivdir)
+
+all: $(EJSON)
+
+$(ejson_msbuild): $(ejson_msbuild).tpl
+	sed -e "s|%msbuild_dir%|$(msbuild_dir)|" \
+	    -e "s|%msbuild_name%|$(msbuild_name)|" \
+	    -e "s|^/cygdrive/\([a-zA-Z]\)|\1:|" \
+	< $< > $@
+
+$(ejson_vcproj): $(ejson_vcproj).tpl $(WIN_ERL_INCLUDE)
+	sed -e "s|%ERLANG_INCLUDE%|`cat $(WIN_ERL_INCLUDE)`|" \
+	< $< > $@
+
+$(WIN_ERL_INCLUDE):$(ERLANG_INCLUDE)
+	echo $< | sed -e "s|^/cygdrive/\([a-zA-Z]\)|\1:|" > $@
 endif
 
 %.app: %.app.in

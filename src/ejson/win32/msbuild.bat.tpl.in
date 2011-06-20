@@ -1,0 +1,1 @@
+%msbuild_dir%/%msbuild_name% ejson.vcxproj -p:configuration=release -p:platform=win32
