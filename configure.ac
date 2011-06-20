@@ -152,23 +152,11 @@ LIB_FLAGS="$JS_LIB_FLAGS -L/usr/local/lib -L/opt/local/lib"
 LIBS="$LIB_FLAGS $LIBS"
 
 case "$(uname -s)" in
-  CYGWIN*)
+  CYGWIN*|MINGW*)
     FLAGS="$LIB_FLAGS $ERLANG_FLAGS $JS_FLAGS -DXP_WIN $FLAGS"
     CPPFLAGS="$FLAGS $CPPFLAGS"
     LDFLAGS="$FLAGS $LDFLAGS"
     IS_WINDOWS="TRUE"
-    IS_CYGWIN="TRUE"
-    # The erlang cc.sh/ld.sh scripts will convert a -O option
-    # into the same optimization flags erlang itself uses.
-    CFLAGS="-O2"
-    LTCFLAGS="$CFLAGS"
-    ;;
-  MINGW*)
-    FLAGS="$LIB_FLAGS $ERLANG_FLAGS $JS_FLAGS -DXP_WIN $FLAGS"
-    CPPFLAGS="$FLAGS $CPPFLAGS"
-    LDFLAGS="$FLAGS $LDFLAGS"
-    IS_WINDOWS="TRUE"
-    IS_MINGW="TRUE"
     # The erlang cc.sh/ld.sh scripts will convert a -O option
     # into the same optimization flags erlang itself uses.
     CFLAGS="-O2"
@@ -184,8 +172,6 @@ case "$(uname -s)" in
 esac
 
 AM_CONDITIONAL([WINDOWS], [test x$IS_WINDOWS = xTRUE])
-
-AM_CONDITIONAL([MINGW], [test x$IS_MINGW = xTRUE])
 
 AC_CHECK_LIB([mozjs], [JS_NewContext], [JS_LIB_BASE=mozjs], [
     AC_CHECK_LIB([js], [JS_NewContext], [JS_LIB_BASE=js], [
@@ -211,7 +197,6 @@ if test x${IS_WINDOWS} = xTRUE; then
     fi
     AC_SUBST(JS_LIB_BINARY)
 
-    if test x${IS_CYGWIN} = xTRUE; then
         # On windows we need to know the path to the openssl binaries.
         AC_ARG_WITH([openssl-bin-dir], [AC_HELP_STRING([--with-openssl-bin-dir=PATH],
             [path to the open ssl binaries for distribution on Windows])], [
@@ -239,9 +224,7 @@ if test x${IS_WINDOWS} = xTRUE; then
         if test ! -f ${msvc_redist_dir}/${msvc_redist_name}; then
             AC_MSG_WARN([The MSVC redistributable seems to be missing; expect the installer to fail.])
         fi
-    fi
 
-    if test x${IS_MINGW} = xTRUE; then
         # We need the msvc redistributables for this platform too
         # (in theory we could just install the assembly locally - but
         # there are at least 4 directories with binaries, meaning 4 copies;
@@ -263,12 +246,11 @@ if test x${IS_WINDOWS} = xTRUE; then
             msbuild_dir=$withval
             msbuild_name="MSBuild.exe"
             AC_SUBST(msbuild_dir)
-	    AC_SUBST(msbuild_name)
+            AC_SUBST(msbuild_name)
         ], [])
         if test ! -f ${msbuild_dir}/${msbuild_name}; then
             AC_MSG_WARN([The .NET Framework 4.0 seems to be missing; expect the couchjs module to fail.])
         fi
-    fi
 fi
 
 JSLIB=-l$JS_LIB_BASE
@@ -548,11 +530,15 @@ AC_CONFIG_FILES([test/javascript/Makefile])
 AC_CONFIG_FILES([test/view_server/Makefile])
 AC_CONFIG_FILES([utils/Makefile])
 AC_CONFIG_FILES([var/Makefile])
-if test x${IS_MINGW} = xTRUE; then
+if test x${IS_WINDOWS} = xTRUE; then
     AC_CONFIG_FILES([src/couchdb/priv/couch_js/win32/msbuild.bat.tpl])
     AC_CONFIG_FILES([src/couchdb/priv/couch_js/win32/couchjs.vcxproj.tpl])
     AC_CONFIG_FILES([src/couchdb/priv/icu_driver/win32/msbuild.bat.tpl])
     AC_CONFIG_FILES([src/couchdb/priv/icu_driver/win32/couch_icu_driver.vcxproj.tpl])
+    AC_CONFIG_FILES([src/ejson/win32/msbuild.bat.tpl])
+    AC_CONFIG_FILES([src/ejson/win32/ejson.vcxproj.tpl])
+    AC_CONFIG_FILES([src/snappy/win32/msbuild.bat.tpl])
+    AC_CONFIG_FILES([src/snappy/win32/snappy.vcxproj.tpl])
 fi
 AC_OUTPUT
 

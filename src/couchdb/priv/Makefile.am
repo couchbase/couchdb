@@ -20,7 +20,7 @@ EXTRA_DIST = \
 
 CLEANFILES = stat_descriptions.cfg
 
-if MINGW
+if WINDOWS
 ICU_OUTPUT_DIR = icu_driver/win32
 icu_driver_msbuild = $(ICU_OUTPUT_DIR)/msbuild.bat
 icu_driver_vcproj = $(ICU_OUTPUT_DIR)/couch_icu_driver.vcxproj
@@ -28,32 +28,23 @@ WIN_ICU_INCLUDE = $(ICU_OUTPUT_DIR)/win_icu_include.tmp
 WIN_ICU_LIB_DIR = $(ICU_OUTPUT_DIR)/win_icu_dir.tmp
 WIN_ERL_INCLUDE = $(ICU_OUTPUT_DIR)/win_erl_include.tmp
 COUCH_ICU_DRIVER = $(ICU_OUTPUT_DIR)/couch_icu_driver.dll
-endif
-
-if !MINGW
-ICU_LOCAL_FLAGS = $(ICU_LOCAL_CFLAGS) $(ICU_LOCAL_LDFLAGS)
-if WINDOWS
-ICU_LOCAL_LIBS=-licuuc -licudt -licuin
 else
+ICU_LOCAL_FLAGS = $(ICU_LOCAL_CFLAGS) $(ICU_LOCAL_LDFLAGS)
 ICU_LOCAL_LIBS=-licuuc -licudata -licui18n
-endif
 
 couchprivlib_LTLIBRARIES = couch_icu_driver.la
 couch_icu_driver_la_SOURCES = icu_driver/couch_icu_driver.c
 couch_icu_driver_la_LDFLAGS = -module -avoid-version $(ICU_LOCAL_FLAGS)
 couch_icu_driver_la_CFLAGS = $(ICU_LOCAL_FLAGS)
 couch_icu_driver_la_LIBADD = $(ICU_LOCAL_LIBS)
+endif
 
 if WINDOWS
-couch_icu_driver_la_LDFLAGS += -no-undefined
-endif
-endif
-
-if MINGW
 couchjs_msbuild = couch_js/win32/msbuild.bat
 couchjs_vcproj = couch_js/win32/couchjs.vcxproj
 WIN_JS_INCLUDE = couch_js/win32/win_js_include.tmp
 WIN_JS_LIB_DIR = couch_js/win32/win_js_dir.tmp
+couchpriv_DATA = stat_descriptions.cfg $(COUCH_ICU_DRIVER)
 endif
 
 COUCHJS_SRCS = \
@@ -68,7 +59,9 @@ couchjs_SOURCES = $(COUCHJS_SRCS)
 couchjs_CFLAGS = -D_BSD_SOURCE $(CURL_CFLAGS)
 couchjs_LDADD = $(CURL_LIBS) @JSLIB@
 
+if !WINDOWS
 couchpriv_DATA = stat_descriptions.cfg
+endif
 couchpriv_PROGRAMS = couchspawnkillable
 
 %.cfg: %.cfg.in
@@ -84,10 +77,11 @@ couchspawnkillable: spawnkillable/couchspawnkillable.sh
 	chmod +x $@
 endif
 
-if MINGW
+if WINDOWS
+
 $(COUCH_ICU_DRIVER) : icu_driver/couch_icu_driver.c $(icu_driver_msbuild) $(icu_driver_vcproj)
 	$(MKDIR_P) "$(couchprivlibdir)" || true
-	(cd icu_driver/win32 && msbuild.bat)
+	(cd icu_driver/win32 && ./msbuild.bat)
 	cp $(ICU_OUTPUT_DIR)/couch_icu_driver.dll $(couchprivlibdir)
 	cp $(ICU_OUTPUT_DIR)/couch_icu_driver.lib $(couchprivlibdir)
 
@@ -96,6 +90,7 @@ all: $(COUCH_ICU_DRIVER)
 $(icu_driver_msbuild): $(icu_driver_msbuild).tpl
 	sed -e "s|%msbuild_dir%|$(msbuild_dir)|" \
 	    -e "s|%msbuild_name%|$(msbuild_name)|" \
+	    -e "s|^/cygdrive/\([a-zA-Z]\)|\1:|" \
 	< $< > $@
 
 $(icu_driver_vcproj): $(icu_driver_vcproj).tpl $(WIN_ICU_INCLUDE) $(WIN_ICU_LIB_DIR) $(WIN_ERL_INCLUDE)
@@ -105,21 +100,22 @@ $(icu_driver_vcproj): $(icu_driver_vcproj).tpl $(WIN_ICU_INCLUDE) $(WIN_ICU_LIB_
 	< $< > $@
 
 $(WIN_ICU_INCLUDE):$(ICU_INCLUDE)
-	echo $< | sed -e "s|^/\([a-zA-Z]\)|\1:|" > $@
+	echo $< | sed -e "s|^/cygdrive/\([a-zA-Z]\)|\1:|" > $@
 
 $(WIN_ICU_LIB_DIR):$(ICU_LIB_DIR)
-	echo $< | sed -e "s|^/\([a-zA-Z]\)|\1:|" > $@
+	echo $< | sed -e "s|^/cygdrive/\([a-zA-Z]\)|\1:|" > $@
 
 $(WIN_ERL_INCLUDE):$(ERLANG_INCLUDE)
-	echo $< | sed -e "s|^/\([a-zA-Z]\)|\1:|" > $@
+	echo $< | sed -e "s|^/cygdrive/\([a-zA-Z]\)|\1:|" > $@
 
 couchjs$(EXEEXT): $(COUCHJS_SRCS) $(couchjs_msbuild) $(couchjs_vcproj)
 	@rm -f couchjs$(EXEEXT)
-	(cd couch_js/win32 && msbuild.bat)
+	(cd couch_js/win32 && ./msbuild.bat)
 
 $(couchjs_msbuild): $(couchjs_msbuild).tpl
 	sed -e "s|%msbuild_dir%|$(msbuild_dir)|" \
 	    -e "s|%msbuild_name%|$(msbuild_name)|" \
+	    -e "s|^/cygdrive/\([a-zA-Z]\)|\1:|" \
 	< $< > $@
 
 $(couchjs_vcproj): $(couchjs_vcproj).tpl $(WIN_JS_INCLUDE) $(WIN_JS_LIB_DIR)
@@ -128,10 +124,10 @@ $(couchjs_vcproj): $(couchjs_vcproj).tpl $(WIN_JS_INCLUDE) $(WIN_JS_LIB_DIR)
 	< $< > $@
 
 $(WIN_JS_INCLUDE):$(JS_INCLUDE)
-	echo $< | sed -e "s|^/\([a-zA-Z]\)|\1:|" > $@
+	echo $< | sed -e "s|^/cygdrive/\([a-zA-Z]\)|\1:|" > $@
 
 $(WIN_JS_LIB_DIR):$(JS_LIB_DIR)
-	echo $< | sed -e "s|^/\([a-zA-Z]\)|\1:|" > $@
+	echo $< | sed -e "s|^/cygdrive/\([a-zA-Z]\)|\1:|" > $@
 endif
 
 # libtool and automake have defeated markh.  For each of our executables
