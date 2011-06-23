@@ -20,7 +20,7 @@
 %% @doc Compacts the views.  GroupId must not include the _design/ prefix
 start_compact(DbName, GroupId) ->
     Pid = couch_view:get_group_server(DbName, <<"_design/",GroupId/binary>>),
-    gen_server:call(Pid, {start_compact, fun compact_group/2}).
+    gen_server:call(Pid, {start_compact, fun compact_group/3}).
 
 abort_compact(DbName, GroupId) ->
     Pid = couch_view:get_group_server(DbName, <<"_design/", GroupId/binary>>),
@@ -31,7 +31,7 @@ abort_compact(DbName, GroupId) ->
 %%=============================================================================
 
 %% @spec compact_group(Group, NewGroup) -> ok
-compact_group(Group, EmptyGroup) ->
+compact_group(Group, EmptyGroup, DbName) ->
     #group{
         current_seq = Seq,
         id_btree = IdBtree,
@@ -40,17 +40,17 @@ compact_group(Group, EmptyGroup) ->
     } = Group,
 
     #group{
-        db = Db,
         id_btree = EmptyIdBtree,
         views = EmptyViews,
         fd = Fd
     } = EmptyGroup,
 
+    {ok, Db} = couch_db:open_int(DbName, []),
     {ok, DbReduce} = couch_btree:full_reduce(Db#db.fulldocinfo_by_id_btree),
+    couch_db:close(Db),
     Count = element(1, DbReduce),
 
     <<"_design", ShortName/binary>> = GroupId,
-    DbName = couch_db:name(Db),
     TaskName = <<DbName/binary, ShortName/binary>>,
     couch_task_status:add_task(<<"View Group Compaction">>, TaskName, <<"">>),
     BufferSize = list_to_integer(
@@ -94,14 +94,12 @@ maybe_retry_compact(DbName, GroupId, NewGroup) ->
     ok ->
         ok;
     update ->
-        {ok, Db} = couch_db:open_int(DbName, []),
         {_, Ref} = erlang:spawn_monitor(fun() ->
-            couch_view_updater:update(nil, NewGroup#group{db = Db})
+            couch_view_updater:update(nil, NewGroup, DbName)
         end),
         receive
         {'DOWN', Ref, _, _, {new_group, NewGroup2}} ->
-            couch_db:close(Db),
-            maybe_retry_compact(DbName, GroupId, NewGroup2#group{db = nil})
+            maybe_retry_compact(DbName, GroupId, NewGroup2)
         end
     end.
 

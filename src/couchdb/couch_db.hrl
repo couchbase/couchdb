@@ -233,7 +233,6 @@
 
 -record(group, {
     sig=nil,
-    db=nil,
     fd=nil,
     name,
     def_lang,
