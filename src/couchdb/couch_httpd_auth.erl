@@ -101,9 +101,9 @@ null_authentication_handler(Req) ->
 
 %% @doc proxy auth handler.
 %
-% This handler allows creation of a userCtx object from a user authenticated remotly.
+% This handler allows creation of a userCtx object from a user authenticated remotely.
 % The client just pass specific headers to CouchDB and the handler create the userCtx.
-% Headers  name can be defined in local.ini. By thefault they are :
+% Header names can be defined in local.ini. By default, they are :
 %
 %   * X-Auth-CouchDB-UserName : contain the username, (x_auth_username in
 %   couch_httpd_auth section)
