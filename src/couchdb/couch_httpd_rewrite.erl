@@ -178,13 +178,14 @@ handle_rewrite_req(#httpd{
             MochiReq1:cleanup(),
 
             #httpd{
+                db_frontend = DbFrontendModule,
                 db_url_handlers = DbUrlHandlers,
                 design_url_handlers = DesignUrlHandlers,
                 default_fun = DefaultFun,
                 url_handlers = UrlHandlers
             } = Req,
-            couch_httpd:handle_request_int(MochiReq1, DefaultFun,
-                    UrlHandlers, DbUrlHandlers, DesignUrlHandlers)
+            couch_httpd:handle_request_int(MochiReq1, DbFrontendModule,
+                    DefaultFun, UrlHandlers, DbUrlHandlers, DesignUrlHandlers)
         end.
 
 quote_plus({bind, X}) ->

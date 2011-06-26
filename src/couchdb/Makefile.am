@@ -48,6 +48,7 @@ source_files = \
     couch_external_manager.erl \
     couch_external_server.erl \
     couch_file.erl \
+    couch_db_frontend.erl \
     couch_httpc_pool.erl \
     couch_httpd.erl \
     couch_httpd_db.erl \
@@ -120,6 +121,7 @@ compiled_files = \
     couch_external_manager.beam \
     couch_external_server.beam \
     couch_file.beam \
+    couch_db_frontend.beam \
     couch_httpc_pool.beam \
     couch_httpd.beam \
     couch_httpd_db.beam \

@@ -14,7 +14,7 @@
 -include("couch_db.hrl").
 
 -export([start_link/0, start_link/1, stop/0, config_change/2, 
-        handle_request/5]).
+        handle_request/6]).
 
 -export([header_value/2,header_value/3,qs_value/2,qs_value/3,qs/1,qs_json_value/3]).
 -export([path/1,absolute_uri/2,body_length/1]).
@@ -28,7 +28,7 @@
 -export([start_json_response/2, start_json_response/3, end_json_response/1]).
 -export([send_response/4,send_method_not_allowed/2,send_error/4, send_redirect/2,send_chunked_error/2]).
 -export([send_json/2,send_json/3,send_json/4,last_chunk/1,parse_multipart_request/3]).
--export([accepted_encodings/1,handle_request_int/5,validate_referer/1,validate_ctype/2]).
+-export([accepted_encodings/1,handle_request_int/6,validate_referer/1,validate_ctype/2]).
 
 start_link() ->
     start_link(http).
@@ -86,6 +86,8 @@ start_link(Name, Options) ->
     {ok, SocketOptions} = couch_util:parse_term(
         couch_config:get("httpd", "socket_options", "[]")),
 
+    DbFrontendModule = list_to_atom(couch_config:get("httpd", "db_frontend", "couch_db_frontend")),
+
     Loop = fun(Req)->
         case SocketOptions of
         [] ->
@@ -94,7 +96,7 @@ start_link(Name, Options) ->
             ok = mochiweb_socket:setopts(Req:get(socket), SocketOptions)
         end,
         apply(?MODULE, handle_request, [
-            Req, DefaultFun, UrlHandlers, DbUrlHandlers, DesignUrlHandlers
+            Req, DbFrontendModule, DefaultFun, UrlHandlers, DbUrlHandlers, DesignUrlHandlers
         ])
     end,
 
@@ -167,15 +169,15 @@ make_arity_3_fun(SpecStr) ->
 make_fun_spec_strs(SpecStr) ->
     re:split(SpecStr, "(?<=})\\s*,\\s*(?={)", [{return, list}]).
 
-handle_request(MochiReq, DefaultFun, UrlHandlers, DbUrlHandlers, 
+handle_request(MochiReq, DbFrontendModule, DefaultFun, UrlHandlers, DbUrlHandlers,
     DesignUrlHandlers) ->
 
     MochiReq1 = couch_httpd_vhost:dispatch_host(MochiReq),
-    
-    handle_request_int(MochiReq1, DefaultFun,
+
+    handle_request_int(MochiReq1, DbFrontendModule, DefaultFun,
                 UrlHandlers, DbUrlHandlers, DesignUrlHandlers).
 
-handle_request_int(MochiReq, DefaultFun,
+handle_request_int(MochiReq, DbFrontendModule, DefaultFun,
             UrlHandlers, DbUrlHandlers, DesignUrlHandlers) ->
     Begin = now(),
     AuthenticationSrcs = make_fun_spec_strs(
@@ -248,6 +250,7 @@ handle_request_int(MochiReq, DefaultFun,
         requested_path_parts =
             [?l2b(unquote(Part)) || Part <- string:tokens(RequestedPath, "/")],
         path_parts = [?l2b(unquote(Part)) || Part <- string:tokens(Path, "/")],
+        db_frontend = DbFrontendModule,
         db_url_handlers = DbUrlHandlers,
         design_url_handlers = DesignUrlHandlers,
         default_fun = DefaultFun,
