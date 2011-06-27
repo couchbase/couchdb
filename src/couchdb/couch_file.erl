@@ -562,6 +562,7 @@ writer_loop(Fd, Eof) ->
         gen_server:reply(From, ok),
         writer_loop(Fd, Eof);
     stop ->
+        ok = file:close(Fd),
         exit(done)
     end.
 
@@ -623,6 +624,7 @@ reader_loop(Fd) ->
         gen_server:reply(From, find_header(Fd, Eof div ?SIZE_BLOCK)),
         reader_loop(Fd);
     stop ->
+        ok = file:close(Fd),
         exit(done)
     end.
 
