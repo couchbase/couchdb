@@ -881,6 +881,7 @@ copy_docs(Db, #db{fd = DestFd} = NewDb, InfoBySeq0, Retry) ->
             NewDb#db.docinfo_by_seq_btree, NewDocInfos, RemoveSeqs),
     {ok, FullDocInfoBTree} = couch_btree:add_remove(
             NewDb#db.fulldocinfo_by_id_btree, NewFullDocInfos, []),
+    ok = couch_file:flush(NewDb#db.fd),
     NewDb#db{ fulldocinfo_by_id_btree=FullDocInfoBTree,
               docinfo_by_seq_btree=DocInfoBTree}.
 
