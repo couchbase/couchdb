@@ -12,7 +12,7 @@
 
 -module(couch_httpd_view_merger).
 
--export([handle_req/1]).
+-export([handle_req/1, apply_http_config/3]).
 
 -include("couch_db.hrl").
 -include("couch_view_merger.hrl").
@@ -36,6 +36,14 @@
 }).
 
 
+setup_http_sender(MergeParams, Req) ->
+    MergeParams#view_merge{
+        user_acc = #sender_acc{
+            req = Req, on_error = MergeParams#view_merge.on_error
+        },
+        callback = fun http_sender/2
+    }.
+
 handle_req(#httpd{method = 'GET'} = Req) ->
     Views = validate_views_param(qs_json_value(Req, "views", nil)),
     Keys = validate_keys_param(qs_json_value(Req, "keys", nil)),
@@ -46,16 +54,10 @@ handle_req(#httpd{method = 'GET'} = Req) ->
         views = Views,
         keys = Keys,
         rereduce_fun = RedFun,
-        rereduce_fun_lang = RedFunLang,
-        callback = fun http_sender/2
+        rereduce_fun_lang = RedFunLang
     },
     MergeParams1 = apply_http_config(Req, [], MergeParams0),
-    MergeParams2 = MergeParams1#view_merge{
-        user_acc = #sender_acc{
-            req = Req, on_error = MergeParams1#view_merge.on_error
-        }
-    },
-    couch_view_merger:query_view(Req, MergeParams2);
+    couch_view_merger:query_view(Req, MergeParams1);
 
 handle_req(#httpd{method = 'POST'} = Req) ->
     couch_httpd:validate_ctype(Req, "application/json"),
@@ -69,16 +71,10 @@ handle_req(#httpd{method = 'POST'} = Req) ->
         views = Views,
         keys = Keys,
         rereduce_fun = RedFun,
-        rereduce_fun_lang = RedFunLang,
-        callback = fun http_sender/2
+        rereduce_fun_lang = RedFunLang
     },
     MergeParams1 = apply_http_config(Req, Props, MergeParams0),
-    MergeParams2 = MergeParams1#view_merge{
-        user_acc = #sender_acc{
-            req = Req, on_error = MergeParams1#view_merge.on_error
-        }
-    },
-    couch_view_merger:query_view(Req, MergeParams2);
+    couch_view_merger:query_view(Req, MergeParams1);
 
 handle_req(Req) ->
     couch_httpd:send_method_not_allowed(Req, "GET,POST").
@@ -98,10 +94,10 @@ apply_http_config(Req, Body, MergeParams) ->
     Policy when is_binary(Policy) ->
        Policy
     end,
-    MergeParams#view_merge{
+    setup_http_sender(MergeParams#view_merge{
         conn_timeout = ConnTimeout,
         on_error = validate_on_error_param(OnError)
-    }.
+    }, Req).
 
 
 http_sender(start, #sender_acc{req = Req, error_acc = ErrorAcc} = SAcc) ->
