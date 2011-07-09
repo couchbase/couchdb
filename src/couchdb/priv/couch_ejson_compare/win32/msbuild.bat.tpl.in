@@ -1,0 +1,1 @@
+%msbuild_dir%/%msbuild_name% couch_ejson_compare.vcxproj -p:configuration=release -p:platform=win32

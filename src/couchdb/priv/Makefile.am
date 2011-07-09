@@ -29,6 +29,10 @@ WIN_ICU_INCLUDE = $(ICU_OUTPUT_DIR)/win_icu_include.tmp
 WIN_ICU_LIB_DIR = $(ICU_OUTPUT_DIR)/win_icu_dir.tmp
 WIN_ERL_INCLUDE = $(ICU_OUTPUT_DIR)/win_erl_include.tmp
 COUCH_ICU_DRIVER = $(ICU_OUTPUT_DIR)/couch_icu_driver.dll
+EJSON_COMPARE_DIR = couch_ejson_compare/win32
+EJSON_COMPARE_MSBUILD = $(EJSON_COMPARE_DIR)/msbuild.bat
+EJSON_COMPARE_VCPROJ = $(EJSON_COMPARE_DIR)/couch_ejson_compare.vcxproj
+COUCH_EJSON_COMPARE = $(EJSON_COMPARE_DIR)/couch_ejson_compare.dll
 else
 ICU_LOCAL_FLAGS = $(ICU_LOCAL_CFLAGS) $(ICU_LOCAL_LDFLAGS)
 ICU_LOCAL_LIBS=-licuuc -licudata -licui18n
@@ -40,9 +44,6 @@ couch_ejson_compare_la_SOURCES = couch_ejson_compare/couch_ejson_compare.c
 couch_ejson_compare_la_CFLAGS = -D_BSD_SOURCE $(ICU_LOCAL_FLAGS)
 couch_ejson_compare_la_LDFLAGS = -module -avoid-version $(ICU_LOCAL_FLAGS)
 couch_ejson_compare_la_LIBADD = $(ICU_LOCAL_LIBS)
-if WINDOWS
-couch_ejson_compare_la_LDFLAGS += -no-undefined
-endif
 endif
 couch_icu_driver_la_SOURCES = icu_driver/couch_icu_driver.c
 couch_icu_driver_la_LDFLAGS = -module -avoid-version $(ICU_LOCAL_FLAGS)
@@ -55,7 +56,7 @@ couchjs_msbuild = couch_js/win32/msbuild.bat
 couchjs_vcproj = couch_js/win32/couchjs.vcxproj
 WIN_JS_INCLUDE = couch_js/win32/win_js_include.tmp
 WIN_JS_LIB_DIR = couch_js/win32/win_js_dir.tmp
-couchpriv_DATA = stat_descriptions.cfg $(COUCH_ICU_DRIVER)
+couchpriv_DATA = stat_descriptions.cfg $(COUCH_ICU_DRIVER) $(COUCH_EJSON_COMPARE)
 endif
 
 COUCHJS_SRCS = \
@@ -118,6 +119,24 @@ $(WIN_ICU_LIB_DIR):$(ICU_LIB_DIR)
 
 $(WIN_ERL_INCLUDE):$(ERLANG_INCLUDE)
 	echo $< | sed -e "s|^/cygdrive/\([a-zA-Z]\)|\1:|" > $@
+
+$(COUCH_EJSON_COMPARE) : couch_ejson_compare/couch_ejson_compare.c $(EJSON_COMPARE_MSBUILD) $(EJSON_COMPARE_VCPROJ)
+	$(MKDIR_P) "$(couchprivlibdir)" || true
+	(cd couch_ejson_compare/win32 && ./msbuild.bat)
+	cp $(EJSON_COMPARE_DIR)/couch_ejson_compare.dll $(couchprivlibdir)
+	cp $(EJSON_COMPARE_DIR)/couch_ejson_compare.lib $(couchprivlibdir)
+
+$(EJSON_COMPARE_MSBUILD): $(EJSON_COMPARE_MSBUILD).tpl
+	sed -e "s|%msbuild_dir%|$(msbuild_dir)|" \
+	    -e "s|%msbuild_name%|$(msbuild_name)|" \
+	    -e "s|^/cygdrive/\([a-zA-Z]\)|\1:|" \
+	< $< > $@
+
+$(EJSON_COMPARE_VCPROJ): $(EJSON_COMPARE_VCPROJ).tpl $(WIN_ICU_INCLUDE) $(WIN_ICU_LIB_DIR) $(WIN_ERL_INCLUDE)
+	sed -e "s|%ICU_INCLUDE%|`cat $(WIN_ICU_INCLUDE)`|" \
+	    -e "s|%ERLANG_INCLUDE%|`cat $(WIN_ERL_INCLUDE)`|" \
+	    -e "s|%ICU_LIB_DIR%|`cat $(WIN_ICU_LIB_DIR)`|" \
+	< $< > $@
 
 couchjs$(EXEEXT): $(COUCHJS_SRCS) $(couchjs_msbuild) $(couchjs_vcproj)
 	@rm -f couchjs$(EXEEXT)

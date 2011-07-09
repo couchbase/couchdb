@@ -535,6 +535,8 @@ if test x${IS_WINDOWS} = xTRUE; then
     AC_CONFIG_FILES([src/couchdb/priv/couch_js/win32/couchjs.vcxproj.tpl])
     AC_CONFIG_FILES([src/couchdb/priv/icu_driver/win32/msbuild.bat.tpl])
     AC_CONFIG_FILES([src/couchdb/priv/icu_driver/win32/couch_icu_driver.vcxproj.tpl])
+    AC_CONFIG_FILES([src/couchdb/priv/couch_ejson_compare/win32/msbuild.bat.tpl])
+    AC_CONFIG_FILES([src/couchdb/priv/couch_ejson_compare/win32/couch_ejson_compare.vcxproj.tpl])
     AC_CONFIG_FILES([src/ejson/win32/msbuild.bat.tpl])
     AC_CONFIG_FILES([src/ejson/win32/ejson.vcxproj.tpl])
     AC_CONFIG_FILES([src/snappy/win32/msbuild.bat.tpl])
