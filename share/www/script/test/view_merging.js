@@ -137,10 +137,13 @@ couchTests.view_merging = function(debug) {
     for (var i = 0; i < resultA.rows.length; i++) {
       var a = resultA.rows[i];
       var b = resultB.rows[i];
+      var docA = a.doc || null;
+      var docB = b.doc || null;
 
       TEquals(JSON.stringify(a.key), JSON.stringify(b.key), "keys are equal");
       TEquals(JSON.stringify(a.value), JSON.stringify(b.value),
         "values are equal");
+      TEquals(JSON.stringify(docA), JSON.stringify(docB), "docs are equal");
     }
   }
 
@@ -1078,10 +1081,237 @@ couchTests.view_merging = function(debug) {
 
   TEquals(resp1 + resp2 + resp3, respMerged.rows[0].value);
 
+
+  /**
+   * Test merging of _all_docs
+   */
+
+  dbA = newDb("test_db_a");
+  dbB = newDb("test_db_b");
+  dbC = newDb("test_db_c");
+  dbFull = newDb("test_db_full");
+  dbs = [dbA, dbB, dbC];
+
+  populateAlternated(dbs, makeDocs(1, 31));
+  populateAlternated([dbFull], makeDocs(1, 31));
+
+  respFull = dbFull.allDocs();
+  respMerged = mergedQuery(dbs, "_all_docs", {});
+
+  compareViewResults(respFull, respMerged);
+
+  // same as before but with remote databases
+  respMerged = mergedQuery([dbUri(dbA), dbB, dbUri(dbC)], "_all_docs", {});
+
+  compareViewResults(respFull, respMerged);
+
+  // test keys parameter, local databases only
+  keys = ["1", "20", "9999", "4"];
+  var sortedKeys = keys;
+  sortedKeys.sort();
+
+  respFull = dbFull.allDocs({"keys": keys});
+  respMerged = mergedQuery(dbs, "_all_docs", {"keys": keys});
+
+  TEquals("object", typeof respMerged);
+  TEquals(respFull.total_rows, respMerged.total_rows);
+  TEquals("object", typeof respMerged.rows);
+  TEquals(respFull.rows.length, respMerged.rows.length);
+
+  for (i = 0; i < respMerged.rows.length; i++) {
+    TEquals(sortedKeys[i], respMerged.rows[i].key);
+  }
+
+  compareViewResults(respFull, respMerged);
+
+  // test keys parameter, local and remote databases
+  respMerged = mergedQuery(
+    [dbUri(dbA), dbB, dbUri(dbC)], "_all_docs", {"keys": keys});
+
+  TEquals("object", typeof respMerged);
+  TEquals(respFull.total_rows, respMerged.total_rows);
+  TEquals("object", typeof respMerged.rows);
+  TEquals(respFull.rows.length, respMerged.rows.length);
+
+  for (i = 0; i < respMerged.rows.length; i++) {
+    TEquals(sortedKeys[i], respMerged.rows[i].key);
+  }
+
+  compareViewResults(respFull, respMerged);
+
+  // test keys parameter, chained view merging
+  body = {"views": {}, "keys": keys};
+  body.views[dbA.name] = "_all_docs";
+  subviewspec = {
+    "views": {}
+  };
+  subviewspec.views[dbB.name] = "_all_docs";
+  subviewspec.views[dbC.name] = "_all_docs";
+  body.views[CouchDB.protocol + CouchDB.host + '/_view_merge'] = subviewspec;
+
+  xhr = CouchDB.request("POST",
+    "/_view_merge", {
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  TEquals(200, xhr.status);
+
+  respMerged = JSON.parse(xhr.responseText);
+
+  compareViewResults(respFull, respMerged);
+
+  // test _all_docs with startkey and endkey, local databases only
+  respFull = dbFull.allDocs({"startkey": "10", "endkey": "2"});
+  respMerged = mergedQuery(dbs, "_all_docs",
+      {"startkey": '"10"', "endkey": '"2"'});
+
+  compareViewResults(respFull, respMerged);
+
+  // test _all_docs with startkey and endkey, local and remote databases
+  respMerged = mergedQuery([dbUri(dbA), dbB, dbUri(dbC)], "_all_docs",
+      {"startkey": '"10"', "endkey": '"2"'});
+
+  compareViewResults(respFull, respMerged);
+
+  // test _all_docs with startkey, endkey and descending, local databases only
+  respFull = dbFull.allDocs({"startkey": "2", "endkey": "10", "descending": true});
+  respMerged = mergedQuery(dbs, "_all_docs",
+      {"startkey": '"2"', "endkey": '"10"', "descending": true});
+
+  compareViewResults(respFull, respMerged);
+
+  // test _all_docs with startkey, endkey and descending, local and remote databases
+  respFull = dbFull.allDocs({"startkey": "2", "endkey": "10", "descending": true});
+  respMerged = mergedQuery([dbUri(dbA), dbB, dbUri(dbC)], "_all_docs",
+      {"startkey": '"2"', "endkey": '"10"', "descending": true});
+
+  compareViewResults(respFull, respMerged);
+
+
+  // Full view request with ?include_docs=true
+  respFull = dbFull.allDocs({"include_docs": true});
+  respMerged = mergedQuery(dbs, "_all_docs", {include_docs: true});
+
+  compareViewResults(respFull, respMerged);
+
+  // same as before but with chained merging
+  // test the we get the same result with a sub merge view spec
+  body = {"views": {}};
+  body.views[dbA.name] = "_all_docs";
+  subviewspec = {
+    "views": {}
+  };
+  subviewspec.views[dbB.name] = "_all_docs";
+  subviewspec.views[dbC.name] = "_all_docs";
+  body.views[CouchDB.protocol + CouchDB.host + '/_view_merge'] = subviewspec;
+
+  xhr = CouchDB.request("POST",
+    "/_view_merge?include_docs=true", {
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  TEquals(200, xhr.status);
+
+  respMerged = JSON.parse(xhr.responseText);
+  compareViewResults(respFull, respMerged);
+
+
+  /**
+   * Test all_docs merging with documents duplicated in several databases.
+   * No duplicated entries are returned. If the same document exists in
+   * several source databases and with different revisions, we return a row
+   * with the most recent revision only.
+   */
+
+  ddoc = {
+    "_id": "_design/foobar",
+    "language": "javascript"
+  };
+
+  TEquals(true, dbFull.save(ddoc).ok);
+  delete ddoc._rev;
+
+  TEquals(true, dbA.save(ddoc).ok);
+  delete ddoc._rev;
+  TEquals(true, dbB.save(ddoc).ok);
+  delete ddoc._rev;
+
+  // ddoc not in dbC, but should be listed in merged _all_docs
+
+  respFull = dbFull.allDocs();
+  respMerged = mergedQuery(dbs, "_all_docs", {});
+  compareViewResults(respFull, respMerged);
+
+  // Add more docs to dbA only
+  TEquals(true, dbA.save({"_id": "001"}).ok);
+  TEquals(true, dbA.save({"_id": "002"}).ok);
+  TEquals(true, dbA.save({"_id": "003"}).ok);
+  TEquals(true, dbA.save({"_id": "004"}).ok);
+  TEquals(true, dbA.save({"_id": "005"}).ok);
+  // And dbFull as well...
+  TEquals(true, dbFull.save({"_id": "001"}).ok);
+  TEquals(true, dbFull.save({"_id": "002"}).ok);
+  TEquals(true, dbFull.save({"_id": "003"}).ok);
+  TEquals(true, dbFull.save({"_id": "004"}).ok);
+  TEquals(true, dbFull.save({"_id": "005"}).ok);
+
+  respFull = dbFull.allDocs();
+  respMerged = mergedQuery(dbs, "_all_docs", {});
+  compareViewResults(respFull, respMerged);
+
+  // ddoc added to dbC, same result as before
+  TEquals(true, dbC.save(ddoc).ok);
+  delete ddoc._rev;
+
+  respMerged = mergedQuery(dbs, "_all_docs", {});
+  compareViewResults(respFull, respMerged);
+
+  // update ddoc in dbB only, we should get revision 2-... in _all_docs result,
+  // and not revision 1-...
+  ddoc = dbB.open(ddoc._id);
+  ddoc.foo = "bar";
+  TEquals("string", typeof ddoc._rev);
+  TEquals(0, ddoc._rev.indexOf("1-"));
+  TEquals(true, dbB.save(ddoc).ok);
+  TEquals(0, ddoc._rev.indexOf("2-"));
+
+  var rev2 = ddoc._rev;
+
+  ddoc = dbFull.open(ddoc._id);
+  ddoc.foo = "bar";
+  TEquals("string", typeof ddoc._rev);
+  TEquals(0, ddoc._rev.indexOf("1-"));
+  TEquals(true, dbFull.save(ddoc).ok);
+  TEquals(0, ddoc._rev.indexOf("2-"));
+
+  TEquals(rev2, ddoc._rev, "Same ddoc rev in dbB and dbFull");
+
+  respFull = dbFull.allDocs();
+  respMerged = mergedQuery(dbs, "_all_docs", {});
+  compareViewResults(respFull, respMerged);
+
+  // Test duplicated regular docs, they only show up once as well
+  TEquals(true, dbC.save({"_id": "003"}).ok);
+  respMerged = mergedQuery(dbs, "_all_docs", {});
+  respFull = dbFull.allDocs();
+  compareViewResults(respFull, respMerged);
+
+  // test startkey and endkey filter for design documents
+  TEquals(true, dbFull.save({"_id": "_design/abc"}).ok);
+  TEquals(true, dbFull.save({"_id": "_design/qwerty"}).ok);
+  TEquals(true, dbC.save({"_id": "_design/abc"}).ok);
+  TEquals(true, dbA.save({"_id": "_design/qwerty"}).ok);
+
+  respMerged = mergedQuery(dbs, "_all_docs",
+    {"startkey": '"_design/"', "endkey": '"_design0"'});
+  respFull = dbFull.allDocs({"startkey": "_design/", "endkey": "_design0"});
+  compareViewResults(respFull, respMerged);
+
   // cleanup
   dbA.deleteDb();
   dbB.deleteDb();
   dbC.deleteDb();
   dbD.deleteDb();
   dbE.deleteDb();
+  dbFull.deleteDb();
 };
