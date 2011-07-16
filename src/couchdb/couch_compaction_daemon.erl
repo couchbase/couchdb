@@ -23,8 +23,10 @@
 -include("couch_db.hrl").
 
 -define(CONFIG_ETS, couch_compaction_daemon_config).
--define(PAUSE_PERIOD, 30 * 60 * 1000).  % milliseconds
--define(DISK_CHECK_PERIOD, 5).          % minutes
+% The period to pause for after checking (and eventually compact) all
+% databases and view groups.
+-define(PAUSE_PERIOD, 1).               % minutes
+-define(DISK_CHECK_PERIOD, 1).          % minutes
 -define(KV_RE,
     [$^, "\\s*", "([^=]+?)", "\\s*", $=, "\\s*", "([^=]+?)", "\\s*", $$]).
 -define(PERIOD_RE,
@@ -147,7 +149,7 @@ compact_loop(Parent) ->
     true ->
         receive {Parent, have_config} -> ok end;
     false ->
-        ok = timer:sleep(?PAUSE_PERIOD)
+        ok = timer:sleep(?PAUSE_PERIOD * 60 * 1000)
     end,
     compact_loop(Parent).
 
@@ -257,6 +259,8 @@ can_db_compact(#config{db_frag = Threshold} = Config, Db) ->
     true ->
         {ok, DbInfo} = couch_db:get_db_info(Db),
         {Frag, SpaceRequired} = frag(DbInfo),
+        ?LOG_DEBUG("Fragmentation for database `~s` is ~p%, estimated space for"
+           " compaction is ~p bytes.", [Db#db.name, Frag, SpaceRequired]),
         case check_frag(Threshold, Frag) of
         false ->
             false;
@@ -281,6 +285,9 @@ can_view_compact(Config, Db, GroupId, GroupInfo) ->
         false;
     true ->
         {Frag, SpaceRequired} = frag(GroupInfo),
+        ?LOG_DEBUG("Fragmentation for view group `~s` (database `~s`) is ~p%, "
+           "estimated space for compaction is ~p bytes.",
+           [GroupId, Db#db.name, Frag, SpaceRequired]),
         case check_frag(Config#config.view_frag, Frag) of
         false ->
             false;
@@ -327,12 +334,13 @@ frag(Props) ->
     0 ->
         {0, FileSize};
     DataSize ->
-        {((FileSize - DataSize) / FileSize * 100), space_required(DataSize)}
+        {round(((FileSize - DataSize) / FileSize * 100)), space_required(DataSize)}
     end.
 
-% rough estimation of necessary disk space to compact a database or view index
+% Rough, and pessimistic, estimation of necessary disk space to compact a
+% database or view index.
 space_required(DataSize) ->
-    round(DataSize * 1.70).
+    round(DataSize * 2.0).
 
 
 load_config() ->
