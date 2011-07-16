@@ -346,8 +346,13 @@ space_required(DataSize) ->
 load_config() ->
     lists:foreach(
         fun({DbName, ConfigString}) ->
-            Config = parse_config(ConfigString),
-            true = ets:insert(?CONFIG_ETS, {?l2b(DbName), Config})
+            case (catch parse_config(ConfigString)) of
+            {ok, Config} ->
+                true = ets:insert(?CONFIG_ETS, {?l2b(DbName), Config});
+            _ ->
+                ?LOG_ERROR("Invalid compaction configuration for database "
+                    "`~s`: `~s`", [DbName, ConfigString])
+            end
         end,
         couch_config:get("compaction_daemon")).
 
@@ -359,7 +364,7 @@ parse_config(ConfigString) ->
             {K, V}
         end,
         string:tokens(string:to_lower(ConfigString), ",")),
-    lists:foldl(
+    Config = lists:foldl(
         fun({"db_fragmentation", V0}, Config) ->
             [V] = string:tokens(V0, "%"),
             Config#config{db_frag = list_to_integer(V)};
@@ -381,7 +386,8 @@ parse_config(ConfigString) ->
             Config#config{abortion = true};
         ({"abortion", V}, Config) when V =:= "no"; V =:= "false" ->
             Config#config{abortion = false}
-        end, #config{}, KVs).
+        end, #config{}, KVs),
+    {ok, Config}.
 
 
 free_space(Path) ->
