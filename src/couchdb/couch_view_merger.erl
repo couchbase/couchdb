@@ -1042,9 +1042,8 @@ get_ddoc(#httpdb{url = BaseUrl, headers = Headers} = HttpDb, Id) ->
     {ok, "200", _RespHeaders, Body} ->
         {ok, couch_doc:from_json_obj(?JSON_DECODE(Body))};
     {ok, _Code, _RespHeaders, Body} ->
-        Msg = io_lib:format("Error getting design document `~s` from database "
-            "`~s`: ~s", [Id, db_uri(HttpDb), Body]),
-        throw({error, iolist_to_binary(Msg)});
+        {Props} = ?JSON_DECODE(Body),
+        throw({get_value(<<"error">>, Props), get_value(<<"reason">>, Props)});
     {error, Error} ->
         Msg = io_lib:format("Error getting design document `~s` from database "
             "`~s`: ~s", [Id, db_uri(HttpDb), Error]),
@@ -1054,10 +1053,8 @@ get_ddoc(Db, Id) ->
     case couch_db:open_doc(Db, Id, [ejson_body]) of
     {ok, _} = Ok ->
         Ok;
-    {error, Error} ->
-        Msg = io_lib:format("Error getting design document `~s` from database "
-            "`~s`: ~s", [Id, Db#db.name, Error]),
-        throw({error, iolist_to_binary(Msg)})
+    Error ->
+        throw(Error)
     end.
 
 
