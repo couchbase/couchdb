@@ -40,7 +40,8 @@
     db_frag = nil,
     view_frag = nil,
     period = nil,
-    abortion = false
+    abortion = false,
+    parallel_view_compact = false
 }).
 
 -record(period, {
@@ -159,13 +160,29 @@ maybe_compact_db(DbName, Config) ->
     {ok, Db} ->
         case can_db_compact(Config, Db) of
         true ->
-            {ok, CompactPid} = couch_db:start_compact(Db),
+            {ok, DbCompactPid} = couch_db:start_compact(Db),
             TimeLeft = compact_time_left(Config),
-            MonRef = erlang:monitor(process, CompactPid),
+            case Config#config.parallel_view_compact of
+            true ->
+                ViewsCompactPid = spawn_link(fun() ->
+                    {ok, Db2} = couch_db:open_int(DbName, []),
+                    maybe_compact_views(Db2, Config),
+                    couch_db:close(Db2)
+                end),
+                ViewsMonRef = erlang:monitor(process, ViewsCompactPid);
+            false ->
+                ViewsMonRef = nil
+            end,
+            DbMonRef = erlang:monitor(process, DbCompactPid),
             receive
-            {'DOWN', MonRef, process, CompactPid, normal} ->
-                maybe_compact_views(Db, Config);
-            {'DOWN', MonRef, process, CompactPid, Reason} ->
+            {'DOWN', DbMonRef, process, _, normal} ->
+                case Config#config.parallel_view_compact of
+                true ->
+                    ok;
+                false ->
+                    maybe_compact_views(Db, Config)
+                end;
+            {'DOWN', DbMonRef, process, _, Reason} ->
                 ?LOG_ERROR("Compaction daemon - an error ocurred while"
                     " compacting the database `~s`: ~p", [DbName, Reason])
             after TimeLeft ->
@@ -173,6 +190,15 @@ maybe_compact_db(DbName, Config) ->
                     " `~s` because it's exceeding the allowed period.",
                     [DbName]),
                 ok = couch_db:abort_compact(Db)
+            end,
+            case ViewsMonRef of
+            nil ->
+                ok;
+            _ ->
+                receive
+                {'DOWN', ViewsMonRef, process, _, _Reason} ->
+                    ok
+                end
             end;
         false ->
             ok
@@ -385,7 +411,11 @@ parse_config(ConfigString) ->
         ({"abortion", V}, Config) when V =:= "yes"; V =:= "true" ->
             Config#config{abortion = true};
         ({"abortion", V}, Config) when V =:= "no"; V =:= "false" ->
-            Config#config{abortion = false}
+            Config#config{abortion = false};
+        ({"parallel_view_compaction", V}, Config) when V =:= "yes"; V =:= "true" ->
+            Config#config{parallel_view_compact = true};
+        ({"parallel_view_compaction", V}, Config) when V =:= "no"; V =:= "false" ->
+            Config#config{parallel_view_compact = false}
         end, #config{}, KVs),
     {ok, Config}.
 

@@ -220,6 +220,11 @@ ssl_certificate_max_depth = 3
 ;              be aborted if this parameter is set to "yes". It defaults to "no" and it's
 ;              meaningful only if the *period* parameter is also specified.
 ;
+; * parallel_view_compaction - If set to "yes", the database and its views are compacted
+;                              in parallel. This is only useful on certain setups, like
+;                              for example when the database and view index directories
+;                              point to different disks. It defaults to "no".
+;
 ; Examples:
 ;
 ; 1) foo = db_fragmentation = 70%, view_fragmentation = 60%
