@@ -238,7 +238,7 @@ maybe_compact_view(#db{name = DbName} = Db, GroupId, Config) ->
                     [GroupId, DbName, Reason])
             after TimeLeft ->
                 ?LOG_INFO("Compaction daemon - aborting the compaction for the "
-                    "vew group `~s` of the database `~s` because it's exceeding"
+                    "view group `~s` of the database `~s` because it's exceeding"
                     " the allowed period.", [GroupId, DbName]),
                 ok = couch_view_compactor:abort_compact(DbName, GroupId)
             end;
