@@ -1007,14 +1007,8 @@ open_db(DbName, UserCtx, _MergeParams) ->
     case couch_db:open(DbName, [{user_ctx, UserCtx}]) of
     {ok, _} = Ok ->
         Ok;
-    {error, Error} ->
-        Msg = io_lib:format("Error opening database `~s`: ~s",
-            [DbName, to_binary(Error)]),
-        throw({error, iolist_to_binary(Msg)});
     Error ->
-        Msg = io_lib:format("Error opening database `~s`: ~s",
-            [DbName, to_binary(Error)]),
-        throw({error, iolist_to_binary(Msg)})
+        throw(Error)
     end.
 
 
