@@ -527,6 +527,21 @@ function $$(node) {
       $.couch.info({
         success: function(info, status) {
           $("#version").text(info.version);
+
+          $.couch.config({
+            success: function(product, status) {
+              if (product.title) {
+                document.title = product.title + " - Futon:" + document.title.split(':').slice(1).join(':');
+                $("#product_link").text(product.title);
+              }
+              if (product.url) {
+                $("#product_link").attr('href', product.url);
+              }
+              if (product.version) {
+                $("#version").text(product.version);
+              }
+            }
+          }, 'product');
         }
       });
     });
