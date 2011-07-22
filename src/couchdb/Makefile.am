@@ -96,7 +96,9 @@ source_files = \
     json_stream_parse.erl \
     couch_internal_load_gen.erl \
     couch_httpd_view_merger.erl \
-    couch_view_merger.erl
+    couch_view_merger.erl \
+    couch_view_merger_queue.erl \
+    couch_skew.erl
 
 EXTRA_DIST = $(source_files) couch_api_wrap.hrl couch_db.hrl couch_js_functions.hrl couch_replicator.hrl \
 	couch_view_merger.hrl
@@ -171,7 +173,9 @@ compiled_files = \
     json_stream_parse.beam \
     couch_internal_load_gen.beam \
     couch_httpd_view_merger.beam \
-    couch_view_merger.beam
+    couch_view_merger.beam \
+    couch_view_merger_queue.beam \
+    couch_skew.beam
 
 # doc_base = \
 #     erlang.png \

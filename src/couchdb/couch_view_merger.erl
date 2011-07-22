@@ -17,8 +17,6 @@
 -include("couch_db.hrl").
 -include("couch_view_merger.hrl").
 
--define(MAX_QUEUE_ITEMS, 1).
-
 -import(couch_util, [
     get_value/2,
     get_value/3,
@@ -28,8 +26,7 @@
 
 -record(merge_params, {
     view_name,
-    queues,
-    queue_map = dict:new(),
+    queue,
     rered_fun,
     rered_lang,
     less_fun,
@@ -76,21 +73,34 @@ query_view(#httpd{user_ctx = UserCtx} = Req, ViewMergeParams) ->
     _ when ViewType =:= map; ViewType =:= red_map ->
         {fun map_view_folder/6, fun merge_map_views/1}
     end,
-    {Queues, Folders} = lists:foldr(
-        fun(View, {QAcc, PidAcc}) ->
-            {ok, Q} = couch_work_queue:new([{max_items, ?MAX_QUEUE_ITEMS}]),
-            Pid = spawn_link(fun() ->
-                FoldFun(View, ViewMergeParams, UserCtx, Keys, ViewArgs, Q)
-            end),
-            {[Q | QAcc], [Pid | PidAcc]}
-        end,
-        {[], []}, Views),
+    NumFolders = length(Views),
+    QueueLessFun = fun
+        ({error, _Url, _Reason}, _) ->
+            true;
+        (_, {error, _Url, _Reason}) ->
+            false;
+        ({row_count, _}, _) ->
+            true;
+        (_, {row_count, _}) ->
+            false;
+        (RowA, RowB) ->
+            LessFun(RowA, RowB)
+    end,
+    {ok, Queue} = couch_view_merger_queue:start_link(NumFolders, QueueLessFun),
     Collector = spawn_link(fun() ->
-        collector_loop(ViewType, length(Queues), Callback, UserAcc)
+        collector_loop(ViewType, NumFolders, Callback, UserAcc)
     end),
+    Folders = lists:foldr(
+        fun(View, Acc) ->
+            Pid = spawn_link(fun() ->
+                FoldFun(View, ViewMergeParams, UserCtx, Keys, ViewArgs, Queue)
+            end),
+            [Pid | Acc]
+        end,
+        [], Views),
     MergeParams = #merge_params{
         view_name = DDocViewSpec#simple_view_spec.view_name,
-        queues = Queues,
+        queue = Queue,
         rered_fun = RedFun,
         rered_lang = RedFunLang,
         less_fun = LessFun,
@@ -100,14 +110,14 @@ query_view(#httpd{user_ctx = UserCtx} = Req, ViewMergeParams) ->
     },
     case MergeFun(MergeParams) of
     {ok, Resp} ->
-        Resp;
+        ok;
     {stop, Resp} ->
         lists:foreach(
-            fun(P) -> catch unlink(P), catch exit(P, kill) end, Folders),
-        lists:foreach(
-            fun(P) -> catch unlink(P), catch exit(P, kill) end, Queues),
-        Resp
-    end.
+            fun(P) -> catch unlink(P), catch exit(P, kill) end, Folders)
+    end,
+    catch unlink(Queue),
+    catch exit(Queue, kill),
+    Resp.
 
 
 view_details(nil, #simple_view_spec{view_name = <<"_all_docs">>}) ->
@@ -231,13 +241,6 @@ view_row_obj(reduce, {Key, Value}) ->
     {[{key, Key}, {value, Value}]}.
 
 
-merge_map_views(#merge_params{queues = [], collector = Col}) ->
-    Col ! {stop, self()},
-    receive
-    {Resp, Col} ->
-        {ok, Resp}
-    end;
-
 merge_map_views(#merge_params{limit = 0, collector = Col}) ->
     Col ! {stop, self()},
     receive
@@ -247,29 +250,32 @@ merge_map_views(#merge_params{limit = 0, collector = Col}) ->
 
 merge_map_views(Params) ->
     #merge_params{
-        queues = Queues, less_fun = LessFun, queue_map = QueueMap,
-        limit = Limit, skip = Skip, collector = Col, view_name = ViewName
+        queue = Queue, limit = Limit, skip = Skip,
+        collector = Col, view_name = ViewName
     } = Params,
-    % QueueMap, map the last row taken from each queue to its respective
-    % queue. Each row in this dict/map is a row that was not the smallest
-    % one in the previous iteration.
-    case (catch dequeue(Queues, QueueMap, Col)) of
-    {stop, _Resp} = Stop ->
-        Stop;
-    {[], _, Queues2} ->
-        merge_map_views(Params#merge_params{queues = Queues2});
-    {TopRows, RowsToQueuesMap0, Queues2} ->
-        {SmallestRow, RestRows0} = take_smallest_row(TopRows, LessFun),
-        {RowToSend, RestRows, QueueMap1, RowsToQueuesMap} =
-            handle_duplicates(
-                ViewName, SmallestRow, RestRows0, QueueMap, RowsToQueuesMap0),
-        QueueMap2 = lists:foldl(
-            fun(R, Acc) ->
-                QList = dict:fetch(R, RowsToQueuesMap),
-                lists:foldl(fun(Q, D) -> dict:store(Q, R, D) end, Acc, QList)
-            end,
-            QueueMap1,
-            RestRows),
+    case couch_view_merger_queue:peek(Queue) of
+    closed ->
+        Col ! {stop, self()},
+        receive
+        {Resp, Col} ->
+            {ok, Resp}
+        end;
+    {ok, {error, _Url, _Reason} = Error} ->
+        Col ! {Error, self()},
+        ok = couch_view_merger_queue:flush(Queue),
+        receive
+        {continue, Col} ->
+            merge_map_views(Params);
+        {stop, Resp, Col} ->
+            {stop, Resp}
+        end;
+    {ok, {row_count, _} = RowCount} ->
+        Col ! RowCount,
+        ok = couch_view_merger_queue:flush(Queue),
+        merge_map_views(Params);
+    {ok, MinRow} ->
+        RowToSend = handle_duplicates(ViewName, MinRow, Queue),
+        ok = couch_view_merger_queue:flush(Queue),
         case Skip > 0 of
         true ->
             Limit2 = Limit;
@@ -278,88 +284,62 @@ merge_map_views(Params) ->
             Limit2 = dec_counter(Limit)
         end,
         Params2 = Params#merge_params{
-            queues = Queues2, queue_map = QueueMap2,
             skip = dec_counter(Skip), limit = Limit2
         },
         merge_map_views(Params2)
     end.
 
 
-handle_duplicates(<<"_all_docs">>, SmallestRow, RestRows, QueueMap, RowsToQueuesMap) ->
-    handle_duplicates_squashed(SmallestRow, RestRows, QueueMap, RowsToQueuesMap);
+handle_duplicates(<<"_all_docs">>, MinRow, Queue) ->
+    handle_duplicates_squashed(MinRow, Queue);
 
-handle_duplicates(_ViewName, SmallestRow, RestRows, QueueMap, RowsToQueuesMap) ->
-    handle_duplicates_allowed(SmallestRow, RestRows, QueueMap, RowsToQueuesMap).
+handle_duplicates(_ViewName, MinRow, Queue) ->
+    handle_duplicates_allowed(MinRow, Queue).
 
 
-handle_duplicates_squashed(SmallestRow, RestRows, QueueMap, RowsToQueuesMap) ->
-    {Key, DocId} = element(1, SmallestRow),
-    IdenticalFound0 = lists:filter(
-        fun(Row) ->
-            {K, D} = element(1, Row),
-            (K =:= Key) andalso (D =/= error)
-        end,
-        RestRows),
-    % If multiple found, pick the one with most recent revision.
-    IdenticalFound = case DocId of
+handle_duplicates_squashed(MinRow, Queue) ->
+    {Key0, Id0} = element(1, MinRow),
+    % AQUI
+    % group rows by similar keys, split error not_found from normal ones, pick one with highest rev
+    {ValueRows, ErrorRows} = case Id0 of
     error ->
-        IdenticalFound0;
-    _ ->
-        [SmallestRow | IdenticalFound0]
+        peek_similar_rows(Key0, Queue, [], [MinRow]);
+    _ when is_binary(Id0) ->
+        peek_similar_rows(Key0, Queue, [MinRow], [])
     end,
-    LatestFound = most_recent_doc_row(IdenticalFound),
-    RowToSend = case LatestFound of
-    nil ->
-        SmallestRow;
-    _ ->
-        LatestFound
-    end,
-    {QueueMap2, RowsToQueuesMap2} = lists:foldl(
-        fun(Row, {QMap, RQMap}) ->
-            [Q | Rest] = dict:fetch(Row, RQMap),
-            RQMap2 = case Rest of
-            [] ->
-                dict:erase(Row, RQMap);
+    case {ValueRows, ErrorRows} of
+    {[], [ErrRow | _]} ->
+        ErrRow;
+    {[ValRow], []} ->
+        ValRow;
+    {[_ | _], _} ->
+        most_recent_doc_row(ValueRows)
+    end.
+
+handle_duplicates_allowed(MinRow, _Queue) ->
+    MinRow.
+
+peek_similar_rows(Key0, Queue, Acc, AccError) ->
+    case couch_view_merger_queue:peek_next(Queue) of
+    empty ->
+        {Acc, AccError};
+    {ok, Row} ->
+        {Key, DocId} = element(1, Row),
+        case Key =:= Key0 of
+        false ->
+            ok = couch_view_merger_queue:unpeek(Queue),
+            {Acc, AccError};
+        true ->
+            case DocId of
+            error ->
+                peek_similar_rows(Key0, Queue, Acc, [Row | AccError]);
             _ ->
-                dict:store(Row, Rest, RQMap)
-            end,
-            QMap2 = dict:erase(Q, QMap),
-            {QMap2, RQMap2}
-        end,
-        {QueueMap, RowsToQueuesMap}, IdenticalFound),
-    {FinalRestRows, QueueMap3} = lists:foldl(
-        fun(Row, {Acc, QMap}) ->
-           {K, _} = element(1, Row),
-           case K =:= Key of
-           true ->
-               {Acc, dict:erase(Row, QMap)};
-           false ->
-               {[Row | Acc], QMap}
-           end
-        end,
-        {[], QueueMap2}, RestRows),
-    case dict:find(SmallestRow, RowsToQueuesMap2) of
-    error ->
-        FinalQueueMap = QueueMap3,
-        FinalRowsToQueuesMap = RowsToQueuesMap2;
-    {ok, QList} ->
-        FinalQueueMap = lists:foldl(fun(Q, A) -> dict:erase(Q, A) end, QueueMap3, QList),
-        FinalRowsToQueuesMap = dict:erase(SmallestRow, RowsToQueuesMap2)
-    end,
-    {RowToSend, FinalRestRows, FinalQueueMap, FinalRowsToQueuesMap}.
+                peek_similar_rows(Key0, Queue, [Row | Acc], AccError)
+            end
+        end
+    end.
 
 
-handle_duplicates_allowed(SmallestRow, RestRows, QueueMap, RowsToQueuesMap) ->
-    [QueueSmallest | Rest] = dict:fetch(SmallestRow, RowsToQueuesMap),
-    % TODO: maybe log an error/warning about duplicate rows (if Rest =/= []).
-    % This happens if the same doc, with same _id, exists in multiple view sources.
-    QueueMap2 = dict:erase(QueueSmallest, QueueMap),
-    RowsToQueuesMap2 = dict:store(SmallestRow, Rest, RowsToQueuesMap),
-    {SmallestRow, RestRows, QueueMap2, RowsToQueuesMap2}.
-
-
-most_recent_doc_row([]) ->
-    nil;
 most_recent_doc_row([First | Rest]) ->
     {RowValue} = element(2, First),
     FirstRev = couch_doc:parse_rev(get_value(<<"rev">>, RowValue)),
@@ -390,13 +370,6 @@ most_recent_doc_row([First | Rest]) ->
     MostRecentRow.
 
 
-merge_reduce_views(#merge_params{queues = [], collector = Col}) ->
-    Col ! {stop, self()},
-    receive
-    {Resp, Col} ->
-        {ok, Resp}
-    end;
-
 merge_reduce_views(#merge_params{limit = 0, collector = Col}) ->
     Col ! {stop, self()},
     receive
@@ -406,41 +379,38 @@ merge_reduce_views(#merge_params{limit = 0, collector = Col}) ->
 
 merge_reduce_views(Params) ->
     #merge_params{
-        queues = Queues, less_fun = LessFun, queue_map = QueueMap,
-        limit = Limit, skip = Skip, collector = Col
+        queue = Queue, limit = Limit, skip = Skip, collector = Col
     } = Params,
-    % QueueMap, map the last row taken from each queue to its respective
-    % queue. Each row in this dict/map is a row that was not the smallest
-    % one in the previous iteration.
-    case (catch dequeue(Queues, QueueMap, Col)) of
-    {stop, _Resp} = Stop ->
-        Stop;
-    {[], _, Queues2} ->
-        merge_reduce_views(Params#merge_params{queues = Queues2});
-    {TopRows, RowsToQueuesMap, Queues2} ->
-        SortedRows = lists:sort(LessFun, TopRows),
-        [FirstGroup | RestGroups] = group_by_similar_keys(SortedRows, []),
-        case FirstGroup of
+    case couch_view_merger_queue:peek(Queue) of
+    closed ->
+        Col ! {stop, self()},
+        receive
+        {Resp, Col} ->
+            {ok, Resp}
+        end;
+    {ok, {error, _Url, _Reason} = Error} ->
+        Col ! {Error, self()},
+        ok = couch_view_merger_queue:flush(Queue),
+        receive
+        {continue, Col} ->
+            merge_reduce_views(Params);
+        {stop, Resp, Col} ->
+            {stop, Resp}
+        end;
+    {ok, {row_count, _} = RowCount} ->
+        Col ! RowCount,
+        ok = couch_view_merger_queue:flush(Queue),
+        merge_reduce_views(Params);
+    {ok, MinRow} ->
+        RowGroup = group_keys_for_rereduce(Queue, [MinRow]),
+        case RowGroup of
         [Row] ->
             ok;
         [{K, _}, _ | _] ->
-            RedVal = rereduce(FirstGroup, Params),
+            RedVal = rereduce(RowGroup, Params),
             Row = {K, RedVal}
         end,
-        QueueMap2 = lists:foldl(
-            fun(R, Acc) ->
-                RQueues = dict:fetch(R, RowsToQueuesMap),
-                lists:foldl(fun(Q, D) -> dict:erase(Q, D) end, Acc, RQueues)
-            end,
-            QueueMap,
-            FirstGroup),
-        QueueMap3 = lists:foldl(
-            fun(R, Map) ->
-                QList = dict:fetch(R, RowsToQueuesMap),
-                lists:foldl(fun(Q, D) -> dict:store(Q, R, D) end, Map, QList)
-            end,
-            QueueMap2,
-            lists:flatten(RestGroups)),
+        ok = couch_view_merger_queue:flush(Queue),
         case Skip > 0 of
         true ->
             Limit2 = Limit;
@@ -449,10 +419,21 @@ merge_reduce_views(Params) ->
             Limit2 = dec_counter(Limit)
         end,
         Params2 = Params#merge_params{
-            queues = Queues2, queue_map = QueueMap3,
             skip = dec_counter(Skip), limit = Limit2
         },
         merge_reduce_views(Params2)
+    end.
+
+
+group_keys_for_rereduce(Queue, [{K, _} | _] = Acc) ->
+    case couch_view_merger_queue:peek_next(Queue) of
+    empty ->
+        Acc;
+    {ok, {K, _} = Row} ->
+        group_keys_for_rereduce(Queue, [Row | Acc]);
+    {ok, _} ->
+        ok = couch_view_merger_queue:unpeek(Queue),
+        Acc
     end.
 
 
@@ -462,81 +443,8 @@ rereduce(Rows, #merge_params{rered_lang = Lang, rered_fun = RedFun}) ->
     Value.
 
 
-group_by_similar_keys([], Groups) ->
-    lists:reverse(Groups);
-
-group_by_similar_keys([Row | Rest], []) ->
-    group_by_similar_keys(Rest, [[Row]]);
-
-group_by_similar_keys([{K, _} = R | Rest], [[{K, _} | _] = Group | RestGroups]) ->
-    group_by_similar_keys(Rest, [[R | Group] | RestGroups]);
-
-group_by_similar_keys([Row | Rest], Groups) ->
-    group_by_similar_keys(Rest, [[Row] | Groups]).
-
-
 dec_counter(0) -> 0;
 dec_counter(N) -> N - 1.
-
-
-dequeue(Queues, QueueMap, Collector) ->
-    % need to keep track from which queues each row was taken
-    RowsToQueuesMap0 = dict:new(),
-    % order of TopRows is important
-    {TopRows, RowsToQueuesMap1, ClosedQueues} = lists:foldr(
-        fun(Q, {RowAcc, RMap, Closed}) ->
-            case dict:find(Q, QueueMap) of
-            {ok, Row} ->
-                {[Row | RowAcc], dict:append(Row, Q, RMap), Closed};
-            error ->
-                case couch_work_queue:dequeue(Q, 1) of
-                {ok, [{row_count, _} = RowCount]} ->
-                    Collector ! RowCount,
-                    case couch_work_queue:dequeue(Q, 1) of
-                    {ok, [{error, _DbUrl, _Reason} = Error]} ->
-                        Collector ! {Error, self()},
-                        receive
-                        {continue, Collector} ->
-                            {RowAcc, RMap, [Q | Closed]};
-                        {stop, Resp, Collector} ->
-                            throw({stop, Resp})
-                        end;
-                    {ok, [Row]} ->
-                        {[Row | RowAcc], dict:append(Row, Q, RMap), Closed};
-                    closed ->
-                        {RowAcc, RMap, [Q | Closed]}
-                    end;
-                {ok, [{error, _DbUrl, _Reason} = Error]} ->
-                    Collector ! {Error, self()},
-                    receive
-                    {continue, Collector} ->
-                        {RowAcc, RMap, [Q | Closed]};
-                    {stop, Resp, Collector} ->
-                        throw({stop, Resp})
-                    end;
-                {ok, [Row]} ->
-                    {[Row | RowAcc], dict:append(Row, Q, RMap), Closed};
-                closed ->
-                    {RowAcc, RMap, [Q | Closed]}
-                end
-            end
-        end,
-        {[], RowsToQueuesMap0, []}, Queues),
-   {TopRows, RowsToQueuesMap1, Queues -- ClosedQueues}.
-
-
-take_smallest_row([First | Rest], LessFun) ->
-    take_smallest_row(Rest, First, LessFun, []).
-
-take_smallest_row([], Smallest, _LessFun, Acc) ->
-    {Smallest, Acc};
-take_smallest_row([Row | Rest], Smallest, LessFun, Acc) ->
-    case LessFun(Row, Smallest) of
-    true ->
-        take_smallest_row(Rest, Row, LessFun, [Smallest | Acc]);
-    false ->
-        take_smallest_row(Rest, Smallest, LessFun, [Row | Acc])
-    end.
 
 
 map_view_folder(#simple_view_spec{database = <<"http://", _/binary>>} = ViewSpec,
@@ -556,11 +464,12 @@ map_view_folder(#simple_view_spec{view_name = <<"_all_docs">>, database = DbName
     {ok, Db} = couch_db:open(DbName, [{user_ctx, UserCtx}]),
     try
         {ok, Info} = couch_db:get_db_info(Db),
-        couch_work_queue:queue(Queue, {row_count, get_value(doc_count, Info)}),
+        ok = couch_view_merger_queue:queue(
+            Queue, {row_count, get_value(doc_count, Info)}),
         % TODO: add support for ?update_seq=true and offset
-        fold_local_all_docs(Keys, Db, Queue, ViewArgs),
-        couch_work_queue:close(Queue)
+        fold_local_all_docs(Keys, Db, Queue, ViewArgs)
     after
+        ok = couch_view_merger_queue:done(Queue),
         couch_db:close(Db)
     end;
 
@@ -578,7 +487,7 @@ map_view_folder(ViewSpec, _MergeParams, UserCtx, Keys, ViewArgs, Queue) ->
         FoldlFun = make_map_fold_fun(IncludeDocs, Conflicts, Db, Queue),
         View = get_map_view(Db, DDocId, ViewName, Stale),
         {ok, RowCount} = couch_view:get_row_count(View),
-        couch_work_queue:queue(Queue, {row_count, RowCount}),
+        ok = couch_view_merger_queue:queue(Queue, {row_count, RowCount}),
         case Keys of
         nil ->
             FoldOpts = couch_httpd_view:make_key_options(ViewArgs),
@@ -591,9 +500,9 @@ map_view_folder(ViewSpec, _MergeParams, UserCtx, Keys, ViewArgs, Queue) ->
                     {ok, _, _} = couch_view:fold(View, FoldlFun, [], FoldOpts)
                 end,
                 Keys)
-        end,
-        couch_work_queue:close(Queue)
+        end
     after
+        ok = couch_view_merger_queue:done(Queue),
         couch_db:close(Db)
     end.
 
@@ -627,7 +536,7 @@ fold_local_all_docs(nil, Db, Queue, ViewArgs) ->
             ok;
         false ->
             Row = all_docs_row(DocInfo, Db, IncludeDocs, Conflicts),
-            couch_work_queue:queue(Queue, Row)
+            ok = couch_view_merger_queue:queue(Queue, Row)
         end,
         {ok, Acc}
     end,
@@ -653,7 +562,7 @@ fold_local_all_docs(Keys, Db, Queue, ViewArgs) ->
             not_found ->
                 {{Key, error}, not_found}
             end,
-            couch_work_queue:queue(Queue, Row)
+            ok = couch_view_merger_queue:queue(Queue, Row)
         end, [], Keys).
 
 
@@ -699,10 +608,10 @@ http_view_folder(ViewSpec, MergeParams, Keys, ViewArgs, Queue) ->
         try
             json_stream_parse:events(DataFun, EventFun)
         catch throw:{error, Error} ->
-            couch_work_queue:queue(Queue, {error, Url, Error})
+            ok = couch_view_merger_queue:queue(Queue, {error, Url, Error})
         after
             stop_conn(Conn),
-            couch_work_queue:close(Queue)
+            ok = couch_view_merger_queue:done(Queue)
         end;
     {ibrowse_async_headers, ReqId, Code, _RespHeaders} ->
         Reason = try
@@ -710,13 +619,13 @@ http_view_folder(ViewSpec, MergeParams, Keys, ViewArgs, Queue) ->
         catch throw:{error, _Error} ->
             <<"Error code ", (?l2b(Code))/binary>>
         end,
-        couch_work_queue:queue(Queue, {error, Url, Reason}),
-        stop_conn(Conn),
-        couch_work_queue:close(Queue);
+        ok = couch_view_merger_queue:queue(Queue, {error, Url, Reason}),
+        ok = couch_view_merger_queue:done(Queue),
+        stop_conn(Conn);
     {ibrowse_async_response, ReqId, {error, Error}} ->
         stop_conn(Conn),
-        couch_work_queue:queue(Queue, {error, Url, Error}),
-        couch_work_queue:close(Queue)
+        ok = couch_view_merger_queue:queue(Queue, {error, Url, Error}),
+        ok = couch_view_merger_queue:done(Queue)
     end.
 
 
@@ -791,7 +700,7 @@ http_view_fold_rc_1(_Ev, Queue) ->
     fun(Ev) -> http_view_fold_rc_1(Ev, Queue) end.
 
 http_view_fold_rc_2(RowCount, Queue) when is_number(RowCount) ->
-    couch_work_queue:queue(Queue, {row_count, RowCount}),
+    ok = couch_view_merger_queue:queue(Queue, {row_count, RowCount}),
     fun(Ev) -> http_view_fold_rows_1(Ev, Queue) end.
 
 http_view_fold_rows_1({key, <<"rows">>}, Queue) ->
@@ -846,7 +755,7 @@ http_view_fold_queue_row({Props}, Queue) ->
             {{Key, error}, Error}
         end
     end,
-    couch_work_queue:queue(Queue, Row).
+    ok = couch_view_merger_queue:queue(Queue, Row).
 
 void_event(_Ev) ->
     fun void_event/1.
@@ -891,9 +800,9 @@ reduce_view_folder(ViewSpec, _MergeParams, UserCtx, Keys, ViewArgs, Queue) ->
                     {ok, _} = couch_view:fold_reduce(View, FoldlFun, [], FoldOpts)
                 end,
                 Keys)
-        end,
-        couch_work_queue:close(Queue)
+        end
     after
+        ok = couch_view_merger_queue:done(Queue),
         couch_db:close(Db)
     end.
 
@@ -914,22 +823,22 @@ make_group_rows_fun(_) ->
 
 make_reduce_fold_fun(#view_query_args{group_level = 0}, Queue) ->
     fun(_Key, Red, Acc) ->
-        couch_work_queue:queue(Queue, {null, Red}),
+        ok = couch_view_merger_queue:queue(Queue, {null, Red}),
         {ok, Acc}
     end;
 
 make_reduce_fold_fun(#view_query_args{group_level = L}, Queue) when is_integer(L) ->
     fun(Key, Red, Acc) when is_list(Key) ->
-        couch_work_queue:queue(Queue, {lists:sublist(Key, L), Red}),
+        ok = couch_view_merger_queue:queue(Queue, {lists:sublist(Key, L), Red}),
         {ok, Acc};
     (Key, Red, Acc) ->
-        couch_work_queue:queue(Queue, {Key, Red}),
+        ok = couch_view_merger_queue:queue(Queue, {Key, Red}),
         {ok, Acc}
     end;
 
 make_reduce_fold_fun(_QueryArgs, Queue) ->
     fun(Key, Red, Acc) ->
-        couch_work_queue:queue(Queue, {Key, Red}),
+        ok = couch_view_merger_queue:queue(Queue, {Key, Red}),
         {ok, Acc}
     end.
 
@@ -946,14 +855,14 @@ get_map_view(Db, DDocId, ViewName, Stale) ->
 
 make_map_fold_fun(false, _Conflicts, _Db, Queue) ->
     fun(Row, _, Acc) ->
-        couch_work_queue:queue(Queue, Row),
+        ok = couch_view_merger_queue:queue(Queue, Row),
         {ok, Acc}
     end;
 
 make_map_fold_fun(true, Conflicts, Db, Queue) ->
     DocOpenOpts = if Conflicts -> [conflicts]; true -> [] end,
     fun({{_Key, error}, _Value} = Row, _, Acc) ->
-        couch_work_queue:queue(Queue, Row),
+        ok = couch_view_merger_queue:queue(Queue, Row),
         {ok, Acc};
     ({{_Key, DocId} = Kd, {Props} = Value}, _, Acc) ->
         Rev = case get_value(<<"_rev">>, Props, nil) of
@@ -964,11 +873,11 @@ make_map_fold_fun(true, Conflicts, Db, Queue) ->
         end,
         IncludeId = get_value(<<"_id">>, Props, DocId),
         [Doc] = couch_httpd_view:doc_member(Db, {IncludeId, Rev}, DocOpenOpts),
-        couch_work_queue:queue(Queue, {Kd, Value, Doc}),
+        ok = couch_view_merger_queue:queue(Queue, {Kd, Value, Doc}),
         {ok, Acc};
     ({{_Key, DocId} = Kd, Value}, _, Acc) ->
         [Doc] = couch_httpd_view:doc_member(Db, {DocId, nil}, DocOpenOpts),
-        couch_work_queue:queue(Queue, {Kd, Value, Doc}),
+        ok = couch_view_merger_queue:queue(Queue, {Kd, Value, Doc}),
         {ok, Acc}
     end.
 
