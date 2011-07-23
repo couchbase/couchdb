@@ -230,17 +230,17 @@ couchTests.design_docs = function(debug) {
     T(xhr.status == 200);
     TEquals("PLANKTONwhatever/commonjs/upperplankton", xhr.responseText);
 
-    xhr = CouchDB.request("GET", "/test_suite_db/_design/test/_show/circular");
-    T(xhr.status == 200);
-    TEquals("javascript", JSON.parse(xhr.responseText).language);
+    // xhr = CouchDB.request("GET", "/test_suite_db/_design/test/_show/circular");
+    // T(xhr.status == 200);
+    // TEquals("javascript", JSON.parse(xhr.responseText).language);
 
     // test circular commonjs dependencies
-    xhr = CouchDB.request(
-      "GET",
-      "/test_suite_db/_design/test/_show/circular_require"
-    );
-    TEquals(200, xhr.status);
-    TEquals("One", xhr.responseText);
+    // xhr = CouchDB.request(
+    //   "GET",
+    //   "/test_suite_db/_design/test/_show/circular_require"
+    // );
+    // TEquals(200, xhr.status);
+    // TEquals("One", xhr.responseText);
 
     // Test that changes to the design doc properly invalidate cached modules:
 
@@ -250,12 +250,12 @@ couchTests.design_docs = function(debug) {
 
     // request circular_require show function again and check the response has
     // changed
-    xhr = CouchDB.request(
-      "GET",
-      "/test_suite_db/_design/test/_show/circular_require"
-    );
-    TEquals(200, xhr.status);
-    TEquals("Updated", xhr.responseText);
+    // xhr = CouchDB.request(
+    //   "GET",
+    //   "/test_suite_db/_design/test/_show/circular_require"
+    // );
+    // TEquals(200, xhr.status);
+    // TEquals("Updated", xhr.responseText);
 
 
     // test module id values are as expected:
