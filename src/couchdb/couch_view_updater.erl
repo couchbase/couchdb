@@ -149,7 +149,7 @@ do_maps(#group{view_server=Server} = Group, MapQueue, WriteQueue) ->
                 Item = {Seq, Id, []},
                 ok = couch_work_queue:queue(WriteQueue, Item);
             ({Seq, #doc{id = Id, deleted = false} = Doc}) ->
-                {ok, [Result]} = couch_view_server:map(Server, [Doc]), % maybe refactor view server modules for Doc/Docs?
+                {ok, [Result]} = couch_view_server:map(Server, [Doc]),
                 Item = {Seq, Id, Result},
                 ok = couch_work_queue:queue(WriteQueue, Item)
             end,
@@ -176,7 +176,6 @@ start_writes(Parent, Owner, WriteQueue, InitialBuild, TimeToPurge, Db, TotalChan
 
 do_writes(Parent, Owner, Group, WriteQueue, InitialBuild, ViewEmptyKVs,
         ChangesDone, TotalChanges) ->
-% do_writes(Parent, Owner, Group, WriteQueue, InitialBuild) ->
     case couch_work_queue:dequeue(WriteQueue) of
     closed ->
         Parent ! {new_group, close_view_server(Group)};
@@ -184,11 +183,7 @@ do_writes(Parent, Owner, Group, WriteQueue, InitialBuild, ViewEmptyKVs,
         {ViewKVs, DocIdViewIdKeys} = lists:foldr(
             fun({_Seq, Id, []}, {ViewKVsAcc, DocIdViewIdKeysAcc}) ->
                 {ViewKVsAcc, [{Id, []} | DocIdViewIdKeysAcc]};
-            ({_Seq, Id, RawQueryResults}, {ViewKVsAcc, DocIdViewIdKeysAcc}) ->
-                QueryResults = [
-                    [list_to_tuple(FunResult) || FunResult <- FunRs] || FunRs <-
-                        couch_query_servers:raw_to_ejson(RawQueryResults)
-                ],
+            ({_Seq, Id, QueryResults}, {ViewKVsAcc, DocIdViewIdKeysAcc}) ->
                 {NewViewKVs, NewViewIdKeys} = view_insert_doc_query_results(
                         Id, QueryResults, ViewKVsAcc, [], []),
                 {NewViewKVs, [{Id, NewViewIdKeys} | DocIdViewIdKeysAcc]}
