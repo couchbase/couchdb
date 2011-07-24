@@ -317,10 +317,8 @@ maybe_track_open_os_files(FileOptions) ->
     end.
 
 terminate(_Reason, #file{reader = Reader, writer = Writer}) ->
-    exit(Reader, kill),
-    receive {'EXIT', Reader, _} -> ok end,
-    exit(Writer, kill),
-    receive {'EXIT', Writer, _} -> ok end.
+    couch_util:shutdown_sync(Reader),
+    couch_util:shutdown_sync(Writer).
 
 handle_call({pread_iolist, Pos}, From, #file{reader = Reader} = File) ->
     Reader ! {read, Pos, From},
