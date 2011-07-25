@@ -75,6 +75,7 @@ compact_group(Group, EmptyGroup, DbName) ->
     end,
     {ok, _, {Bt3, Uncopied, _, _Total, _LastId}} = couch_btree:foldl(
         IdBtree, Fun, {EmptyIdBtree, [], 0, 0, nil}),
+    ok = couch_file:flush(Fd),
     {ok, NewIdBtree} = couch_btree:add(Bt3, lists:reverse(Uncopied)),
 
     NewViews = lists:map(fun({View, EmptyView}) ->
@@ -124,6 +125,7 @@ compact_view(Fd, View, EmptyView, BufferSize) ->
 
     {ok, _, {Bt3, Uncopied, _, _Total}} = couch_btree:foldl(
         View#view.btree, Fun, {EmptyView#view.btree, [], 0, 0}),
+    ok = couch_file:flush(Fd),
     {ok, NewBt} = couch_btree:add(Bt3, lists:reverse(Uncopied)),
     EmptyView#view{btree = NewBt}.
 

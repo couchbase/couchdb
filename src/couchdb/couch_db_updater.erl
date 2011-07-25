@@ -792,6 +792,7 @@ commit_data(Db, _) ->
         end,
 
         ok = couch_file:write_header(Fd, Header),
+        ok = couch_file:flush(Fd),
 
         case lists:member(after_header, FsyncOptions) of
         true -> ok = couch_file:sync(Fd);
@@ -842,6 +843,7 @@ copy_docs(Db, #db{fd = DestFd} = NewDb, InfoBySeq0, Retry) ->
     InfoBySeq = lists:usort(fun(#doc_info{id=A}, #doc_info{id=B}) -> A =< B end,
         InfoBySeq0),
     Ids = [Id || #doc_info{id=Id} <- InfoBySeq],
+    ok = couch_file:flush(DestFd),
     LookupResults = couch_btree:lookup(Db#db.fulldocinfo_by_id_btree, Ids),
 
     NewFullDocInfos1 = lists:map(
@@ -878,12 +880,10 @@ copy_docs(Db, #db{fd = DestFd} = NewDb, InfoBySeq0, Retry) ->
         [Seq || {ok, #full_doc_info{update_seq=Seq}} <- Existing]
     end,
 
-    ok = couch_file:flush(NewDb#db.fd),
     {ok, DocInfoBTree} = couch_btree:add_remove(
             NewDb#db.docinfo_by_seq_btree, NewDocInfos, RemoveSeqs),
     {ok, FullDocInfoBTree} = couch_btree:add_remove(
             NewDb#db.fulldocinfo_by_id_btree, NewFullDocInfos, []),
-    ok = couch_file:flush(NewDb#db.fd),
     NewDb#db{ fulldocinfo_by_id_btree=FullDocInfoBTree,
               docinfo_by_seq_btree=DocInfoBTree}.
 
