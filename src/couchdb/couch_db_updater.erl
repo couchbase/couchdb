@@ -622,11 +622,12 @@ modify_full_doc_info(Db, Id, MergeConflicts, OldDocInfo,
                     {SameFd, SameFd} ->
                         ok;
                     _ ->
-                        % Fd where the attachments were written to is not the same
+                        % Fd where the attachments were written to, or the body
+                        % (when doing optimistic updates), is not the same
                         % as our Fd. This can happen when a database is being
                         % switched out during a compaction.
-                        ?LOG_DEBUG("File where the attachments are written has"
-                                " changed. Possibly retrying.", []),
+                        ?LOG_DEBUG("File where the attachments or body were written"
+                                " has changed. Possibly retrying.", []),
                         throw(retry)
                     end,
                     case Summary of

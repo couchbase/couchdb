@@ -880,9 +880,11 @@ prepare_doc_summaries(Db, BucketList, Options) ->
             true ->
                 Summary = SummaryChunk
             end,
-            AttsFd = case Atts of
+            FlushFd = case Atts of
             [#att{data = {Fd, _}} | _] ->
                 Fd;
+            [] when Optimistic ->
+                Db#db.fd;
             [] ->
                 nil
             end,
@@ -892,7 +894,7 @@ prepare_doc_summaries(Db, BucketList, Options) ->
                 deleted=Doc#doc.deleted,
                 summary=Summary,
                 size_atts=SizeAtts,
-                fd=AttsFd
+                fd=FlushFd
             }
         end,
         Bucket) || Bucket <- BucketList].
