@@ -946,6 +946,227 @@ couchTests.view_merging = function(debug) {
 
 
   /**
+   * Test behaviour when builtin reduce functions throw errors.
+   */
+  var bad_ddoc = {
+    _id: "_design/test",
+    language: "javascript",
+    views: {
+      badredview: {
+        map:
+          (function(doc) {
+             emit(doc._id, "abc");
+          }).toString(),
+        reduce: "_sum"
+      }
+    }
+  };
+
+  dbA = newDb("test_db_a");
+  dbB = newDb("test_db_b");
+  dbC = newDb("test_db_c");
+  dbs = [dbA, dbB];
+  dbs = [dbA, dbB, dbC];
+  docs = makeDocs(1, 31);
+
+  addDoc(dbs, bad_ddoc);
+  populateAlternated(dbs, docs);
+
+  resp = mergedQuery(dbs, "test/badredview");
+
+  TEquals(3, resp.rows.length);
+  TEquals(true, resp.rows[0].error);
+  TEquals(true, typeof resp.rows[0].from !== "undefined");
+  TEquals("string", typeof resp.rows[0].reason);
+  TEquals(true, resp.rows[1].error);
+  TEquals(true, typeof resp.rows[1].from !== "undefined");
+  TEquals("string", typeof resp.rows[1].reason);
+  TEquals(true, resp.rows[2].error);
+  TEquals(true, typeof resp.rows[2].from !== "undefined");
+  TEquals("string", typeof resp.rows[2].reason);
+
+  // same result with remote views
+  resp = mergedQuery([dbUri(dbA), dbB, dbUri(dbC)], "test/badredview");
+
+  TEquals(3, resp.rows.length);
+  TEquals(true, resp.rows[0].error);
+  TEquals(true, typeof resp.rows[0].from !== "undefined");
+  TEquals("string", typeof resp.rows[0].reason);
+  TEquals(true, resp.rows[1].error);
+  TEquals(true, typeof resp.rows[1].from !== "undefined");
+  TEquals("string", typeof resp.rows[1].reason);
+  TEquals(true, resp.rows[2].error);
+  TEquals(true, typeof resp.rows[2].from !== "undefined");
+  TEquals("string", typeof resp.rows[2].reason);
+
+  // similar results with sub merges
+  body = {"views": {}};
+  body.views[dbA.name] = "test/badredview";
+  subviewspec = {
+    "views": {}
+  };
+  subviewspec.views[dbB.name] = "test/badredview";
+  subviewspec.views[dbC.name] = "test/badredview";
+  body.views[CouchDB.protocol + CouchDB.host + '/_view_merge'] = subviewspec;
+
+  xhr = CouchDB.request("POST", "/_view_merge", {
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  TEquals(200, xhr.status);
+
+  resp = JSON.parse(xhr.responseText);
+
+  TEquals(3, resp.rows.length);
+  TEquals(true, resp.rows[0].error);
+  TEquals(true, typeof resp.rows[0].from !== "undefined");
+  TEquals("string", typeof resp.rows[0].reason);
+  TEquals(true, resp.rows[1].error);
+  TEquals(true, typeof resp.rows[1].from !== "undefined");
+  TEquals("string", typeof resp.rows[1].reason);
+  TEquals(true, resp.rows[2].error);
+  TEquals(true, typeof resp.rows[2].from !== "undefined");
+  TEquals("string", typeof resp.rows[2].reason);
+
+  // Update the map function so that reduce will succeed - should work.
+  bad_ddoc = dbA.open(bad_ddoc._id);
+  bad_ddoc.views["badredview"].map = "function(doc) { emit(doc._id, 1); }";
+  TEquals(true, dbA.save(bad_ddoc).ok);
+
+  bad_ddoc = dbB.open(bad_ddoc._id);
+  bad_ddoc.views["badredview"].map = "function(doc) { emit(doc._id, 1); }";
+  TEquals(true, dbB.save(bad_ddoc).ok);
+
+  bad_ddoc = dbC.open(bad_ddoc._id);
+  bad_ddoc.views["badredview"].map = "function(doc) { emit(doc._id, 1); }";
+  TEquals(true, dbC.save(bad_ddoc).ok);
+
+  resp = mergedQuery(dbs, "test/badredview");
+  TEquals(1, resp.rows.length);
+  TEquals(null, resp.rows[0].key);
+  TEquals(30, resp.rows[0].value);
+
+  // same result with remote views
+  resp = mergedQuery([dbUri(dbA), dbB, dbUri(dbC)], "test/badredview");
+  TEquals(1, resp.rows.length);
+  TEquals(null, resp.rows[0].key);
+  TEquals(30, resp.rows[0].value);
+
+  /**
+   * Test behaviour when JavaScript reduce functions have errors
+   * (or throws exceptions).
+   */
+  bad_ddoc = {
+    _id: "_design/test",
+    language: "javascript",
+    views: {
+      badredview: {
+        map:
+          (function(doc) {
+             emit(doc._id, 1);
+          }).toString(),
+        reduce:
+          "function(keys, values, rereduce) { return val +; }"
+      }
+    }
+  };
+
+  dbA = newDb("test_db_a");
+  dbB = newDb("test_db_b");
+  dbC = newDb("test_db_c");
+  dbs = [dbA, dbB];
+  dbs = [dbA, dbB, dbC];
+  docs = makeDocs(1, 31);
+
+  addDoc(dbs, bad_ddoc);
+  populateAlternated(dbs, docs);
+
+  resp = mergedQuery(dbs, "test/badredview");
+
+  TEquals(3, resp.rows.length);
+  TEquals(true, resp.rows[0].error);
+  TEquals(true, typeof resp.rows[0].from !== "undefined");
+  TEquals("string", typeof resp.rows[0].reason);
+  TEquals(true, resp.rows[1].error);
+  TEquals(true, typeof resp.rows[1].from !== "undefined");
+  TEquals("string", typeof resp.rows[1].reason);
+  TEquals(true, resp.rows[2].error);
+  TEquals(true, typeof resp.rows[2].from !== "undefined");
+  TEquals("string", typeof resp.rows[2].reason);
+
+  // same result with remote views
+  resp = mergedQuery([dbUri(dbA), dbB, dbUri(dbC)], "test/badredview");
+
+  TEquals(3, resp.rows.length);
+  TEquals(true, resp.rows[0].error);
+  TEquals(true, typeof resp.rows[0].from !== "undefined");
+  TEquals("string", typeof resp.rows[0].reason);
+  TEquals(true, resp.rows[1].error);
+  TEquals(true, typeof resp.rows[1].from !== "undefined");
+  TEquals("string", typeof resp.rows[1].reason);
+  TEquals(true, resp.rows[2].error);
+  TEquals(true, typeof resp.rows[2].from !== "undefined");
+  TEquals("string", typeof resp.rows[2].reason);
+
+  // similar results with sub merges
+  body = {"views": {}};
+  body.views[dbA.name] = "test/badredview";
+  subviewspec = {
+    "views": {}
+  };
+  subviewspec.views[dbB.name] = "test/badredview";
+  subviewspec.views[dbC.name] = "test/badredview";
+  body.views[CouchDB.protocol + CouchDB.host + '/_view_merge'] = subviewspec;
+
+  xhr = CouchDB.request("POST", "/_view_merge", {
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  TEquals(200, xhr.status);
+
+  resp = JSON.parse(xhr.responseText);
+
+  TEquals(3, resp.rows.length);
+  TEquals(true, resp.rows[0].error);
+  TEquals(true, typeof resp.rows[0].from !== "undefined");
+  TEquals("string", typeof resp.rows[0].reason);
+  TEquals(true, resp.rows[1].error);
+  TEquals(true, typeof resp.rows[1].from !== "undefined");
+  TEquals("string", typeof resp.rows[1].reason);
+  TEquals(true, resp.rows[2].error);
+  TEquals(true, typeof resp.rows[2].from !== "undefined");
+  TEquals("string", typeof resp.rows[2].reason);
+
+  // Correct the reduce function's code, query result should not
+  // contain errors anymore.
+  bad_ddoc = dbA.open(bad_ddoc._id);
+  bad_ddoc.views["badredview"].reduce =
+    "function(keys, values, rereduce) { return sum(values); }";
+  TEquals(true, dbA.save(bad_ddoc).ok);
+
+  bad_ddoc = dbB.open(bad_ddoc._id);
+  bad_ddoc.views["badredview"].reduce =
+    "function(keys, values, rereduce) { return sum(values); }";
+  TEquals(true, dbB.save(bad_ddoc).ok);
+
+  bad_ddoc = dbC.open(bad_ddoc._id);
+  bad_ddoc.views["badredview"].reduce =
+    "function(keys, values, rereduce) { return sum(values); }";
+  TEquals(true, dbC.save(bad_ddoc).ok);
+
+  resp = mergedQuery(dbs, "test/badredview");
+  TEquals(1, resp.rows.length);
+  TEquals(null, resp.rows[0].key);
+  TEquals(30, resp.rows[0].value);
+
+  // same result with remote views
+  resp = mergedQuery([dbUri(dbA), dbB, dbUri(dbC)], "test/badredview");
+  TEquals(1, resp.rows.length);
+  TEquals(null, resp.rows[0].key);
+  TEquals(30, resp.rows[0].value);
+
+
+  /**
    * Test that we can merge arbitray map views, that is,
    * the source databases do not need to have the same
    * map function code, nor design document IDs nor view names.

@@ -403,26 +403,57 @@ merge_reduce_views(Params) ->
         merge_reduce_views(Params);
     {ok, MinRow} ->
         RowGroup = group_keys_for_rereduce(Queue, [MinRow]),
-        case RowGroup of
-        [Row] ->
-            ok;
-        [{K, _}, _ | _] ->
-            RedVal = rereduce(RowGroup, Params),
-            Row = {K, RedVal}
-        end,
         ok = couch_view_merger_queue:flush(Queue),
-        case Skip > 0 of
-        true ->
-            Limit2 = Limit;
-        false ->
-            Col ! {row, Row},
-            Limit2 = dec_counter(Limit)
+        Row = case RowGroup of
+        [R] ->
+            {row, R};
+        [{K, _}, _ | _] ->
+            try
+                RedVal = rereduce(RowGroup, Params),
+                {row, {K, RedVal}}
+            catch
+            _Tag:Error ->
+                on_rereduce_error(Col, Error)
+            end
         end,
-        Params2 = Params#merge_params{
-            skip = dec_counter(Skip), limit = Limit2
-        },
-        merge_reduce_views(Params2)
+        case Row of
+        {stop, _Resp} = Stop ->
+            Stop;
+        _ ->
+            case Skip > 0 of
+            true ->
+                Limit2 = Limit;
+            false ->
+                case Row of
+                {row, _} ->
+                    Col ! Row;
+                _ ->
+                    ok
+                end,
+                Limit2 = dec_counter(Limit)
+            end,
+            Params2 = Params#merge_params{
+                skip = dec_counter(Skip), limit = Limit2
+            },
+            merge_reduce_views(Params2)
+        end
     end.
+
+
+on_rereduce_error(Col, Error) ->
+    Col ! {reduce_error(Error), self()},
+    receive
+    {continue, Col} ->
+        ok;
+    {stop, Resp, Col} ->
+        {stop, Resp}
+    end.
+
+
+reduce_error({invalid_value, Reason}) ->
+    {error, null, to_binary(Reason)};
+reduce_error(Error) ->
+    {error, null, to_binary(Error)}.
 
 
 group_keys_for_rereduce(Queue, [{K, _} | _] = Acc) ->
@@ -501,6 +532,8 @@ map_view_folder(ViewSpec, _MergeParams, UserCtx, Keys, ViewArgs, Queue) ->
                 end,
                 Keys)
         end
+    catch _Tag:Error ->
+        couch_view_merger_queue:queue(Queue, {error, null, to_binary(Error)})
     after
         ok = couch_view_merger_queue:done(Queue),
         couch_db:close(Db)
@@ -641,6 +674,7 @@ http_view_folder_req_details(#merged_view_spec{
     _ ->
         {[{<<"keys">>, Keys} | EJson]}
     end,
+    put(from_url, Url),
     {MergeUrl, post, Headers, ?JSON_ENCODE(Body), Options};
 
 http_view_folder_req_details(#simple_view_spec{
@@ -655,6 +689,7 @@ http_view_folder_req_details(#simple_view_spec{
         ?b2l(DDocId) ++ "/_view/" ++ ?b2l(ViewName)
     end ++ view_qs(ViewArgs),
     Headers = [{"Content-Type", "application/json"} | Db#httpdb.headers],
+    put(from_url, DbUrl),
     case Keys of
     nil ->
         {ViewUrl, get, [], [], Options};
@@ -731,7 +766,13 @@ http_view_fold_queue_row({Props}, Queue) ->
         %
         % It can be received when receiving a result which is the result of
         % another view merge.
-        From = get_value(<<"from">>, Props, null),
+        From0 = get_value(<<"from">>, Props, null),
+        From = case From0 of
+        null ->
+            get(from_url);
+        _ ->
+            From0
+        end,
         Reason = get_value(<<"reason">>, Props, null),
         {error, From, Reason};
     _ ->
@@ -801,6 +842,8 @@ reduce_view_folder(ViewSpec, _MergeParams, UserCtx, Keys, ViewArgs, Queue) ->
                 end,
                 Keys)
         end
+    catch _Tag:Error ->
+        couch_view_merger_queue:queue(Queue, reduce_error(Error))
     after
         ok = couch_view_merger_queue:done(Queue),
         couch_db:close(Db)
