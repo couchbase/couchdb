@@ -960,7 +960,9 @@ open_db(DbName, UserCtx, _MergeParams) ->
     {ok, _} = Ok ->
         Ok;
     Error ->
-        throw(Error)
+        Reason = io_lib:format("Could not open local database `~s` "
+            "reason: ~s", [DbName, to_binary(Error)]),
+        throw({not_found, iolist_to_binary(Reason)})
     end.
 
 
@@ -1000,7 +1002,9 @@ get_ddoc(Db, Id) ->
     {ok, _} = Ok ->
         Ok;
     Error ->
-        throw(Error)
+        Reason = io_lib:format("Could not open design document `~s` from "
+            "database `~s`, reason: ~s", [Id, Db#db.name, to_binary(Error)]),
+        throw({not_found, iolist_to_binary(Reason)})
     end.
 
 
