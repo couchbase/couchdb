@@ -32,6 +32,9 @@
 -define(PERIOD_RE,
     [$^, "([^-]+?)", "\\s*", $-, "\\s*", "([^-]+?)", $$]).
 
+% If the file size is smaller than this, don't trigger compaction.
+-define(MIN_FILE_SIZE, 128 * 1024).
+
 -record(state, {
     loop_pid
 }).
@@ -354,13 +357,19 @@ check_frag(Threshold, Frag) ->
 
 frag(Props) ->
     FileSize = couch_util:get_value(disk_size, Props),
-    case couch_util:get_value(data_size, Props) of
-    null ->
-        {100, FileSize};
-    0 ->
+    case FileSize < ?MIN_FILE_SIZE of
+    true ->
         {0, FileSize};
-    DataSize ->
-        {round(((FileSize - DataSize) / FileSize * 100)), space_required(DataSize)}
+    false ->
+        case couch_util:get_value(data_size, Props) of
+        null ->
+            {100, FileSize};
+        0 ->
+            {0, FileSize};
+        DataSize ->
+            Frag = round(((FileSize - DataSize) / FileSize * 100)),
+            {Frag, space_required(DataSize)}
+        end
     end.
 
 % Rough, and pessimistic, estimation of necessary disk space to compact a
