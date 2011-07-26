@@ -854,6 +854,29 @@
         },
 
         /**
+         * Execute an update function for a given document.
+         * @param {String} fun Update function in the form of ddoc/update_fun
+         * @param {String} doc_id The ID of the document to update
+         * @param {options} params parameters to the update function
+         * @param {ajaxSettings} ajaxOptions <a href="http://api.jquery.com/
+         * jQuery.ajax/#jQuery-ajax-settings">jQuery ajax settings</a>
+         */
+        update: function(fun, doc_id, params, ajaxOptions) {
+          var ddoc_fun = list.split('/');
+          var opts = options || {};
+          var type = 'POST';
+          var data = encodeOptions(params);
+          ajax({
+              type: type,
+              data: data,
+              url: this.uri + '_design/' + ddoc_fun[0] +
+                   '/_update/' + ddoc_fun[1] + '/' + doc_id + encodeOptions(options)
+              },
+              ajaxOptions, 'An error occured updating ' + doc_id
+          );
+        },
+
+        /**
          * Executes the specified view-name from the specified design-doc
          * design document, you can specify a list of <code>keys</code>
          * in the options object to recieve only those keys.
