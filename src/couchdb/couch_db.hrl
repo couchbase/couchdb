@@ -13,7 +13,7 @@
 -define(LOCAL_DOC_PREFIX, "_local/").
 -define(DESIGN_DOC_PREFIX0, "_design").
 -define(DESIGN_DOC_PREFIX, "_design/").
--define(DEFAULT_COMPRESSION, none).
+-define(DEFAULT_COMPRESSION, snappy).
 
 -define(MIN_STR, <<"">>).
 -define(MAX_STR, <<255>>). % illegal utf string
