@@ -106,11 +106,12 @@ http_sender(start, #sender_acc{req = Req, error_acc = ErrorAcc} = SAcc) ->
     case ErrorAcc of
     [] ->
         Acc = <<"\r\n">>;
-    _ ->
+    [FirstError | Rest] ->
+        couch_httpd:send_chunk(Resp, [<<"\r\n">>, FirstError]),
         lists:foreach(
-            fun(Row) -> couch_httpd:send_chunk(Resp, [Row, <<",\r\n">>]) end,
-            lists:reverse(ErrorAcc)),
-        Acc = <<>>
+            fun(Row) -> couch_httpd:send_chunk(Resp, [<<",\r\n">>, Row]) end,
+            Rest),
+        Acc = <<",\r\n">>
     end,
     {ok, SAcc#sender_acc{resp = Resp, acc = Acc}};
 
@@ -122,11 +123,12 @@ http_sender({start, RowCount}, #sender_acc{req = Req, error_acc = ErrorAcc} = SA
     case ErrorAcc of
     [] ->
         Acc = <<"\r\n">>;
-    _ ->
+    [FirstError | Rest] ->
+        couch_httpd:send_chunk(Resp, [<<"\r\n">>, FirstError]),
         lists:foreach(
-            fun(Row) -> couch_httpd:send_chunk(Resp, [Row, <<",\r\n">>]) end,
-            lists:reverse(ErrorAcc)),
-        Acc = <<>>
+            fun(Row) -> couch_httpd:send_chunk(Resp, [<<",\r\n">>, Row]) end,
+            Rest),
+        Acc = <<",\r\n">>
     end,
     {ok, SAcc#sender_acc{resp = Resp, acc = Acc, error_acc = []}};
 

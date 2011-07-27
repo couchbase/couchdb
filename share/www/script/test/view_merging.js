@@ -177,7 +177,7 @@ couchTests.view_merging = function(debug) {
   };
 
   // test with empty dbs
-  var dbA, dbB, dbs, docs, resp, resp2, i;
+  var dbA, dbB, dbC, dbD, dbE, dbs, docs, resp, resp2, i;
   var xhr, body, subviewspec;
   dbA = newDb("test_db_a");
   dbB = newDb("test_db_b");
@@ -191,6 +191,74 @@ couchTests.view_merging = function(debug) {
   TEquals(0, resp.total_rows);
   TEquals("object", typeof resp.rows);
   TEquals(0, resp.rows.length);
+
+  // Test for existence of error rows when most source databases are
+  // are missing the design documents.
+
+  addDoc([dbA], {
+    "_id": "_design/testfoobar",
+    "views": { "foobar": { "map": "function(doc) { emit(doc._id, 1); }" } }
+  });
+  dbC = newDb("test_db_c");
+  dbD = newDb("test_db_d");
+  dbE = newDb("test_db_e");
+  dbs = [dbUri(dbA), dbUri(dbB), dbUri(dbC), dbUri(dbD), dbUri(dbE)];
+  resp = mergedQuery(dbs, "testfoobar/foobar");
+
+  TEquals(4, resp.rows.length);
+  for (i = 0; i < resp.rows.length; i++) {
+    TEquals(true, resp.rows[i].error);
+    TEquals("string", typeof resp.rows[i].from);
+    TEquals("string", typeof resp.rows[i].reason);
+  }
+
+  // Same as before but with sub view merges.
+  body = {"views": {}};
+  body.views[dbA.name] = "testfoobar/foobar";
+  body.views[dbB.name] = "testfoobar/foobar";
+  subviewspec = {
+    "views": {}
+  };
+  subviewspec.views[dbC.name] = "testfoobar/foobar";
+  subviewspec.views[dbD.name] = "testfoobar/foobar";
+  subviewspec.views[dbE.name] = "testfoobar/foobar";
+  body.views[CouchDB.protocol + CouchDB.host + '/_view_merge'] = subviewspec;
+
+  xhr = CouchDB.request("POST", "/_view_merge", {
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  TEquals(200, xhr.status);
+  resp = JSON.parse(xhr.responseText);
+
+  // 2 error rows, one for local database dbB plus another related to "remote"
+  // view merging (all 3 "remote" databases miss the design document).
+  TEquals(2, resp.rows.length);
+  for (i = 0; i < resp.rows.length; i++) {
+    TEquals(true, resp.rows[i].error);
+    TEquals(true, (typeof resp.rows[i].from === "string") || (resp.rows[i].from === null));
+    TEquals("string", typeof resp.rows[i].reason);
+  }
+
+  addDoc([dbC], {
+    "_id": "_design/testfoobar",
+    "views": { "foobar": { "map": "function(doc) { emit(doc._id, 1); }" } }
+  });
+  xhr = CouchDB.request("POST", "/_view_merge", {
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  TEquals(200, xhr.status);
+  resp = JSON.parse(xhr.responseText);
+
+  // 3 error rows, one for local database dbB plus 2 related to "remote"
+  // databases dbD and dbE.
+  TEquals(3, resp.rows.length);
+  for (i = 0; i < resp.rows.length; i++) {
+    TEquals(true, resp.rows[i].error);
+    TEquals(true, (typeof resp.rows[i].from === "string") || (resp.rows[i].from === null));
+    TEquals("string", typeof resp.rows[i].reason);
+  }
 
 
   // test 1 empty db and one non-empty db
@@ -300,7 +368,6 @@ couchTests.view_merging = function(debug) {
 
 
   // 5 dbs, alternated keys
-  var dbC, dbD, dbE;
   dbA = newDb("test_db_a");
   dbB = newDb("test_db_b");
   dbC = newDb("test_db_c");
