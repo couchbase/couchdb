@@ -291,7 +291,5 @@ validate_on_error_param(Value) ->
     throw({bad_request, Msg}).
 
 
-rem_passwd(null) ->
-    null;
 rem_passwd(Url) ->
     ?l2b(couch_util:url_strip_password(Url)).

@@ -451,9 +451,9 @@ on_rereduce_error(Col, Error) ->
 
 
 reduce_error({invalid_value, Reason}) ->
-    {error, null, to_binary(Reason)};
+    {error, node_uri(), to_binary(Reason)};
 reduce_error(Error) ->
-    {error, null, to_binary(Error)}.
+    {error, node_uri(), to_binary(Error)}.
 
 
 group_keys_for_rereduce(Queue, [{K, _} | _] = Acc) ->
@@ -492,16 +492,22 @@ map_view_folder(#merged_view_spec{} = ViewSpec,
 
 map_view_folder(#simple_view_spec{view_name = <<"_all_docs">>, database = DbName},
     _MergeParams, UserCtx, Keys, ViewArgs, Queue) ->
-    {ok, Db} = couch_db:open(DbName, [{user_ctx, UserCtx}]),
-    try
-        {ok, Info} = couch_db:get_db_info(Db),
+    case couch_db:open(DbName, [{user_ctx, UserCtx}]) of
+    {ok, Db} ->
+        try
+            {ok, Info} = couch_db:get_db_info(Db),
+            ok = couch_view_merger_queue:queue(
+                Queue, {row_count, get_value(doc_count, Info)}),
+            % TODO: add support for ?update_seq=true and offset
+            fold_local_all_docs(Keys, Db, Queue, ViewArgs)
+        after
+            ok = couch_view_merger_queue:done(Queue),
+            couch_db:close(Db)
+        end;
+    {not_found, _} ->
         ok = couch_view_merger_queue:queue(
-            Queue, {row_count, get_value(doc_count, Info)}),
-        % TODO: add support for ?update_seq=true and offset
-        fold_local_all_docs(Keys, Db, Queue, ViewArgs)
-    after
-        ok = couch_view_merger_queue:done(Queue),
-        couch_db:close(Db)
+               Queue, {error, node_uri(), db_not_found_msg(DbName)}),
+        ok = couch_view_merger_queue:done(Queue)
     end;
 
 map_view_folder(ViewSpec, _MergeParams, UserCtx, Keys, ViewArgs, Queue) ->
@@ -513,30 +519,40 @@ map_view_folder(ViewSpec, _MergeParams, UserCtx, Keys, ViewArgs, Queue) ->
         include_docs = IncludeDocs,
         conflicts = Conflicts
     } = ViewArgs,
-    {ok, Db} = couch_db:open(DbName, [{user_ctx, UserCtx}]),
-    try
-        FoldlFun = make_map_fold_fun(IncludeDocs, Conflicts, Db, Queue),
-        View = get_map_view(Db, DDocId, ViewName, Stale),
-        {ok, RowCount} = couch_view:get_row_count(View),
-        ok = couch_view_merger_queue:queue(Queue, {row_count, RowCount}),
-        case Keys of
-        nil ->
-            FoldOpts = couch_httpd_view:make_key_options(ViewArgs),
-            {ok, _, _} = couch_view:fold(View, FoldlFun, [], FoldOpts);
-        _ when is_list(Keys) ->
-            lists:foreach(
-                fun(K) ->
-                    FoldOpts = couch_httpd_view:make_key_options(
-                        ViewArgs#view_query_args{start_key = K, end_key = K}),
-                    {ok, _, _} = couch_view:fold(View, FoldlFun, [], FoldOpts)
-                end,
-                Keys)
-        end
-    catch _Tag:Error ->
-        couch_view_merger_queue:queue(Queue, {error, null, to_binary(Error)})
-    after
-        ok = couch_view_merger_queue:done(Queue),
-        couch_db:close(Db)
+    case couch_db:open(DbName, [{user_ctx, UserCtx}]) of
+    {ok, Db} ->
+        try
+            FoldlFun = make_map_fold_fun(IncludeDocs, Conflicts, Db, Queue),
+            View = get_map_view(Db, DDocId, ViewName, Stale),
+            {ok, RowCount} = couch_view:get_row_count(View),
+            ok = couch_view_merger_queue:queue(Queue, {row_count, RowCount}),
+            case Keys of
+            nil ->
+                FoldOpts = couch_httpd_view:make_key_options(ViewArgs),
+                {ok, _, _} = couch_view:fold(View, FoldlFun, [], FoldOpts);
+            _ when is_list(Keys) ->
+                lists:foreach(
+                    fun(K) ->
+                        FoldOpts = couch_httpd_view:make_key_options(
+                            ViewArgs#view_query_args{start_key = K, end_key = K}),
+                        {ok, _, _} = couch_view:fold(View, FoldlFun, [], FoldOpts)
+                    end,
+                    Keys)
+            end
+        catch
+        {not_found, Reason} when Reason =:= missing; Reason =:= deleted ->
+            ok = couch_view_merger_queue:queue(
+                Queue, {error, node_uri(), ddoc_not_found_msg(DbName, DDocId)});
+        _Tag:Error ->
+            couch_view_merger_queue:queue(Queue, {error, node_uri(), to_binary(Error)})
+        after
+            ok = couch_view_merger_queue:done(Queue),
+            couch_db:close(Db)
+        end;
+    {not_found, _} ->
+        ok = couch_view_merger_queue:queue(
+               Queue, {error, node_uri(), db_not_found_msg(DbName)}),
+        ok = couch_view_merger_queue:done(Queue)
     end.
 
 
@@ -647,12 +663,26 @@ http_view_folder(ViewSpec, MergeParams, Keys, ViewArgs, Queue) ->
             ok = couch_view_merger_queue:done(Queue)
         end;
     {ibrowse_async_headers, ReqId, Code, _RespHeaders} ->
-        Reason = try
+        Error = try
             stream_all(ReqId, [])
         catch throw:{error, _Error} ->
             <<"Error code ", (?l2b(Code))/binary>>
         end,
-        ok = couch_view_merger_queue:queue(Queue, {error, Url, Reason}),
+        case (catch ?JSON_DECODE(Error)) of
+        {Props} when is_list(Props) ->
+            case {get_value(<<"error">>, Props), get_value(<<"reason">>, Props)} of
+            {<<"not_found">>, Reason} when
+                    Reason =/= <<"missing">>, Reason =/= <<"deleted">> ->
+                ok = couch_view_merger_queue:queue(Queue, {error, Url, Reason});
+            {<<"not_found">>, _} ->
+                ok = couch_view_merger_queue:queue(Queue, {error, Url, <<"not_found">>});
+            JsonError ->
+                ok = couch_view_merger_queue:queue(
+                    Queue, {error, Url, to_binary(JsonError)})
+            end;
+        _ ->
+            ok = couch_view_merger_queue:queue(Queue, {error, Url, to_binary(Error)})
+        end,
         ok = couch_view_merger_queue:done(Queue),
         stop_conn(Conn);
     {ibrowse_async_response, ReqId, {error, Error}} ->
@@ -821,32 +851,42 @@ reduce_view_folder(ViewSpec, _MergeParams, UserCtx, Keys, ViewArgs, Queue) ->
     #view_query_args{
         stale = Stale
     } = ViewArgs,
-    {ok, Db} = couch_db:open(DbName, [{user_ctx, UserCtx}]),
-    try
-        FoldlFun = make_reduce_fold_fun(ViewArgs, Queue),
-        KeyGroupFun = make_group_rows_fun(ViewArgs),
-        {ok, View, _} = couch_view:get_reduce_view(Db, DDocId, ViewName, Stale),
-        case Keys of
-        nil ->
-            FoldOpts = [{key_group_fun, KeyGroupFun} |
-                couch_httpd_view:make_key_options(ViewArgs)],
-            {ok, _} = couch_view:fold_reduce(View, FoldlFun, [], FoldOpts);
-        _ when is_list(Keys) ->
-            lists:foreach(
-                fun(K) ->
-                    FoldOpts = [{key_group_fun, KeyGroupFun} |
-                        couch_httpd_view:make_key_options(
-                            ViewArgs#view_query_args{
-                                start_key = K, end_key = K})],
-                    {ok, _} = couch_view:fold_reduce(View, FoldlFun, [], FoldOpts)
-                end,
-                Keys)
-        end
-    catch _Tag:Error ->
-        couch_view_merger_queue:queue(Queue, reduce_error(Error))
-    after
-        ok = couch_view_merger_queue:done(Queue),
-        couch_db:close(Db)
+    case couch_db:open(DbName, [{user_ctx, UserCtx}]) of
+    {ok, Db} ->
+        try
+            FoldlFun = make_reduce_fold_fun(ViewArgs, Queue),
+            KeyGroupFun = make_group_rows_fun(ViewArgs),
+            {ok, View, _} = couch_view:get_reduce_view(Db, DDocId, ViewName, Stale),
+            case Keys of
+            nil ->
+                FoldOpts = [{key_group_fun, KeyGroupFun} |
+                    couch_httpd_view:make_key_options(ViewArgs)],
+                {ok, _} = couch_view:fold_reduce(View, FoldlFun, [], FoldOpts);
+            _ when is_list(Keys) ->
+                lists:foreach(
+                    fun(K) ->
+                        FoldOpts = [{key_group_fun, KeyGroupFun} |
+                            couch_httpd_view:make_key_options(
+                                ViewArgs#view_query_args{
+                                    start_key = K, end_key = K})],
+                        {ok, _} = couch_view:fold_reduce(View, FoldlFun, [], FoldOpts)
+                    end,
+                    Keys)
+            end
+        catch
+        {not_found, Reason} when Reason =:= missing; Reason =:= deleted ->
+            ok = couch_view_merger_queue:queue(
+                Queue, {error, node_uri(), ddoc_not_found_msg(DbName, DDocId)});
+        _Tag:Error ->
+            couch_view_merger_queue:queue(Queue, reduce_error(Error))
+        after
+            ok = couch_view_merger_queue:done(Queue),
+            couch_db:close(Db)
+        end;
+    {not_found, _} ->
+        ok = couch_view_merger_queue:queue(
+            Queue, {error, node_uri(), db_not_found_msg(DbName)}),
+        ok = couch_view_merger_queue:done(Queue)
     end.
 
 
@@ -959,10 +999,10 @@ open_db(DbName, UserCtx, _MergeParams) ->
     case couch_db:open(DbName, [{user_ctx, UserCtx}]) of
     {ok, _} = Ok ->
         Ok;
+    {not_found, _} ->
+        throw({not_found, db_not_found_msg(DbName)});
     Error ->
-        Reason = io_lib:format("Could not open local database `~s` "
-            "reason: ~s", [DbName, to_binary(Error)]),
-        throw({not_found, iolist_to_binary(Reason)})
+        throw(Error)
     end.
 
 
@@ -991,7 +1031,14 @@ get_ddoc(#httpdb{url = BaseUrl, headers = Headers} = HttpDb, Id) ->
         {ok, couch_doc:from_json_obj(?JSON_DECODE(Body))};
     {ok, _Code, _RespHeaders, Body} ->
         {Props} = ?JSON_DECODE(Body),
-        throw({get_value(<<"error">>, Props), get_value(<<"reason">>, Props)});
+        case {get_value(<<"error">>, Props), get_value(<<"reason">>, Props)} of
+        {not_found, _} ->
+            throw({not_found, ddoc_not_found_msg(HttpDb, Id)});
+        Error ->
+            Msg = io_lib:format("Error getting design document `~s` from "
+                "database `~s`: ~s", [Id, db_uri(HttpDb), Error]),
+            throw({error, iolist_to_binary(Msg)})
+        end;
     {error, Error} ->
         Msg = io_lib:format("Error getting design document `~s` from database "
             "`~s`: ~s", [Id, db_uri(HttpDb), Error]),
@@ -1001,10 +1048,8 @@ get_ddoc(Db, Id) ->
     case couch_db:open_doc(Db, Id, [ejson_body]) of
     {ok, _} = Ok ->
         Ok;
-    Error ->
-        Reason = io_lib:format("Could not open design document `~s` from "
-            "database `~s`, reason: ~s", [Id, Db#db.name, to_binary(Error)]),
-        throw({not_found, iolist_to_binary(Reason)})
+    {not_found, _} ->
+        throw({not_found, ddoc_not_found_msg(Db, Id)})
     end.
 
 
@@ -1015,6 +1060,14 @@ db_uri(#db{name = Name}) ->
 db_uri(Url) when is_binary(Url) ->
     ?l2b(couch_util:url_strip_password(Url)).
 
+
+db_not_found_msg(DbName) ->
+    iolist_to_binary(io_lib:format("Database `~s` doesn't exist.", [db_uri(DbName)])).
+
+ddoc_not_found_msg(DbName, DDocId) ->
+    Msg = io_lib:format(
+        "Design document `~s` missing in database `~s`.", [DDocId, db_uri(DbName)]),
+    iolist_to_binary(Msg).
 
 
 ibrowse_options(#httpdb{timeout = T, url = Url}) ->
@@ -1146,3 +1199,9 @@ stop_conn(Conn) ->
     unlink(Conn),
     receive {'EXIT', Conn, _} -> ok after 0 -> ok end,
     catch ibrowse:stop_worker_process(Conn).
+
+node_uri() ->
+    iolist_to_binary([
+        couch_config:get("httpd", "bind_address", "localhost"),
+        $:,
+        couch_config:get("httpd", "port", "5984")]).
