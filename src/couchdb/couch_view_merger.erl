@@ -775,8 +775,8 @@ http_view_fold_rows_1({key, <<"rows">>}, Queue) ->
 http_view_fold_rows_1(_Ev, Queue) ->
     fun(Ev) -> http_view_fold_rows_1(Ev, Queue) end.
 
-http_view_fold_rows_2(array_end, _Queue) ->
-    fun void_event/1;
+http_view_fold_rows_2(array_end, Queue) ->
+    fun(Ev) -> http_view_fold_errors_1(Ev, Queue) end;
 http_view_fold_rows_2(object_start, Queue) ->
     fun(Ev) ->
         json_stream_parse:collect_object(
@@ -787,46 +787,58 @@ http_view_fold_rows_2(object_start, Queue) ->
             end)
     end.
 
+http_view_fold_errors_1({key, <<"errors">>}, Queue) ->
+    fun(array_start) -> fun(Ev) -> http_view_fold_errors_2(Ev, Queue) end end;
+http_view_fold_errors_1(_Ev, _Queue) ->
+    fun void_event/1.
+
+http_view_fold_errors_2(array_end, _Queue) ->
+    fun void_event/1;
+http_view_fold_errors_2(object_start, Queue) ->
+    fun(Ev) ->
+        json_stream_parse:collect_object(
+            Ev,
+            fun(Error) ->
+                http_view_fold_queue_error(Error, Queue),
+                fun(Ev2) -> http_view_fold_errors_2(Ev2, Queue) end
+            end)
+    end.
+
+
+http_view_fold_queue_error({Props}, Queue) ->
+    From0 = get_value(<<"from">>, Props, ?LOCAL),
+    From = case From0 of
+        ?LOCAL ->
+        get(from_url);
+    _ ->
+        From0
+    end,
+    Reason = get_value(<<"reason">>, Props, null),
+    ok = couch_view_merger_queue:queue(Queue, {error, From, Reason}).
+
+
 http_view_fold_queue_row({Props}, Queue) ->
-    Key = get_value(<<"key">>, Props, nil),
+    Key = get_value(<<"key">>, Props, null),
     Id = get_value(<<"id">>, Props, nil),
     Val = get_value(<<"value">>, Props),
-    Row = case Key of
+    Row = case get_value(<<"error">>, Props, nil) of
     nil ->
-        % We got a row like:
-        %     {"error": true, "from": "http://server/db", "reason": "timeout"}
-        %
-        % It can be received when receiving a result which is the result of
-        % another view merge.
-        From0 = get_value(<<"from">>, Props, ?LOCAL),
-        From = case From0 of
-        ?LOCAL ->
-            get(from_url);
-        _ ->
-            From0
-        end,
-        Reason = get_value(<<"reason">>, Props, null),
-        {error, From, Reason};
-    _ ->
-        case get_value(<<"error">>, Props, nil) of
+        case Id of
         nil ->
-            case Id of
+            % reduce row
+            {Key, Val};
+        _ ->
+            % map row
+            case get_value(<<"doc">>, Props, nil) of
             nil ->
-                % reduce row
-                {Key, Val};
-            _ ->
-                % map row
-                case get_value(<<"doc">>, Props, nil) of
-                nil ->
-                    {{Key, Id}, Val};
-                Doc ->
-                    {{Key, Id}, Val, {doc, Doc}}
-                end
-            end;
-        Error ->
-            % error in a map row
-            {{Key, error}, Error}
-        end
+                {{Key, Id}, Val};
+            Doc ->
+                {{Key, Id}, Val, {doc, Doc}}
+            end
+        end;
+    Error ->
+        % error in a map row
+        {{Key, error}, Error}
     end,
     ok = couch_view_merger_queue:queue(Queue, Row).
 

@@ -100,82 +100,64 @@ apply_http_config(Req, Body, MergeParams) ->
     }, Req).
 
 
-http_sender(start, #sender_acc{req = Req, error_acc = ErrorAcc} = SAcc) ->
+http_sender(start, #sender_acc{req = Req} = SAcc) ->
     {ok, Resp} = couch_httpd:start_json_response(Req, 200, []),
     couch_httpd:send_chunk(Resp, <<"{\"rows\":[">>),
-    case ErrorAcc of
-    [] ->
-        Acc = <<"\r\n">>;
-    [FirstError | Rest] ->
-        couch_httpd:send_chunk(Resp, [<<"\r\n">>, FirstError]),
-        lists:foreach(
-            fun(Row) -> couch_httpd:send_chunk(Resp, [<<",\r\n">>, Row]) end,
-            Rest),
-        Acc = <<",\r\n">>
-    end,
-    {ok, SAcc#sender_acc{resp = Resp, acc = Acc}};
+    {ok, SAcc#sender_acc{resp = Resp, acc = <<"\r\n">>}};
 
-http_sender({start, RowCount}, #sender_acc{req = Req, error_acc = ErrorAcc} = SAcc) ->
+http_sender({start, RowCount}, #sender_acc{req = Req} = SAcc) ->
     Start = io_lib:format(
         "{\"total_rows\":~w,\"rows\":[", [RowCount]),
     {ok, Resp} = couch_httpd:start_json_response(Req, 200, []),
     couch_httpd:send_chunk(Resp, Start),
-    case ErrorAcc of
-    [] ->
-        Acc = <<"\r\n">>;
-    [FirstError | Rest] ->
-        couch_httpd:send_chunk(Resp, [<<"\r\n">>, FirstError]),
-        lists:foreach(
-            fun(Row) -> couch_httpd:send_chunk(Resp, [<<",\r\n">>, Row]) end,
-            Rest),
-        Acc = <<",\r\n">>
-    end,
-    {ok, SAcc#sender_acc{resp = Resp, acc = Acc, error_acc = []}};
+    {ok, SAcc#sender_acc{resp = Resp, acc = <<"\r\n">>}};
 
 http_sender({row, Row}, #sender_acc{resp = Resp, acc = Acc} = SAcc) ->
     couch_httpd:send_chunk(Resp, [Acc, ?JSON_ENCODE(Row)]),
     {ok, SAcc#sender_acc{acc = <<",\r\n">>}};
 
-http_sender(stop, #sender_acc{resp = Resp}) ->
-    couch_httpd:send_chunk(Resp, <<"\r\n]}">>),
+http_sender(stop, #sender_acc{resp = Resp, error_acc = ErrorAcc}) ->
+    case ErrorAcc of
+    [] ->
+        couch_httpd:send_chunk(Resp, <<"\r\n]}">>);
+    _ ->
+        couch_httpd:send_chunk(Resp, [<<"\r\n">>, <<"],\r\n">>, <<"\"errors\":[">>]),
+        lists:foldl(
+            fun(Row, Sep) ->
+                couch_httpd:send_chunk(Resp, [Sep, Row]),
+                <<",\r\n">>
+            end,
+            <<"\r\n">>, ErrorAcc),
+        couch_httpd:send_chunk(Resp, <<"\r\n]}">>)
+    end,
     {ok, couch_httpd:end_json_response(Resp)};
 
-http_sender({error, Url, Reason}, #sender_acc{on_error = continue} = SAcc) ->
-    #sender_acc{resp = Resp, error_acc = ErrorAcc, acc = Acc} = SAcc,
+http_sender({error, Url, Reason}, #sender_acc{on_error = continue, error_acc = ErrorAcc} = SAcc) ->
     Row = {[
-        {<<"error">>, true}, {<<"from">>, rem_passwd(Url)},
-        {<<"reason">>, to_binary(Reason)}
+        {<<"from">>, rem_passwd(Url)}, {<<"reason">>, to_binary(Reason)}
     ]},
-    case Resp of
-    nil ->
-        % we haven't started the response yet
-        ErrorAcc2 = [?JSON_ENCODE(Row) | ErrorAcc],
-        Acc2 = Acc;
-    _ ->
-        couch_httpd:send_chunk(Resp, [Acc, ?JSON_ENCODE(Row)]),
-        ErrorAcc2 = ErrorAcc,
-        Acc2 = <<",\r\n">>
-    end,
-    {ok, SAcc#sender_acc{error_acc = ErrorAcc2, acc = Acc2}};
+    ErrorAcc2 = [?JSON_ENCODE(Row) | ErrorAcc],
+    {ok, SAcc#sender_acc{error_acc = ErrorAcc2}};
 
 http_sender({error, Url, Reason}, #sender_acc{on_error = stop} = SAcc) ->
-    #sender_acc{req = Req, resp = Resp, acc = Acc} = SAcc,
+    #sender_acc{req = Req, resp = Resp} = SAcc,
     Row = {[
-        {<<"error">>, true}, {<<"from">>, rem_passwd(Url)},
-        {<<"reason">>, to_binary(Reason)}
+        {<<"from">>, rem_passwd(Url)}, {<<"reason">>, to_binary(Reason)}
     ]},
     case Resp of
     nil ->
         % we haven't started the response yet
-        Start = io_lib:format("{\"total_rows\":~w,\"rows\":[\r\n", [0]),
+        Start = io_lib:format("{\"total_rows\":~w,\"rows\":[]\r\n", [0]),
         {ok, Resp2} = couch_httpd:start_json_response(Req, 200, []),
         couch_httpd:send_chunk(Resp2, Start),
-        couch_httpd:send_chunk(Resp2, ?JSON_ENCODE(Row)),
+        couch_httpd:send_chunk(Resp2, [<<",\r\n">>, <<"\"errors\":[">>]),
+        couch_httpd:send_chunk(Resp2, [?JSON_ENCODE(Row), "]"]),
         couch_httpd:send_chunk(Resp2, <<"\r\n]}">>);
     _ ->
        Resp2 = Resp,
-       couch_httpd:send_chunk(Resp2, [Acc, ?JSON_ENCODE(Row)]),
-       couch_httpd:send_chunk(Resp2, <<"\r\n]}">>)
+       couch_httpd:send_chunk(Resp2, [<<"\r\n],">>, <<"\"errors\":[">>]),
+       couch_httpd:send_chunk(Resp2, [?JSON_ENCODE(Row), "]"]),
+       couch_httpd:send_chunk(Resp2, <<"\r\n}">>)
     end,
     {stop, Resp2}.
 

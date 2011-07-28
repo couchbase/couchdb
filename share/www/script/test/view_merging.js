@@ -205,11 +205,11 @@ couchTests.view_merging = function(debug) {
   dbs = [dbUri(dbA), dbUri(dbB), dbUri(dbC), dbUri(dbD), dbUri(dbE)];
   resp = mergedQuery(dbs, "testfoobar/foobar");
 
-  TEquals(4, resp.rows.length);
-  for (i = 0; i < resp.rows.length; i++) {
-    TEquals(true, resp.rows[i].error);
-    TEquals("string", typeof resp.rows[i].from);
-    TEquals("string", typeof resp.rows[i].reason);
+  TEquals(0, resp.rows.length);
+  TEquals(4, resp.errors.length);
+  for (i = 0; i < resp.errors.length; i++) {
+    TEquals("string", typeof resp.errors[i].from);
+    TEquals("string", typeof resp.errors[i].reason);
   }
 
   // Same as before but with sub view merges.
@@ -233,11 +233,11 @@ couchTests.view_merging = function(debug) {
 
   // 2 error rows, one for local database dbB plus another related to "remote"
   // view merging (all 3 "remote" databases miss the design document).
-  TEquals(2, resp.rows.length);
-  for (i = 0; i < resp.rows.length; i++) {
-    TEquals(true, resp.rows[i].error);
-    TEquals(true, (typeof resp.rows[i].from === "string") || (resp.rows[i].from === null));
-    TEquals("string", typeof resp.rows[i].reason);
+  TEquals(0, resp.rows.length);
+  TEquals(2, resp.errors.length);
+  for (i = 0; i < resp.errors.length; i++) {
+    TEquals(true, (typeof resp.errors[i].from === "string") || (resp.errors[i].from === null));
+    TEquals("string", typeof resp.errors[i].reason);
   }
 
   addDoc([dbC], {
@@ -253,11 +253,11 @@ couchTests.view_merging = function(debug) {
 
   // 3 error rows, one for local database dbB plus 2 related to "remote"
   // databases dbD and dbE.
-  TEquals(3, resp.rows.length);
-  for (i = 0; i < resp.rows.length; i++) {
-    TEquals(true, resp.rows[i].error);
-    TEquals(true, (typeof resp.rows[i].from === "string") || (resp.rows[i].from === null));
-    TEquals("string", typeof resp.rows[i].reason);
+  TEquals(0, resp.rows.length);
+  TEquals(3, resp.errors.length);
+  for (i = 0; i < resp.errors.length; i++) {
+    TEquals(true, (typeof resp.errors[i].from === "string") || (resp.errors[i].from === null));
+    TEquals("string", typeof resp.errors[i].reason);
   }
 
 
@@ -1041,30 +1041,26 @@ couchTests.view_merging = function(debug) {
 
   resp = mergedQuery(dbs, "test/badredview");
 
-  TEquals(3, resp.rows.length);
-  TEquals(true, resp.rows[0].error);
-  TEquals(true, typeof resp.rows[0].from !== "undefined");
-  TEquals("string", typeof resp.rows[0].reason);
-  TEquals(true, resp.rows[1].error);
-  TEquals(true, typeof resp.rows[1].from !== "undefined");
-  TEquals("string", typeof resp.rows[1].reason);
-  TEquals(true, resp.rows[2].error);
-  TEquals(true, typeof resp.rows[2].from !== "undefined");
-  TEquals("string", typeof resp.rows[2].reason);
+  TEquals(0, resp.rows.length);
+  TEquals(3, resp.errors.length);
+  TEquals(true, typeof resp.errors[0].from !== "undefined");
+  TEquals("string", typeof resp.errors[0].reason);
+  TEquals(true, typeof resp.errors[1].from !== "undefined");
+  TEquals("string", typeof resp.errors[1].reason);
+  TEquals(true, typeof resp.errors[2].from !== "undefined");
+  TEquals("string", typeof resp.errors[2].reason);
 
   // same result with remote views
   resp = mergedQuery([dbUri(dbA), dbB, dbUri(dbC)], "test/badredview");
 
-  TEquals(3, resp.rows.length);
-  TEquals(true, resp.rows[0].error);
-  TEquals(true, typeof resp.rows[0].from !== "undefined");
-  TEquals("string", typeof resp.rows[0].reason);
-  TEquals(true, resp.rows[1].error);
-  TEquals(true, typeof resp.rows[1].from !== "undefined");
-  TEquals("string", typeof resp.rows[1].reason);
-  TEquals(true, resp.rows[2].error);
-  TEquals(true, typeof resp.rows[2].from !== "undefined");
-  TEquals("string", typeof resp.rows[2].reason);
+  TEquals(0, resp.rows.length);
+  TEquals(3, resp.errors.length);
+  TEquals(true, typeof resp.errors[0].from !== "undefined");
+  TEquals("string", typeof resp.errors[0].reason);
+  TEquals(true, typeof resp.errors[1].from !== "undefined");
+  TEquals("string", typeof resp.errors[1].reason);
+  TEquals(true, typeof resp.errors[2].from !== "undefined");
+  TEquals("string", typeof resp.errors[2].reason);
 
   // similar results with sub merges
   body = {"views": {}};
@@ -1084,16 +1080,14 @@ couchTests.view_merging = function(debug) {
 
   resp = JSON.parse(xhr.responseText);
 
-  TEquals(3, resp.rows.length);
-  TEquals(true, resp.rows[0].error);
-  TEquals(true, typeof resp.rows[0].from !== "undefined");
-  TEquals("string", typeof resp.rows[0].reason);
-  TEquals(true, resp.rows[1].error);
-  TEquals(true, typeof resp.rows[1].from !== "undefined");
-  TEquals("string", typeof resp.rows[1].reason);
-  TEquals(true, resp.rows[2].error);
-  TEquals(true, typeof resp.rows[2].from !== "undefined");
-  TEquals("string", typeof resp.rows[2].reason);
+  TEquals(0, resp.rows.length);
+  TEquals(3, resp.errors.length);
+  TEquals(true, typeof resp.errors[0].from !== "undefined");
+  TEquals("string", typeof resp.errors[0].reason);
+  TEquals(true, typeof resp.errors[1].from !== "undefined");
+  TEquals("string", typeof resp.errors[1].reason);
+  TEquals(true, typeof resp.errors[2].from !== "undefined");
+  TEquals("string", typeof resp.errors[2].reason);
 
   // Update the map function so that reduce will succeed - should work.
   bad_ddoc = dbA.open(bad_ddoc._id);
@@ -1150,30 +1144,26 @@ couchTests.view_merging = function(debug) {
 
   resp = mergedQuery(dbs, "test/badredview");
 
-  TEquals(3, resp.rows.length);
-  TEquals(true, resp.rows[0].error);
-  TEquals(true, typeof resp.rows[0].from !== "undefined");
-  TEquals("string", typeof resp.rows[0].reason);
-  TEquals(true, resp.rows[1].error);
-  TEquals(true, typeof resp.rows[1].from !== "undefined");
-  TEquals("string", typeof resp.rows[1].reason);
-  TEquals(true, resp.rows[2].error);
-  TEquals(true, typeof resp.rows[2].from !== "undefined");
-  TEquals("string", typeof resp.rows[2].reason);
+  TEquals(0, resp.rows.length);
+  TEquals(3, resp.errors.length);
+  TEquals(true, typeof resp.errors[0].from !== "undefined");
+  TEquals("string", typeof resp.errors[0].reason);
+  TEquals(true, typeof resp.errors[1].from !== "undefined");
+  TEquals("string", typeof resp.errors[1].reason);
+  TEquals(true, typeof resp.errors[2].from !== "undefined");
+  TEquals("string", typeof resp.errors[2].reason);
 
   // same result with remote views
   resp = mergedQuery([dbUri(dbA), dbB, dbUri(dbC)], "test/badredview");
 
-  TEquals(3, resp.rows.length);
-  TEquals(true, resp.rows[0].error);
-  TEquals(true, typeof resp.rows[0].from !== "undefined");
-  TEquals("string", typeof resp.rows[0].reason);
-  TEquals(true, resp.rows[1].error);
-  TEquals(true, typeof resp.rows[1].from !== "undefined");
-  TEquals("string", typeof resp.rows[1].reason);
-  TEquals(true, resp.rows[2].error);
-  TEquals(true, typeof resp.rows[2].from !== "undefined");
-  TEquals("string", typeof resp.rows[2].reason);
+  TEquals(0, resp.rows.length);
+  TEquals(3, resp.errors.length);
+  TEquals(true, typeof resp.errors[0].from !== "undefined");
+  TEquals("string", typeof resp.errors[0].reason);
+  TEquals(true, typeof resp.errors[1].from !== "undefined");
+  TEquals("string", typeof resp.errors[1].reason);
+  TEquals(true, typeof resp.errors[2].from !== "undefined");
+  TEquals("string", typeof resp.errors[2].reason);
 
   // similar results with sub merges
   body = {"views": {}};
@@ -1193,16 +1183,14 @@ couchTests.view_merging = function(debug) {
 
   resp = JSON.parse(xhr.responseText);
 
-  TEquals(3, resp.rows.length);
-  TEquals(true, resp.rows[0].error);
-  TEquals(true, typeof resp.rows[0].from !== "undefined");
-  TEquals("string", typeof resp.rows[0].reason);
-  TEquals(true, resp.rows[1].error);
-  TEquals(true, typeof resp.rows[1].from !== "undefined");
-  TEquals("string", typeof resp.rows[1].reason);
-  TEquals(true, resp.rows[2].error);
-  TEquals(true, typeof resp.rows[2].from !== "undefined");
-  TEquals("string", typeof resp.rows[2].reason);
+  TEquals(0, resp.rows.length);
+  TEquals(3, resp.errors.length);
+  TEquals(true, typeof resp.errors[0].from !== "undefined");
+  TEquals("string", typeof resp.errors[0].reason);
+  TEquals(true, typeof resp.errors[1].from !== "undefined");
+  TEquals("string", typeof resp.errors[1].reason);
+  TEquals(true, typeof resp.errors[2].from !== "undefined");
+  TEquals("string", typeof resp.errors[2].reason);
 
   // Correct the reduce function's code, query result should not
   // contain errors anymore.
