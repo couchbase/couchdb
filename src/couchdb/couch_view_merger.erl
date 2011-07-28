@@ -17,6 +17,8 @@
 -include("couch_db.hrl").
 -include("couch_view_merger.hrl").
 
+-define(LOCAL, <<"local">>).
+
 -import(couch_util, [
     get_value/2,
     get_value/3,
@@ -451,9 +453,9 @@ on_rereduce_error(Col, Error) ->
 
 
 reduce_error({invalid_value, Reason}) ->
-    {error, node_uri(), to_binary(Reason)};
+    {error, ?LOCAL, to_binary(Reason)};
 reduce_error(Error) ->
-    {error, node_uri(), to_binary(Error)}.
+    {error, ?LOCAL, to_binary(Error)}.
 
 
 group_keys_for_rereduce(Queue, [{K, _} | _] = Acc) ->
@@ -506,7 +508,7 @@ map_view_folder(#simple_view_spec{view_name = <<"_all_docs">>, database = DbName
         end;
     {not_found, _} ->
         ok = couch_view_merger_queue:queue(
-               Queue, {error, node_uri(), db_not_found_msg(DbName)}),
+               Queue, {error, ?LOCAL, db_not_found_msg(DbName)}),
         ok = couch_view_merger_queue:done(Queue)
     end;
 
@@ -542,16 +544,16 @@ map_view_folder(ViewSpec, _MergeParams, UserCtx, Keys, ViewArgs, Queue) ->
         catch
         {not_found, Reason} when Reason =:= missing; Reason =:= deleted ->
             ok = couch_view_merger_queue:queue(
-                Queue, {error, node_uri(), ddoc_not_found_msg(DbName, DDocId)});
+                Queue, {error, ?LOCAL, ddoc_not_found_msg(DbName, DDocId)});
         _Tag:Error ->
-            couch_view_merger_queue:queue(Queue, {error, node_uri(), to_binary(Error)})
+            couch_view_merger_queue:queue(Queue, {error, ?LOCAL, to_binary(Error)})
         after
             ok = couch_view_merger_queue:done(Queue),
             couch_db:close(Db)
         end;
     {not_found, _} ->
         ok = couch_view_merger_queue:queue(
-               Queue, {error, node_uri(), db_not_found_msg(DbName)}),
+               Queue, {error, ?LOCAL, db_not_found_msg(DbName)}),
         ok = couch_view_merger_queue:done(Queue)
     end.
 
@@ -796,9 +798,9 @@ http_view_fold_queue_row({Props}, Queue) ->
         %
         % It can be received when receiving a result which is the result of
         % another view merge.
-        From0 = get_value(<<"from">>, Props, null),
+        From0 = get_value(<<"from">>, Props, ?LOCAL),
         From = case From0 of
-        null ->
+        ?LOCAL ->
             get(from_url);
         _ ->
             From0
@@ -876,7 +878,7 @@ reduce_view_folder(ViewSpec, _MergeParams, UserCtx, Keys, ViewArgs, Queue) ->
         catch
         {not_found, Reason} when Reason =:= missing; Reason =:= deleted ->
             ok = couch_view_merger_queue:queue(
-                Queue, {error, node_uri(), ddoc_not_found_msg(DbName, DDocId)});
+                Queue, {error, ?LOCAL, ddoc_not_found_msg(DbName, DDocId)});
         _Tag:Error ->
             couch_view_merger_queue:queue(Queue, reduce_error(Error))
         after
@@ -885,7 +887,7 @@ reduce_view_folder(ViewSpec, _MergeParams, UserCtx, Keys, ViewArgs, Queue) ->
         end;
     {not_found, _} ->
         ok = couch_view_merger_queue:queue(
-            Queue, {error, node_uri(), db_not_found_msg(DbName)}),
+            Queue, {error, ?LOCAL, db_not_found_msg(DbName)}),
         ok = couch_view_merger_queue:done(Queue)
     end.
 
@@ -1199,9 +1201,3 @@ stop_conn(Conn) ->
     unlink(Conn),
     receive {'EXIT', Conn, _} -> ok after 0 -> ok end,
     catch ibrowse:stop_worker_process(Conn).
-
-node_uri() ->
-    iolist_to_binary([
-        couch_config:get("httpd", "bind_address", "localhost"),
-        $:,
-        couch_config:get("httpd", "port", "5984")]).
