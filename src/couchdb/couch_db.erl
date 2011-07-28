@@ -108,19 +108,19 @@ close(#db{fd_ref_counter=RefCntr}) ->
     couch_ref_counter:drop(RefCntr).
 
 open_ref_counted(MainPid, OpenedPid) ->
-    gen_server:call(MainPid, {open_ref_count, OpenedPid}).
+    gen_server:call(MainPid, {open_ref_count, OpenedPid}, infinity).
 
 is_idle(MainPid) ->
-    gen_server:call(MainPid, is_idle).
+    gen_server:call(MainPid, is_idle, infinity).
 
 monitor(#db{main_pid=MainPid}) ->
     erlang:monitor(process, MainPid).
 
 start_compact(#db{update_pid=Pid}) ->
-    gen_server:call(Pid, start_compact).
+    gen_server:call(Pid, start_compact, infinity).
 
 abort_compact(#db{update_pid=Pid}) ->
-    gen_server:call(Pid, abort_compact).
+    gen_server:call(Pid, abort_compact, infinity).
 
 delete_doc(Db, Id, Revisions) ->
     DeletedDocs = [#doc{id=Id, revs=[Rev], deleted=true} || Rev <- Revisions],
@@ -232,10 +232,10 @@ get_full_doc_infos(Db, Ids) ->
     couch_btree:lookup(Db#db.fulldocinfo_by_id_btree, Ids).
 
 increment_update_seq(#db{update_pid=UpdatePid}) ->
-    gen_server:call(UpdatePid, increment_update_seq).
+    gen_server:call(UpdatePid, increment_update_seq, infinity).
 
 purge_docs(#db{update_pid=UpdatePid}, IdsRevs) ->
-    gen_server:call(UpdatePid, {purge_docs, IdsRevs}).
+    gen_server:call(UpdatePid, {purge_docs, IdsRevs}, infinity).
 
 get_committed_update_seq(#db{committed_update_seq=Seq}) ->
     Seq.
@@ -1089,7 +1089,7 @@ enum_docs(Db, InFun, InAcc, Options) ->
 
 init({DbName, Filepath, Fd, Options}) ->
     {ok, UpdaterPid} = gen_server:start_link(couch_db_updater, {self(), DbName, Filepath, Fd, Options}, []),
-    {ok, #db{fd_ref_counter=RefCntr}=Db} = gen_server:call(UpdaterPid, get_db),
+    {ok, #db{fd_ref_counter=RefCntr}=Db} = gen_server:call(UpdaterPid, get_db, infinity),
     couch_ref_counter:add(RefCntr),
     case lists:member(sys_db, Options) of
     true ->
