@@ -30,6 +30,6 @@
    callback,
    user_acc,
    % parameters that matter only when there are remote views to merge
-   conn_timeout = 10000,    % milliseconds
+   conn_timeout = 60000,    % milliseconds
    on_error = continue      % 'continue' | 'stop'
 }).
