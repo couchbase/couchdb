@@ -122,7 +122,10 @@
     deleted,
     summary,
     size_atts,
-    fd}).
+    fd,
+    body_md5 = <<>>,
+    atts_md5 = <<>>
+    }).
 
 -record(att,
     {

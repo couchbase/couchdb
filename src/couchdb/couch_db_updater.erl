@@ -217,11 +217,11 @@ handle_cast(Msg, #db{name = Name} = Db) ->
 
 
 handle_info({update_docs, Client, GroupedDocs, NonRepDocs, MergeConflicts,
-        FullCommit}, Db) ->
+        FullCommit, Clobber}, Db) ->
     GroupedDocs2 = [[{Client, D} || D <- DocGroup] || DocGroup <- GroupedDocs],
     if NonRepDocs == [] ->
         {GroupedDocs3, Clients, FullCommit2} = collect_updates(GroupedDocs2,
-                [Client], MergeConflicts, FullCommit);
+                [Client], MergeConflicts, FullCommit, Clobber);
     true ->
         GroupedDocs3 = GroupedDocs2,
         FullCommit2 = FullCommit,
@@ -229,7 +229,7 @@ handle_info({update_docs, Client, GroupedDocs, NonRepDocs, MergeConflicts,
     end,
     NonRepDocs2 = [{Client, NRDoc} || NRDoc <- NonRepDocs],
     try update_docs_int(Db, GroupedDocs3, NonRepDocs2, MergeConflicts,
-                FullCommit2) of
+                FullCommit2, Clobber) of
     {ok, Db2} ->
         ok = gen_server:call(Db#db.main_pid, {db_updated, Db2}),
         if Db2#db.update_seq /= Db#db.update_seq ->
@@ -263,9 +263,9 @@ code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 
-collect_updates(SortedDocs, ClientsAcc, MergeConflicts, FullCommit) ->
+collect_updates(SortedDocs, ClientsAcc, MergeConflicts, FullCommit, Clobber) ->
     {UnsortedDocs, Clients, FullCommit1} =
-        collect_unsorted_updates([], ClientsAcc, MergeConflicts, FullCommit),
+        collect_unsorted_updates([], ClientsAcc, MergeConflicts, FullCommit, Clobber),
     GroupedDocs = case UnsortedDocs of
     [] ->
         SortedDocs;
@@ -292,17 +292,17 @@ group_buckets([[{_, Doc1} | _] = B1 | Rest1], [[{_, Doc2} | _] = B2 | Rest2]) ->
         group_buckets(Rest1, [B1, B2 | Rest2])
     end.
 
-collect_unsorted_updates(DocsAcc, ClientsAcc, MergeConflicts, FullCommit) ->
+collect_unsorted_updates(DocsAcc, ClientsAcc, MergeConflicts, FullCommit, Clobber) ->
     receive
         % Only collect updates with the same MergeConflicts flag and without
         % local docs. It's easier to just avoid multiple _local doc
         % updaters than deal with their possible conflicts, and local docs
         % writes are relatively rare. Can be optmized later if really needed.
-        {update_docs, Client, GroupedDocs, [], MergeConflicts, FullCommit2} ->
+        {update_docs, Client, GroupedDocs, [], MergeConflicts, FullCommit2, Clobber} ->
             DocsAcc2 = DocsAcc ++ [[{Client, Doc} || Doc <- DocGroup]
                     || DocGroup <- GroupedDocs],
             collect_unsorted_updates(DocsAcc2, [Client | ClientsAcc],
-                    MergeConflicts, (FullCommit or FullCommit2))
+                    MergeConflicts, (FullCommit or FullCommit2), Clobber)
     after 0 ->
         {DocsAcc, ClientsAcc, FullCommit}
     end.
@@ -539,9 +539,37 @@ to_branch(Doc, [RevId]) ->
 to_branch(Doc, [RevId | Rest]) ->
     [{RevId, ?REV_MISSING, to_branch(Doc, Rest)}].
 
-modify_full_doc_info(Db, Id, MergeConflicts, nil, Docs, AccSeq) ->
-    modify_full_doc_info(Db, Id, MergeConflicts, #full_doc_info{id=Id}, Docs, AccSeq);
-modify_full_doc_info(Db, Id, MergeConflicts, OldDocInfo,
+
+maybe_clobber(false, Tree, #doc_update_info{id = Id}, Client, Rev, _Limit) ->
+    send_result(Client, Id, Rev, conflict),
+    Tree;
+
+maybe_clobber(true, Tree, #doc_update_info{id = Id} = Doc, Client, Rev, Limit) ->
+    {_, {LeafPos, RevIds} = WinPath} = couch_doc:to_doc_info_path(
+        #full_doc_info{rev_tree = Tree}),
+    NewRevId = new_revid(Doc, WinPath),
+    Doc2 = Doc#doc_update_info{revs = {LeafPos + 1, [NewRevId | RevIds]}},
+    case couch_key_tree:merge(Tree, to_path(Doc2), Limit) of
+    {Tree2, no_conflicts} ->
+        Tree2;
+    _ ->
+        send_result(Client, Id, Rev, conflict),
+        Tree
+    end.
+
+
+% Used only when the clobber option is used on updates.
+new_revid(#doc_update_info{deleted = Del} = Doc, {OldPos, [OldRevId | _]}) ->
+    #doc_update_info{
+        body_md5 = BodyMd5,
+        atts_md5 = AttsMd5
+    } = Doc,
+    couch_util:md5(?term_to_bin({Del, OldPos, OldRevId, BodyMd5, AttsMd5})).
+
+
+modify_full_doc_info(Db, Id, MergeConflicts, Clobber, nil, Docs, AccSeq) ->
+    modify_full_doc_info(Db, Id, MergeConflicts, Clobber, #full_doc_info{id=Id}, Docs, AccSeq);
+modify_full_doc_info(Db, Id, MergeConflicts, Clobber, OldDocInfo,
         NewDocs, AccSeq) ->
     #db{fd=Fd,revs_limit=Limit}=Db,
     #full_doc_info{id=Id,rev_tree=OldTree,deleted=OldDeleted} = OldDocInfo,
@@ -551,8 +579,7 @@ modify_full_doc_info(Db, Id, MergeConflicts, OldDocInfo,
                 case couch_key_tree:merge(AccTree, to_path(NewDoc),
                     Limit) of
                 {_NewTree, conflicts} when (not OldDeleted) ->
-                    send_result(Client, Id, {Pos-1,PrevRevs}, conflict),
-                    AccTree;
+                    maybe_clobber(Clobber, AccTree, NewDoc, Client, {Pos - 1, PrevRevs}, Limit);
                 {NewTree, conflicts} when PrevRevs /= [] ->
                     % Check to be sure if prev revision was specified, it's
                     % a leaf node in the tree
@@ -563,8 +590,7 @@ modify_full_doc_info(Db, Id, MergeConflicts, OldDocInfo,
                     if IsPrevLeaf ->
                         NewTree;
                     true ->
-                        send_result(Client, Id, {Pos-1,PrevRevs}, conflict),
-                        AccTree
+                        maybe_clobber(Clobber, AccTree, NewDoc, Client, {Pos - 1, PrevRevs}, Limit)
                     end;
                 {NewTree, no_conflicts} when  AccTree == NewTree ->
                     % the tree didn't change at all
@@ -588,8 +614,7 @@ modify_full_doc_info(Db, Id, MergeConflicts, OldDocInfo,
                                 {ok, {OldPos + 1, NewRevId}}),
                         NewTree2;
                     true ->
-                        send_result(Client, Id, {Pos-1,PrevRevs}, conflict),
-                        AccTree
+                        maybe_clobber(Clobber, AccTree, NewDoc, Client, {Pos - 1, PrevRevs}, Limit)
                     end;
                 {NewTree, _} ->
                     NewTree
@@ -665,7 +690,7 @@ modify_full_doc_info(Db, Id, MergeConflicts, OldDocInfo,
 
 
 
-update_docs_int(Db, DocsList, NonRepDocs, MergeConflicts, FullCommit) ->
+update_docs_int(Db, DocsList, NonRepDocs, MergeConflicts, FullCommit, Clobber) ->
     #db{
         fulldocinfo_by_id_btree = DocInfoByIdBTree,
         docinfo_by_seq_btree = DocInfoBySeqBTree,
@@ -675,7 +700,7 @@ update_docs_int(Db, DocsList, NonRepDocs, MergeConflicts, FullCommit) ->
     % lookup up the old documents, if they exist.
     KeyModFuns = lists:map(fun([{_Client, #doc_update_info{id=Id}}|_] = Docs) ->
             {Id, fun(PrevValue, LastSeqAcc) ->
-                modify_full_doc_info(Db, Id, MergeConflicts, PrevValue, Docs, LastSeqAcc)
+                modify_full_doc_info(Db, Id, MergeConflicts, Clobber, PrevValue, Docs, LastSeqAcc)
             end}
         end, DocsList),
 
@@ -858,7 +883,7 @@ copy_docs(Db, #db{fd = DestFd} = NewDb, InfoBySeq0, Retry) ->
                     Seq = element(3, LeafVal),
                     {_Body, AttsInfo} = Summary = copy_doc_attachments(
                         Db, Sp, DestFd),
-                    SummaryChunk = make_doc_summary(NewDb, Summary),
+                    {SummaryChunk, _} = make_doc_summary(NewDb, Summary),
                     {ok, Pos, SummarySize} = couch_file:append_raw_chunk(
                         DestFd, SummaryChunk),
                     TotalLeafSize = lists:foldl(
@@ -1007,4 +1032,6 @@ make_doc_summary(#db{compression = Comp}, {Body0, Atts0}) ->
         couch_compress:compress(Atts0, Comp)
     end,
     SummaryBin = ?term_to_bin({Body, Atts}),
-    couch_file:assemble_file_chunk(SummaryBin, couch_util:md5(SummaryBin)).
+    Summary = couch_file:assemble_file_chunk(
+        SummaryBin, couch_util:md5(SummaryBin)),
+    {Summary, Body}.

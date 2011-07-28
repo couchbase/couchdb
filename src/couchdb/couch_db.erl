@@ -835,9 +835,16 @@ write_and_commit(#db{update_pid=UpdatePid}=Db, DocBuckets1,
     DocBuckets = prepare_doc_summaries(Db, DocBuckets1, Options),
     MergeConflicts = lists:member(merge_conflicts, Options),
     FullCommit = lists:member(full_commit, Options),
+    Clobber = lists:member(clobber, Options),
+    case MergeConflicts andalso Clobber of
+    true ->
+        throw({error, <<"Clobber head and merge conflict options are incompatible.">>});
+    false ->
+        ok
+    end,
     MRef = erlang:monitor(process, UpdatePid),
     try
-        UpdatePid ! {update_docs, self(), DocBuckets, NonRepDocs, MergeConflicts, FullCommit},
+        UpdatePid ! {update_docs, self(), DocBuckets, NonRepDocs, MergeConflicts, FullCommit, Clobber},
         case collect_results(UpdatePid, MRef, []) of
         {ok, Results} -> {ok, Results};
         retry ->
@@ -851,7 +858,7 @@ write_and_commit(#db{update_pid=UpdatePid}=Db, DocBuckets1,
             % We only retry once
             DocBuckets3 = prepare_doc_summaries(Db2, DocBuckets2, Options),
             close(Db2),
-            UpdatePid ! {update_docs, self(), DocBuckets3, NonRepDocs, MergeConflicts, FullCommit},
+            UpdatePid ! {update_docs, self(), DocBuckets3, NonRepDocs, MergeConflicts, FullCommit, Clobber},
             case collect_results(UpdatePid, MRef, []) of
             {ok, Results} -> {ok, Results};
             retry -> throw({update_error, compaction_retry})
@@ -864,6 +871,7 @@ write_and_commit(#db{update_pid=UpdatePid}=Db, DocBuckets1,
 
 prepare_doc_summaries(Db, BucketList, Options) ->
     Optimistic = lists:member(optimistic, Options),
+    Clobber = lists:member(clobber, Options),
     [lists:map(
         fun(#doc{body = Body, atts = Atts} = Doc) ->
             {DiskAtts, SizeAtts} = lists:mapfoldl(
@@ -872,7 +880,8 @@ prepare_doc_summaries(Db, BucketList, Options) ->
                     {{N, T, P, AL, DL, R, M, E}, SizeAcc + AL}
                 end,
                 0, Atts),
-            SummaryChunk = couch_db_updater:make_doc_summary(Db, {Body, DiskAtts}),
+            {SummaryChunk, CompressedBody} =
+                couch_db_updater:make_doc_summary(Db, {Body, DiskAtts}),
             if Optimistic ->
                 {ok, SummaryPos, SummarySize} =
                     couch_file:append_raw_chunk(Db#db.fd, SummaryChunk),
@@ -888,14 +897,24 @@ prepare_doc_summaries(Db, BucketList, Options) ->
             [] ->
                 nil
             end,
-            #doc_update_info{
+            DocUpdateInfo = #doc_update_info{
                 id=Doc#doc.id,
                 revs=Doc#doc.revs,
                 deleted=Doc#doc.deleted,
                 summary=Summary,
                 size_atts=SizeAtts,
                 fd=FlushFd
-            }
+            },
+            case Clobber of
+            false ->
+                DocUpdateInfo;
+            true ->
+                AttsInfo = [{N, T, M} || #att{name = N, type = T, md5 = M} <- Atts, M =/= <<>>],
+                DocUpdateInfo#doc_update_info{
+                    atts_md5 = couch_util:md5(?term_to_bin(AttsInfo)),
+                    body_md5 = couch_util:md5(CompressedBody)
+                }
+            end
         end,
         Bucket) || Bucket <- BucketList].
 
