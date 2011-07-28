@@ -1085,8 +1085,8 @@ ddoc_not_found_msg(DbName, DDocId) ->
 
 
 ibrowse_options(#httpdb{timeout = T, url = Url}) ->
-    [{inactivity_timeout, T}, {connect_timeout, T},
-        {response_format, binary}] ++
+    [{inactivity_timeout, T}, {connect_timeout, infinity},
+        {response_format, binary}, {socket_options, [{keepalive, true}]}] ++
     case Url of
     "https://" ++ _ ->
         % TODO: add SSL options like verify and cacertfile
