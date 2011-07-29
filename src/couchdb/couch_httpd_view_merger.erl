@@ -180,16 +180,18 @@ http_sender({error, Url, Reason}, #sender_acc{on_error = stop} = SAcc) ->
 validate_views_param({[_ | _] = Views}) ->
     lists:flatten(lists:map(
         fun({DbName, ViewName}) when is_binary(ViewName) ->
-            {DDocId, Vn} = parse_view_name(ViewName),
+            {DDocDbName, DDocId, Vn} = parse_view_name(ViewName),
             #simple_view_spec{
-                database = DbName, ddoc_id = DDocId, view_name = Vn
+                database = DbName, ddoc_id = DDocId, view_name = Vn,
+                ddoc_database = DDocDbName
             };
         ({DbName, ViewNames}) when is_list(ViewNames) ->
             lists:map(
                 fun(ViewName) ->
-                    {DDocId, Vn} = parse_view_name(ViewName),
+                    {DDocDbName, DDocId, Vn} = parse_view_name(ViewName),
                     #simple_view_spec{
-                        database = DbName, ddoc_id = DDocId, view_name = Vn
+                        database = DbName, ddoc_id = DDocId, view_name = Vn,
+                        ddoc_database = DDocDbName
                     }
                 end, ViewNames);
         ({MergeUrl, {[_ | _] = Props} = EJson}) ->
@@ -230,11 +232,17 @@ validate_views_param(_) ->
 parse_view_name(Name) ->
     case string:tokens(couch_util:trim(?b2l(Name)), "/") of
     ["_all_docs"] ->
-        {nil, <<"_all_docs">>};
+        {nil, nil, <<"_all_docs">>};
     [DDocName, ViewName0] ->
-        {<<"_design/", (?l2b(DDocName))/binary>>, ?l2b(ViewName0)};
+        {nil, <<"_design/", (?l2b(DDocName))/binary>>, ?l2b(ViewName0)};
     ["_design", DDocName, ViewName0] ->
-        {<<"_design/", (?l2b(DDocName))/binary>>, ?l2b(ViewName0)};
+        {nil, <<"_design/", (?l2b(DDocName))/binary>>, ?l2b(ViewName0)};
+    [DDocDbName1, DDocName, ViewName0] ->
+        DDocDbName = ?l2b(couch_httpd:unquote(DDocDbName1)),
+        {DDocDbName, <<"_design/", (?l2b(DDocName))/binary>>, ?l2b(ViewName0)};
+    [DDocDbName1, "_design", DDocName, ViewName0] ->
+        DDocDbName = ?l2b(couch_httpd:unquote(DDocDbName1)),
+        {DDocDbName, <<"_design/", (?l2b(DDocName))/binary>>, ?l2b(ViewName0)};
     _ ->
         throw({bad_request, "A `view` property must have the shape"
             " `ddoc_name/view_name`."})

@@ -1583,6 +1583,49 @@ couchTests.view_merging = function(debug) {
   respFull = dbFull.allDocs({"startkey": "_design/", "endkey": "_design0"});
   compareViewResults(respFull, respMerged);
 
+  /**
+   * Test with "centralized"/"foreign" design documents.
+   */
+  ddoc = {
+    _id: "_design/test",
+    language: "javascript",
+    views: {
+      mapview1: {
+        map:
+          (function(doc) {
+             emit(doc.integer, doc.string);
+          }).toString()
+      }
+    }
+  };
+
+  var masterDb = newDb("test_db_master");
+  dbA = newDb("test_db_a");
+  dbB = newDb("test_db_b");
+  docs = makeDocs(1, 11);
+  dbs = [dbA, dbB];
+
+  addDoc([masterDb], ddoc);
+  populateAlternated(dbs, docs);
+
+  resp = mergedQuery(dbs, masterDb.name + "/test/mapview1");
+
+  TEquals("object", typeof resp);
+  TEquals(10, resp.total_rows);
+  TEquals("object", typeof resp.rows);
+  TEquals(10, resp.rows.length);
+
+  testKeysSorted(resp);
+
+  resp = mergedQuery(dbs, masterDb.name + "/_design/test/mapview1");
+
+  TEquals("object", typeof resp);
+  TEquals(10, resp.total_rows);
+  TEquals("object", typeof resp.rows);
+  TEquals(10, resp.rows.length);
+
+  testKeysSorted(resp);
+
   // cleanup
   dbA.deleteDb();
   dbB.deleteDb();
@@ -1590,4 +1633,5 @@ couchTests.view_merging = function(debug) {
   dbD.deleteDb();
   dbE.deleteDb();
   dbFull.deleteDb();
+  masterDb.deleteDb();
 };

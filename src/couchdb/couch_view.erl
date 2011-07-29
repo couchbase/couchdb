@@ -38,26 +38,39 @@ get_temp_updater(DbName, Language, DesignOptions, MapSrc, RedSrc) ->
         throw(Error)
     end.
 
-get_group_server(DbName, GroupId) ->
-    case couch_view_group:open_db_group(DbName, GroupId) of
-    {ok, Group} ->
-        case gen_server:call(couch_view, {get_group_server, DbName, Group}, infinity) of
-        {ok, Pid} ->
-            Pid;
-        Error ->
-            throw(Error)
-        end;
+get_group_server(DbName, GroupId) when is_binary(GroupId) ->
+    Group = open_db_group(DbName, GroupId),
+    get_group_server(DbName, Group);
+get_group_server(DbName, Group) ->
+    case gen_server:call(couch_view, {get_group_server, DbName, Group}, infinity) of
+    {ok, Pid} ->
+        Pid;
     Error ->
         throw(Error)
     end.
 
+open_db_group(DbName, GroupId) ->
+    case couch_view_group:open_db_group(DbName, GroupId) of
+    {ok, Group} ->
+        Group;
+    Error ->
+        throw(Error)
+    end.
+
+get_group(Db, {GroupDb, GroupId}, Stale) ->
+    DbGroup = open_db_group(couch_db:name(GroupDb), GroupId),
+    do_get_group(Db, DbGroup, Stale);
 get_group(Db, GroupId, Stale) ->
+    DbGroup = open_db_group(couch_db:name(Db), GroupId),
+    do_get_group(Db, DbGroup, Stale).
+
+do_get_group(Db, DbGroup, Stale) ->
     MinUpdateSeq = case Stale of
     ok -> 0;
     update_after -> 0;
     _Else -> couch_db:get_update_seq(Db)
     end,
-    GroupPid = get_group_server(couch_db:name(Db), GroupId),
+    GroupPid = get_group_server(couch_db:name(Db), DbGroup),
     Result = couch_view_group:request_group(GroupPid, MinUpdateSeq),
     case Stale of
     update_after ->

@@ -301,7 +301,6 @@ handle_duplicates(_ViewName, MinRow, Queue) ->
 
 handle_duplicates_squashed(MinRow, Queue) ->
     {Key0, Id0} = element(1, MinRow),
-    % AQUI
     % group rows by similar keys, split error not_found from normal ones, pick one with highest rev
     {ValueRows, ErrorRows} = case Id0 of
     error ->
@@ -514,7 +513,8 @@ map_view_folder(#simple_view_spec{view_name = <<"_all_docs">>, database = DbName
 
 map_view_folder(ViewSpec, _MergeParams, UserCtx, Keys, ViewArgs, Queue) ->
     #simple_view_spec{
-        database = DbName, ddoc_id = DDocId, view_name = ViewName
+        database = DbName, ddoc_database = DDocDbName,
+        ddoc_id = DDocId, view_name = ViewName
     } = ViewSpec,
     #view_query_args{
         stale = Stale,
@@ -525,7 +525,7 @@ map_view_folder(ViewSpec, _MergeParams, UserCtx, Keys, ViewArgs, Queue) ->
     {ok, Db} ->
         try
             FoldlFun = make_map_fold_fun(IncludeDocs, Conflicts, Db, Queue),
-            View = get_map_view(Db, DDocId, ViewName, Stale),
+            {DDocDb, View} = get_map_view(Db, DDocDbName, DDocId, ViewName, Stale),
             {ok, RowCount} = couch_view:get_row_count(View),
             ok = couch_view_merger_queue:queue(Queue, {row_count, RowCount}),
             case Keys of
@@ -540,11 +540,15 @@ map_view_folder(ViewSpec, _MergeParams, UserCtx, Keys, ViewArgs, Queue) ->
                         {ok, _, _} = couch_view:fold(View, FoldlFun, [], FoldOpts)
                     end,
                     Keys)
-            end
+            end,
+            catch couch_db:close(DDocDb)
         catch
         {not_found, Reason} when Reason =:= missing; Reason =:= deleted ->
             ok = couch_view_merger_queue:queue(
                 Queue, {error, ?LOCAL, ddoc_not_found_msg(DbName, DDocId)});
+        ddoc_db_not_found ->
+            ok = couch_view_merger_queue:queue(
+                Queue, {error, ?LOCAL, ddoc_not_found_msg(DDocDbName, DDocId)});
         _Tag:Error ->
             couch_view_merger_queue:queue(Queue, {error, ?LOCAL, to_binary(Error)})
         after
@@ -860,7 +864,8 @@ reduce_view_folder(#merged_view_spec{} = ViewSpec,
 
 reduce_view_folder(ViewSpec, _MergeParams, UserCtx, Keys, ViewArgs, Queue) ->
     #simple_view_spec{
-        database = DbName, ddoc_id = DDocId, view_name = ViewName
+        database = DbName, ddoc_database = DDocDbName,
+        ddoc_id = DDocId, view_name = ViewName
     } = ViewSpec,
     #view_query_args{
         stale = Stale
@@ -870,7 +875,7 @@ reduce_view_folder(ViewSpec, _MergeParams, UserCtx, Keys, ViewArgs, Queue) ->
         try
             FoldlFun = make_reduce_fold_fun(ViewArgs, Queue),
             KeyGroupFun = make_group_rows_fun(ViewArgs),
-            {ok, View, _} = couch_view:get_reduce_view(Db, DDocId, ViewName, Stale),
+            {DDocDb, View} = get_reduce_view(Db, DDocDbName, DDocId, ViewName, Stale),
             case Keys of
             nil ->
                 FoldOpts = [{key_group_fun, KeyGroupFun} |
@@ -886,11 +891,15 @@ reduce_view_folder(ViewSpec, _MergeParams, UserCtx, Keys, ViewArgs, Queue) ->
                         {ok, _} = couch_view:fold_reduce(View, FoldlFun, [], FoldOpts)
                     end,
                     Keys)
-            end
+            end,
+            catch couch_db:close(DDocDb)
         catch
         {not_found, Reason} when Reason =:= missing; Reason =:= deleted ->
             ok = couch_view_merger_queue:queue(
                 Queue, {error, ?LOCAL, ddoc_not_found_msg(DbName, DDocId)});
+        ddoc_db_not_found ->
+            ok = couch_view_merger_queue:queue(
+                Queue, {error, ?LOCAL, ddoc_not_found_msg(DDocDbName, DDocId)});
         _Tag:Error ->
             couch_view_merger_queue:queue(Queue, reduce_error(Error))
         after
@@ -902,6 +911,24 @@ reduce_view_folder(ViewSpec, _MergeParams, UserCtx, Keys, ViewArgs, Queue) ->
             Queue, {error, ?LOCAL, db_not_found_msg(DbName)}),
         ok = couch_view_merger_queue:done(Queue)
     end.
+
+
+get_reduce_view(Db, DDocDbName, DDocId, ViewName, Stale) ->
+    GroupId = case DDocDbName of
+    nil ->
+        DDocDb = nil,
+        DDocId;
+    _ when is_binary(DDocDbName) ->
+        DDocDb = case couch_db:open_int(DDocDbName, []) of
+        {ok, DDocDb1} ->
+            DDocDb1;
+        {not_found, _} ->
+            throw(ddoc_db_not_found)
+        end,
+        {DDocDb, DDocId}
+    end,
+    {ok, View, _} = couch_view:get_reduce_view(Db, GroupId, ViewName, Stale),
+    {DDocDb, View}.
 
 
 make_group_rows_fun(#view_query_args{group_level = 0}) ->
@@ -940,14 +967,28 @@ make_reduce_fold_fun(_QueryArgs, Queue) ->
     end.
 
 
-get_map_view(Db, DDocId, ViewName, Stale) ->
-    case couch_view:get_map_view(Db, DDocId, ViewName, Stale) of
+get_map_view(Db, DDocDbName, DDocId, ViewName, Stale) ->
+    GroupId = case DDocDbName of
+    nil ->
+        DDocDb = nil,
+        DDocId;
+    _ when is_binary(DDocDbName) ->
+        DDocDb = case couch_db:open_int(DDocDbName, []) of
+        {ok, DDocDb1} ->
+            DDocDb1;
+        {not_found, _} ->
+            throw(ddoc_db_not_found)
+        end,
+        {DDocDb, DDocId}
+    end,
+    View = case couch_view:get_map_view(Db, GroupId, ViewName, Stale) of
     {ok, MapView, _} ->
         MapView;
     {not_found, _} ->
-        {ok, View, _} = couch_view:get_reduce_view(Db, DDocId, ViewName, Stale),
-        couch_view:extract_map_view(View)
-    end.
+        {ok, RedView, _} = couch_view:get_reduce_view(Db, GroupId, ViewName, Stale),
+        couch_view:extract_map_view(RedView)
+    end,
+    {DDocDb, View}.
 
 
 make_map_fold_fun(false, _Conflicts, _Db, Queue) ->
@@ -987,8 +1028,15 @@ get_first_ddoc([#simple_view_spec{view_name = <<"_all_docs">>} = ViewSpec | _],
     {ok, nil, ViewSpec};
 
 get_first_ddoc([#simple_view_spec{} = Spec | _], MergeParams, UserCtx) ->
-    #simple_view_spec{database = DbName, ddoc_id = Id} = Spec,
-    {ok, Db} = open_db(DbName, UserCtx, MergeParams),
+    #simple_view_spec{
+        database = DbName, ddoc_database = DDocDbName, ddoc_id = Id
+    } = Spec,
+    {ok, Db} = case DDocDbName of
+    nil ->
+        open_db(DbName, UserCtx, MergeParams);
+    _ when is_binary(DDocDbName) ->
+        open_db(DDocDbName, UserCtx, MergeParams)
+    end,
     {ok, #doc{body = DDoc}} = get_ddoc(Db, Id),
     close_db(Db),
     {ok, DDoc, Spec};

@@ -12,6 +12,7 @@
 
 -record(simple_view_spec, {
     database,
+    ddoc_database = nil, % Couchbase specific
     ddoc_id,
     view_name
 }).
