@@ -18,7 +18,7 @@
 % public API
 -export([start_link/2]).
 % consumer API
--export([peek/1, peek_next/1, unpeek/1, flush/1]).
+-export([pop/1, pop_next/1, peek/1, flush/1]).
 % producer API
 -export([queue/2, done/1]).
 
@@ -31,8 +31,8 @@
 
 -record(state, {
     rows,                     % a functional priority queue (skew)
-    peeked = [],              % list of so far peeked items
-    consumer = nil,           % peek request (only 1 consumer is supported)
+    poped = [],               % list of so far poped items
+    consumer = nil,           % pop request (only 1 consumer is supported)
     less_fun,
     num_producers
 }).
@@ -41,18 +41,18 @@
 start_link(NumProducers, LessFun) when is_integer(NumProducers), NumProducers > 0 ->
     gen_server:start_link(?MODULE, {NumProducers, LessFun}, []).
 
-peek(Pid) ->
+pop(Pid) ->
     try
-        gen_server:call(Pid, peek, infinity)
+        gen_server:call(Pid, pop, infinity)
     catch _:_ ->
         closed
     end.
 
-peek_next(Pid) ->
-    gen_server:call(Pid, peek_next, infinity).
+pop_next(Pid) ->
+    gen_server:call(Pid, pop_next, infinity).
 
-unpeek(Pid) ->
-    ok = gen_server:cast(Pid, unpeek).
+peek(Pid) ->
+    gen_server:call(Pid, peek).
 
 queue(Pid, Row) ->
     ok = gen_server:call(Pid, {queue, Row}, infinity).
@@ -74,7 +74,7 @@ init({NumProducers, LessFun}) ->
     {ok, State}.
 
 
-handle_call(peek, From, #state{peeked = []} = State) ->
+handle_call(pop, From, #state{poped = []} = State) ->
     #state{
         less_fun = LessFun,
         rows = Rows,
@@ -85,17 +85,17 @@ handle_call(peek, From, #state{peeked = []} = State) ->
         {noreply, State#state{consumer = From}};
     false ->
         {{_, MinRow} = X, Rows2} = couch_skew:out(LessFun, Rows),
-        {reply, {ok, MinRow}, State#state{rows = Rows2, peeked = [X]}}
+        {reply, {ok, MinRow}, State#state{rows = Rows2, poped = [X]}}
     end;
 
-handle_call(peek_next, _From, #state{peeked = [_ | _] = Peeked} = State) ->
+handle_call(pop_next, _From, #state{poped = [_ | _] = Poped} = State) ->
     #state{rows = Rows, less_fun = LessFun} = State,
     case couch_skew:size(Rows) of
     0 ->
         {reply, empty, State};
     _ ->
         {{_, MinRow} = X, Rows2} = couch_skew:out(LessFun, Rows),
-        NewState = State#state{rows = Rows2, peeked = [X | Peeked]},
+        NewState = State#state{rows = Rows2, poped = [X | Poped]},
         {reply, {ok, MinRow}, NewState}
     end;
 
@@ -104,49 +104,52 @@ handle_call({queue, Row}, From, #state{num_producers = N} = State) when N > 0 ->
         less_fun = LessFun,
         rows = Rows,
         consumer = Consumer,
-        peeked = Peeked
+        poped = Poped
     } = State,
     Rows2 = couch_skew:in({From, Row}, LessFun, Rows),
     case (Consumer =/= nil) andalso (couch_skew:size(Rows2) >= N) of
     true ->
         {{_, MinRow} = X, Rows3} = couch_skew:out(LessFun, Rows2),
         gen_server:reply(Consumer, {ok, MinRow}),
-        Peeked2 = [X | Peeked],
+        Poped2 = [X | Poped],
         Consumer2 = nil;
     false ->
-        Peeked2 = Peeked,
+        Poped2 = Poped,
         Rows3 = Rows2,
         Consumer2 = Consumer
     end,
     NewState = State#state{
         rows = Rows3,
         consumer = Consumer2,
-        peeked = Peeked2
+        poped = Poped2
     },
-    {noreply, NewState}.
+    {noreply, NewState};
 
+% Allowed to be called after the first pop in a merge iteration.
+handle_call(peek, _From, #state{poped = [_ | _], rows = Rows} = State) ->
+    case couch_skew:size(Rows) of
+    0 ->
+        {reply, empty, State};
+    _ ->
+        {_, Row} = couch_skew:min(Rows),
+        {reply, {ok, Row}, State}
+    end.
 
-% Consumer "undoes" last peek. Doesn't make much sense in regular
-% queing terminology.
-handle_cast(unpeek, #state{peeked = [X | Rest]} = State) ->
-    #state{less_fun = LessFun, rows = Rows} = State,
-    Rows2 = couch_skew:in(X, LessFun, Rows),
-    {noreply, State#state{rows = Rows2, peeked = Rest}};
 
 % Consumer should call this after doing its processing of the previously
-% peeked rows.
+% poped rows.
 handle_cast(flush, #state{consumer = nil} = State) ->
     #state{
-        peeked = Peeked,
+        poped = Poped,
         num_producers = N,
         rows = Rows
     } = State,
-    lists:foreach(fun({Req, _}) -> gen_server:reply(Req, ok) end, Peeked),
+    lists:foreach(fun({Req, _}) -> gen_server:reply(Req, ok) end, Poped),
     case (N =:= 0) andalso (couch_skew:size(Rows) =:= 0) of
     true ->
-        {stop, normal, State#state{peeked = []}};
+        {stop, normal, State#state{poped = []}};
     false ->
-        {noreply, State#state{peeked = []}}
+        {noreply, State#state{poped = []}}
     end;
 
 handle_cast(done, #state{consumer = nil, num_producers = NumProds} = State) ->
@@ -163,7 +166,7 @@ handle_cast(done, #state{consumer = nil, num_producers = NumProds} = State) ->
         {noreply, State#state{num_producers = NumProds2}}
     end;
 
-handle_cast(done, #state{peeked = []} = State) ->
+handle_cast(done, #state{poped = []} = State) ->
     #state{
         less_fun = LessFun,
         rows = Rows,
@@ -186,7 +189,7 @@ handle_cast(done, #state{peeked = []} = State) ->
                 num_producers = NumProds2,
                 consumer = nil,
                 rows = Rows2,
-                peeked = [X]
+                poped = [X]
             },
             {noreply, NewState}
         end

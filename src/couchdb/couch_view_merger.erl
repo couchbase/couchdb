@@ -256,7 +256,7 @@ merge_map_views(#merge_params{row_acc = []} = Params) ->
         queue = Queue, limit = Limit, skip = Skip,
         collector = Col, view_name = ViewName
     } = Params,
-    case couch_view_merger_queue:peek(Queue) of
+    case couch_view_merger_queue:pop(Queue) of
     closed ->
         Col ! {stop, self()},
         receive
@@ -323,9 +323,9 @@ handle_all_docs_row(MinRow, Queue) ->
     % and others with a value, discard the "not_found" ones.
     {ValueRows, ErrorRows} = case Id0 of
     error ->
-        peek_similar_rows(Key0, Queue, [], [MinRow]);
+        pop_similar_rows(Key0, Queue, [], [MinRow]);
     _ when is_binary(Id0) ->
-        peek_similar_rows(Key0, Queue, [MinRow], [])
+        pop_similar_rows(Key0, Queue, [MinRow], [])
     end,
     case {ValueRows, ErrorRows} of
     {[], [ErrRow | _]} ->
@@ -339,22 +339,22 @@ handle_all_docs_row(MinRow, Queue) ->
 handle_duplicates_allowed(MinRow, _Queue) ->
     {MinRow, []}.
 
-peek_similar_rows(Key0, Queue, Acc, AccError) ->
-    case couch_view_merger_queue:peek_next(Queue) of
+pop_similar_rows(Key0, Queue, Acc, AccError) ->
+    case couch_view_merger_queue:peek(Queue) of
     empty ->
         {Acc, AccError};
     {ok, Row} ->
         {Key, DocId} = element(1, Row),
         case Key =:= Key0 of
         false ->
-            ok = couch_view_merger_queue:unpeek(Queue),
             {Acc, AccError};
         true ->
+            {ok, Row} = couch_view_merger_queue:pop_next(Queue),
             case DocId of
             error ->
-                peek_similar_rows(Key0, Queue, Acc, [Row | AccError]);
+                pop_similar_rows(Key0, Queue, Acc, [Row | AccError]);
             _ ->
-                peek_similar_rows(Key0, Queue, [Row | Acc], AccError)
+                pop_similar_rows(Key0, Queue, [Row | Acc], AccError)
             end
         end
     end.
@@ -371,7 +371,7 @@ merge_reduce_views(Params) ->
     #merge_params{
         queue = Queue, limit = Limit, skip = Skip, collector = Col
     } = Params,
-    case couch_view_merger_queue:peek(Queue) of
+    case couch_view_merger_queue:pop(Queue) of
     closed ->
         Col ! {stop, self()},
         receive
@@ -447,13 +447,13 @@ reduce_error(Error) ->
 
 
 group_keys_for_rereduce(Queue, [{K, _} | _] = Acc) ->
-    case couch_view_merger_queue:peek_next(Queue) of
+    case couch_view_merger_queue:peek(Queue) of
     empty ->
         Acc;
     {ok, {K, _} = Row} ->
+        {ok, Row} = couch_view_merger_queue:pop_next(Queue),
         group_keys_for_rereduce(Queue, [Row | Acc]);
     {ok, _} ->
-        ok = couch_view_merger_queue:unpeek(Queue),
         Acc
     end.
 
