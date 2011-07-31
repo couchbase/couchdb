@@ -34,7 +34,8 @@
     less_fun,
     collector,
     skip,
-    limit
+    limit,
+    row_acc = []
 }).
 
 -record(httpdb, {
@@ -250,7 +251,7 @@ merge_map_views(#merge_params{limit = 0, collector = Col}) ->
         {stop, Resp}
     end;
 
-merge_map_views(Params) ->
+merge_map_views(#merge_params{row_acc = []} = Params) ->
     #merge_params{
         queue = Queue, limit = Limit, skip = Skip,
         collector = Col, view_name = ViewName
@@ -276,7 +277,7 @@ merge_map_views(Params) ->
         ok = couch_view_merger_queue:flush(Queue),
         merge_map_views(Params);
     {ok, MinRow} ->
-        RowToSend = handle_duplicates(ViewName, MinRow, Queue),
+        {RowToSend, RestToSend} = handle_duplicates(ViewName, MinRow, Queue),
         ok = couch_view_merger_queue:flush(Queue),
         case Skip > 0 of
         true ->
@@ -286,22 +287,40 @@ merge_map_views(Params) ->
             Limit2 = dec_counter(Limit)
         end,
         Params2 = Params#merge_params{
-            skip = dec_counter(Skip), limit = Limit2
+            skip = dec_counter(Skip), limit = Limit2, row_acc = RestToSend
         },
         merge_map_views(Params2)
-    end.
+    end;
+
+merge_map_views(#merge_params{row_acc = [RowToSend | Rest]} = Params) ->
+    #merge_params{
+        limit = Limit, skip = Skip, collector = Col
+    } = Params,
+    case Skip > 0 of
+    true ->
+        Limit2 = Limit;
+    false ->
+        Col ! {row, RowToSend},
+        Limit2 = dec_counter(Limit)
+    end,
+    Params2 = Params#merge_params{
+        skip = dec_counter(Skip), limit = Limit2, row_acc = Rest
+    },
+    merge_map_views(Params2).
 
 
 handle_duplicates(<<"_all_docs">>, MinRow, Queue) ->
-    handle_duplicates_squashed(MinRow, Queue);
+    handle_all_docs_row(MinRow, Queue);
 
 handle_duplicates(_ViewName, MinRow, Queue) ->
     handle_duplicates_allowed(MinRow, Queue).
 
 
-handle_duplicates_squashed(MinRow, Queue) ->
+handle_all_docs_row(MinRow, Queue) ->
     {Key0, Id0} = element(1, MinRow),
-    % group rows by similar keys, split error not_found from normal ones, pick one with highest rev
+    % Group rows by similar keys, split error "not_found" from normal ones. If all
+    % are "not_found" rows, squash them into one. If there are "not_found" ones
+    % and others with a value, discard the "not_found" ones.
     {ValueRows, ErrorRows} = case Id0 of
     error ->
         peek_similar_rows(Key0, Queue, [], [MinRow]);
@@ -310,15 +329,15 @@ handle_duplicates_squashed(MinRow, Queue) ->
     end,
     case {ValueRows, ErrorRows} of
     {[], [ErrRow | _]} ->
-        ErrRow;
+        {ErrRow, []};
     {[ValRow], []} ->
-        ValRow;
-    {[_ | _], _} ->
-        most_recent_doc_row(ValueRows)
+        {ValRow, []};
+    {[FirstVal | RestVal], _} ->
+        {FirstVal, RestVal}
     end.
 
 handle_duplicates_allowed(MinRow, _Queue) ->
-    MinRow.
+    {MinRow, []}.
 
 peek_similar_rows(Key0, Queue, Acc, AccError) ->
     case couch_view_merger_queue:peek_next(Queue) of
@@ -339,36 +358,6 @@ peek_similar_rows(Key0, Queue, Acc, AccError) ->
             end
         end
     end.
-
-
-most_recent_doc_row([First | Rest]) ->
-    {RowValue} = element(2, First),
-    FirstRev = couch_doc:parse_rev(get_value(<<"rev">>, RowValue)),
-    {MostRecentRow, _} = lists:foldl(
-        fun(Row, {_, {PosMrr, IdMrr} = _MostRecentRev} = Acc) ->
-            {RowVal} = element(2, Row),
-            {Pos, Id} = Rev = couch_doc:parse_rev(get_value(<<"rev">>, RowVal)),
-            case PosMrr - Pos of
-            N when N < 0 ->
-                {Row, Rev};
-            P when P > 0 ->
-                Acc;
-            0 ->
-                % Rev IDs must be equal. Crash on purpose if not.
-                % TODO: maybe change this behaviour.
-                case Id of
-                IdMrr ->
-                    Acc;
-                _ ->
-                    {Key, _} = element(1, First),
-                    Msg = io_lib:format("Found different rev IDs at position ~p"
-                        " for document `~s`.", [Pos, Key]),
-                    throw({error, iolist_to_binary(Msg)})
-                end
-            end
-        end,
-        {First, FirstRev}, Rest),
-    MostRecentRow.
 
 
 merge_reduce_views(#merge_params{limit = 0, collector = Col}) ->

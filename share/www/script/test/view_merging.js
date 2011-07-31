@@ -1494,94 +1494,44 @@ couchTests.view_merging = function(debug) {
 
   /**
    * Test all_docs merging with documents duplicated in several databases.
-   * No duplicated entries are returned. If the same document exists in
-   * several source databases and with different revisions, we return a row
-   * with the most recent revision only.
    */
-
+  dbA = newDb("test_db_a");
+  dbB = newDb("test_db_b");
+  dbC = newDb("test_db_c");
+  dbs = [dbA, dbB, dbC];
   ddoc = {
     "_id": "_design/foobar",
     "language": "javascript"
   };
-
-  TEquals(true, dbFull.save(ddoc).ok);
-  delete ddoc._rev;
 
   TEquals(true, dbA.save(ddoc).ok);
   delete ddoc._rev;
   TEquals(true, dbB.save(ddoc).ok);
   delete ddoc._rev;
 
-  // ddoc not in dbC, but should be listed in merged _all_docs
+  // ddoc not in dbC, but should be listed in merged _all_docs 2 times
 
-  respFull = dbFull.allDocs();
   respMerged = mergedQuery(dbs, "_all_docs", {});
-  compareViewResults(respFull, respMerged);
+  TEquals(2, respMerged.total_rows);
+  TEquals(2, respMerged.rows.length);
+  TEquals(ddoc._id, respMerged.rows[0].id);
+  TEquals(ddoc._id, respMerged.rows[0].key);
+  TEquals(ddoc._id, respMerged.rows[1].id);
+  TEquals(ddoc._id, respMerged.rows[1].key);
 
-  // Add more docs to dbA only
-  TEquals(true, dbA.save({"_id": "001"}).ok);
-  TEquals(true, dbA.save({"_id": "002"}).ok);
-  TEquals(true, dbA.save({"_id": "003"}).ok);
-  TEquals(true, dbA.save({"_id": "004"}).ok);
-  TEquals(true, dbA.save({"_id": "005"}).ok);
-  // And dbFull as well...
-  TEquals(true, dbFull.save({"_id": "001"}).ok);
-  TEquals(true, dbFull.save({"_id": "002"}).ok);
-  TEquals(true, dbFull.save({"_id": "003"}).ok);
-  TEquals(true, dbFull.save({"_id": "004"}).ok);
-  TEquals(true, dbFull.save({"_id": "005"}).ok);
-
-  respFull = dbFull.allDocs();
-  respMerged = mergedQuery(dbs, "_all_docs", {});
-  compareViewResults(respFull, respMerged);
-
-  // ddoc added to dbC, same result as before
+  // ddoc added to dbC, will now be listed 3 times in _all_docs
   TEquals(true, dbC.save(ddoc).ok);
   delete ddoc._rev;
 
   respMerged = mergedQuery(dbs, "_all_docs", {});
-  compareViewResults(respFull, respMerged);
-
-  // update ddoc in dbB only, we should get revision 2-... in _all_docs result,
-  // and not revision 1-...
-  ddoc = dbB.open(ddoc._id);
-  ddoc.foo = "bar";
-  TEquals("string", typeof ddoc._rev);
-  TEquals(0, ddoc._rev.indexOf("1-"));
-  TEquals(true, dbB.save(ddoc).ok);
-  TEquals(0, ddoc._rev.indexOf("2-"));
-
-  var rev2 = ddoc._rev;
-
-  ddoc = dbFull.open(ddoc._id);
-  ddoc.foo = "bar";
-  TEquals("string", typeof ddoc._rev);
-  TEquals(0, ddoc._rev.indexOf("1-"));
-  TEquals(true, dbFull.save(ddoc).ok);
-  TEquals(0, ddoc._rev.indexOf("2-"));
-
-  TEquals(rev2, ddoc._rev, "Same ddoc rev in dbB and dbFull");
-
-  respFull = dbFull.allDocs();
-  respMerged = mergedQuery(dbs, "_all_docs", {});
-  compareViewResults(respFull, respMerged);
-
-  // Test duplicated regular docs, they only show up once as well
-  TEquals(true, dbC.save({"_id": "003"}).ok);
-  respMerged = mergedQuery(dbs, "_all_docs", {});
-  respFull = dbFull.allDocs();
-  compareViewResults(respFull, respMerged);
-
-  // test startkey and endkey filter for design documents
-  TEquals(true, dbFull.save({"_id": "_design/abc"}).ok);
-  TEquals(true, dbFull.save({"_id": "_design/qwerty"}).ok);
-  TEquals(true, dbC.save({"_id": "_design/abc"}).ok);
-  TEquals(true, dbA.save({"_id": "_design/qwerty"}).ok);
-
-  respMerged = mergedQuery(dbs, "_all_docs",
-    {"startkey": '"_design/"', "endkey": '"_design0"'});
-  respFull = dbFull.allDocs({"startkey": "_design/", "endkey": "_design0"});
-  compareViewResults(respFull, respMerged);
+  TEquals(3, respMerged.total_rows);
+  TEquals(3, respMerged.rows.length);
+  TEquals(ddoc._id, respMerged.rows[0].id);
+  TEquals(ddoc._id, respMerged.rows[0].key);
+  TEquals(ddoc._id, respMerged.rows[1].id);
+  TEquals(ddoc._id, respMerged.rows[1].key);
+  TEquals(ddoc._id, respMerged.rows[2].id);
+  TEquals(ddoc._id, respMerged.rows[2].key);
 
   /**
    * Test with "centralized"/"foreign" design documents.
