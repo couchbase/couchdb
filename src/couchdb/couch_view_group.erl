@@ -221,9 +221,9 @@ handle_call({compact_done, NewGroup}, _From, State) ->
         "compact: ~p", [DbName, GroupId, CurrentSeq, NewGroup#group.current_seq]),
     {reply, update, State};
 
-handle_call(abort_compact, _From, #group_state{compactor_pid = nil} = State) ->
+handle_call(cancel_compact, _From, #group_state{compactor_pid = nil} = State) ->
     {reply, ok, State};
-handle_call(abort_compact, _From, #group_state{compactor_pid = Pid} = State) ->
+handle_call(cancel_compact, _From, #group_state{compactor_pid = Pid} = State) ->
     unlink(Pid),
     exit(Pid, kill),
     {reply, ok, State#group_state{compactor_pid = nil}}.

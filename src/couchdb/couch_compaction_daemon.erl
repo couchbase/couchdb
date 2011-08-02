@@ -23,17 +23,11 @@
 -include("couch_db.hrl").
 
 -define(CONFIG_ETS, couch_compaction_daemon_config).
-% The period to pause for after checking (and eventually compact) all
-% databases and view groups.
--define(PAUSE_PERIOD, 1).               % minutes
 -define(DISK_CHECK_PERIOD, 1).          % minutes
 -define(KV_RE,
     [$^, "\\s*", "([^=]+?)", "\\s*", $=, "\\s*", "([^=]+?)", "\\s*", $$]).
 -define(PERIOD_RE,
     [$^, "([^-]+?)", "\\s*", $-, "\\s*", "([^-]+?)", $$]).
-
-% If the file size is smaller than this, don't trigger compaction.
--define(MIN_FILE_SIZE, 128 * 1024).
 
 -record(state, {
     loop_pid
@@ -43,7 +37,7 @@
     db_frag = nil,
     view_frag = nil,
     period = nil,
-    abortion = false,
+    cancel = false,
     parallel_view_compact = false
 }).
 
@@ -62,7 +56,7 @@ init(_) ->
     ?CONFIG_ETS = ets:new(?CONFIG_ETS, [named_table, set, protected]),
     Server = self(),
     ok = couch_config:register(
-        fun("compaction_daemon", Db, NewValue) ->
+        fun("compactions", Db, NewValue) ->
             ok = gen_server:cast(Server, {config_update, Db, NewValue})
         end),
     load_config(),
@@ -70,7 +64,7 @@ init(_) ->
     ok ->
         Loop = spawn_link(fun() -> compact_loop(Server) end),
         {ok, #state{loop_pid = Loop}};
-    {error, Error} ->
+    Error ->
         {stop, Error}
     end.
 
@@ -87,9 +81,8 @@ start_os_mon() ->
     ok ->
         ok;
     {error, {already_started, os_mon}} ->
-        ok = disksup:set_check_interval(?DISK_CHECK_PERIOD),
-        ok = disksup:set_almost_full_threshold(1);
-    {error, _} = Error ->
+        ok;
+    Error ->
         Error
     end.
 
@@ -99,7 +92,7 @@ handle_cast({config_update, DbName, deleted}, State) ->
     {noreply, State};
 
 handle_cast({config_update, DbName, Config}, #state{loop_pid = Loop} = State) ->
-    NewConfig = parse_config(Config),
+    {ok, NewConfig} = parse_config(Config),
     WasEmpty = (ets:info(?CONFIG_ETS, size) =:= 0),
     true = ets:insert(?CONFIG_ETS, {?l2b(DbName), NewConfig}),
     case WasEmpty of
@@ -108,10 +101,7 @@ handle_cast({config_update, DbName, Config}, #state{loop_pid = Loop} = State) ->
     false ->
         ok
     end,
-    {noreply, State};
-
-handle_cast(Msg, State) ->
-    {stop, {unexpected_cast, Msg}, State}.
+    {noreply, State}.
 
 
 handle_call(Msg, _From, State) ->
@@ -119,10 +109,7 @@ handle_call(Msg, _From, State) ->
 
 
 handle_info({'EXIT', Pid, Reason}, #state{loop_pid = Pid} = State) ->
-    {stop, {compaction_loop_died, Reason}, State};
-
-handle_info(Msg, State) ->
-    {stop, {unexpected_msg, Msg}, State}.
+    {stop, {compaction_loop_died, Reason}, State}.
 
 
 terminate(_Reason, _State) ->
@@ -153,7 +140,9 @@ compact_loop(Parent) ->
     true ->
         receive {Parent, have_config} -> ok end;
     false ->
-        ok = timer:sleep(?PAUSE_PERIOD * 60 * 1000)
+        PausePeriod = list_to_integer(
+            couch_config:get("compaction_daemon", "check_interval", "1")),
+        ok = timer:sleep(PausePeriod * 1000)
     end,
     compact_loop(Parent).
 
@@ -189,10 +178,10 @@ maybe_compact_db(DbName, Config) ->
                 ?LOG_ERROR("Compaction daemon - an error ocurred while"
                     " compacting the database `~s`: ~p", [DbName, Reason])
             after TimeLeft ->
-                ?LOG_INFO("Compaction daemon - aborting compaction for database"
+                ?LOG_INFO("Compaction daemon - canceling compaction for database"
                     " `~s` because it's exceeding the allowed period.",
                     [DbName]),
-                ok = couch_db:abort_compact(Db)
+                ok = couch_db:cancel_compact(Db)
             end,
             case ViewsMonRef of
             nil ->
@@ -240,10 +229,10 @@ maybe_compact_view(#db{name = DbName} = Db, GroupId, Config) ->
                     " the view group `~s` from database `~s`: ~p",
                     [GroupId, DbName, Reason])
             after TimeLeft ->
-                ?LOG_INFO("Compaction daemon - aborting the compaction for the "
+                ?LOG_INFO("Compaction daemon - canceling the compaction for the "
                     "view group `~s` of the database `~s` because it's exceeding"
                     " the allowed period.", [GroupId, DbName]),
-                ok = couch_view_compactor:abort_compact(DbName, GroupId)
+                ok = couch_view_compactor:cancel_compact(DbName, GroupId)
             end;
         false ->
             ok
@@ -253,7 +242,7 @@ maybe_compact_view(#db{name = DbName} = Db, GroupId, Config) ->
     end.
 
 
-compact_time_left(#config{abortion = false}) ->
+compact_time_left(#config{cancel = false}) ->
     infinity;
 compact_time_left(#config{period = nil}) ->
     infinity;
@@ -357,7 +346,9 @@ check_frag(Threshold, Frag) ->
 
 frag(Props) ->
     FileSize = couch_util:get_value(disk_size, Props),
-    case FileSize < ?MIN_FILE_SIZE of
+    MinFileSize = list_to_integer(
+        couch_config:get("compaction_daemon", "min_file_size", "131072")),
+    case FileSize < MinFileSize of
     true ->
         {0, FileSize};
     false ->
@@ -389,7 +380,7 @@ load_config() ->
                     "`~s`: `~s`", [DbName, ConfigString])
             end
         end,
-        couch_config:get("compaction_daemon")).
+        couch_config:get("compactions")).
 
 
 parse_config(ConfigString) ->
@@ -417,10 +408,10 @@ parse_config(ConfigString) ->
                     to = {list_to_integer(ToHH), list_to_integer(ToMM)}
                 }
             };
-        ({"abortion", V}, Config) when V =:= "yes"; V =:= "true" ->
-            Config#config{abortion = true};
-        ({"abortion", V}, Config) when V =:= "no"; V =:= "false" ->
-            Config#config{abortion = false};
+        ({"strict_window", V}, Config) when V =:= "yes"; V =:= "true" ->
+            Config#config{cancel = true};
+        ({"strict_window", V}, Config) when V =:= "no"; V =:= "false" ->
+            Config#config{cancel = false};
         ({"parallel_view_compaction", V}, Config) when V =:= "yes"; V =:= "true" ->
             Config#config{parallel_view_compact = true};
         ({"parallel_view_compaction", V}, Config) when V =:= "no"; V =:= "false" ->

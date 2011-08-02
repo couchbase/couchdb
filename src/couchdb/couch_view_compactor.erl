@@ -14,7 +14,7 @@
 
 -include ("couch_db.hrl").
 
--export([start_compact/2, abort_compact/2]).
+-export([start_compact/2, cancel_compact/2]).
 
 %% @spec start_compact(DbName::binary(), GroupId:binary()) -> ok
 %% @doc Compacts the views.  GroupId must not include the _design/ prefix
@@ -22,9 +22,9 @@ start_compact(DbName, GroupId) ->
     Pid = couch_view:get_group_server(DbName, <<"_design/",GroupId/binary>>),
     gen_server:call(Pid, {start_compact, fun compact_group/3}).
 
-abort_compact(DbName, GroupId) ->
+cancel_compact(DbName, GroupId) ->
     Pid = couch_view:get_group_server(DbName, <<"_design/", GroupId/binary>>),
-    gen_server:call(Pid, abort_compact).
+    gen_server:call(Pid, cancel_compact).
 
 %%=============================================================================
 %% internal functions

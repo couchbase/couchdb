@@ -162,9 +162,9 @@ handle_call(start_compact, _From, Db) ->
         % compact currently running, this is a no-op
         {reply, {ok, Db#db.compactor_pid}, Db}
     end;
-handle_call(abort_compact, _From, #db{compactor_pid = nil} = Db) ->
+handle_call(cancel_compact, _From, #db{compactor_pid = nil} = Db) ->
     {reply, ok, Db};
-handle_call(abort_compact, _From, #db{compactor_pid = Pid} = Db) ->
+handle_call(cancel_compact, _From, #db{compactor_pid = Pid} = Db) ->
     unlink(Pid),
     exit(Pid, kill),
     {reply, ok, Db#db{compactor_pid = nil}};
