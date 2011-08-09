@@ -99,7 +99,8 @@ source_files = \
     couch_httpd_view_merger.erl \
     couch_view_merger.erl \
     couch_view_merger_queue.erl \
-    couch_skew.erl
+    couch_skew.erl \
+    couch_indexer_manager.erl
 
 EXTRA_DIST = $(source_files) couch_api_wrap.hrl couch_db.hrl couch_js_functions.hrl couch_replicator.hrl \
 	couch_view_merger.hrl
@@ -177,7 +178,8 @@ compiled_files = \
     couch_httpd_view_merger.beam \
     couch_view_merger.beam \
     couch_view_merger_queue.beam \
-    couch_skew.beam
+    couch_skew.beam \
+    couch_indexer_manager.beam
 
 # doc_base = \
 #     erlang.png \

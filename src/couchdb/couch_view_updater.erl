@@ -19,6 +19,7 @@
 -spec update(_, #group{}, Dbname::binary()) -> no_return().
 
 update(Owner, Group, DbName) ->
+    ok = couch_indexer_manager:enter(),
     #group{
         name = GroupName,
         current_seq = Seq,
@@ -84,6 +85,7 @@ update(Owner, Group, DbName) ->
     couch_work_queue:close(MapQueue),
     couch_db:close(Db),
     receive {new_group, NewGroup} ->
+        ok = couch_indexer_manager:leave(),
         exit({new_group,
                 NewGroup#group{current_seq=couch_db:get_update_seq(Db)}})
     end.

@@ -19,6 +19,8 @@ uri_file = %localstaterundir%/couch.uri
 ; deflate_[N]  - use zlib's deflate, N is the compression level which ranges from 1 (fastest,
 ;                lowest compression ratio) to 9 (slowest, highest compression ratio)
 file_compression = snappy
+; Maximum number of distinct view update/building processes at any point in time.
+max_parallel_indexers = 4
 
 [database_compaction]
 ; larger buffer sizes can originate smaller files

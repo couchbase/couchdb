@@ -66,7 +66,13 @@ init([]) ->
             permanent,
             brutal_kill,
             worker,
-            [couch_log]}
+            [couch_log]},
+        {couch_indexer_manager,
+            {couch_indexer_manager, start_link, []},
+            permanent,
+            brutal_kill,
+            worker,
+            [couch_indexer_manager]}
     ],
     {ok, {{one_for_one, 10, 3600}, Children}}.
 
