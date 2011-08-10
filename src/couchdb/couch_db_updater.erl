@@ -717,7 +717,7 @@ update_docs_int(Db, DocsList, NonRepDocs, MergeConflicts, FullCommit, Clobber) -
 
     {ok, [], DocInfoBySeqBTree2} = couch_btree:query_modify_raw(DocInfoBySeqBTree, RemoveBySeq ++ InsertBySeq),
 
-    {ok, Db2} = update_local_docs(Db, NonRepDocs),
+    {ok, Db2} = update_local_docs(Db, NonRepDocs, Clobber),
 
     Db3 = Db2#db{
         fulldocinfo_by_id_btree = DocInfoByIdBTree2,
@@ -739,23 +739,29 @@ update_docs_int(Db, DocsList, NonRepDocs, MergeConflicts, FullCommit, Clobber) -
     {ok, commit_data(Db4, not FullCommit)}.
 
 
-update_local_docs(Db, []) ->
+update_local_docs(Db, [], _Clobber) ->
     {ok, Db};
-update_local_docs(#db{local_docs_btree=Btree}=Db, Docs) ->
+update_local_docs(#db{local_docs_btree=Btree}=Db, Docs, Clobber) ->
     Ids = [Id || {_Client, #doc{id=Id}} <- Docs],
     OldDocLookups = couch_btree:lookup(Btree, Ids),
     BtreeEntries = lists:zipwith(
         fun({Client, #doc{id=Id,deleted=Delete,revs={0,PrevRevs},body=Body}}, OldDocLookup) ->
             case PrevRevs of
             [RevStr|_] ->
-                PrevRev = list_to_integer(?b2l(RevStr));
+                PrevRev0 = list_to_integer(?b2l(RevStr));
             [] ->
-                PrevRev = 0
+                PrevRev0 = 0
             end,
             OldRev =
             case OldDocLookup of
                 {ok, {_, {OldRev0, _}}} -> OldRev0;
                 not_found -> 0
+            end,
+            PrevRev = case Clobber of
+            true ->
+                OldRev;
+            false ->
+                PrevRev0
             end,
             case OldRev == PrevRev of
             true ->

@@ -61,7 +61,7 @@ test_db_name() -> <<"couch_test_clobber_head">>.
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(13),
+    etap:plan(16),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -133,12 +133,35 @@ test() ->
     etap:is(Conflicts6, [{3, LoseRev}],
         "Conflict revision remains the same after last clobber update"),
 
+    % Test clobber of local docs.
+    LocalDoc = test_doc(<<"_local/foo">>, 1),
+    LocalDocCreateResult = couch_db:update_doc(Db6, LocalDoc, []),
+    ?etap_match(LocalDocCreateResult, {ok, _}, "Created test local document"),
+
+    LocalDoc2 = test_doc(<<"_local/foo">>, 2),
+    try
+        couch_db:update_doc(Db6, LocalDoc2, []),
+        etap:bail("Expected conflict when updating local document")
+    catch throw:conflict ->
+        etap:diag("Got conflict when updating local document")
+    end,
+
+    LocalDocCreateResult2 = (catch couch_db:update_doc(Db6, LocalDoc2, [clobber])),
+    ?etap_match(LocalDocCreateResult2, {ok, _}, "Updated test local document"),
+
+    {ok, Db7} = couch_db:open_int(test_db_name(), []),
+    {ok, #doc{body = {LocalProps}}} = couch_db:open_doc(
+        Db7, <<"_local/foo">>, [ejson_body]),
+    etap:is(couch_util:get_value(<<"value">>, LocalProps), 2,
+        "Latest local document revision has value 2 in the body"),
+
     couch_db:close(Db),
     couch_db:close(Db2),
     couch_db:close(Db3),
     couch_db:close(Db4),
     couch_db:close(Db5),
     couch_db:close(Db6),
+    couch_db:close(Db7),
     delete_db(),
     couch_server_sup:stop(),
     ok.
