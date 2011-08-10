@@ -302,25 +302,30 @@ can_view_compact(Config, Db, GroupId, GroupInfo) ->
     false ->
         false;
     true ->
-        {Frag, SpaceRequired} = frag(GroupInfo),
-        ?LOG_DEBUG("Fragmentation for view group `~s` (database `~s`) is ~p%, "
-           "estimated space for compaction is ~p bytes.",
-           [GroupId, Db#db.name, Frag, SpaceRequired]),
-        case check_frag(Config#config.view_frag, Frag) of
-        false ->
-            false;
+        case couch_util:get_value(updater_running, GroupInfo) of
         true ->
-            Free = free_space(couch_config:get("couchdb", "view_index_dir")),
-            case Free >= SpaceRequired of
-            true ->
-                true;
+            false;
+        false ->
+            {Frag, SpaceRequired} = frag(GroupInfo),
+            ?LOG_DEBUG("Fragmentation for view group `~s` (database `~s`) is "
+                "~p%, estimated space for compaction is ~p bytes.",
+                [GroupId, Db#db.name, Frag, SpaceRequired]),
+            case check_frag(Config#config.view_frag, Frag) of
             false ->
-                ?LOG_INFO("Compaction daemon - skipping view group `~s` "
-                    "compaction (database `~s`): the estimated necessary disk "
-                    "space is about ~p bytes but the currently available disk "
-                    "space is ~p bytes.",
-                    [GroupId, Db#db.name, SpaceRequired, Free]),
-                false
+                false;
+            true ->
+                Free = free_space(couch_config:get("couchdb", "view_index_dir")),
+                case Free >= SpaceRequired of
+                true ->
+                    true;
+                false ->
+                    ?LOG_INFO("Compaction daemon - skipping view group `~s` "
+                        "compaction (database `~s`): the estimated necessary "
+                        "disk space is about ~p bytes but the currently available"
+                        " disk space is ~p bytes.",
+                        [GroupId, Db#db.name, SpaceRequired, Free]),
+                    false
+                end
             end
         end
     end.
