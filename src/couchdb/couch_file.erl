@@ -281,7 +281,7 @@ maybe_create_file(Filepath, Options) ->
     case lists:member(create, Options) of
     true ->
         filelib:ensure_dir(Filepath),
-        case file:open(Filepath, [write, binary]) of
+        case file:open(Filepath, [read, write, binary]) of
         {ok, Fd} ->
             {ok, Length} = file:position(Fd, eof),
             case Length > 0 of
