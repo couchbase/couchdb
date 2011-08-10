@@ -33,7 +33,11 @@
 start_link() ->
     start_link(http).
 start_link(http) ->
-    Port = couch_config:get("httpd", "port", "5984"),
+    PrevPort = couch_ios:get_port(),
+    Port = case PrevPort of
+        0 -> couch_config:get("httpd", "port", "5984");
+        X -> X
+    end,
     start_link(?MODULE, [{port, Port}]);
 start_link(https) ->
     Port = couch_config:get("ssl", "port", "6984"),
