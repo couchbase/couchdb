@@ -17,7 +17,7 @@
 -export([modify/3, fold_reduce/4, lookup/2, get_state/1, set_options/2]).
 -export([add_remove/5, query_modify/6]).
 -export([guided_purge/3]).
--export([stats/1]).
+-export([stats/1, less/3]).
 
 -export([encode_node/2]).
 

@@ -47,7 +47,13 @@ parse_http_params(Req, DDoc, ViewName, #view_merge{keys = Keys}) ->
     end,
 
     StaleDefined = couch_httpd:qs_value(Req, "stale") =/= undefined,
-    QueryArgs = couch_httpd_view:parse_view_params(Req, Keys, ViewType),
+    QueryArgs = case ViewName of
+    <<"_all_docs">> ->
+        couch_httpd_view:parse_view_params(Req, Keys, ViewType,
+            fun(A, B) -> A < B end);
+    _ ->
+        couch_httpd_view:parse_view_params(Req, Keys, ViewType)
+    end,
     QueryArgs1 = QueryArgs#view_query_args{view_name = ViewName},
 
     case StaleDefined of
@@ -1526,6 +1532,8 @@ simple_set_view_query(Params, DDoc, Req) ->
         throw({error, set_view_outdated})
     end,
 
+    % This code path is never triggered for _all_docs, hence we don't need
+    % to handle the special case to do raw collation for the query parameters
     QueryArgs = couch_httpd_view:parse_view_params(Req, Keys, ViewType),
     QueryArgs2 = QueryArgs#view_query_args{
         view_name = ViewName,

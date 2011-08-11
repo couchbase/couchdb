@@ -15,7 +15,7 @@
 
 -export([handle_view_req/3,handle_temp_view_req/2]).
 
--export([parse_view_params/3]).
+-export([parse_view_params/3, parse_view_params/4]).
 -export([make_view_fold_fun/7, finish_view_fold/4, finish_view_fold/5, view_row_obj/4]).
 -export([view_etag/3, view_etag/4, make_reduce_fold_funs/6]).
 -export([design_doc_view/5, parse_bool_param/1, doc_member/3]).
@@ -32,18 +32,19 @@ design_doc_view(Req, Db, DName, ViewName, Keys) ->
     Reduce = get_reduce_type(Req),
     case couch_view:get_map_view(Db, DesignId, ViewName, Stale) of
     {ok, View, Group} ->
-        QueryArgs = parse_view_params(Req, Keys, map),
+        QueryArgs = parse_view_params(Req, Keys, map, view_collator(View)),
         output_map_view(Req, View, Group, Db, QueryArgs, Keys);
     {not_found, Reason} ->
         case couch_view:get_reduce_view(Db, DesignId, ViewName, Stale) of
         {ok, ReduceView, Group} ->
+            Collator = view_collator(ReduceView),
             case Reduce of
             false ->
-                QueryArgs = parse_view_params(Req, Keys, red_map),
+                QueryArgs = parse_view_params(Req, Keys, red_map, Collator),
                 MapView = couch_view:extract_map_view(ReduceView),
                 output_map_view(Req, MapView, Group, Db, QueryArgs, Keys);
             _ ->
-                QueryArgs = parse_view_params(Req, Keys, reduce),
+                QueryArgs = parse_view_params(Req, Keys, reduce, Collator),
                 output_reduce_view(Req, Db, ReduceView, Group, QueryArgs, Keys)
             end;
         _ ->
@@ -85,19 +86,19 @@ handle_temp_view_req(#httpd{method='POST'}=Req, Db) ->
     Reduce = get_reduce_type(Req),
     case couch_util:get_value(<<"reduce">>, Props, null) of
     null ->
-        QueryArgs = parse_view_params(Req, Keys, map),
         {ok, View, Group} = couch_view:get_temp_map_view(Db, Language,
             DesignOptions, MapSrc),
+        QueryArgs = parse_view_params(Req, Keys, map, view_collator(View)),
         output_map_view(Req, View, Group, Db, QueryArgs, Keys);
     _ when Reduce =:= false ->
-        QueryArgs = parse_view_params(Req, Keys, red_map),
         {ok, View, Group} = couch_view:get_temp_map_view(Db, Language,
             DesignOptions, MapSrc),
+        QueryArgs = parse_view_params(Req, Keys, red_map, view_collator(View)),
         output_map_view(Req, View, Group, Db, QueryArgs, Keys);
     RedSrc ->
-        QueryArgs = parse_view_params(Req, Keys, reduce),
         {ok, View, Group} = couch_view:get_temp_reduce_view(Db, Language,
             DesignOptions, MapSrc, RedSrc),
+        QueryArgs = parse_view_params(Req, Keys, reduce, view_collator(View)),
         output_reduce_view(Req, Db, View, Group, QueryArgs, Keys)
     end;
 
@@ -204,23 +205,42 @@ load_view(Req, Db, {ViewDesignId, ViewName}, Keys) ->
     Reduce = get_reduce_type(Req),
     case couch_view:get_map_view(Db, ViewDesignId, ViewName, Stale) of
     {ok, View, Group} ->
-        QueryArgs = parse_view_params(Req, Keys, map),
+        QueryArgs = parse_view_params(Req, Keys, map, view_collator(View)),
         {map, View, Group, QueryArgs};
     {not_found, _Reason} ->
         case couch_view:get_reduce_view(Db, ViewDesignId, ViewName, Stale) of
         {ok, ReduceView, Group} ->
+            Collator = view_collator(ReduceView),
             case Reduce of
             false ->
-                QueryArgs = parse_view_params(Req, Keys, map_red),
+                QueryArgs = parse_view_params(Req, Keys, map_red, Collator),
                 MapView = couch_view:extract_map_view(ReduceView),
                 {map, MapView, Group, QueryArgs};
             _ ->
-                QueryArgs = parse_view_params(Req, Keys, reduce),
+                QueryArgs = parse_view_params(Req, Keys, reduce, Collator),
                 {reduce, ReduceView, Group, QueryArgs}
             end;
         {not_found, Reason} ->
             throw({not_found, Reason})
         end
+    end.
+
+view_collator({reduce, _N, _Lang, View}) ->
+    view_collator(View);
+
+view_collator({temp_reduce, View}) ->
+    view_collator(View);
+
+view_collator(#view{btree=Btree}) ->
+    % Return an "is-less-than" predicate by calling into the btree's
+    % collator. For raw collation, couch_btree compares arbitrary
+    % Erlang terms, but for normal (ICU) collation, it expects
+    % {Json, Id} tuples.
+    fun
+        ({_JsonA, _IdA}=A, {_JsonB, _IdB}=B) ->
+            couch_btree:less(Btree, A, B);
+        (JsonA, JsonB) ->
+            couch_btree:less(Btree, {JsonA, null}, {JsonB, null})
     end.
 
 % query_parse_error could be removed
@@ -229,6 +249,9 @@ load_view(Req, Db, {ViewDesignId, ViewName}, Keys) ->
 % it might simplify things to have a parse_view_params function
 % that doesn't throw().
 parse_view_params(Req, Keys, ViewType) ->
+    % If not collation is given use the Unicode collation as default
+    parse_view_params(Req, Keys, ViewType, fun couch_view:less_json/2).
+parse_view_params(Req, Keys, ViewType, LessThan) ->
     QueryList = couch_httpd:qs(Req),
     QueryParams =
     lists:foldl(fun({K, V}, Acc) ->
@@ -242,7 +265,7 @@ parse_view_params(Req, Keys, ViewType) ->
     QueryArgs = lists:foldl(fun({K, V}, Args2) ->
         validate_view_query(K, V, Args2)
     end, Args, lists:reverse(QueryParams)), % Reverse to match QS order.
-    warn_on_empty_key_range(QueryArgs),
+    warn_on_empty_key_range(QueryArgs, LessThan),
     GroupLevel = QueryArgs#view_query_args.group_level,
     case {ViewType, GroupLevel, IsMultiGet} of
     {reduce, exact, true} ->
@@ -340,15 +363,15 @@ parse_view_param("_type", Value) ->
 parse_view_param(Key, Value) ->
     [{extra, {Key, Value}}].
 
-warn_on_empty_key_range(#view_query_args{start_key=undefined}) ->
+warn_on_empty_key_range(#view_query_args{start_key=undefined}, _Lt) ->
     ok;
-warn_on_empty_key_range(#view_query_args{end_key=undefined}) ->
+warn_on_empty_key_range(#view_query_args{end_key=undefined}, _Lt) ->
     ok;
-warn_on_empty_key_range(#view_query_args{start_key=A, end_key=A}) ->
+warn_on_empty_key_range(#view_query_args{start_key=A, end_key=A}, _Lt) ->
     ok;
 warn_on_empty_key_range(#view_query_args{
-    start_key=StartKey, end_key=EndKey, direction=Dir}) ->
-    case {Dir, couch_view:less_json(StartKey, EndKey)} of
+    start_key=StartKey, end_key=EndKey, direction=Dir}, LessThan) ->
+    case {Dir, LessThan(StartKey, EndKey)} of
         {fwd, false} ->
             throw({query_parse_error,
             <<"No rows can match your key range, reverse your ",
