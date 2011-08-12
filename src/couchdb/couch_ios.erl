@@ -16,7 +16,7 @@
 
 -export([init/1, terminate/2, code_change/3]).
 -export([handle_call/3, handle_cast/2, handle_info/2]).
--export([get_port/0, set_port/1]).
+-export([get_port/0, set_port/1, post_notification/2]).
 -on_load(nif_init/0).
 
 -include("couch_db.hrl").
@@ -35,6 +35,7 @@ init(_) ->
 % If the iOS NIF doesn't load, always respond with 0.
 set_port(_) -> ok.
 get_port() -> 0.
+post_notification(Name, PropList) -> {error, nif_not_loaded}.
 
 terminate(_Reason, _) ->
     ok.
