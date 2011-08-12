@@ -1032,7 +1032,6 @@ couchTests.view_merging = function(debug) {
   dbA = newDb("test_db_a");
   dbB = newDb("test_db_b");
   dbC = newDb("test_db_c");
-  dbs = [dbA, dbB];
   dbs = [dbA, dbB, dbC];
   docs = makeDocs(1, 31);
 
