@@ -167,6 +167,8 @@ handle_call(cancel_compact, _From, #db{compactor_pid = nil} = Db) ->
 handle_call(cancel_compact, _From, #db{compactor_pid = Pid} = Db) ->
     unlink(Pid),
     exit(Pid, kill),
+    RootDir = couch_config:get("couchdb", "database_dir", "."),
+    ok = couch_file:delete(RootDir, Db#db.filepath ++ ".compact"),
     {reply, ok, Db#db{compactor_pid = nil}};
 
 

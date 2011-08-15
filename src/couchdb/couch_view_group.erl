@@ -226,6 +226,12 @@ handle_call(cancel_compact, _From, #group_state{compactor_pid = nil} = State) ->
 handle_call(cancel_compact, _From, #group_state{compactor_pid = Pid} = State) ->
     unlink(Pid),
     exit(Pid, kill),
+    #group_state{
+        group = #group{sig=GroupSig},
+        init_args = {RootDir, DbName, _}
+    } = State,
+    CompactFile = index_file_name(compact, RootDir, DbName, GroupSig),
+    ok = couch_file:delete(RootDir, CompactFile),
     {reply, ok, State#group_state{compactor_pid = nil}}.
 
 
