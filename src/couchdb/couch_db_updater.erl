@@ -553,6 +553,7 @@ maybe_clobber(true, Tree, #doc_update_info{id = Id} = Doc, Client, Rev, Limit) -
     Doc2 = Doc#doc_update_info{revs = {LeafPos + 1, [NewRevId | RevIds]}},
     case couch_key_tree:merge(Tree, to_path(Doc2), Limit) of
     {Tree2, no_conflicts} ->
+        send_result(Client, Id, Rev, {ok, {LeafPos + 1, NewRevId}}),
         Tree2;
     _ ->
         send_result(Client, Id, Rev, conflict),

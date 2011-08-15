@@ -61,7 +61,7 @@ test_db_name() -> <<"couch_test_clobber_head">>.
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(16),
+    etap:plan(18),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -88,7 +88,12 @@ test() ->
     ?etap_match(DocUpdateResult2, {ok, _}, "Updated test document doc1"),
 
     {ok, Db2} = couch_db:open_int(test_db_name(), []),
+    {ok, Rev1} = DocUpdateResult2,
+    {ok, [OpenRev1Result]} = couch_db:open_doc_revs(Db2, <<"doc1">>, [Rev1], [ejson_body]),
+    ?etap_match(OpenRev1Result, {ok, _}, "clobber update returns correct revision"),
     {ok, ReadDoc2} = couch_db:open_doc(Db2, <<"doc1">>, [ejson_body]),
+    {ok, ReadDoc2ByRev} = OpenRev1Result,
+    etap:is(ReadDoc2, ReadDoc2ByRev, "open by rev and by id give same result"),
     {Props2} = couch_doc:to_json_obj(ReadDoc2, []),
     etap:is(2, couch_util:get_value(<<"value">>, Props2), "doc.value is 2"),
 
