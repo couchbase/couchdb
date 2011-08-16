@@ -179,3 +179,9 @@ couch_doc_open(Db, DocId, Rev, Options) ->
               throw(Else)
       end
   end.
+
+welcome_message(WelcomeMessage) ->
+    [
+     {couchdb, WelcomeMessage},
+     {version, list_to_binary(couch_server:get_version())}
+    ].

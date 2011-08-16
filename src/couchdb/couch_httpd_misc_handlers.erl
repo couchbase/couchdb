@@ -29,11 +29,8 @@
 
 % httpd global handlers
 
-handle_welcome_req(#httpd{method='GET'}=Req, WelcomeMessage) ->
-    send_json(Req, {[
-        {couchdb, WelcomeMessage},
-        {version, list_to_binary(couch_server:get_version())}
-    ]});
+handle_welcome_req(#httpd{method='GET',db_frontend=DbFrontend}=Req, WelcomeMessage) ->
+    send_json(Req, {DbFrontend:welcome_message(WelcomeMessage)});
 handle_welcome_req(Req, _) ->
     send_method_not_allowed(Req, "GET,HEAD").
 
