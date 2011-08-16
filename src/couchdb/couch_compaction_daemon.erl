@@ -14,7 +14,7 @@
 -behaviour(gen_server).
 
 % public API
--export([start_link/0]).
+-export([start_link/0, config_change/3]).
 
 % gen_server callbacks
 -export([init/1, handle_call/3, handle_info/2, handle_cast/2]).
@@ -54,19 +54,20 @@ start_link() ->
 init(_) ->
     process_flag(trap_exit, true),
     ?CONFIG_ETS = ets:new(?CONFIG_ETS, [named_table, set, protected]),
-    Server = self(),
-    ok = couch_config:register(
-        fun("compactions", Db, NewValue) ->
-            ok = gen_server:cast(Server, {config_update, Db, NewValue})
-        end),
+    ok = couch_config:register(fun ?MODULE:config_change/3),
     load_config(),
     case start_os_mon() of
     ok ->
+        Server = self(),
         Loop = spawn_link(fun() -> compact_loop(Server) end),
         {ok, #state{loop_pid = Loop}};
     Error ->
         {stop, Error}
     end.
+
+
+config_change("compactions", DbName, NewValue) ->
+    ok = gen_server:cast(?MODULE, {config_update, DbName, NewValue}).
 
 
 start_os_mon() ->
