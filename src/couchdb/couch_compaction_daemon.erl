@@ -196,7 +196,7 @@ maybe_compact_db(DbName, Config) ->
                 end
             end;
         false ->
-            ok
+            maybe_compact_views(DbName, DDocNames, Config)
         end;
     _ ->
         ok
