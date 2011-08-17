@@ -558,6 +558,8 @@ log_request(#httpd{mochi_req=MochiReq,peer=Peer}, Code) ->
         Code
     ]).
 
+access_log_request(MochiReq, Code, Body) ->
+    couch_access_log:log(MochiReq, Code, Body).
 
 start_response_length(#httpd{mochi_req=MochiReq}=Req, Code, Headers, Length) ->
     log_request(Req, Code),
@@ -621,11 +623,13 @@ send_chunk(Resp, Data) ->
     {ok, Resp}.
 
 last_chunk(Resp) ->
+    access_log_request(Resp:get(request), Resp:get(code), chunked),
     Resp:write_chunk([]),
     {ok, Resp}.
 
 send_response(#httpd{mochi_req=MochiReq}=Req, Code, Headers, Body) ->
     log_request(Req, Code),
+    access_log_request(MochiReq, Code, Body),
     couch_stats_collector:increment({httpd_status_codes, Code}),
     Headers2 = http_1_0_keep_alive(MochiReq, Headers),
     if Code >= 400 ->
