@@ -60,7 +60,7 @@ test() ->
     ok = couch_config:set(
         "compactions",
         binary_to_list(test_db_name()),
-        "db_fragmentation = 70%, view_fragmentation = 70%",
+        "[{db_fragmentation, \"70%\"}, {view_fragmentation, \"70%\"}]",
         false),
 
     ok = timer:sleep(4000), % something >= check_interval
@@ -84,7 +84,7 @@ test() ->
     ok = couch_config:set(
         "compactions",
         "_default",
-        "db_fragmentation = 70%, view_fragmentation = 70%",
+        "[{db_fragmentation, \"70%\"}, {view_fragmentation, \"70%\"}]",
         false),
 
     ok = timer:sleep(4000), % something >= check_interval

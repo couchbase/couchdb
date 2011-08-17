@@ -42,8 +42,8 @@
 }).
 
 -record(period, {
-    from,
-    to
+    from = nil,
+    to = nil
 }).
 
 
@@ -93,13 +93,17 @@ handle_cast({config_update, DbName, deleted}, State) ->
     {noreply, State};
 
 handle_cast({config_update, DbName, Config}, #state{loop_pid = Loop} = State) ->
-    {ok, NewConfig} = parse_config(Config),
-    WasEmpty = (ets:info(?CONFIG_ETS, size) =:= 0),
-    true = ets:insert(?CONFIG_ETS, {?l2b(DbName), NewConfig}),
-    case WasEmpty of
-    true ->
-        Loop ! {self(), have_config};
-    false ->
+    case parse_config(DbName, Config) of
+    {ok, NewConfig} ->
+        WasEmpty = (ets:info(?CONFIG_ETS, size) =:= 0),
+        true = ets:insert(?CONFIG_ETS, {?l2b(DbName), NewConfig}),
+        case WasEmpty of
+        true ->
+            Loop ! {self(), have_config};
+        false ->
+            ok
+        end;
+    error ->
         ok
     end,
     {noreply, State}.
@@ -398,52 +402,88 @@ space_required(DataSize) ->
 load_config() ->
     lists:foreach(
         fun({DbName, ConfigString}) ->
-            case (catch parse_config(ConfigString)) of
+            case parse_config(DbName, ConfigString) of
             {ok, Config} ->
                 true = ets:insert(?CONFIG_ETS, {?l2b(DbName), Config});
-            _ ->
-                ?LOG_ERROR("Invalid compaction configuration for database "
-                    "`~s`: `~s`", [DbName, ConfigString])
+            error ->
+                ok
             end
         end,
         couch_config:get("compactions")).
 
+parse_config(DbName, ConfigString) ->
+    case (catch do_parse_config(ConfigString)) of
+    {ok, Conf} ->
+        {ok, Conf};
+    incomplete_period ->
+        ?LOG_ERROR("Incomplete period ('to' or 'from' missing) in the compaction"
+            " configuration for database `~s`", [DbName]),
+        error;
+    _ ->
+        ?LOG_ERROR("Invalid compaction configuration for database "
+            "`~s`: `~s`", [DbName, ConfigString]),
+        error
+    end.
 
-parse_config(ConfigString) ->
-    KVs = lists:map(
-        fun(Pair) ->
-            {match, [K, V]} = re:run(Pair, ?KV_RE, [{capture, [1, 2], list}]),
-            {K, V}
-        end,
-        string:tokens(string:to_lower(ConfigString), ",")),
-    Config = lists:foldl(
-        fun({"db_fragmentation", V0}, Config) ->
-            [V] = string:tokens(V0, "%"),
-            Config#config{db_frag = list_to_integer(V)};
-        ({"view_fragmentation", V0}, Config) ->
-            [V] = string:tokens(V0, "%"),
-            Config#config{view_frag = list_to_integer(V)};
-        ({"period", V}, Config) ->
-            {match, [From, To]} = re:run(
-                V, ?PERIOD_RE, [{capture, [1, 2], list}]),
-            [FromHH, FromMM] = string:tokens(From, ":"),
-            [ToHH, ToMM] = string:tokens(To, ":"),
-            Config#config{
-                period = #period{
-                    from = {list_to_integer(FromHH), list_to_integer(FromMM)},
-                    to = {list_to_integer(ToHH), list_to_integer(ToMM)}
-                }
-            };
-        ({"strict_window", V}, Config) when V =:= "yes"; V =:= "true" ->
-            Config#config{cancel = true};
-        ({"strict_window", V}, Config) when V =:= "no"; V =:= "false" ->
-            Config#config{cancel = false};
-        ({"parallel_view_compaction", V}, Config) when V =:= "yes"; V =:= "true" ->
-            Config#config{parallel_view_compact = true};
-        ({"parallel_view_compaction", V}, Config) when V =:= "no"; V =:= "false" ->
-            Config#config{parallel_view_compact = false}
-        end, #config{}, KVs),
-    {ok, Config}.
+do_parse_config(ConfigString) ->
+    {ok, ConfProps} = couch_util:parse_term(ConfigString),
+    {ok, #config{period = Period} = Conf} = config_record(ConfProps, #config{}),
+    case Period of
+    nil ->
+        {ok, Conf};
+    #period{from = From, to = To} when From =/= nil, To =/= nil ->
+        {ok, Conf};
+    #period{} ->
+        incomplete_period
+    end.
+
+config_record([], Config) ->
+    {ok, Config};
+
+config_record([{db_fragmentation, V} | Rest], Config) ->
+    [Frag] = string:tokens(V, "%"),
+    config_record(Rest, Config#config{db_frag = list_to_integer(Frag)});
+
+config_record([{view_fragmentation, V} | Rest], Config) ->
+    [Frag] = string:tokens(V, "%"),
+    config_record(Rest, Config#config{view_frag = list_to_integer(Frag)});
+
+config_record([{from, V} | Rest], #config{period = Period0} = Config) ->
+    Time = parse_time(V),
+    Period = case Period0 of
+    nil ->
+        #period{from = Time};
+    #period{} ->
+        Period0#period{from = Time}
+    end,
+    config_record(Rest, Config#config{period = Period});
+
+config_record([{to, V} | Rest], #config{period = Period0} = Config) ->
+    Time = parse_time(V),
+    Period = case Period0 of
+    nil ->
+        #period{to = Time};
+    #period{} ->
+        Period0#period{to = Time}
+    end,
+    config_record(Rest, Config#config{period = Period});
+
+config_record([{strict_window, true} | Rest], Config) ->
+    config_record(Rest, Config#config{cancel = true});
+
+config_record([{strict_window, false} | Rest], Config) ->
+    config_record(Rest, Config#config{cancel = false});
+
+config_record([{parallel_view_compaction, true} | Rest], Config) ->
+    config_record(Rest, Config#config{parallel_view_compact = true});
+
+config_record([{parallel_view_compaction, false} | Rest], Config) ->
+    config_record(Rest, Config#config{parallel_view_compact = false}).
+
+
+parse_time(String) ->
+    [HH, MM] = string:tokens(String, ":"),
+    {list_to_integer(HH), list_to_integer(MM)}.
 
 
 free_space(Path) ->

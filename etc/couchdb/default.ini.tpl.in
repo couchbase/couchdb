@@ -215,12 +215,12 @@ min_file_size = 131072
 
 [compactions]
 ; List of compaction rules for the compaction daemon.
-; The daemon compacts databases and they're respective view groups when all the
+; The daemon compacts databases and their respective view groups when all the
 ; condition parameters are satisfied. Configuration can be per database or
 ; global, and it has the following format:
 ;
-; database_name = parameter=value [, parameter=value]*
-; _default = parameter=value [, parameter=value]*
+; database_name = [ {ParamName, ParamValue}, {ParamName, ParamValue}, ... ]
+; _default = [ {ParamName, ParamValue}, {ParamName, ParamValue}, ... ]
 ;
 ; Possible parameters:
 ;
@@ -247,21 +247,21 @@ min_file_size = 131072
 ;                        querying a view group's information URI
 ;                        (GET /dbname/_design/groupname/_info).
 ;
-; * period - The period for which a database (and its view groups) compaction
-;            is allowed. This value must obey the following format:
+; * from _and_ to - The period for which a database (and its view groups) compaction
+;                   is allowed. The value for these parameters must obey the format:
 ;
-;                HH:MM - HH:MM  (HH in [0..23], MM in [0..59])
+;                   HH:MM - HH:MM  (HH in [0..23], MM in [0..59])
 ;
 ; * strict_window - If a compaction is still running after the end of the allowed
-;                   period, it will be canceled if this parameter is set to "yes".
-;                   It defaults to "no" and it's meaningful only if the *period*
+;                   period, it will be canceled if this parameter is set to 'true'.
+;                   It defaults to 'false' and it's meaningful only if the *period*
 ;                   parameter is also specified.
 ;
-; * parallel_view_compaction - If set to "yes", the database and its views are
+; * parallel_view_compaction - If set to 'true', the database and its views are
 ;                              compacted in parallel. This is only useful on
 ;                              certain setups, like for example when the database
 ;                              and view index directories point to different
-;                              disks. It defaults to "no".
+;                              disks. It defaults to 'false'.
 ;
 ; Before a compaction is triggered, an estimation of how much free disk space is
 ; needed is computed. This estimation corresponds to 2 times the data size of
@@ -270,20 +270,24 @@ min_file_size = 131072
 ;
 ; Examples:
 ;
-; 1) foo = db_fragmentation = 70%, view_fragmentation = 60%
+; 1) [{db_fragmentation, "70%"}, {view_fragmentation, "60%"}]
 ;    The `foo` database is compacted if its fragmentation is 70% or more.
 ;    Any view index of this database is compacted only if its fragmentation
 ;    is 60% or more.
 ;
-; 2) foo = db_fragmentation = 70%, view_fragmentation = 60%, period = 00:00-04:00
+; 2) [{db_fragmentation, "70%"}, {view_fragmentation, "60%"}, {from, "00:00"}, {to, "04:00"}]
 ;    Similar to the preceding example but a compaction (database or view index)
 ;    is only triggered if the current time is between midnight and 4 AM.
 ;
-; 3) foo = db_fragmentation = 70%, view_fragmentation = 60%, period = 00:00-04:00, strict_window = yes
+; 3) [{db_fragmentation, "70%"}, {view_fragmentation, "60%"}, {from, "00:00"}, {to, "04:00"}, {strict_window, true}]
 ;    Similar to the preceding example - a compaction (database or view index)
 ;    is only triggered if the current time is between midnight and 4 AM. If at
 ;    4 AM the database or one of its views is still compacting, the compaction
 ;    process will be canceled.
 ;
-;_default = db_fragmentation = 70%, view_fragmentation = 60%, period = 23:00 - 04:00
+; 4) [{db_fragmentation, "70%"}, {view_fragmentation, "60%"}, {from, "00:00"}, {to, "04:00"}, {strict_window, true}, {parallel_view_compaction, true}]
+;    Similar to the preceding example, but a database and its views can be
+;    compacted in parallel.
+;
+;_default = [{db_fragmentation, "70%"}, {view_fragmentation, "60%"}, {from, "23:00"}, {to, "04:00"}]
 
