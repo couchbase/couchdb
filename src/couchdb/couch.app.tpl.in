@@ -9,6 +9,7 @@
         couch_external_manager,
         couch_httpd,
         couch_log,
+        couch_access_log,
         couch_primary_services,
         couch_query_servers,
         couch_rep_sup,

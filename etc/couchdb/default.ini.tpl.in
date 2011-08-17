@@ -34,6 +34,21 @@ file = %localstatelogdir%/couch.log
 level = info
 include_sasl = true
 
+; Enable apache httpd-style access logging.
+; The default format is the "extended" or "combined" format that
+; includes:
+;   host ident authuser date request status bytes referer(sic) user-agent
+;
+; The alternative format is "common" that includes:
+;   host ident authuser date request status bytes
+;
+; If a value is not defined, the log entry will be " - " for that value.
+
+[access_log]
+enable = false
+format = extended
+file = %localstatelogdir%/couch_access.log
+
 [couch_httpd_auth]
 authentication_db = _users
 authentication_redirect = /_utils/session.html
