@@ -56,36 +56,13 @@ init(_) ->
     ?CONFIG_ETS = ets:new(?CONFIG_ETS, [named_table, set, protected]),
     ok = couch_config:register(fun ?MODULE:config_change/3),
     load_config(),
-    case start_os_mon() of
-    ok ->
-        Server = self(),
-        Loop = spawn_link(fun() -> compact_loop(Server) end),
-        {ok, #state{loop_pid = Loop}};
-    Error ->
-        {stop, Error}
-    end.
+    Server = self(),
+    Loop = spawn_link(fun() -> compact_loop(Server) end),
+    {ok, #state{loop_pid = Loop}}.
 
 
 config_change("compactions", DbName, NewValue) ->
     ok = gen_server:cast(?MODULE, {config_update, DbName, NewValue}).
-
-
-start_os_mon() ->
-    _ = application:load(os_mon),
-    ok = application:set_env(
-        os_mon, disk_space_check_interval, ?DISK_CHECK_PERIOD),
-    ok = application:set_env(os_mon, disk_almost_full_threshold, 1),
-    ok = application:set_env(os_mon, start_memsup, false),
-    ok = application:set_env(os_mon, start_cpu_sup, false),
-    _ = application:start(sasl),
-    case application:start(os_mon) of
-    ok ->
-        ok;
-    {error, {already_started, os_mon}} ->
-        ok;
-    Error ->
-        Error
-    end.
 
 
 handle_cast({config_update, DbName, deleted}, State) ->
