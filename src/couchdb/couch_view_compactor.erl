@@ -18,10 +18,19 @@
 
 %% @spec start_compact(DbName::binary(), GroupId:binary()) -> ok
 %% @doc Compacts the views.  GroupId must not include the _design/ prefix
+start_compact({DbName, GroupDbName}, GroupId) ->
+    Pid = couch_view:get_group_server({DbName, GroupDbName}, GroupId),
+    CompactFun = fun(Group, EmptyGroup, _) ->
+        compact_group(Group, EmptyGroup, {DbName, GroupDbName})
+    end,
+    gen_server:call(Pid, {start_compact, CompactFun});
 start_compact(DbName, GroupId) ->
     Pid = couch_view:get_group_server(DbName, <<"_design/",GroupId/binary>>),
     gen_server:call(Pid, {start_compact, fun compact_group/3}).
 
+cancel_compact({DbName, GroupDbName}, GroupId) ->
+    Pid = couch_view:get_group_server({DbName, GroupDbName}, GroupId),
+    gen_server:call(Pid, cancel_compact);
 cancel_compact(DbName, GroupId) ->
     Pid = couch_view:get_group_server(DbName, <<"_design/", GroupId/binary>>),
     gen_server:call(Pid, cancel_compact).
@@ -29,6 +38,11 @@ cancel_compact(DbName, GroupId) ->
 %%=============================================================================
 %% internal functions
 %%=============================================================================
+
+docs_db_name({DocsDbName, _DDocDbName}) ->
+    DocsDbName;
+docs_db_name(DbName) when is_binary(DbName) ->
+    DbName.
 
 %% @spec compact_group(Group, NewGroup) -> ok
 compact_group(Group, EmptyGroup, DbName) ->
@@ -45,13 +59,14 @@ compact_group(Group, EmptyGroup, DbName) ->
         fd = Fd
     } = EmptyGroup,
 
-    {ok, Db} = couch_db:open_int(DbName, []),
+    DbName1 = docs_db_name(DbName),
+    {ok, Db} = couch_db:open_int(DbName1, []),
     {ok, DbReduce} = couch_btree:full_reduce(Db#db.fulldocinfo_by_id_btree),
     couch_db:close(Db),
     Count = element(1, DbReduce),
 
     <<"_design", ShortName/binary>> = GroupId,
-    TaskName = <<DbName/binary, ShortName/binary>>,
+    TaskName = <<DbName1/binary, ShortName/binary>>,
     couch_task_status:add_task(<<"View Group Compaction">>, TaskName, <<"">>),
     BufferSize = list_to_integer(
         couch_config:get("view_compaction", "keyvalue_buffer_size", "2097152")),
@@ -60,7 +75,7 @@ compact_group(Group, EmptyGroup, DbName) ->
             {Bt, Acc, AccSize, TotalCopied, LastId}) ->
         if DocId =:= LastId -> % COUCHDB-999
             Msg = "Duplicates of ~s detected in ~s ~s - rebuild required",
-            exit(io_lib:format(Msg, [DocId, DbName, GroupId]));
+            exit(io_lib:format(Msg, [DocId, DbName1, GroupId]));
         true -> ok end,
         AccSize2 = AccSize + ?term_size(KV),
         if AccSize2 >= BufferSize ->
@@ -96,7 +111,7 @@ maybe_retry_compact(DbName, GroupId, NewGroup) ->
         ok;
     update ->
         {_, Ref} = erlang:spawn_monitor(fun() ->
-            couch_view_updater:update(nil, NewGroup, DbName)
+            couch_view_updater:update(nil, NewGroup, docs_db_name(DbName))
         end),
         receive
         {'DOWN', Ref, _, _, {new_group, NewGroup2}} ->

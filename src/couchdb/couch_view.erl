@@ -38,6 +38,14 @@ get_temp_updater(DbName, Language, DesignOptions, MapSrc, RedSrc) ->
         throw(Error)
     end.
 
+get_group_server({DbName, GroupDbName}, GroupId) when is_binary(GroupId) ->
+    DbGroup = case GroupId of
+    <<?DESIGN_DOC_PREFIX, _/binary>> ->
+        open_db_group(GroupDbName, GroupId);
+    _ ->
+        open_db_group(GroupDbName, <<?DESIGN_DOC_PREFIX, GroupId/binary>>)
+    end,
+    get_group_server(DbName, DbGroup);
 get_group_server(DbName, GroupId) when is_binary(GroupId) ->
     Group = open_db_group(DbName, GroupId),
     get_group_server(DbName, Group);
@@ -89,6 +97,9 @@ get_temp_group(Db, Language, DesignOptions, MapSrc, RedSrc) ->
         get_temp_updater(couch_db:name(Db), Language, DesignOptions, MapSrc, RedSrc),
         couch_db:get_update_seq(Db)).
 
+get_group_info({DbName, GroupDbName}, GroupId) ->
+    GroupPid = get_group_server({DbName, GroupDbName}, GroupId),
+    couch_view_group:request_group_info(GroupPid);
 get_group_info(#db{name = DbName}, GroupId) ->
     get_group_info(DbName, GroupId);
 get_group_info(DbName, GroupId) ->
