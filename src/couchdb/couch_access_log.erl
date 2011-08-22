@@ -133,9 +133,9 @@ get_auth_user(MochiReq) ->
     case MochiReq:get_header_value("Authorization") of
     undefined -> "-";
     "Basic " ++ UserPass64 ->
-        UserPass = base64:decode(UserPass64),
-        [User, _Pass] = string:tokens(UserPass, ":"),
-	binary_to_list(User)
+        UserPass = base64:decode_to_string(UserPass64),
+        [User | _] = string:tokens(UserPass, ":"),
+        User
     end.
 
 get_log_messages(MochiReq, Code, [_, Body, _, _]) ->
