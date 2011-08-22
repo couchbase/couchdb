@@ -82,8 +82,8 @@ nobase_dist_localdata_DATA = \
     www/image/save.png \
     www/image/sidebar-toggle.png \
     www/image/spinner.gif \
-	www/image/spinner_33.gif \
-	www/image/spinner_6b.gif \
+    www/image/spinner_33.gif \
+    www/image/spinner_6b.gif \
     www/image/test_failure.gif \
     www/image/test_success.gif \
     www/image/thead-key.gif \
@@ -104,7 +104,7 @@ nobase_dist_localdata_DATA = \
     www/script/jquery.editinline.js \
     www/script/jquery.form.js \
     www/script/jquery.js \
-	www/script/jquery-ui-1.8.11.custom.min.js \
+    www/script/jquery-ui-1.8.11.custom.min.js \
     www/script/jquery.resizer.js \
     www/script/jquery.suggest.js \
     www/script/json2.js \
@@ -198,6 +198,6 @@ nobase_dist_localdata_DATA = \
     www/spec/run.html \
     www/status.html \
     www/style/jquery-ui-1.8.11.custom.css \
-	www/style/layout.css \
+    www/style/layout.css \
     www/verify_install.html \
     www/_sidebar.html
