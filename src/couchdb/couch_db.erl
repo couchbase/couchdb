@@ -28,7 +28,7 @@
 -export([init/1,terminate/2,handle_call/3,handle_cast/2,code_change/3,handle_info/2]).
 -export([changes_since/4,changes_since/5,read_doc/2,new_revid/1]).
 -export([check_is_admin/1, check_is_member/1]).
--export([reopen/1]).
+-export([reopen/1, get_current_seq/1]).
 
 -include("couch_db.hrl").
 
@@ -99,6 +99,9 @@ reopen(#db{main_pid = Pid, fd_ref_counter = OldRefCntr, user_ctx = UserCtx}) ->
         catch couch_ref_counter:drop(OldRefCntr)
     end,
     {ok, NewDb#db{user_ctx = UserCtx}}.
+
+get_current_seq(#db{main_pid = Pid}) ->
+    gen_server:call(Pid, get_current_seq, infinity).
 
 ensure_full_commit(#db{update_pid=UpdatePid,instance_start_time=StartTime}) ->
     ok = gen_server:call(UpdatePid, full_commit, infinity),
@@ -1133,7 +1136,10 @@ handle_call({db_updated, NewDb}, _From, #db{fd_ref_counter=OldRefCntr}) ->
     end,
     {reply, ok, NewDb};
 handle_call(get_db, _From, Db) ->
-    {reply, {ok, Db}, Db}.
+    {reply, {ok, Db}, Db};
+handle_call(get_current_seq, _From, #db{update_seq = Seq} = Db) ->
+    {reply, {ok, Seq}, Db}.
+
 
 
 handle_cast(Msg, Db) ->

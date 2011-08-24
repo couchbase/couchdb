@@ -14,6 +14,7 @@ configure
 autom4te.cache
 build-aux
 *.diff
+*.pyc
 
 # ./configure
 

@@ -1,0 +1,13 @@
+#!/bin/sh
+
+echo "Running set view test include_docs.py\n"
+./include_docs.py
+
+echo "Running set view test passive_partitions.py\n"
+./passive_partitions.py
+
+echo "Running set view test cleanup.py\n"
+./cleanup.py
+
+echo "Running set view test compaction.py\n"
+./compaction.py
