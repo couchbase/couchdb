@@ -48,7 +48,7 @@ docs_db_name(DbName) when is_binary(DbName) ->
 compact_group(Group, EmptyGroup, DbName) ->
     #group{
         current_seq = Seq,
-        id_btree = IdBtree,
+        id_btree = #btree{extract_kv = Extract} = IdBtree,
         name = GroupId,
         views = Views
     } = Group,
@@ -67,35 +67,26 @@ compact_group(Group, EmptyGroup, DbName) ->
     <<"_design", ShortName/binary>> = GroupId,
     TaskName = <<DbName1/binary, ShortName/binary>>,
     couch_task_status:add_task(<<"View Group Compaction">>, TaskName, <<"">>),
-    BufferSize = list_to_integer(
-        couch_config:get("view_compaction", "keyvalue_buffer_size", "2097152")),
 
-    Fun = fun({DocId, _ViewIdKeys} = KV,
-            {Bt, Acc, AccSize, TotalCopied, LastId}) ->
-        if DocId =:= LastId -> % COUCHDB-999
+    BeforeKVWriteFun = fun(Item, {TotalCopied, LastDocId}) ->
+        {DocId, _ViewIdKeys} = Extract(Item),
+        if DocId =:= LastDocId -> % COUCHDB-999
             Msg = "Duplicates of ~s detected in ~s ~s - rebuild required",
             exit(io_lib:format(Msg, [DocId, DbName1, GroupId]));
         true -> ok end,
-        AccSize2 = AccSize + ?term_size(KV),
-        if AccSize2 >= BufferSize ->
-            {ok, Bt2} = couch_btree:add(Bt, lists:reverse([KV|Acc])),
-            ok = couch_file:flush(Fd),
-            couch_task_status:update("Copied ~p of ~p Ids (~p%)",
-                [TotalCopied, Count, (TotalCopied*100) div Count]),
-            {ok, {Bt2, [], 0, TotalCopied + 1 + length(Acc), DocId}};
-        true ->
-            {ok, {Bt, [KV|Acc], AccSize2, TotalCopied, DocId}}
-        end
+        couch_task_status:update("Copied ~p of ~p ids (~p%)",
+            [TotalCopied, Count, (TotalCopied*100) div Count]),
+        {Item, {TotalCopied + 1, DocId}}
     end,
-    {ok, _, {Bt3, Uncopied, _, _Total, _LastId}} = couch_btree:foldl(
-        IdBtree, Fun, {EmptyIdBtree, [], 0, 0, nil}),
-    ok = couch_file:flush(Fd),
-    {ok, NewIdBtree} = couch_btree:add(Bt3, lists:reverse(Uncopied)),
+    % First copy the id btree.
+    {ok, NewIdBtreeRoot} = couch_btree_copy:copy(IdBtree, Fd,
+        [{before_kv_write, {BeforeKVWriteFun, {0, nil}}}]),
+    NewIdBtree = EmptyIdBtree#btree{root=NewIdBtreeRoot},
 
     NewViews = lists:map(fun({View, EmptyView}) ->
-        compact_view(Fd, View, EmptyView, BufferSize)
+        compact_view(Fd, View, EmptyView)
     end, lists:zip(Views, EmptyViews)),
-    ok = couch_file:flush(Fd),
+
     NewGroup = EmptyGroup#group{
         id_btree=NewIdBtree,
         views=NewViews,
@@ -120,27 +111,18 @@ maybe_retry_compact(#db{name = DbName} = Db, GroupId, NewGroup) ->
     end.
 
 %% @spec compact_view(Fd, View, EmptyView, Retry) -> CompactView
-compact_view(Fd, View, EmptyView, BufferSize) ->
+compact_view(Fd, View, #view{btree=ViewBtree}=EmptyView) ->
     {ok, Count} = couch_view:get_row_count(View),
 
-    %% Key is {Key,DocId}
-    Fun = fun(KV, {Bt, Acc, AccSize, TotalCopied}) ->
-        AccSize2 = AccSize + ?term_size(KV),
-        if AccSize2 >= BufferSize ->
-            {ok, Bt2} = couch_btree:add(Bt, lists:reverse([KV|Acc])),
-            ok = couch_file:flush(Fd),
-            couch_task_status:update("View #~p: copied ~p of ~p KVs (~p%)",
-                [View#view.id_num, TotalCopied, Count,
-                    (TotalCopied*100) div Count]),
-            {ok, {Bt2, [], 0, TotalCopied + 1 + length(Acc)}};
-        true ->
-            {ok, {Bt, [KV|Acc], AccSize2, TotalCopied}}
-        end
+    BeforeKVWriteFun = fun(Item, TotalCopied) ->
+        couch_task_status:update("View #~p: copied ~p of ~p kvs (~p%)",
+            [View#view.id_num, TotalCopied, Count,
+             (TotalCopied*100) div Count]),
+        {Item, TotalCopied + 1}
     end,
 
-    {ok, _, {Bt3, Uncopied, _, _Total}} = couch_btree:foldl(
-        View#view.btree, Fun, {EmptyView#view.btree, [], 0, 0}),
-    ok = couch_file:flush(Fd),
-    {ok, NewBt} = couch_btree:add(Bt3, lists:reverse(Uncopied)),
-    EmptyView#view{btree = NewBt}.
-
+    % Copy each view btree.
+    {ok, NewBtreeRoot} = couch_btree_copy:copy(View#view.btree, Fd,
+        [{before_kv_write, {BeforeKVWriteFun, 0}}]),
+    ViewBtree2 = ViewBtree#btree{root=NewBtreeRoot},
+    EmptyView#view{btree=ViewBtree2}.
