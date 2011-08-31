@@ -141,6 +141,7 @@ var init_sandbox = function() {
     sandbox.send = send;
     sandbox.getRow = getRow;
     sandbox.require = require;
+    sandbox.isArray = isArray;
   } catch(e) {
     throw(e);
   }
