@@ -37,12 +37,13 @@ copy(Btree, Fd, Options) ->
         ok
     end,
     Acc0 = apply_options(Options, #acc{btree = Btree, fd = Fd}),
-    {ok, _, #acc{cur_level = 1} = FinalAcc} = couch_btree:fold(
+    {ok, _, #acc{cur_level = 1} = FinalAcc0} = couch_btree:fold(
         Btree, fun fold_copy/3, Acc0, []),
-    {ok, CopyRootState} = finish_copy(FinalAcc),
+    {ok, CopyRootState, FinalAcc} = finish_copy(FinalAcc0),
     ok = couch_file:flush(Fd),
     ok = couch_file:sync(Fd),
-    {ok, CopyRootState}.
+    {_, LastUserAcc} = FinalAcc#acc.before_kv_write,
+    {ok, CopyRootState, LastUserAcc}.
 
 
 apply_options([], Acc) ->
@@ -143,16 +144,17 @@ finish_copy(#acc{cur_level = 1, max_level = 1, nodes = Nodes} = Acc) ->
     [] ->
         {ok, nil};
     [{_Key, _Value} | _] = KvList ->
-        {RootState, _} = flush_leaf(KvList, Acc),
-        {ok, RootState}
+        {RootState, Acc2} = flush_leaf(KvList, Acc),
+        {ok, RootState, Acc2}
     end;
 
 finish_copy(#acc{cur_level = Level, max_level = Level, nodes = Nodes} = Acc) ->
     case dict:fetch(Level, Nodes) of
     [{_Key, {Pos, Red, Size}}] ->
-        {ok, {Pos, Red, Size}};
+        {ok, {Pos, Red, Size}, Acc};
     NodeList ->
-        write_kp_node(Acc, lists:reverse(NodeList))
+        {ok, RootState} = write_kp_node(Acc, lists:reverse(NodeList)),
+        {ok, RootState, Acc}
     end;
 
 finish_copy(#acc{cur_level = Level, nodes = Nodes} = Acc) ->

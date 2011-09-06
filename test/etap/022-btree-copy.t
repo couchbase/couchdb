@@ -29,7 +29,7 @@ path(FileName) ->
 
 main(_) ->
     test_util:init_code_path(),
-    etap:plan(54),
+    etap:plan(72),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -79,7 +79,12 @@ test_copy(NumItems, ReduceFun) ->
     {_, Red, _} = couch_btree:get_state(Btree),
 
     {ok, FdCopy} = couch_file:open(CopyFileName, [create, overwrite]),
-    {ok, RootCopy} = couch_btree_copy:copy(Btree, FdCopy, []),
+    CopyCallback = fun(KV, Acc) -> {KV, Acc + 1} end,
+    {ok, RootCopy, FinalAcc} = couch_btree_copy:copy(
+        Btree, FdCopy, [{before_kv_write, {CopyCallback, 0}}]),
+    etap:is(FinalAcc, length(KVs),
+        "couch_btree_copy returned the right final user acc"),
+
     {ok, BtreeCopy} = couch_btree:open(
         RootCopy, FdCopy, [{compression, none}, {reduce, ReduceFun}]),
     check_btree_copy(BtreeCopy, Red, KVs),
