@@ -639,51 +639,60 @@ http_view_folder(ViewSpec, MergeParams, Keys, ViewArgs, Queue) ->
     {Url, Method, Headers, Body, Options} = http_view_folder_req_details(
         ViewSpec, MergeParams, Keys, ViewArgs),
     {ok, Conn} = ibrowse:spawn_link_worker_process(Url),
-    {ibrowse_req_id, ReqId} = ibrowse:send_req_direct(
-        Conn, Url, Headers, Method, Body,
-        [{stream_to, {self(), once}} | Options]),
-    receive
-    {ibrowse_async_headers, ReqId, "200", _RespHeaders} ->
-        ibrowse:stream_next(ReqId),
-        DataFun = fun() -> stream_data(ReqId) end,
-        EventFun = fun(Ev) ->
-            http_view_fold(Ev, ViewArgs#view_query_args.view_type, Queue)
-        end,
-        try
-            json_stream_parse:events(DataFun, EventFun)
-        catch throw:{error, Error} ->
-            ok = couch_view_merger_queue:queue(Queue, {error, Url, Error})
-        after
-            stop_conn(Conn),
-            ok = couch_view_merger_queue:done(Queue)
-        end;
-    {ibrowse_async_headers, ReqId, Code, _RespHeaders} ->
-        Error = try
-            stream_all(ReqId, [])
-        catch throw:{error, _Error} ->
-            <<"Error code ", (?l2b(Code))/binary>>
-        end,
-        case (catch ?JSON_DECODE(Error)) of
-        {Props} when is_list(Props) ->
-            case {get_value(<<"error">>, Props), get_value(<<"reason">>, Props)} of
-            {<<"not_found">>, Reason} when
-                    Reason =/= <<"missing">>, Reason =/= <<"deleted">> ->
-                ok = couch_view_merger_queue:queue(Queue, {error, Url, Reason});
-            {<<"not_found">>, _} ->
-                ok = couch_view_merger_queue:queue(Queue, {error, Url, <<"not_found">>});
-            JsonError ->
-                ok = couch_view_merger_queue:queue(
-                    Queue, {error, Url, to_binary(JsonError)})
-            end;
-        _ ->
-            ok = couch_view_merger_queue:queue(Queue, {error, Url, to_binary(Error)})
-        end,
-        ok = couch_view_merger_queue:done(Queue),
-        stop_conn(Conn);
-    {ibrowse_async_response, ReqId, {error, Error}} ->
-        stop_conn(Conn),
-        ok = couch_view_merger_queue:queue(Queue, {error, Url, Error}),
-        ok = couch_view_merger_queue:done(Queue)
+    R =  ibrowse:send_req_direct(
+           Conn, Url, Headers, Method, Body,
+           [{stream_to, {self(), once}} | Options]),
+
+    case R of
+        {error, Reason} ->
+            ok = couch_view_merger_queue:queue(Queue,
+                                               {error, Url,
+                                                ibrowse_error_msg(Reason)}),
+            ok = couch_view_merger_queue:done(Queue);
+        {ibrowse_req_id, ReqId} ->
+            receive
+            {ibrowse_async_headers, ReqId, "200", _RespHeaders} ->
+                ibrowse:stream_next(ReqId),
+                DataFun = fun() -> stream_data(ReqId) end,
+                EventFun = fun(Ev) ->
+                    http_view_fold(Ev, ViewArgs#view_query_args.view_type, Queue)
+                end,
+                try
+                    json_stream_parse:events(DataFun, EventFun)
+                catch throw:{error, Error} ->
+                    ok = couch_view_merger_queue:queue(Queue, {error, Url, Error})
+                after
+                    stop_conn(Conn),
+                    ok = couch_view_merger_queue:done(Queue)
+                end;
+            {ibrowse_async_headers, ReqId, Code, _RespHeaders} ->
+                Error = try
+                    stream_all(ReqId, [])
+                catch throw:{error, _Error} ->
+                    <<"Error code ", (?l2b(Code))/binary>>
+                end,
+                case (catch ?JSON_DECODE(Error)) of
+                {Props} when is_list(Props) ->
+                    case {get_value(<<"error">>, Props), get_value(<<"reason">>, Props)} of
+                    {<<"not_found">>, Reason} when
+                            Reason =/= <<"missing">>, Reason =/= <<"deleted">> ->
+                        ok = couch_view_merger_queue:queue(Queue, {error, Url, Reason});
+                    {<<"not_found">>, _} ->
+                        ok = couch_view_merger_queue:queue(Queue, {error, Url, <<"not_found">>});
+                    JsonError ->
+                        ok = couch_view_merger_queue:queue(
+                            Queue, {error, Url, to_binary(JsonError)})
+                    end;
+                _ ->
+                    ok = couch_view_merger_queue:queue(Queue, {error, Url, to_binary(Error)})
+                end,
+                ok = couch_view_merger_queue:done(Queue),
+                stop_conn(Conn);
+            {ibrowse_async_response, ReqId, {error, Error}} ->
+                stop_conn(Conn),
+                ok = couch_view_merger_queue:queue(Queue, {error, Url, Error}),
+                ok = couch_view_merger_queue:done(Queue)
+            end
     end.
 
 
@@ -1120,6 +1129,10 @@ ddoc_not_found_msg(DbName, DDocId) ->
         "Design document `~s` missing in database `~s`.", [DDocId, db_uri(DbName)]),
     iolist_to_binary(Msg).
 
+ibrowse_error_msg(Reason) when is_atom(Reason) ->
+    to_binary(Reason);
+ibrowse_error_msg(Reason) when is_tuple(Reason) ->
+    to_binary(element(1, Reason)).
 
 ibrowse_options(#httpdb{timeout = T, url = Url}) ->
     [{inactivity_timeout, T}, {connect_timeout, infinity},
@@ -1250,3 +1263,4 @@ stop_conn(Conn) ->
     unlink(Conn),
     receive {'EXIT', Conn, _} -> ok after 0 -> ok end,
     catch ibrowse:stop_worker_process(Conn).
+
