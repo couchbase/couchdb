@@ -90,9 +90,7 @@ query_view(#httpd{user_ctx = UserCtx} = Req, ViewMergeParams) ->
             LessFun(RowA, RowB)
     end,
     {ok, Queue} = couch_view_merger_queue:start_link(NumFolders, QueueLessFun),
-    Collector = spawn_link(fun() ->
-        collector_loop(ViewType, NumFolders, Callback, UserAcc)
-    end),
+    Collector = make_collector(ViewType, NumFolders, Callback, UserAcc),
     Folders = lists:foldr(
         fun(View, Acc) ->
             Pid = spawn_link(fun() ->
@@ -111,17 +109,22 @@ query_view(#httpd{user_ctx = UserCtx} = Req, ViewMergeParams) ->
         skip = ViewArgs#view_query_args.skip,
         limit = ViewArgs#view_query_args.limit
     },
-    case MergeFun(MergeParams) of
-    {ok, Resp} ->
-        ok;
-    {stop, Resp} ->
-        lists:foreach(
-            fun(P) -> catch unlink(P), catch exit(P, kill) end, Folders)
-    end,
-    catch unlink(Queue),
-    catch exit(Queue, kill),
-    Resp.
 
+    try
+        case MergeFun(MergeParams) of
+            {ok, Resp} ->
+                Resp;
+            {stop, Resp} ->
+                Resp
+        end
+    after
+        lists:foreach(fun (P) ->
+                          catch unlink(P),
+                          catch exit(P, kill)
+                      end, Folders),
+        catch unlink(Queue),
+        catch exit(Queue, kill)
+    end.
 
 view_details(nil, #simple_view_spec{view_name = <<"_all_docs">>}) ->
     {<<"raw">>, map, nil};
@@ -166,33 +169,42 @@ view_less_fun(Collation, Dir, ViewType) ->
         fun(A, B) -> not LessFun(A, B) end
     end.
 
+make_collector(ViewType, NumFolders, Callback, UserAcc) ->
+    fun (Item) ->
+            collector_loop(ViewType, NumFolders, Callback, UserAcc, Item)
+    end.
 
-collector_loop(red_map, NumFolders, Callback, UserAcc) ->
-    collector_loop(map, NumFolders, Callback, UserAcc);
+collector_loop(red_map, NumFolders, Callback, UserAcc, Item) ->
+    collector_loop(map, NumFolders, Callback, UserAcc, Item);
 
-collector_loop(map, NumFolders, Callback, UserAcc) ->
-    collect_row_count(map, NumFolders, 0, Callback, UserAcc);
+collector_loop(map, NumFolders, Callback, UserAcc, Item) ->
+    collect_row_count(map, NumFolders, 0, Callback, UserAcc, Item);
 
-collector_loop(reduce, _NumFolders, Callback, UserAcc) ->
+collector_loop(reduce, _NumFolders, Callback, UserAcc, Item) ->
     {ok, UserAcc2} = Callback(start, UserAcc),
-    collect_rows(reduce, Callback, UserAcc2).
+    collect_rows(reduce, Callback, UserAcc2, Item).
 
 
-collect_row_count(ViewType, RecvCount, AccCount, Callback, UserAcc) ->
-    receive
-    {{error, _DbUrl, _Reason} = Error, From} ->
+collect_row_count(ViewType, RecvCount, AccCount, Callback, UserAcc, Item) ->
+    case Item of
+    {error, _DbUrl, _Reason} = Error ->
         case Callback(Error, UserAcc) of
         {stop, Resp} ->
-            From ! {stop, Resp, self()};
+            {stop, Resp};
         {ok, UserAcc2} ->
-            From ! {continue, self()},
             case RecvCount > 1 of
             false ->
                 {ok, UserAcc3} = Callback({start, AccCount}, UserAcc2),
-                collect_rows(ViewType, Callback, UserAcc3);
+                {ok,
+                 fun (Item) ->
+                     collect_rows(ViewType, Callback, UserAcc3, Item)
+                 end};
             true ->
-                collect_row_count(
-                    ViewType, RecvCount - 1, AccCount, Callback, UserAcc2)
+                {ok,
+                 fun (Item) ->
+                     collect_row_count(ViewType, RecvCount - 1, AccCount,
+                                       Callback, UserAcc2, Item)
+                 end}
             end
         end;
     {row_count, Count} ->
@@ -203,31 +215,41 @@ collect_row_count(ViewType, RecvCount, AccCount, Callback, UserAcc) ->
             % TODO: maybe add etag like for regular views? How to
             %       compute them?
             {ok, UserAcc2} = Callback({start, AccCount2}, UserAcc),
-            collect_rows(ViewType, Callback, UserAcc2);
+            {ok,
+             fun (Item) ->
+                 collect_rows(ViewType, Callback, UserAcc2, Item)
+             end};
         true ->
-            collect_row_count(
-                ViewType, RecvCount - 1, AccCount2, Callback, UserAcc)
+            {ok,
+             fun (Item) ->
+                     collect_row_count(ViewType, RecvCount - 1,
+                                       AccCount2, Callback, UserAcc, Item)
+             end}
         end
     end.
 
-
-collect_rows(ViewType, Callback, UserAcc) ->
-    receive
-    {{error, _DbUrl, _Reason} = Error, From} ->
+collect_rows(ViewType, Callback, UserAcc, Item) ->
+    case Item of
+    {error, _DbUrl, _Reason} = Error ->
         case Callback(Error, UserAcc) of
         {stop, Resp} ->
-            From ! {stop, Resp, self()};
+            {stop, Resp};
         {ok, UserAcc2} ->
-            From ! {continue, self()},
-            collect_rows(ViewType, Callback, UserAcc2)
+            {ok,
+             fun (Item) ->
+                 collect_rows(ViewType, Callback, UserAcc2, Item)
+             end}
         end;
     {row, Row} ->
         RowEJson = view_row_obj(ViewType, Row),
         {ok, UserAcc2} = Callback({row, RowEJson}, UserAcc),
-        collect_rows(ViewType, Callback, UserAcc2);
-    {stop, From} ->
+        {ok,
+         fun (Item) ->
+                 collect_rows(ViewType, Callback, UserAcc2, Item)
+         end};
+    stop ->
         {ok, UserAcc2} = Callback(stop, UserAcc),
-        From ! {UserAcc2, self()}
+        {stop, UserAcc2}
     end.
 
 
@@ -245,11 +267,7 @@ view_row_obj(reduce, {Key, Value}) ->
 
 
 merge_map_views(#merge_params{limit = 0, collector = Col}) ->
-    Col ! {stop, self()},
-    receive
-    {Resp, Col} ->
-        {stop, Resp}
-    end;
+    Col(stop);
 
 merge_map_views(#merge_params{row_acc = []} = Params) ->
     #merge_params{
@@ -258,36 +276,34 @@ merge_map_views(#merge_params{row_acc = []} = Params) ->
     } = Params,
     case couch_view_merger_queue:pop(Queue) of
     closed ->
-        Col ! {stop, self()},
-        receive
-        {Resp, Col} ->
-            {ok, Resp}
-        end;
+        {stop, Resp} = Col(stop),
+        {ok, Resp};
     {ok, {error, _Url, _Reason} = Error} ->
-        Col ! {Error, self()},
         ok = couch_view_merger_queue:flush(Queue),
-        receive
-        {continue, Col} ->
-            merge_map_views(Params);
-        {stop, Resp, Col} ->
+        case Col(Error) of
+        {ok, Col2} ->
+            merge_map_views(Params#merge_params{collector=Col2});
+        {stop, Resp} ->
             {stop, Resp}
         end;
     {ok, {row_count, _} = RowCount} ->
-        Col ! RowCount,
+        {ok, Col2} = Col(RowCount),
         ok = couch_view_merger_queue:flush(Queue),
-        merge_map_views(Params);
+        merge_map_views(Params#merge_params{collector=Col2});
     {ok, MinRow} ->
         {RowToSend, RestToSend} = handle_duplicates(ViewName, MinRow, Queue),
         ok = couch_view_merger_queue:flush(Queue),
         case Skip > 0 of
         true ->
-            Limit2 = Limit;
+            Limit2 = Limit,
+            Col2 = Col;
         false ->
-            Col ! {row, RowToSend},
+            {ok, Col2} = Col({row, RowToSend}),
             Limit2 = dec_counter(Limit)
         end,
         Params2 = Params#merge_params{
-            skip = dec_counter(Skip), limit = Limit2, row_acc = RestToSend
+            skip = dec_counter(Skip), limit = Limit2, row_acc = RestToSend,
+            collector = Col2
         },
         merge_map_views(Params2)
     end;
@@ -298,13 +314,15 @@ merge_map_views(#merge_params{row_acc = [RowToSend | Rest]} = Params) ->
     } = Params,
     case Skip > 0 of
     true ->
-        Limit2 = Limit;
+        Limit2 = Limit,
+        Col2 = Col;
     false ->
-        Col ! {row, RowToSend},
+        {ok, Col2} = Col({row, RowToSend}),
         Limit2 = dec_counter(Limit)
     end,
     Params2 = Params#merge_params{
-        skip = dec_counter(Skip), limit = Limit2, row_acc = Rest
+        skip = dec_counter(Skip), limit = Limit2, row_acc = Rest,
+        collector = Col2
     },
     merge_map_views(Params2).
 
@@ -361,11 +379,7 @@ pop_similar_rows(Key0, Queue, Acc, AccError) ->
 
 
 merge_reduce_views(#merge_params{limit = 0, collector = Col}) ->
-    Col ! {stop, self()},
-    receive
-    {Resp, Col} ->
-        {stop, Resp}
-    end;
+    Col(stop);
 
 merge_reduce_views(Params) ->
     #merge_params{
@@ -373,34 +387,30 @@ merge_reduce_views(Params) ->
     } = Params,
     case couch_view_merger_queue:pop(Queue) of
     closed ->
-        Col ! {stop, self()},
-        receive
-        {Resp, Col} ->
-            {ok, Resp}
-        end;
+        {stop, Resp} = Col(stop),
+        {ok, Resp};
     {ok, {error, _Url, _Reason} = Error} ->
-        Col ! {Error, self()},
         ok = couch_view_merger_queue:flush(Queue),
-        receive
-        {continue, Col} ->
-            merge_reduce_views(Params);
-        {stop, Resp, Col} ->
+        case Col(Error) of
+        {ok, Col2} ->
+            merge_reduce_views(Params#merge_params{collector = Col2});
+        {stop, Resp} ->
             {stop, Resp}
         end;
     {ok, {row_count, _} = RowCount} ->
-        Col ! RowCount,
+        {ok, Col2} = Col(RowCount),
         ok = couch_view_merger_queue:flush(Queue),
-        merge_reduce_views(Params);
+        merge_reduce_views(Params#merge_params{collector = Col2});
     {ok, MinRow} ->
         RowGroup = group_keys_for_rereduce(Queue, [MinRow]),
         ok = couch_view_merger_queue:flush(Queue),
-        Row = case RowGroup of
+        {Row, Col2} = case RowGroup of
         [R] ->
-            {row, R};
+            {{row, R}, Col};
         [{K, _}, _ | _] ->
             try
                 RedVal = rereduce(RowGroup, Params),
-                {row, {K, RedVal}}
+                {{row, {K, RedVal}}, Col}
             catch
             _Tag:Error ->
                 on_rereduce_error(Col, Error)
@@ -412,18 +422,20 @@ merge_reduce_views(Params) ->
         _ ->
             case Skip > 0 of
             true ->
-                Limit2 = Limit;
+                Limit2 = Limit,
+                Col3 = Col2;
             false ->
                 case Row of
                 {row, _} ->
-                    Col ! Row;
+                    {ok, Col3} = Col2(Row);
                 _ ->
+                    Col3 = Col2,
                     ok
                 end,
                 Limit2 = dec_counter(Limit)
             end,
             Params2 = Params#merge_params{
-                skip = dec_counter(Skip), limit = Limit2
+                skip = dec_counter(Skip), limit = Limit2, collector = Col3
             },
             merge_reduce_views(Params2)
         end
@@ -431,14 +443,12 @@ merge_reduce_views(Params) ->
 
 
 on_rereduce_error(Col, Error) ->
-    Col ! {reduce_error(Error), self()},
-    receive
-    {continue, Col} ->
-        ok;
-    {stop, Resp, Col} ->
-        {stop, Resp}
+    case Col(reduce_error(Error)) of
+    {stop, Resp} = Stop ->
+            {Stop, undefined};
+    Other ->
+            Other
     end.
-
 
 reduce_error({invalid_value, Reason}) ->
     {error, ?LOCAL, to_binary(Reason)};
