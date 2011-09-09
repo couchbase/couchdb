@@ -154,6 +154,7 @@ if WINDOWS
 	$(INSTALL) $(JS_LIB_BINARY) $(bindir)
 	$(INSTALL) .libs/couchspawnkillable.exe \
 		"$(DESTDIR)$(couchprivdir)/couchspawnkillable.exe"
+	$(INSTALL) couchjs$(EXEEXT) $(bindir)
 endif
 
 uninstall-local:
