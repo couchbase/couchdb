@@ -35,6 +35,8 @@
     error_acc = []
 }).
 
+-define(CHUNK_SIZE, 10).
+
 
 setup_http_sender(MergeParams, Req) ->
     MergeParams#view_merge{
@@ -101,11 +103,17 @@ apply_http_config(Req, Body, MergeParams) ->
 
 
 http_sender(start, #sender_acc{req = Req} = SAcc) ->
+    put(rows_count, 0),
+    put(rows, []),
+
     {ok, Resp} = couch_httpd:start_json_response(Req, 200, []),
     couch_httpd:send_chunk(Resp, <<"{\"rows\":[">>),
     {ok, SAcc#sender_acc{resp = Resp, acc = <<"\r\n">>}};
 
 http_sender({start, RowCount}, #sender_acc{req = Req} = SAcc) ->
+    put(rows_count, 0),
+    put(rows, []),
+
     Start = io_lib:format(
         "{\"total_rows\":~w,\"rows\":[", [RowCount]),
     {ok, Resp} = couch_httpd:start_json_response(Req, 200, []),
@@ -113,10 +121,24 @@ http_sender({start, RowCount}, #sender_acc{req = Req} = SAcc) ->
     {ok, SAcc#sender_acc{resp = Resp, acc = <<"\r\n">>}};
 
 http_sender({row, Row}, #sender_acc{resp = Resp, acc = Acc} = SAcc) ->
-    couch_httpd:send_chunk(Resp, [Acc, ?JSON_ENCODE(Row)]),
+    RowsCount = get(rows_count) + 1,
+    RowsRev = [[Acc, ?JSON_ENCODE(Row)] | get(rows)],
+
+    put(rows_count, RowsCount),
+    put(rows, RowsRev),
+
+    case RowsCount >= ?CHUNK_SIZE of
+    true ->
+        flush_rows(Resp, RowsRev);
+    false ->
+        ok
+    end,
+
     {ok, SAcc#sender_acc{acc = <<",\r\n">>}};
 
 http_sender(stop, #sender_acc{resp = Resp, error_acc = ErrorAcc}) ->
+    flush_rows(Resp),
+
     case ErrorAcc of
     [] ->
         couch_httpd:send_chunk(Resp, <<"\r\n]}">>);
@@ -155,12 +177,25 @@ http_sender({error, Url, Reason}, #sender_acc{on_error = stop} = SAcc) ->
         couch_httpd:send_chunk(Resp2, <<"\r\n]}">>);
     _ ->
        Resp2 = Resp,
+       flush_rows(Resp2),
        couch_httpd:send_chunk(Resp2, [<<"\r\n],">>, <<"\"errors\":[">>]),
        couch_httpd:send_chunk(Resp2, [?JSON_ENCODE(Row), "]"]),
        couch_httpd:send_chunk(Resp2, <<"\r\n}">>)
     end,
     {stop, Resp2}.
 
+flush_rows(Resp) ->
+    RowsRev = get(rows),
+    flush_rows(Resp, RowsRev).
+
+flush_rows(_Resp, []) ->
+    put(rows_count, 0),
+    put(rows, []);
+flush_rows(Resp, RowsRev) ->
+    Rows = lists:reverse(RowsRev),
+    couch_httpd:send_chunk(Resp, Rows),
+    put(rows_count, 0),
+    put(rows, []).
 
 %% Valid `views` example:
 %%
