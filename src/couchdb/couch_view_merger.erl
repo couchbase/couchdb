@@ -196,14 +196,14 @@ collect_row_count(ViewType, RecvCount, AccCount, Callback, UserAcc, Item) ->
             false ->
                 {ok, UserAcc3} = Callback({start, AccCount}, UserAcc2),
                 {ok,
-                 fun (Item) ->
-                     collect_rows(ViewType, Callback, UserAcc3, Item)
+                 fun (It) ->
+                     collect_rows(ViewType, Callback, UserAcc3, It)
                  end};
             true ->
                 {ok,
-                 fun (Item) ->
+                 fun (It) ->
                      collect_row_count(ViewType, RecvCount - 1, AccCount,
-                                       Callback, UserAcc2, Item)
+                                       Callback, UserAcc2, It)
                  end}
             end
         end;
@@ -216,14 +216,14 @@ collect_row_count(ViewType, RecvCount, AccCount, Callback, UserAcc, Item) ->
             %       compute them?
             {ok, UserAcc2} = Callback({start, AccCount2}, UserAcc),
             {ok,
-             fun (Item) ->
-                 collect_rows(ViewType, Callback, UserAcc2, Item)
+             fun (It) ->
+                 collect_rows(ViewType, Callback, UserAcc2, It)
              end};
         true ->
             {ok,
-             fun (Item) ->
+             fun (It) ->
                      collect_row_count(ViewType, RecvCount - 1,
-                                       AccCount2, Callback, UserAcc, Item)
+                                       AccCount2, Callback, UserAcc, It)
              end}
         end
     end.
@@ -236,16 +236,16 @@ collect_rows(ViewType, Callback, UserAcc, Item) ->
             {stop, Resp};
         {ok, UserAcc2} ->
             {ok,
-             fun (Item) ->
-                 collect_rows(ViewType, Callback, UserAcc2, Item)
+             fun (It) ->
+                 collect_rows(ViewType, Callback, UserAcc2, It)
              end}
         end;
     {row, Row} ->
         RowEJson = view_row_obj(ViewType, Row),
         {ok, UserAcc2} = Callback({row, RowEJson}, UserAcc),
         {ok,
-         fun (Item) ->
-                 collect_rows(ViewType, Callback, UserAcc2, Item)
+         fun (It) ->
+                 collect_rows(ViewType, Callback, UserAcc2, It)
          end};
     stop ->
         {ok, UserAcc2} = Callback(stop, UserAcc),
@@ -444,7 +444,7 @@ merge_reduce_views(Params) ->
 
 on_rereduce_error(Col, Error) ->
     case Col(reduce_error(Error)) of
-    {stop, Resp} = Stop ->
+    {stop, _Resp} = Stop ->
             {Stop, undefined};
     Other ->
             Other
