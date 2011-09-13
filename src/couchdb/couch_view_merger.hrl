@@ -30,6 +30,7 @@
    rereduce_fun_lang = <<"javascript">>,
    callback,
    user_acc,
+   ddoc_revision = nil,    % nil | auto | Revision
    % parameters that matter only when there are remote views to merge
    conn_timeout = 60000,    % milliseconds
    on_error = continue      % 'continue' | 'stop'

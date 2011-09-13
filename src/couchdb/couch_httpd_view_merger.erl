@@ -52,11 +52,14 @@ handle_req(#httpd{method = 'GET'} = Req) ->
     RedFun = validate_reredfun_param(qs_json_value(Req, <<"rereduce">>, nil)),
     RedFunLang = validate_lang_param(
         qs_json_value(Req, <<"language">>, <<"javascript">>)),
+    DDocRevision = validate_revision_param(
+        qs_json_value(Req, <<"ddoc_revision">>, nil)),
     MergeParams0 = #view_merge{
         views = Views,
         keys = Keys,
         rereduce_fun = RedFun,
-        rereduce_fun_lang = RedFunLang
+        rereduce_fun_lang = RedFunLang,
+        ddoc_revision = DDocRevision
     },
     MergeParams1 = apply_http_config(Req, [], MergeParams0),
     couch_view_merger:query_view(Req, MergeParams1);
@@ -69,11 +72,14 @@ handle_req(#httpd{method = 'POST'} = Req) ->
     RedFun = validate_reredfun_param(get_value(<<"rereduce">>, Props, nil)),
     RedFunLang = validate_lang_param(
         get_value(<<"language">>, Props, <<"javascript">>)),
+    DDocRevision = validate_revision_param(
+        get_value(<<"ddoc_revision">>, Props, nil)),
     MergeParams0 = #view_merge{
         views = Views,
         keys = Keys,
         rereduce_fun = RedFun,
-        rereduce_fun_lang = RedFunLang
+        rereduce_fun_lang = RedFunLang,
+        ddoc_revision = DDocRevision
     },
     MergeParams1 = apply_http_config(Req, Props, MergeParams0),
     couch_view_merger:query_view(Req, MergeParams1);
@@ -236,6 +242,13 @@ validate_views_param({[_ | _] = Views}) ->
             _ ->
                 throw({bad_request, "Invalid view merge definition object."})
             end,
+            case get_value(<<"ddoc_revision">>, Props) of
+            undefined ->
+                ok;
+            _ ->
+                Msg = "Nested 'ddoc_revision' specifications are not allowed.",
+                throw({bad_request, Msg})
+            end,
             case get_value(<<"views">>, Props) of
             {[_ | _]} = SubViews ->
                 SubViewSpecs = validate_views_param(SubViews),
@@ -315,6 +328,12 @@ validate_on_error_param(Value) ->
         " It must be `continue` (default) or `stop`.", [to_binary(Value)]),
     throw({bad_request, Msg}).
 
+validate_revision_param(nil) ->
+    nil;
+validate_revision_param(<<"auto">>) ->
+    auto;
+validate_revision_param(Revision) ->
+    couch_doc:parse_rev(Revision).
 
 rem_passwd(Url) ->
     ?l2b(couch_util:url_strip_password(Url)).

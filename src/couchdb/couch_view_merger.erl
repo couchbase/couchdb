@@ -19,6 +19,9 @@
 
 -define(LOCAL, <<"local">>).
 
+-define(RETRY_INTERVAL, 1000).
+-define(MAX_RETRIES, 30).
+
 -import(couch_util, [
     get_value/2,
     get_value/3,
@@ -46,12 +49,44 @@
 }).
 
 
-query_view(#httpd{user_ctx = UserCtx} = Req, ViewMergeParams) ->
+query_view(Req, ViewMergeParams) ->
+    query_view_loop(Req, ViewMergeParams, ?MAX_RETRIES).
+
+query_view_loop(_Req, _ViewMergeParams, 0) ->
+    throw({error, revision_sync_failed});
+query_view_loop(Req, ViewMergeParams, N) ->
+    try
+        do_query_view(Req, ViewMergeParams)
+    catch
+    throw:retry ->
+        timer:sleep(?RETRY_INTERVAL),
+        query_view_loop(Req, ViewMergeParams, N - 1)
+    end.
+
+do_query_view(#httpd{user_ctx = UserCtx} = Req, ViewMergeParams) ->
     #view_merge{
        views = Views, keys = Keys, callback = Callback, user_acc = UserAcc,
-       rereduce_fun = InRedFun, rereduce_fun_lang = InRedFunLang
+       rereduce_fun = InRedFun, rereduce_fun_lang = InRedFunLang,
+       ddoc_revision = DesiredDDocRevision
     } = ViewMergeParams,
+
     {ok, DDoc, DDocViewSpec} = get_first_ddoc(Views, ViewMergeParams, UserCtx),
+    DDocRev = ddoc_rev(DDoc),
+
+    case should_check_rev(ViewMergeParams, DDoc) of
+    true ->
+        case DesiredDDocRevision of
+        auto ->
+            ok;
+        DDocRev ->
+            ok;
+        _ ->
+            throw({error, revision_mismatch})
+        end;
+    false ->
+        ok
+    end,
+
     % view type =~ query type
     {Collation, ViewType0, ViewLang} = view_details(DDoc, DDocViewSpec),
     ViewType = case {ViewType0, couch_httpd:qs_value(Req, "reduce", "true")} of
@@ -72,12 +107,16 @@ query_view(#httpd{user_ctx = UserCtx} = Req, ViewMergeParams) ->
     LessFun = view_less_fun(Collation, ViewArgs#view_query_args.direction, ViewType),
     {FoldFun, MergeFun} = case ViewType of
     reduce ->
-        {fun reduce_view_folder/6, fun merge_reduce_views/1};
+        {fun reduce_view_folder/7, fun merge_reduce_views/1};
     _ when ViewType =:= map; ViewType =:= red_map ->
-        {fun map_view_folder/6, fun merge_map_views/1}
+        {fun map_view_folder/7, fun merge_map_views/1}
     end,
     NumFolders = length(Views),
     QueueLessFun = fun
+        (revision_mismatch, _) ->
+            true;
+        (_, revision_mismatch) ->
+            false;
         ({error, _Url, _Reason}, _) ->
             true;
         (_, {error, _Url, _Reason}) ->
@@ -94,7 +133,8 @@ query_view(#httpd{user_ctx = UserCtx} = Req, ViewMergeParams) ->
     Folders = lists:foldr(
         fun(View, Acc) ->
             Pid = spawn_link(fun() ->
-                FoldFun(View, ViewMergeParams, UserCtx, Keys, ViewArgs, Queue)
+                FoldFun(View, ViewMergeParams,
+                    UserCtx, Keys, ViewArgs, DDoc, Queue)
             end),
             [Pid | Acc]
         end,
@@ -112,6 +152,13 @@ query_view(#httpd{user_ctx = UserCtx} = Req, ViewMergeParams) ->
 
     try
         case MergeFun(MergeParams) of
+        revision_mismatch ->
+            case DesiredDDocRevision of
+            auto ->
+                throw(retry);
+            _ ->
+                throw({error, revision_mismatch})
+            end;
         {ok, Resp} ->
             Resp;
         {stop, Resp} ->
@@ -130,7 +177,8 @@ query_view(#httpd{user_ctx = UserCtx} = Req, ViewMergeParams) ->
 view_details(nil, #simple_view_spec{view_name = <<"_all_docs">>}) ->
     {<<"raw">>, map, nil};
 
-view_details({Props} = DDoc, #simple_view_spec{view_name = ViewName}) ->
+view_details(#doc{body = DDoc}, #simple_view_spec{view_name = ViewName}) ->
+    {Props} = DDoc,
     {ViewDef} = get_nested_json_value(DDoc, [<<"views">>, ViewName]),
     {ViewOptions} = get_value(<<"options">>, ViewDef, {[]}),
     Collation = get_value(<<"collation">>, ViewOptions, <<"default">>),
@@ -144,7 +192,7 @@ view_details({Props} = DDoc, #simple_view_spec{view_name = ViewName}) ->
     {Collation, ViewType, Lang}.
 
 
-reduce_function(DDoc, #simple_view_spec{view_name = ViewName}) ->
+reduce_function(#doc{body = DDoc}, #simple_view_spec{view_name = ViewName}) ->
     {ViewDef} = get_nested_json_value(DDoc, [<<"views">>, ViewName]),
     get_value(<<"reduce">>, ViewDef).
 
@@ -279,6 +327,8 @@ merge_map_views(#merge_params{row_acc = []} = Params) ->
     closed ->
         {stop, Resp} = Col(stop),
         {ok, Resp};
+    {ok, revision_mismatch} ->
+        revision_mismatch;
     {ok, {error, _Url, _Reason} = Error} ->
         ok = couch_view_merger_queue:flush(Queue),
         case Col(Error) of
@@ -390,6 +440,8 @@ merge_reduce_views(Params) ->
     closed ->
         {stop, Resp} = Col(stop),
         {ok, Resp};
+    {ok, revision_mismatch} ->
+        revision_mismatch;
     {ok, {error, _Url, _Reason} = Error} ->
         ok = couch_view_merger_queue:flush(Queue),
         case Col(Error) of
@@ -403,42 +455,45 @@ merge_reduce_views(Params) ->
         ok = couch_view_merger_queue:flush(Queue),
         merge_reduce_views(Params#merge_params{collector = Col2});
     {ok, MinRow} ->
-        RowGroup = group_keys_for_rereduce(Queue, [MinRow]),
-        ok = couch_view_merger_queue:flush(Queue),
-        {Row, Col2} = case RowGroup of
-        [R] ->
-            {{row, R}, Col};
-        [{K, _}, _ | _] ->
-            try
-                RedVal = rereduce(RowGroup, Params),
-                {{row, {K, RedVal}}, Col}
-            catch
-            _Tag:Error ->
-                on_rereduce_error(Col, Error)
-            end
-        end,
-        case Row of
-        {stop, _Resp} = Stop ->
-            Stop;
-        _ ->
-            case Skip > 0 of
-            true ->
-                Limit2 = Limit,
-                Col3 = Col2;
-            false ->
-                case Row of
-                {row, _} ->
-                    {ok, Col3} = Col2(Row);
-                _ ->
-                    Col3 = Col2,
-                    ok
-                end,
-                Limit2 = dec_counter(Limit)
+        case group_keys_for_rereduce(Queue, [MinRow]) of
+        revision_mismatch -> revision_mismatch;
+        RowGroup ->
+            ok = couch_view_merger_queue:flush(Queue),
+            {Row, Col2} = case RowGroup of
+            [R] ->
+                {{row, R}, Col};
+            [{K, _}, _ | _] ->
+                try
+                    RedVal = rereduce(RowGroup, Params),
+                    {{row, {K, RedVal}}, Col}
+                catch
+                _Tag:Error ->
+                    on_rereduce_error(Col, Error)
+                end
             end,
-            Params2 = Params#merge_params{
-                skip = dec_counter(Skip), limit = Limit2, collector = Col3
-            },
-            merge_reduce_views(Params2)
+            case Row of
+            {stop, _Resp} = Stop ->
+                Stop;
+            _ ->
+                case Skip > 0 of
+                true ->
+                    Limit2 = Limit,
+                    Col3 = Col2;
+                false ->
+                    case Row of
+                    {row, _} ->
+                        {ok, Col3} = Col2(Row);
+                    _ ->
+                        Col3 = Col2,
+                        ok
+                    end,
+                    Limit2 = dec_counter(Limit)
+                end,
+                Params2 = Params#merge_params{
+                    skip = dec_counter(Skip), limit = Limit2, collector = Col3
+                },
+                merge_reduce_views(Params2)
+            end
         end
     end.
 
@@ -456,7 +511,6 @@ reduce_error({invalid_value, Reason}) ->
 reduce_error(Error) ->
     {error, ?LOCAL, to_binary(Error)}.
 
-
 group_keys_for_rereduce(Queue, [{K, _} | _] = Acc) ->
     case couch_view_merger_queue:peek(Queue) of
     empty ->
@@ -464,6 +518,8 @@ group_keys_for_rereduce(Queue, [{K, _} | _] = Acc) ->
     {ok, {K, _} = Row} ->
         {ok, Row} = couch_view_merger_queue:pop_next(Queue),
         group_keys_for_rereduce(Queue, [Row | Acc]);
+    {ok, revision_mismatch} ->
+        revision_mismatch;
     {ok, _} ->
         Acc
     end.
@@ -480,19 +536,19 @@ dec_counter(N) -> N - 1.
 
 
 map_view_folder(#simple_view_spec{database = <<"http://", _/binary>>} = ViewSpec,
-                MergeParams, _UserCtx, Keys, ViewArgs, Queue) ->
-    http_view_folder(ViewSpec, MergeParams, Keys, ViewArgs, Queue);
+                MergeParams, _UserCtx, Keys, ViewArgs, DDoc, Queue) ->
+    http_view_folder(ViewSpec, MergeParams, Keys, ViewArgs, DDoc, Queue);
 
 map_view_folder(#simple_view_spec{database = <<"https://", _/binary>>} = ViewSpec,
-                MergeParams, _UserCtx, Keys, ViewArgs, Queue) ->
-    http_view_folder(ViewSpec, MergeParams, Keys, ViewArgs, Queue);
+                MergeParams, _UserCtx, Keys, ViewArgs, DDoc, Queue) ->
+    http_view_folder(ViewSpec, MergeParams, Keys, ViewArgs, DDoc, Queue);
 
 map_view_folder(#merged_view_spec{} = ViewSpec,
-                MergeParams, _UserCtx, Keys, ViewArgs, Queue) ->
-    http_view_folder(ViewSpec, MergeParams, Keys, ViewArgs, Queue);
+                MergeParams, _UserCtx, Keys, ViewArgs, DDoc, Queue) ->
+    http_view_folder(ViewSpec, MergeParams, Keys, ViewArgs, DDoc, Queue);
 
 map_view_folder(#simple_view_spec{view_name = <<"_all_docs">>, database = DbName},
-    _MergeParams, UserCtx, Keys, ViewArgs, Queue) ->
+    _MergeParams, UserCtx, Keys, ViewArgs, _DDoc, Queue) ->
     case couch_db:open(DbName, [{user_ctx, UserCtx}]) of
     {ok, Db} ->
         try
@@ -511,7 +567,8 @@ map_view_folder(#simple_view_spec{view_name = <<"_all_docs">>, database = DbName
         ok = couch_view_merger_queue:done(Queue)
     end;
 
-map_view_folder(ViewSpec, _MergeParams, UserCtx, Keys, ViewArgs, Queue) ->
+map_view_folder(ViewSpec, MergeParams,
+                UserCtx, Keys, ViewArgs, DDoc, Queue) ->
     #simple_view_spec{
         database = DbName, ddoc_database = DDocDbName,
         ddoc_id = DDocId, view_name = ViewName
@@ -526,20 +583,27 @@ map_view_folder(ViewSpec, _MergeParams, UserCtx, Keys, ViewArgs, Queue) ->
         try
             FoldlFun = make_map_fold_fun(IncludeDocs, Conflicts, Db, Queue),
             {DDocDb, View} = get_map_view(Db, DDocDbName, DDocId, ViewName, Stale),
-            {ok, RowCount} = couch_view:get_row_count(View),
-            ok = couch_view_merger_queue:queue(Queue, {row_count, RowCount}),
-            case Keys of
-            nil ->
-                FoldOpts = couch_httpd_view:make_key_options(ViewArgs),
-                {ok, _, _} = couch_view:fold(View, FoldlFun, [], FoldOpts);
-            _ when is_list(Keys) ->
-                lists:foreach(
-                    fun(K) ->
-                        FoldOpts = couch_httpd_view:make_key_options(
-                            ViewArgs#view_query_args{start_key = K, end_key = K}),
-                        {ok, _, _} = couch_view:fold(View, FoldlFun, [], FoldOpts)
-                    end,
-                    Keys)
+
+            case not(should_check_rev(MergeParams, DDoc)) orelse
+                ddoc_unchanged(DDocDb, DDoc) of
+            true ->
+                {ok, RowCount} = couch_view:get_row_count(View),
+                ok = couch_view_merger_queue:queue(Queue, {row_count, RowCount}),
+                case Keys of
+                nil ->
+                    FoldOpts = couch_httpd_view:make_key_options(ViewArgs),
+                    {ok, _, _} = couch_view:fold(View, FoldlFun, [], FoldOpts);
+                _ when is_list(Keys) ->
+                    lists:foreach(
+                        fun(K) ->
+                            FoldOpts = couch_httpd_view:make_key_options(
+                                ViewArgs#view_query_args{start_key = K, end_key = K}),
+                            {ok, _, _} = couch_view:fold(View, FoldlFun, [], FoldOpts)
+                        end,
+                        Keys)
+                end;
+            false ->
+                ok = couch_view_merger_queue:queue(Queue, revision_mismatch)
             end,
             catch couch_db:close(DDocDb)
         catch
@@ -646,9 +710,9 @@ all_docs_row(DocInfo, Db, IncludeDoc, Conflicts) ->
     end.
 
 
-http_view_folder(ViewSpec, MergeParams, Keys, ViewArgs, Queue) ->
+http_view_folder(ViewSpec, MergeParams, Keys, ViewArgs, DDoc, Queue) ->
     {Url, Method, Headers, Body, Options} = http_view_folder_req_details(
-        ViewSpec, MergeParams, Keys, ViewArgs),
+        ViewSpec, MergeParams, Keys, ViewArgs, DDoc),
     {ok, Conn} = ibrowse:spawn_link_worker_process(Url),
     R =  ibrowse:send_req_direct(
            Conn, Url, Headers, Method, Body,
@@ -689,6 +753,8 @@ http_view_folder(ViewSpec, MergeParams, Keys, ViewArgs, Queue) ->
                     ok = couch_view_merger_queue:queue(Queue, {error, Url, Reason});
                 {<<"not_found">>, _} ->
                     ok = couch_view_merger_queue:queue(Queue, {error, Url, <<"not_found">>});
+                {<<"error">>, <<"revision_mismatch">>} ->
+                    ok = couch_view_merger_queue:queue(Queue, revision_mismatch);
                 JsonError ->
                     ok = couch_view_merger_queue:queue(
                         Queue, {error, Url, to_binary(JsonError)})
@@ -707,23 +773,35 @@ http_view_folder(ViewSpec, MergeParams, Keys, ViewArgs, Queue) ->
 
 
 http_view_folder_req_details(#merged_view_spec{
-        url = MergeUrl0, ejson_spec = {EJson}}, MergeParams, Keys, ViewArgs) ->
+        url = MergeUrl0, ejson_spec = {EJson}},
+        MergeParams, Keys, ViewArgs, DDoc) ->
     {ok, #httpdb{url = Url, ibrowse_options = Options} = Db} =
         open_db(MergeUrl0, nil, MergeParams),
     MergeUrl = Url ++ view_qs(ViewArgs),
     Headers = [{"Content-Type", "application/json"} | Db#httpdb.headers],
-    Body = case Keys of
+
+    EJson1 = case Keys of
     nil ->
-        {EJson};
+        EJson;
     _ ->
-        {[{<<"keys">>, Keys} | EJson]}
+        [{<<"keys">>, Keys} | EJson]
     end,
+
+    EJson2 = case should_check_rev(MergeParams, DDoc) of
+    true ->
+        P = fun (Tuple) -> element(1, Tuple) =/= <<"ddoc_revision">> end,
+        [{<<"ddoc_revision">>, ddoc_rev_str(DDoc)} | lists:filter(P, EJson1)];
+    false ->
+        EJson1
+    end,
+
+    Body = {EJson2},
     put(from_url, Url),
     {MergeUrl, post, Headers, ?JSON_ENCODE(Body), Options};
 
 http_view_folder_req_details(#simple_view_spec{
         database = DbUrl, ddoc_id = DDocId, view_name = ViewName},
-        MergeParams, Keys, ViewArgs) ->
+        MergeParams, Keys, ViewArgs, _DDoc) ->
     {ok, #httpdb{url = Url, ibrowse_options = Options} = Db} =
         open_db(DbUrl, nil, MergeParams),
     ViewUrl = Url ++ case ViewName of
@@ -859,18 +937,18 @@ void_event(_Ev) ->
 
 
 reduce_view_folder(#simple_view_spec{database = <<"http://", _/binary>>} = ViewSpec,
-                MergeParams, _UserCtx, Keys, ViewArgs, Queue) ->
-    http_view_folder(ViewSpec, MergeParams, Keys, ViewArgs, Queue);
+                MergeParams, _UserCtx, Keys, ViewArgs, DDoc, Queue) ->
+    http_view_folder(ViewSpec, MergeParams, Keys, ViewArgs, DDoc, Queue);
 
 reduce_view_folder(#simple_view_spec{database = <<"https://", _/binary>>} = ViewSpec,
-                MergeParams, _UserCtx, Keys, ViewArgs, Queue) ->
-    http_view_folder(ViewSpec, MergeParams, Keys, ViewArgs, Queue);
+                MergeParams, _UserCtx, Keys, ViewArgs, DDoc, Queue) ->
+    http_view_folder(ViewSpec, MergeParams, Keys, ViewArgs, DDoc, Queue);
 
 reduce_view_folder(#merged_view_spec{} = ViewSpec,
-                MergeParams, _UserCtx, Keys, ViewArgs, Queue) ->
-    http_view_folder(ViewSpec, MergeParams, Keys, ViewArgs, Queue);
+                MergeParams, _UserCtx, Keys, ViewArgs, DDoc, Queue) ->
+    http_view_folder(ViewSpec, MergeParams, Keys, ViewArgs, DDoc, Queue);
 
-reduce_view_folder(ViewSpec, _MergeParams, UserCtx, Keys, ViewArgs, Queue) ->
+reduce_view_folder(ViewSpec, MergeParams, UserCtx, Keys, ViewArgs, DDoc, Queue) ->
     #simple_view_spec{
         database = DbName, ddoc_database = DDocDbName,
         ddoc_id = DDocId, view_name = ViewName
@@ -883,22 +961,31 @@ reduce_view_folder(ViewSpec, _MergeParams, UserCtx, Keys, ViewArgs, Queue) ->
         try
             FoldlFun = make_reduce_fold_fun(ViewArgs, Queue),
             KeyGroupFun = make_group_rows_fun(ViewArgs),
-            {DDocDb, View} = get_reduce_view(Db, DDocDbName, DDocId, ViewName, Stale),
-            case Keys of
-            nil ->
-                FoldOpts = [{key_group_fun, KeyGroupFun} |
-                    couch_httpd_view:make_key_options(ViewArgs)],
-                {ok, _} = couch_view:fold_reduce(View, FoldlFun, [], FoldOpts);
-            _ when is_list(Keys) ->
-                lists:foreach(
-                    fun(K) ->
-                        FoldOpts = [{key_group_fun, KeyGroupFun} |
-                            couch_httpd_view:make_key_options(
-                                ViewArgs#view_query_args{
-                                    start_key = K, end_key = K})],
-                        {ok, _} = couch_view:fold_reduce(View, FoldlFun, [], FoldOpts)
-                    end,
-                    Keys)
+            {DDocDb, View} = get_reduce_view(Db, DDocDbName,
+                                             DDocId, ViewName, Stale),
+
+            case not(should_check_rev(MergeParams, DDoc)) orelse
+                ddoc_unchanged(DDocDb, DDoc) of
+            true ->
+                case Keys of
+                nil ->
+                    FoldOpts = [{key_group_fun, KeyGroupFun} |
+                        couch_httpd_view:make_key_options(ViewArgs)],
+                    {ok, _} = couch_view:fold_reduce(View, FoldlFun, [], FoldOpts);
+                _ when is_list(Keys) ->
+                    lists:foreach(
+                        fun(K) ->
+                            FoldOpts = [{key_group_fun, KeyGroupFun} |
+                                couch_httpd_view:make_key_options(
+                                    ViewArgs#view_query_args{
+                                        start_key = K, end_key = K})],
+                            {ok, _} = couch_view:fold_reduce(View, FoldlFun,
+                                                             [], FoldOpts)
+                        end,
+                        Keys)
+                end;
+            false ->
+                ok = couch_view_merger_queue:queue(Queue, revision_mismatch)
             end,
             catch couch_db:close(DDocDb)
         catch
@@ -1045,8 +1132,9 @@ get_first_ddoc([#simple_view_spec{} = Spec | _], MergeParams, UserCtx) ->
     _ when is_binary(DDocDbName) ->
         open_db(DDocDbName, UserCtx, MergeParams)
     end,
-    {ok, #doc{body = DDoc}} = get_ddoc(Db, Id),
+    {ok, DDoc} = get_ddoc(Db, Id),
     close_db(Db),
+
     {ok, DDoc, Spec};
 
 get_first_ddoc([_MergeSpec | Rest], MergeParams, UserCtx) ->
@@ -1094,7 +1182,7 @@ close_db(Db) ->
 
 
 get_ddoc(#httpdb{url = BaseUrl, headers = Headers} = HttpDb, Id) ->
-    Url = BaseUrl ++ ?b2l(Id),
+    Url = BaseUrl ++ ?b2l(Id) ++ "?revs=true",
     case ibrowse:send_req(
         Url, Headers, get, [], HttpDb#httpdb.ibrowse_options) of
     {ok, "200", _RespHeaders, Body} ->
@@ -1169,6 +1257,7 @@ view_qs(ViewArgs) ->
         conflicts = Conflicts,
         stale = Stale
     } = ViewArgs,
+
     QsList = case StartKey =:= DefViewArgs#view_query_args.start_key of
     true ->
         [];
@@ -1274,3 +1363,35 @@ stop_conn(Conn) ->
     receive {'EXIT', Conn, _} -> ok after 0 -> ok end,
     catch ibrowse:stop_worker_process(Conn).
 
+ddoc_rev(nil) ->
+    nil;
+ddoc_rev(#doc{revs = {Pos, [RevId | _]}}) ->
+    {Pos, RevId}.
+
+ddoc_rev_str(DDoc) ->
+    couch_doc:rev_to_str(ddoc_rev(DDoc)).
+
+should_check_rev(#view_merge{ddoc_revision = DDocRevision}, DDoc) ->
+    DDocRevision =/= nil andalso DDoc =/= nil.
+
+ddoc_unchanged(Db, DDoc) ->
+    DbName = couch_db:name(Db),
+    case couch_db:open_int(DbName, []) of
+    {ok, Db1} ->
+        try
+            case couch_db:get_update_seq(Db) =:= couch_db:get_update_seq(Db1) of
+            true ->
+                %% nothing changed
+                true;
+            false ->
+                %% design document may have changed
+                DDocId = DDoc#doc.id,
+                {ok, MaybeUpdatedDDoc} = get_ddoc(Db1, DDocId),
+                ddoc_rev(DDoc) =:= ddoc_rev(MaybeUpdatedDDoc)
+            end
+        after
+            couch_db:close(Db1)
+        end;
+    {not_found, _} ->
+        throw(ddoc_db_not_found)
+    end.
