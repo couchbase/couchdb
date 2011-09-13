@@ -53,27 +53,27 @@ replication_id(#rep{options = Options} = Rep) ->
 % please add a new clause and increase ?REP_ID_VERSION.
 
 replication_id(#rep{user_ctx = UserCtx} = Rep, 2) ->
-    {ok, HostName} = inet:gethostname(),
-    Port = case (catch mochiweb_socket_server:get(couch_httpd, port)) of
-    P when is_number(P) ->
-        P;
-    _ ->
-        % On restart we might be called before the couch_httpd process is
-        % started.
-        % TODO: we might be under an SSL socket server only, or both under
-        % SSL and a non-SSL socket.
-        % ... mochiweb_socket_server:get(https, port)
-        list_to_integer(couch_config:get("httpd", "port", "5984"))
-    end,
+    Uuid = ensure_server_replication_uuid(),
     Src = get_rep_endpoint(UserCtx, Rep#rep.source),
     Tgt = get_rep_endpoint(UserCtx, Rep#rep.target),
-    maybe_append_filters([HostName, Port, Src, Tgt], Rep);
+    maybe_append_filters([Uuid, Src, Tgt], Rep);
 
 replication_id(#rep{user_ctx = UserCtx} = Rep, 1) ->
     {ok, HostName} = inet:gethostname(),
     Src = get_rep_endpoint(UserCtx, Rep#rep.source),
     Tgt = get_rep_endpoint(UserCtx, Rep#rep.target),
     maybe_append_filters([HostName, Src, Tgt], Rep).
+
+
+ensure_server_replication_uuid() ->
+    case couch_config:get("replicator", "uuid", nil) of
+    nil ->
+        NewSecret = ?b2l(couch_uuids:random()),
+        couch_config:set("replicator", "uuid", NewSecret),
+        NewSecret;
+    Secret ->
+        Secret
+    end.
 
 
 maybe_append_filters(Base,
