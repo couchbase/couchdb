@@ -163,3 +163,10 @@ verify_ssl_certificates = false
 ; ssl_trusted_certificates_file = /etc/ssl/certs/ca-certificates.crt
 ; maximum peer certificate depth (must be set even if certificate validation is off)
 ssl_certificate_max_depth = 3
+
+[vendor]
+name = couchbase
+version = 1.2.0
+
+[modules]
+geocouch = 7fd793c10f3aa667a1088a937398bc5b51472b7f
