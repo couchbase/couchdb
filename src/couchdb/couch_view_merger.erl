@@ -112,16 +112,17 @@ query_view(#httpd{user_ctx = UserCtx} = Req, ViewMergeParams) ->
 
     try
         case MergeFun(MergeParams) of
-            {ok, Resp} ->
-                Resp;
-            {stop, Resp} ->
-                Resp
+        {ok, Resp} ->
+            Resp;
+        {stop, Resp} ->
+            Resp
         end
     after
-        lists:foreach(fun (P) ->
-                          catch unlink(P),
-                          catch exit(P, kill)
-                      end, Folders),
+        lists:foreach(
+            fun (P) ->
+                catch unlink(P),
+                catch exit(P, kill)
+            end, Folders),
         catch unlink(Queue),
         catch exit(Queue, kill)
     end.
@@ -171,7 +172,7 @@ view_less_fun(Collation, Dir, ViewType) ->
 
 make_collector(ViewType, NumFolders, Callback, UserAcc) ->
     fun (Item) ->
-            collector_loop(ViewType, NumFolders, Callback, UserAcc, Item)
+        collector_loop(ViewType, NumFolders, Callback, UserAcc, Item)
     end.
 
 collector_loop(red_map, NumFolders, Callback, UserAcc, Item) ->
@@ -222,8 +223,8 @@ collect_row_count(ViewType, RecvCount, AccCount, Callback, UserAcc, Item) ->
         true ->
             {ok,
              fun (It) ->
-                     collect_row_count(ViewType, RecvCount - 1,
-                                       AccCount2, Callback, UserAcc, It)
+                 collect_row_count(ViewType, RecvCount - 1,
+                     AccCount2, Callback, UserAcc, It)
              end}
         end
     end.
@@ -654,55 +655,54 @@ http_view_folder(ViewSpec, MergeParams, Keys, ViewArgs, Queue) ->
            [{stream_to, {self(), once}} | Options]),
 
     case R of
-        {error, Reason} ->
-            ok = couch_view_merger_queue:queue(Queue,
-                                               {error, Url,
-                                                ibrowse_error_msg(Reason)}),
-            ok = couch_view_merger_queue:done(Queue);
-        {ibrowse_req_id, ReqId} ->
-            receive
-            {ibrowse_async_headers, ReqId, "200", _RespHeaders} ->
-                ibrowse:stream_next(ReqId),
-                DataFun = fun() -> stream_data(ReqId) end,
-                EventFun = fun(Ev) ->
-                    http_view_fold(Ev, ViewArgs#view_query_args.view_type, Queue)
-                end,
-                try
-                    json_stream_parse:events(DataFun, EventFun)
-                catch throw:{error, Error} ->
-                    ok = couch_view_merger_queue:queue(Queue, {error, Url, Error})
-                after
-                    stop_conn(Conn),
-                    ok = couch_view_merger_queue:done(Queue)
-                end;
-            {ibrowse_async_headers, ReqId, Code, _RespHeaders} ->
-                Error = try
-                    stream_all(ReqId, [])
-                catch throw:{error, _Error} ->
-                    <<"Error code ", (?l2b(Code))/binary>>
-                end,
-                case (catch ?JSON_DECODE(Error)) of
-                {Props} when is_list(Props) ->
-                    case {get_value(<<"error">>, Props), get_value(<<"reason">>, Props)} of
-                    {<<"not_found">>, Reason} when
-                            Reason =/= <<"missing">>, Reason =/= <<"deleted">> ->
-                        ok = couch_view_merger_queue:queue(Queue, {error, Url, Reason});
-                    {<<"not_found">>, _} ->
-                        ok = couch_view_merger_queue:queue(Queue, {error, Url, <<"not_found">>});
-                    JsonError ->
-                        ok = couch_view_merger_queue:queue(
-                            Queue, {error, Url, to_binary(JsonError)})
-                    end;
-                _ ->
-                    ok = couch_view_merger_queue:queue(Queue, {error, Url, to_binary(Error)})
-                end,
-                ok = couch_view_merger_queue:done(Queue),
-                stop_conn(Conn);
-            {ibrowse_async_response, ReqId, {error, Error}} ->
+    {error, Reason} ->
+        ok = couch_view_merger_queue:queue(Queue,
+            {error, Url, ibrowse_error_msg(Reason)}),
+        ok = couch_view_merger_queue:done(Queue);
+    {ibrowse_req_id, ReqId} ->
+        receive
+        {ibrowse_async_headers, ReqId, "200", _RespHeaders} ->
+            ibrowse:stream_next(ReqId),
+            DataFun = fun() -> stream_data(ReqId) end,
+            EventFun = fun(Ev) ->
+                http_view_fold(Ev, ViewArgs#view_query_args.view_type, Queue)
+            end,
+            try
+                json_stream_parse:events(DataFun, EventFun)
+            catch throw:{error, Error} ->
+                ok = couch_view_merger_queue:queue(Queue, {error, Url, Error})
+            after
                 stop_conn(Conn),
-                ok = couch_view_merger_queue:queue(Queue, {error, Url, Error}),
                 ok = couch_view_merger_queue:done(Queue)
-            end
+            end;
+        {ibrowse_async_headers, ReqId, Code, _RespHeaders} ->
+            Error = try
+                stream_all(ReqId, [])
+            catch throw:{error, _Error} ->
+                <<"Error code ", (?l2b(Code))/binary>>
+            end,
+            case (catch ?JSON_DECODE(Error)) of
+            {Props} when is_list(Props) ->
+                case {get_value(<<"error">>, Props), get_value(<<"reason">>, Props)} of
+                {<<"not_found">>, Reason} when
+                        Reason =/= <<"missing">>, Reason =/= <<"deleted">> ->
+                    ok = couch_view_merger_queue:queue(Queue, {error, Url, Reason});
+                {<<"not_found">>, _} ->
+                    ok = couch_view_merger_queue:queue(Queue, {error, Url, <<"not_found">>});
+                JsonError ->
+                    ok = couch_view_merger_queue:queue(
+                        Queue, {error, Url, to_binary(JsonError)})
+                end;
+            _ ->
+                ok = couch_view_merger_queue:queue(Queue, {error, Url, to_binary(Error)})
+            end,
+            ok = couch_view_merger_queue:done(Queue),
+            stop_conn(Conn);
+        {ibrowse_async_response, ReqId, {error, Error}} ->
+            stop_conn(Conn),
+            ok = couch_view_merger_queue:queue(Queue, {error, Url, Error}),
+            ok = couch_view_merger_queue:done(Queue)
+        end
     end.
 
 
