@@ -165,7 +165,7 @@ verify_ssl_certificates = false
 ssl_certificate_max_depth = 3
 
 [vendor]
-name = couchbase
+name = Couchbase Single Server
 version = 1.2.0
 
 [modules]
