@@ -18,7 +18,15 @@
 
 -spec update(_, #group{}, Dbname::binary()) -> no_return().
 
-update(Owner, Group, DbName) ->
+update(Owner, Group, DbName) when is_binary(DbName) ->
+    {ok, Db} = couch_db:open_int(DbName, []),
+    try
+        update(Owner, Group, Db)
+    after
+        couch_db:close(Db)
+    end;
+
+update(Owner, Group, #db{name = DbName} = Db) ->
     ok = couch_indexer_manager:enter(),
     #group{
         name = GroupName,
@@ -26,7 +34,6 @@ update(Owner, Group, DbName) ->
         purge_seq = PurgeSeq
     } = Group,
 
-    {ok, Db} = couch_db:open_int(DbName, []),
     DbPurgeSeq = couch_db:get_purge_seq(Db),
     if DbPurgeSeq == PurgeSeq ->
         ok;
@@ -83,7 +90,6 @@ update(Owner, Group, DbName) ->
             end,
             ok, []),
     couch_work_queue:close(MapQueue),
-    couch_db:close(Db),
     receive {new_group, NewGroup} ->
         ok = couch_indexer_manager:leave(),
         exit({new_group,
