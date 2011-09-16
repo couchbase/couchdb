@@ -167,6 +167,7 @@ ssl_certificate_max_depth = 3
 [vendor]
 name = Couchbase Single Server
 version = 1.2.0
+url = http://www.couchbase.com/
 
 [modules]
 geocouch = 7fd793c10f3aa667a1088a937398bc5b51472b7f

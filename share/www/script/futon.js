@@ -501,7 +501,6 @@ function $$(node) {
   $.futon.storage.declare("recent", {scope: "cookie", defaultValue: ""});
 
   $(function() {
-    document.title = "Apache CouchDB - Futon: " + document.title;
     if ($.futon.storage.get("sidebar") == "hidden") {
       // doing this as early as possible prevents flickering
       $(document.body).addClass("fullwidth");
@@ -527,6 +526,18 @@ function $$(node) {
       $.couch.info({
         success: function(info, status) {
           $("#version").text(info.version);
+          if (info.vendor) {
+            $("#logo").attr('alt', info.vendor.name);
+            var vendorName = $("#vendor_name").text(info.vendor.name);
+            $("#vendor_version").text(info.vendor.version);
+            if (info.vendor.url) {
+              vendorName.attr('href', info.vendor.url);
+            }
+            $("#vendor").show();
+            document.title = info.vendor.name + " - Futon: " + document.title;
+          } else {
+            document.title = "Apache CouchDB - Futon: " + document.title;
+          }
         }
       });
     });
