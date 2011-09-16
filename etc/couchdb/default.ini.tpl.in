@@ -291,3 +291,7 @@ min_file_size = 131072
 ;
 ;_default = [{db_fragmentation, "70%"}, {view_fragmentation, "60%"}, {from, "23:00"}, {to, "04:00"}]
 
+[vendor]
+name = Couchbase Single Server
+version = 1.2.0
+url = http://www.couchbase.com/
