@@ -69,17 +69,25 @@ test() ->
 
 test_copy(NumItems, ReduceFun) ->
     KVs = [{I, I} || I <- lists:seq(1, NumItems)],
-    {ok, #btree{fd = Fd} = Btree} = make_btree(KVs, ReduceFun),
+
+    OriginalFileName = path(
+        "test/etap/test_btree_" ++ integer_to_list(length(KVs)) ++ ".dat"),
+    CopyFileName = path(
+        "test/etap/test_btree_" ++ integer_to_list(NumItems) ++ "_copy.dat"),
+
+    {ok, #btree{fd = Fd} = Btree} = make_btree(OriginalFileName, KVs, ReduceFun),
     {_, Red, _} = couch_btree:get_state(Btree),
-    {ok, FdCopy} = couch_file:open(
-        path("test_btree_" ++ integer_to_list(NumItems) ++ "_copy.dat"),
-        [create, overwrite]),
+
+    {ok, FdCopy} = couch_file:open(CopyFileName, [create, overwrite]),
     {ok, RootCopy} = couch_btree_copy:copy(Btree, FdCopy, []),
     {ok, BtreeCopy} = couch_btree:open(
         RootCopy, FdCopy, [{compression, none}, {reduce, ReduceFun}]),
     check_btree_copy(BtreeCopy, Red, KVs),
+
     ok = couch_file:close(Fd),
-    ok = couch_file:close(FdCopy).
+    ok = couch_file:close(FdCopy),
+    ok = file:delete(OriginalFileName),
+    ok = file:delete(CopyFileName).
 
 
 check_btree_copy(Btree, Red, KVs) ->
@@ -92,10 +100,8 @@ check_btree_copy(Btree, Red, KVs) ->
     etap:is(KVs, lists:reverse(CopyKVs), "btree copy has same keys").
 
 
-make_btree(KVs, ReduceFun) ->
-    {ok, Fd} = couch_file:open(
-        path("test_btree_" ++ integer_to_list(length(KVs)) ++ ".dat"),
-        [create, overwrite]),
+make_btree(Filename, KVs, ReduceFun) ->
+    {ok, Fd} = couch_file:open(Filename, [create, overwrite]),
     {ok, Btree} = couch_btree:open(
         nil, Fd, [{compression, none}, {reduce, ReduceFun}]),
     {ok, Btree2} = couch_btree:add_remove(Btree, KVs, []),
