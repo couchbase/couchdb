@@ -48,7 +48,7 @@ docs_db_name(DbName) when is_binary(DbName) ->
 compact_group(Group, EmptyGroup, DbName) ->
     #group{
         current_seq = Seq,
-        id_btree = #btree{extract_kv = Extract} = IdBtree,
+        id_btree = IdBtree,
         name = GroupId,
         views = Views
     } = Group,
@@ -68,15 +68,14 @@ compact_group(Group, EmptyGroup, DbName) ->
     TaskName = <<DbName1/binary, ShortName/binary>>,
     couch_task_status:add_task(<<"View Group Compaction">>, TaskName, <<"">>),
 
-    BeforeKVWriteFun = fun(Item, {TotalCopied, LastDocId}) ->
-        {DocId, _ViewIdKeys} = Extract(Item),
+    BeforeKVWriteFun = fun({DocId, _} = KV, {TotalCopied, LastDocId}) ->
         if DocId =:= LastDocId -> % COUCHDB-999
             Msg = "Duplicates of ~s detected in ~s ~s - rebuild required",
             exit(io_lib:format(Msg, [DocId, DbName1, GroupId]));
         true -> ok end,
         couch_task_status:update("Copied ~p of ~p ids (~p%)",
             [TotalCopied, Count, (TotalCopied*100) div Count]),
-        {Item, {TotalCopied + 1, DocId}}
+        {KV, {TotalCopied + 1, DocId}}
     end,
     % First copy the id btree.
     {ok, NewIdBtreeRoot} = couch_btree_copy:copy(IdBtree, Fd,
