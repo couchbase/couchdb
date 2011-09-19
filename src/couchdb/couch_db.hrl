@@ -292,6 +292,8 @@
     heartbeat,
     timeout,
     filter = "",
+    filter_fun,
+    filter_args = [],
     include_docs = false,
     conflicts = false,
     db_open_options = []
