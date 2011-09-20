@@ -15,6 +15,7 @@
 -export([open/2, open/3, query_modify/4, query_modify_raw/2, add/2, add_remove/3]).
 -export([fold/4, full_reduce/1, final_reduce/2, size/1, foldl/3, foldl/4, lookup_sorted/2]).
 -export([modify/3, fold_reduce/4, lookup/2, get_state/1, set_options/2]).
+-export([guided_purge/3]).
 
 -include("couch_db.hrl").
 -define(CHUNK_THRESHOLD, 16#4ff).
@@ -756,4 +757,78 @@ stream_kv_node2(Bt, Reds, PrevKVs, [{K,V} | RestKVs], InRange, Dir, Fun, Acc) ->
         {stop, Acc2} ->
             {stop, {PrevKVs, Reds}, Acc2}
         end
+    end.
+
+
+guided_purge(#btree{root = Root} = Bt, GuideFun, GuideAcc0) ->
+    % inspired by query_modify/4
+    {ok, KeyPointers, FinalGuideAcc, Bt2} = guided_purge(Bt, Root, GuideFun, GuideAcc0),
+    {ok, NewRoot, Bt3} = complete_root(Bt2, KeyPointers),
+    {ok, Bt3#btree{root = NewRoot}, FinalGuideAcc}.
+
+
+guided_purge(Bt, NodeState, GuideFun, GuideAcc) ->
+    % inspired by modify_node/5
+    case NodeState of
+    nil ->
+        NodeType = kv_node,
+        NodeList = [];
+    _Tuple ->
+        Pointer = element(1, NodeState),
+        {NodeType, NodeList} = get_node(Bt, Pointer)
+    end,
+    {ok, NewNodeList, GuideAcc2, Bt2} =
+    case NodeType of
+    kp_node ->
+        kp_guided_purge(Bt, NodeList, GuideFun, GuideAcc);
+    kv_node ->
+        kv_guided_purge(Bt, NodeList, GuideFun, GuideAcc)
+    end,
+    case NewNodeList of
+    [] ->  % no nodes remain
+        {ok, [], GuideAcc2, Bt2};
+    NodeList ->  % nothing changed
+        {LastKey, _LastValue} = lists:last(NodeList),
+        {ok, [{LastKey, NodeState}], GuideAcc2, Bt2};
+    _ ->
+        {ok, ResultList, Bt3} = write_node(Bt2, NodeType, NewNodeList),
+        {ok, ResultList, GuideAcc2, Bt3}
+    end.
+
+
+kv_guided_purge(Bt, KvList, GuideFun, GuideAcc) ->
+    kv_guided_purge(Bt, KvList, GuideFun, GuideAcc, []).
+
+kv_guided_purge(Bt, [], _GuideFun, GuideAcc, ResultKvList) ->
+    {ok, lists:reverse(ResultKvList), GuideAcc, Bt};
+
+kv_guided_purge(Bt, [{Key, Value} | Rest] = KvList, GuideFun, GuideAcc, ResultKvList) ->
+    AssembledKv = assemble(Bt, Key, Value),
+    case GuideFun(value, AssembledKv, GuideAcc) of
+    {stop, GuideAcc2} ->
+        {ok, lists:reverse(ResultKvList, KvList), GuideAcc2, Bt};
+    {purge, GuideAcc2} ->
+        kv_guided_purge(Bt, Rest, GuideFun, GuideAcc2, ResultKvList);
+    {keep, GuideAcc2} ->
+        kv_guided_purge(Bt, Rest, GuideFun, GuideAcc2, [{Key, Value} | ResultKvList])
+    end.
+
+
+kp_guided_purge(Bt, NodeList, GuideFun, GuideAcc) ->
+    kp_guided_purge(Bt, NodeList, GuideFun, GuideAcc, []).
+
+kp_guided_purge(Bt, [], _GuideFun, GuideAcc, ResultNode) ->
+    {ok, lists:reverse(ResultNode), GuideAcc, Bt};
+
+kp_guided_purge(Bt, [{Key, NodeState} | Rest] = KpList, GuideFun, GuideAcc, ResultNode) ->
+    case GuideFun(branch, element(2, NodeState), GuideAcc) of
+    {stop, GuideAcc2} ->
+        {ok, lists:reverse(ResultNode, KpList), GuideAcc2, Bt};
+    {keep, GuideAcc2} ->
+        kp_guided_purge(Bt, Rest, GuideFun, GuideAcc2, [{Key, NodeState} | ResultNode]);
+    {purge, GuideAcc2} ->
+        kp_guided_purge(Bt, Rest, GuideFun, GuideAcc2, ResultNode);
+    {partial_purge, GuideAcc2} ->
+        {ok, ChildKPs, GuideAcc3, Bt2} = guided_purge(Bt, NodeState, GuideFun, GuideAcc2),
+        kp_guided_purge(Bt2, Rest, GuideFun, GuideAcc3, lists:reverse(ChildKPs, ResultNode))
     end.

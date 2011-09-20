@@ -41,6 +41,7 @@ EXTRA_DIST = \
     020-btree-basics.t \
     021-btree-reductions.t \
     022-btree-copy.t \
+    023-btree-guided-purge.t \
     030-doc-from-json.t \
     031-doc-to-json.t \
     040-util.t \
