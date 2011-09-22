@@ -580,7 +580,7 @@ fold_replication_logs([Db | Rest] = Dbs, Vsn, LogId, NewId, Rep, Acc) ->
             ?l2b(?LOCAL_DOC_PREFIX ++ OldRepId), NewId, Rep, Acc);
     {error, <<"not_found">>} ->
         fold_replication_logs(
-            Rest, ?REP_ID_VERSION, NewId, NewId, Rep, [#doc{id = NewId} | Acc]);
+            Rest, ?REP_ID_VERSION, NewId, NewId, Rep, [#doc{id = NewId, body = {[]}} | Acc]);
     {ok, Doc} when LogId =:= NewId ->
         fold_replication_logs(
             Rest, ?REP_ID_VERSION, NewId, NewId, Rep, [Doc | Acc]);

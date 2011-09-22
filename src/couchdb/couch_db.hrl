@@ -103,7 +103,7 @@
     revs = {0, []},
 
     % the json body object.
-    body = {[]},
+    body = <<"{}">>,
 
     atts = [], % attachments
 

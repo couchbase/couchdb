@@ -27,6 +27,7 @@
 -export([reorder_results/2]).
 -export([url_strip_password/1]).
 -export([encode_doc_id/1]).
+-export([brace/1, debrace/1]).
 
 -include("couch_db.hrl").
 
@@ -429,3 +430,12 @@ encode_doc_id(<<"_local/", Rest/binary>>) ->
     "_local/" ++ url_encode(Rest);
 encode_doc_id(Id) ->
     url_encode(Id).
+
+debrace(IoList) ->
+    JsonBinary = iolist_to_binary(IoList),
+    InnerSize = size(JsonBinary) - 2,
+    <<"{", Inner:InnerSize/binary, "}">> = JsonBinary,
+    Inner.
+
+brace(JsonBinary) ->
+    iolist_to_binary(["{", JsonBinary, "}"]).

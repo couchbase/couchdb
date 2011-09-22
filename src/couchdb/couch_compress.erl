@@ -77,6 +77,8 @@ is_compressed(<<?SNAPPY_PREFIX, _/binary>>) ->
     true;
 is_compressed(<<?TERM_PREFIX, _/binary>>) ->
     true;
+is_compressed(<<"{", _/binary>>) ->
+    false;
 is_compressed(Term) when not is_binary(Term) ->
     false.
 

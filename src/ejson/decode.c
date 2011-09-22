@@ -25,7 +25,14 @@ typedef struct {
     ErlNifEnv* env;
 } decode_ctx;
 
+typedef struct {
+    unsigned int depth;
+    ErlNifBinary private;
+} validate_ctx;
+
 #define ENV(ctxarg) (((decode_ctx*)ctxarg)->env)
+#define DEPTH(ctxarg) (((validate_ctx*)ctxarg)->depth)
+#define PRIV_CHARS(ctxarg) (((validate_ctx*)ctxarg)->private)
 
 #define CONTINUE 1
 #define CANCEL 0
@@ -205,6 +212,67 @@ decoder_callbacks = {
     decode_end_array
 };
 
+
+static int
+validate_start_array(void* ctx)
+{
+    DEPTH(ctx)++;
+    return CONTINUE;
+}
+
+
+static int
+validate_end_array(void* ctx)
+{
+    DEPTH(ctx)--;
+    return CONTINUE;
+}
+
+
+static int
+validate_start_map(void* ctx)
+{
+    DEPTH(ctx)++;
+    return CONTINUE;
+}
+
+
+static int
+validate_end_map(void* ctx)
+{
+    DEPTH(ctx)--;
+    return CONTINUE;
+}
+
+
+static int
+validate_map_key(void* ctx, const unsigned char* data, unsigned int size)
+{
+    if(size == 0) return CONTINUE;
+    if(DEPTH(ctx) != 1) return CONTINUE;
+    int i = PRIV_CHARS(ctx).size;
+    while(i--)
+    {
+        if(data[0] == PRIV_CHARS(ctx).data[i])
+            return CANCEL;
+    }
+    return CONTINUE;
+}
+
+static yajl_callbacks
+validate_callbacks = {
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    validate_start_map,
+    validate_map_key,
+    validate_end_map,
+    validate_start_array,
+};
+
 static int
 check_rest(unsigned char* data, unsigned int size, unsigned int used)
 {
@@ -224,6 +292,73 @@ check_rest(unsigned char* data, unsigned int size, unsigned int used)
     }
 
     return CONTINUE;
+}
+
+ERL_NIF_TERM
+validate_doc(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+{
+    validate_ctx ctx;
+    ctx.depth = 0;
+    yajl_parser_config conf = {0, 1};
+    yajl_handle handle = yajl_alloc(&validate_callbacks, &conf, NULL, &ctx);
+    yajl_status status;
+    ErlNifBinary json;
+    ErlNifBinary private;
+    ERL_NIF_TERM ret;
+
+    if(!enif_inspect_iolist_as_binary(env, argv[0], &json))
+    {
+        ret = enif_make_badarg(env);
+        goto done;
+    }
+
+    if(!enif_inspect_iolist_as_binary(env, argv[1], &ctx.private))
+    {
+        ret = enif_make_badarg(env);
+        goto done;
+    }
+
+    status = yajl_parse(handle, json.data, json.size);
+
+    if(status == yajl_status_insufficient_data && handle->bytesConsumed == json.size)
+    {
+        status = yajl_parse_complete(handle);
+    }
+
+    if(status == yajl_status_ok)
+    {
+        if(handle->bytesConsumed != json.size && check_rest(json.data, json.size, handle->bytesConsumed) == CANCEL)
+        {
+            ret = enif_make_tuple(env, 2,
+                enif_make_atom(env, "error"),
+                enif_make_atom(env, "garbage_after_value")
+            );
+        }
+        else
+        {
+            ret = enif_make_atom(env, "ok");
+        }
+    }
+    else
+    {
+        if(status == yajl_status_client_canceled)
+        {
+            ret = enif_make_tuple(env, 2,
+                    enif_make_atom(env, "error"),
+                    enif_make_atom(env, "private_field_set")
+            );
+            goto done;
+        }
+
+        ret = enif_make_tuple(env, 2,
+                enif_make_atom(env, "error"),
+                enif_make_atom(env, "invalid_json")
+        );
+    }
+
+done:
+    if(handle != NULL) yajl_free(handle);
+    return ret;
 }
 
 ERL_NIF_TERM

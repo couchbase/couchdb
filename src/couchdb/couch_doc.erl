@@ -31,10 +31,15 @@ to_json_rev(0, []) ->
 to_json_rev(Start, [FirstRevId|_]) ->
     [{<<"_rev">>, ?l2b([integer_to_list(Start),"-",revid_to_str(FirstRevId)])}].
 
-to_json_body(true, {Body}) ->
-    Body ++ [{<<"_deleted">>, true}];
-to_json_body(false, {Body}) ->
-    Body.
+to_ejson_body(true, {Body}) ->
+    to_ejson_body(false, {Body}) ++ [{<<"_deleted">>, true}];
+to_ejson_body(false, {Body}) ->
+    Body;
+to_ejson_body(false, <<"{}">>) ->
+    [];
+to_ejson_body(false, Body) when is_binary(Body) ->
+    {R} = ?JSON_DECODE(Body),
+    R.
 
 to_json_revisions(Options, Start, RevIds) ->
     case lists:member(revs, Options) of
@@ -136,7 +141,7 @@ doc_to_json_obj(#doc{id=Id,deleted=Del,body=Body,revs={Start, RevIds},
             meta=Meta}=Doc,Options)->
     {[{<<"_id">>, Id}]
         ++ to_json_rev(Start, RevIds)
-        ++ to_json_body(Del, Body)
+        ++ to_ejson_body(Del, Body)
         ++ to_json_revisions(Options, Start, RevIds)
         ++ to_json_meta(Meta)
         ++ to_json_attachments(Doc#doc.atts, Options)
@@ -570,8 +575,17 @@ abort_multi_part_stream(Parser, MonRef) ->
         erlang:demonitor(MonRef, [flush])
     end.
 
+with_ejson_body(Doc) ->
+    Uncompressed = with_uncompressed_body(Doc),
+    #doc{body = Body} = Uncompressed,
+    Uncompressed#doc{body = {to_ejson_body(false, Body)}}.
 
-with_ejson_body(#doc{body = Body} = Doc) when is_binary(Body) ->
-    Doc#doc{body = couch_compress:decompress(Body)};
-with_ejson_body(#doc{body = {_}} = Doc) ->
+with_uncompressed_body(#doc{body = Body} = Doc) when is_binary(Body) ->
+    case couch_compress:is_compressed(Body) of
+        true ->
+            Doc#doc{body = couch_compress:decompress(Body)};
+        false ->
+            Doc
+    end;
+with_uncompressed_body(#doc{body = {_}} = Doc) ->
     Doc.

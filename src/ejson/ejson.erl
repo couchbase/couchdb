@@ -11,7 +11,7 @@
 % the License.
 
 -module(ejson).
--export([encode/1, decode/1]).
+-export([encode/1, decode/1, validate/2]).
 -on_load(init/0).
 
 init() ->
@@ -163,4 +163,7 @@ reverse_tokens(_) ->
     exit(ejson_nif_not_loaded).
 
 final_encode(_) ->
+    exit(ejson_nif_not_loaded).
+
+validate(_, _) ->
     exit(ejson_nif_not_loaded).
