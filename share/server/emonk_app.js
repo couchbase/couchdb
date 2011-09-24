@@ -18,6 +18,7 @@ var finished = false;
 var start_resp = {};
 var row = null;
 var chunks = [];
+var view_did_emit = false;
 
 //
 // Erlang Functions
@@ -125,6 +126,21 @@ var filter_docs = function(fname, docs, req) {
   }
 };
 
+var filter_view = function(vname, docs) {
+  try {
+    var func = get_func(["views", vname, "map"]);
+    var results = [];
+    for(var i = 0; i < docs.length; i++) {
+      view_did_emit = false;
+      func.apply(ddoc, [docs[i]]);
+      results.push(view_did_emit);
+    }
+    return results;
+  } catch(e) {
+    return handleError(e);
+  }
+};
+
 //
 // Sandbox Functions
 //
@@ -142,6 +158,7 @@ var init_sandbox = function() {
     sandbox.getRow = getRow;
     sandbox.require = require;
     sandbox.isArray = isArray;
+    sandbox.emit = emit;
   } catch(e) {
     throw(e);
   }
@@ -197,6 +214,10 @@ var getRow = function() {
   }
 
   return row[1];
+};
+
+var emit = function() {
+  view_did_emit = true;
 };
 
 //

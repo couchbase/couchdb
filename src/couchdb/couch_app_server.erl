@@ -12,7 +12,7 @@
 
 -module(couch_app_server).
 
--export([show_doc/5, validate_update/5, filter_docs/5]).
+-export([show_doc/5, validate_update/5, filter_docs/5, filter_view/3]).
 -export([list_view/2, list_start/5, list_row/5, list_end/1, update_doc/5]).
 
 -include("couch_db.hrl").
@@ -62,6 +62,12 @@ filter_docs(Req, Db, DDoc, FilterName, Docs) ->
     Docs2 = [couch_util:json_doc(Doc) || Doc <- Docs],
     with_server(DDoc, fun({Module, Server, DDocId}) ->
         Module:filter_docs(Server, DDocId, FilterName, Docs2, json_req(Req, Db))
+    end).
+
+filter_view(DDoc, ViewName, Docs) ->
+    Docs2 = [couch_util:json_doc(Doc) || Doc <- Docs],
+    with_server(DDoc, fun({Module, Server, DDocId}) ->
+        Module:filter_view(Server, DDocId, ViewName, Docs2)
     end).
 
 % Private API

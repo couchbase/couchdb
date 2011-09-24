@@ -204,7 +204,7 @@ filter_view(ViewName, Style, Db) ->
                 Docs = [Doc || {ok, Doc} <- [
                         couch_db:open_doc(Db2, DocInfo2, [deleted, conflicts])
                             || DocInfo2 <- DocInfos]],
-                {ok, Passes} = couch_query_servers:filter_view(
+                {ok, Passes} = couch_app_server:filter_view(
                     DDoc, VName, Docs
                 ),
                 [{[{<<"rev">>, couch_doc:rev_to_str({RevPos,RevId})}]}

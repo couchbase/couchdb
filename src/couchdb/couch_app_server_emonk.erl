@@ -13,7 +13,7 @@
 -module(couch_app_server_emonk).
 
 -export([get_server/3, ret_server/1]).
--export([show_doc/5, validate_update/6, filter_docs/5]).
+-export([show_doc/5, validate_update/6, filter_docs/5, filter_view/4]).
 -export([list_start/5, list_row/3, list_end/2, update_doc/5]).
 
 -include("couch_db.hrl").
@@ -61,6 +61,10 @@ validate_update(Ctx, _DDocId, EditDoc, DiskDoc, Context, SecObj) ->
 
 filter_docs(Ctx, _DDocId, FilterName, Docs, Req) ->
     {ok, Passes} = do_call(Ctx, <<"filter_docs">>, [FilterName, Docs, Req]),
+    {ok, Passes}.
+
+filter_view(Ctx, _DDocId, ViewName, Docs) ->
+    {ok, Passes} = do_call(Ctx, <<"filter_view">>, [ViewName, Docs]),
     {ok, Passes}.
 
 do_call(Ctx, FName, Args) ->

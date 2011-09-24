@@ -41,7 +41,7 @@
 -behaviour(gen_server).
 
 -export([get_server/3, ret_server/1]).
--export([show_doc/5, validate_update/6, filter_docs/5]).
+-export([show_doc/5, validate_update/6, filter_docs/5, filter_view/4]).
 -export([list_start/5, list_row/3, list_end/2, update_doc/5]).
 
 -export([init/1, terminate/2, code_change/3]).
@@ -99,6 +99,11 @@ validate_update(Pid, DDocId, EditDoc, DiskDoc, Context, SecObj) ->
 
 filter_docs(Pid, DDocId, FilterName, Docs, Req) ->
     Data = [<<"ddoc">>, DDocId, [<<"filters">>, FilterName], [Docs, Req]],
+    [true, Passes] = gen_server:call(Pid, {prompt, Data}),
+    {ok, Passes}.
+
+filter_view(Pid, DDocId, ViewName, Docs) ->
+    Data = [<<"ddoc">>, DDocId, [<<"views">>, ViewName, <<"map">>], [Docs]],
     [true, Passes] = gen_server:call(Pid, {prompt, Data}),
     {ok, Passes}.
 
