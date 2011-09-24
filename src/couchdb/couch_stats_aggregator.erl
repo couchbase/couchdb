@@ -37,7 +37,7 @@
 start() ->
     PrivDir = couch_util:priv_dir(),
     start(filename:join(PrivDir, "stat_descriptions.cfg")).
-    
+
 start(FileName) ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [FileName], []).
 
@@ -58,12 +58,12 @@ all(Time) when is_integer(Time) ->
             {[]};
         _ ->
             Ret = lists:foldl(fun({{Mod, Key}, Agg}, Acc) ->
-                CurrKeys = case proplists:lookup(Mod, Acc) of
-                    none -> [];
-                    {Mod, {Keys}} -> Keys
+                CurrKeys = case couch_util:get_value(Mod, Acc) of
+                    undefined -> [];
+                    {Keys} -> Keys
                 end,
                 NewMod = {[{Key, to_json_term(Agg)} | CurrKeys]},
-                [{Mod, NewMod} | proplists:delete(Mod, Acc)]
+                [{Mod, NewMod} | lists:keydelete(Mod, 1, Acc)]
             end, [], Stats),
             {Ret}
     end.
@@ -104,17 +104,17 @@ init(StatDescsFileName) ->
             ets:insert(?MODULE, {{{Sect, Key}, Secs}, Agg})
         end, Samples)
     end, Descs),
-    
+
     Self = self(),
     ok = couch_config:register(
         fun("stats", _) -> exit(Self, config_change) end
     ),
-    
+
     Rate = list_to_integer(couch_config:get("stats", "rate", "1000")),
     % TODO: Add timer_start to kernel start options.
     {ok, TRef} = timer:apply_after(Rate, ?MODULE, collect_sample, []),
     {ok, {TRef, Rate}}.
-    
+
 terminate(_Reason, {TRef, _Rate}) ->
     timer:cancel(TRef),
     ok.
@@ -137,14 +137,14 @@ handle_call(collect_sample, _, {OldTRef, SampleInterval}) ->
         end, {0, 0}, Values2),
         {Key, {absolute, Mean}}
     end, couch_stats_collector:all(absolute)),
-    
+
     Values = Incs ++ Abs,
     Now = erlang:now(),
     lists:foreach(fun({{Key, Rate}, Agg}) ->
-        NewAgg = case proplists:lookup(Key, Values) of
-            none ->
+        NewAgg = case couch_util:get_value(Key, Values) of
+            undefined ->
                 rem_values(Now, Agg);
-            {Key, {Type, Value}} ->
+            {Type, Value} ->
                 NewValue = new_value(Type, Value, Agg#aggregate.current),
                 Agg2 = add_value(Now, NewValue, Agg),
                 rem_values(Now, Agg2)
@@ -195,7 +195,7 @@ add_value(Time, Value, Agg) ->
         variance=Variance,
         samples=Samples
     } = Agg,
-    
+
     NewCount = Count + 1,
     NewMean = Mean + (Value - Mean) / NewCount,
     NewVariance = Variance + (Value - Mean) * (Value - NewMean),
@@ -219,16 +219,21 @@ add_value(Time, Value, Agg) ->
     end.
 
 rem_values(Time, Agg) ->
-    Seconds = Agg#aggregate.seconds,
+    MicroSeconds = Agg#aggregate.seconds * 1000000,
     Samples = Agg#aggregate.samples,
-    Pred = fun({When, _Value}) ->
-        timer:now_diff(Time, When) =< (Seconds * 1000000)
-    end,
-    {Keep, Remove} = lists:splitwith(Pred, Samples),
-    Agg2 = lists:foldl(fun({_, Value}, Acc) ->
-        rem_value(Value, Acc)
-    end, Agg, Remove),
-    Agg2#aggregate{samples=Keep}.
+
+    rem_value(Samples, Time, MicroSeconds, Agg, []).
+
+rem_value([], _Time, _MicroSeconds, Aggregate, Keep) ->
+    Aggregate#aggregate{samples = Keep};
+rem_value([{When, Value} | Rest], Time, MicroSeconds, Aggregate, Keep) ->
+    case timer:now_diff(Time, When) =< MicroSeconds of
+        true ->
+            rem_value(Rest, Time, MicroSeconds, Aggregate, [{When, Value} | Keep]);
+        false ->
+            NewAggregate = rem_value(Value, Aggregate),
+            rem_value(Rest, Time, MicroSeconds, NewAggregate, Keep)
+    end.
 
 rem_value(_Value, #aggregate{count=Count, seconds=Secs}) when Count =< 1 ->
     #aggregate{seconds=Secs};
