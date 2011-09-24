@@ -307,10 +307,10 @@ var get_func = function(path) {
   curr = ddoc;
   comp = compiled;
   for(var i = 0; i < path.length-1; i++) {
-    if(!ddoc[path[i]]) {
+    if(!curr[path[i]]) {
       throw(["error", "not_found", "Missing function: " + path.join(".")]);
     }
-    curr = ddoc[path[i]];
+    curr = curr[path[i]];
     comp[path[i]] = comp[path[i]] || {};
     comp = comp[path[i]];
   }
