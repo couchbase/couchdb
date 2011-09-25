@@ -762,7 +762,7 @@ stream_kv_node2(Bt, Reds, PrevKVs, [{K,V} | RestKVs], InRange, Dir, Fun, Acc) ->
 
 guided_purge(#btree{root = Root} = Bt, GuideFun, GuideAcc0) ->
     % inspired by query_modify/4
-    {ok, KeyPointers, FinalGuideAcc, Bt2} = guided_purge(Bt, Root, GuideFun, GuideAcc0),
+    {ok, KeyPointers, FinalGuideAcc, Bt2, _Go} = guided_purge(Bt, Root, GuideFun, GuideAcc0),
     {ok, NewRoot, Bt3} = complete_root(Bt2, KeyPointers),
     {ok, Bt3#btree{root = NewRoot}, FinalGuideAcc}.
 
@@ -777,7 +777,7 @@ guided_purge(Bt, NodeState, GuideFun, GuideAcc) ->
         Pointer = element(1, NodeState),
         {NodeType, NodeList} = get_node(Bt, Pointer)
     end,
-    {ok, NewNodeList, GuideAcc2, Bt2} =
+    {ok, NewNodeList, GuideAcc2, Bt2, Go} =
     case NodeType of
     kp_node ->
         kp_guided_purge(Bt, NodeList, GuideFun, GuideAcc);
@@ -786,13 +786,13 @@ guided_purge(Bt, NodeState, GuideFun, GuideAcc) ->
     end,
     case NewNodeList of
     [] ->  % no nodes remain
-        {ok, [], GuideAcc2, Bt2};
+        {ok, [], GuideAcc2, Bt2, Go};
     NodeList ->  % nothing changed
         {LastKey, _LastValue} = lists:last(NodeList),
-        {ok, [{LastKey, NodeState}], GuideAcc2, Bt2};
+        {ok, [{LastKey, NodeState}], GuideAcc2, Bt2, Go};
     _ ->
         {ok, ResultList, Bt3} = write_node(Bt2, NodeType, NewNodeList),
-        {ok, ResultList, GuideAcc2, Bt3}
+        {ok, ResultList, GuideAcc2, Bt3, Go}
     end.
 
 
@@ -800,13 +800,13 @@ kv_guided_purge(Bt, KvList, GuideFun, GuideAcc) ->
     kv_guided_purge(Bt, KvList, GuideFun, GuideAcc, []).
 
 kv_guided_purge(Bt, [], _GuideFun, GuideAcc, ResultKvList) ->
-    {ok, lists:reverse(ResultKvList), GuideAcc, Bt};
+    {ok, lists:reverse(ResultKvList), GuideAcc, Bt, ok};
 
 kv_guided_purge(Bt, [{Key, Value} | Rest] = KvList, GuideFun, GuideAcc, ResultKvList) ->
     AssembledKv = assemble(Bt, Key, Value),
     case GuideFun(value, AssembledKv, GuideAcc) of
     {stop, GuideAcc2} ->
-        {ok, lists:reverse(ResultKvList, KvList), GuideAcc2, Bt};
+        {ok, lists:reverse(ResultKvList, KvList), GuideAcc2, Bt, stop};
     {purge, GuideAcc2} ->
         kv_guided_purge(Bt, Rest, GuideFun, GuideAcc2, ResultKvList);
     {keep, GuideAcc2} ->
@@ -818,17 +818,22 @@ kp_guided_purge(Bt, NodeList, GuideFun, GuideAcc) ->
     kp_guided_purge(Bt, NodeList, GuideFun, GuideAcc, []).
 
 kp_guided_purge(Bt, [], _GuideFun, GuideAcc, ResultNode) ->
-    {ok, lists:reverse(ResultNode), GuideAcc, Bt};
+    {ok, lists:reverse(ResultNode), GuideAcc, Bt, ok};
 
 kp_guided_purge(Bt, [{Key, NodeState} | Rest] = KpList, GuideFun, GuideAcc, ResultNode) ->
     case GuideFun(branch, element(2, NodeState), GuideAcc) of
     {stop, GuideAcc2} ->
-        {ok, lists:reverse(ResultNode, KpList), GuideAcc2, Bt};
+        {ok, lists:reverse(ResultNode, KpList), GuideAcc2, Bt, stop};
     {keep, GuideAcc2} ->
         kp_guided_purge(Bt, Rest, GuideFun, GuideAcc2, [{Key, NodeState} | ResultNode]);
     {purge, GuideAcc2} ->
         kp_guided_purge(Bt, Rest, GuideFun, GuideAcc2, ResultNode);
     {partial_purge, GuideAcc2} ->
-        {ok, ChildKPs, GuideAcc3, Bt2} = guided_purge(Bt, NodeState, GuideFun, GuideAcc2),
-        kp_guided_purge(Bt2, Rest, GuideFun, GuideAcc3, lists:reverse(ChildKPs, ResultNode))
+        {ok, ChildKPs, GuideAcc3, Bt2, Go} = guided_purge(Bt, NodeState, GuideFun, GuideAcc2),
+        case Go of
+        ok ->
+            kp_guided_purge(Bt2, Rest, GuideFun, GuideAcc3, lists:reverse(ChildKPs, ResultNode));
+        stop ->
+            {ok, lists:reverse(ChildKPs, ResultNode) ++ Rest, GuideAcc3, Bt2, stop}
+        end
     end.
