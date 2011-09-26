@@ -147,3 +147,17 @@ distsign: distcheck check
 	    > $(top_srcdir)/$(distdir).tar.gz.md5
 	sha1sum $(top_srcdir)/$(distdir).tar.gz \
 	    > $(top_srcdir)/$(distdir).tar.gz.sha
+
+COUCHDB_PLT ?= couchdb.plt
+
+$(COUCHDB_PLT):
+	$(MAKE) all
+	dialyzer --output_plt $(COUCHDB_PLT) --build_plt -pa src/couchdb --apps compiler crypto erts inets kernel os_mon sasl ssl stdlib xmerl syntax_tools public_key snmp tools hipe runtime_tools mnesia -c src/erlang-oauth src/etap src/ibrowse src/mochiweb src/snappy
+
+.PHONY: rebuild_plt
+rebuild_plt:
+	rm $(COUCHDB_PLT)
+	$(MAKE) $(COUCHDB_PLT)
+
+dialyzer: all $(COUCHDB_PLT)
+	dialyzer --plt $(COUCHDB_PLT)  -pa src/couchdb -c src/couchdb
