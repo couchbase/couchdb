@@ -447,19 +447,24 @@ open_temp_group(DbName, Language, DesignOptions, MapSrc, RedSrc) ->
         Error
     end.
 
-set_view_sig(#group{
-            views=Views,
+set_view_sig(#group{def_lang=Lang}=G) ->
+    ViewInfo = lists:map(fun(V) ->
+        case couch_view_server:add_view_deps(Lang, V) of
+            V -> old_view_format(V); % Unchanged
+            Else -> Else
+        end
+    end, G#group.views),
+    set_view_sig(ViewInfo, G).
+
+set_view_sig(ViewInfo, #group{
             lib={[]},
             def_lang=Language,
             design_options=DesignOptions}=G) ->
-    ViewInfo = [old_view_format(V) || V <- Views],
     G#group{sig=couch_util:md5(term_to_binary({ViewInfo, Language, DesignOptions}))};
-set_view_sig(#group{
-            views=Views,
+set_view_sig(ViewInfo, #group{
             lib=Lib,
             def_lang=Language,
             design_options=DesignOptions}=G) ->
-    ViewInfo = [old_view_format(V) || V <- Views],
     G#group{sig=couch_util:md5(term_to_binary({ViewInfo, Language, DesignOptions, sort_lib(Lib)}))}.
 
 % Use the old view record format so group sig's don't change

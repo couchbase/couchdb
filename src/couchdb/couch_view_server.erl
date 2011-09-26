@@ -12,7 +12,7 @@
 
 -module(couch_view_server).
 
--export([is_lightweight/1]).
+-export([is_lightweight/1, add_view_deps/2]).
 -export([get_server/3, ret_server/1]).
 -export([map/2, reduce/4, rereduce/4]).
 
@@ -49,6 +49,15 @@ ret_server(nil) ->
     ok;
 ret_server({Module, Server}) ->
     Module:ret_server(Server).
+
+
+% Concrete view servers can just return their argument, if the
+% results only depends on the code in the view. Or they can have
+% language-specific behavior, such as introspecing a runtime
+% function (Obj-C), or normalizing whitespace (e.g. JavaScript).
+add_view_deps(Lang, View) ->
+    {Module, _} = get_module_arg(Lang),
+    Module:add_view_deps(View).
 
 
 map({Module, Server}, Docs) ->

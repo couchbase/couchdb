@@ -37,7 +37,7 @@
 % to help simplify your view code.
 -module(couch_view_server_erlang).
 
--export([is_lightweight/0]).
+-export([is_lightweight/0, add_view_deps/1]).
 -export([get_server/3, ret_server/1]).
 -export([map/2, reduce/3, rereduce/3]).
 
@@ -45,6 +45,9 @@
 
 is_lightweight() ->
     true.
+
+add_view_deps(View) ->
+    View.
 
 get_server(_Arg, Maps, Reds) ->
     MapFuns = [compile(map, MapSrc) || MapSrc <- Maps],
