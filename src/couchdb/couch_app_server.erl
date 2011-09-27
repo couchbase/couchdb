@@ -13,14 +13,14 @@
 -module(couch_app_server).
 
 -export([show_doc/5, validate_update/5, filter_docs/5]).
--export([list_view/2, list_start/5, list_row/4, list_end/1, update_doc/5]).
+-export([list_view/2, list_start/5, list_row/5, list_end/1, update_doc/5]).
 
 -include("couch_db.hrl").
 
 show_doc(Req, Db, DDoc, ShowName, Doc) ->
     {Req2, Doc2} = mk_json(Req, Db, Doc),
     with_server(DDoc, fun({Module, Server, DDocId}) ->
-        Module:show_doc(Server, DDocId, ShowName, Doc2, Req2) 
+        Module:show_doc(Server, DDocId, ShowName, Doc2, Req2)
     end).
 
 list_view(DDoc, Fun) ->
@@ -29,10 +29,10 @@ list_view(DDoc, Fun) ->
 list_start({Module, Server, DDocId}, Req, Db, ListName, Head) ->
     Module:list_start(Server, DDocId, ListName, Head, json_req(Req, Db)).
 
-list_row({Module, Server, DDocId}, Db, {{_, _}, _} = Row, IncludeDoc) ->
-    JsonRow = couch_httpd_view:view_row_obj(Db, Row, IncludeDoc),
+list_row({Module, Server, DDocId}, Db, {{_, _}, _} = Row, IncludeDoc, Conflicts) ->
+    JsonRow = couch_httpd_view:view_row_obj(Db, Row, IncludeDoc, Conflicts),
     Module:list_row(Server, DDocId, JsonRow);
-list_row({Module, Server, DDocId}, _Db, {Key, Value}, _IncludeDoc) ->
+list_row({Module, Server, DDocId}, _Db, {Key, Value}, _IncludeDoc, _Conflicts) ->
     JsonRow = {[{key, Key}, {value, Value}]},
     Module:list_row(Server, DDocId, JsonRow).
 
