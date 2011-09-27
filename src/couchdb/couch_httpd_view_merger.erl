@@ -220,7 +220,9 @@ flush_rows(Resp, RowsRev) ->
 
 validate_views_param({[_ | _] = Views}) ->
     lists:flatten(lists:map(
-        fun({DbName, ViewName}) when is_binary(ViewName) ->
+        fun ({<<"sets">>, SetsSpec}) ->
+            validate_sets_param(SetsSpec);
+        ({DbName, ViewName}) when is_binary(ViewName) ->
             {DDocDbName, DDocId, Vn} = parse_view_name(ViewName),
             #simple_view_spec{
                 database = DbName, ddoc_id = DDocId, view_name = Vn,
@@ -230,9 +232,10 @@ validate_views_param({[_ | _] = Views}) ->
             lists:map(
                 fun(ViewName) ->
                     {DDocDbName, DDocId, Vn} = parse_view_name(ViewName),
+
                     #simple_view_spec{
-                        database = DbName, ddoc_id = DDocId, view_name = Vn,
-                        ddoc_database = DDocDbName
+                        database = DbName, ddoc_id = DDocId,
+                        view_name = Vn, ddoc_database = DDocDbName
                     }
                 end, ViewNames);
         ({MergeUrl, {[_ | _] = Props} = EJson}) ->
@@ -253,7 +256,10 @@ validate_views_param({[_ | _] = Views}) ->
             {[_ | _]} = SubViews ->
                 SubViewSpecs = validate_views_param(SubViews),
                 case lists:any(
-                    fun(#simple_view_spec{}) -> true; (_) -> false end,
+                    fun(#simple_view_spec{}) -> true;
+                       (#set_view_spec{}) -> true;
+                       (_) -> false
+                    end,
                     SubViewSpecs) of
                 true ->
                     ok;
@@ -274,6 +280,55 @@ validate_views_param({[_ | _] = Views}) ->
         end, Views));
 
 validate_views_param(_) ->
+    throw({bad_request, <<"`views` parameter must be an object with at ",
+                          "least 1 property.">>}).
+
+validate_sets_param({[_ | _] = Sets}) ->
+    lists:map(
+        fun ({SetName, {[_|_] = Props}}) ->
+            ViewName = get_value(<<"view">>, Props),
+            Partitions = get_value(<<"partitions">>, Props),
+
+            case ViewName =:= undefined orelse Partitions =:= undefined of
+            true ->
+                Msg0 = io_lib:format(
+                    "Set view specification for `~s` misses "
+                    "`partitions` and/or `view` properties", [SetName]),
+                throw({bad_request, Msg0});
+            false ->
+                ok
+            end,
+
+            {DDocDbName, DDocId, Vn} = parse_view_name(ViewName),
+            case DDocDbName =/= nil orelse DDocId =:= nil of
+            true ->
+                Msg1 = io_lib:format(
+                    "Invalid `viewname` property for `~s` set view. "
+                    "Design document id and view name must specified.",
+                         [SetName]),
+                throw({bad_request, Msg1});
+            false ->
+                ok
+            end,
+            case not(is_list(Partitions)) orelse
+                lists:any(fun (X) -> not(is_integer(X)) end, Partitions) of
+            true ->
+                Msg2 = io_lib:format(
+                    "Invalid `partitions` property for `~s` set view",
+                    [SetName]),
+                throw({bad_request, Msg2});
+            false ->
+                ok
+            end,
+
+            #set_view_spec{
+                name = SetName,
+                ddoc_id = DDocId, view_name = Vn, partitions = Partitions
+            };
+        (_) ->
+            throw({bad_request, "Invalid set view merge definition object."})
+        end, Sets);
+validate_sets_param(_) ->
     throw({bad_request, <<"`views` parameter must be an object with at ",
                           "least 1 property.">>}).
 

@@ -26,3 +26,6 @@ echo "Running set view test compaction_transitions.py\n"
 
 echo "Running set view test filter_partitions.py\n"
 ./filter_partitions.py
+
+echo "Running set view test view_merge.py\n"
+./view_merge.py

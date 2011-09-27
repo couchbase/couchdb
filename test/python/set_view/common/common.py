@@ -40,6 +40,7 @@ def partition_update_seq(params, partition):
 
 
 def populate(params, make_doc = lambda i: {"_id": str(i), "integer": i, "string": str(i)}):
+    start = params.get("start_id", 0)
     server = params["server"]
     dbs = []
     for i in xrange(0, params["nparts"]):
@@ -51,7 +52,7 @@ def populate(params, make_doc = lambda i: {"_id": str(i), "integer": i, "string"
     for i in xrange(len(dbs)):
         docs = []
         for j in xrange(i + 1, params["ndocs"] + 1, params["nparts"]):
-            docs.append(make_doc(j))
+            docs.append(make_doc(start + j))
 
         conn = httplib.HTTPConnection(params["host"])
         conn.request(
