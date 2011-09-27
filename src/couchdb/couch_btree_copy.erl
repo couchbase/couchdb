@@ -22,6 +22,7 @@
     btree,
     fd,
     before_kv_write = {fun(Item, Acc) -> {Item, Acc} end, []},
+    filter = fun(_) -> true end,
     compression = ?DEFAULT_COMPRESSION,
     nodes = dict:from_list([{1, []}]),
     cur_level = 1,
@@ -50,6 +51,8 @@ apply_options([], Acc) ->
     Acc;
 apply_options([{before_kv_write, {Fun, UserAcc}} | Rest], Acc) ->
     apply_options(Rest, Acc#acc{before_kv_write = {Fun, UserAcc}});
+apply_options([{filter, Fun} | Rest], Acc) ->
+    apply_options(Rest, Acc#acc{filter = Fun});
 apply_options([override | Rest], Acc) ->
     apply_options(Rest, Acc);
 apply_options([{compression, Comp} | Rest], Acc) ->
@@ -97,18 +100,23 @@ write_kp_node(#acc{fd = Fd, btree = Bt, compression = Comp}, NodeList) ->
     {ok, {Pos, Red, ChildrenSize + Size}}.
 
 
-fold_copy(Item, _Reds, #acc{nodes = Nodes, cur_level = 1} = Acc) ->
-    {K, V} = extract(Acc, Item),
-    LevelNode = dict:fetch(1, Nodes),
-    LevelNodes2 = [{K, V} | LevelNode],
-    NextAcc = case ?term_size(LevelNodes2) >= ?CHUNK_THRESHOLD of
-    true ->
-        {LeafState, Acc2} = flush_leaf(LevelNodes2, Acc),
-        bubble_up({K, LeafState}, Acc2);
+fold_copy(Item, _Reds, #acc{nodes = Nodes, cur_level = 1, filter = Filter} = Acc) ->
+    case Filter(Item) of
     false ->
-        Acc#acc{nodes = dict:store(1, LevelNodes2, Nodes)}
-    end,
-    {ok, NextAcc}.
+        {ok, Acc};
+    true ->
+        {K, V} = extract(Acc, Item),
+        LevelNode = dict:fetch(1, Nodes),
+        LevelNodes2 = [{K, V} | LevelNode],
+        NextAcc = case ?term_size(LevelNodes2) >= ?CHUNK_THRESHOLD of
+        true ->
+            {LeafState, Acc2} = flush_leaf(LevelNodes2, Acc),
+            bubble_up({K, LeafState}, Acc2);
+        false ->
+            Acc#acc{nodes = dict:store(1, LevelNodes2, Nodes)}
+        end,
+        {ok, NextAcc}
+    end.
 
 
 bubble_up({Key, NodeState}, #acc{cur_level = Level} = Acc) ->
