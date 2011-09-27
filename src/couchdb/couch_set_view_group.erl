@@ -288,7 +288,7 @@ handle_call({activate_partitions, Partitions}, _From, State) ->
 
 
 % {request_group, StaleType}
-handle_call({request_group, nil}, From,
+handle_call({request_group, false}, From,
         #group_state{
             updater_pid = UpPid,
             waiting_list = WaitList

@@ -224,7 +224,7 @@ reverse_key_default(?MAX_STR) -> ?MIN_STR;
 reverse_key_default(Key) -> Key.
 
 get_stale_type(Req) ->
-    list_to_existing_atom(couch_httpd:qs_value(Req, "stale", "nil")).
+    list_to_existing_atom(couch_httpd:qs_value(Req, "stale", "false")).
 
 get_reduce_type(Req) ->
     list_to_existing_atom(couch_httpd:qs_value(Req, "reduce", "true")).
