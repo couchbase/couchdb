@@ -536,6 +536,8 @@ to_path(#doc_update_info{revs={Start, RevIds}}=Doc) ->
     {Start - length(RevIds) + 1, Branch}.
 
 -spec to_branch(#doc_update_info{}, [RevId::binary()]) -> [branch()].
+to_branch(Doc, []) ->
+    [{0, Doc, []}];
 to_branch(Doc, [RevId]) ->
     [{RevId, Doc, []}];
 to_branch(Doc, [RevId | Rest]) ->
@@ -546,7 +548,8 @@ maybe_clobber(false, Tree, #doc_update_info{id = Id}, Client, Rev, _Limit) ->
     send_result(Client, Id, Rev, conflict),
     Tree;
 
-maybe_clobber(true, Tree, #doc_update_info{id = Id} = Doc, Client, Rev, Limit) ->
+maybe_clobber(true, Tree, #doc_update_info{id=Id, revs={0, []}}=Doc, Client,
+              Rev, Limit) ->
     {_, {LeafPos, RevIds} = WinPath} = couch_doc:to_doc_info_path(
         #full_doc_info{rev_tree = Tree}),
     NewRevId = new_revid(Doc, WinPath),
@@ -558,8 +561,10 @@ maybe_clobber(true, Tree, #doc_update_info{id = Id} = Doc, Client, Rev, Limit) -
     _ ->
         send_result(Client, Id, Rev, conflict),
         Tree
-    end.
+    end;
 
+maybe_clobber(true, _Tree, Doc, _Client, _Rev, _Limit) ->
+    [to_path(Doc)].
 
 % Used only when the clobber option is used on updates.
 new_revid(#doc_update_info{deleted = Del} = Doc, {OldPos, [OldRevId | _]}) ->
@@ -577,7 +582,13 @@ modify_full_doc_info(Db, Id, MergeConflicts, Clobber, OldDocInfo,
     #db{fd=Fd,revs_limit=Limit}=Db,
     #full_doc_info{id=Id,rev_tree=OldTree,deleted=OldDeleted} = OldDocInfo,
     NewRevTree = lists:foldl(
-        fun({Client, #doc_update_info{revs={Pos,[_Rev|PrevRevs]}}=NewDoc}, AccTree) ->
+        fun({Client, #doc_update_info{revs={Pos, RevIds}}=NewDoc}, AccTree) ->
+            case RevIds /= [] of
+            true ->
+                [_Rev|PrevRevs] = RevIds;
+            false ->
+                PrevRevs = []
+            end,
             if not MergeConflicts ->
                 case couch_key_tree:merge(AccTree, to_path(NewDoc),
                     Limit) of

@@ -83,7 +83,9 @@ test() ->
     DocCreateResult = couch_db:update_doc(Db, Doc1, []),
     ?etap_match(DocCreateResult, {ok, _}, "Created test document doc1"),
 
-    Doc2 = test_doc(<<"doc1">>, 2),
+    RevId2 = iolist_to_binary(
+        [integer_to_list(2), "-", "10000000000000000000000000000000"]),
+    Doc2 = test_doc(<<"doc1">>, 2, RevId2),
     DocUpdateResult2 = (catch couch_db:update_doc(Db, Doc2, [clobber])),
     ?etap_match(DocUpdateResult2, {ok, _}, "Updated test document doc1"),
 
@@ -97,7 +99,9 @@ test() ->
     {Props2} = couch_doc:to_json_obj(ReadDoc2, []),
     etap:is(2, couch_util:get_value(<<"value">>, Props2), "doc.value is 2"),
 
-    Doc3 = test_doc(<<"doc1">>, 3),
+    RevId3 = iolist_to_binary(
+        [integer_to_list(3), "-", "10000000000000000000000000000001"]),
+    Doc3 = test_doc(<<"doc1">>, 3, RevId3),
     DocUpdateResult3 = (catch couch_db:update_doc(Db, Doc3, [clobber])),
     ?etap_match(DocUpdateResult3, {ok, _}, "Updated test document doc1 again"),
 

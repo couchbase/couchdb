@@ -477,8 +477,15 @@ validate_doc_update(Db, Doc, GetDiskDocFun) ->
     end.
 
 
-prep_and_validate_update(Db, #doc{id=Id,revs={RevStart, Revs}}=Doc,
-        OldFullDocInfo, LeafRevsDict, AllowConflict) ->
+prep_and_validate_update(Db, #doc{id=Id,revs={RevStart0, Revs0}}=Doc,
+        OldFullDocInfo, LeafRevsDict, AllowConflict, Clobber) ->
+    case Clobber of
+    true ->
+        {RevStart, Revs} = {0, []};
+    false ->
+        {RevStart, Revs} = {RevStart0, Revs0}
+    end,
+
     case Revs of
     [PrevRev|_] ->
         case dict:find({RevStart, PrevRev}, LeafRevsDict) of
@@ -511,15 +518,21 @@ prep_and_validate_update(Db, #doc{id=Id,revs={RevStart, Revs}}=Doc,
 
 
 
-prep_and_validate_updates(_Db, [], [], _AllowConflict, AccPrepped,
+prep_and_validate_updates(_Db, [], [], _AllowConflict, _Clobber, AccPrepped,
         AccFatalErrors) ->
    {lists:reverse(AccPrepped), lists:reverse(AccFatalErrors)};
 prep_and_validate_updates(Db, [DocBucket|RestBuckets], [not_found|RestLookups],
-        AllowConflict, AccPrepped, AccErrors) ->
+        AllowConflict, Clobber, AccPrepped, AccErrors) ->
     [#doc{id=Id}|_]=DocBucket,
     % no existing revs are known,
     {PreppedBucket, AccErrors3} = lists:foldl(
-        fun(#doc{revs=Revs}=Doc, {AccBucket, AccErrors2}) ->
+        fun(#doc{revs=Revs0}=Doc, {AccBucket, AccErrors2}) ->
+            case Clobber of
+            true ->
+                Revs = {0, []};
+            false ->
+                Revs = Revs0
+            end,
             case couch_doc:has_stubs(Doc) of
             true ->
                 couch_doc:merge_stubs(Doc, #doc{}); % will throw exception
@@ -541,10 +554,10 @@ prep_and_validate_updates(Db, [DocBucket|RestBuckets], [not_found|RestLookups],
         {[], AccErrors}, DocBucket),
 
     prep_and_validate_updates(Db, RestBuckets, RestLookups, AllowConflict,
-            [PreppedBucket | AccPrepped], AccErrors3);
+            Clobber, [PreppedBucket | AccPrepped], AccErrors3);
 prep_and_validate_updates(Db, [DocBucket|RestBuckets],
         [{ok, #full_doc_info{rev_tree=OldRevTree}=OldFullDocInfo}|RestLookups],
-        AllowConflict, AccPrepped, AccErrors) ->
+        AllowConflict, Clobber, AccPrepped, AccErrors) ->
     Leafs = couch_key_tree:get_all_leafs(OldRevTree),
     LeafRevsDict = dict:from_list([
         begin
@@ -557,7 +570,7 @@ prep_and_validate_updates(Db, [DocBucket|RestBuckets],
     {PreppedBucket, AccErrors3} = lists:foldl(
         fun(Doc, {Docs2Acc, AccErrors2}) ->
             case prep_and_validate_update(Db, Doc, OldFullDocInfo,
-                    LeafRevsDict, AllowConflict) of
+                    LeafRevsDict, AllowConflict, Clobber) of
             {ok, Doc2} ->
                 {[Doc2 | Docs2Acc], AccErrors2};
             {Error, #doc{id=Id,revs=Revs}} ->
@@ -567,7 +580,7 @@ prep_and_validate_updates(Db, [DocBucket|RestBuckets],
         end,
         {[], AccErrors}, DocBucket),
     prep_and_validate_updates(Db, RestBuckets, RestLookups, AllowConflict,
-            [PreppedBucket | AccPrepped], AccErrors3).
+            Clobber, [PreppedBucket | AccPrepped], AccErrors3).
 
 
 update_docs(Db, Docs, Options) ->
@@ -669,16 +682,28 @@ new_revid(#doc{body=Body,revs={OldStart,OldRevs},
         couch_util:md5(term_to_binary([Deleted, OldStart, OldRev, Body, Atts2]))
     end.
 
-new_revs([], OutBuckets, IdRevsAcc) ->
+new_revs([], _Clobber, OutBuckets, IdRevsAcc) ->
     {lists:reverse(OutBuckets), IdRevsAcc};
-new_revs([Bucket|RestBuckets], OutBuckets, IdRevsAcc) ->
+new_revs([Bucket|RestBuckets], Clobber, OutBuckets, IdRevsAcc) ->
     {NewBucket, IdRevsAcc3} = lists:mapfoldl(
-        fun(#doc{id=Id,revs={Start, RevIds}}=Doc, IdRevsAcc2)->
-        NewRevId = new_revid(Doc),
-        {Doc#doc{revs={Start+1, [NewRevId | RevIds]}},
-            [{{Id, {Start, RevIds}}, {ok, {Start+1, NewRevId}}} | IdRevsAcc2]}
+    fun(#doc{id=Id,revs={Start, RevIds}}=Doc, IdRevsAcc2)->
+        {Start2, RevIds2} = case Clobber of
+        true ->
+            case RevIds /= [] of
+            true -> % A new rev id is provided by the client with clobber option
+                [NewRevId | _] = RevIds;
+            false ->
+                NewRevId = 0
+            end,
+            {Start, RevIds};
+        false ->
+            NewRevId = new_revid(Doc),
+            {Start+1, [NewRevId | RevIds]}
+        end,
+        {Doc#doc{revs={Start2, RevIds2}},
+            [{{Id, {Start, RevIds}}, {ok, {Start2, NewRevId}}} | IdRevsAcc2]}
     end, IdRevsAcc, Bucket),
-    new_revs(RestBuckets, [NewBucket|OutBuckets], IdRevsAcc3).
+    new_revs(RestBuckets, Clobber, [NewBucket|OutBuckets], IdRevsAcc3).
 
 check_dup_atts(#doc{atts=Atts}=Doc) ->
     Atts2 = lists:sort(fun(#att{name=N1}, #att{name=N2}) -> N1 < N2 end, Atts),
@@ -736,6 +761,7 @@ update_docs(Db, Docs, Options, interactive_edit) ->
         
     DocBuckets = group_alike_docs(Docs2),
     Optimistic = lists:member(optimistic, Options),
+    Clobber = lists:member(clobber, Options),
 
     case (Db#db.validate_doc_funs /= []) orelse
         lists:any(
@@ -757,7 +783,7 @@ update_docs(Db, Docs, Options, interactive_edit) ->
         ExistingDocInfos = get_full_doc_infos(Db, Ids),
 
         {DocBucketsPrepped, PreCommitFailures} = prep_and_validate_updates(Db,
-                DocBuckets, ExistingDocInfos, AllOrNothing, [], []),
+                DocBuckets, ExistingDocInfos, AllOrNothing, Clobber, [], []),
 
         % strip out any empty buckets
         DocBuckets2 = [Bucket || [_|_] = Bucket <- DocBucketsPrepped];
@@ -781,7 +807,7 @@ update_docs(Db, Docs, Options, interactive_edit) ->
                         Doc), Db#db.fd)
                 || Doc <- B] || B <- DocBuckets2],
         
-        {DocBuckets4, IdRevs} = new_revs(DocBuckets3, [], []),
+        {DocBuckets4, IdRevs} = new_revs(DocBuckets3, Clobber, [], []),
         {ok, CommitResults} = write_and_commit(Db, DocBuckets4, NonRepDocs, Options2),
         
         ResultsDict = dict:from_list(IdRevs ++ CommitResults ++ PreCommitFailures),
@@ -916,11 +942,18 @@ prepare_doc_summaries(Db, BucketList, Options) ->
             false ->
                 DocUpdateInfo;
             true ->
-                AttsInfo = [{N, T, M} || #att{name = N, type = T, md5 = M} <- Atts, M =/= <<>>],
-                DocUpdateInfo#doc_update_info{
-                    atts_md5 = couch_util:md5(?term_to_bin(AttsInfo)),
-                    body_md5 = couch_util:md5(CompressedBody)
-                }
+                {RevPos, RevIds} = DocUpdateInfo#doc_update_info.revs,
+                case RevPos == 0 andalso RevIds == [] of
+                true ->
+                    AttsInfo = [{N, T, M} ||
+                        #att{name = N, type = T, md5 = M} <- Atts, M =/= <<>>],
+                    DocUpdateInfo#doc_update_info{
+                        atts_md5 = couch_util:md5(?term_to_bin(AttsInfo)),
+                        body_md5 = couch_util:md5(CompressedBody)
+                    };
+                false ->
+                    DocUpdateInfo
+                end
             end
         end,
         Bucket) || Bucket <- BucketList].
