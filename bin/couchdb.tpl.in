@@ -231,8 +231,7 @@ start_couchdb () {
         touch $PID_FILE
         interactive_option="+Bd -noinput"
     fi
-    command="'%ERL%' $interactive_option $ERL_START_OPTIONS \
-        -env ERL_LIBS '%localerlanglibdir%' %localerlanglibargs% -couch_ini $start_arguments -s couch"
+    ERL_LIBS="$ERL_LIBS:'%localerlanglibdir%'"
 
     # Find plugins and add them to the Erlang path.
     if test -d "%localerlanglibdir%/../../plugins"; then
@@ -244,11 +243,17 @@ start_couchdb () {
                     : # Do not use this plugin.
                 else
                     ERL_ZFLAGS="$ERL_ZFLAGS -pz '$plugin/ebin'"
+                    if test -d "$plugin/deps"; then
+                        ERL_LIBS="$ERL_LIBS:'$plugin/deps'"
+                    fi
                 fi
             fi
         done
         export ERL_ZFLAGS
     fi
+
+    command="'%ERL%' $interactive_option $ERL_START_OPTIONS \
+        -env ERL_LIBS $ERL_LIBS %localerlanglibargs% -couch_ini $start_arguments -s couch"
 
     if test "$BACKGROUND" = "true" -a "$RECURSED" = "false"; then
         $0 $background_start_arguments -b -r $RESPAWN_TIMEOUT -p $PID_FILE \
