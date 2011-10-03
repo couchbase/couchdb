@@ -10,16 +10,16 @@ dnl WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 dnl License for the specific language governing permissions and limitations
 dnl under the License.
 
-m4_define([LOCAL_PACKAGE_AUTHOR_NAME], [The Apache Software Foundation])
-m4_define([LOCAL_PACKAGE_AUTHOR_ADDRESS], [dev@couchdb.apache.org])
-m4_define([LOCAL_PACKAGE_IDENTIFIER], [couchdb])
-m4_define([LOCAL_PACKAGE_TARNAME], [apache-couchdb])
-m4_define([LOCAL_PACKAGE_NAME], [Apache CouchDB])
-m4_define([LOCAL_BUG_URI], [https://issues.apache.org/jira/browse/COUCHDB])
-m4_define([LOCAL_VERSION_MAJOR], [1])
-m4_define([LOCAL_VERSION_MINOR], [2])
+m4_define([LOCAL_PACKAGE_AUTHOR_NAME], [Couchbase])
+m4_define([LOCAL_PACKAGE_AUTHOR_ADDRESS], [mobile@couchbase.com])
+m4_define([LOCAL_PACKAGE_IDENTIFIER], [couchbase])
+m4_define([LOCAL_PACKAGE_TARNAME], [couchbase-mobile])
+m4_define([LOCAL_PACKAGE_NAME], [Couchbase Mobile])
+m4_define([LOCAL_BUG_URI], [http://www.couchbase.org/issues/])
+m4_define([LOCAL_VERSION_MAJOR], [2])
+m4_define([LOCAL_VERSION_MINOR], [0])
 m4_define([LOCAL_VERSION_REVISION], [0])
-m4_define([LOCAL_VERSION_STAGE], [a])
+m4_define([LOCAL_VERSION_STAGE], [beta])
 m4_define([LOCAL_VERSION_RELEASE], [-%release%])
 m4_define([LOCAL_VERSION_PRIMARY],
     [LOCAL_VERSION_MAJOR.LOCAL_VERSION_MINOR.LOCAL_VERSION_REVISION])
