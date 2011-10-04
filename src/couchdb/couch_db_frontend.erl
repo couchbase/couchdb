@@ -182,6 +182,11 @@ couch_doc_open(Db, DocId, Rev, Options) ->
 
 welcome_message(WelcomeMessage) ->
     [
-     {couchdb, WelcomeMessage},
-     {version, list_to_binary(couch_server:get_version())}
-    ].
+        {couchdb, WelcomeMessage},
+        {version, list_to_binary(couch_server:get_version())}
+        ] ++ case couch_config:get("vendor") of
+        [] ->
+            [];
+        Properties ->
+            [{vendor, {[{?l2b(K), ?l2b(V)} || {K, V} <- Properties]}}]
+        end.
