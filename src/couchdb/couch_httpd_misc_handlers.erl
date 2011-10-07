@@ -30,9 +30,13 @@
 % httpd global handlers
 
 handle_welcome_req(#httpd{method='GET'}=Req, WelcomeMessage) ->
-    Vendor = lists:map(fun({Key, Value}) ->
-      {Key, ?l2b(Value)}
-    end, couch_config:get("vendor")),
+    Vendor = case couch_config:get("vendor") of
+      [] -> [];
+      Vendor1 -> [{
+        proplists:get_value("name", Vendor1),
+        ?l2b(proplists:get_value("version", Vendor1))
+      }]
+    end,
 
     Modules = lists:map(fun({Key, Value}) ->
       {Key, ?l2b(Value)}
@@ -41,7 +45,7 @@ handle_welcome_req(#httpd{method='GET'}=Req, WelcomeMessage) ->
     send_json(Req, {[
         {couchdb, WelcomeMessage},
         {version, list_to_binary(couch_server:get_version())}]
-        ++ [{vendor, {Vendor}}]
+        ++ Vendor
         ++ [{modules, {Modules}}
     ]});
 handle_welcome_req(Req, _) ->
