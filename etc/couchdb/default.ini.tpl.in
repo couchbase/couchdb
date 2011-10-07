@@ -2,8 +2,8 @@
 
 ; Upgrading CouchDB will overwrite this file.
 [vendor]
-name = %package_author_name%
-version = %version%
+name = Couchbase
+version = 1.2.0
 
 [couchdb]
 database_dir = %localstatelibdir%
