@@ -16,7 +16,7 @@
 % public API
 -export([start_link/0]).
 
--export([get_map_view/4, get_reduce_view/4]).
+-export([get_map_view/4, get_map_view/5, get_reduce_view/4, get_reduce_view/5]).
 -export([get_group/3, get_group_pid/2, release_group/1, define_group/3]).
 -export([get_group_info/2]).
 
@@ -256,11 +256,19 @@ get_key_pos(Key, [_|Rest], N) ->
 
 
 get_map_view(SetName, DDocId, ViewName, StaleType) ->
-    {ok, #set_view_group{views = Views} = Group} = get_group(
-        SetName, DDocId, StaleType),
-    case get_map_view0(ViewName, Views) of
-    {ok, View} ->
+    case get_map_view(SetName, DDocId, ViewName, StaleType, []) of
+    {ok, View, Group, _} ->
         {ok, View, Group};
+    Else ->
+        Else
+    end.
+
+get_map_view(SetName, DDocId, ViewName, StaleType, FilterPartitions) ->
+    {ok, Group0} = get_group(SetName, DDocId, StaleType),
+    {Group, Unindexed} = modify_bitmasks(Group0, FilterPartitions),
+    case get_map_view0(ViewName, Group#set_view_group.views) of
+    {ok, View} ->
+        {ok, View, Group, Unindexed};
     Else ->
         Else
     end.
@@ -274,11 +282,23 @@ get_map_view0(Name, [#set_view{map_names=MapNames}=View|Rest]) ->
     end.
 
 get_reduce_view(SetName, DDocId, ViewName, StaleType) ->
-    {ok, #set_view_group{views = Views, def_lang = Lang} = Group} =
-        get_group(SetName, DDocId, StaleType),
+    case get_reduce_view(SetName, DDocId, ViewName, StaleType, []) of
+    {ok, View, Group, _} ->
+        {ok, View, Group};
+    Else ->
+        Else
+    end.
+
+get_reduce_view(SetName, DDocId, ViewName, StaleType, FilterPartitions) ->
+    {ok, Group0} = get_group(SetName, DDocId, StaleType),
+    {Group, Unindexed} = modify_bitmasks(Group0, FilterPartitions),
+    #set_view_group{
+        views = Views,
+        def_lang = Lang
+    } = Group,
     case get_reduce_view0(ViewName, Lang, Views) of
     {ok, View} ->
-        {ok, View, Group};
+        {ok, View, Group, Unindexed};
     Else ->
         Else
     end.
@@ -493,3 +513,19 @@ less_json_ids({JsonA, IdA}, {JsonB, IdB}) ->
 
 less_json(A,B) ->
     couch_ejson_compare:less(A, B) < 0.
+
+
+modify_bitmasks(Group, []) ->
+    {Group, []};
+modify_bitmasks(Group, Partitions) ->
+    IndexedBitmask = ?set_abitmask(Group) bor ?set_pbitmask(Group),
+    WantedBitmask = couch_set_view_util:build_bitmask(Partitions),
+    UnindexedBitmask = WantedBitmask band (bnot IndexedBitmask),
+    ABitmask2 = WantedBitmask band IndexedBitmask,
+    PBitmask2 = (bnot ABitmask2) band IndexedBitmask,
+    Header = (Group#set_view_group.index_header)#set_view_index_header{
+        abitmask = ABitmask2 band (bnot ?set_cbitmask(Group)),
+        pbitmask = PBitmask2
+    },
+    Unindexed = couch_set_view_util:decode_bitmask(UnindexedBitmask),
+    {Group#set_view_group{index_header = Header}, Unindexed}.

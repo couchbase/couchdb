@@ -71,9 +71,9 @@ define_view(Pid, Params) ->
         passive_partitions = PassivePartitionsList
     } = Params,
     ActiveList = lists:usort(ActivePartitionsList),
-    ActiveBitmask = build_bitmask(ActiveList),
+    ActiveBitmask = couch_set_view_util:build_bitmask(ActiveList),
     PassiveList = lists:usort(PassivePartitionsList),
-    PassiveBitmask = build_bitmask(PassiveList),
+    PassiveBitmask = couch_set_view_util:build_bitmask(PassiveList),
     case (ActiveBitmask band PassiveBitmask) /= 0 of
     true ->
         throw({bad_view_definition,
@@ -874,15 +874,6 @@ compare_seqs([{PartId, SeqA} | RestA], [{PartId, SeqB} | RestB]) ->
     _Smaller ->
         false
     end.
-
-
-build_bitmask(ActiveList) ->
-    build_bitmask(ActiveList, 0).
-
-build_bitmask([], Acc) ->
-    Acc;
-build_bitmask([PartId | Rest], Acc) when is_integer(PartId), PartId >= 0 ->
-    build_bitmask(Rest, (1 bsl PartId) bor Acc).
 
 
 set_passive_partitions([], Abitmask, Pbitmask, Seqs, PurgeSeqs) ->

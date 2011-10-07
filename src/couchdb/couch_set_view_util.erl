@@ -13,6 +13,7 @@
 -module(couch_set_view_util).
 
 -export([detuple_kvs/2, expand_dups/2, expand_dups/3, partitions_map/2]).
+-export([build_bitmask/1, decode_bitmask/1]).
 
 
 detuple_kvs([], Acc) ->
@@ -58,3 +59,25 @@ partitions_map([{_Key, {dups, [{PartitionId, _Val} | _]}} | RestKvs], BitMap) ->
 partitions_map([{_Key, {PartitionId, _Val}} | RestKvs], BitMap) ->
     partitions_map(RestKvs, BitMap bor (1 bsl PartitionId)).
 
+
+build_bitmask(ActiveList) ->
+    build_bitmask(ActiveList, 0).
+
+build_bitmask([], Acc) ->
+    Acc;
+build_bitmask([PartId | Rest], Acc) when is_integer(PartId), PartId >= 0 ->
+    build_bitmask(Rest, (1 bsl PartId) bor Acc).
+
+
+decode_bitmask(Bitmask) ->
+    decode_bitmask(Bitmask, 0).
+
+decode_bitmask(0, _) ->
+    [];
+decode_bitmask(Bitmask, PartId) ->
+    case Bitmask band 1 of
+    1 ->
+        [PartId | decode_bitmask(Bitmask bsr 1, PartId + 1)];
+    0 ->
+        decode_bitmask(Bitmask bsr 1, PartId + 1)
+    end.

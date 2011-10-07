@@ -17,7 +17,7 @@
 -export([parse_view_params/3]).
 -export([make_view_fold_fun/6, finish_view_fold/4, finish_view_fold/5, view_row_obj/2]).
 -export([view_etag/2, view_etag/3, make_reduce_fold_funs/5]).
--export([design_doc_view/5, parse_bool_param/1]).
+-export([design_doc_view/6, parse_bool_param/1]).
 -export([make_key_options/1, load_view/6]).
 
 -import(couch_httpd,
@@ -50,7 +50,9 @@ route_request(Req, _SetName, _DDocId, [<<"_define">>]) ->
 
 route_request(#httpd{method = 'GET'} = Req, SetName, DDocId, [<<"_view">>, ViewName]) ->
     Keys = couch_httpd:qs_json_value(Req, "keys", nil),
-    design_doc_view(Req, SetName, DDocId, ViewName, Keys);
+    FilteredPartitions = couch_httpd:qs_json_value(Req, "partitions", []),
+    validate_json_partition_list(FilteredPartitions),
+    design_doc_view(Req, SetName, DDocId, ViewName, FilteredPartitions, Keys);
 
 route_request(#httpd{method = 'POST'} = Req, SetName, DDocId, [<<"_view">>, ViewName]) ->
     couch_httpd:validate_ctype(Req, "application/json"),
@@ -64,7 +66,9 @@ route_request(#httpd{method = 'POST'} = Req, SetName, DDocId, [<<"_view">>, View
     _ ->
         throw({bad_request, "`keys` member must be a array."})
     end,
-    design_doc_view(Req, SetName, DDocId, ViewName, Keys);
+    FilteredPartitions = couch_util:get_value(<<"partitions">>, Fields, []),
+    validate_json_partition_list(FilteredPartitions),
+    design_doc_view(Req, SetName, DDocId, ViewName, FilteredPartitions, Keys);
 
 route_request(#httpd{method = 'POST'} = Req, SetName, DDocId, [<<"_compact">>]) ->
     couch_httpd:validate_ctype(Req, "application/json"),
@@ -96,25 +100,25 @@ route_request(#httpd{method = 'POST'} = Req, SetName, DDocId, [<<"_cleanup_parti
 validate_json_partition_list(L) when is_list(L) ->
     lists:foreach(
         fun(P) when not is_number(P) ->
-                throw({bad_request, "Body must be a JSON array of partition IDs."});
+                throw({bad_request, "Expected a JSON array of partition IDs."});
             (_) ->
                 ok
         end, L);
 validate_json_partition_list(_) ->
-    throw({bad_request, "Body must be a JSON array of partition IDs."}).
+    throw({bad_request, "Expected a JSON array of partition IDs."}).
 
 
-design_doc_view(Req, SetName, DDocId, ViewName, Keys) ->
+design_doc_view(Req, SetName, DDocId, ViewName, FilteredPartitions, Keys) ->
     Stale = get_stale_type(Req),
     Reduce = get_reduce_type(Req),
-    case couch_set_view:get_map_view(SetName, DDocId, ViewName, Stale) of
-    {ok, View, Group} ->
+    case couch_set_view:get_map_view(SetName, DDocId, ViewName, Stale, FilteredPartitions) of
+    {ok, View, Group, _} ->
         QueryArgs = parse_view_params(Req, Keys, map),
         Result = output_map_view(Req, View, Group, QueryArgs, Keys),
         couch_set_view:release_group(Group);
     {not_found, Reason} ->
-        case couch_set_view:get_reduce_view(SetName, DDocId, ViewName, Stale) of
-        {ok, ReduceView, Group} ->
+        case couch_set_view:get_reduce_view(SetName, DDocId, ViewName, Stale, FilteredPartitions) of
+        {ok, ReduceView, Group, _} ->
             case Reduce of
             false ->
                 QueryArgs = parse_view_params(Req, Keys, red_map),

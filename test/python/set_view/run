@@ -14,3 +14,6 @@ echo "Running set view test cleanup.py\n"
 
 echo "Running set view test compaction.py\n"
 ./compaction.py
+
+echo "Running set view test filter_partitions.py\n"
+./filter_partitions.py
