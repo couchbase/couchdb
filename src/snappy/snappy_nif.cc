@@ -148,7 +148,7 @@ snappy_compress(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
         SnappyNifSink sink(env);
         snappy::Compress(&source, &sink);
         return make_ok(env, enif_make_binary(env, &sink.getBin()));
-    } catch(std::bad_alloc e) {
+    } catch(std::bad_alloc &e) {
         return make_error(env, "insufficient_memory");
     } catch(...) {
         return make_error(env, "unknown");
