@@ -1,5 +1,5 @@
 #!/usr/bin/env escript
-%% -*- erlang -*-
+%%-*- erlang -*-
 
 % Licensed under the Apache License, Version 2.0 (the "License"); you may not
 % use this file except in compliance with the License.  You may obtain a copy of
@@ -75,26 +75,18 @@ test() ->
 
 test_welcome() ->
     WelcomeReq = #http_db{url=server()},
-    Expect = {[
-        {<<"couchdb">>, <<"Welcome">>},
-        {<<"version">>, list_to_binary(couch_server:get_version())}
-    ]},
-    etap:is(
-        couch_rep_httpc:request(WelcomeReq),
-        Expect,
-        "welcome request with url-as-list"
+    {Resp} = couch_rep_httpc:request(WelcomeReq),
+    etap:is(<<"Welcome">>,
+	    couch_util:get_value(<<"couchdb">>, Resp),
+	        "welcome request with url-as-list"
     ).
 
 test_binary_url() ->
-    Req = #http_db{url=list_to_binary(server())},
-    Expect = {[
-        {<<"couchdb">>, <<"Welcome">>},
-        {<<"version">>, list_to_binary(couch_server:get_version())}
-    ]},
-    etap:is(
-        couch_rep_httpc:request(Req),
-        Expect,
-        "welcome request with url-as-binary"
+    WelcomeReq = #http_db{url=list_to_binary(server())},
+    {Resp} = couch_rep_httpc:request(WelcomeReq),
+    etap:is(<<"Welcome">>,
+	    couch_util:get_value(<<"couchdb">>, Resp),
+	        "welcome request with url-as-list"
     ).
 
 test_put() ->

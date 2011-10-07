@@ -146,10 +146,9 @@ test() ->
 test_regular_request() ->
     Result = case ibrowse:send_req(server(), [], get, []) of
         {ok, _, _, Body} ->
-            {[{<<"couchdb">>, <<"Welcome">>},
-              {<<"version">>,_}
-            ]} = couch_util:json_decode(Body),
-            etap:is(true, true, "should return server info");
+	    {WelcomeMessage} = couch_util:json_decode(Body),
+            etap:is(true, proplists:is_defined(<<"couchdb">>, WelcomeMessage),
+		    "should return server info");
         _Else -> 
             etap:is(false, true, <<"ibrowse fail">>)
     end.
