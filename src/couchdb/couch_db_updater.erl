@@ -760,6 +760,12 @@ update_local_docs(#db{local_docs_btree=Btree}=Db, Docs, Clobber) ->
     OldDocLookups = couch_btree:lookup(Btree, Ids),
     BtreeEntries = lists:zipwith(
         fun({Client, #doc{id=Id,deleted=Delete,revs={0,PrevRevs},body=Body}}, OldDocLookup) ->
+            case PrevRevs of
+            [RevStr|_] ->
+                PrevRev0 = list_to_integer(?b2l(RevStr));
+            [] ->
+                PrevRev0 = 0
+            end,
             OldRev =
             case OldDocLookup of
                 {ok, {_, {OldRev0, _}}} -> OldRev0;
@@ -769,12 +775,7 @@ update_local_docs(#db{local_docs_btree=Btree}=Db, Docs, Clobber) ->
             true ->
                 OldRev;
             false ->
-                case PrevRevs of
-                [RevStr|_] ->
-                    list_to_integer(?b2l(RevStr));
-                [] ->
-                    0
-                end
+                PrevRev0
             end,
             case OldRev == PrevRev of
             true ->
