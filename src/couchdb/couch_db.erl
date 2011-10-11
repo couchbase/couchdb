@@ -747,6 +747,7 @@ update_docs(Db, Docs, Options, replicated_changes) ->
 update_docs(Db, Docs, Options, interactive_edit) ->
     increment_stat(Db, {couchdb, database_writes}),
     AllOrNothing = lists:member(all_or_nothing, Options),
+    PreSorted = lists:member(presorted, Options),
     % go ahead and generate the new revision ids for the documents.
     % separate out the NonRep documents from the rest of the documents
     {Docs2, NonRepDocs} = lists:foldl(
@@ -759,7 +760,11 @@ update_docs(Db, Docs, Options, interactive_edit) ->
             end
         end, {[], []}, Docs),
         
-    DocBuckets = group_alike_docs(Docs2),
+    DocBuckets = if PreSorted ->
+        group_alike_docs(Docs2, []);
+    true ->
+        group_alike_docs(Docs2)
+    end,
     Optimistic = lists:member(optimistic, Options),
     Clobber = lists:member(clobber, Options),
 
