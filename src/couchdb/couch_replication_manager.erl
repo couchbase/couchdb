@@ -15,6 +15,8 @@
 
 % public API
 -export([replication_started/1, replication_completed/1, replication_error/2]).
+-export([changes_feed_loop/0, db_update_notifier/0, maybe_tag_rep_doc/3]).
+-export([update_rep_doc/2, rep_db_update_error/2]).
 
 % gen_server callbacks
 -export([start_link/0, init/1, handle_call/3, handle_info/2, handle_cast/2]).
