@@ -815,12 +815,18 @@ update_docs(Db, Docs, Options, interactive_edit) ->
         {DocBuckets4, IdRevs} = new_revs(DocBuckets3, Clobber, [], []),
         {ok, CommitResults} = write_and_commit(Db, DocBuckets4, NonRepDocs, Options2),
         
-        ResultsDict = dict:from_list(IdRevs ++ CommitResults ++ PreCommitFailures),
-        {ok, lists:map(
-            fun(#doc{id=Id,revs={Pos, RevIds}}) ->
-                {ok, Result} = dict:find({Id, {Pos, RevIds}}, ResultsDict),
-                Result
-            end, Docs)}
+        case lists:member(return_errors_only, Options) of
+        false ->
+            ResultsDict = dict:from_list(IdRevs ++ CommitResults ++ PreCommitFailures),
+            {ok, lists:map(
+                fun(#doc{id=Id,revs={Pos, RevIds}}) ->
+                    {ok, Result} = dict:find({Id, {Pos, RevIds}}, ResultsDict),
+                    Result
+                end, Docs)};
+        true ->
+            Errors = CommitResults ++ PreCommitFailures,
+            {ok, [{Id, Error} || {{Id,_rev}, Error} <- Errors]}
+        end
     end.
 
 % Returns the first available document on disk. Input list is a full rev path
