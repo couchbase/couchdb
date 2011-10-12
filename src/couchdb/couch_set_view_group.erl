@@ -28,11 +28,11 @@
 -include("couch_set_view.hrl").
 
 -define(CLEANUP_TIMEOUT, 3000).
--define(set_name(State), element(2, State#group_state.init_args)).
--define(group_id(State), (State#group_state.group)#set_view_group.name).
--define(db_set(State), (State#group_state.group)#set_view_group.db_set).
+-define(set_name(State), element(2, State#state.init_args)).
+-define(group_id(State), (State#state.group)#set_view_group.name).
+-define(db_set(State), (State#state.group)#set_view_group.db_set).
 
--record(group_state, {
+-record(state, {
     init_args,
     group,
     updater_pid = nil,
@@ -143,7 +143,7 @@ init({{_, SetName, _} = InitArgs, ReturnPid, Ref}) ->
                        NumPartitions, integer_to_list(Header#set_view_index_header.cbitmask, 2)])
         end,
         {ok, RefCounter} = couch_ref_counter:start([Fd]),
-        {ok, #group_state{
+        {ok, #state{
             init_args = InitArgs,
             group = Group#set_view_group{
                 ref_counter = RefCounter, db_set = DbSet
@@ -156,13 +156,13 @@ init({{_, SetName, _} = InitArgs, ReturnPid, Ref}) ->
 
 handle_call({define_view, NumPartitions, ActiveList, ActiveBitmask,
     PassiveList, PassiveBitmask}, _From,
-    #group_state{
+    #state{
         group = #set_view_group{
             index_header = #set_view_index_header{num_partitions = nil}
         }} = State) ->
     Seqs = lists:map(
         fun(PartId) -> {PartId, 0} end, lists:usort(ActiveList ++ PassiveList)),
-    #group_state{group = Group2} = State2 = stop_cleaner(State),
+    #state{group = Group2} = State2 = stop_cleaner(State),
     #set_view_group{
         name = DDocId,
         index_header = Header,
@@ -190,7 +190,7 @@ handle_call({define_view, NumPartitions, ActiveList, ActiveBitmask,
             fun(V) -> V#set_view{update_seqs = Seqs, purge_seqs = Seqs} end, Views)
     },
     ok = commit_header(NewGroup),
-    NewState = State2#group_state{group = NewGroup},
+    NewState = State2#state{group = NewGroup},
     ?LOG_INFO("Set view `~s`, group `~s`, configured with:~n"
               "~p partitions~n"
               "initial active partitions ~w~n"
@@ -198,20 +198,20 @@ handle_call({define_view, NumPartitions, ActiveList, ActiveBitmask,
               [?set_name(State), DDocId, NumPartitions, ActiveList, PassiveList]),
     {reply, ok, NewState, ?CLEANUP_TIMEOUT};
 
-handle_call(is_view_defined, _From, #group_state{group = Group} = State) ->
+handle_call(is_view_defined, _From, #state{group = Group} = State) ->
     #set_view_group{
         index_header = #set_view_index_header{num_partitions = NumParts}
     } = Group,
     {reply, is_integer(NumParts), State, ?CLEANUP_TIMEOUT};
 
-handle_call(_Msg, _From, #group_state{
+handle_call(_Msg, _From, #state{
         group = #set_view_group{
             index_header = #set_view_index_header{num_partitions = nil}
         }} = State) ->
     {reply, view_undefined, State};
 
 handle_call({cleanup_partitions, Partitions}, _From, State) ->
-    #group_state{group = Group2} = State2 = stop_cleaner(State),
+    #state{group = Group2} = State2 = stop_cleaner(State),
     #set_view_group{
         index_header = #set_view_index_header{
             abitmask = Abitmask, pbitmask = Pbitmask, cbitmask = Cbitmask
@@ -228,14 +228,14 @@ handle_call({cleanup_partitions, Partitions}, _From, State) ->
              cleanup_partitions, Partitions, State2,
              NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs, NewPurgeSeqs),
         ok = couch_db_set:remove_partitions(?db_set(State3), Partitions),
-        NewState = case is_pid(State3#group_state.compactor_pid) of
+        NewState = case is_pid(State3#state.compactor_pid) of
         true ->
             ?LOG_INFO("Restarting compaction for group `~s`, set view `~s`, "
                       "because the cleanup bitmask was updated.",
                       [?group_id(State3), ?set_name(State3)]),
-            unlink(State3#group_state.compactor_pid),
-            exit(State3#group_state.compactor_pid, kill),
-            start_compactor(State3, State3#group_state.compactor_fun);
+            unlink(State3#state.compactor_pid),
+            exit(State3#state.compactor_pid, kill),
+            start_compactor(State3, State3#state.compactor_fun);
         false ->
             State3
         end,
@@ -245,7 +245,7 @@ handle_call({cleanup_partitions, Partitions}, _From, State) ->
     end;
 
 handle_call({set_passive_partitions, Partitions}, _From, State) ->
-    #group_state{group = Group2} = State2 = stop_cleaner(State),
+    #state{group = Group2} = State2 = stop_cleaner(State),
     #set_view_group{
         index_header = #set_view_index_header{
             abitmask = Abitmask, pbitmask = Pbitmask, cbitmask = Cbitmask
@@ -266,7 +266,7 @@ handle_call({set_passive_partitions, Partitions}, _From, State) ->
     end;
 
 handle_call({activate_partitions, Partitions}, _From, State) ->
-    #group_state{group = Group2} = State2 = stop_cleaner(State),
+    #state{group = Group2} = State2 = stop_cleaner(State),
     #set_view_group{
         index_header = #set_view_index_header{
             abitmask = Abitmask, pbitmask = Pbitmask, cbitmask = Cbitmask
@@ -289,7 +289,7 @@ handle_call({activate_partitions, Partitions}, _From, State) ->
 
 % {request_group, StaleType}
 handle_call({request_group, false}, From,
-        #group_state{
+        #state{
             updater_pid = UpPid,
             waiting_list = WaitList
         } = State) ->
@@ -297,38 +297,38 @@ handle_call({request_group, false}, From,
     nil ->
         case index_needs_update(State) of
         {true, NewSeqs} ->
-            #group_state{group = Group} = State2 = stop_cleaner(State),
+            #state{group = Group} = State2 = stop_cleaner(State),
             Owner = self(),
             Pid = spawn_link(fun() ->
                 couch_set_view_updater:update(Owner, Group, ?set_name(State2), NewSeqs)
             end),
-            {noreply, State2#group_state{
+            {noreply, State2#state{
                 updater_pid = Pid,
                 waiting_list = [From | WaitList]}};
         {false, _} ->
-            {reply, {ok, State#group_state.group}, State}
+            {reply, {ok, State#state.group}, State}
         end;
     _ when is_pid(UpPid) ->
-        {noreply, State#group_state{waiting_list = [From | WaitList]}, ?CLEANUP_TIMEOUT}
+        {noreply, State#state{waiting_list = [From | WaitList]}, ?CLEANUP_TIMEOUT}
     end;
 
-handle_call({request_group, ok}, _From, #group_state{group = Group} = State) ->
+handle_call({request_group, ok}, _From, #state{group = Group} = State) ->
     {reply, {ok, Group}, State, ?CLEANUP_TIMEOUT};
 
-handle_call({request_group, update_after}, From, #group_state{group = Group} = State) ->
+handle_call({request_group, update_after}, From, #state{group = Group} = State) ->
     gen_server:reply(From, {ok, Group}),
-    case State#group_state.updater_pid of
+    case State#state.updater_pid of
     Pid when is_pid(Pid) ->
         {noreply, State};
     nil ->
         case index_needs_update(State) of
         {true, NewSeqs} ->
-            #group_state{group = Group2} = State2 = stop_cleaner(State),
+            #state{group = Group2} = State2 = stop_cleaner(State),
             Owner = self(),
             UpPid = spawn_link(fun() ->
                 couch_set_view_updater:update(Owner, Group2, ?set_name(State2), NewSeqs)
             end),
-            {noreply, State2#group_state{updater_pid = UpPid}};
+            {noreply, State2#state{updater_pid = UpPid}};
         {false, _} ->
             {noreply, State}
         end
@@ -338,15 +338,15 @@ handle_call(request_group_info, _From, State) ->
     GroupInfo = get_group_info(State),
     {reply, {ok, GroupInfo}, State, ?CLEANUP_TIMEOUT};
 
-handle_call({start_compact, CompactFun}, _From, #group_state{compactor_pid = nil} = State) ->
-    #group_state{compactor_pid = Pid} = State2 = start_compactor(State, CompactFun),
+handle_call({start_compact, CompactFun}, _From, #state{compactor_pid = nil} = State) ->
+    #state{compactor_pid = Pid} = State2 = start_compactor(State, CompactFun),
     {reply, {ok, Pid}, State2};
 handle_call({start_compact, _}, _From, State) ->
     %% compact already running, this is a no-op
-    {reply, {ok, State#group_state.compactor_pid}, State};
+    {reply, {ok, State#state.compactor_pid}, State};
 
 handle_call({compact_done, NewGroup}, _From, State) ->
-    #group_state{
+    #state{
         group = Group,
         init_args = {RootDir, _, _},
         updater_pid = UpdaterPid,
@@ -363,7 +363,7 @@ handle_call({compact_done, NewGroup}, _From, State) ->
                   [?group_id(State), ?set_name(State)]),
         {reply, {restart, Group, compact_group(State)}, State};
     true ->
-        case group_up_to_date(NewGroup, State#group_state.group) of
+        case group_up_to_date(NewGroup, State#state.group) of
         true ->
             ?LOG_INFO("Set view `~s`, group `~s`, compaction complete",
                       [?set_name(State), ?group_id(State)]),
@@ -394,7 +394,7 @@ handle_call({compact_done, NewGroup}, _From, State) ->
             {ok, NewRefCounter} = couch_ref_counter:start([NewGroup#set_view_group.fd]),
 
             self() ! delayed_commit,
-            State2 = State#group_state{
+            State2 = State#state{
                 compactor_pid = nil,
                 compactor_fun = nil,
                 updater_pid = NewUpdaterPid,
@@ -403,7 +403,7 @@ handle_call({compact_done, NewGroup}, _From, State) ->
                     ref_counter = NewRefCounter
                 }
             },
-            commit_header(State2#group_state.group),
+            commit_header(State2#state.group),
             State3 = maybe_start_cleaner(State2),
             {reply, ok, State3, ?CLEANUP_TIMEOUT};
         false ->
@@ -413,23 +413,23 @@ handle_call({compact_done, NewGroup}, _From, State) ->
         end
     end;
 
-handle_call(cancel_compact, _From, #group_state{compactor_pid = nil} = State) ->
+handle_call(cancel_compact, _From, #state{compactor_pid = nil} = State) ->
     {reply, ok, State, ?CLEANUP_TIMEOUT};
-handle_call(cancel_compact, _From, #group_state{compactor_pid = Pid} = State) ->
+handle_call(cancel_compact, _From, #state{compactor_pid = Pid} = State) ->
     unlink(Pid),
     exit(Pid, kill),
-    #group_state{
+    #state{
         group = #set_view_group{sig = GroupSig},
         init_args = {RootDir, _, _}
     } = State,
     CompactFile = index_file_name(compact, RootDir, ?set_name(State), GroupSig),
     ok = couch_file:delete(RootDir, CompactFile),
-    State2 = maybe_start_cleaner(State#group_state{compactor_pid = nil}),
+    State2 = maybe_start_cleaner(State#state{compactor_pid = nil}),
     {reply, ok, State2, ?CLEANUP_TIMEOUT}.
 
 
-handle_cast({partial_update, Pid, NewGroup}, #group_state{updater_pid=Pid} = State) ->
-    #group_state{
+handle_cast({partial_update, Pid, NewGroup}, #state{updater_pid=Pid} = State) ->
+    #state{
         waiting_commit = WaitingCommit
     } = State,
     ?LOG_INFO("Checkpointing set view `~s` update for group `~s`",
@@ -438,7 +438,7 @@ handle_cast({partial_update, Pid, NewGroup}, #group_state{updater_pid=Pid} = Sta
         erlang:send_after(1000, self(), delayed_commit);
     true -> ok
     end,
-    {noreply, State#group_state{group = NewGroup, waiting_commit = true}};
+    {noreply, State#state{group = NewGroup, waiting_commit = true}};
 handle_cast({partial_update, _, _}, State) ->
     %% message from an old (probably pre-compaction) updater; ignore
     {noreply, State, ?CLEANUP_TIMEOUT}.
@@ -448,11 +448,11 @@ handle_info(timeout, State) ->
     NewState = maybe_start_cleaner(State),
     {noreply, NewState};
 
-handle_info(delayed_commit, #group_state{group = Group} = State) ->
+handle_info(delayed_commit, #state{group = Group} = State) ->
     commit_header(Group),
-    {noreply, State#group_state{waiting_commit = false}, ?CLEANUP_TIMEOUT};
+    {noreply, State#state{waiting_commit = false}, ?CLEANUP_TIMEOUT};
 
-handle_info({'EXIT', Pid, {clean_group, Group}}, #group_state{cleaner_pid = Pid} = State) ->
+handle_info({'EXIT', Pid, {clean_group, Group}}, #state{cleaner_pid = Pid} = State) ->
     #set_view_group{
         index_header = #set_view_index_header{
             cbitmask = Cbitmask,
@@ -468,7 +468,7 @@ handle_info({'EXIT', Pid, {clean_group, Group}}, #group_state{cleaner_pid = Pid}
             pbitmask = OldPbitmask,
             num_partitions = NumPartitions
         }
-    } = State#group_state.group,
+    } = State#state.group,
     ?LOG_INFO("Cleanup finished for set view `~s`, group `~s`~n"
               "New abitmask ~*..0s, old abitmask ~*..0s~n"
               "New pbitmask ~*..0s, old pbitmask ~*..0s~n"
@@ -480,19 +480,19 @@ handle_info({'EXIT', Pid, {clean_group, Group}}, #group_state{cleaner_pid = Pid}
                NumPartitions, integer_to_list(OldPbitmask, 2),
                NumPartitions, integer_to_list(Cbitmask, 2),
                NumPartitions, integer_to_list(OldCbitmask, 2)]),
-    {noreply, State#group_state{cleaner_pid = nil, group = Group}};
+    {noreply, State#state{cleaner_pid = nil, group = Group}};
 
-handle_info({'EXIT', Pid, Reason}, #group_state{cleaner_pid = Pid} = State) ->
+handle_info({'EXIT', Pid, Reason}, #state{cleaner_pid = Pid} = State) ->
     {stop, {cleaner_died, Reason}, State};
 
 handle_info({'EXIT', Pid, shutdown},
-    #group_state{group = #set_view_group{db_set = Pid}} = State) ->
+    #state{group = #set_view_group{db_set = Pid}} = State) ->
     ?LOG_INFO("Set view `~s`, group `~s`, terminating because database set "
               "was shutdown", [?set_name(State), ?group_id(State)]),
     {stop, normal, State};
 
 handle_info({'EXIT', UpPid, {new_group, Group}},
-        #group_state{
+        #state{
             updater_pid = UpPid,
             waiting_list = WaitList,
             waiting_commit = WaitingCommit} = State) ->
@@ -501,7 +501,7 @@ handle_info({'EXIT', UpPid, {new_group, Group}},
     true -> ok
     end,
     reply_with_group(Group, WaitList),
-    State2 = State#group_state{
+    State2 = State#state{
         updater_pid = nil,
         waiting_commit = true,
         waiting_list = [],
@@ -514,17 +514,17 @@ handle_info({'EXIT', _, {new_group, _}}, State) ->
     %% message from an old (probably pre-compaction) updater; ignore
     {noreply, State, ?CLEANUP_TIMEOUT};
 
-handle_info({'EXIT', UpPid, reset}, #group_state{updater_pid = UpPid} = State) ->
+handle_info({'EXIT', UpPid, reset}, #state{updater_pid = UpPid} = State) ->
     State2 = stop_cleaner(State),
-    case prepare_group(State#group_state.init_args, true) of
+    case prepare_group(State#state.init_args, true) of
     {ok, ResetGroup} ->
         Owner = self(),
-        State3 = State2#group_state{group = ResetGroup},
+        State3 = State2#state{group = ResetGroup},
         {true, NewSeqs} = index_needs_update(State3),
         Pid = spawn_link(fun() ->
             couch_set_view_updater:update(Owner, ResetGroup, ?set_name(State), NewSeqs)
         end),
-        {ok, State3#group_state{updater_pid = Pid}};
+        {ok, State3#state{updater_pid = Pid}};
     Error ->
         {stop, normal, reply_all(State2, Error), ?CLEANUP_TIMEOUT}
     end;
@@ -545,7 +545,7 @@ handle_info({'EXIT', FromPid, Reason}, State) ->
     {stop, Reason, State}.
 
 
-terminate(Reason, #group_state{updater_pid=Update, compactor_pid=Compact}=S) ->
+terminate(Reason, #state{updater_pid=Update, compactor_pid=Compact}=S) ->
     State2 = stop_cleaner(S),
     reply_all(State2, Reason),
     case is_process_alive(?db_set(S)) of
@@ -566,9 +566,9 @@ code_change(_OldVsn, State, _Extra) ->
 reply_with_group(Group, WaitList) ->
     lists:foreach(fun(From) -> gen_server:reply(From, {ok, Group}) end, WaitList).
 
-reply_all(#group_state{waiting_list=WaitList}=State, Reply) ->
+reply_all(#state{waiting_list=WaitList}=State, Reply) ->
     [catch gen_server:reply(From, Reply) || From <- WaitList],
-    State#group_state{waiting_list=[]}.
+    State#state{waiting_list=[]}.
 
 prepare_group({RootDir, SetName, #set_view_group{sig = Sig} = Group}, ForceReset)->
     case open_index_file(RootDir, SetName, Sig) of
@@ -682,7 +682,7 @@ open_set_group(SetName, GroupId) ->
     end.
 
 get_group_info(State) ->
-    #group_state{
+    #state{
         group=Group,
         updater_pid=UpdaterPid,
         compactor_pid=CompactorPid,
@@ -959,7 +959,7 @@ validate_partitions(_, []) ->
 
 update_header(OpName, Partitions, State,
               NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs, NewPurgeSeqs) ->
-    #group_state{
+    #state{
         group = #set_view_group{
             index_header =
                 #set_view_index_header{
@@ -969,7 +969,7 @@ update_header(OpName, Partitions, State,
             views = Views
         } = Group
     } = State,
-    NewState = State#group_state{
+    NewState = State#state{
         group = Group#set_view_group{
             index_header = Header#set_view_index_header{
                 abitmask = NewAbitmask,
@@ -984,8 +984,8 @@ update_header(OpName, Partitions, State,
                 end, Views)
         }
     },
-    ok = commit_header(NewState#group_state.group),
-    {ActiveList, PassiveList} = make_partition_lists(NewState#group_state.group),
+    ok = commit_header(NewState#state.group),
+    {ActiveList, PassiveList} = make_partition_lists(NewState#state.group),
     ok = couch_db_set:set_active(?db_set(NewState), ActiveList),
     ok = couch_db_set:set_passive(?db_set(NewState), PassiveList),
     % TODO maybe set to debug level
@@ -1003,35 +1003,35 @@ update_header(OpName, Partitions, State,
     NewState.
 
 
-maybe_start_cleaner(#group_state{cleaner_pid = Pid} = State) when is_pid(Pid) ->
+maybe_start_cleaner(#state{cleaner_pid = Pid} = State) when is_pid(Pid) ->
     State;
-maybe_start_cleaner(#group_state{group = Group} = State) ->
+maybe_start_cleaner(#state{group = Group} = State) ->
     #set_view_group{
         index_header = #set_view_index_header{cbitmask = Cbitmask}
     } = Group,
-    case is_pid(State#group_state.compactor_pid) orelse
-        is_pid(State#group_state.updater_pid) orelse (Cbitmask == 0) of
+    case is_pid(State#state.compactor_pid) orelse
+        is_pid(State#state.updater_pid) orelse (Cbitmask == 0) of
     true ->
         State;
     false ->
         Cleaner = spawn_link(fun() -> cleaner(Group) end),
         ?LOG_INFO("Started cleanup process ~p for set view `~s`, group `~s`",
                   [Cleaner, ?set_name(State), ?group_id(State)]),
-        State#group_state{cleaner_pid = Cleaner}
+        State#state{cleaner_pid = Cleaner}
     end.
 
 
-stop_cleaner(#group_state{cleaner_pid = nil} = State) ->
+stop_cleaner(#state{cleaner_pid = nil} = State) ->
     State;
-stop_cleaner(#group_state{cleaner_pid = Pid} = State) when is_pid(Pid) ->
+stop_cleaner(#state{cleaner_pid = Pid} = State) when is_pid(Pid) ->
     ?LOG_INFO("Stopping cleanup process for set view `~s`, group `~s`",
-              [?set_name(State), (State#group_state.group)#set_view_group.name]),
+              [?set_name(State), (State#state.group)#set_view_group.name]),
     Pid ! stop,
     receive
     {'EXIT', Pid, {clean_group, Group}} ->
         ?LOG_INFO("Stopped cleanup process for set view `~s`, group `~s`",
                   [?set_name(State), ?group_id(State)]),
-        State#group_state{group = Group, cleaner_pid = nil};
+        State#state{group = Group, cleaner_pid = nil};
     {'EXIT', Pid, Reason} ->
         exit({cleanup_process_died, Reason})
     end.
@@ -1120,7 +1120,7 @@ make_btree_purge_fun(Cbitmask) ->
     end.
 
 
-index_needs_update(#group_state{group = Group} = State) ->
+index_needs_update(#state{group = Group} = State) ->
     {ok, CurSeqs} = couch_db_set:get_seqs(?db_set(State)),
     {CurSeqs > ?set_seqs(Group), CurSeqs}.
 
@@ -1150,13 +1150,13 @@ start_compactor(State, CompactFun) ->
               [?set_name(State2), ?group_id(State2)]),
     NewGroup = compact_group(State2),
     Pid = spawn_link(fun() ->
-        CompactFun(State2#group_state.group, NewGroup, ?set_name(State2))
+        CompactFun(State2#state.group, NewGroup, ?set_name(State2))
     end),
-    State2#group_state{compactor_pid = Pid, compactor_fun = CompactFun}.
+    State2#state{compactor_pid = Pid, compactor_fun = CompactFun}.
 
 
 compact_group(State) ->
-    #group_state{
+    #state{
         group = #set_view_group{sig = GroupSig} = Group,
         init_args = {RootDir, SetName, _}
     } = State,
