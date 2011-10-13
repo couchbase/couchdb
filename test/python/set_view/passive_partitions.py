@@ -409,8 +409,6 @@ def test_view_updates(params):
 
     expected = params["ndocs"] - (params["ndocs"] / 4)
 
-    assert view_result["total_rows"] == (params["ndocs"] + 2), \
-        "Query returned %d total_rows" % (params["ndocs"] + 2,)
     assert len(view_result["rows"]) == expected, \
         "Query returned %d rows" % (expected,)
 

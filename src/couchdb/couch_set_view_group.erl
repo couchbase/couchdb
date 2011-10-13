@@ -36,6 +36,8 @@
     init_args,
     group,
     updater_pid = nil,
+    % 'not_running' | 'starting' | 'updating_active' | 'updating_passive'
+    updater_state = not_running,
     compactor_pid = nil,
     compactor_fun = nil,
     waiting_commit = false,
@@ -294,21 +296,16 @@ handle_call({request_group, false}, From,
         } = State) ->
     case UpPid of
     nil ->
-        case index_needs_update(State) of
-        {true, NewSeqs} ->
-            #state{group = Group} = State2 = stop_cleaner(State),
-            Owner = self(),
-            Pid = spawn_link(fun() ->
-                couch_set_view_updater:update(Owner, Group, ?set_name(State2), NewSeqs)
-            end),
-            {noreply, State2#state{
-                updater_pid = Pid,
-                waiting_list = [From | WaitList]}};
-        {false, _} ->
-            {reply, {ok, State#state.group}, State}
-        end;
+        State2 = start_updater(State#state{waiting_list = [From | WaitList]}),
+        {noreply, State2, ?CLEANUP_TIMEOUT};
     _ when is_pid(UpPid) ->
-        {noreply, State#state{waiting_list = [From | WaitList]}, ?CLEANUP_TIMEOUT}
+        State2 = stop_updater(State#state{waiting_list = [From | WaitList]}),
+        case ?set_pbitmask(State2#state.group) of
+        0 ->
+            {noreply, State2, ?CLEANUP_TIMEOUT};
+        M when is_integer(M) ->
+            {noreply, start_updater(State2), ?CLEANUP_TIMEOUT}
+        end
     end;
 
 handle_call({request_group, ok}, _From, #state{group = Group} = State) ->
@@ -320,17 +317,8 @@ handle_call({request_group, update_after}, From, #state{group = Group} = State) 
     Pid when is_pid(Pid) ->
         {noreply, State};
     nil ->
-        case index_needs_update(State) of
-        {true, NewSeqs} ->
-            #state{group = Group2} = State2 = stop_cleaner(State),
-            Owner = self(),
-            UpPid = spawn_link(fun() ->
-                couch_set_view_updater:update(Owner, Group2, ?set_name(State2), NewSeqs)
-            end),
-            {noreply, State2#state{updater_pid = UpPid}};
-        {false, _} ->
-            {noreply, State}
-        end
+        State2 = start_updater(State),
+        {noreply, State2, ?CLEANUP_TIMEOUT}
     end;
 
 handle_call(request_group_info, _From, State) ->
@@ -379,7 +367,7 @@ handle_call({compact_done, NewGroup}, _From, State) ->
                 Owner = self(),
                 {true, NewSeqs} = index_needs_update(State),
                 spawn_link(fun() ->
-                    couch_set_view_updater:update(Owner, NewGroup, ?set_name(State), NewSeqs)
+                    couch_set_view_updater:update(Owner, NewGroup, NewSeqs)
                 end);
             true ->
                 nil
@@ -397,6 +385,10 @@ handle_call({compact_done, NewGroup}, _From, State) ->
                 compactor_pid = nil,
                 compactor_fun = nil,
                 updater_pid = NewUpdaterPid,
+                updater_state = case is_pid(NewUpdaterPid) of
+                    true -> starting;
+                    false -> not_running
+                end,
                 group = NewGroup#set_view_group{
                     index_header = get_index_header_data(NewGroup),
                     ref_counter = NewRefCounter
@@ -446,6 +438,16 @@ handle_cast({partial_update, _, _}, State) ->
 handle_info(timeout, State) ->
     NewState = maybe_start_cleaner(State),
     {noreply, NewState};
+
+handle_info({updater_state, UpdaterState}, State) ->
+    State2 = State#state{updater_state = UpdaterState},
+    case {UpdaterState, State2#state.waiting_list} of
+    {updating_passive, [_ | _]} ->
+        State3 = stop_updater(State2),
+        {noreply, start_updater(State3)};
+    _ ->
+        {noreply, State2}
+    end;
 
 handle_info(delayed_commit, #state{group = Group} = State) ->
     commit_header(Group),
@@ -502,6 +504,7 @@ handle_info({'EXIT', UpPid, {new_group, Group}},
     reply_with_group(Group, WaitList),
     State2 = State#state{
         updater_pid = nil,
+        updater_state = not_running,
         waiting_commit = true,
         waiting_list = [],
         group = Group
@@ -517,13 +520,7 @@ handle_info({'EXIT', UpPid, reset}, #state{updater_pid = UpPid} = State) ->
     State2 = stop_cleaner(State),
     case prepare_group(State#state.init_args, true) of
     {ok, ResetGroup} ->
-        Owner = self(),
-        State3 = State2#state{group = ResetGroup},
-        {true, NewSeqs} = index_needs_update(State3),
-        Pid = spawn_link(fun() ->
-            couch_set_view_updater:update(Owner, ResetGroup, ?set_name(State), NewSeqs)
-        end),
-        {ok, State3#state{updater_pid = Pid}};
+        {ok, start_updater(State2#state{group = ResetGroup})};
     Error ->
         {stop, normal, reply_all(State2, Error), ?CLEANUP_TIMEOUT}
     end;
@@ -684,6 +681,7 @@ get_group_info(State) ->
     #state{
         group=Group,
         updater_pid=UpdaterPid,
+        updater_state=UpdaterState,
         compactor_pid=CompactorPid,
         waiting_commit=WaitingCommit,
         waiting_list=WaitersList,
@@ -703,6 +701,7 @@ get_group_info(State) ->
         {disk_size, Size},
         {data_size, view_group_data_size(Btree, Views)},
         {updater_running, UpdaterPid /= nil},
+        {updater_state, couch_util:to_binary(UpdaterState)},
         {compact_running, CompactorPid /= nil},
         {cleanup_running, (CleanerPid /= nil) orelse
             ((CompactorPid /= nil) andalso (?set_cbitmask(Group) =/= 0))},
@@ -1174,3 +1173,54 @@ accept_compact_group(NewGroup, CurrentGroup) ->
     #set_view_group{id_btree = NewIdBtree} = NewGroup,
     {ok, IdBitmap} = couch_btree:full_reduce(NewIdBtree),
     (IdBitmap band ?set_cbitmask(CurrentGroup)) =:= 0.
+
+
+stop_updater(#state{updater_pid = nil} = State) ->
+    State;
+stop_updater(#state{updater_pid = Pid} = State) ->
+    Pid ! stop,
+    receive
+    {'EXIT', Pid, {new_group, NewGroup}} ->
+        case State#state.waiting_commit of
+        true ->
+            ok;
+        false ->
+            erlang:send_after(1000, self(), delayed_commit)
+        end,
+        reply_with_group(NewGroup, State#state.waiting_list),
+        State#state{
+            updater_pid = nil,
+            updater_state = not_running,
+            waiting_commit = true,
+            group = NewGroup,
+            waiting_list = []
+        };
+    {'EXIT', Pid, Reason} ->
+        ?LOG_ERROR("Updater, set view `~s`, group `~s`, died with "
+            "unexpected reason: ~p",
+            [?set_name(State), ?group_id(State), Reason]),
+        State#state{updater_pid = nil, updater_state = not_running}
+    end.
+
+
+start_updater(#state{updater_pid = nil, updater_state = not_running} = State) ->
+    case index_needs_update(State) of
+    {true, NewSeqs} ->
+        #state{group = Group} = State2 = stop_cleaner(State),
+        Owner = self(),
+        Pid = spawn_link(fun() ->
+            couch_set_view_updater:update(Owner, Group, NewSeqs)
+        end),
+        State2#state{
+            updater_pid = Pid,
+            updater_state = starting
+        };
+    {false, _} ->
+        case State#state.waiting_list of
+        [] ->
+            State;
+        _ ->
+            reply_with_group(State#state.group, State#state.waiting_list),
+            State#state{waiting_list = []}
+        end
+    end.

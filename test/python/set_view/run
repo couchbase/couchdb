@@ -9,6 +9,9 @@ echo "Running set view test stale.py\n"
 echo "Running set view test passive_partitions.py\n"
 ./passive_partitions.py
 
+echo "Running set view test passive_partitions_update.py\n"
+./passive_partitions_update.py
+
 echo "Running set view test cleanup.py\n"
 ./cleanup.py
 

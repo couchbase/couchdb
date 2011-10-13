@@ -122,7 +122,7 @@ maybe_retry_compact(NewGroup, SetName) ->
         ok;
     update ->
         {_, Ref} = erlang:spawn_monitor(fun() ->
-            couch_set_view_updater:update(nil, NewGroup, SetName)
+            couch_set_view_updater:update(nil, NewGroup)
         end),
         receive
         {'DOWN', Ref, _, _, {new_group, NewGroup2}} ->

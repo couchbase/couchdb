@@ -68,7 +68,8 @@ enum_docs_since(Pid, SinceSeqs, Fun, Acc0) ->
         catch couch_db:close(Db),
         Acc3
     end,
-    Acc2 = lists:foldl(Wrapper, Acc0, lists:keysort(1, Active)),
+    {ok, Acc1} = Fun(starting_active, Acc0),
+    Acc2 = lists:foldl(Wrapper, Acc1, lists:keysort(1, Active)),
     {ok, Acc3} = Fun(starting_passive, Acc2),
     Acc4 = lists:foldl(Wrapper, Acc3, lists:keysort(1, Passive)),
     {ok, Acc4}.

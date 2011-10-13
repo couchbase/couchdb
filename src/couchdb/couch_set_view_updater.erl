@@ -12,7 +12,7 @@
 
 -module(couch_set_view_updater).
 
--export([update/3, update/4]).
+-export([update/2, update/3]).
 
 -include("couch_db.hrl").
 -include("couch_set_view.hrl").
@@ -20,12 +20,13 @@
 -define(replace(L, K, V), lists:keystore(K, 1, L, {K, V})).
 
 
-update(Owner, #set_view_group{db_set = DbSet} = Group, SetName) ->
+update(Owner, #set_view_group{db_set = DbSet} = Group) ->
     {ok, NewSeqs} = couch_db_set:get_seqs(DbSet),
-    update(Owner, Group, SetName, NewSeqs).
+    update(Owner, Group, NewSeqs).
 
-update(Owner, Group, SetName, NewSeqs) ->
+update(Owner, Group, NewSeqs) ->
     #set_view_group{
+        set_name = SetName,
         name = GroupName,
         index_header = #set_view_index_header{seqs = SinceSeqs}
     } = Group,
@@ -81,7 +82,7 @@ update(Owner, Group, SetName, NewSeqs) ->
         Parent ! {new_group, NewGroup}
     end),
 
-    load_changes(SetName, Group, SinceSeqs, MapQueue),
+    load_changes(Owner, Group, SinceSeqs, MapQueue),
     receive
     {new_group, _} = NewGroup ->
         ok = couch_indexer_manager:leave(),
@@ -89,8 +90,9 @@ update(Owner, Group, SetName, NewSeqs) ->
     end.
 
 
-load_changes(SetName, Group, SinceSeqs, MapQueue) ->
+load_changes(Owner, Group, SinceSeqs, MapQueue) ->
     #set_view_group{
+        set_name = SetName,
         db_set = DbSet,
         design_options = DesignOptions
     } = Group,
@@ -104,21 +106,46 @@ load_changes(SetName, Group, SinceSeqs, MapQueue) ->
     _ -> [conflicts, deleted_conflicts]
     end,
     FoldFun = fun({partition, Id, Since}, Type) ->
-            ?LOG_INFO("Reading changes (since sequence ~p) from ~s partition ~s to"
+            maybe_stop(Type),
+            ?LOG_INFO("Reading changes (since sequence ~p) from ~p partition ~s to"
                 " update set view `~s`", [Since, Type, ?dbname(SetName, Id), SetName]),
             {ok, Type};
+        (starting_active, _) ->
+            notify_owner(Owner, updating_active),
+            {ok, active};
         (starting_passive, _) ->
-            % TODO: we're blocking all query requests until the view is created
-            % (or updated) for all partitions. We should prioritize the active
-            % partitions, unblock the queries and finally, in parallel, index
-            % all changes from the passive partitions.
-            {ok, "passive"};
+            maybe_stop(passive),
+            notify_owner(Owner, updating_passive),
+            {ok, passive};
         ({doc_info, DocInfo, PartId, Db}, Type) ->
+            maybe_stop(Type),
             load_doc(Db, PartId, DocInfo, MapQueue, DocOpts, IncludeDesign),
             {ok, Type}
     end,
-    {ok, _} = couch_db_set:enum_docs_since(DbSet, SinceSeqs, FoldFun, "active"),
+    try
+        {ok, _} = couch_db_set:enum_docs_since(DbSet, SinceSeqs, FoldFun, active)
+    catch
+    throw:stop ->
+        ok
+    end,
     couch_work_queue:close(MapQueue).
+
+
+maybe_stop(active) ->
+    ok;
+maybe_stop(passive) ->
+    receive
+    stop ->
+        throw(stop)
+    after 0 ->
+        ok
+    end.
+
+
+notify_owner(nil, _State) ->
+    ok;
+notify_owner(Owner, State) when is_pid(Owner) ->
+    Owner ! {updater_state, State}.
 
 
 add_query_server(#set_view_group{query_server = nil} = Group) ->
