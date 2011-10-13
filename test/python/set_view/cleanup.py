@@ -36,9 +36,28 @@ def test_cleanup(params):
 
     common.test_keys_sorted(view_result)
 
-    print "Triggering partition 4 cleanup and querying view again"
+    info = common.get_set_view_info(params)
+    assert info["active_partitions"] == [0, 1, 2, 3], "right active partitions list"
+    assert info["passive_partitions"] == [], "right passive partitions list"
+    assert info["cleanup_partitions"] == [], "right cleanup partitions list"
+    for i in [0, 1, 2, 3]:
+        assert info["update_seqs"][str(i)] == (params["ndocs"] / 4), \
+            "right update seq for partition %d" % (i + 1)
+
+    print "Triggering partition 4 cleanup"
     common.cleanup_partition(params, 3)
 
+    info = common.get_set_view_info(params)
+    assert info["active_partitions"] == [0, 1, 2], "right active partitions list"
+    assert info["passive_partitions"] == [], "right passive partitions list"
+    assert info["cleanup_partitions"] == [3], "right cleanup partitions list"
+    for i in [0, 1, 2]:
+        assert info["update_seqs"][str(i)] == (params["ndocs"] / 4), \
+            "right update seq for partition %d" % (i + 1)
+    assert not("3" in info["update_seqs"]), "partition 3 not in info.update_seqs"
+    assert info["cleanup_running"] == True, "cleanup process is running"
+
+    print "Querying view again"
     (resp2, view_result2) = common.query(params, "mapview1")
     etag2 = resp2.getheader("ETag")
 
@@ -84,6 +103,15 @@ def test_cleanup(params):
         assert not (key in all_keys), \
             "Key %d not in result after partition 4 cleanup finished" % (key,)
 
+    info = common.get_set_view_info(params)
+    assert info["active_partitions"] == [0, 1, 2], "right active partitions list"
+    assert info["passive_partitions"] == [], "right passive partitions list"
+    assert info["cleanup_partitions"] == [], "right cleanup partitions list"
+    for i in [0, 1, 2]:
+        assert info["update_seqs"][str(i)] == (params["ndocs"] / 4), \
+            "right update seq for partition %d" % (i + 1)
+    assert not("3" in info["update_seqs"]), "partition 3 not in info.update_seqs"
+
     print "Adding 2 new documents to partition 4"
     server = params["server"]
     db4 = server[params["setname"] + "/3"]
@@ -117,6 +145,15 @@ def test_cleanup(params):
     assert not(new_doc1["integer"] in all_keys), "new_doc1 not in query result after cleanup"
     assert not(new_doc2["integer"] in all_keys), "new_doc2 not in query result after cleanup"
 
+    info = common.get_set_view_info(params)
+    assert info["active_partitions"] == [0, 1, 2], "right active partitions list"
+    assert info["passive_partitions"] == [], "right passive partitions list"
+    assert info["cleanup_partitions"] == [], "right cleanup partitions list"
+    for i in [0, 1, 2]:
+        assert info["update_seqs"][str(i)] == (params["ndocs"] / 4), \
+            "right update seq for partition %d" % (i + 1)
+    assert not("3" in info["update_seqs"]), "partition 3 not in info.update_seqs"
+
     print "Triggering compaction again and verifying it doesn't crash"
     common.compact_set_view(params)
     (resp5, view_result5) = common.query(params, "mapview1")
@@ -124,6 +161,15 @@ def test_cleanup(params):
 
     assert etag5 == etag4, "Same etag after second compaction"
     assert view_result5 == view_result4, "Same query results after second compaction"
+
+    info = common.get_set_view_info(params)
+    assert info["active_partitions"] == [0, 1, 2], "right active partitions list"
+    assert info["passive_partitions"] == [], "right passive partitions list"
+    assert info["cleanup_partitions"] == [], "right cleanup partitions list"
+    for i in [0, 1, 2]:
+        assert info["update_seqs"][str(i)] == (params["ndocs"] / 4), \
+            "right update seq for partition %d" % (i + 1)
+    assert not("3" in info["update_seqs"]), "partition 3 not in info.update_seqs"
 
 
 

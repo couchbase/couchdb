@@ -153,11 +153,10 @@ start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
 
-% TODO: fixme
-get_group_info(#db{name = DbName}, GroupId) ->
-    get_group_info(DbName, GroupId);
-get_group_info(DbName, GroupId) ->
-    couch_set_view_group:request_group_info(get_group_server(DbName, GroupId)).
+get_group_info(SetName, DDocId) ->
+    GroupPid = get_group_pid(SetName, DDocId),
+    {ok, _Info} = couch_set_view_group:request_group_info(GroupPid).
+
 
 cleanup_index_files(Db) ->
     % load all ddocs

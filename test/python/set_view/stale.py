@@ -39,6 +39,18 @@ def test_staleness(params):
 
     common.test_keys_sorted(map_view_result)
 
+    # To give the set view group some time to write and fsync the index header
+    time.sleep(5)
+
+    print "Verifying set view group info"
+    info = common.get_set_view_info(params)
+    assert info["active_partitions"] == [0, 1, 2, 3], "right active partitions list"
+    assert info["passive_partitions"] == [], "right passive partitions list"
+    assert info["cleanup_partitions"] == [], "right cleanup partitions list"
+    for i in [0, 1, 2, 3]:
+        assert info["update_seqs"][str(i)] == (params["ndocs"] / 4), \
+            "right update seq for partition %d" % (i + 1)
+
     print "Adding 1 new document to each partition"
     server = params["server"]
     db1 = server[params["setname"] + "/0"]
@@ -62,6 +74,10 @@ def test_staleness(params):
     assert map_view_result2 == map_view_result, "Same response as before with ?stale=ok"
     assert map_etag2 == map_etag, "Same etag as before with ?stale=ok"
 
+    print "Verifying set view group info"
+    info2 = common.get_set_view_info(params)
+    assert info2 == info, "Same set view group info after ?stale=ok query"
+
     print "Querying map view with ?stale=update_after"
     (map_resp3, map_view_result3) = common.query(params, "mapview1", {"stale": "update_after"})
     map_etag3 = map_resp3.getheader("ETag")
@@ -70,6 +86,15 @@ def test_staleness(params):
     assert map_etag3 == map_etag, "Same etag as before with ?stale=updater_after"
 
     time.sleep(5)
+
+    print "Verifying set view group info"
+    info = common.get_set_view_info(params)
+    assert info["active_partitions"] == [0, 1, 2, 3], "right active partitions list"
+    assert info["passive_partitions"] == [], "right passive partitions list"
+    assert info["cleanup_partitions"] == [], "right cleanup partitions list"
+    for i in [0, 1, 2, 3]:
+        assert info["update_seqs"][str(i)] == ((params["ndocs"] / 4) + 1), \
+            "right update seq for partition %d" % (i + 1)
 
     print "Querying map view without stale option"
     (map_resp4, map_view_result4) = common.query(params, "mapview1")

@@ -41,6 +41,15 @@ def test_compaction(params):
 
     common.test_keys_sorted(map_view_result)
 
+    print "Verifying set view group info"
+    info = common.get_set_view_info(params)
+    assert info["active_partitions"] == [0, 1, 2, 3], "right active partitions list"
+    assert info["passive_partitions"] == [], "right passive partitions list"
+    assert info["cleanup_partitions"] == [], "right cleanup partitions list"
+    for i in [0, 1, 2, 3]:
+        assert info["update_seqs"][str(i)] == (params["ndocs"] / 4), \
+            "right update seq for partition %d" % (i + 1)
+
     print "Querying reduce view"
     (red_resp, red_view_result) = common.query(params, "redview1")
     red_etag = red_resp.getheader("ETag")
@@ -52,7 +61,18 @@ def test_compaction(params):
     print "Triggering view compaction"
     common.compact_set_view(params)
 
+    print "Verifying set view group info"
+    info2 = common.get_set_view_info(params)
+    assert info2["active_partitions"] == [0, 1, 2, 3], "right active partitions list"
+    assert info2["passive_partitions"] == [], "right passive partitions list"
+    assert info2["cleanup_partitions"] == [], "right cleanup partitions list"
+    for i in [0, 1, 2, 3]:
+        assert info2["update_seqs"][str(i)] == (params["ndocs"] / 4), \
+            "right update seq for partition %d" % (i + 1)
+    assert info2["disk_size"] < info["disk_size"], "Smaller disk_size after compaction"
+
     print "Querying map view"
+
     (map_resp2, map_view_result2) = common.query(params, "mapview1")
     map_etag2 = map_resp2.getheader("ETag")
 
@@ -77,12 +97,35 @@ def test_compaction(params):
     print "Triggering view compaction"
     common.compact_set_view(params, False)
 
+    print "Verifying set view group info"
+    info = common.get_set_view_info(params)
+    assert info["active_partitions"] == [0, 1, 2, 3], "right active partitions list"
+    assert info["passive_partitions"] == [], "right passive partitions list"
+    assert info["cleanup_partitions"] == [], "right cleanup partitions list"
+    for i in [0, 1, 2, 3]:
+        assert info["update_seqs"][str(i)] == (params["ndocs"] / 4), \
+            "right update seq for partition %d" % (i + 1)
+    assert info["compact_running"] == True, "Compaction is flagged as running in group info"
+
+
     print "Triggering set view group index update"
     common.query(params, "redview1")
 
     print "Waiting for set view compaction to finish"
     compaction_was_running = (common.wait_set_view_compaction_complete(params) > 0)
     assert compaction_was_running, "Compaction was running when the view update was triggered"
+
+    print "Verifying set view group info"
+    info = common.get_set_view_info(params)
+    assert info["active_partitions"] == [0, 1, 2, 3], "right active partitions list"
+    assert info["passive_partitions"] == [], "right passive partitions list"
+    assert info["cleanup_partitions"] == [], "right cleanup partitions list"
+    for i in [0, 1, 2, 3]:
+        if i == 3:
+            seq = (params["ndocs"] / 4) + 2
+        else:
+            seq = (params["ndocs"] / 4)
+        assert info["update_seqs"][str(i)] == seq, "right update seq for partition %d" % (i + 1)
 
     print "Querying map view"
     (map_resp3, map_view_result3) = common.query(params, "mapview1")
@@ -112,8 +155,31 @@ def test_compaction(params):
     print "Triggering partition 4 cleanup while compaction is ongoing"
     common.cleanup_partition(params, 3)
 
+    print "Verifying set view group info"
+    info = common.get_set_view_info(params)
+    assert info["active_partitions"] == [0, 1, 2], "right active partitions list"
+    assert info["passive_partitions"] == [], "right passive partitions list"
+    assert info["cleanup_partitions"] == [3], "right cleanup partitions list"
+    for i in [0, 1, 2]:
+        assert info["update_seqs"][str(i)] == (params["ndocs"] / 4), \
+            "right update seq for partition %d" % (i + 1)
+    assert not("3" in info["update_seqs"]), "paritition 4 not in group info update_seqs"
+    assert info["compact_running"] == True, "Compaction is flagged as running in group info"
+    assert info["cleanup_running"] == True, "Cleanup is flagged as running in group info"
+
     compaction_was_running = (common.wait_set_view_compaction_complete(params) > 0)
     assert compaction_was_running, "Compaction was running when the cleanup was triggered"
+
+    print "Verifying set view group info"
+    info2 = common.get_set_view_info(params)
+    assert info2["active_partitions"] == [0, 1, 2], "right active partitions list"
+    assert info2["passive_partitions"] == [], "right passive partitions list"
+    assert info2["cleanup_partitions"] == [], "right cleanup partitions list"
+    for i in [0, 1, 2]:
+        assert info2["update_seqs"][str(i)] == (params["ndocs"] / 4), \
+            "right update seq for partition %d" % (i + 1)
+    assert not("3" in info["update_seqs"]), "paritition 4 not in group info update_seqs"
+    assert info2["disk_size"] < info["disk_size"], "Smaller disk_size after compaction+cleanup"
 
     print "Querying map view"
     (map_resp4, map_view_result4) = common.query(params, "mapview1")

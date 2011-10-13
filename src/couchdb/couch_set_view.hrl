@@ -16,6 +16,9 @@
 
 -define(master_dbname(SetName), <<SetName/binary, "/master">>).
 
+-define(set_num_partitions(SetViewGroup),
+        (SetViewGroup#set_view_group.index_header)#set_view_index_header.num_partitions).
+
 -define(set_abitmask(SetViewGroup),
         (SetViewGroup#set_view_group.index_header)#set_view_index_header.abitmask).
 

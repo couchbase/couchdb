@@ -142,6 +142,19 @@ def cleanup_partition(params, i):
     conn.close()
 
 
+def get_set_view_info(params):
+    conn = httplib.HTTPConnection(params["host"])
+    conn.request(
+        "GET",
+        "/_set_view/" + params["setname"] + "/" + params["ddoc"]["_id"] + "/_info"
+        )
+    resp = conn.getresponse()
+    assert resp.status == 200, "Set view info response has status 200"
+    info = json.loads(resp.read())
+    conn.close()
+    return info
+
+
 def compact_set_view(params, block = True):
     conn = httplib.HTTPConnection(params["host"])
     conn.request(

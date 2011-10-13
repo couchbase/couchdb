@@ -48,6 +48,10 @@ route_request(#httpd{method = 'POST'} = Req, SetName, DDocId, [<<"_define">>]) -
 route_request(Req, _SetName, _DDocId, [<<"_define">>]) ->
     send_method_not_allowed(Req, "POST");
 
+route_request(#httpd{method = 'GET'} = Req, SetName, DDocId, [<<"_info">>]) ->
+    {ok, Info} = couch_set_view:get_group_info(SetName, DDocId),
+    couch_httpd:send_json(Req, 200, {Info});
+
 route_request(#httpd{method = 'GET'} = Req, SetName, DDocId, [<<"_view">>, ViewName]) ->
     Keys = couch_httpd:qs_json_value(Req, "keys", nil),
     FilteredPartitions = couch_httpd:qs_json_value(Req, "partitions", []),

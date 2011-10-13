@@ -686,7 +686,8 @@ get_group_info(State) ->
         updater_pid=UpdaterPid,
         compactor_pid=CompactorPid,
         waiting_commit=WaitingCommit,
-        waiting_list=WaitersList
+        waiting_list=WaitersList,
+        cleaner_pid=CleanerPid
     } = State,
     #set_view_group{
         fd = Fd,
@@ -703,10 +704,16 @@ get_group_info(State) ->
         {data_size, view_group_data_size(Btree, Views)},
         {updater_running, UpdaterPid /= nil},
         {compact_running, CompactorPid /= nil},
+        {cleanup_running, (CleanerPid /= nil) orelse
+            ((CompactorPid /= nil) andalso (?set_cbitmask(Group) =/= 0))},
         {waiting_commit, WaitingCommit},
         {waiting_clients, length(WaitersList)},
-        {update_seqs, ?set_seqs(Group)},
-        {purge_seqs, ?set_purge_seqs(Group)}
+        {max_number_partitions, ?set_num_partitions(Group)},
+        {update_seqs, {[{couch_util:to_binary(P), S} || {P, S} <- ?set_seqs(Group)]}},
+        {purge_seqs, {[{couch_util:to_binary(P), S} || {P, S} <- ?set_purge_seqs(Group)]}},
+        {active_partitions, couch_set_view_util:decode_bitmask(?set_abitmask(Group))},
+        {passive_partitions, couch_set_view_util:decode_bitmask(?set_pbitmask(Group))},
+        {cleanup_partitions, couch_set_view_util:decode_bitmask(?set_cbitmask(Group))}
     ].
 
 view_group_data_size(MainBtree, Views) ->
