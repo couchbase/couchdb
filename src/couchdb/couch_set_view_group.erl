@@ -217,7 +217,6 @@ handle_call({cleanup_partitions, Partitions}, _From, State) ->
             abitmask = Abitmask, pbitmask = Pbitmask, cbitmask = Cbitmask
         } = Header
     } = Group2,
-    % TODO abort compaction and restart it
     case validate_partitions(Header, Partitions) of
     ok ->
         {ok, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs, NewPurgeSeqs} =
