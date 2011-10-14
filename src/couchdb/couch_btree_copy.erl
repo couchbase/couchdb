@@ -150,7 +150,7 @@ bubble_up({Key, NodeState}, Level, #acc{max_level = MaxLevel,
 finish_copy(#acc{cur_level = 1, max_level = 1, nodes = Nodes} = Acc) ->
     case dict:fetch(1, Nodes) of
     [] ->
-        {ok, nil};
+        {ok, nil, Acc};
     [{_Key, _Value} | _] = KvList ->
         {RootState, Acc2} = flush_leaf(KvList, Acc),
         {ok, RootState, Acc2}
