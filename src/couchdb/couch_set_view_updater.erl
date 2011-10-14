@@ -132,10 +132,17 @@ load_changes(Owner, Group, SinceSeqs, MapQueue) ->
 
 
 maybe_stop(active) ->
-    ok;
+    receive
+    stop_immediately ->
+        throw(stop)
+    after 0 ->
+        ok
+    end;
 maybe_stop(passive) ->
     receive
-    stop ->
+    stop_immediately ->
+        throw(stop);
+    stop_after_active ->
         throw(stop)
     after 0 ->
         ok

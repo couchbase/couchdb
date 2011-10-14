@@ -7,6 +7,7 @@ import json
 import couchdb
 import httplib
 import urllib
+import time
 import common
 
 HOST = "localhost:5984"
@@ -173,6 +174,87 @@ def test_cleanup(params):
 
 
 
+def test_set_cleanup_partitions_when_updater_is_running(params):
+    print "Marking all partitions for cleanup"
+    for i in [0, 1, 2, 3]:
+        common.cleanup_partition(params, i)
+
+    print "Compacting the set view group"
+    common.compact_set_view(params)
+
+    info = common.get_set_view_info(params)
+    assert info["active_partitions"] == [], "right active partitions list"
+    assert info["passive_partitions"] == [], "right passive partitions list"
+    assert info["cleanup_partitions"] == [], "right cleanup partitions list"
+
+    print "Querying view"
+    (resp, view_result) = common.query(params, "mapview1")
+    assert view_result["total_rows"] == 0, "Empty view result"
+    assert len(view_result["rows"]) == 0, "Empty view result"
+
+    print "Marking all partitions as active"
+    for i in [0, 1, 2, 3]:
+        common.enable_partition(params, i)
+
+    print "Querying view with ?stale=update_after"
+    (resp, view_result) = common.query(params, "mapview1", {"stale": "update_after"})
+    assert view_result["total_rows"] == 0, "Empty view result"
+    assert len(view_result["rows"]) == 0, "Empty view result"
+
+    print "Marking partition 2 for cleanup while the updater is running"
+    common.cleanup_partition(params, 1)
+
+    info = common.get_set_view_info(params)
+    assert info["active_partitions"] == [0, 2, 3], "right active partitions list"
+    assert info["passive_partitions"] == [], "right passive partitions list"
+    assert info["cleanup_partitions"] == [1], "right cleanup partitions list"
+    assert not("1" in info["update_seqs"]), "partition 1 not in info.update_seqs"
+    assert not("1" in info["purge_seqs"]), "partition 1 not in info.update_seqs"
+
+    print "Waiting for the set view updater to finish"
+    iterations = 0
+    while True:
+        info = common.get_set_view_info(params)
+        if info["updater_running"]:
+            iterations += 1
+        else:
+            break
+
+    assert iterations > 0, "Updater was running when partition 2 was marked for cleanup"
+    print "Verifying set view group info"
+    info = common.get_set_view_info(params)
+    assert info["active_partitions"] == [0, 2, 3], "right active partitions list"
+    assert info["passive_partitions"] == [], "right passive partitions list"
+    assert info["cleanup_partitions"] == [1] or info["cleanup_partitions"] == [], \
+        "cleanup partitions list is not wrong"
+    assert not("1" in info["update_seqs"]), "partition 1 not in info.update_seqs"
+    assert not("1" in info["purge_seqs"]), "partition 1 not in info.update_seqs"
+
+    print "Querying view"
+    (resp, view_result) = common.query(params, "mapview1")
+
+    doc_count = common.set_doc_count(params, [0, 2, 3])
+    assert len(view_result["rows"]) == doc_count, "Query returned %d rows" % doc_count
+    common.test_keys_sorted(view_result)
+
+    all_keys = {}
+    for r in view_result["rows"]:
+        all_keys[r["key"]] = True
+
+    for key in xrange(2, params["ndocs"], params["nparts"]):
+        assert not (key in all_keys), \
+            "Key %d not in result after partition 2 marked for cleanup" % (key,)
+
+    print "Verifying set view group info"
+    info = common.get_set_view_info(params)
+    assert info["active_partitions"] == [0, 2, 3], "right active partitions list"
+    assert info["passive_partitions"] == [], "right passive partitions list"
+    assert info["cleanup_partitions"] == [], "right cleanup partitions list"
+    assert not("1" in info["update_seqs"]), "partition 1 not in info.update_seqs"
+    assert not("1" in info["purge_seqs"]), "partition 1 not in info.update_seqs"
+
+
+
 def main():
     server = couchdb.Server(url = "http://" + HOST)
     params = {
@@ -191,6 +273,7 @@ def main():
     print "Databases created"
 
     test_cleanup(params)
+    test_set_cleanup_partitions_when_updater_is_running(params)
 
     print "Deleting test data"
     common.create_dbs(params, True)

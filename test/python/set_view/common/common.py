@@ -22,6 +22,17 @@ def create_dbs(params, del_only = False):
         server.create(params["setname"] + "/master")
 
 
+def set_doc_count(params, partitions = None):
+    if partitions is None:
+        partitions = range(0, params["nparts"])
+    count = 0
+    for i in partitions:
+        name = params["setname"] + "/" + str(i)
+        db = params["server"][name]
+        count += len(db)
+    return count
+
+
 def populate(params, make_doc = lambda i: {"_id": str(i), "integer": i, "string": str(i)}):
     server = params["server"]
     dbs = []

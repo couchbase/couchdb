@@ -93,6 +93,58 @@ def test_updates(params):
 
 
 
+def test_set_passive_partitions_when_updater_is_running(params):
+    print "Querying map view in steady state with ?stale=update_after"
+    (resp, view_result) = common.query(params, "mapview", {"stale": "update_after"})
+
+    assert len(view_result["rows"]) == 0, "Received empty row set"
+    assert view_result["total_rows"] == 0, "Received empty row set"
+
+    print "Marking partition 4 as passive"
+    common.disable_partition(params, 3)
+
+    info = common.get_set_view_info(params)
+    assert info["active_partitions"] == [0, 1, 2], "right active partitions list"
+    assert info["passive_partitions"] == [3], "right passive partitions list"
+    assert info["cleanup_partitions"] == [], "right cleanup partitions list"
+
+    print "Waiting for the set view updater to finish"
+    iterations = 0
+    while True:
+        info = common.get_set_view_info(params)
+        if info["updater_running"]:
+            iterations += 1
+        else:
+            break
+
+    assert iterations > 0, "Updater was running when partition 4 was set to passive"
+    print "Verifying set view group info"
+    info = common.get_set_view_info(params)
+    assert info["active_partitions"] == [0, 1, 2], "right active partitions list"
+    assert info["passive_partitions"] == [3], "right passive partitions list"
+    assert info["cleanup_partitions"] == [],  "right cleanup partitions list"
+
+    print "Querying map view again"
+    (resp, view_result) = common.query(params, "mapview")
+
+    doc_count = common.set_doc_count(params)
+    expected_row_count = common.set_doc_count(params, [0, 1, 2])
+    assert view_result["total_rows"] == doc_count, \
+        "Query returned %d total_rows" % (doc_count,)
+    assert len(view_result["rows"]) == expected_row_count, \
+        "Query returned %d rows" % (expected_row_count,)
+
+    common.test_keys_sorted(view_result)
+
+    all_keys = {}
+    for r in view_result["rows"]:
+        all_keys[r["key"]] = True
+
+    for key in xrange(4, doc_count, params["nparts"]):
+        assert not (key in all_keys), \
+            "Key %d not in result after partition 4 was set to passive" % (key,)
+
+
 def main():
     server = couchdb.Server(url = "http://" + HOST)
     params = {
@@ -112,6 +164,15 @@ def main():
     common.define_set_view(params, [0], [1, 2, 3])
 
     test_updates(params)
+
+    print "Re-creating databases"
+    del params["ddoc"]["_rev"]
+    common.create_dbs(params)
+    common.populate(params)
+    print "Configuring set view with all partitions active"
+    common.define_set_view(params, [0, 1, 2, 3], [])
+
+    test_set_passive_partitions_when_updater_is_running(params)
 
     print "Deleting test data"
     common.create_dbs(params, True)

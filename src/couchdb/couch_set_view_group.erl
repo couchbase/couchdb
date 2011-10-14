@@ -225,22 +225,33 @@ handle_call({cleanup_partitions, Partitions}, _From, State) ->
             set_cleanup_partitions(
                 Partitions, Abitmask, Pbitmask, Cbitmask,
                 ?set_seqs(Group2), ?set_purge_seqs(Group2)),
-        State3 = update_header(
-             cleanup_partitions, Partitions, State2,
+        UpdaterRunning = is_pid(State2#state.updater_pid),
+        State3 = stop_updater(State2, immediately),
+        State4 = update_header(
+             cleanup_partitions, Partitions, State3,
              NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs, NewPurgeSeqs),
         ok = couch_db_set:remove_partitions(?db_set(State3), Partitions),
-        NewState = case is_pid(State3#state.compactor_pid) of
+        State5 = case is_pid(State4#state.compactor_pid) of
         true ->
             ?LOG_INFO("Restarting compaction for group `~s`, set view `~s`, "
                       "because the cleanup bitmask was updated.",
-                      [?group_id(State3), ?set_name(State3)]),
-            unlink(State3#state.compactor_pid),
-            exit(State3#state.compactor_pid, kill),
-            start_compactor(State3, State3#state.compactor_fun);
+                      [?group_id(State4), ?set_name(State4)]),
+            unlink(State4#state.compactor_pid),
+            exit(State4#state.compactor_pid, kill),
+            start_compactor(State4, State4#state.compactor_fun);
         false ->
-            State3
+            State4
         end,
-        {reply, ok, maybe_start_cleaner(NewState), ?CLEANUP_TIMEOUT};
+        NewState = case UpdaterRunning of
+        true ->
+            % Updater was running, we stopped it, updated the group we received
+            % from the updater, updated that group's bitmasks and update/purge
+            % seqs, and now restart the updater with this modified group.
+            start_updater(State5);
+        false ->
+            maybe_start_cleaner(State5)
+        end,
+        {reply, ok, NewState, ?CLEANUP_TIMEOUT};
     Error ->
         {reply, Error, State2, ?CLEANUP_TIMEOUT}
     end;
@@ -258,9 +269,20 @@ handle_call({set_passive_partitions, Partitions}, _From, State) ->
             set_passive_partitions(
                 Partitions, Abitmask, Pbitmask,
                 ?set_seqs(Group2), ?set_purge_seqs(Group2)),
-        NewState = update_header(
-             set_passive_partitions, Partitions, State2,
+        UpdaterRunning = is_pid(State2#state.updater_pid),
+        State3 = stop_updater(State2, immediately),
+        State4 = update_header(
+             set_passive_partitions, Partitions, State3,
              NewAbitmask, NewPbitmask, Cbitmask, NewSeqs, NewPurgeSeqs),
+        NewState = case UpdaterRunning of
+        true ->
+            % Updater was running, we stopped it, updated the group we received
+            % from the updater, updated that group's bitmasks and update/purge
+            % seqs, and now restart the updater with this modified group.
+            start_updater(State4);
+        false ->
+            State4
+        end,
         {reply, ok, NewState, ?CLEANUP_TIMEOUT};
     Error ->
         {reply, Error, State2, ?CLEANUP_TIMEOUT}
@@ -332,7 +354,7 @@ handle_call({start_compact, _}, _From, State) ->
     %% compact already running, this is a no-op
     {reply, {ok, State#state.compactor_pid}, State};
 
-handle_call({compact_done, NewGroup}, _From, State) ->
+handle_call({compact_done, NewGroup0}, _From, State) ->
     #state{
         group = Group,
         init_args = {RootDir, _, _},
@@ -343,15 +365,16 @@ handle_call({compact_done, NewGroup}, _From, State) ->
         fd = OldFd, sig = GroupSig, ref_counter = RefCounter
     } = Group,
 
-    case accept_compact_group(NewGroup, Group) of
+    case accept_compact_group(NewGroup0, Group) of
     false ->
         ?LOG_INFO("Recompacting group `~s`, set view `~s`, because the "
                   "cleanup bitmask was updated.",
                   [?group_id(State), ?set_name(State)]),
         {reply, {restart, Group, compact_group(State)}, State};
     true ->
-        case group_up_to_date(NewGroup, State#state.group) of
+        case group_up_to_date(NewGroup0, State#state.group) of
         true ->
+            NewGroup = update_bitmasks(Group, NewGroup0),
             ?LOG_INFO("Set view `~s`, group `~s`, compaction complete",
                       [?set_name(State), ?group_id(State)]),
             FileName = index_file_name(RootDir, ?set_name(State), GroupSig),
@@ -419,10 +442,12 @@ handle_call(cancel_compact, _From, #state{compactor_pid = Pid} = State) ->
     {reply, ok, State2, ?CLEANUP_TIMEOUT}.
 
 
-handle_cast({partial_update, Pid, NewGroup}, #state{updater_pid=Pid} = State) ->
+handle_cast({partial_update, Pid, NewGroup0}, #state{updater_pid=Pid} = State) ->
     #state{
-        waiting_commit = WaitingCommit
+        waiting_commit = WaitingCommit,
+        group = Group
     } = State,
+    NewGroup = update_bitmasks(Group, NewGroup0),
     ?LOG_INFO("Checkpointing set view `~s` update for group `~s`",
               [?set_name(State), NewGroup#set_view_group.name]),
     if not WaitingCommit ->
@@ -492,8 +517,9 @@ handle_info({'EXIT', Pid, shutdown},
               "was shutdown", [?set_name(State), ?group_id(State)]),
     {stop, normal, State};
 
-handle_info({'EXIT', UpPid, {new_group, Group}},
+handle_info({'EXIT', UpPid, {new_group, NewGroup0}},
         #state{
+            group = Group,
             updater_pid = UpPid,
             waiting_list = WaitList,
             waiting_commit = WaitingCommit} = State) ->
@@ -501,13 +527,14 @@ handle_info({'EXIT', UpPid, {new_group, Group}},
         erlang:send_after(1000, self(), delayed_commit);
     true -> ok
     end,
-    reply_with_group(Group, WaitList),
+    NewGroup = update_bitmasks(Group, NewGroup0),
+    reply_with_group(NewGroup, WaitList),
     State2 = State#state{
         updater_pid = nil,
         updater_state = not_running,
         waiting_commit = true,
         waiting_list = [],
-        group = Group
+        group = NewGroup
     },
     State3 = maybe_start_cleaner(State2),
     {noreply, State3, ?CLEANUP_TIMEOUT};
@@ -1175,25 +1202,47 @@ accept_compact_group(NewGroup, CurrentGroup) ->
     (IdBitmap band ?set_cbitmask(CurrentGroup)) =:= 0.
 
 
-stop_updater(#state{updater_pid = nil} = State) ->
+stop_updater(State) ->
+    stop_updater(State, after_active_indexed).
+
+stop_updater(#state{updater_pid = nil} = State, _When) ->
     State;
-stop_updater(#state{updater_pid = Pid} = State) ->
-    Pid ! stop,
+stop_updater(#state{updater_pid = Pid, group = Group} = State, When) ->
+    case When of
+    after_active_indexed ->
+        Pid ! stop_after_active,
+        ?LOG_INFO("Stopping updater for set view `~s`, group `~s`, as soon "
+            "as all active partitions are processed",
+            [?set_name(State), ?group_id(State)]);
+    immediately ->
+        Pid ! stop_immediately,
+        ?LOG_INFO("Stopping updater for set view `~s`, group `~s`, immediately",
+            [?set_name(State), ?group_id(State)])
+    end,
     receive
-    {'EXIT', Pid, {new_group, NewGroup}} ->
+    {'EXIT', Pid, {new_group, NewGroup0}} ->
+        NewGroup = update_bitmasks(Group, NewGroup0),
+        ?LOG_INFO("Set view `~s`, group `~s`, updater stopped",
+            [?set_name(State), ?group_id(State)]),
         case State#state.waiting_commit of
         true ->
             ok;
         false ->
             erlang:send_after(1000, self(), delayed_commit)
         end,
-        reply_with_group(NewGroup, State#state.waiting_list),
+        WaitingList2 = case When of
+        immediately ->
+            State#state.waiting_list;
+        after_active_indexed ->
+            reply_with_group(NewGroup, State#state.waiting_list),
+            []
+        end,
         State#state{
             updater_pid = nil,
             updater_state = not_running,
             waiting_commit = true,
             group = NewGroup,
-            waiting_list = []
+            waiting_list = WaitingList2
         };
     {'EXIT', Pid, Reason} ->
         ?LOG_ERROR("Updater, set view `~s`, group `~s`, died with "
@@ -1204,6 +1253,8 @@ stop_updater(#state{updater_pid = Pid} = State) ->
 
 
 start_updater(#state{updater_pid = nil, updater_state = not_running} = State) ->
+    ?LOG_INFO("Starting updater for set view `~s`, group `~s`",
+        [?set_name(State), ?group_id(State)]),
     case index_needs_update(State) of
     {true, NewSeqs} ->
         #state{group = Group} = State2 = stop_cleaner(State),
@@ -1224,3 +1275,29 @@ start_updater(#state{updater_pid = nil, updater_state = not_running} = State) ->
             State#state{waiting_list = []}
         end
     end.
+
+
+update_bitmasks(CurrentGroup, #set_view_group{index_header = Header} = NewGroup) ->
+    NewGroup#set_view_group{
+        index_header = Header#set_view_index_header{
+            abitmask = ?set_abitmask(CurrentGroup),
+            pbitmask = ?set_pbitmask(CurrentGroup)
+        }
+    }.
+
+
+% Left mostly for development/debugging
+%% log_bitmask_changes(Old, New) ->
+%%     #set_view_group{set_name = SetName, name = GroupId} = Old,
+%%     #set_view_group{set_name = SetName, name = GroupId} = New,
+%%     ?LOG_INFO("Set view `~s`, group `~s`~n"
+%%         "abitmask before ~*..0s, abitmask after ~*..0s~n"
+%%         "pbitmask before ~*..0s, pbitmask after ~*..0s~n"
+%%         "cbitmask before ~*..0s, cbitmask after ~*..0s~n",
+%%         [SetName, GroupId,
+%%             ?set_num_partitions(New), integer_to_list(?set_abitmask(Old), 2),
+%%             ?set_num_partitions(New), integer_to_list(?set_abitmask(New), 2),
+%%             ?set_num_partitions(New), integer_to_list(?set_pbitmask(Old), 2),
+%%             ?set_num_partitions(New), integer_to_list(?set_pbitmask(New), 2),
+%%             ?set_num_partitions(New), integer_to_list(?set_cbitmask(Old), 2),
+%%             ?set_num_partitions(New), integer_to_list(?set_cbitmask(New), 2)]).
