@@ -232,7 +232,7 @@ start_couchdb () {
         interactive_option="+Bd -noinput"
     fi
     command="'%ERL%' $interactive_option $ERL_START_OPTIONS \
-        -env ERL_LIBS '%localerlanglibdir%' -couch_ini $start_arguments -s couch"
+        -env ERL_LIBS '%localerlanglibdir%' %localerlanglibargs% -couch_ini $start_arguments -s couch"
 
     # Find plugins and add them to the Erlang path.
     if test -d "%localerlanglibdir%/../../plugins"; then

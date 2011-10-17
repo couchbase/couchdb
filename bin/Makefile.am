@@ -37,6 +37,7 @@ couchdb: couchdb.tpl
 	    -e "s|%localini%|local.ini|g" \
 	    -e "s|%localconfdir%|@localconfdir@|g" \
 	    -e "s|%localstatelogdir%|@localstatelogdir@|g" \
+	    -e "s|%localerlanglibargs%||g" \
 	    -e "s|%localstatelibdir%|@localstatelibdir@|g" \
 	    -e "s|%localstatedir%|@localstatedir@|g" \
 	    -e "s|%bug_uri%|@bug_uri@|g" \
