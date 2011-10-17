@@ -15,6 +15,7 @@
 -export([query_view/2]).
 
 -include("couch_db.hrl").
+-include("couch_index_merger.hrl").
 -include("couch_view_merger.hrl").
 -include("couch_set_view.hrl").
 
@@ -29,26 +30,6 @@
     to_binary/1,
     get_nested_json_value/2
 ]).
-
--record(merge_params, {
-    view_name,
-    queue,
-    rered_fun,
-    rered_lang,
-    less_fun,
-    collector,
-    skip,
-    limit,
-    row_acc = []
-}).
-
--record(httpdb, {
-   url,
-   timeout,
-   headers = [{"Accept", "application/json"}],
-   ibrowse_options = []
-}).
-
 
 query_view(Req, ViewMergeParams) ->
     query_view_loop(Req, ViewMergeParams, ?MAX_RETRIES).
@@ -65,18 +46,21 @@ query_view_loop(Req, ViewMergeParams, N) ->
     end.
 
 do_query_view(#httpd{user_ctx = UserCtx} = Req, ViewMergeParams) ->
-    #view_merge{
-       views = Views, keys = Keys, callback = Callback, user_acc = UserAcc,
-       rereduce_fun = InRedFun, rereduce_fun_lang = InRedFunLang,
-       ddoc_revision = DesiredDDocRevision
+    #index_merge{
+       indexes = Views, callback = Callback, user_acc = UserAcc,
+       extra = Extra
     } = ViewMergeParams,
+    #view_merge{
+       keys = Keys, rereduce_fun = InRedFun, rereduce_fun_lang = InRedFunLang,
+       ddoc_revision = DesiredDDocRevision
+    } = Extra,
 
     ?LOG_DEBUG("Running a view merging for the following views: ~p", [Views]),
 
     {ok, DDoc, DDocViewSpec} = get_first_ddoc(Views, ViewMergeParams, UserCtx),
     DDocRev = ddoc_rev(DDoc),
 
-    case should_check_rev(ViewMergeParams, DDoc) of
+    case should_check_rev(Extra, DDoc) of
     true ->
         case DesiredDDocRevision of
         auto ->
@@ -146,14 +130,15 @@ do_query_view(#httpd{user_ctx = UserCtx} = Req, ViewMergeParams) ->
         end,
         [], Views),
     MergeParams = #merge_params{
-        view_name = view_name(DDocViewSpec),
+        index_name = DDocViewSpec#simple_index_spec.index_name,
         queue = Queue,
-        rered_fun = RedFun,
-        rered_lang = RedFunLang,
-        less_fun = LessFun,
         collector = Collector,
         skip = ViewArgs#view_query_args.skip,
-        limit = ViewArgs#view_query_args.limit
+        limit = ViewArgs#view_query_args.limit,
+        extra = #view_merge{
+            rereduce_fun = RedFun,
+            rereduce_fun_lang = RedFunLang
+        }
     },
 
     try
@@ -182,12 +167,10 @@ do_query_view(#httpd{user_ctx = UserCtx} = Req, ViewMergeParams) ->
         catch exit(Queue, kill)
     end.
 
-view_details(nil, #simple_view_spec{view_name = <<"_all_docs">>}) ->
+view_details(nil, #simple_index_spec{index_name = <<"_all_docs">>}) ->
     {<<"raw">>, map, nil};
 
-view_details(#doc{body = DDoc}, ViewSpec) ->
-    ViewName = view_name(ViewSpec),
-
+view_details(#doc{body = DDoc}, #simple_index_spec{index_name = ViewName}) ->
     {Props} = DDoc,
     {ViewDef} = get_nested_json_value(DDoc, [<<"views">>, ViewName]),
     {ViewOptions} = get_value(<<"options">>, ViewDef, {[]}),
@@ -201,8 +184,7 @@ view_details(#doc{body = DDoc}, ViewSpec) ->
     Lang = get_value(<<"language">>, Props, <<"javascript">>),
     {Collation, ViewType, Lang}.
 
-reduce_function(#doc{body = DDoc}, ViewSpec) ->
-    ViewName = view_name(ViewSpec),
+reduce_function(#doc{body = DDoc}, #simple_index_spec{index_name = ViewName}) ->
     {ViewDef} = get_nested_json_value(DDoc, [<<"views">>, ViewName]),
     get_value(<<"reduce">>, ViewDef).
 
@@ -331,7 +313,7 @@ merge_map_views(#merge_params{limit = 0, collector = Col}) ->
 merge_map_views(#merge_params{row_acc = []} = Params) ->
     #merge_params{
         queue = Queue, limit = Limit, skip = Skip,
-        collector = Col, view_name = ViewName
+        collector = Col, index_name = ViewName
     } = Params,
     case couch_view_merger_queue:pop(Queue) of
     closed ->
@@ -539,7 +521,11 @@ group_keys_for_rereduce(Queue, [{K, _} | _] = Acc) ->
     end.
 
 
-rereduce(Rows, #merge_params{rered_lang = Lang, rered_fun = RedFun}) ->
+rereduce(Rows, #merge_params{extra = Extra}) ->
+    #view_merge{
+        rereduce_fun = RedFun,
+        rereduce_fun_lang = Lang
+    } = Extra,
     Reds = [[Val] || {_Key, Val} <- Rows],
     {ok, [Value]} = couch_query_servers:rereduce(Lang, [RedFun], Reds),
     Value.
@@ -633,7 +619,7 @@ map_view_folder(ViewSpec, MergeParams,
                 #httpd{user_ctx = UserCtx}, Keys, ViewArgs, DDoc, Queue) ->
     #simple_view_spec{
         database = DbName, ddoc_database = DDocDbName,
-        ddoc_id = DDocId, view_name = ViewName
+        ddoc_id = DDocId, index_name = ViewName
     } = ViewSpec,
     #view_query_args{
         stale = Stale,
@@ -646,8 +632,8 @@ map_view_folder(ViewSpec, MergeParams,
             FoldlFun = make_map_fold_fun(IncludeDocs, Conflicts, Db, Queue),
             {DDocDb, View} = get_map_view(Db, DDocDbName, DDocId, ViewName, Stale),
 
-            case not(should_check_rev(MergeParams, DDoc)) orelse
-                ddoc_unchanged(DDocDb, DDoc) of
+            case not(should_check_rev(MergeParams#index_merge.extra, DDoc))
+                orelse ddoc_unchanged(DDocDb, DDoc) of
             true ->
                 {ok, RowCount} = couch_view:get_row_count(View),
                 ok = couch_view_merger_queue:queue(Queue, {row_count, RowCount}),
@@ -921,7 +907,7 @@ http_view_folder(ViewSpec, MergeParams, Keys, ViewArgs, DDoc, Queue) ->
     end.
 
 
-http_view_folder_req_details(#merged_view_spec{
+http_view_folder_req_details(#merged_index_spec{
         url = MergeUrl0, ejson_spec = {EJson}},
         MergeParams, Keys, ViewArgs, DDoc) ->
     {ok, #httpdb{url = Url, ibrowse_options = Options} = Db} =
@@ -936,7 +922,7 @@ http_view_folder_req_details(#merged_view_spec{
         [{<<"keys">>, Keys} | EJson]
     end,
 
-    EJson2 = case should_check_rev(MergeParams, DDoc) of
+    EJson2 = case should_check_rev(MergeParams#index_merge.extra, DDoc) of
     true ->
         P = fun (Tuple) -> element(1, Tuple) =/= <<"ddoc_revision">> end,
         [{<<"ddoc_revision">>, ddoc_rev_str(DDoc)} | lists:filter(P, EJson1)];
@@ -948,8 +934,8 @@ http_view_folder_req_details(#merged_view_spec{
     put(from_url, Url),
     {MergeUrl, post, Headers, ?JSON_ENCODE(Body), Options};
 
-http_view_folder_req_details(#simple_view_spec{
-        database = DbUrl, ddoc_id = DDocId, view_name = ViewName},
+http_view_folder_req_details(#simple_index_spec{
+        database = DbUrl, ddoc_id = DDocId, index_name = ViewName},
         MergeParams, Keys, ViewArgs, _DDoc) ->
     {ok, #httpdb{url = Url, ibrowse_options = Options} = Db} =
         open_db(DbUrl, nil, MergeParams),
@@ -1105,7 +1091,7 @@ reduce_view_folder(ViewSpec, MergeParams,
                    #httpd{user_ctx = UserCtx}, Keys, ViewArgs, DDoc, Queue) ->
     #simple_view_spec{
         database = DbName, ddoc_database = DDocDbName,
-        ddoc_id = DDocId, view_name = ViewName
+        ddoc_id = DDocId, index_name = ViewName
     } = ViewSpec,
     #view_query_args{
         stale = Stale
@@ -1118,8 +1104,8 @@ reduce_view_folder(ViewSpec, MergeParams,
             {DDocDb, View} = get_reduce_view(Db, DDocDbName,
                                              DDocId, ViewName, Stale),
 
-            case not(should_check_rev(MergeParams, DDoc)) orelse
-                ddoc_unchanged(DDocDb, DDoc) of
+            case not(should_check_rev(MergeParams#index_merge.extra, DDoc))
+                orelse ddoc_unchanged(DDocDb, DDoc) of
             true ->
                 case Keys of
                 nil ->
@@ -1347,7 +1333,7 @@ make_map_fold_fun(true, Conflicts, Db, Queue) ->
 get_first_ddoc([], _MergeParams, _UserCtx) ->
     throw({error, <<"A view spec can not consist of merges exclusively.">>});
 
-get_first_ddoc([#simple_view_spec{view_name = <<"_all_docs">>} = ViewSpec | _],
+get_first_ddoc([#simple_index_spec{index_name = <<"_all_docs">>} = ViewSpec | _],
                _MergeParams, _UserCtx) ->
     {ok, nil, ViewSpec};
 
@@ -1362,8 +1348,8 @@ get_first_ddoc([#set_view_spec{} = Spec | _], MergeParams, UserCtx) ->
 
     {ok, DDoc, Spec};
 
-get_first_ddoc([#simple_view_spec{} = Spec | _], MergeParams, UserCtx) ->
-    #simple_view_spec{
+get_first_ddoc([#simple_index_spec{} = Spec | _], MergeParams, UserCtx) ->
+    #simple_index_spec{
         database = DbName, ddoc_database = DDocDbName, ddoc_id = Id
     } = Spec,
     {ok, Db} = case DDocDbName of
@@ -1384,13 +1370,13 @@ get_first_ddoc([_MergeSpec | Rest], MergeParams, UserCtx) ->
 open_db(<<"http://", _/binary>> = DbName, _UserCtx, MergeParams) ->
     HttpDb = #httpdb{
         url = maybe_add_trailing_slash(DbName),
-        timeout = MergeParams#view_merge.conn_timeout
+        timeout = MergeParams#index_merge.conn_timeout
     },
     {ok, HttpDb#httpdb{ibrowse_options = ibrowse_options(HttpDb)}};
 open_db(<<"https://", _/binary>> = DbName, _UserCtx, MergeParams) ->
     HttpDb = #httpdb{
         url = maybe_add_trailing_slash(DbName),
-        timeout = MergeParams#view_merge.conn_timeout
+        timeout = MergeParams#index_merge.conn_timeout
     },
     {ok, HttpDb#httpdb{ibrowse_options = ibrowse_options(HttpDb)}};
 open_db(DbName, UserCtx, _MergeParams) ->
@@ -1654,8 +1640,3 @@ ddoc_unchanged(Db, DDoc) ->
     {not_found, _} ->
         throw(ddoc_db_not_found)
     end.
-
-view_name(#simple_view_spec{view_name = ViewName}) ->
-    ViewName;
-view_name(#set_view_spec{view_name = ViewName}) ->
-    ViewName.

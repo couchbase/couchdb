@@ -15,6 +15,7 @@
 -export([handle_req/1, apply_http_config/3]).
 
 -include("couch_db.hrl").
+-include("couch_index_merger.hrl").
 -include("couch_view_merger.hrl").
 -include("../ibrowse/ibrowse.hrl").
 
@@ -39,9 +40,9 @@
 
 
 setup_http_sender(MergeParams, Req) ->
-    MergeParams#view_merge{
+    MergeParams#index_merge{
         user_acc = #sender_acc{
-            req = Req, on_error = MergeParams#view_merge.on_error
+            req = Req, on_error = MergeParams#index_merge.on_error
         },
         callback = fun http_sender/2
     }.
@@ -54,12 +55,15 @@ handle_req(#httpd{method = 'GET'} = Req) ->
         qs_json_value(Req, <<"language">>, <<"javascript">>)),
     DDocRevision = validate_revision_param(
         qs_json_value(Req, <<"ddoc_revision">>, nil)),
-    MergeParams0 = #view_merge{
-        views = Views,
+    ViewMergeParams = #view_merge{
         keys = Keys,
         rereduce_fun = RedFun,
         rereduce_fun_lang = RedFunLang,
         ddoc_revision = DDocRevision
+    },
+    MergeParams0 = #index_merge{
+        indexes = Views,
+        extra = ViewMergeParams
     },
     MergeParams1 = apply_http_config(Req, [], MergeParams0),
     couch_view_merger:query_view(Req, MergeParams1);
@@ -74,12 +78,15 @@ handle_req(#httpd{method = 'POST'} = Req) ->
         get_value(<<"language">>, Props, <<"javascript">>)),
     DDocRevision = validate_revision_param(
         get_value(<<"ddoc_revision">>, Props, nil)),
-    MergeParams0 = #view_merge{
-        views = Views,
+    ViewMergeParams = #view_merge{
         keys = Keys,
         rereduce_fun = RedFun,
         rereduce_fun_lang = RedFunLang,
         ddoc_revision = DDocRevision
+    },
+    MergeParams0 = #index_merge{
+        indexes = Views,
+        extra = ViewMergeParams
     },
     MergeParams1 = apply_http_config(Req, Props, MergeParams0),
     couch_view_merger:query_view(Req, MergeParams1);
@@ -89,7 +96,7 @@ handle_req(Req) ->
 
 
 apply_http_config(Req, Body, MergeParams) ->
-    DefConnTimeout = MergeParams#view_merge.conn_timeout,
+    DefConnTimeout = MergeParams#index_merge.conn_timeout,
     ConnTimeout = case get_value(<<"connection_timeout">>, Body, nil) of
     nil ->
         qs_json_value(Req, "connection_timeout", DefConnTimeout);
@@ -102,7 +109,7 @@ apply_http_config(Req, Body, MergeParams) ->
     Policy when is_binary(Policy) ->
        Policy
     end,
-    setup_http_sender(MergeParams#view_merge{
+    setup_http_sender(MergeParams#index_merge{
         conn_timeout = ConnTimeout,
         on_error = validate_on_error_param(OnError)
     }, Req).
@@ -224,18 +231,17 @@ validate_views_param({[_ | _] = Views}) ->
             validate_sets_param(SetsSpec);
         ({DbName, ViewName}) when is_binary(ViewName) ->
             {DDocDbName, DDocId, Vn} = parse_view_name(ViewName),
-            #simple_view_spec{
-                database = DbName, ddoc_id = DDocId, view_name = Vn,
+            #simple_index_spec{
+                database = DbName, ddoc_id = DDocId, index_name = Vn,
                 ddoc_database = DDocDbName
             };
         ({DbName, ViewNames}) when is_list(ViewNames) ->
             lists:map(
                 fun(ViewName) ->
                     {DDocDbName, DDocId, Vn} = parse_view_name(ViewName),
-
-                    #simple_view_spec{
-                        database = DbName, ddoc_id = DDocId,
-                        view_name = Vn, ddoc_database = DDocDbName
+                    #simple_index_spec{
+                        database = DbName, ddoc_id = DDocId, index_name = Vn,
+                        ddoc_database = DDocDbName
                     }
                 end, ViewNames);
         ({MergeUrl, {[_ | _] = Props} = EJson}) ->
@@ -269,7 +275,7 @@ validate_views_param({[_ | _] = Views}) ->
                         [rem_passwd(MergeUrl)]),
                     throw({bad_request, SubMergeError})
                 end,
-                #merged_view_spec{url = MergeUrl, ejson_spec = EJson};
+                #merged_index_spec{url = MergeUrl, ejson_spec = EJson};
             _ ->
                 SubMergeError = io_lib:format("Invalid view merge definition for"
                     " sub-merge done at `~s`.", [rem_passwd(MergeUrl)]),
