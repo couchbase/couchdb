@@ -232,13 +232,16 @@ handle_info({update_docs, Client, GroupedDocs, NonRepDocs, MergeConflicts,
     NonRepDocs2 = [{Client, NRDoc} || NRDoc <- NonRepDocs],
     try update_docs_int(Db, GroupedDocs3, NonRepDocs2, MergeConflicts,
                 FullCommit2, Clobber) of
-    {ok, Db2} ->
+    {ok, Db2, UpdatedDDocIds} ->
         ok = gen_server:call(Db#db.main_pid, {db_updated, Db2}),
         if Db2#db.update_seq /= Db#db.update_seq ->
             couch_db_update_notifier:notify({updated, Db2#db.name});
         true -> ok
         end,
         [catch(ClientPid ! {done, self()}) || ClientPid <- Clients],
+        lists:foreach(fun(DDocId) ->
+            couch_db_update_notifier:notify({ddoc_updated, {Db#db.name, DDocId}})
+        end, UpdatedDDocIds),
         {noreply, Db2}
     catch
         throw: retry ->
@@ -575,10 +578,10 @@ new_revid(#doc_update_info{deleted = Del} = Doc, {OldPos, [OldRevId | _]}) ->
     couch_util:md5(?term_to_bin({Del, OldPos, OldRevId, BodyMd5, AttsMd5})).
 
 
-modify_full_doc_info(Db, Id, MergeConflicts, Clobber, nil, Docs, AccSeq) ->
-    modify_full_doc_info(Db, Id, MergeConflicts, Clobber, #full_doc_info{id=Id}, Docs, AccSeq);
+modify_full_doc_info(Db, Id, MergeConflicts, Clobber, nil, Docs, Acc) ->
+    modify_full_doc_info(Db, Id, MergeConflicts, Clobber, #full_doc_info{id=Id}, Docs, Acc);
 modify_full_doc_info(Db, Id, MergeConflicts, Clobber, OldDocInfo,
-        NewDocs, AccSeq) ->
+        NewDocs, {AccSeq, AccDDocIds}) ->
     #db{fd=Fd,revs_limit=Limit}=Db,
     #full_doc_info{id=Id,rev_tree=OldTree,deleted=OldDeleted} = OldDocInfo,
     NewRevTree = lists:foldl(
@@ -642,7 +645,7 @@ modify_full_doc_info(Db, Id, MergeConflicts, Clobber, OldDocInfo,
         OldTree, NewDocs),
     if NewRevTree == OldTree ->
         % nothing changed
-        {OldDocInfo, AccSeq};
+        {OldDocInfo, {AccSeq, AccDDocIds}};
     true ->
         NewSeq = AccSeq+1,
         {FlushedRevTree, LeafsSize} = couch_key_tree:mapfold(
@@ -699,7 +702,13 @@ modify_full_doc_info(Db, Id, MergeConflicts, Clobber, OldDocInfo,
         % get the deleted flag
         #doc_info{revs=[#rev_info{deleted=Deleted}|_]} =
                         couch_doc:to_doc_info(NewFullDocInfo),
-        {NewFullDocInfo#full_doc_info{deleted=Deleted}, NewSeq}
+        AccDDocIds2 = case Id of
+        <<?DESIGN_DOC_PREFIX, _/binary>> ->
+            [Id | AccDDocIds];
+        _ ->
+            AccDDocIds
+        end,
+        {NewFullDocInfo#full_doc_info{deleted=Deleted}, {NewSeq, AccDDocIds2}}
     end.
 
 
@@ -713,13 +722,13 @@ update_docs_int(Db, DocsList, NonRepDocs, MergeConflicts, FullCommit, Clobber) -
         } = Db,
     % lookup up the old documents, if they exist.
     KeyModFuns = lists:map(fun([{_Client, #doc_update_info{id=Id}}|_] = Docs) ->
-            {Id, fun(PrevValue, LastSeqAcc) ->
-                modify_full_doc_info(Db, Id, MergeConflicts, Clobber, PrevValue, Docs, LastSeqAcc)
+            {Id, fun(PrevValue, Acc) ->
+                modify_full_doc_info(Db, Id, MergeConflicts, Clobber, PrevValue, Docs, Acc)
             end}
         end, DocsList),
 
-    {ok, KeyResults, NewSeq, DocInfoByIdBTree2} =
-            couch_btree:modify(DocInfoByIdBTree, KeyModFuns, LastSeq),
+    {ok, KeyResults, {NewSeq, UpdatedDDocIds}, DocInfoByIdBTree2} =
+            couch_btree:modify(DocInfoByIdBTree, KeyModFuns, {LastSeq, []}),
 
     % Write out the document summaries (the bodies are stored in the nodes of
     % the trees, the attachments are already written to disk)
@@ -741,16 +750,14 @@ update_docs_int(Db, DocsList, NonRepDocs, MergeConflicts, FullCommit, Clobber) -
     couch_file:flush(Fd),
     % Check if we just updated any design documents, and update the validation
     % funs if we did.
-    case lists:any(
-        fun(<<"_design/", _/binary>>) -> true; (_) -> false end,
-            [Id || [{_Client, #doc_update_info{id=Id}}|_] <- DocsList]) of
-    false ->
-        Db4 = Db3;
-    true ->
-        Db4 = refresh_validate_doc_funs(Db3)
+    Db4 = case UpdatedDDocIds of
+    [] ->
+        Db3;
+    _ ->
+        refresh_validate_doc_funs(Db3)
     end,
 
-    {ok, commit_data(Db4, not FullCommit)}.
+    {ok, commit_data(Db4, not FullCommit), UpdatedDDocIds}.
 
 
 update_local_docs(Db, [], _Clobber) ->
