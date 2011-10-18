@@ -53,20 +53,20 @@ handle_req(#httpd{method = 'GET'} = Req) ->
     RedFun = validate_reredfun_param(qs_json_value(Req, <<"rereduce">>, nil)),
     RedFunLang = validate_lang_param(
         qs_json_value(Req, <<"language">>, <<"javascript">>)),
-    DDocRevision = validate_revision_param(
+    DDocRevision = couch_index_merger:validate_revision_param(
         qs_json_value(Req, <<"ddoc_revision">>, nil)),
     ViewMergeParams = #view_merge{
         keys = Keys,
         rereduce_fun = RedFun,
-        rereduce_fun_lang = RedFunLang,
-        ddoc_revision = DDocRevision
+        rereduce_fun_lang = RedFunLang
     },
     MergeParams0 = #index_merge{
         indexes = Views,
+        ddoc_revision = DDocRevision,
         extra = ViewMergeParams
     },
     MergeParams1 = apply_http_config(Req, [], MergeParams0),
-    couch_view_merger:query_view(Req, MergeParams1);
+    couch_index_merger:query_index(couch_view_merger, Req, MergeParams1);
 
 handle_req(#httpd{method = 'POST'} = Req) ->
     couch_httpd:validate_ctype(Req, "application/json"),
@@ -76,20 +76,20 @@ handle_req(#httpd{method = 'POST'} = Req) ->
     RedFun = validate_reredfun_param(get_value(<<"rereduce">>, Props, nil)),
     RedFunLang = validate_lang_param(
         get_value(<<"language">>, Props, <<"javascript">>)),
-    DDocRevision = validate_revision_param(
+    DDocRevision = couch_index_merger:validate_revision_param(
         get_value(<<"ddoc_revision">>, Props, nil)),
     ViewMergeParams = #view_merge{
         keys = Keys,
         rereduce_fun = RedFun,
-        rereduce_fun_lang = RedFunLang,
-        ddoc_revision = DDocRevision
+        rereduce_fun_lang = RedFunLang
     },
     MergeParams0 = #index_merge{
         indexes = Views,
+        ddoc_revision = DDocRevision,
         extra = ViewMergeParams
     },
     MergeParams1 = apply_http_config(Req, Props, MergeParams0),
-    couch_view_merger:query_view(Req, MergeParams1);
+    couch_index_merger:query_index(couch_view_merger, Req, MergeParams1);
 
 handle_req(Req) ->
     couch_httpd:send_method_not_allowed(Req, "GET,POST").
@@ -169,7 +169,8 @@ http_sender(stop, #sender_acc{resp = Resp, error_acc = ErrorAcc}) ->
 
 http_sender({error, Url, Reason}, #sender_acc{on_error = continue, error_acc = ErrorAcc} = SAcc) ->
     Row = {[
-        {<<"from">>, rem_passwd(Url)}, {<<"reason">>, to_binary(Reason)}
+        {<<"from">>, couch_index_merger:rem_passwd(Url)},
+            {<<"reason">>, to_binary(Reason)}
     ]},
     ErrorAcc2 = [?JSON_ENCODE(Row) | ErrorAcc],
     {ok, SAcc#sender_acc{error_acc = ErrorAcc2}};
@@ -177,7 +178,8 @@ http_sender({error, Url, Reason}, #sender_acc{on_error = continue, error_acc = E
 http_sender({error, Url, Reason}, #sender_acc{on_error = stop} = SAcc) ->
     #sender_acc{req = Req, resp = Resp} = SAcc,
     Row = {[
-        {<<"from">>, rem_passwd(Url)}, {<<"reason">>, to_binary(Reason)}
+        {<<"from">>, couch_index_merger:rem_passwd(Url)},
+        {<<"reason">>, to_binary(Reason)}
     ]},
     case Resp of
     nil ->
@@ -272,13 +274,14 @@ validate_views_param({[_ | _] = Views}) ->
                 false ->
                     SubMergeError = io_lib:format("Could not find a non-composed"
                         " view spec in the view merge targeted at `~s`",
-                        [rem_passwd(MergeUrl)]),
+                        [couch_index_merger:rem_passwd(MergeUrl)]),
                     throw({bad_request, SubMergeError})
                 end,
                 #merged_index_spec{url = MergeUrl, ejson_spec = EJson};
             _ ->
                 SubMergeError = io_lib:format("Invalid view merge definition for"
-                    " sub-merge done at `~s`.", [rem_passwd(MergeUrl)]),
+                    " sub-merge done at `~s`.",
+                    [couch_index_merger:rem_passwd(MergeUrl)]),
                 throw({bad_request, SubMergeError})
             end;
         (_) ->
@@ -388,13 +391,3 @@ validate_on_error_param(Value) ->
     Msg = io_lib:format("Invalid value (`~s`) for the parameter `on_error`."
         " It must be `continue` (default) or `stop`.", [to_binary(Value)]),
     throw({bad_request, Msg}).
-
-validate_revision_param(nil) ->
-    nil;
-validate_revision_param(<<"auto">>) ->
-    auto;
-validate_revision_param(Revision) ->
-    couch_doc:parse_rev(Revision).
-
-rem_passwd(Url) ->
-    ?l2b(couch_util:url_strip_password(Url)).

@@ -99,6 +99,7 @@ source_files = \
     json_stream_parse.erl \
     couch_internal_load_gen.erl \
     couch_httpd_view_merger.erl \
+    couch_index_merger.erl \
     couch_view_merger.erl \
     couch_view_merger_queue.erl \
     couch_skew.erl \
@@ -188,6 +189,7 @@ compiled_files = \
     json_stream_parse.beam \
     couch_internal_load_gen.beam \
     couch_httpd_view_merger.beam \
+    couch_index_merger.beam \
     couch_view_merger.beam \
     couch_view_merger_queue.beam \
     couch_skew.beam \

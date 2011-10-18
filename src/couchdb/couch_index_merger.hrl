@@ -31,6 +31,7 @@
    conn_timeout = 60000,    % milliseconds
    on_error = continue,     % 'continue' | 'stop'
    % extra is for index implementation specific properties
+   ddoc_revision = nil,    % nil | auto | Revision
    extra = nil
 }).
 

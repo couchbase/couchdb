@@ -13,8 +13,7 @@
 -record(view_merge, {
     keys = nil,
     rereduce_fun = nil,
-    rereduce_fun_lang = <<"javascript">>,
-    ddoc_revision = nil    % nil | auto | Revision
+    rereduce_fun_lang = <<"javascript">>
 }).
 
 -record(set_view_spec, {
