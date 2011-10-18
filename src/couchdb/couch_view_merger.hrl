@@ -23,8 +23,15 @@
     ejson_spec
 }).
 
+-record(set_view_spec, {
+    name,
+    ddoc_id,
+    view_name,
+    partitions
+}).
+
 -record(view_merge, {
-   views = [],   % [ #simple_view_spec{} | #merged_view_spec{} ]
+   views = [],   % [ #simple_view_spec{} | #merged_view_spec{} | #set_view_spec{} ]
    keys = nil,
    rereduce_fun = nil,
    rereduce_fun_lang = <<"javascript">>,
