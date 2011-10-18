@@ -13,7 +13,7 @@ import common
 HOST = "localhost:5984"
 SET_NAME = "test_suite_set_view"
 NUM_PARTS = 4
-NUM_DOCS = 100000
+NUM_DOCS = 400000
 DDOC = {
     "_id": "_design/test",
     "language": "javascript",
@@ -276,16 +276,23 @@ def test_change_partition_states_while_cleanup_running(params):
         assert info["update_seqs"][str(i)] == expected, \
             "right update seq for partition %d" % (i + 1)
 
-    print "Marking all partitions for cleanup"
-    common.cleanup_partition(params, [0, 1, 2, 3])
+    print "Marking partitions 1 and 2 for cleanup"
+    common.cleanup_partition(params, [0, 1])
+
+    info = common.get_set_view_info(params)
+    assert info["cleanup_running"] == True, "cleanup is running"
+    assert info["active_partitions"] == [2, 3], "right active partitions list"
+    assert info["passive_partitions"] == [], "right passive partitions list"
+    assert info["cleanup_partitions"] == [0, 1], "right cleanup partitions list"
 
     print "Marking partitions 1 and 2 as active while cleanup is ongoing"
     common.enable_partition(params, [0, 1])
 
     print "Querying view"
     (resp, view_result) = common.query(params, "mapview1")
-    doc_count = common.set_doc_count(params, [0, 1])
+    doc_count = common.set_doc_count(params, [0, 1, 2, 3])
 
+    info = common.get_set_view_info(params)
     assert view_result["total_rows"] == doc_count, "Query returned %d total_rows" % doc_count
     assert len(view_result["rows"]) == doc_count, "Query returned %d rows" % doc_count
     common.test_keys_sorted(view_result)
@@ -301,23 +308,21 @@ def test_change_partition_states_while_cleanup_running(params):
         assert (key in all_keys), \
             "Key %d in result after partition 2 activated" % (key,)
     for key in xrange(3, params["ndocs"], params["nparts"]):
-        assert not (key in all_keys), \
-            "Key %d not in result after partition 3 marked for cleanup" % (key,)
+        assert (key in all_keys), \
+            "Key %d (partition 3) in result set" % (key,)
     for key in xrange(4, params["ndocs"], params["nparts"]):
-        assert not (key in all_keys), \
-            "Key %d not in result after partition 4 marked for cleanup" % (key,)
+        assert (key in all_keys), \
+            "Key %d (partition 4) in result set" % (key,)
 
     print "Verifying group info"
     info = common.get_set_view_info(params)
-    assert info["active_partitions"] == [0, 1], "right active partitions list"
+    assert info["active_partitions"] == [0, 1, 2, 3], "right active partitions list"
     assert info["passive_partitions"] == [], "right passive partitions list"
     assert info["cleanup_partitions"] == [], "right cleanup partitions list"
-    for i in [0, 1]:
+    for i in [0, 1, 2, 3]:
         expected = common.set_doc_count(params, [i])
         assert info["update_seqs"][str(i)] == expected, \
             "right update seq for partition %d" % (i + 1)
-    assert not("2" in info["update_seqs"]), "Partition 3 not in group's update_seqs"
-    assert not("3" in info["update_seqs"]), "Partition 4 not in group's update_seqs"
 
 
 
