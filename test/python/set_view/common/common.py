@@ -113,11 +113,17 @@ def define_set_view(params, active_partitions, passive_partitions):
 
 
 def disable_partition(params, i):
+    if type(i) is int:
+        body = json.dumps([i])
+    elif type(i) is list:
+        body = json.dumps(i)
+    else:
+        raise Exception("Invalid parameter type")
     conn = httplib.HTTPConnection(params["host"])
     conn.request(
         "POST",
         "/_set_view/" + params["setname"] + "/" + params["ddoc"]["_id"] + "/_passive_partitions",
-        json.dumps([i]),
+        body,
         {"Content-Type": "application/json"}
         )
     resp = conn.getresponse()
@@ -127,11 +133,17 @@ def disable_partition(params, i):
 
 
 def enable_partition(params, i):
+    if type(i) is int:
+        body = json.dumps([i])
+    elif type(i) is list:
+        body = json.dumps(i)
+    else:
+        raise Exception("Invalid parameter type")
     conn = httplib.HTTPConnection(params["host"])
     conn.request(
         "POST",
         "/_set_view/" + params["setname"] + "/" + params["ddoc"]["_id"] + "/_active_partitions",
-        json.dumps([i]),
+        body,
         {"Content-Type": "application/json"}
         )
     resp = conn.getresponse()
@@ -140,11 +152,17 @@ def enable_partition(params, i):
     conn.close()
 
 def cleanup_partition(params, i):
+    if type(i) is int:
+        body = json.dumps([i])
+    elif type(i) is list:
+        body = json.dumps(i)
+    else:
+        raise Exception("Invalid parameter type")
     conn = httplib.HTTPConnection(params["host"])
     conn.request(
         "POST",
         "/_set_view/" + params["setname"] + "/" + params["ddoc"]["_id"] + "/_cleanup_partitions",
-        json.dumps([i]),
+        body,
         {"Content-Type": "application/json"}
         )
     resp = conn.getresponse()

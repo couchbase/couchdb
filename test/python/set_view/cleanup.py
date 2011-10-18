@@ -255,6 +255,72 @@ def test_set_cleanup_partitions_when_updater_is_running(params):
 
 
 
+def test_change_partition_states_while_cleanup_running(params):
+    print "Marking all partitions as active"
+    common.enable_partition(params, [0, 1, 2, 3])
+
+    doc_count = common.set_doc_count(params, [0, 1, 2, 3])
+    print "Updating view"
+    (resp, view_result) = common.query(params, "mapview1", {"limit": "100"})
+
+    assert view_result["total_rows"] == doc_count, "Query returned %d total_rows" % doc_count
+    assert len(view_result["rows"]) == 100, "Query returned 100 rows"
+    common.test_keys_sorted(view_result)
+
+    info = common.get_set_view_info(params)
+    assert info["active_partitions"] == [0, 1, 2, 3], "right active partitions list"
+    assert info["passive_partitions"] == [], "right passive partitions list"
+    assert info["cleanup_partitions"] == [], "right cleanup partitions list"
+    for i in [0, 1, 2, 3]:
+        expected = common.set_doc_count(params, [i])
+        assert info["update_seqs"][str(i)] == expected, \
+            "right update seq for partition %d" % (i + 1)
+
+    print "Marking all partitions for cleanup"
+    common.cleanup_partition(params, [0, 1, 2, 3])
+
+    print "Marking partitions 1 and 2 as active while cleanup is ongoing"
+    common.enable_partition(params, [0, 1])
+
+    print "Querying view"
+    (resp, view_result) = common.query(params, "mapview1")
+    doc_count = common.set_doc_count(params, [0, 1])
+
+    assert view_result["total_rows"] == doc_count, "Query returned %d total_rows" % doc_count
+    assert len(view_result["rows"]) == doc_count, "Query returned %d rows" % doc_count
+    common.test_keys_sorted(view_result)
+
+    all_keys = {}
+    for r in view_result["rows"]:
+        all_keys[r["key"]] = True
+
+    for key in xrange(1, params["ndocs"], params["nparts"]):
+        assert (key in all_keys), \
+            "Key %d in result after partition 1 activated" % (key,)
+    for key in xrange(2, params["ndocs"], params["nparts"]):
+        assert (key in all_keys), \
+            "Key %d in result after partition 2 activated" % (key,)
+    for key in xrange(3, params["ndocs"], params["nparts"]):
+        assert not (key in all_keys), \
+            "Key %d not in result after partition 3 marked for cleanup" % (key,)
+    for key in xrange(4, params["ndocs"], params["nparts"]):
+        assert not (key in all_keys), \
+            "Key %d not in result after partition 4 marked for cleanup" % (key,)
+
+    print "Verifying group info"
+    info = common.get_set_view_info(params)
+    assert info["active_partitions"] == [0, 1], "right active partitions list"
+    assert info["passive_partitions"] == [], "right passive partitions list"
+    assert info["cleanup_partitions"] == [], "right cleanup partitions list"
+    for i in [0, 1]:
+        expected = common.set_doc_count(params, [i])
+        assert info["update_seqs"][str(i)] == expected, \
+            "right update seq for partition %d" % (i + 1)
+    assert not("2" in info["update_seqs"]), "Partition 3 not in group's update_seqs"
+    assert not("3" in info["update_seqs"]), "Partition 4 not in group's update_seqs"
+
+
+
 def main():
     server = couchdb.Server(url = "http://" + HOST)
     params = {
@@ -274,6 +340,7 @@ def main():
 
     test_cleanup(params)
     test_set_cleanup_partitions_when_updater_is_running(params)
+    test_change_partition_states_while_cleanup_running(params)
 
     print "Deleting test data"
     common.create_dbs(params, True)
