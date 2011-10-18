@@ -18,7 +18,7 @@
 
 -export([get_map_view/4, get_map_view/5, get_reduce_view/4, get_reduce_view/5]).
 -export([get_group/3, get_group_pid/2, release_group/1, define_group/3]).
--export([get_group_info/2]).
+-export([get_group_info/2, cleanup_index_files/1]).
 
 -export([is_view_defined/2]).
 -export([set_passive_partitions/3, set_active_partitions/3, set_cleanup_partitions/3]).
@@ -37,12 +37,6 @@
 
 -record(server,{
     root_dir = []}).
-
-% TODOs:
-%
-% 1) Adapt cleanup_index_files for set views
-%
-% 2) Make all this code more elegant and less verbose
 
 
 % For a "set view" we have multiple databases which are indexed.
@@ -158,17 +152,20 @@ get_group_info(SetName, DDocId) ->
     {ok, _Info} = couch_set_view_group:request_group_info(GroupPid).
 
 
-cleanup_index_files(Db) ->
+cleanup_index_files(SetName) ->
     % load all ddocs
+    {ok, Db} = couch_db:open_int(?master_dbname(SetName), []),
     {ok, DesignDocs} = couch_db:get_design_docs(Db),
+    couch_db:close(Db),
 
     % make unique list of group sigs
     Sigs = lists:map(fun(#doc{id = GroupId}) ->
-        {ok, Info} = get_group_info(Db, GroupId),
-        ?b2l(couch_util:get_value(signature, Info))
-    end, [DD||DD <- DesignDocs, DD#doc.deleted == false]),
+            {ok, Info} = get_group_info(SetName, GroupId),
+            ?b2l(couch_util:get_value(signature, Info))
+        end,
+        [DD || DD <- DesignDocs, not DD#doc.deleted]),
 
-    FileList = list_index_files(Db),
+    FileList = list_index_files(SetName),
 
     % regex that matches all ddocs
     RegExp = "("++ string:join(Sigs, "|") ++")",
@@ -178,15 +175,17 @@ cleanup_index_files(Db) ->
            || FilePath <- FileList,
               re:run(FilePath, RegExp, [{capture, none}]) =:= nomatch],
     % delete unused files
-    ?LOG_DEBUG("deleting unused view index files: ~p",[DeleteFiles]),
+    ?LOG_INFO("Deleting unused (old) set view `~s` index files:~n~n~s",
+        [SetName, string:join(DeleteFiles, "\n")]),
     RootDir = couch_config:get("couchdb", "view_index_dir"),
-    [couch_file:delete(RootDir,File,false)||File <- DeleteFiles],
-    ok.
+    lists:foreach(
+        fun(File) -> couch_file:delete(RootDir, File, false) end,
+        DeleteFiles).
 
-list_index_files(Db) ->
+list_index_files(SetName) ->
     % call server to fetch the index files
     RootDir = couch_config:get("couchdb", "view_index_dir"),
-    filelib:wildcard(RootDir ++ "/." ++ ?b2l(couch_db:name(Db)) ++ "_design"++"/*").
+    filelib:wildcard(RootDir ++ "/set_view_" ++ ?b2l(SetName) ++ "_design/*").
 
 
 get_row_count(#set_view{btree=Bt}) ->

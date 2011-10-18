@@ -30,6 +30,16 @@
 
 
 
+handle_req(#httpd{path_parts = [<<"_set_view">>, SetName, <<"_cleanup">>]} = Req) ->
+    case Req#httpd.method of
+    'POST' ->
+         couch_httpd:validate_ctype(Req, "application/json"),
+         ok = couch_set_view:cleanup_index_files(SetName),
+         send_json(Req, 202, {[{ok, true}]});
+     _ ->
+         send_method_not_allowed(Req, "POST")
+     end;
+
 handle_req(#httpd{path_parts = PathParts} = Req) ->
     [<<"_set_view">>, SetName, <<"_design">>, DesignName | Rest] = PathParts,
     route_request(Req, SetName, <<"_design/", DesignName/binary>>, Rest).
