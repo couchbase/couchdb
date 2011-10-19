@@ -428,7 +428,7 @@ handle_call({compact_done, NewGroup}, {Pid, _}, #state{compactor_pid = Pid} = St
                 }
             },
             commit_header(State2#state.group),
-            State3 = maybe_start_cleaner(State2),
+            State3 = notify_cleanup_waiters(State2),
             {reply, ok, State3, ?CLEANUP_TIMEOUT};
         false ->
             ?LOG_INFO("Set view `~s`, group `~s`, compaction still behind, retrying",
