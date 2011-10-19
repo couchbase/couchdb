@@ -152,7 +152,7 @@ maybe_stop(passive) ->
 notify_owner(nil, _State) ->
     ok;
 notify_owner(Owner, State) when is_pid(Owner) ->
-    Owner ! {updater_state, State}.
+    Owner ! {updater_state, self(), State}.
 
 
 add_query_server(#set_view_group{query_server = nil} = Group) ->

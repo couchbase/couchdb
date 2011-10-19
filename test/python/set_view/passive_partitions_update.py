@@ -144,6 +144,52 @@ def test_set_passive_partitions_when_updater_is_running(params):
         assert not (key in all_keys), \
             "Key %d not in result after partition 4 was set to passive" % (key,)
 
+    print "Adding 2 new documents to partition 4"
+    server = params["server"]
+    db4 = server[params["setname"] + "/3"]
+    new_doc1 = {"_id": "999999999", "integer": 999999999, "string": "999999999"}
+    new_doc2 = {"_id": "000", "integer": -1111, "string": "000"}
+    db4.save(new_doc1)
+    db4.save(new_doc2)
+
+    print "Querying map view again"
+    (resp, view_result2) = common.query(params, "mapview")
+    assert view_result2["rows"] == view_result["rows"], "Same result set as before"
+
+    print "Verifying set view group info"
+    info = common.get_set_view_info(params)
+    assert info["active_partitions"] == [0, 1, 2], "right active partitions list"
+    assert info["passive_partitions"] == [3], "right passive partitions list"
+    assert info["cleanup_partitions"] == [],  "right cleanup partitions list"
+
+    total_doc_count = common.set_doc_count(params)
+    print "Changing partition 4 from passive to active"
+    common.enable_partition(params, 3)
+
+    print "Querying map view again"
+    (resp, view_result) = common.query(params, "mapview")
+
+    assert view_result["total_rows"] == total_doc_count, \
+        "total_rows is %d" % total_doc_count
+    assert len(view_result["rows"]) == total_doc_count, \
+        "number of rows returned is %d" % total_doc_count
+    common.test_keys_sorted(view_result)
+
+    assert view_result["rows"][0]["key"] == new_doc2["integer"], \
+        "new_doc2 reflected in result set at first row"
+    assert view_result["rows"][-1]["key"] == new_doc1["integer"], \
+        "new_doc1 reflected in result set at last row"
+
+    print "Verifying set view group info"
+    info = common.get_set_view_info(params)
+    assert info["active_partitions"] == [0, 1, 2, 3], "right active partitions list"
+    assert info["passive_partitions"] == [], "right passive partitions list"
+    assert info["cleanup_partitions"] == [],  "right cleanup partitions list"
+    for i in [0, 1, 2, 3]:
+        expected_seq = common.partition_update_seq(params, i)
+        assert info["update_seqs"][str(i)] == expected_seq, \
+            "right update seq number (%d) for partition %d" % (expected_seq, i + 1)
+
 
 def main():
     server = couchdb.Server(url = "http://" + HOST)

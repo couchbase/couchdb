@@ -6,6 +6,9 @@ echo "Running set view test include_docs.py\n"
 echo "Running set view test stale.py\n"
 ./stale.py
 
+echo "Running set view test updates.py\n"
+./updates.py
+
 echo "Running set view test passive_partitions.py\n"
 ./passive_partitions.py
 
@@ -17,6 +20,9 @@ echo "Running set view test cleanup.py\n"
 
 echo "Running set view test compaction.py\n"
 ./compaction.py
+
+echo "Running set view test compaction_transitions.py\n"
+./compaction_transitions.py
 
 echo "Running set view test filter_partitions.py\n"
 ./filter_partitions.py

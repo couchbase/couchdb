@@ -218,122 +218,6 @@ def test_compaction(params):
     assert red_etag4 != red_etag3, "Different reduce view etag after compaction+cleanup"
 
 
-
-def test_set_passive_during_compaction(params):
-    print "Querying map view"
-    (map_resp, map_view_result) = common.query(params, "mapview1")
-
-    doc_count = common.set_doc_count(params)
-    assert map_view_result["total_rows"] == doc_count, \
-        "Query returned %d total_rows" % doc_count
-    assert len(map_view_result["rows"]) == doc_count, \
-        "Query returned %d rows" % doc_count
-
-    common.test_keys_sorted(map_view_result)
-
-    print "Verifying set view group info"
-    info = common.get_set_view_info(params)
-    assert info["active_partitions"] == [0, 1, 2, 3], "right active partitions list"
-    assert info["passive_partitions"] == [], "right passive partitions list"
-    assert info["cleanup_partitions"] == [], "right cleanup partitions list"
-    for i in [0, 1, 2, 3]:
-        db = params["server"][params["setname"] + "/" + str(i)]
-        seq = db.info()["update_seq"]
-        assert info["update_seqs"][str(i)] == seq, \
-            "right update seq for partition %d" % (i + 1)
-
-    print "Triggering view compaction"
-    common.compact_set_view(params, False)
-
-    print "Marking partition 4 as passive"
-    common.disable_partition(params, 3)
-
-    info = common.get_set_view_info(params)
-    assert info["active_partitions"] == [0, 1, 2], "right active partitions list"
-    assert info["passive_partitions"] == [3], "right passive partitions list"
-    assert info["cleanup_partitions"] == [], "right cleanup partitions list"
-
-    print "Waiting for compaction to finish"
-    compaction_was_running = (common.wait_set_view_compaction_complete(params) > 0)
-    assert compaction_was_running, "Compaction was running when the view update was triggered"
-
-    print "Verifying group info"
-    info = common.get_set_view_info(params)
-    assert info["active_partitions"] == [0, 1, 2], "right active partitions list"
-    assert info["passive_partitions"] == [3], "right passive partitions list"
-    assert info["cleanup_partitions"] == [], "right cleanup partitions list"
-
-    print "Querying map view again"
-    (map_resp, map_view_result) = common.query(params, "mapview1")
-
-    expected = common.set_doc_count(params, [0, 1, 2])
-    assert map_view_result["total_rows"] == doc_count, \
-        "Query returned %d total_rows" % doc_count
-    assert len(map_view_result["rows"]) == expected, \
-        "Query returned %d rows" % expected
-
-    common.test_keys_sorted(map_view_result)
-
-    all_keys = {}
-    for r in map_view_result["rows"]:
-        all_keys[r["key"]] = True
-
-    for key in xrange(4, params["ndocs"], params["nparts"]):
-        assert not (key in all_keys), \
-            "Key %d not in result after partition 4 set to passive" % (key,)
-
-
-def test_set_active_during_compaction(params):
-    doc_count = common.set_doc_count(params)
-
-    print "Triggering view compaction"
-    common.compact_set_view(params, False)
-
-    print "Marking partition 4 as active"
-    common.enable_partition(params, 3)
-
-    info = common.get_set_view_info(params)
-    assert info["active_partitions"] == [0, 1, 2, 3], "right active partitions list"
-    assert info["passive_partitions"] == [], "right passive partitions list"
-    assert info["cleanup_partitions"] == [], "right cleanup partitions list"
-
-    print "Querying map view"
-    (map_resp, map_view_result) = common.query(params, "mapview1", {"limit": "20"})
-
-    assert map_view_result["total_rows"] == doc_count, \
-        "Query returned %d total_rows" % doc_count
-    assert len(map_view_result["rows"]) == 20, "Query returned 20 rows"
-
-    common.test_keys_sorted(map_view_result)
-    for i in xrange(1, 21):
-        assert map_view_result["rows"][i - 1]["key"] == i, \
-            "Result row set has key %d at position %d" % (i, i - 1)
-
-    print "Waiting for compaction to finish"
-    compaction_was_running = (common.wait_set_view_compaction_complete(params) > 0)
-    assert compaction_was_running, "Compaction was running when the view update was triggered"
-
-    print "Verifying group info"
-    info = common.get_set_view_info(params)
-    assert info["active_partitions"] == [0, 1, 2, 3], "right active partitions list"
-    assert info["passive_partitions"] == [], "right passive partitions list"
-    assert info["cleanup_partitions"] == [], "right cleanup partitions list"
-
-    print "Querying map view"
-    (map_resp, map_view_result) = common.query(params, "mapview1")
-
-    assert map_view_result["total_rows"] == doc_count, \
-        "Query returned %d total_rows" % doc_count
-    assert len(map_view_result["rows"]) == doc_count, \
-        "Query returned %d rows" % doc_count
-
-    common.test_keys_sorted(map_view_result)
-    for i in xrange(1, 21):
-        assert map_view_result["rows"][i - 1]["key"] == i, \
-            "Result row set has key %d at position %d" % (i, i - 1)
-
-
-
 def main():
     server = couchdb.Server(url = "http://" + HOST)
     params = {
@@ -352,16 +236,6 @@ def main():
     print "Databases created"
 
     test_compaction(params)
-
-    print "Re-creating databases"
-    del params["ddoc"]["_rev"]
-    common.create_dbs(params)
-    common.populate(params)
-    print "Configuring set view with all partitions active"
-    common.define_set_view(params, [0, 1, 2, 3], [])
-
-    test_set_passive_during_compaction(params)
-    test_set_active_during_compaction(params)
 
     print "Deleting test data"
     common.create_dbs(params, True)

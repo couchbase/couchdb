@@ -33,6 +33,12 @@ def set_doc_count(params, partitions = None):
     return count
 
 
+def partition_update_seq(params, partition):
+    name = params["setname"] + "/" + str(partition)
+    db = params["server"][name]
+    return db.info()["update_seq"]
+
+
 def populate(params, make_doc = lambda i: {"_id": str(i), "integer": i, "string": str(i)}):
     server = params["server"]
     dbs = []
