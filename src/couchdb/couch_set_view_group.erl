@@ -276,6 +276,11 @@ handle_call({set_passive_partitions, Partitions}, From, State) ->
         _ ->
             CleanupWaiters2 = CleanupWaiters ++ [{From, passive, StillInCleanup}],
             State7 = State5#state{cleanup_waiters = CleanupWaiters2},
+            ?LOG_INFO("Set view `~s`, group `~s`, blocking client ~p, requesting "
+                "to set the partitions ~w to passive because the partitions ~w "
+                "are still in cleanup",
+                [?set_name(State2), ?group_id(State2), element(1, From),
+                    Partitions, StillInCleanup]),
             {noreply, maybe_start_cleaner(State7)}
         end;
     Error ->
@@ -315,6 +320,11 @@ handle_call({activate_partitions, Partitions}, From, State) ->
         _ ->
             CleanupWaiters2 = CleanupWaiters ++ [{From, active, StillInCleanup}],
             State7 = State6#state{cleanup_waiters = CleanupWaiters2},
+            ?LOG_INFO("Set view `~s`, group `~s`, blocking client ~p, requesting "
+                "to set the partitions ~w to active because the partitions ~w "
+                "are still in cleanup",
+                [?set_name(State2), ?group_id(State2), element(1, From),
+                    Partitions, StillInCleanup]),
             {noreply, maybe_start_cleaner(State7)}
         end;
     Error ->
@@ -1353,6 +1363,8 @@ notify_cleanup_waiters([Waiter | Rest], #state{group = Group} = State, Acc) ->
             ?set_cbitmask(Group), NewSeqs, NewPurgeSeqs),
         case StillInCleanup of
         [] ->
+            ?LOG_INFO("Set view `~s`, group `~s`, unblocking cleanup waiter ~p",
+                [?set_name(State2), ?group_id(State2), element(1, From)]),
             gen_server:reply(From, ok),
             notify_cleanup_waiters(Rest, State2, Acc);
         _ ->
