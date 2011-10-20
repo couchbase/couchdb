@@ -202,10 +202,7 @@ handle_call({define_view, NumPartitions, ActiveList, ActiveBitmask,
     {reply, ok, NewState, ?CLEANUP_TIMEOUT};
 
 handle_call(is_view_defined, _From, #state{group = Group} = State) ->
-    #set_view_group{
-        index_header = #set_view_index_header{num_partitions = NumParts}
-    } = Group,
-    {reply, is_integer(NumParts), State, ?CLEANUP_TIMEOUT};
+    {reply, is_integer(?set_num_partitions(Group)), State, ?CLEANUP_TIMEOUT};
 
 handle_call(_Msg, _From, #state{
         group = #set_view_group{
@@ -504,35 +501,20 @@ handle_info(delayed_commit, #state{group = Group} = State) ->
     commit_header(Group),
     {noreply, State#state{waiting_commit = false}, ?CLEANUP_TIMEOUT};
 
-handle_info({'EXIT', Pid, {clean_group, Group}}, #state{cleaner_pid = Pid} = State) ->
-    #set_view_group{
-        index_header = #set_view_index_header{
-            cbitmask = Cbitmask,
-            abitmask = Abitmask,
-            pbitmask = Pbitmask,
-            num_partitions = NumPartitions
-        }
-    } = Group,
-    #set_view_group{
-        index_header = #set_view_index_header{
-            cbitmask = OldCbitmask,
-            abitmask = OldAbitmask,
-            pbitmask = OldPbitmask,
-            num_partitions = NumPartitions
-        }
-    } = State#state.group,
+handle_info({'EXIT', Pid, {clean_group, NewGroup}}, #state{cleaner_pid = Pid} = State) ->
+    #state{group = OldGroup} = State,
     ?LOG_INFO("Cleanup finished for set view `~s`, group `~s`~n"
-              "New abitmask ~*..0s, old abitmask ~*..0s~n"
-              "New pbitmask ~*..0s, old pbitmask ~*..0s~n"
-              "New cbitmask ~*..0s, old cbitmask ~*..0s~n",
-              [?set_name(State), ?group_id(State),
-               NumPartitions, integer_to_list(Abitmask, 2),
-               NumPartitions, integer_to_list(OldAbitmask, 2),
-               NumPartitions, integer_to_list(Pbitmask, 2),
-               NumPartitions, integer_to_list(OldPbitmask, 2),
-               NumPartitions, integer_to_list(Cbitmask, 2),
-               NumPartitions, integer_to_list(OldCbitmask, 2)]),
-    State2 = State#state{cleaner_pid = nil, group = Group},
+          "New abitmask ~*..0s, old abitmask ~*..0s~n"
+          "New pbitmask ~*..0s, old pbitmask ~*..0s~n"
+          "New cbitmask ~*..0s, old cbitmask ~*..0s~n",
+          [?set_name(State), ?group_id(State),
+              ?set_num_partitions(NewGroup), integer_to_list(?set_abitmask(NewGroup), 2),
+              ?set_num_partitions(NewGroup), integer_to_list(?set_abitmask(OldGroup), 2),
+              ?set_num_partitions(NewGroup), integer_to_list(?set_pbitmask(NewGroup), 2),
+              ?set_num_partitions(NewGroup), integer_to_list(?set_pbitmask(OldGroup), 2),
+              ?set_num_partitions(NewGroup), integer_to_list(?set_cbitmask(NewGroup), 2),
+              ?set_num_partitions(NewGroup), integer_to_list(?set_cbitmask(OldGroup), 2)]),
+    State2 = State#state{cleaner_pid = nil, group = NewGroup},
     {noreply, notify_cleanup_waiters(State2)};
 
 handle_info({'EXIT', Pid, Reason}, #state{cleaner_pid = Pid} = State) ->
@@ -1063,11 +1045,8 @@ update_header(OpName, Partitions, State,
 maybe_start_cleaner(#state{cleaner_pid = Pid} = State) when is_pid(Pid) ->
     State;
 maybe_start_cleaner(#state{group = Group} = State) ->
-    #set_view_group{
-        index_header = #set_view_index_header{cbitmask = Cbitmask}
-    } = Group,
     case is_pid(State#state.compactor_pid) orelse
-        is_pid(State#state.updater_pid) orelse (Cbitmask == 0) of
+        is_pid(State#state.updater_pid) orelse (?set_cbitmask(Group) == 0) of
     true ->
         State;
     false ->
@@ -1082,7 +1061,7 @@ stop_cleaner(#state{cleaner_pid = nil} = State) ->
     State;
 stop_cleaner(#state{cleaner_pid = Pid} = State) when is_pid(Pid) ->
     ?LOG_INFO("Stopping cleanup process for set view `~s`, group `~s`",
-              [?set_name(State), (State#state.group)#set_view_group.name]),
+        [?set_name(State), ?group_id(State)]),
     Pid ! stop,
     receive
     {'EXIT', Pid, {clean_group, Group}} ->
@@ -1097,17 +1076,17 @@ stop_cleaner(#state{cleaner_pid = Pid} = State) when is_pid(Pid) ->
 
 cleaner(Group) ->
     #set_view_group{
-        index_header = #set_view_index_header{cbitmask = Cbitmask} = Header,
+        index_header = Header,
         views = Views,
         id_btree = IdBtree,
         fd = Fd
     } = Group,
     ok = couch_file:flush(Fd),
     {ok, NewIdBtree, Go} = couch_btree:guided_purge(
-        IdBtree, make_btree_purge_fun(Cbitmask), go),
+        IdBtree, make_btree_purge_fun(?set_cbitmask(Group)), go),
     NewViews = case Go of
     go ->
-        clean_views(go, Cbitmask, Views, []);
+        clean_views(go, ?set_cbitmask(Group), Views, []);
     stop ->
         Views
     end,
@@ -1118,7 +1097,7 @@ cleaner(Group) ->
             Acc bor Bm
         end,
         IdBitmap, NewViews),
-    NewCbitmask = Cbitmask band CombinedBitmap,
+    NewCbitmask = ?set_cbitmask(Group) band CombinedBitmap,
     NewGroup = Group#set_view_group{
         id_btree = NewIdBtree,
         views = NewViews,
@@ -1183,11 +1162,8 @@ index_needs_update(#state{group = Group} = State) ->
     {CurSeqs > ?set_seqs(Group), CurSeqs}.
 
 
-make_partition_lists(#set_view_group{index_header = Header}) ->
-    #set_view_index_header{
-        seqs = Seqs, abitmask = Abitmask, pbitmask = Pbitmask
-    } = Header,
-    make_partition_lists(Seqs, Abitmask, Pbitmask, [], []).
+make_partition_lists(Group) ->
+    make_partition_lists(?set_seqs(Group), ?set_abitmask(Group), ?set_pbitmask(Group), [], []).
 
 make_partition_lists([], _Abitmask, _Pbitmask, Active, Passive) ->
     {lists:reverse(Active), lists:reverse(Passive)};
