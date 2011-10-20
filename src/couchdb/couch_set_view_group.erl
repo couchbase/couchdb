@@ -1024,9 +1024,14 @@ update_header(OpName, Partitions, State,
         }
     },
     ok = commit_header(NewState#state.group),
-    {ActiveList, PassiveList} = make_partition_lists(NewState#state.group),
-    ok = couch_db_set:set_active(?db_set(NewState), ActiveList),
-    ok = couch_db_set:set_passive(?db_set(NewState), PassiveList),
+    case (NewAbitmask =:= Abitmask) andalso (NewPbitmask =:= Pbitmask) of
+    true ->
+        ok;
+    false ->
+        {ActiveList, PassiveList} = make_partition_lists(NewState#state.group),
+        ok = couch_db_set:set_active(?db_set(NewState), ActiveList),
+        ok = couch_db_set:set_passive(?db_set(NewState), PassiveList)
+    end,
     % TODO maybe set to debug level
     ?LOG_INFO("Set view `~s`, group `~s`, ~p ~w~n"
         "abitmask before ~*..0s, abitmask after ~*..0s~n"
