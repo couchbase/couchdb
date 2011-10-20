@@ -272,7 +272,7 @@ handle_call({set_passive_partitions, Partitions}, From, State) ->
         State6 = restart_compactor(State5, "the passive bitmask was updated"),
         case StillInCleanup of
         [] ->
-            {reply, ok, State6, ?CLEANUP_TIMEOUT};
+            {reply, ok, maybe_start_cleaner(State6)};
         _ ->
             CleanupWaiters2 = CleanupWaiters ++ [{From, passive, StillInCleanup}],
             State7 = State5#state{cleanup_waiters = CleanupWaiters2},
@@ -316,7 +316,7 @@ handle_call({activate_partitions, Partitions}, From, State) ->
         State6 = restart_compactor(State5, "the active bitmask was updated"),
         case StillInCleanup of
         [] ->
-            {reply, ok, State6, ?CLEANUP_TIMEOUT};
+            {reply, ok, maybe_start_cleaner(State6)};
         _ ->
             CleanupWaiters2 = CleanupWaiters ++ [{From, active, StillInCleanup}],
             State7 = State6#state{cleanup_waiters = CleanupWaiters2},
