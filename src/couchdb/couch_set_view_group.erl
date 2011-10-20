@@ -1270,11 +1270,11 @@ stop_updater(#state{updater_pid = Pid} = State, When) ->
 
 
 start_updater(#state{updater_pid = nil, updater_state = not_running} = State) ->
-    ?LOG_INFO("Starting updater for set view `~s`, group `~s`",
-        [?set_name(State), ?group_id(State)]),
     case index_needs_update(State) of
     {true, NewSeqs} ->
         #state{group = Group} = State2 = stop_cleaner(State),
+        ?LOG_INFO("Starting updater for set view `~s`, group `~s`",
+            [?set_name(State), ?group_id(State)]),
         Owner = self(),
         Pid = spawn_link(fun() ->
             couch_set_view_updater:update(Owner, Group, NewSeqs)
