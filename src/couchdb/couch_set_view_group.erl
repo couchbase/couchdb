@@ -501,13 +501,14 @@ handle_info(delayed_commit, #state{group = Group} = State) ->
     commit_header(Group),
     {noreply, State#state{waiting_commit = false}, ?CLEANUP_TIMEOUT};
 
-handle_info({'EXIT', Pid, {clean_group, NewGroup}}, #state{cleaner_pid = Pid} = State) ->
+handle_info({'EXIT', Pid, {clean_group, NewGroup, Count}}, #state{cleaner_pid = Pid} = State) ->
     #state{group = OldGroup} = State,
     ?LOG_INFO("Cleanup finished for set view `~s`, group `~s`~n"
+          "Removed ~p values from the index~n"
           "New abitmask ~*..0s, old abitmask ~*..0s~n"
           "New pbitmask ~*..0s, old pbitmask ~*..0s~n"
           "New cbitmask ~*..0s, old cbitmask ~*..0s~n",
-          [?set_name(State), ?group_id(State),
+          [?set_name(State), ?group_id(State), Count,
               ?set_num_partitions(NewGroup), integer_to_list(?set_abitmask(NewGroup), 2),
               ?set_num_partitions(NewGroup), integer_to_list(?set_abitmask(OldGroup), 2),
               ?set_num_partitions(NewGroup), integer_to_list(?set_pbitmask(NewGroup), 2),
@@ -845,9 +846,11 @@ init_group(Fd, #set_view_group{def_lang = Lang, views = Views} = Group, IndexHea
     ViewStates2 = lists:map(StateUpdate, ViewStates),
     Compression = couch_compress:get_compression_method(),
     IdTreeReduce = fun(reduce, KVs) ->
-        couch_set_view_util:partitions_map(KVs, 0);
+        {length(KVs), couch_set_view_util:partitions_map(KVs, 0)};
     (rereduce, [First | Rest]) ->
-        lists:foldl(fun(M, A) -> M bor A end, First, Rest)
+        lists:foldl(
+            fun({S, M}, {T, A}) -> {S + T, M bor A} end,
+            First, Rest)
     end,
     {ok, IdBtree} = couch_btree:open(
         IdBtreeState, Fd, [{compression, Compression}, {reduce, IdTreeReduce}]),
@@ -1069,11 +1072,12 @@ stop_cleaner(#state{cleaner_pid = Pid, group = OldGroup} = State) when is_pid(Pi
         [?set_name(State), ?group_id(State)]),
     Pid ! stop,
     receive
-    {'EXIT', Pid, {clean_group, NewGroup}} ->
+    {'EXIT', Pid, {clean_group, NewGroup, Count}} ->
         ?LOG_INFO("Stopped cleanup process for set view `~s`, group `~s`.~n"
+             "Removed ~p values from the index~n"
              "New set of partitions to cleanup: ~w~n"
              "Old set of partitions to cleanup: ~w~n",
-             [?set_name(State), ?group_id(State),
+             [?set_name(State), ?group_id(State), Count,
                  couch_set_view_util:decode_bitmask(?set_cbitmask(NewGroup)),
                  couch_set_view_util:decode_bitmask(?set_cbitmask(OldGroup))]),
         State2 = State#state{group = NewGroup, cleaner_pid = nil},
@@ -1091,6 +1095,13 @@ cleaner(Group) ->
         fd = Fd
     } = Group,
     ok = couch_file:flush(Fd),
+    {ok, {KVCountBefore0, _}} = couch_btree:full_reduce(IdBtree),
+    KVCountBefore = lists:foldl(
+        fun(#set_view{btree = Bt}, Acc) ->
+            {ok, {Count, _, _}} = couch_btree:full_reduce(Bt),
+            Acc + Count
+        end,
+        KVCountBefore0, Views),
     {ok, NewIdBtree, Go} = couch_btree:guided_purge(
         IdBtree, make_btree_purge_fun(?set_cbitmask(Group)), go),
     NewViews = case Go of
@@ -1099,13 +1110,13 @@ cleaner(Group) ->
     stop ->
         Views
     end,
-    {ok, IdBitmap} = couch_btree:full_reduce(NewIdBtree),
-    CombinedBitmap = lists:foldl(
-        fun(#set_view{btree = Bt}, Acc) ->
-            {ok, {_, _, Bm}} = couch_btree:full_reduce(Bt),
-            Acc bor Bm
+    {ok, {KVCountAfter0, IdBitmap}} = couch_btree:full_reduce(NewIdBtree),
+    {CombinedBitmap, KVCountAfter} = lists:foldl(
+        fun(#set_view{btree = Bt}, {AccMap, AccCount}) ->
+            {ok, {Count, _, Bm}} = couch_btree:full_reduce(Bt),
+            {AccMap bor Bm, AccCount + Count}
         end,
-        IdBitmap, NewViews),
+        {IdBitmap, KVCountAfter0}, NewViews),
     NewCbitmask = ?set_cbitmask(Group) band CombinedBitmap,
     NewGroup = Group#set_view_group{
         id_btree = NewIdBtree,
@@ -1114,7 +1125,7 @@ cleaner(Group) ->
     },
     commit_header(NewGroup),
     ok = couch_file:flush(Fd),
-    exit({clean_group, NewGroup}).
+    exit({clean_group, NewGroup, KVCountBefore - KVCountAfter}).
 
 
 clean_views(_, _, [], Acc) ->
@@ -1136,12 +1147,7 @@ btree_purge_fun(value, {_K, {PartId, _}}, Acc, Cbitmask) ->
         {keep, Acc}
     end;
 btree_purge_fun(branch, Red, Acc, Cbitmask) ->
-    Bitmap = case is_tuple(Red) of
-    true ->
-        element(3, Red);
-    false ->
-        Red
-    end,
+    Bitmap = element(tuple_size(Red), Red),
     case Bitmap band Cbitmask of
     0 ->
         {keep, Acc};
@@ -1220,7 +1226,7 @@ compact_group(State) ->
 
 accept_compact_group(NewGroup, CurrentGroup) ->
     #set_view_group{id_btree = NewIdBtree} = NewGroup,
-    {ok, IdBitmap} = couch_btree:full_reduce(NewIdBtree),
+    {ok, {_, IdBitmap}} = couch_btree:full_reduce(NewIdBtree),
     (IdBitmap band ?set_cbitmask(CurrentGroup)) =:= 0.
 
 
