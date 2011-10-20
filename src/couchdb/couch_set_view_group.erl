@@ -1064,15 +1064,19 @@ maybe_start_cleaner(#state{group = Group} = State) ->
 
 stop_cleaner(#state{cleaner_pid = nil} = State) ->
     State;
-stop_cleaner(#state{cleaner_pid = Pid} = State) when is_pid(Pid) ->
+stop_cleaner(#state{cleaner_pid = Pid, group = OldGroup} = State) when is_pid(Pid) ->
     ?LOG_INFO("Stopping cleanup process for set view `~s`, group `~s`",
         [?set_name(State), ?group_id(State)]),
     Pid ! stop,
     receive
-    {'EXIT', Pid, {clean_group, Group}} ->
-        ?LOG_INFO("Stopped cleanup process for set view `~s`, group `~s`",
-                  [?set_name(State), ?group_id(State)]),
-        State2 = State#state{group = Group, cleaner_pid = nil},
+    {'EXIT', Pid, {clean_group, NewGroup}} ->
+        ?LOG_INFO("Stopped cleanup process for set view `~s`, group `~s`.~n"
+             "New set of partitions to cleanup: ~w~n"
+             "Old set of partitions to cleanup: ~w~n",
+             [?set_name(State), ?group_id(State),
+                 couch_set_view_util:decode_bitmask(?set_cbitmask(NewGroup)),
+                 couch_set_view_util:decode_bitmask(?set_cbitmask(OldGroup))]),
+        State2 = State#state{group = NewGroup, cleaner_pid = nil},
         notify_cleanup_waiters(State2);
     {'EXIT', Pid, Reason} ->
         exit({cleanup_process_died, Reason})
