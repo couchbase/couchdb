@@ -92,16 +92,25 @@ is_view_defined(Pid) ->
     gen_server:call(Pid, is_view_defined, infinity).
 
 
+set_passive_partitions(_Pid, []) ->
+    ok;
 set_passive_partitions(Pid, Partitions) ->
-    gen_server:call(Pid, {set_passive_partitions, Partitions}, infinity).
+    Bitmask = couch_set_view_util:build_bitmask(Partitions),
+    gen_server:call(Pid, {set_passive_partitions, Partitions, Bitmask}, infinity).
 
 
+activate_partitions(_Pid, []) ->
+    ok;
 activate_partitions(Pid, Partitions) ->
-    gen_server:call(Pid, {activate_partitions, Partitions}, infinity).
+    Bitmask = couch_set_view_util:build_bitmask(Partitions),
+    gen_server:call(Pid, {activate_partitions, Partitions, Bitmask}, infinity).
 
 
+cleanup_partitions(_Pid, []) ->
+    ok;
 cleanup_partitions(Pid, Partitions) ->
-    gen_server:call(Pid, {cleanup_partitions, Partitions}, infinity).
+    Bitmask = couch_set_view_util:build_bitmask(Partitions),
+    gen_server:call(Pid, {cleanup_partitions, Partitions, Bitmask}, infinity).
 
 
 % from template
@@ -210,11 +219,13 @@ handle_call(_Msg, _From, #state{
         }} = State) ->
     {reply, view_undefined, State};
 
-handle_call({cleanup_partitions, Partitions}, _From, State) ->
-    #state{group = Group2} = State2 = stop_cleaner(State),
-    #set_view_group{index_header = Header} = Group2,
-    case validate_partitions(Header, Partitions) of
-    ok ->
+handle_call({cleanup_partitions, _Partitions, Bitmask}, _From,
+        #state{group = Group} = State) when Bitmask =:= ?set_cbitmask(Group) ->
+    {reply, ok, State};
+handle_call({cleanup_partitions, Partitions, Bitmask}, _From, State) ->
+    case validate_partitions(State#state.group, Bitmask) of
+    true ->
+        State2 = stop_cleaner(State),
         UpdaterRunning = is_pid(State2#state.updater_pid),
         #state{group = Group3} = State3 = stop_updater(State2, immediately),
         {ok, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs, NewPurgeSeqs} =
@@ -236,17 +247,17 @@ handle_call({cleanup_partitions, Partitions}, _From, State) ->
             maybe_start_cleaner(State5)
         end,
         {reply, ok, NewState, ?CLEANUP_TIMEOUT};
-    Error ->
-        {reply, Error, State2, ?CLEANUP_TIMEOUT}
+    false ->
+        {reply, {error, <<"Invalid list of partitions">>}, State, ?CLEANUP_TIMEOUT}
     end;
 
-handle_call({set_passive_partitions, Partitions}, From, State) ->
-    #state{
-        group = #set_view_group{index_header = Header},
-        cleanup_waiters = CleanupWaiters
-    } = State2 = stop_cleaner(State),
-    case validate_partitions(Header, Partitions) of
-    ok ->
+handle_call({set_passive_partitions, _Partitions, Bitmask}, _From,
+        #state{group = Group} = State) when Bitmask =:= ?set_pbitmask(Group) ->
+    {reply, ok, State};
+handle_call({set_passive_partitions, Partitions, Bitmask}, From, State) ->
+    case validate_partitions(State#state.group, Bitmask) of
+    true ->
+        #state{cleanup_waiters = CleanupWaiters} = State2 = stop_cleaner(State),
         UpdaterRunning = is_pid(State2#state.updater_pid),
         #state{group = Group3} = State3 = stop_updater(State2, immediately),
         {StillInCleanup, NotInCleanup} = partitions_still_in_cleanup(Partitions, Group3),
@@ -280,17 +291,17 @@ handle_call({set_passive_partitions, Partitions}, From, State) ->
                     Partitions, StillInCleanup]),
             {noreply, maybe_start_cleaner(State7)}
         end;
-    Error ->
-        {reply, Error, State2, ?CLEANUP_TIMEOUT}
+    false ->
+        {reply, {error, <<"Invalid list of partitions">>}, State, ?CLEANUP_TIMEOUT}
     end;
 
-handle_call({activate_partitions, Partitions}, From, State) ->
-    #state{
-        group = #set_view_group{index_header = Header},
-        cleanup_waiters = CleanupWaiters
-    } = State2 = stop_cleaner(State),
-    case validate_partitions(Header, Partitions) of
-    ok ->
+handle_call({activate_partitions, _Partitions, Bitmask}, _From,
+        #state{group = Group} = State) when Bitmask =:= ?set_abitmask(Group) ->
+    {reply, ok, State};
+handle_call({activate_partitions, Partitions, Bitmask}, From, State) ->
+    case validate_partitions(State#state.group, Bitmask) of
+    true ->
+        #state{cleanup_waiters = CleanupWaiters} = State2 = stop_cleaner(State),
         UpdaterRunning = is_pid(State2#state.updater_pid),
         #state{group = Group3} = State3 = stop_updater(State2, immediately),
         {StillInCleanup, NotInCleanup} = partitions_still_in_cleanup(Partitions, Group3),
@@ -324,8 +335,8 @@ handle_call({activate_partitions, Partitions}, From, State) ->
                     Partitions, StillInCleanup]),
             {noreply, maybe_start_cleaner(State7)}
         end;
-    Error ->
-        {reply, Error, State2, ?CLEANUP_TIMEOUT}
+    false ->
+        {reply, {error, <<"Invalid list of partitions">>}, State, ?CLEANUP_TIMEOUT}
     end;
 
 
@@ -991,12 +1002,8 @@ set_cleanup_partitions([PartId | Rest], Abitmask, Pbitmask, Cbitmask, Seqs, Purg
     end.
 
 
-validate_partitions(#set_view_index_header{num_partitions = N}, [PartId | _]) when PartId >= N ->
-    {error, {invalid_partition, PartId}};
-validate_partitions(Header, [_PartId | Rest]) ->
-    validate_partitions(Header, Rest);
-validate_partitions(_, []) ->
-    ok.
+validate_partitions(Group, Bitmask) ->
+    Bitmask < (1 bsl ?set_num_partitions(Group)).
 
 
 update_header(OpName, Partitions, State,
