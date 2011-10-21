@@ -555,6 +555,8 @@ handle_info({'EXIT', UpPid, {new_group, NewGroup}},
         waiting_list = [],
         group = NewGroup
     },
+    ?LOG_INFO("Set view `~s`, group `~s`, updater finished",
+        [?set_name(State2), ?group_id(State2)]),
     State3 = maybe_start_cleaner(State2),
     {noreply, State3, ?CLEANUP_TIMEOUT};
 
