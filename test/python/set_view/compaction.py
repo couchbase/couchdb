@@ -153,7 +153,7 @@ def test_compaction(params):
     common.compact_set_view(params, False)
 
     print "Triggering partition 4 cleanup while compaction is ongoing"
-    common.cleanup_partition(params, 3)
+    common.set_partition_states(params, cleanup = [3])
 
     print "Verifying set view group info"
     info = common.get_set_view_info(params)

@@ -35,7 +35,7 @@ def test_updates(params):
     assert view_result["total_rows"] == 0, "Received empty row set"
 
     print "Adding partitions 7 and 8 as active while updater is running"
-    common.enable_partition(params, [6, 7])
+    common.set_partition_states(params, active = [6, 7])
 
     print "Verifying group info"
     info = common.get_set_view_info(params)

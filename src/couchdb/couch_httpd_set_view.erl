@@ -89,25 +89,14 @@ route_request(#httpd{method = 'POST'} = Req, SetName, DDocId, [<<"_compact">>]) 
     {ok, _Pid} = couch_set_view_compactor:start_compact(SetName, DDocId),
     couch_httpd:send_json(Req, 202, {[{ok, true}]});
 
-route_request(#httpd{method = 'POST'} = Req, SetName, DDocId, [<<"_passive_partitions">>]) ->
+route_request(#httpd{method = 'POST'} = Req, SetName, DDocId, [<<"_set_partition_states">>]) ->
     couch_httpd:validate_ctype(Req, "application/json"),
-    PartList = couch_httpd:json_body(Req),
-    validate_json_partition_list(PartList),
-    couch_set_view:set_passive_partitions(SetName, DDocId, PartList),
-    couch_httpd:send_json(Req, 201, {[{ok, true}]});
-
-route_request(#httpd{method = 'POST'} = Req, SetName, DDocId, [<<"_active_partitions">>]) ->
-    couch_httpd:validate_ctype(Req, "application/json"),
-    PartList = couch_httpd:json_body(Req),
-    validate_json_partition_list(PartList),
-    couch_set_view:set_active_partitions(SetName, DDocId, PartList),
-    couch_httpd:send_json(Req, 201, {[{ok, true}]});
-
-route_request(#httpd{method = 'POST'} = Req, SetName, DDocId, [<<"_cleanup_partitions">>]) ->
-    couch_httpd:validate_ctype(Req, "application/json"),
-    PartList = couch_httpd:json_body(Req),
-    validate_json_partition_list(PartList),
-    couch_set_view:set_cleanup_partitions(SetName, DDocId, PartList),
+    {Fields} = couch_httpd:json_body_obj(Req),
+    Active = couch_util:get_value(<<"active">>, Fields, []),
+    Passive = couch_util:get_value(<<"passive">>, Fields, []),
+    Cleanup = couch_util:get_value(<<"cleanup">>, Fields, []),
+    ok = couch_set_view:set_partition_states(
+        SetName, DDocId, Active, Passive, Cleanup),
     couch_httpd:send_json(Req, 201, {[{ok, true}]}).
 
 

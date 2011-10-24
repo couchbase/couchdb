@@ -18,7 +18,7 @@
 -export([open_set_group/2]).
 -export([request_group/2, release_group/1]).
 -export([is_view_defined/1, define_view/2]).
--export([set_passive_partitions/2, activate_partitions/2, cleanup_partitions/2]).
+-export([set_state/4]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -44,6 +44,12 @@
     waiting_list = [],
     cleaner_pid = nil,
     cleanup_waiters = []
+}).
+
+-record(cleanup_waiter, {
+    from,
+    active_list,
+    passive_list
 }).
 
 % api methods
@@ -92,25 +98,28 @@ is_view_defined(Pid) ->
     gen_server:call(Pid, is_view_defined, infinity).
 
 
-set_passive_partitions(_Pid, []) ->
-    ok;
-set_passive_partitions(Pid, Partitions) ->
-    Bitmask = couch_set_view_util:build_bitmask(Partitions),
-    gen_server:call(Pid, {set_passive_partitions, Partitions, Bitmask}, infinity).
-
-
-activate_partitions(_Pid, []) ->
-    ok;
-activate_partitions(Pid, Partitions) ->
-    Bitmask = couch_set_view_util:build_bitmask(Partitions),
-    gen_server:call(Pid, {activate_partitions, Partitions, Bitmask}, infinity).
-
-
-cleanup_partitions(_Pid, []) ->
-    ok;
-cleanup_partitions(Pid, Partitions) ->
-    Bitmask = couch_set_view_util:build_bitmask(Partitions),
-    gen_server:call(Pid, {cleanup_partitions, Partitions, Bitmask}, infinity).
+set_state(Pid, ActivePartitions, PassivePartitions, CleanupPartitions) ->
+    Active = ordsets:from_list(ActivePartitions),
+    Passive = ordsets:from_list(PassivePartitions),
+    case ordsets:intersection(Active, Passive) of
+    [] ->
+        Cleanup = ordsets:from_list(CleanupPartitions),
+        case ordsets:intersection(Active, Cleanup) of
+        [] ->
+            case ordsets:intersection(Passive, Cleanup) of
+            [] ->
+                gen_server:call(
+                    Pid, {set_state, Active, Passive, Cleanup}, infinity);
+            _ ->
+                {error,
+                    <<"Intersection between passive and cleanup partition lists">>}
+            end;
+        _ ->
+            {error, <<"Intersection between active and cleanup partition lists">>}
+        end;
+    _ ->
+        {error, <<"Intersection between active and passive partition lists">>}
+    end.
 
 
 % from template
@@ -219,126 +228,15 @@ handle_call(_Msg, _From, #state{
         }} = State) ->
     {reply, view_undefined, State};
 
-handle_call({cleanup_partitions, _Partitions, Bitmask}, _From,
-        #state{group = Group} = State) when Bitmask =:= ?set_cbitmask(Group) ->
-    {reply, ok, State};
-handle_call({cleanup_partitions, Partitions, Bitmask}, _From, State) ->
-    case validate_partitions(State#state.group, Bitmask) of
-    true ->
-        State2 = stop_cleaner(State),
-        UpdaterRunning = is_pid(State2#state.updater_pid),
-        #state{group = Group3} = State3 = stop_updater(State2, immediately),
-        {ok, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs, NewPurgeSeqs} =
-            set_cleanup_partitions(
-                Partitions, ?set_abitmask(Group3), ?set_pbitmask(Group3),
-                ?set_cbitmask(Group3), ?set_seqs(Group3), ?set_purge_seqs(Group3)),
-        State4 = update_header(
-             cleanup_partitions, Partitions, State3,
-             NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs, NewPurgeSeqs),
-        ok = couch_db_set:remove_partitions(?db_set(State4), Partitions),
-        State5 = restart_compactor(State4, "the cleanup bitmask was updated"),
-        NewState = case UpdaterRunning of
-        true ->
-            % Updater was running, we stopped it, updated the group we received
-            % from the updater, updated that group's bitmasks and update/purge
-            % seqs, and now restart the updater with this modified group.
-            start_updater(State5);
-        false ->
-            maybe_start_cleaner(State5)
-        end,
-        {reply, ok, NewState, ?CLEANUP_TIMEOUT};
-    false ->
-        {reply, {error, <<"Invalid list of partitions">>}, State, ?CLEANUP_TIMEOUT}
+handle_call({set_state, ActiveList, PassiveList, CleanupList}, From, State) ->
+    try
+        NewState = update_partition_states(
+            ActiveList, PassiveList, CleanupList, From, State),
+        {noreply, NewState, ?CLEANUP_TIMEOUT}
+    catch
+    throw:Error ->
+        {reply, Error, State}
     end;
-
-handle_call({set_passive_partitions, _Partitions, Bitmask}, _From,
-        #state{group = Group} = State) when Bitmask =:= ?set_pbitmask(Group) ->
-    {reply, ok, State};
-handle_call({set_passive_partitions, Partitions, Bitmask}, From, State) ->
-    case validate_partitions(State#state.group, Bitmask) of
-    true ->
-        #state{cleanup_waiters = CleanupWaiters} = State2 = stop_cleaner(State),
-        UpdaterRunning = is_pid(State2#state.updater_pid),
-        #state{group = Group3} = State3 = stop_updater(State2, immediately),
-        {StillInCleanup, NotInCleanup} = partitions_still_in_cleanup(Partitions, Group3),
-        {ok, NewAbitmask, NewPbitmask, NewSeqs, NewPurgeSeqs} =
-            set_passive_partitions(
-                NotInCleanup, ?set_abitmask(Group3), ?set_pbitmask(Group3),
-                ?set_seqs(Group3), ?set_purge_seqs(Group3)),
-        State4 = update_header(
-             set_passive_partitions, NotInCleanup, State3,
-             NewAbitmask, NewPbitmask, ?set_cbitmask(Group3), NewSeqs, NewPurgeSeqs),
-        State5 = case UpdaterRunning of
-        true ->
-            % Updater was running, we stopped it, updated the group we received
-            % from the updater, updated that group's bitmasks and update/purge
-            % seqs, and now restart the updater with this modified group.
-            start_updater(State4);
-        false ->
-            State4
-        end,
-        State6 = restart_compactor(State5, "the passive bitmask was updated"),
-        case StillInCleanup of
-        [] ->
-            {reply, ok, maybe_start_cleaner(State6)};
-        _ ->
-            CleanupWaiters2 = CleanupWaiters ++ [{From, passive, StillInCleanup}],
-            State7 = State5#state{cleanup_waiters = CleanupWaiters2},
-            ?LOG_INFO("Set view `~s`, group `~s`, blocking client ~p, requesting "
-                "to set the partitions ~w to passive because the partitions ~w "
-                "are still in cleanup",
-                [?set_name(State2), ?group_id(State2), element(1, From),
-                    Partitions, StillInCleanup]),
-            {noreply, maybe_start_cleaner(State7)}
-        end;
-    false ->
-        {reply, {error, <<"Invalid list of partitions">>}, State, ?CLEANUP_TIMEOUT}
-    end;
-
-handle_call({activate_partitions, _Partitions, Bitmask}, _From,
-        #state{group = Group} = State) when Bitmask =:= ?set_abitmask(Group) ->
-    {reply, ok, State};
-handle_call({activate_partitions, Partitions, Bitmask}, From, State) ->
-    case validate_partitions(State#state.group, Bitmask) of
-    true ->
-        #state{cleanup_waiters = CleanupWaiters} = State2 = stop_cleaner(State),
-        UpdaterRunning = is_pid(State2#state.updater_pid),
-        #state{group = Group3} = State3 = stop_updater(State2, immediately),
-        {StillInCleanup, NotInCleanup} = partitions_still_in_cleanup(Partitions, Group3),
-        {ok, NewAbitmask, NewPbitmask, NewSeqs, NewPurgeSeqs} =
-            set_active_partitions(
-                NotInCleanup, ?set_abitmask(Group3), ?set_pbitmask(Group3),
-                ?set_seqs(Group3), ?set_purge_seqs(Group3)),
-        State4 = update_header(
-             activate_partitions, NotInCleanup, State3,
-             NewAbitmask, NewPbitmask, ?set_cbitmask(Group3), NewSeqs, NewPurgeSeqs),
-        State5 = case UpdaterRunning of
-        true ->
-            % Updater was running, we stopped it, updated the group we received
-            % from the updater, updated that group's bitmasks and update/purge
-            % seqs, and now restart the updater with this modified group.
-            start_updater(State4);
-        false ->
-            State4
-        end,
-        State6 = restart_compactor(State5, "the active bitmask was updated"),
-        case StillInCleanup of
-        [] ->
-            {reply, ok, maybe_start_cleaner(State6)};
-        _ ->
-            CleanupWaiters2 = CleanupWaiters ++ [{From, active, StillInCleanup}],
-            State7 = State6#state{cleanup_waiters = CleanupWaiters2},
-            ?LOG_INFO("Set view `~s`, group `~s`, blocking client ~p, requesting "
-                "to set the partitions ~w to active because the partitions ~w "
-                "are still in cleanup",
-                [?set_name(State2), ?group_id(State2), element(1, From),
-                    Partitions, StillInCleanup]),
-            {noreply, maybe_start_cleaner(State7)}
-        end;
-    false ->
-        {reply, {error, <<"Invalid list of partitions">>}, State, ?CLEANUP_TIMEOUT}
-    end;
-
 
 % {request_group, StaleType}
 handle_call({request_group, false}, From,
@@ -931,6 +829,109 @@ compare_seqs([{PartId, SeqA} | RestA], [{PartId, SeqB} | RestB]) ->
     end.
 
 
+update_partition_states(ActiveList, PassiveList, CleanupList, From, State) ->
+    #state{group = Group} = State,
+    ActiveMask = couch_set_view_util:build_bitmask(ActiveList),
+    case ActiveMask >= (1 bsl ?set_num_partitions(Group)) of
+    true ->
+        throw({error, <<"Invalid active partitions list">>});
+    false ->
+        ok
+    end,
+    PassiveMask = couch_set_view_util:build_bitmask(PassiveList),
+    case PassiveMask >= (1 bsl ?set_num_partitions(Group)) of
+    true ->
+        throw({error, <<"Invalid passive partitions list">>});
+    false ->
+        ok
+    end,
+    CleanupMask = couch_set_view_util:build_bitmask(CleanupList),
+    case CleanupMask >= (1 bsl ?set_num_partitions(Group)) of
+    true ->
+        throw({error, <<"Invalid cleanup partitions list">>});
+    false ->
+        ok
+    end,
+    case (ActiveMask bor ?set_abitmask(Group)) =:= ?set_abitmask(Group) andalso
+        (PassiveMask bor ?set_pbitmask(Group)) =:= ?set_pbitmask(Group) andalso
+        (CleanupMask bor ?set_cbitmask(Group)) =:= ?set_cbitmask(Group) of
+    true ->
+        gen_server:reply(From, ok),
+        State;
+    false ->
+        do_update_partition_states(ActiveList, PassiveList, CleanupList, From, State)
+    end.
+
+
+do_update_partition_states(ActiveList, PassiveList, CleanupList, From, State) ->
+    #state{cleanup_waiters = CleanupWaiters} = State2 = stop_cleaner(State),
+    UpdaterRunning = is_pid(State2#state.updater_pid),
+    #state{group = Group3} = State3 = stop_updater(State2, immediately),
+    {InCleanup, _NotInCleanup} =
+        partitions_still_in_cleanup(ActiveList ++ PassiveList, Group3),
+    case InCleanup of
+    [] ->
+        {ok, NewAbitmask1, NewPbitmask1, NewSeqs1, NewPurgeSeqs1} =
+            set_active_partitions(
+                ActiveList,
+                ?set_abitmask(Group3),
+                ?set_pbitmask(Group3),
+                ?set_seqs(Group3),
+                ?set_purge_seqs(Group3)),
+        {ok, NewAbitmask2, NewPbitmask2, NewSeqs2, NewPurgeSeqs2} =
+            set_passive_partitions(
+                PassiveList,
+                NewAbitmask1,
+                NewPbitmask1,
+                NewSeqs1,
+                NewPurgeSeqs1),
+        {ok, NewAbitmask3, NewPbitmask3, NewCbitmask3, NewSeqs3, NewPurgeSeqs3} =
+            set_cleanup_partitions(
+                CleanupList,
+                NewAbitmask2,
+                NewPbitmask2,
+                ?set_cbitmask(Group3),
+                NewSeqs2,
+                NewPurgeSeqs2),
+        State4 = update_header(
+            State3,
+            NewAbitmask3,
+            NewPbitmask3,
+            NewCbitmask3,
+            NewSeqs3,
+            NewPurgeSeqs3),
+        case CleanupList of
+        [] ->
+            ok;
+        _ ->
+            ok = couch_db_set:remove_partitions(?db_set(State4), CleanupList)
+        end,
+        gen_server:reply(From, ok);
+    _ ->
+        ?LOG_INFO("Set view `~s`, group `~s`, blocking client ~p, "
+            "requesting partition state change because the following "
+            "partitions are still in cleanup: ~w",
+            [?set_name(State), ?group_id(State), element(1, From), InCleanup]),
+        Waiter = #cleanup_waiter{
+            from = From,
+            active_list = ActiveList,
+            passive_list = PassiveList
+        },
+        State4 = State3#state{cleanup_waiters = CleanupWaiters ++ [Waiter]}
+    end,
+    State5 = case UpdaterRunning of
+    true ->
+        % Updater was running, we stopped it, updated the group we received
+        % from the updater, updated that group's bitmasks and update/purge
+        % seqs, and now restart the updater with this modified group.
+        start_updater(State4);
+    false ->
+        State4
+    end,
+    State6 = restart_compactor(State5, "partition states were updated"),
+    maybe_start_cleaner(State6).
+
+
 set_passive_partitions([], Abitmask, Pbitmask, Seqs, PurgeSeqs) ->
     {ok, Abitmask, Pbitmask, Seqs, PurgeSeqs};
 
@@ -1004,12 +1005,7 @@ set_cleanup_partitions([PartId | Rest], Abitmask, Pbitmask, Cbitmask, Seqs, Purg
     end.
 
 
-validate_partitions(Group, Bitmask) ->
-    Bitmask < (1 bsl ?set_num_partitions(Group)).
-
-
-update_header(OpName, Partitions, State,
-              NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs, NewPurgeSeqs) ->
+update_header(State, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs, NewPurgeSeqs) ->
     #state{
         group = #set_view_group{
             index_header =
@@ -1045,11 +1041,11 @@ update_header(OpName, Partitions, State,
         ok = couch_db_set:set_passive(?db_set(NewState), PassiveList)
     end,
     % TODO maybe set to debug level
-    ?LOG_INFO("Set view `~s`, group `~s`, ~p ~w~n"
+    ?LOG_INFO("Set view `~s`, group `~s`, partition states updated~n"
         "abitmask before ~*..0s, abitmask after ~*..0s~n"
         "pbitmask before ~*..0s, pbitmask after ~*..0s~n"
         "cbitmask before ~*..0s, cbitmask after ~*..0s~n",
-        [?set_name(State), ?group_id(State), OpName, Partitions,
+        [?set_name(State), ?group_id(State),
          NumPartitions, integer_to_list(Abitmask, 2),
          NumPartitions, integer_to_list(NewAbitmask, 2),
          NumPartitions, integer_to_list(Pbitmask, 2),
@@ -1330,47 +1326,44 @@ partitions_still_in_cleanup([PartId | Rest], Group, AccStill, AccNot) ->
 
 notify_cleanup_waiters(#state{cleanup_waiters = []} = State) ->
     State;
-notify_cleanup_waiters(#state{cleanup_waiters = Waiters} = State) ->
-    ?LOG_INFO("Set view `~s`, group `~s`, notifying cleanup waiters",
-        [?set_name(State), ?group_id(State)]),
-    notify_cleanup_waiters(Waiters, State, []).
-
-notify_cleanup_waiters([], State, Acc) ->
-    State#state{cleanup_waiters = lists:reverse(Acc)};
-notify_cleanup_waiters([Waiter | Rest], #state{group = Group} = State, Acc) ->
-    {From, NewPartState, PartIds} = Waiter,
-    {StillInCleanup, NotInCleanup} = partitions_still_in_cleanup(PartIds, Group),
-    case NotInCleanup of
+notify_cleanup_waiters(State) ->
+    #state{group = Group, cleanup_waiters = [Waiter | RestWaiters]} = State,
+    #cleanup_waiter{
+        from = From,
+        active_list = Active,
+        passive_list = Passive
+    } = Waiter,
+    {InCleanup, _NotInCleanup} =
+        partitions_still_in_cleanup(Active ++ Passive, Group),
+    case InCleanup of
     [] ->
-        notify_cleanup_waiters(Rest, State, [Waiter | Acc]);
-    _ ->
-        case NewPartState of
-        active ->
-            {ok, NewAbitmask, NewPbitmask, NewSeqs, NewPurgeSeqs} =
-                set_active_partitions(
-                    NotInCleanup, ?set_abitmask(Group), ?set_pbitmask(Group),
-                    ?set_seqs(Group), ?set_purge_seqs(Group)),
-            Op = activate_partitions_after_cleanup;
-        passive ->
-            {ok, NewAbitmask, NewPbitmask, NewSeqs, NewPurgeSeqs} =
-                set_passive_partitions(
-                    NotInCleanup, ?set_abitmask(Group), ?set_pbitmask(Group),
-                    ?set_seqs(Group), ?set_purge_seqs(Group)),
-            Op = set_passive_partitions_after_cleanup
-        end,
+        {ok, NewAbitmask1, NewPbitmask1, NewSeqs1, NewPurgeSeqs1} =
+            set_active_partitions(
+                Active,
+                ?set_abitmask(Group),
+                ?set_pbitmask(Group),
+                ?set_seqs(Group),
+                ?set_purge_seqs(Group)),
+        {ok, NewAbitmask2, NewPbitmask2, NewSeqs2, NewPurgeSeqs2} =
+            set_passive_partitions(
+                Passive,
+                NewAbitmask1,
+                NewPbitmask1,
+                NewSeqs1,
+                NewPurgeSeqs1),
         State2 = update_header(
-            Op, NotInCleanup, State, NewAbitmask, NewPbitmask,
-            ?set_cbitmask(Group), NewSeqs, NewPurgeSeqs),
-        case StillInCleanup of
-        [] ->
-            ?LOG_INFO("Set view `~s`, group `~s`, unblocking cleanup waiter ~p",
-                [?set_name(State2), ?group_id(State2), element(1, From)]),
-            gen_server:reply(From, ok),
-            notify_cleanup_waiters(Rest, State2, Acc);
-        _ ->
-            Waiter2 = {From, NewPartState, StillInCleanup},
-            notify_cleanup_waiters(Rest, State2, [Waiter2 | Acc])
-        end
+            State,
+            NewAbitmask2,
+            NewPbitmask2,
+            ?set_cbitmask(Group),
+            NewSeqs2,
+            NewPurgeSeqs2),
+        ?LOG_INFO("Set view `~s`, group `~s`, unblocking cleanup waiter ~p",
+            [?set_name(State2), ?group_id(State2), element(1, From)]),
+        gen_server:reply(From, ok),
+        State2#state{cleanup_waiters = RestWaiters};
+    _ ->
+        State
     end.
 
 

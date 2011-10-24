@@ -59,8 +59,8 @@ def test_maps(params):
         assert info["update_seqs"][str(i)] == (params["ndocs"] / 4), \
             "right update seq for partition %d" % (i + 1)
 
-    print "Disabling partition 4"
-    common.disable_partition(params, 3)
+    print "Setting partition 4 as passive"
+    common.set_partition_states(params, passive = [3])
 
     print "Verifying set view group info"
     info = common.get_set_view_info(params)
@@ -93,8 +93,8 @@ def test_maps(params):
         assert not (key in all_keys), \
             "Key %d not in result after partition 4 was made passive" % (key,)
 
-    print "Re-enabling partition 4"
-    common.enable_partition(params, 3)
+    print "Setting partition 4 state to active"
+    common.set_partition_states(params, active = [3])
 
     print "Verifying set view group info"
     info = common.get_set_view_info(params)
@@ -117,9 +117,8 @@ def test_maps(params):
 
     common.test_keys_sorted(view_result3)
 
-    print "Disabling partitions 1 and 4"
-    common.disable_partition(params, 0)
-    common.disable_partition(params, 3)
+    print "Setting partitions 1 and 4 to passive state"
+    common.set_partition_states(params, passive = [0, 3])
 
     print "Verifying set view group info"
     info = common.get_set_view_info(params)
@@ -156,9 +155,8 @@ def test_maps(params):
         assert not (key in all_keys), \
             "Key %d not in result after partition 4 was made passive" % (key,)
 
-    print "Disabling all partitions and querying view again"
-    for i in xrange(params["nparts"]):
-        common.disable_partition(params, i)
+    print "Marking all partitions as passive and querying view again"
+    common.set_partition_states(params, passive = range(params["nparts"]))
 
     (resp5, view_result5) = common.query(params, "mapview1")
     etag5 = resp5.getheader("ETag")
@@ -171,9 +169,8 @@ def test_maps(params):
     assert etag5 != etag3, "ETag is different from all previous responses"
     assert etag5 != etag4, "ETag is different from all previous responses"
 
-    print "Re-enabling all partitions"
-    for i in xrange(params["nparts"]):
-        common.enable_partition(params, i)
+    print "Setting all partitions to active state"
+    common.set_partition_states(params, active = range(params["nparts"]))
 
     print "Verifying set view group info"
     info = common.get_set_view_info(params)
@@ -216,8 +213,8 @@ def test_reduces(params, viewname):
         assert info["update_seqs"][str(i)] == (params["ndocs"] / 4), \
             "right update seq for partition %d" % (i + 1)
 
-    print "Disabling partition 3"
-    common.disable_partition(params, 2)
+    print "Setting partition 3 to passive state"
+    common.set_partition_states(params, passive = [2])
 
     print "Verifying set view group info"
     info = common.get_set_view_info(params)
@@ -320,8 +317,8 @@ def test_reduces(params, viewname):
         assert not (key in all_keys), \
             "Key %d not in result after partition 3 was made passive" % (key,)
 
-    print "Re-enabling partition 3"
-    common.enable_partition(params, 2)
+    print "Setting partition 3 to active state"
+    common.set_partition_states(params, active = [2])
 
     print "Verifying set view group info"
     info = common.get_set_view_info(params)
@@ -383,8 +380,8 @@ def test_reduces(params, viewname):
 
 
 def test_view_updates(params):
-    print "Disabling partition 2"
-    common.disable_partition(params, 1)
+    print "Setting partition 2 state to passive"
+    common.set_partition_states(params, passive = [1])
 
     print "Verifying set view group info"
     info = common.get_set_view_info(params)
@@ -424,8 +421,8 @@ def test_view_updates(params):
     assert not(new_doc1["integer"] in all_keys), "new_doc1 not reflected in view"
     assert not(new_doc2["integer"] in all_keys), "new_doc2 not reflected in view"
 
-    print "Re-enabling partition 2"
-    common.enable_partition(params, 1)
+    print "Setting partition 2 state to active"
+    common.set_partition_states(params, active = [1])
 
     print "Querying map view again"
     (resp2, view_result2) = common.query(params, "mapview1")

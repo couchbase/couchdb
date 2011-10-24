@@ -118,61 +118,23 @@ def define_set_view(params, active_partitions, passive_partitions):
     conn.close()
 
 
-def disable_partition(params, i):
-    if type(i) is int:
-        body = json.dumps([i])
-    elif type(i) is list:
-        body = json.dumps(i)
-    else:
-        raise Exception("Invalid parameter type")
+def set_partition_states(params, active = [], passive = [], cleanup = []):
+    body = json.dumps(
+        {
+            "active": active,
+            "passive": passive,
+            "cleanup": cleanup
+        })
     conn = httplib.HTTPConnection(params["host"])
     conn.request(
         "POST",
-        "/_set_view/" + params["setname"] + "/" + params["ddoc"]["_id"] + "/_passive_partitions",
+        "/_set_view/" + params["setname"] + "/" + \
+            params["ddoc"]["_id"] + "/_set_partition_states",
         body,
         {"Content-Type": "application/json"}
         )
     resp = conn.getresponse()
-    assert resp.status == 201, "Disable partition response has status 201"
-    body = json.loads(resp.read())
-    conn.close()
-
-
-def enable_partition(params, i):
-    if type(i) is int:
-        body = json.dumps([i])
-    elif type(i) is list:
-        body = json.dumps(i)
-    else:
-        raise Exception("Invalid parameter type")
-    conn = httplib.HTTPConnection(params["host"])
-    conn.request(
-        "POST",
-        "/_set_view/" + params["setname"] + "/" + params["ddoc"]["_id"] + "/_active_partitions",
-        body,
-        {"Content-Type": "application/json"}
-        )
-    resp = conn.getresponse()
-    assert resp.status == 201, "Enable partition response has status 201"
-    body = json.loads(resp.read())
-    conn.close()
-
-def cleanup_partition(params, i):
-    if type(i) is int:
-        body = json.dumps([i])
-    elif type(i) is list:
-        body = json.dumps(i)
-    else:
-        raise Exception("Invalid parameter type")
-    conn = httplib.HTTPConnection(params["host"])
-    conn.request(
-        "POST",
-        "/_set_view/" + params["setname"] + "/" + params["ddoc"]["_id"] + "/_cleanup_partitions",
-        body,
-        {"Content-Type": "application/json"}
-        )
-    resp = conn.getresponse()
-    assert resp.status == 201, "Cleanup response has status 201"
+    assert resp.status == 201, "_set_partition_states response has status 201"
     body = json.loads(resp.read())
     conn.close()
 

@@ -101,7 +101,7 @@ def test_set_passive_partitions_when_updater_is_running(params):
     assert view_result["total_rows"] == 0, "Received empty row set"
 
     print "Marking partition 4 as passive"
-    common.disable_partition(params, 3)
+    common.set_partition_states(params, passive = [3])
 
     info = common.get_set_view_info(params)
     assert info["active_partitions"] == [0, 1, 2], "right active partitions list"
@@ -164,7 +164,7 @@ def test_set_passive_partitions_when_updater_is_running(params):
 
     total_doc_count = common.set_doc_count(params)
     print "Changing partition 4 from passive to active"
-    common.enable_partition(params, 3)
+    common.set_partition_states(params, active = [3])
 
     print "Querying map view again"
     (resp, view_result) = common.query(params, "mapview")

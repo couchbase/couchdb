@@ -46,7 +46,7 @@ def test_cleanup(params):
             "right update seq for partition %d" % (i + 1)
 
     print "Triggering partition 4 cleanup"
-    common.cleanup_partition(params, 3)
+    common.set_partition_states(params, cleanup = [3])
 
     info = common.get_set_view_info(params)
     assert info["active_partitions"] == [0, 1, 2], "right active partitions list"
@@ -176,8 +176,7 @@ def test_cleanup(params):
 
 def test_set_cleanup_partitions_when_updater_is_running(params):
     print "Marking all partitions for cleanup"
-    for i in [0, 1, 2, 3]:
-        common.cleanup_partition(params, i)
+    common.set_partition_states(params, cleanup = range(params["nparts"]))
 
     print "Compacting the set view group"
     common.compact_set_view(params)
@@ -193,8 +192,7 @@ def test_set_cleanup_partitions_when_updater_is_running(params):
     assert len(view_result["rows"]) == 0, "Empty view result"
 
     print "Marking all partitions as active"
-    for i in [0, 1, 2, 3]:
-        common.enable_partition(params, i)
+    common.set_partition_states(params, active = range(params["nparts"]))
 
     print "Querying view with ?stale=update_after"
     (resp, view_result) = common.query(params, "mapview1", {"stale": "update_after"})
@@ -202,7 +200,7 @@ def test_set_cleanup_partitions_when_updater_is_running(params):
     assert len(view_result["rows"]) == 0, "Empty view result"
 
     print "Marking partition 2 for cleanup while the updater is running"
-    common.cleanup_partition(params, 1)
+    common.set_partition_states(params, cleanup = [1])
 
     info = common.get_set_view_info(params)
     assert info["active_partitions"] == [0, 2, 3], "right active partitions list"
@@ -257,7 +255,7 @@ def test_set_cleanup_partitions_when_updater_is_running(params):
 
 def test_change_partition_states_while_cleanup_running(params):
     print "Marking all partitions as active"
-    common.enable_partition(params, [0, 1, 2, 3])
+    common.set_partition_states(params, active = range(params["nparts"]))
 
     doc_count = common.set_doc_count(params, [0, 1, 2, 3])
     print "Updating view"
@@ -277,7 +275,7 @@ def test_change_partition_states_while_cleanup_running(params):
             "right update seq for partition %d" % (i + 1)
 
     print "Marking partitions 1 and 2 for cleanup"
-    common.cleanup_partition(params, [0, 1])
+    common.set_partition_states(params, cleanup = [0, 1])
 
     info = common.get_set_view_info(params)
     assert info["cleanup_running"] == True, "cleanup is running"
@@ -286,7 +284,7 @@ def test_change_partition_states_while_cleanup_running(params):
     assert info["cleanup_partitions"] == [0, 1], "right cleanup partitions list"
 
     print "Marking partitions 1 and 2 as active while cleanup is ongoing"
-    common.enable_partition(params, [0, 1])
+    common.set_partition_states(params, active = [0, 1])
 
     print "Querying view"
     (resp, view_result) = common.query(params, "mapview1")

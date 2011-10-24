@@ -49,7 +49,7 @@ def test(params):
             "Key %d from partition 3 is not in the result" % (key,)
 
     print "Disabling (making it passive) partition 2"
-    common.disable_partition(params, 1)
+    common.set_partition_states(params, passive = [1])
 
     print "Querying map view again with ?partitions=[0,1,3]"
     (map_resp2, map_view_result2) = common.query(
@@ -60,7 +60,7 @@ def test(params):
     assert map_etag2 == map_etag, "Same Etag as before"
 
     print "Marking partition 2 for cleanup"
-    common.cleanup_partition(params, 1)
+    common.set_partition_states(params, cleanup = [1])
 
     print "Querying map view again with ?partitions=[0,1,3]"
     (map_resp3, map_view_result3) = common.query(

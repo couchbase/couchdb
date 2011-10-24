@@ -21,7 +21,7 @@
 -export([get_group_info/2, cleanup_index_files/1]).
 
 -export([is_view_defined/2]).
--export([set_passive_partitions/3, set_active_partitions/3, set_cleanup_partitions/3]).
+-export([set_partition_states/5]).
 
 -export([fold/5, fold_reduce/5]).
 -export([get_row_count/1, reduce_to_count/1, extract_map_view/1]).
@@ -92,32 +92,39 @@ is_view_defined(SetName, DDocId) ->
     couch_set_view_group:is_view_defined(GroupPid).
 
 
-% Partitions list of partition IDs (e.g. [6, 9, 11])
-set_passive_partitions(SetName, DDocId, Partitions) ->
+% This is an incremental operation. That is, the following sequence of calls:
+%
+% set_partitions_states(<<"myset">>, <<"_design/foo">>, [0, 1], [5], [8])
+% set_partitions_states(<<"myset">>, <<"_design/foo">>, [2, 3], [6, 7], [9])
+% set_partitions_states(<<"myset">>, <<"_design/foo">>, [], [], [10])
+%
+% Will cause the set view index to have the following state:
+%
+%   active partitions:   [0, 1, 2, 3]
+%   passive partitions:  [5, 6, 7]
+%   cleanup partitions:  [8, 9, 10]
+%
+% Also, to move partition(s) from one state to another, simply do a call
+% where that partition(s) is listed in the new desired state. Example:
+%
+% set_partitions_states(<<"myset">>, <<"_design/foo">>, [0, 1, 2], [3], [4])
+% set_partitions_states(<<"myset">>, <<"_design/foo">>, [], [2], [])
+%
+% This will result in the following set view index state:
+%
+%   active partitions:   [0, 1]
+%   passive_partitions:  [2, 3]
+%   cleanup_partitions:  [4]
+%
+% (partition 2 was first set to active state and then moved into the passive state)
+%
+% New partitions are added by specifying them for the first time in the active
+% or passive state lists.
+%
+set_partition_states(SetName, DDocId, ActivePartitions, PassivePartitions, CleanupPartitions) ->
     GroupPid = get_group_pid(SetName, DDocId),
-    case couch_set_view_group:set_passive_partitions(GroupPid, Partitions) of
-    ok ->
-        ok;
-    Error ->
-        throw(Error)
-    end.
-
-
-% Partitions list of partition IDs (e.g. [6, 9, 11])
-set_active_partitions(SetName, DDocId, Partitions) ->
-    GroupPid = get_group_pid(SetName, DDocId),
-    case couch_set_view_group:activate_partitions(GroupPid, Partitions) of
-    ok ->
-        ok;
-    Error ->
-        throw(Error)
-    end.
-
-
-% Partitions list of partition IDs (e.g. [6, 9, 11])
-set_cleanup_partitions(SetName, DDocId, Partitions) ->
-    GroupPid = get_group_pid(SetName, DDocId),
-    case couch_set_view_group:cleanup_partitions(GroupPid, Partitions) of
+    case couch_set_view_group:set_state(
+        GroupPid, ActivePartitions, PassivePartitions, CleanupPartitions) of
     ok ->
         ok;
     Error ->

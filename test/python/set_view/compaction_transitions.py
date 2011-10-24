@@ -53,7 +53,7 @@ def test_set_passive_during_compaction(params):
     common.compact_set_view(params, False)
 
     print "Marking partition 4 as passive"
-    common.disable_partition(params, 3)
+    common.set_partition_states(params, passive = [3])
 
     info = common.get_set_view_info(params)
     assert info["active_partitions"] == [0, 1, 2], "right active partitions list"
@@ -93,7 +93,7 @@ def test_set_passive_during_compaction(params):
     common.compact_set_view(params, False)
 
     print "Adding two new partitions, 5 and 6, as passive while compaction is running"
-    common.disable_partition(params, [4, 5])
+    common.set_partition_states(params, passive = [4, 5])
 
     print "Waiting for compaction to finish"
     compaction_was_running = (common.wait_set_view_compaction_complete(params) > 0)
@@ -176,10 +176,10 @@ def test_set_active_during_compaction(params):
     common.compact_set_view(params, False)
 
     print "Marking partitions 4, 5 and 6 as active while compaction is running"
-    common.enable_partition(params, [3, 4, 5])
+    common.set_partition_states(params, active = [3, 4, 5])
 
     print "Adding new partitions 7 and 8 with active state while compaction is running"
-    common.enable_partition(params, [6, 7])
+    common.set_partition_states(params, active = [6, 7])
 
     info = common.get_set_view_info(params)
     assert info["active_partitions"] == [0, 1, 2, 3, 4, 5, 6, 7], "right active partitions list"
