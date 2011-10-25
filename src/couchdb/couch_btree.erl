@@ -15,6 +15,7 @@
 -export([open/2, open/3, query_modify/4, query_modify_raw/2, add/2, add_remove/3]).
 -export([fold/4, full_reduce/1, final_reduce/2, size/1, foldl/3, foldl/4, lookup_sorted/2]).
 -export([modify/3, fold_reduce/4, lookup/2, get_state/1, set_options/2]).
+-export([add_remove/5, query_modify/6]).
 -export([guided_purge/3]).
 
 -include("couch_db.hrl").
@@ -173,12 +174,21 @@ add(Bt, InsertKeyValues) ->
     add_remove(Bt, InsertKeyValues, []).
 
 add_remove(Bt, InsertKeyValues, RemoveKeys) ->
-    {ok, [], Bt2} = query_modify(Bt, [], InsertKeyValues, RemoveKeys),
+    {ok, _, Bt2} = add_remove(Bt, InsertKeyValues, RemoveKeys, nil, nil),
     {ok, Bt2}.
 
+add_remove(Bt, InsertKeyValues, RemoveKeys, PurgeFun, PurgeFunAcc) ->
+    {ok, [], PurgeFunAcc2, Bt2} = query_modify(
+        Bt, [], InsertKeyValues, RemoveKeys, PurgeFun, PurgeFunAcc),
+    {ok, PurgeFunAcc2, Bt2}.
 
 
 query_modify(Bt, LookupKeys, InsertValues, RemoveKeys) ->
+    {ok, QueryResults, _, Bt2} =
+        query_modify(Bt, LookupKeys, InsertValues, RemoveKeys, nil, nil),
+    {ok, QueryResults, Bt2}.
+
+query_modify(Bt, LookupKeys, InsertValues, RemoveKeys, PurgeFun, PurgeFunAcc) ->
     #btree{root=Root} = Bt,
     InsertActions = lists:map(
         fun(KeyValue) ->
@@ -197,16 +207,18 @@ query_modify(Bt, LookupKeys, InsertValues, RemoveKeys) ->
             end
         end,
     Actions = lists:sort(SortFun, lists:append([InsertActions, RemoveActions, FetchActions])) ,
-    {ok, KeyPointers, QueryResults, nil, Bt2} = modify_node(Bt, Root, Actions, [], nil),
+    {ok, KeyPointers, QueryResults, nil, PurgeFunAcc2, _KeepPurging2, Bt2} =
+        modify_node(Bt, Root, Actions, [], nil, PurgeFun, PurgeFunAcc, is_function(PurgeFun, 3)),
     {ok, NewRoot, Bt3} = complete_root(Bt2, KeyPointers),
-    {ok, QueryResults, Bt3#btree{root=NewRoot}}.
+    {ok, QueryResults, PurgeFunAcc2, Bt3#btree{root=NewRoot}}.
 
 
 % Similar to query_modify, except the keys values must be sorted and tagged
 % tuples of {action, Key, Value} and sorted by the sorted by Key, then by
 % the rules in the function op_order.
 query_modify_raw(#btree{root=Root} = Bt, SortedActions) ->
-    {ok, KeyPointers, QueryResults, nil, Bt2} = modify_node(Bt, Root, SortedActions, [], nil),
+    {ok, KeyPointers, QueryResults, nil, nil, false, Bt2} =
+        modify_node(Bt, Root, SortedActions, [], nil, nil, nil, false),
     {ok, NewRoot, Bt3} = complete_root(Bt2, KeyPointers),
     {ok, QueryResults, Bt3#btree{root=NewRoot}}.
 
@@ -214,8 +226,8 @@ query_modify_raw(#btree{root=Root} = Bt, SortedActions) ->
 modify(Bt, KeyFuns, Acc) ->
     #btree{root=Root} = Bt,
     Actions = [{modify, Key, Fun} || {Key, Fun} <- KeyFuns],
-    {ok, KeyPointers, BeforeAfterResults, Acc2, Bt2} =
-            modify_node(Bt, Root, Actions, [], Acc),
+    {ok, KeyPointers, BeforeAfterResults, Acc2, nil, false, Bt2} =
+            modify_node(Bt, Root, Actions, [], Acc, nil, nil, false),
     {ok, NewRoot, Bt3} = complete_root(Bt2, KeyPointers),
     {ok, BeforeAfterResults, Acc2, Bt3#btree{root=NewRoot}}.
 
@@ -327,7 +339,7 @@ chunkify([InElement | RestInList], ChunkThreshold, OutList, OutListSize, OutputC
         chunkify(RestInList, ChunkThreshold, [InElement | OutList], OutListSize + Size, OutputChunks)
     end.
 
-modify_node(Bt, RootPointerInfo, Actions, QueryOutput, Acc) ->
+modify_node(Bt, RootPointerInfo, Actions, QueryOutput, Acc, PurgeFun, PurgeFunAcc, KeepPurging) ->
     case RootPointerInfo of
     nil ->
         NodeType = kv_node,
@@ -336,22 +348,28 @@ modify_node(Bt, RootPointerInfo, Actions, QueryOutput, Acc) ->
         Pointer = element(1, RootPointerInfo),
         {NodeType, NodeList} = get_node(Bt, Pointer)
     end,
-    NodeTuple = list_to_tuple(NodeList),
 
-    {ok, NewNodeList, QueryOutput2, Acc2, Bt2} =
     case NodeType of
-    kp_node -> modify_kpnode(Bt, NodeTuple, 1, Actions, [], QueryOutput, Acc);
-    kv_node -> modify_kvnode(Bt, NodeTuple, 1, Actions, [], QueryOutput, Acc)
+    kp_node ->
+        NodeTuple = list_to_tuple(NodeList),
+        {ok, NewNodeList, QueryOutput2, Acc2, PurgeFunAcc2, KeepPurging2, Bt2} =
+            modify_kpnode(Bt, NodeTuple, 1, Actions, [], QueryOutput, Acc, PurgeFun, PurgeFunAcc, KeepPurging);
+    kv_node ->
+        {ok, NewNodeList1, PurgeFunAcc2, KeepPurging2, Bt1} =
+            maybe_purge(kv_node, Bt, NodeList, PurgeFun, PurgeFunAcc, KeepPurging),
+        NodeTuple = list_to_tuple(NewNodeList1),
+        {ok, NewNodeList, QueryOutput2, Acc2, Bt2} =
+            modify_kvnode(Bt1, NodeTuple, 1, Actions, [], QueryOutput, Acc)
     end,
     case NewNodeList of
     [] ->  % no nodes remain
-        {ok, [], QueryOutput2, Acc2, Bt2};
+        {ok, [], QueryOutput2, Acc2, PurgeFunAcc2, KeepPurging2, Bt2};
     NodeList ->  % nothing changed
         {LastKey, _LastValue} = element(tuple_size(NodeTuple), NodeTuple),
-        {ok, [{LastKey, RootPointerInfo}], QueryOutput2, Acc2, Bt2};
+        {ok, [{LastKey, RootPointerInfo}], QueryOutput2, Acc2, PurgeFunAcc2, KeepPurging2, Bt2};
     _Else2 ->
         {ok, ResultList, Bt3} = write_node(Bt2, NodeType, NewNodeList),
-        {ok, ResultList, QueryOutput2, Acc2, Bt3}
+        {ok, ResultList, QueryOutput2, Acc2, PurgeFunAcc2, KeepPurging2, Bt3}
     end.
 
 
@@ -395,36 +413,55 @@ write_node(#btree{fd = Fd, compression = Comp} = Bt, NodeType, NodeList) ->
     ],
     {ok, ResultList, Bt}.
 
-modify_kpnode(Bt, {}, _LowerBound, Actions, [], QueryOutput, Acc) ->
-    modify_node(Bt, nil, Actions, QueryOutput, Acc);
-modify_kpnode(Bt, NodeTuple, LowerBound, [], ResultNode, QueryOutput, Acc) ->
-    {ok, lists:reverse(ResultNode, bounded_tuple_to_list(NodeTuple, LowerBound,
-            tuple_size(NodeTuple), [])), QueryOutput, Acc, Bt};
+modify_kpnode(Bt, {}, _LowerBound, Actions, [], QueryOutput, Acc, PurgeFun, PurgeFunAcc, KeepPurging) ->
+    modify_node(Bt, nil, Actions, QueryOutput, Acc, PurgeFun, PurgeFunAcc, KeepPurging);
+modify_kpnode(Bt, NodeTuple, LowerBound, [], ResultNode, QueryOutput, Acc, PurgeFun, PurgeFunAcc, KeepPurging) ->
+    NodeList = bounded_tuple_to_list(
+        NodeTuple, LowerBound, tuple_size(NodeTuple), []),
+    {ok, NewNodeList, PurgeFunAcc2, KeepPurging2, Bt2} =
+        maybe_purge(kp_node, Bt, NodeList, PurgeFun, PurgeFunAcc, KeepPurging),
+    ResultNode2 = lists:reverse(ResultNode, NewNodeList),
+    {ok, ResultNode2, QueryOutput, Acc, PurgeFunAcc2, KeepPurging2, Bt2};
 modify_kpnode(Bt, NodeTuple, LowerBound,
-        [{_, FirstActionKey, _}|_]=Actions, ResultNode, QueryOutput, Acc) ->
+        [{_, FirstActionKey, _}|_]=Actions, ResultNode, QueryOutput, Acc, PurgeFun, PurgeFunAcc, KeepPurging) ->
     Sz = tuple_size(NodeTuple),
     N = find_first_gteq(Bt, NodeTuple, LowerBound, Sz, FirstActionKey),
     case N =:= Sz of
     true  ->
         % perform remaining actions on last node
         {_, PointerInfo} = element(Sz, NodeTuple),
-        {ok, ChildKPs, QueryOutput2, Acc2, Bt2} =
-            modify_node(Bt, PointerInfo, Actions, QueryOutput, Acc),
-        NodeList = lists:reverse(ResultNode, bounded_tuple_to_list(NodeTuple, LowerBound,
-            Sz - 1, ChildKPs)),
-        {ok, NodeList, QueryOutput2, Acc2, Bt2};
+        {ok, ChildKPs, QueryOutput2, Acc2, PurgeFunAcc2, KeepPurging2, Bt2} =
+            modify_node(Bt, PointerInfo, Actions, QueryOutput, Acc, PurgeFun, PurgeFunAcc, KeepPurging),
+        PrevNodes = bounded_tuple_to_list(NodeTuple, LowerBound, Sz - 1, []),
+        {ok, NewPrevNodes, PurgeFunAcc3, KeepPurging3, Bt3} =
+            maybe_purge(kp_node, Bt2, PrevNodes, PurgeFun, PurgeFunAcc2, KeepPurging2),
+        NodeList = lists:reverse(ResultNode, NewPrevNodes ++ ChildKPs),
+        {ok, NodeList, QueryOutput2, Acc2, PurgeFunAcc3, KeepPurging3, Bt3};
     false ->
         {NodeKey, PointerInfo} = element(N, NodeTuple),
         SplitFun = fun({_ActionType, ActionKey, _ActionValue}) ->
                 not less(Bt, NodeKey, ActionKey)
             end,
         {LessEqQueries, GreaterQueries} = lists:splitwith(SplitFun, Actions),
-        {ok, ChildKPs, QueryOutput2, Acc2, Bt2} =
-                modify_node(Bt, PointerInfo, LessEqQueries, QueryOutput, Acc),
-        ResultNode2 = lists:reverse(ChildKPs, bounded_tuple_to_revlist(NodeTuple,
-                LowerBound, N - 1, ResultNode)),
-        modify_kpnode(Bt2, NodeTuple, N+1, GreaterQueries, ResultNode2, QueryOutput2, Acc2)
+        {ok, ChildKPs, QueryOutput2, Acc2, PurgeFunAcc2, KeepPurging2, Bt2} =
+                modify_node(Bt, PointerInfo, LessEqQueries, QueryOutput, Acc, PurgeFun, PurgeFunAcc, KeepPurging),
+        PrevNodes = bounded_tuple_to_list(NodeTuple, LowerBound, N - 1, []),
+        {ok, NewPrevNodes, PurgeFunAcc3, KeepPurging3, Bt3} =
+            maybe_purge(kp_node, Bt2, PrevNodes, PurgeFun, PurgeFunAcc2, KeepPurging2),
+        ResultNode2 = lists:reverse(ChildKPs, lists:reverse(NewPrevNodes, ResultNode)),
+        modify_kpnode(Bt3, NodeTuple, N + 1, GreaterQueries, ResultNode2, QueryOutput2, Acc2, PurgeFun, PurgeFunAcc3, KeepPurging3)
     end.
+
+maybe_purge(_NodeType, Bt, NodeList, _PurgeFun, PurgeFunAcc, false) ->
+    {ok, NodeList, PurgeFunAcc, false, Bt};
+maybe_purge(kp_node, Bt, NodeList, PurgeFun, PurgeFunAcc, true) ->
+    {ok, NewNodeList, PurgeFunAcc2, Bt2, Go} =
+        kp_guided_purge(Bt, NodeList, PurgeFun, PurgeFunAcc),
+    {ok, NewNodeList, PurgeFunAcc2, Go =/= stop, Bt2};
+maybe_purge(kv_node, Bt, NodeList, PurgeFun, PurgeFunAcc, true) ->
+    {ok, NewNodeList, PurgeFunAcc2, Bt2, Go} =
+        kv_guided_purge(Bt, NodeList, PurgeFun, PurgeFunAcc),
+    {ok, NewNodeList, PurgeFunAcc2, Go =/= stop, Bt2}.
 
 bounded_tuple_to_revlist(_Tuple, Start, End, Tail) when Start > End ->
     Tail;

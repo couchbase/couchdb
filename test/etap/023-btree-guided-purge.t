@@ -19,7 +19,7 @@ filename() -> "./test/etap/temp.023".
 
 main(_) ->
     test_util:init_code_path(),
-    etap:plan(14),
+    etap:plan(20),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -35,6 +35,7 @@ test() ->
     all_purged_items_test(),
     partial_purges_test(),
     partial_purges_test_with_stop(),
+    add_remove_and_purge_test(),
     ok.
 
 
@@ -238,6 +239,86 @@ partial_purges_test_with_stop() ->
         end,
         KVs2),
     etap:diag("Btree has no odd values after guided purge"),
+
+    couch_file:close(Fd).
+
+
+add_remove_and_purge_test() ->
+    ReduceFun = fun
+        (reduce, KVs) ->
+            even_odd_count(KVs);
+        (rereduce, Reds) ->
+            Even = lists:sum([E || {E, _} <- Reds]),
+            Odd = lists:sum([O || {_, O} <- Reds]),
+            {Even, Odd}
+    end,
+
+    {ok, Fd} = couch_file:open(filename(), [create, overwrite]),
+    {ok, Btree} = couch_btree:open(nil, Fd, [{reduce, ReduceFun}]),
+
+    N = 211341,
+    KVs = [{I, I} || I <- lists:seq(1, N)],
+    {NumEven, NumOdds} = even_odd_count(KVs),
+
+    {ok, Btree2} = couch_btree:add_remove(Btree, KVs, []),
+    ok = couch_file:flush(Fd),
+
+    {ok, Red} = couch_btree:full_reduce(Btree2),
+    etap:is(Red, {NumEven, NumOdds}, "Initial reduce value equals {NumEven, NumOdd}"),
+
+    PurgeFun = fun
+        (value, {K, K}, Count) ->
+            case (K rem 2) of
+            0 ->
+                {keep, Count};
+            _ ->
+                {purge, Count + 1}
+            end;
+        (branch, {0, _OddCount}, Count) ->
+            {purge, Count};
+        (branch, {_, 0}, Count) ->
+            {keep, Count};
+        (branch, {EvCount, _OddCount}, Count) when EvCount > 0 ->
+            {partial_purge, Count}
+    end,
+    {ok, PurgeAcc, Btree3} = couch_btree:add_remove(
+        Btree2, [{2, -1}, {14006, -1}, {500000, -1}], [4, 200000, 10], PurgeFun, 0),
+    ok = couch_file:flush(Fd),
+    etap:is(PurgeAcc, NumOdds, "couch_btree:add_remove/5 returned right accumulator - NumOdds}"),
+    {ok, Red2} = couch_btree:full_reduce(Btree3),
+    etap:is(Red2, {NumEven - 2, 0}, "Reduce value after guided purge equals {NumEven - 2, 0}"),
+
+    FoldFun = fun(KV, _, Acc) ->
+        {ok, [KV | Acc]}
+    end,
+    {ok, _, KVs2} = couch_btree:foldl(Btree3, FoldFun, []),
+    lists:foreach(
+        fun({K, V}) ->
+            case (K rem 2) =:= 0 of
+            true ->
+                ok;
+            false ->
+                etap:bail("Got odd value in btree after purge: " ++ integer_to_list(K))
+            end,
+            case lists:member(K, [2, 14006, 500000]) of
+            true when V =:= -1 ->
+                ok;
+            true ->
+                etap:bail("Key " ++ integer_to_list(K) ++ " has wrong value (expected -1)");
+            false ->
+                case K =:= V of
+                true ->
+                    ok;
+                false ->
+                    etap:bail("Key " ++ integer_to_list(K) ++ " has wrong value")
+                end
+            end
+        end,
+        KVs2),
+    etap:diag("Btree has no odd values after couch_btree:add_remove/6 call"),
+    etap:is(couch_util:get_value(4, KVs2), undefined, "Key 2 not in tree anymore"),
+    etap:is(couch_util:get_value(10, KVs2), undefined, "Key 10 not in tree anymore"),
+    etap:is(couch_util:get_value(200000, KVs2), undefined, "Key 200000 not in tree anymore"),
 
     couch_file:close(Fd).
 
