@@ -548,7 +548,21 @@ rereduce(Rows, #merge_params{rered_lang = Lang, rered_fun = RedFun}) ->
 dec_counter(0) -> 0;
 dec_counter(N) -> N - 1.
 
-prepare_set_view(ViewSpec, ViewArgs, Queue, GetView) ->
+get_set_view(GetSetViewFn, SetName, DDocId, ViewName, Stale, Partitions) ->
+    case GetSetViewFn(SetName, DDocId, ViewName, ok, Partitions) of
+    {ok, StaleView, StaleGroup, []} ->
+        case Stale of
+        ok ->
+            {ok, StaleView, StaleGroup, []};
+        _Other ->
+            couch_set_view:release_group(StaleGroup),
+            GetSetViewFn(SetName, DDocId, ViewName, Stale, Partitions)
+        end;
+    Other ->
+        Other
+    end.
+
+prepare_set_view(ViewSpec, ViewArgs, Queue, GetSetViewFn) ->
     #set_view_spec{
         name = SetName,
         ddoc_id = DDocId, view_name = ViewName,
@@ -559,9 +573,10 @@ prepare_set_view(ViewSpec, ViewArgs, Queue, GetView) ->
     } = ViewArgs,
 
     try
-        case GetView(SetName, DDocId, ViewName, Stale, Partitions) of
+        case get_set_view(GetSetViewFn, SetName, DDocId,
+                          ViewName, Stale, Partitions) of
         {ok, View, Group, []} ->
-             {View, Group};
+            {View, Group};
         {ok, _, Group, MissingPartitions} ->
             ?LOG_INFO("Set view ~s misses indexes for ~p.",
                       [SetName, MissingPartitions]),
