@@ -292,65 +292,56 @@ handle_call({compact_done, NewGroup}, {Pid, _}, #state{compactor_pid = Pid} = St
         fd = OldFd, sig = GroupSig, ref_counter = RefCounter
     } = Group,
 
-    case accept_compact_group(NewGroup, Group) of
-    false ->
-        ?LOG_INFO("Recompacting group `~s`, set view `~s`, because the "
-                  "cleanup bitmask was updated.",
-                  [?group_id(State), ?set_name(State)]),
-        {reply, {restart, Group, compact_group(State)}, State};
+    case group_up_to_date(NewGroup, State#state.group) of
     true ->
-        case group_up_to_date(NewGroup, State#state.group) of
+        ?LOG_INFO("Set view `~s`, group `~s`, compaction complete",
+            [?set_name(State), ?group_id(State)]),
+        FileName = index_file_name(RootDir, ?set_name(State), GroupSig),
+        CompactName = index_file_name(compact, RootDir, ?set_name(State), GroupSig),
+        ok = couch_file:delete(RootDir, FileName),
+        ok = file:rename(CompactName, FileName),
+
+        NewUpdaterPid =
+        if is_pid(UpdaterPid) ->
+            unlink(UpdaterPid),
+            exit(UpdaterPid, view_compaction_complete),
+            Owner = self(),
+            {true, NewSeqs} = index_needs_update(State),
+            spawn_link(fun() ->
+                couch_set_view_updater:update(Owner, NewGroup, NewSeqs)
+            end);
         true ->
-            ?LOG_INFO("Set view `~s`, group `~s`, compaction complete",
-                      [?set_name(State), ?group_id(State)]),
-            FileName = index_file_name(RootDir, ?set_name(State), GroupSig),
-            CompactName = index_file_name(compact, RootDir, ?set_name(State), GroupSig),
-            ok = couch_file:delete(RootDir, FileName),
-            ok = file:rename(CompactName, FileName),
+            nil
+        end,
 
-            %% if an updater is running, kill it and start a new one
-            NewUpdaterPid =
-            if is_pid(UpdaterPid) ->
-                unlink(UpdaterPid),
-                exit(UpdaterPid, view_compaction_complete),
-                Owner = self(),
-                {true, NewSeqs} = index_needs_update(State),
-                spawn_link(fun() ->
-                    couch_set_view_updater:update(Owner, NewGroup, NewSeqs)
-                end);
-            true ->
-                nil
+        %% cleanup old group
+        unlink(CompactorPid),
+        receive {'EXIT', CompactorPid, normal} -> ok after 0 -> ok end,
+        unlink(OldFd),
+        couch_ref_counter:drop(RefCounter),
+        {ok, NewRefCounter} = couch_ref_counter:start([NewGroup#set_view_group.fd]),
+
+        self() ! delayed_commit,
+        State2 = State#state{
+            compactor_pid = nil,
+            compactor_fun = nil,
+            updater_pid = NewUpdaterPid,
+            updater_state = case is_pid(NewUpdaterPid) of
+                true -> starting;
+                false -> not_running
             end,
-
-            %% cleanup old group
-            unlink(CompactorPid),
-            receive {'EXIT', CompactorPid, normal} -> ok after 0 -> ok end,
-            unlink(OldFd),
-            couch_ref_counter:drop(RefCounter),
-            {ok, NewRefCounter} = couch_ref_counter:start([NewGroup#set_view_group.fd]),
-
-            self() ! delayed_commit,
-            State2 = State#state{
-                compactor_pid = nil,
-                compactor_fun = nil,
-                updater_pid = NewUpdaterPid,
-                updater_state = case is_pid(NewUpdaterPid) of
-                    true -> starting;
-                    false -> not_running
-                end,
-                group = NewGroup#set_view_group{
-                    index_header = get_index_header_data(NewGroup),
-                    ref_counter = NewRefCounter
-                }
-            },
-            commit_header(State2#state.group),
-            State3 = notify_cleanup_waiters(State2),
-            {reply, ok, State3, ?CLEANUP_TIMEOUT};
-        false ->
-            ?LOG_INFO("Set view `~s`, group `~s`, compaction still behind, retrying",
-                      [?set_name(State), ?group_id(State)]),
-            {reply, update, State}
-        end
+            group = NewGroup#set_view_group{
+                index_header = get_index_header_data(NewGroup),
+                ref_counter = NewRefCounter
+            }
+        },
+        commit_header(State2#state.group),
+        State3 = notify_cleanup_waiters(State2),
+        {reply, ok, State3, ?CLEANUP_TIMEOUT};
+    false ->
+        ?LOG_INFO("Set view `~s`, group `~s`, compaction still behind, retrying",
+            [?set_name(State), ?group_id(State)]),
+        {reply, update, State}
     end;
 handle_call({compact_done, _NewGroup}, {OldPid, _}, State) ->
     % From a previous compactor that was killed/stopped, ignore.
@@ -1227,12 +1218,6 @@ compact_group(State) ->
     } = State,
     {ok, Fd} = open_index_file(compact, RootDir, SetName, GroupSig),
     reset_file(Fd, SetName, Group).
-
-
-accept_compact_group(NewGroup, CurrentGroup) ->
-    #set_view_group{id_btree = NewIdBtree} = NewGroup,
-    {ok, {_, IdBitmap}} = couch_btree:full_reduce(NewIdBtree),
-    (IdBitmap band ?set_cbitmask(CurrentGroup)) =:= 0.
 
 
 stop_updater(State) ->

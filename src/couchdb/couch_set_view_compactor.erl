@@ -127,9 +127,7 @@ maybe_retry_compact(NewGroup, SetName) ->
         receive
         {'DOWN', Ref, _, _, {new_group, NewGroup2}} ->
             maybe_retry_compact(NewGroup2, SetName)
-        end;
-    {restart, CurrentGroup, EmptyGroup} ->
-        compact_group(CurrentGroup, EmptyGroup, SetName)
+        end
     end.
 
 %% @spec compact_view(Fd, View, EmptyView, Acc) -> {CompactView, NewAcc}
