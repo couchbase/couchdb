@@ -32,6 +32,23 @@
 -define(group_id(State), (State#state.group)#set_view_group.name).
 -define(db_set(State), (State#state.group)#set_view_group.db_set).
 
+-record(stats, {
+    updates = 0,
+    % # of updates that only finished updating the active partitions
+    % (in the phase of updating passive partitions). Normally its value
+    % is full_updates - 1.
+    partial_updates = 0,
+    % # of times the updater was forced to stop (because partition states
+    % were updated) while it was still indexing the active partitions.
+    updater_stops = 0,
+    compactions = 0,
+    % # of interrupted cleanups. Cleanups which were stopped (in order to do
+    % higher priority tasks) and left the index in a not yet clean state (but
+    % hopefully closer to a clean state).
+    cleanup_stops = 0,
+    cleanups = 0
+}).
+
 -record(state, {
     init_args,
     group,
@@ -43,7 +60,8 @@
     waiting_commit = false,
     waiting_list = [],
     cleaner_pid = nil,
-    cleanup_waiters = []
+    cleanup_waiters = [],
+    stats = #stats{}
 }).
 
 -record(cleanup_waiter, {
@@ -51,6 +69,18 @@
     active_list,
     passive_list
 }).
+
+-define(inc_stat(S, Stats), setelement(S, Stats, element(S, Stats) + 1)).
+-define(inc_updates(Stats), ?inc_stat(#stats.updates, Stats)).
+-define(inc_partial_updates(Stats), ?inc_stat(#stats.partial_updates, Stats)).
+-define(inc_updater_stops(Stats), ?inc_stat(#stats.updater_stops, Stats)).
+-define(inc_cleanups(Stats), ?inc_stat(#stats.cleanups, Stats)).
+-define(inc_cleanup_stops(Stats), ?inc_stat(#stats.cleanup_stops, Stats)).
+-define(inc_compactions(Stats), Stats#stats{
+     compactions = Stats#stats.compactions + 1,
+     cleanups = Stats#stats.cleanups + 1
+}).
+
 
 % api methods
 request_group(Pid, StaleType) ->
@@ -333,7 +363,8 @@ handle_call({compact_done, NewGroup}, {Pid, _}, #state{compactor_pid = Pid} = St
             group = NewGroup#set_view_group{
                 index_header = get_index_header_data(NewGroup),
                 ref_counter = NewRefCounter
-            }
+            },
+            stats = ?inc_compactions(State#state.stats)
         },
         commit_header(State2#state.group),
         State3 = notify_cleanup_waiters(State2),
@@ -389,6 +420,8 @@ handle_info({updater_state, Pid, UpdaterState}, #state{updater_pid = Pid} = Stat
     {updating_passive, [_ | _]} ->
         State3 = stop_updater(State2),
         {noreply, start_updater(State3)};
+    {updating_passive, _} ->
+        {noreply, State2#state{stats = ?inc_partial_updates(State2#state.stats)}};
     _ ->
         {noreply, State2}
     end;
@@ -415,7 +448,11 @@ handle_info({'EXIT', Pid, {clean_group, NewGroup, Count}}, #state{cleaner_pid = 
               ?set_num_partitions(NewGroup), integer_to_list(?set_pbitmask(OldGroup), 2),
               ?set_num_partitions(NewGroup), integer_to_list(?set_cbitmask(NewGroup), 2),
               ?set_num_partitions(NewGroup), integer_to_list(?set_cbitmask(OldGroup), 2)]),
-    State2 = State#state{cleaner_pid = nil, group = NewGroup},
+    State2 = State#state{
+        cleaner_pid = nil,
+        group = NewGroup,
+        stats = ?inc_cleanups(State#state.stats)
+    },
     {noreply, notify_cleanup_waiters(State2)};
 
 handle_info({'EXIT', Pid, Reason}, #state{cleaner_pid = Pid} = State) ->
@@ -442,7 +479,8 @@ handle_info({'EXIT', UpPid, {new_group, NewGroup}},
         updater_state = not_running,
         waiting_commit = true,
         waiting_list = [],
-        group = NewGroup
+        group = NewGroup,
+        stats = ?inc_updates(State#state.stats)
     },
     ?LOG_INFO("Set view `~s`, group `~s`, updater finished",
         [?set_name(State2), ?group_id(State2)]),
@@ -622,7 +660,8 @@ get_group_info(State) ->
         compactor_pid=CompactorPid,
         waiting_commit=WaitingCommit,
         waiting_list=WaitersList,
-        cleaner_pid=CleanerPid
+        cleaner_pid=CleanerPid,
+        stats=Stats
     } = State,
     #set_view_group{
         fd = Fd,
@@ -631,6 +670,16 @@ get_group_info(State) ->
         def_lang = Lang,
         views = Views
     } = Group,
+    JsonStats = {[
+        {updates, Stats#stats.updates},
+        {partial_updates, Stats#stats.partial_updates},
+        {updater_interruptions, Stats#stats.updater_stops},
+        {compactions, Stats#stats.compactions},
+        {cleanups, Stats#stats.cleanups},
+        {waiting_clients, length(WaitersList)},
+        {cleanup_interruptions, Stats#stats.cleanup_stops},
+        {cleanup_blocked_processes, length(State#state.cleanup_waiters)}
+    ]},
     {ok, Size} = couch_file:bytes(Fd),
     [
         {signature, ?l2b(hex_sig(GroupSig))},
@@ -643,13 +692,13 @@ get_group_info(State) ->
         {cleanup_running, (CleanerPid /= nil) orelse
             ((CompactorPid /= nil) andalso (?set_cbitmask(Group) =/= 0))},
         {waiting_commit, WaitingCommit},
-        {waiting_clients, length(WaitersList)},
         {max_number_partitions, ?set_num_partitions(Group)},
         {update_seqs, {[{couch_util:to_binary(P), S} || {P, S} <- ?set_seqs(Group)]}},
         {purge_seqs, {[{couch_util:to_binary(P), S} || {P, S} <- ?set_purge_seqs(Group)]}},
         {active_partitions, couch_set_view_util:decode_bitmask(?set_abitmask(Group))},
         {passive_partitions, couch_set_view_util:decode_bitmask(?set_pbitmask(Group))},
-        {cleanup_partitions, couch_set_view_util:decode_bitmask(?set_cbitmask(Group))}
+        {cleanup_partitions, couch_set_view_util:decode_bitmask(?set_cbitmask(Group))},
+        {stats, JsonStats}
     ].
 
 view_group_data_size(MainBtree, Views) ->
@@ -1076,7 +1125,17 @@ stop_cleaner(#state{cleaner_pid = Pid, group = OldGroup} = State) when is_pid(Pi
              [?set_name(State), ?group_id(State), Count,
                  couch_set_view_util:decode_bitmask(?set_cbitmask(NewGroup)),
                  couch_set_view_util:decode_bitmask(?set_cbitmask(OldGroup))]),
-        State2 = State#state{group = NewGroup, cleaner_pid = nil},
+        case ?set_cbitmask(NewGroup) of
+        0 ->
+            NewStats = ?inc_cleanups(State#state.stats);
+        _ ->
+            NewStats = ?inc_cleanup_stops(State#state.stats)
+        end,
+        State2 = State#state{
+            group = NewGroup,
+            cleaner_pid = nil,
+            stats = NewStats
+        },
         notify_cleanup_waiters(State2);
     {'EXIT', Pid, Reason} ->
         exit({cleanup_process_died, Reason})
@@ -1208,7 +1267,13 @@ restart_compactor(#state{compactor_pid = Pid} = State, Reason) ->
         [?group_id(State), ?set_name(State), Reason]),
     unlink(Pid),
     exit(Pid, kill),
-    start_compactor(State, State#state.compactor_fun).
+    State2 = case ?set_cbitmask(State#state.group) of
+    0 ->
+        State;
+    _ ->
+        State#state{stats = ?inc_cleanup_stops(State#state.stats)}
+    end,
+    start_compactor(State2, State2#state.compactor_fun).
 
 
 compact_group(State) ->
@@ -1247,19 +1312,22 @@ stop_updater(#state{updater_pid = Pid} = State, When) ->
         false ->
             erlang:send_after(1000, self(), delayed_commit)
         end,
-        WaitingList2 = case When of
+        case When of
         immediately ->
-            State#state.waiting_list;
+            NewStats = ?inc_updater_stops(State#state.stats),
+            WaitingList2 = State#state.waiting_list;
         after_active_indexed ->
             reply_with_group(NewGroup, State#state.waiting_list),
-            []
+            NewStats = ?inc_partial_updates(State#state.stats),
+            WaitingList2 = []
         end,
         State#state{
             updater_pid = nil,
             updater_state = not_running,
             waiting_commit = true,
             group = NewGroup,
-            waiting_list = WaitingList2
+            waiting_list = WaitingList2,
+            stats = NewStats
         };
     {'EXIT', Pid, Reason} ->
         ?LOG_ERROR("Updater, set view `~s`, group `~s`, died with "
