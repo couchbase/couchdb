@@ -18,7 +18,7 @@
 -export([make_view_fold_fun/6, finish_view_fold/4, finish_view_fold/5, view_row_obj/2]).
 -export([view_etag/2, view_etag/3, make_reduce_fold_funs/5]).
 -export([design_doc_view/6, parse_bool_param/1]).
--export([make_key_options/1, load_view/6]).
+-export([make_key_options/1]).
 
 -import(couch_httpd,
     [send_json/2,send_json/3,send_json/4,send_method_not_allowed/2,send_chunk/2,
@@ -235,30 +235,6 @@ get_stale_type(Req) ->
 
 get_reduce_type(Req) ->
     list_to_existing_atom(couch_httpd:qs_value(Req, "reduce", "true")).
-
-load_view(Req, SetName, DDocDbName, DDocId, ViewName, Keys) ->
-    Stale = get_stale_type(Req),
-    Reduce = get_reduce_type(Req),
-    case couch_set_view:get_map_view(SetName, DDocDbName, DDocId, ViewName, Stale) of
-    {ok, View, Group} ->
-        QueryArgs = parse_view_params(Req, Keys, map),
-        {map, View, Group, QueryArgs};
-    {not_found, _Reason} ->
-        case couch_set_view:get_reduce_view(SetName, DDocDbName, DDocId, ViewName, Stale) of
-        {ok, ReduceView, Group} ->
-            case Reduce of
-            false ->
-                QueryArgs = parse_view_params(Req, Keys, map_red),
-                MapView = couch_set_view:extract_map_view(ReduceView),
-                {map, MapView, Group, QueryArgs};
-            _ ->
-                QueryArgs = parse_view_params(Req, Keys, reduce),
-                {reduce, ReduceView, Group, QueryArgs}
-            end;
-        {not_found, Reason} ->
-            throw({not_found, Reason})
-        end
-    end.
 
 % query_parse_error could be removed
 % we wouldn't need to pass the view type, it'd just parse params.
