@@ -290,8 +290,9 @@ min_file_size = 131072
 ;    compacted in parallel.
 ;
 ;_default = [{db_fragmentation, "70%"}, {view_fragmentation, "60%"}, {from, "23:00"}, {to, "04:00"}]
+;
+;[vendor]
+;name = Couchbase Single Server
+;version = 2.0.0
+;url = http://www.couchbase.com/
 
-[vendor]
-name = Couchbase Single Server
-version = 2.0.0
-url = http://www.couchbase.com/
