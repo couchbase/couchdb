@@ -14,6 +14,9 @@
 
 -export([detuple_kvs/2, expand_dups/2, expand_dups/3, partitions_map/2]).
 -export([build_bitmask/1, decode_bitmask/1]).
+-export([make_btree_purge_fun/1]).
+
+-include("couch_set_view.hrl").
 
 
 detuple_kvs([], Acc) ->
@@ -80,4 +83,37 @@ decode_bitmask(Bitmask, PartId) ->
         [PartId | decode_bitmask(Bitmask bsr 1, PartId + 1)];
     0 ->
         decode_bitmask(Bitmask bsr 1, PartId + 1)
+    end.
+
+
+make_btree_purge_fun(Group) when ?set_cbitmask(Group) =/= 0 ->
+    fun(Type, Value, Acc) ->
+        receive
+        stop ->
+            {stop, stop}
+        after 0 ->
+            btree_purge_fun(Type, Value, Acc, ?set_cbitmask(Group))
+        end
+    end.
+
+btree_purge_fun(value, {_K, {PartId, _}}, Acc, Cbitmask) ->
+    Mask = 1 bsl PartId,
+    case (Cbitmask band Mask) of
+    Mask ->
+        {purge, Acc};
+    0 ->
+        {keep, Acc}
+    end;
+btree_purge_fun(branch, Red, Acc, Cbitmask) ->
+    Bitmap = element(tuple_size(Red), Red),
+    case Bitmap band Cbitmask of
+    0 ->
+        {keep, Acc};
+    _ ->
+        case Bitmap bxor Cbitmask of
+        0 ->
+            {purge, Acc};
+        _ ->
+            {partial_purge, Acc}
+        end
     end.

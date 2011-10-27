@@ -46,7 +46,11 @@
     % higher priority tasks) and left the index in a not yet clean state (but
     % hopefully closer to a clean state).
     cleanup_stops = 0,
-    cleanups = 0
+    cleanups = 0,
+    % Time the last full (uninterrupted) cleanup took and number of KVs it
+    % removed from the index.
+    last_cleanup_duration = 0,
+    last_cleanup_kv_count = 0
 }).
 
 -record(state, {
@@ -407,7 +411,16 @@ handle_cast({partial_update, Pid, NewGroup}, #state{updater_pid=Pid} = State) ->
     {noreply, State#state{group = NewGroup, waiting_commit = true}};
 handle_cast({partial_update, _, _}, State) ->
     %% message from an old (probably pre-compaction) updater; ignore
-    {noreply, State, ?CLEANUP_TIMEOUT}.
+    {noreply, State, ?CLEANUP_TIMEOUT};
+
+handle_cast({cleanup_done, CleanupTime, CleanupKVCount}, State) ->
+    NewStats = (State#state.stats)#stats{
+        last_cleanup_duration = CleanupTime,
+        last_cleanup_kv_count = CleanupKVCount,
+        cleanups = (State#state.stats)#stats.cleanups + 1
+    },
+    {noreply, State#state{stats = NewStats}}.
+
 
 
 handle_info(timeout, State) ->
@@ -415,13 +428,26 @@ handle_info(timeout, State) ->
     {noreply, NewState};
 
 handle_info({updater_state, Pid, UpdaterState}, #state{updater_pid = Pid} = State) ->
+    #state{
+        waiting_list = WaitList,
+        cleanup_waiters = CleanupWaiters
+    } = State,
     State2 = State#state{updater_state = UpdaterState},
-    case {UpdaterState, State2#state.waiting_list} of
-    {updating_passive, [_ | _]} ->
-        State3 = stop_updater(State2),
-        {noreply, start_updater(State3)};
-    {updating_passive, _} ->
-        {noreply, State2#state{stats = ?inc_partial_updates(State2#state.stats)}};
+    case UpdaterState of
+    updating_passive ->
+        State3 = case WaitList of
+        [] ->
+            State2;
+        _ ->
+            stop_updater(State2)
+        end,
+        State4 = case CleanupWaiters of
+        [] ->
+            State3;
+        _ ->
+            notify_cleanup_waiters(stop_updater(State3))
+        end,
+        {noreply, start_updater(State4)};
     _ ->
         {noreply, State2}
     end;
@@ -434,8 +460,8 @@ handle_info(delayed_commit, #state{group = Group} = State) ->
     commit_header(Group),
     {noreply, State#state{waiting_commit = false}, ?CLEANUP_TIMEOUT};
 
-handle_info({'EXIT', Pid, {clean_group, NewGroup, Count}}, #state{cleaner_pid = Pid} = State) ->
-    #state{group = OldGroup} = State,
+handle_info({'EXIT', Pid, {clean_group, NewGroup, Count, Time}}, #state{cleaner_pid = Pid} = State) ->
+    #state{group = OldGroup, stats = Stats} = State,
     ?LOG_INFO("Cleanup finished for set view `~s`, group `~s`~n"
           "Removed ~p values from the index~n"
           "New abitmask ~*..0s, old abitmask ~*..0s~n"
@@ -451,7 +477,11 @@ handle_info({'EXIT', Pid, {clean_group, NewGroup, Count}}, #state{cleaner_pid = 
     State2 = State#state{
         cleaner_pid = nil,
         group = NewGroup,
-        stats = ?inc_cleanups(State#state.stats)
+        stats = Stats#stats{
+            cleanups = Stats#stats.cleanups + 1,
+            last_cleanup_duration = Time,
+            last_cleanup_kv_count = Count
+        }
     },
     {noreply, notify_cleanup_waiters(State2)};
 
@@ -678,7 +708,9 @@ get_group_info(State) ->
         {cleanups, Stats#stats.cleanups},
         {waiting_clients, length(WaitersList)},
         {cleanup_interruptions, Stats#stats.cleanup_stops},
-        {cleanup_blocked_processes, length(State#state.cleanup_waiters)}
+        {cleanup_blocked_processes, length(State#state.cleanup_waiters)},
+        {last_cleanup_duration, Stats#stats.last_cleanup_duration / 1000000},
+        {last_cleanup_kv_count, Stats#stats.last_cleanup_kv_count}
     ]},
     {ok, Size} = couch_file:bytes(Fd),
     [
@@ -1117,7 +1149,7 @@ stop_cleaner(#state{cleaner_pid = Pid, group = OldGroup} = State) when is_pid(Pi
         [?set_name(State), ?group_id(State)]),
     Pid ! stop,
     receive
-    {'EXIT', Pid, {clean_group, NewGroup, Count}} ->
+    {'EXIT', Pid, {clean_group, NewGroup, Count, Time}} ->
         ?LOG_INFO("Stopped cleanup process for set view `~s`, group `~s`.~n"
              "Removed ~p values from the index~n"
              "New set of partitions to cleanup: ~w~n"
@@ -1127,7 +1159,11 @@ stop_cleaner(#state{cleaner_pid = Pid, group = OldGroup} = State) when is_pid(Pi
                  couch_set_view_util:decode_bitmask(?set_cbitmask(OldGroup))]),
         case ?set_cbitmask(NewGroup) of
         0 ->
-            NewStats = ?inc_cleanups(State#state.stats);
+            NewStats = (State#state.stats)#stats{
+                last_cleanup_duration = Time,
+                last_cleanup_kv_count = Count,
+                cleanups = (State#state.stats)#stats.cleanups + 1
+            };
         _ ->
             NewStats = ?inc_cleanup_stops(State#state.stats)
         end,
@@ -1150,6 +1186,7 @@ cleaner(Group) ->
         fd = Fd
     } = Group,
     ok = couch_file:flush(Fd),
+    StartTime = now(),
     {ok, {KVCountBefore0, _}} = couch_btree:full_reduce(IdBtree),
     KVCountBefore = lists:foldl(
         fun(#set_view{btree = Bt}, Acc) ->
@@ -1157,11 +1194,11 @@ cleaner(Group) ->
             Acc + Count
         end,
         KVCountBefore0, Views),
-    {ok, NewIdBtree, Go} = couch_btree:guided_purge(
-        IdBtree, make_btree_purge_fun(?set_cbitmask(Group)), go),
+    PurgeFun = couch_set_view_util:make_btree_purge_fun(Group),
+    {ok, NewIdBtree, Go} = couch_btree:guided_purge(IdBtree, PurgeFun, go),
     NewViews = case Go of
     go ->
-        clean_views(go, ?set_cbitmask(Group), Views, []);
+        clean_views(go, PurgeFun, Views, []);
     stop ->
         Views
     end,
@@ -1180,51 +1217,17 @@ cleaner(Group) ->
     },
     commit_header(NewGroup),
     ok = couch_file:flush(Fd),
-    exit({clean_group, NewGroup, KVCountBefore - KVCountAfter}).
+    Duration = timer:now_diff(now(), StartTime),
+    exit({clean_group, NewGroup, KVCountBefore - KVCountAfter, Duration}).
 
 
 clean_views(_, _, [], Acc) ->
     lists:reverse(Acc);
 clean_views(stop, _, Rest, Acc) ->
     lists:reverse(Acc, Rest);
-clean_views(go, Cbitmask, [#set_view{btree = Btree} = View | Rest], Acc) ->
-    {ok, NewBtree, Go} = couch_btree:guided_purge(
-        Btree, make_btree_purge_fun(Cbitmask), go),
-    clean_views(Go, Cbitmask, Rest, [View#set_view{btree = NewBtree} | Acc]).
-
-
-btree_purge_fun(value, {_K, {PartId, _}}, Acc, Cbitmask) ->
-    Mask = 1 bsl PartId,
-    case (Cbitmask band Mask) of
-    Mask ->
-        {purge, Acc};
-    0 ->
-        {keep, Acc}
-    end;
-btree_purge_fun(branch, Red, Acc, Cbitmask) ->
-    Bitmap = element(tuple_size(Red), Red),
-    case Bitmap band Cbitmask of
-    0 ->
-        {keep, Acc};
-    _ ->
-        case Bitmap bxor Cbitmask of
-        0 ->
-            {purge, Acc};
-        _ ->
-            {partial_purge, Acc}
-        end
-    end.
-
-
-make_btree_purge_fun(Cbitmask) ->
-    fun(Type, Value, Acc) ->
-        receive
-        stop ->
-            {stop, stop}
-        after 0 ->
-            btree_purge_fun(Type, Value, Acc, Cbitmask)
-        end
-    end.
+clean_views(go, PurgeFun, [#set_view{btree = Btree} = View | Rest], Acc) ->
+    {ok, NewBtree, Go} = couch_btree:guided_purge(Btree, PurgeFun, go),
+    clean_views(Go, PurgeFun, Rest, [View#set_view{btree = NewBtree} | Acc]).
 
 
 index_needs_update(#state{group = Group} = State) ->
@@ -1318,7 +1321,12 @@ stop_updater(#state{updater_pid = Pid} = State, When) ->
             WaitingList2 = State#state.waiting_list;
         after_active_indexed ->
             reply_with_group(NewGroup, State#state.waiting_list),
-            NewStats = ?inc_partial_updates(State#state.stats),
+            NewStats = case ?set_pbitmask(NewGroup) of
+            0 ->
+                ?inc_updates(State#state.stats);
+            _ ->
+                ?inc_partial_updates(State#state.stats)
+            end,
             WaitingList2 = []
         end,
         State#state{
@@ -1337,6 +1345,8 @@ stop_updater(#state{updater_pid = Pid} = State, When) ->
     end.
 
 
+start_updater(#state{updater_pid = Pid} = State) when is_pid(Pid) ->
+    State;
 start_updater(#state{updater_pid = nil, updater_state = not_running} = State) ->
     case index_needs_update(State) of
     {true, NewSeqs} ->
@@ -1378,6 +1388,8 @@ partitions_still_in_cleanup([PartId | Rest], Group, AccStill, AccNot) ->
 
 
 notify_cleanup_waiters(#state{cleanup_waiters = []} = State) ->
+    State;
+notify_cleanup_waiters(#state{group = Group} = State) when ?set_cbitmask(Group) =/= 0 ->
     State;
 notify_cleanup_waiters(State) ->
     #state{group = Group, cleanup_waiters = [Waiter | RestWaiters]} = State,

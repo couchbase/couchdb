@@ -50,7 +50,7 @@ update(Owner, Group, NewSeqs) ->
     end),
 
     Parent = self(),
-    spawn_link(fun() ->
+    Writer = spawn_link(fun() ->
         couch_task_status:add_task([
             {type, indexer},
             {set, SetName},
@@ -83,7 +83,7 @@ update(Owner, Group, NewSeqs) ->
         Parent ! {new_group, NewGroup}
     end),
 
-    load_changes(Owner, Group, SinceSeqs, MapQueue),
+    load_changes(Owner, Group, SinceSeqs, MapQueue, Writer),
     receive
     {new_group, _} = NewGroup ->
         ok = couch_indexer_manager:leave(),
@@ -91,7 +91,7 @@ update(Owner, Group, NewSeqs) ->
     end.
 
 
-load_changes(Owner, Group, SinceSeqs, MapQueue) ->
+load_changes(Owner, Group, SinceSeqs, MapQueue, Writer) ->
     #set_view_group{
         set_name = SetName,
         db_set = DbSet,
@@ -127,7 +127,7 @@ load_changes(Owner, Group, SinceSeqs, MapQueue) ->
         {ok, _} = couch_db_set:enum_docs_since(DbSet, SinceSeqs, FoldFun, active)
     catch
     throw:stop ->
-        ok
+        Writer ! stop
     end,
     couch_work_queue:close(MapQueue).
 
@@ -281,13 +281,19 @@ flush_writes(Parent, Owner, Group, InitialBuild, ViewEmptyKVs, Queue) ->
             {NewViewKVs, [{DocId, {PartId, NewViewIdKeys}} | DocIdViewIdKeysAcc], PartIdSeqs2}
         end,
         {ViewEmptyKVs, [], dict:new()}, Queue),
-    Group2 = write_changes(
+    {Group2, CleanupTime, CleanupKVCount} = write_changes(
         Group, ViewKVs, DocIdViewIdKeys, PartIdSeqs, InitialBuild),
     case Owner of
     nil ->
         ok;
     _ ->
-        ok = gen_server:cast(Owner, {partial_update, Parent, Group2})
+        ok = gen_server:cast(Owner, {partial_update, Parent, Group2}),
+        case ?set_cbitmask(Group) of
+        0 ->
+            ok;
+        _ ->
+            ok = gen_server:cast(Owner, {cleanup_done, CleanupTime, CleanupKVCount})
+        end
     end,
     update_task(length(Queue)),
     Group2.
@@ -326,7 +332,12 @@ view_insert_doc_query_results(DocId, PartitionId, [ResultKVs | RestResults],
 
 
 write_changes(Group, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs, InitialBuild) ->
-    #set_view_group{id_btree=IdBtree,fd=Fd} = Group,
+    #set_view_group{
+        id_btree = IdBtree,
+        fd = Fd,
+        set_name = SetName,
+        name = GroupName
+    } = Group,
 
     AddDocIdViewIdKeys = [{DocId, ViewIdKeys} || {DocId, ViewIdKeys} <- DocIdViewIdKeys, ViewIdKeys /= []],
     if InitialBuild ->
@@ -336,8 +347,27 @@ write_changes(Group, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs, InitialBui
         RemoveDocIds = [DocId || {DocId, ViewIdKeys} <- DocIdViewIdKeys, ViewIdKeys == []],
         LookupDocIds = [DocId || {DocId, _ViewIdKeys} <- DocIdViewIdKeys]
     end,
-    {ok, LookupResults, IdBtree2}
-        = couch_btree:query_modify(IdBtree, LookupDocIds, AddDocIdViewIdKeys, RemoveDocIds),
+    CleanupFun = case ?set_cbitmask(Group) of
+    0 ->
+        nil;
+    _ ->
+        couch_set_view_util:make_btree_purge_fun(Group)
+    end,
+    case ?set_cbitmask(Group) of
+    0 ->
+        IdBtreePurgedKeyCount = 0,
+        CleanupStart = 0,
+        {ok, LookupResults, IdBtree2} =
+            couch_btree:query_modify(IdBtree, LookupDocIds, AddDocIdViewIdKeys, RemoveDocIds);
+    _ ->
+        CleanupStart = now(),
+        {ok, {IdTreeKvCountBefore, _}} = couch_btree:full_reduce(IdBtree),
+        {ok, LookupResults, [], IdBtree2} =
+            couch_btree:query_modify(
+                IdBtree, LookupDocIds, AddDocIdViewIdKeys, RemoveDocIds, CleanupFun, []),
+        {ok, {IdTreeKvCountAfter, _}} = couch_btree:full_reduce(IdBtree2),
+        IdBtreePurgedKeyCount = IdTreeKvCountBefore - IdTreeKvCountAfter
+    end,
     KeysToRemoveByView = lists:foldl(
         fun(LookupResult, KeysToRemoveByViewAcc) ->
             case LookupResult of
@@ -352,22 +382,49 @@ write_changes(Group, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs, InitialBui
             end
         end,
         dict:new(), LookupResults),
-    Views2 = lists:zipwith(fun(View, {_View, AddKeyValues}) ->
+    {Views2, CleanupKvCount} = lists:mapfoldl(fun({View, {_View, AddKeyValues}}, Acc) ->
             KeysToRemove = couch_util:dict_find(View#set_view.id_num, KeysToRemoveByView, []),
-            {ok, ViewBtree2} = couch_btree:add_remove(View#set_view.btree, AddKeyValues, KeysToRemove),
-            case ViewBtree2 =/= View#set_view.btree of
+            case ?set_cbitmask(Group) of
+            0 ->
+                CleanupCount = 0,
+                {ok, ViewBtree2} = couch_btree:add_remove(
+                    View#set_view.btree, AddKeyValues, KeysToRemove);
+            _ ->
+                {ok, {KvCountBefore, _, _}} = couch_btree:full_reduce(View#set_view.btree),
+                {ok, [], ViewBtree2} = couch_btree:add_remove(
+                    View#set_view.btree, AddKeyValues, KeysToRemove, CleanupFun, []),
+                {ok, {KvCountAfter, _, _}} = couch_btree:full_reduce(ViewBtree2),
+                CleanupCount = KvCountBefore - KvCountAfter
+            end,
+            NewView = case ViewBtree2 =/= View#set_view.btree of
                 true ->
                     NewUpSeqs = update_seqs(PartIdSeqs, View#set_view.update_seqs),
                     View#set_view{btree=ViewBtree2, update_seqs=NewUpSeqs};
                 _ ->
                     View#set_view{btree=ViewBtree2}
-            end
-        end,    Group#set_view_group.views, ViewKeyValuesToAdd),
+            end,
+            {NewView, Acc + CleanupCount}
+        end,
+        IdBtreePurgedKeyCount, lists:zip(Group#set_view_group.views, ViewKeyValuesToAdd)),
     couch_file:flush(Fd),
     NewSeqs = update_seqs(PartIdSeqs, ?set_seqs(Group)),
     Header = Group#set_view_group.index_header,
-    NewHeader = Header#set_view_index_header{seqs = NewSeqs},
-    Group#set_view_group{views = Views2, id_btree = IdBtree2, index_header = NewHeader}.
+    NewHeader = Header#set_view_index_header{seqs = NewSeqs, cbitmask = 0},
+    case ?set_cbitmask(Group) of
+    0 ->
+        CleanupTime = nil;
+    _ ->
+        CleanupTime = timer:now_diff(now(), CleanupStart),
+        ?LOG_INFO("Updater for set view `~s`, group `~s`, performed cleanup "
+            "of ~p key/value pairs in ~.3f seconds",
+            [SetName, GroupName, CleanupKvCount, CleanupTime / 1000000])
+    end,
+    NewGroup = Group#set_view_group{
+        views = Views2,
+        id_btree = IdBtree2,
+        index_header = NewHeader
+    },
+    {NewGroup, CleanupTime, CleanupKvCount}.
 
 
 update_seqs(PartIdSeqs, Seqs) ->
