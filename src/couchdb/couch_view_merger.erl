@@ -578,8 +578,8 @@ prepare_set_view(ViewSpec, ViewArgs, Queue, GetSetViewFn) ->
         {ok, View, Group, []} ->
             {View, Group};
         {ok, _, Group, MissingPartitions} ->
-            ?LOG_INFO("Set view ~s misses indexes for ~p.",
-                      [SetName, MissingPartitions]),
+            ?LOG_INFO("Set view `~s`, group `~s`, missing partitions: ~w",
+                      [SetName, DDocId, MissingPartitions]),
             couch_set_view:release_group(Group),
             couch_view_merger_queue:queue(Queue, set_view_outdated),
             couch_view_merger_queue:done(Queue),
