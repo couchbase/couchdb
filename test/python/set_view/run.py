@@ -14,6 +14,7 @@ from compaction_transitions import TestCompactionTransitions
 from update_cleanup import TestUpdateCleanup
 from filter_partitions import TestFilterPartitions
 from view_merge import TestViewMerge
+from burst_state_updates import TestBurstStateUpdates
 
 
 def main():
@@ -30,6 +31,7 @@ def main():
     suite.addTest(unittest.makeSuite(TestUpdateCleanup))
     suite.addTest(unittest.makeSuite(TestFilterPartitions))
     suite.addTest(unittest.makeSuite(TestViewMerge))
+    suite.addTest(unittest.makeSuite(TestBurstStateUpdates))
 
     unittest.TextTestRunner(verbosity = 2, failfast = True).run(suite)
 

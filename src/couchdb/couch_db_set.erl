@@ -42,12 +42,18 @@ open(SetName, Active, Passive, DbOpenOptions) ->
 close(Pid) ->
     ok = gen_server:call(Pid, close, infinity).
 
+set_active(_Pid, []) ->
+    ok;
 set_active(Pid, PartList) ->
     ok = gen_server:call(Pid, {set_active, PartList}, infinity).
 
+set_passive(_Pid, []) ->
+    ok;
 set_passive(Pid, PartList) ->
     ok = gen_server:call(Pid, {set_passive, PartList}, infinity).
 
+remove_partitions(_Pid, []) ->
+    ok;
 remove_partitions(Pid, PartList) ->
     ok = gen_server:call(Pid, {remove_partitions, PartList}, infinity).
 
@@ -131,7 +137,7 @@ handle_call(get_dbs, _From, State) ->
     [] ->
         case Passive of
         [{_, DbName} | _] ->
-            {Db, _, _} = dict:fetch(DbName, State#state.dbs_active),
+            {Db, _, _} = dict:fetch(DbName, State#state.dbs_passive),
             Db#db.user_ctx;
         [] ->
             couch_util:get_value(user_ctx, State#state.db_open_options, #user_ctx{})

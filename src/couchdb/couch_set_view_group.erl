@@ -71,7 +71,8 @@
 -record(cleanup_waiter, {
     from,
     active_list,
-    passive_list
+    passive_list,
+    cleanup_list
 }).
 
 -define(inc_stat(S, Stats), setelement(S, Stats, element(S, Stats) + 1)).
@@ -957,12 +958,7 @@ do_update_partition_states(ActiveList, PassiveList, CleanupList, From, State) ->
             NewCbitmask3,
             NewSeqs3,
             NewPurgeSeqs3),
-        case CleanupList of
-        [] ->
-            ok;
-        _ ->
-            ok = couch_db_set:remove_partitions(?db_set(State4), CleanupList)
-        end,
+        ok = couch_db_set:remove_partitions(?db_set(State4), CleanupList),
         gen_server:reply(From, ok);
     _ ->
         ?LOG_INFO("Set view `~s`, group `~s`, blocking client ~p, "
@@ -972,7 +968,8 @@ do_update_partition_states(ActiveList, PassiveList, CleanupList, From, State) ->
         Waiter = #cleanup_waiter{
             from = From,
             active_list = ActiveList,
-            passive_list = PassiveList
+            passive_list = PassiveList,
+            cleanup_list = CleanupList
         },
         State4 = State3#state{cleanup_waiters = CleanupWaiters ++ [Waiter]}
     end,
@@ -1382,7 +1379,8 @@ notify_cleanup_waiters(State) ->
     #cleanup_waiter{
         from = From,
         active_list = Active,
-        passive_list = Passive
+        passive_list = Passive,
+        cleanup_list = Cleanup
     } = Waiter,
     {InCleanup, _NotInCleanup} =
         partitions_still_in_cleanup(Active ++ Passive, Group),
@@ -1402,13 +1400,22 @@ notify_cleanup_waiters(State) ->
                 NewPbitmask1,
                 NewSeqs1,
                 NewPurgeSeqs1),
+        {ok, NewAbitmask3, NewPbitmask3, NewCbitmask3, NewSeqs3, NewPurgeSeqs3} =
+            set_cleanup_partitions(
+                Cleanup,
+                NewAbitmask2,
+                NewPbitmask2,
+                ?set_cbitmask(Group),
+                NewSeqs2,
+                NewPurgeSeqs2),
         State2 = update_header(
             State,
-            NewAbitmask2,
-            NewPbitmask2,
-            ?set_cbitmask(Group),
-            NewSeqs2,
-            NewPurgeSeqs2),
+            NewAbitmask3,
+            NewPbitmask3,
+            NewCbitmask3,
+            NewSeqs3,
+            NewPurgeSeqs3),
+        ok = couch_db_set:remove_partitions(?db_set(State2), Cleanup),
         ?LOG_INFO("Set view `~s`, group `~s`, unblocking cleanup waiter ~p",
             [?set_name(State2), ?group_id(State2), element(1, From)]),
         gen_server:reply(From, ok),

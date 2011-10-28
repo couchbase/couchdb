@@ -362,7 +362,7 @@ write_changes(Group, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs, InitialBui
     _ ->
         CleanupStart = now(),
         {ok, {IdTreeKvCountBefore, _}} = couch_btree:full_reduce(IdBtree),
-        {ok, LookupResults, [], IdBtree2} =
+        {ok, LookupResults, _, IdBtree2} =
             couch_btree:query_modify(
                 IdBtree, LookupDocIds, AddDocIdViewIdKeys, RemoveDocIds, CleanupFun, []),
         {ok, {IdTreeKvCountAfter, _}} = couch_btree:full_reduce(IdBtree2),
@@ -391,7 +391,7 @@ write_changes(Group, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs, InitialBui
                     View#set_view.btree, AddKeyValues, KeysToRemove);
             _ ->
                 {ok, {KvCountBefore, _, _}} = couch_btree:full_reduce(View#set_view.btree),
-                {ok, [], ViewBtree2} = couch_btree:add_remove(
+                {ok, _, ViewBtree2} = couch_btree:add_remove(
                     View#set_view.btree, AddKeyValues, KeysToRemove, CleanupFun, []),
                 {ok, {KvCountAfter, _, _}} = couch_btree:full_reduce(ViewBtree2),
                 CleanupCount = KvCountBefore - KvCountAfter
