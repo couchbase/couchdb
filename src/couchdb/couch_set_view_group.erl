@@ -428,26 +428,11 @@ handle_info(timeout, State) ->
     {noreply, NewState};
 
 handle_info({updater_state, Pid, UpdaterState}, #state{updater_pid = Pid} = State) ->
-    #state{
-        waiting_list = WaitList,
-        cleanup_waiters = CleanupWaiters
-    } = State,
     State2 = State#state{updater_state = UpdaterState},
     case UpdaterState of
-    updating_passive ->
-        State3 = case WaitList of
-        [] ->
-            State2;
-        _ ->
-            stop_updater(State2)
-        end,
-        State4 = case CleanupWaiters of
-        [] ->
-            State3;
-        _ ->
-            notify_cleanup_waiters(stop_updater(State3))
-        end,
-        {noreply, start_updater(State4)};
+    updating_passive when State#state.waiting_list =/= [] ->
+        State3 = stop_updater(State2),
+        {noreply, start_updater(State3)};
     _ ->
         {noreply, State2}
     end;
@@ -1329,14 +1314,15 @@ stop_updater(#state{updater_pid = Pid} = State, When) ->
             end,
             WaitingList2 = []
         end,
-        State#state{
+        NewState = State#state{
             updater_pid = nil,
             updater_state = not_running,
             waiting_commit = true,
             group = NewGroup,
             waiting_list = WaitingList2,
             stats = NewStats
-        };
+        },
+        notify_cleanup_waiters(NewState);
     {'EXIT', Pid, Reason} ->
         ?LOG_ERROR("Updater, set view `~s`, group `~s`, died with "
             "unexpected reason: ~p",
