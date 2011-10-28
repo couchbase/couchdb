@@ -30,7 +30,7 @@ admin_user_ctx() -> {user_ctx, #user_ctx{roles=[<<"_admin">>]}}.
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(17),
+    etap:plan(16),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -127,10 +127,8 @@ test_regular_request() ->
             {Props} = ejson:decode(Body),
             Couchdb = couch_util:get_value(<<"couchdb">>, Props),
             Version = couch_util:get_value(<<"version">>, Props),
-            Vendor = couch_util:get_value(<<"vendor">>, Props),
             etap:isnt(Couchdb, undefined, "Found couchdb property"),
-            etap:isnt(Version, undefined, "Found version property"),
-            etap:isnt(Vendor, undefined, "Found vendor property");
+            etap:isnt(Version, undefined, "Found version property");
         _Else ->
             etap:bail("http GET / request failed")
     end.
