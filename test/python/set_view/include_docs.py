@@ -8,6 +8,7 @@ import couchdb
 import httplib
 import urllib
 import common
+import unittest
 
 
 HOST = "localhost:5984"
@@ -25,55 +26,48 @@ DDOC = {
 }
 
 
+class TestIncludeDocs(unittest.TestCase):
 
-def test_include_docs(params):
-    print "Querying map view"
-    (map_resp, map_view_result) = common.query(params, "mapview1", {"include_docs": "true"})
-    map_etag = map_resp.getheader("ETag")
-
-    assert map_view_result["total_rows"] == params["ndocs"], \
-        "Query returned %d total_rows" % (params["ndocs"],)
-    assert len(map_view_result["rows"]) == params["ndocs"], \
-        "Query returned %d rows" % (params["ndocs"],)
-
-    common.test_keys_sorted(map_view_result)
-
-    for row in map_view_result["rows"]:
-        assert "doc" in row, 'row has a "doc" property'
-        doc = row["doc"]
-        key = row["key"]
-        assert doc["integer"] == row["key"], "doc.integer same as row.key"
-        assert doc["string"] == str(row["key"]), "doc.string same as String(row.key)"
-        assert doc["_rev"].find("1-") == 0, "doc._rev starts with 1-"
-
+    def setUp(self):
+        self._params = {
+            "host": HOST,
+            "ddoc": DDOC,
+            "nparts": NUM_PARTS,
+            "ndocs": NUM_DOCS,
+            "setname": SET_NAME,
+            "server": couchdb.Server(url = "http://" + HOST)
+            }
+        # print "Creating databases"
+        common.create_dbs(self._params)
+        common.populate(
+            self._params,
+            make_doc = lambda i: {"_id": str(i), "integer": i, "string": str(i)}
+            )
+        common.define_set_view(self._params, range(NUM_PARTS), [])
+        # print "Databases created"
 
 
-
-def main():
-    server = couchdb.Server(url = "http://" + HOST)
-    params = {
-        "host": HOST,
-        "ddoc": DDOC,
-        "nparts": NUM_PARTS,
-        "ndocs": NUM_DOCS,
-        "setname": SET_NAME,
-        "server": server
-    }
-
-    print "Creating databases"
-    common.create_dbs(params)
-    common.populate(
-        params,
-        make_doc = lambda i: {"_id": str(i), "integer": i, "string": str(i)}
-        )
-    common.define_set_view(params, range(NUM_PARTS), [])
-    print "Databases created"
-
-    test_include_docs(params)
-
-    print "Deleting test data"
-    common.create_dbs(params, True)
-    print "Done\n"
+    def tearDown(self):
+        # print "Deleting test data"
+        common.create_dbs(self._params, True)
 
 
-main()
+    def test_include_docs(self):
+        # print "Querying map view"
+        (map_resp, map_view_result) = common.query(self._params, "mapview1", {"include_docs": "true"})
+        map_etag = map_resp.getheader("ETag")
+
+        self.assertEqual(map_view_result["total_rows"], self._params["ndocs"],
+                         "Query returned %d total_rows" % self._params["ndocs"])
+        self.assertEqual(len(map_view_result["rows"]), self._params["ndocs"],
+                         "Query returned %d rows" % self._params["ndocs"])
+
+        common.test_keys_sorted(map_view_result)
+
+        for row in map_view_result["rows"]:
+            self.assertTrue("doc" in row, 'row has a "doc" property')
+            doc = row["doc"]
+            self.assertEqual(doc["integer"], row["key"], "doc.integer same as row.key")
+            self.assertEqual(doc["string"], str(row["key"]), "doc.string same as String(row.key)")
+            self.assertEqual(doc["_rev"].find("1-"), 0, "doc._rev starts with 1-")
+
