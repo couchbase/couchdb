@@ -38,6 +38,7 @@
     % needed for the attachment upload integrity check (ticket 558)
     identity_md5,
     identity_len = 0,
+    encoding,
     encoding_fun,
     end_encoding_fun
     }).
@@ -197,8 +198,9 @@ write(Pid, Bin) ->
 
 
 init({Fd, Options}) ->
+    Encoding = couch_util:get_value(encoding, Options, identity),
     {EncodingFun, EndEncodingFun} =
-    case couch_util:get_value(encoding, Options, identity) of
+    case Encoding of
     identity ->
         identity_enc_dec_funs();
     gzip ->
@@ -208,6 +210,7 @@ init({Fd, Options}) ->
             fd=Fd,
             md5=couch_util:md5_init(),
             identity_md5=couch_util:md5_init(),
+            encoding=Encoding,
             encoding_fun=EncodingFun,
             end_encoding_fun=EndEncodingFun,
             max_buffer=couch_util:get_value(
@@ -230,6 +233,7 @@ handle_call({write, Bin}, _From, Stream) ->
         md5 = Md5,
         identity_md5 = IdenMd5,
         identity_len = IdenLen,
+        encoding = Encoding,
         encoding_fun = EncodingFun} = Stream,
     if BinSize + BufferLen > Max ->
         WriteBin = lists:reverse(Buffer, [Bin]),
@@ -244,7 +248,12 @@ handle_call({write, Bin}, _From, Stream) ->
         WriteBin2 ->
             {ok, Pos, _} = couch_file:append_binary(Fd, WriteBin2),
             WrittenLen2 = WrittenLen + iolist_size(WriteBin2),
-            Md5_2 = couch_util:md5_update(Md5, WriteBin2),
+            Md5_2 = case Encoding of
+            identity ->
+                IdenMd5_2;
+            gzip ->
+                couch_util:md5_update(Md5, WriteBin2)
+            end,
             Written2 = [{Pos, iolist_size(WriteBin2)}|Written]
         end,
 
@@ -271,13 +280,19 @@ handle_call(close, _From, Stream) ->
         md5 = Md5,
         identity_md5 = IdenMd5,
         identity_len = IdenLen,
+        encoding = Encoding,
         encoding_fun = EncodingFun,
         end_encoding_fun = EndEncodingFun} = Stream,
 
     WriteBin = lists:reverse(Buffer),
     IdenMd5Final = couch_util:md5_final(couch_util:md5_update(IdenMd5, WriteBin)),
     WriteBin2 = EncodingFun(WriteBin) ++ EndEncodingFun(),
-    Md5Final = couch_util:md5_final(couch_util:md5_update(Md5, WriteBin2)),
+    Md5Final = case Encoding of
+    identity ->
+        IdenMd5Final;
+    gzip ->
+        couch_util:md5_final(couch_util:md5_update(Md5, WriteBin2))
+    end,
     Result = case WriteBin2 of
     [] ->
         {lists:reverse(Written), WrittenLen, IdenLen, Md5Final, IdenMd5Final};
