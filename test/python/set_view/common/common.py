@@ -3,6 +3,7 @@ except ImportError: import json
 import couchdb
 import httplib
 import urllib
+from threading import Thread
 
 
 def create_dbs(params, del_only = False):
@@ -50,26 +51,41 @@ def populate(params, make_doc = lambda i: {"_id": str(i), "integer": i, "string"
     master_db = server[params["setname"] + "/master"]
     master_db.save(params["ddoc"])
 
-    for i in xrange(len(dbs)):
-        docs = []
-        for j in xrange(i + 1, params["ndocs"] + 1, params["nparts"]):
-            docs.append(make_doc(start + j))
-
-        conn = httplib.HTTPConnection(params["host"])
+    def upload_docs(db_name, doc_list, conn):
         conn.request(
             "POST",
-            "/" + urllib.quote_plus(dbs[i].name) + "/_bulk_docs",
-            json.dumps({"docs": docs}),
+            "/" + urllib.quote_plus(db_name) + "/_bulk_docs",
+            json.dumps({"docs": doc_list}),
             {'Content-Type': 'application/json'}
             )
         resp = conn.getresponse()
 
         assert resp.status == 201, "_bulk_docs response had status 201"
         results = json.loads(resp.read())
-        conn.close()
-
         for r in results:
             assert r["ok"], "Document %s created" % (r["id"])
+
+    def populate_db(db_num, db_name):
+        docs = []
+        conn = httplib.HTTPConnection(params["host"])
+        for i in xrange(db_num, params["ndocs"] + 1, params["nparts"]):
+            docs.append(make_doc(start + i))
+            if len(docs) >= 1000:
+                upload_docs(db_name, docs, conn)
+                docs = []
+
+        if len(docs) > 0:
+            upload_docs(db_name, docs, conn)
+        conn.close()
+
+    threads = []
+    for i in xrange(len(dbs)):
+        t = Thread(None, populate_db, None, (i + 1, dbs[i].name))
+        t.start()
+        threads.append(t)
+
+    for t in threads:
+        t.join()
 
 
 def query(params, viewname, query_params = {}):
