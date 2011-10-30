@@ -87,33 +87,33 @@ decode_bitmask(Bitmask, PartId) ->
 
 
 make_btree_purge_fun(Group) when ?set_cbitmask(Group) =/= 0 ->
-    fun(Type, Value, Acc) ->
+    fun(Type, Value, {go, Acc}) ->
         receive
         stop ->
-            {stop, stop}
+            {stop, {stop, Acc}}
         after 0 ->
-            btree_purge_fun(Type, Value, Acc, ?set_cbitmask(Group))
+            btree_purge_fun(Type, Value, {go, Acc}, ?set_cbitmask(Group))
         end
     end.
 
-btree_purge_fun(value, {_K, {PartId, _}}, Acc, Cbitmask) ->
+btree_purge_fun(value, {_K, {PartId, _}}, {go, Acc}, Cbitmask) ->
     Mask = 1 bsl PartId,
     case (Cbitmask band Mask) of
     Mask ->
-        {purge, Acc};
+        {purge, {go, Acc + 1}};
     0 ->
-        {keep, Acc}
+        {keep, {go, Acc}}
     end;
-btree_purge_fun(branch, Red, Acc, Cbitmask) ->
+btree_purge_fun(branch, Red, {go, Acc}, Cbitmask) ->
     Bitmap = element(tuple_size(Red), Red),
     case Bitmap band Cbitmask of
     0 ->
-        {keep, Acc};
+        {keep, {go, Acc}};
     _ ->
         case Bitmap bxor Cbitmask of
         0 ->
-            {purge, Acc};
+            {purge, {go, Acc + element(1, Red)}};
         _ ->
-            {partial_purge, Acc}
+            {partial_purge, {go, Acc}}
         end
     end.

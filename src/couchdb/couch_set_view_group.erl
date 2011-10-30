@@ -1169,28 +1169,22 @@ cleaner(Group) ->
     } = Group,
     ok = couch_file:flush(Fd),
     StartTime = now(),
-    {ok, {KVCountBefore0, _}} = couch_btree:full_reduce(IdBtree),
-    KVCountBefore = lists:foldl(
-        fun(#set_view{btree = Bt}, Acc) ->
-            {ok, {Count, _, _}} = couch_btree:full_reduce(Bt),
-            Acc + Count
-        end,
-        KVCountBefore0, Views),
     PurgeFun = couch_set_view_util:make_btree_purge_fun(Group),
-    {ok, NewIdBtree, Go} = couch_btree:guided_purge(IdBtree, PurgeFun, go),
-    NewViews = case Go of
+    {ok, NewIdBtree, {Go, IdPurgedCount}} =
+        couch_btree:guided_purge(IdBtree, PurgeFun, {go, 0}),
+    {TotalPurgedCount, NewViews} = case Go of
     go ->
-        clean_views(go, PurgeFun, Views, []);
+        clean_views(go, PurgeFun, Views, IdPurgedCount, []);
     stop ->
-        Views
+        {IdPurgedCount, Views}
     end,
-    {ok, {KVCountAfter0, IdBitmap}} = couch_btree:full_reduce(NewIdBtree),
-    {CombinedBitmap, KVCountAfter} = lists:foldl(
-        fun(#set_view{btree = Bt}, {AccMap, AccCount}) ->
-            {ok, {Count, _, Bm}} = couch_btree:full_reduce(Bt),
-            {AccMap bor Bm, AccCount + Count}
+    {ok, {_, IdBitmap}} = couch_btree:full_reduce(NewIdBtree),
+    CombinedBitmap = lists:foldl(
+        fun(#set_view{btree = Bt}, AccMap) ->
+            {ok, {_, _, Bm}} = couch_btree:full_reduce(Bt),
+            AccMap bor Bm
         end,
-        {IdBitmap, KVCountAfter0}, NewViews),
+        IdBitmap, NewViews),
     NewCbitmask = ?set_cbitmask(Group) band CombinedBitmap,
     NewGroup = Group#set_view_group{
         id_btree = NewIdBtree,
@@ -1200,16 +1194,18 @@ cleaner(Group) ->
     commit_header(NewGroup),
     ok = couch_file:flush(Fd),
     Duration = timer:now_diff(now(), StartTime),
-    exit({clean_group, NewGroup, KVCountBefore - KVCountAfter, Duration}).
+    exit({clean_group, NewGroup, TotalPurgedCount, Duration}).
 
 
-clean_views(_, _, [], Acc) ->
-    lists:reverse(Acc);
-clean_views(stop, _, Rest, Acc) ->
-    lists:reverse(Acc, Rest);
-clean_views(go, PurgeFun, [#set_view{btree = Btree} = View | Rest], Acc) ->
-    {ok, NewBtree, Go} = couch_btree:guided_purge(Btree, PurgeFun, go),
-    clean_views(Go, PurgeFun, Rest, [View#set_view{btree = NewBtree} | Acc]).
+clean_views(_, _, [], Count, Acc) ->
+    {Count, lists:reverse(Acc)};
+clean_views(stop, _, Rest, Count, Acc) ->
+    {Count, lists:reverse(Acc, Rest)};
+clean_views(go, PurgeFun, [#set_view{btree = Btree} = View | Rest], Count, Acc) ->
+    {ok, NewBtree, {Go, PurgedCount}} =
+        couch_btree:guided_purge(Btree, PurgeFun, {go, Count}),
+    NewAcc = [View#set_view{btree = NewBtree} | Acc],
+    clean_views(Go, PurgeFun, Rest, PurgedCount, NewAcc).
 
 
 index_needs_update(#state{group = Group} = State) ->

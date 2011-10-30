@@ -361,12 +361,9 @@ write_changes(Group, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs, InitialBui
             couch_btree:query_modify(IdBtree, LookupDocIds, AddDocIdViewIdKeys, RemoveDocIds);
     _ ->
         CleanupStart = now(),
-        {ok, {IdTreeKvCountBefore, _}} = couch_btree:full_reduce(IdBtree),
-        {ok, LookupResults, _, IdBtree2} =
+        {ok, LookupResults, {_, IdBtreePurgedKeyCount}, IdBtree2} =
             couch_btree:query_modify(
-                IdBtree, LookupDocIds, AddDocIdViewIdKeys, RemoveDocIds, CleanupFun, []),
-        {ok, {IdTreeKvCountAfter, _}} = couch_btree:full_reduce(IdBtree2),
-        IdBtreePurgedKeyCount = IdTreeKvCountBefore - IdTreeKvCountAfter
+                IdBtree, LookupDocIds, AddDocIdViewIdKeys, RemoveDocIds, CleanupFun, {go, 0})
     end,
     KeysToRemoveByView = lists:foldl(
         fun(LookupResult, KeysToRemoveByViewAcc) ->
@@ -390,11 +387,8 @@ write_changes(Group, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs, InitialBui
                 {ok, ViewBtree2} = couch_btree:add_remove(
                     View#set_view.btree, AddKeyValues, KeysToRemove);
             _ ->
-                {ok, {KvCountBefore, _, _}} = couch_btree:full_reduce(View#set_view.btree),
-                {ok, _, ViewBtree2} = couch_btree:add_remove(
-                    View#set_view.btree, AddKeyValues, KeysToRemove, CleanupFun, []),
-                {ok, {KvCountAfter, _, _}} = couch_btree:full_reduce(ViewBtree2),
-                CleanupCount = KvCountBefore - KvCountAfter
+                {ok, {_, CleanupCount}, ViewBtree2} = couch_btree:add_remove(
+                    View#set_view.btree, AddKeyValues, KeysToRemove, CleanupFun, {go, 0})
             end,
             NewView = case ViewBtree2 =/= View#set_view.btree of
                 true ->
