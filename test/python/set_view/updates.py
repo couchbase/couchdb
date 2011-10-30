@@ -3,7 +3,8 @@
 import sys
 sys.path.append("../lib")
 sys.path.append("common")
-import json
+try: import simplejson as json
+except ImportError: import json
 import couchdb
 import httplib
 import urllib

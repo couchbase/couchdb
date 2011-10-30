@@ -8,7 +8,8 @@ from copy import deepcopy
 import couchdb
 import httplib
 import common
-import json
+try: import simplejson as json
+except ImportError: import json
 import urllib
 import unittest
 

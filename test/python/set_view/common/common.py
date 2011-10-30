@@ -1,4 +1,5 @@
-import json
+try: import simplejson as json
+except ImportError: import json
 import couchdb
 import httplib
 import urllib
