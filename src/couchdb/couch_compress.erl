@@ -23,6 +23,10 @@
 % value as their first byte
 -define(TERM_PREFIX, 131).
 
+% If a term's binary representation is smaller then this threshold, don't
+% even attempt to compress it.
+-define(SNAPPY_COMPRESS_THRESHOLD, 64).
+
 
 get_compression_method() ->
     case couch_config:get("couchdb", "file_compression") of
@@ -44,16 +48,21 @@ compress(Term, {deflate, Level}) ->
     term_to_binary(Term, [{minor_version, 1}, {compressed, Level}]);
 compress(Term, snappy) ->
     Bin = ?term_to_bin(Term),
-    try
-        {ok, CompressedBin} = snappy:compress(Bin),
-        case byte_size(CompressedBin) < byte_size(Bin) of
-        true ->
-            <<?SNAPPY_PREFIX, CompressedBin/binary>>;
-        false ->
+    case byte_size(Bin) < ?SNAPPY_COMPRESS_THRESHOLD of
+    true ->
+        Bin;
+    false ->
+        try
+            {ok, CompressedBin} = snappy:compress(Bin),
+            case byte_size(CompressedBin) < byte_size(Bin) of
+            true ->
+                <<?SNAPPY_PREFIX, CompressedBin/binary>>;
+            false ->
+                Bin
+            end
+        catch exit:snappy_nif_not_loaded ->
             Bin
         end
-    catch exit:snappy_nif_not_loaded ->
-        Bin
     end.
 
 
