@@ -264,7 +264,7 @@ validate_views_param({[_ | _] = Views}) ->
             {[_ | _]} = SubViews ->
                 SubViewSpecs = validate_views_param(SubViews),
                 case lists:any(
-                    fun(#simple_view_spec{}) -> true;
+                    fun(#simple_index_spec{}) -> true;
                        (#set_view_spec{}) -> true;
                        (_) -> false
                     end,

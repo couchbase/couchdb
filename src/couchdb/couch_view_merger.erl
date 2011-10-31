@@ -70,9 +70,9 @@ make_funs(Req, DDoc, ViewName, ViewArgs, IndexMergeParams) ->
         ViewType),
     {FoldFun, MergeFun} = case ViewType of
     reduce ->
-        {fun reduce_view_folder/6, fun merge_reduce_views/1};
+        {fun reduce_view_folder/7, fun merge_reduce_views/1};
     _ when ViewType =:= map; ViewType =:= red_map ->
-        {fun map_view_folder/6, fun merge_map_views/1}
+        {fun map_view_folder/7, fun merge_map_views/1}
     end,
     CollectorFun = case ViewType of
     reduce ->
@@ -205,7 +205,7 @@ view_less_fun(Collation, Dir, ViewType) ->
             fun({KeyA, _}, {KeyB, _}) -> couch_view:less_json(KeyA, KeyB) end
         end;
     <<"raw">> ->
-        fun(A, B) -> A < B end
+        fun erlang:'<'/2
     end,
     case Dir of
     fwd ->
@@ -448,7 +448,7 @@ prepare_set_view(ViewSpec, ViewArgs, Queue, GetSetViewFn) ->
     end.
 
 map_view_folder(Db, #simple_index_spec{index_name = <<"_all_docs">>},
-        MergeParams, ViewArgs, _DDoc, Queue) ->
+        MergeParams, _Req, ViewArgs, _DDoc, Queue) ->
     #index_merge{
         extra = #view_merge{
             keys = Keys
@@ -460,7 +460,16 @@ map_view_folder(Db, #simple_index_spec{index_name = <<"_all_docs">>},
     % TODO: add support for ?update_seq=true and offset
     fold_local_all_docs(Keys, Db, Queue, ViewArgs);
 
-map_view_folder(Db, ViewSpec, MergeParams, ViewArgs, DDoc, Queue) ->
+map_view_folder(_Db, #set_view_spec{} = ViewSpec, MergeParams,
+                Req, ViewArgs, DDoc, Queue) ->
+    #index_merge{
+        extra = #view_merge{
+            keys = Keys
+        }
+    } = MergeParams,
+    map_set_view_folder(ViewSpec, MergeParams, Req, Keys, ViewArgs, DDoc, Queue);
+
+map_view_folder(Db, ViewSpec, MergeParams, _Req, ViewArgs, DDoc, Queue) ->
     #simple_index_spec{
         ddoc_database = DDocDbName, ddoc_id = DDocId, index_name = ViewName
     } = ViewSpec,
@@ -545,8 +554,8 @@ map_set_view_folder(ViewSpec, MergeParams, Req, Keys, ViewArgs, DDoc, Queue) ->
                                                               RowCount, HelperFuns),
             FoldAccInit = {Limit, Skip, undefined, []},
 
-            case not(should_check_rev(MergeParams, DDoc)) orelse
-                ddoc_unchanged(DDocDbName, DDoc) of
+            case not(couch_index_merger:should_check_rev(MergeParams, DDoc)) orelse
+                couch_index_merger:ddoc_unchanged(DDocDbName, DDoc) of
             true ->
                 ok = couch_view_merger_queue:queue(Queue, {row_count, RowCount}),
 
@@ -576,7 +585,8 @@ map_set_view_folder(ViewSpec, MergeParams, Req, Keys, ViewArgs, DDoc, Queue) ->
         catch
         ddoc_db_not_found ->
             ok = couch_view_merger_queue:queue(
-                Queue, {error, ?LOCAL, ddoc_not_found_msg(DDocDbName, DDocId)});
+                Queue, {error, ?LOCAL,
+                    couch_index_merger:ddoc_not_found_msg(DDocDbName, DDocId)});
         _Tag:Error ->
             couch_view_merger_queue:queue(Queue, {error, ?LOCAL, to_binary(Error)})
         after
@@ -757,8 +767,17 @@ http_view_fold_queue_row({Props}, Queue) ->
     end,
     ok = couch_view_merger_queue:queue(Queue, Row).
 
+reduce_view_folder(_Db, #set_view_spec{} = ViewSpec, MergeParams,
+                   Req, ViewArgs, DDoc, Queue) ->
+    #index_merge{
+        extra = #view_merge{
+            keys = Keys
+        }
+    } = MergeParams,
+    reduce_set_view_folder(ViewSpec, MergeParams, Req,
+                           Keys, ViewArgs, DDoc, Queue);
 
-reduce_view_folder(Db, ViewSpec, MergeParams, ViewArgs, DDoc, Queue) ->
+reduce_view_folder(Db, ViewSpec, MergeParams, _Req, ViewArgs, DDoc, Queue) ->
     #simple_index_spec{
         ddoc_database = DDocDbName, ddoc_id = DDocId, index_name = ViewName
     } = ViewSpec,
@@ -838,8 +857,8 @@ reduce_set_view_folder(ViewSpec, MergeParams, Req, Keys, ViewArgs, DDoc, Queue) 
                     Req, GroupLevel, ViewArgs, nil, HelperFuns),
             FoldAccInit = {Limit, Skip, undefined, []},
 
-            case not(should_check_rev(MergeParams, DDoc)) orelse
-                ddoc_unchanged(DDocDbName, DDoc) of
+            case not(couch_index_merger:should_check_rev(MergeParams, DDoc)) orelse
+                couch_index_merger:ddoc_unchanged(DDocDbName, DDoc) of
             true ->
                 case Keys of
                 nil ->
@@ -866,7 +885,8 @@ reduce_set_view_folder(ViewSpec, MergeParams, Req, Keys, ViewArgs, DDoc, Queue) 
         catch
         ddoc_db_not_found ->
             ok = couch_view_merger_queue:queue(
-                Queue, {error, ?LOCAL, ddoc_not_found_msg(DDocDbName, DDocId)});
+                Queue, {error, ?LOCAL,
+                    couch_index_merger:ddoc_not_found_msg(DDocDbName, DDocId)});
         _Tag:Error ->
             couch_view_merger_queue:queue(Queue, {error, ?LOCAL, to_binary(Error)})
         after
@@ -963,6 +983,11 @@ make_map_fold_fun(true, Conflicts, Db, Queue) ->
         {ok, Acc}
     end.
 
+view_undefined_msg(SetName, DDocId) ->
+    Msg = io_lib:format(
+        "Undefined set view `~s` for `~s` design document.",
+            [SetName, DDocId]),
+    iolist_to_binary(Msg).
 
 view_qs(ViewArgs) ->
     DefViewArgs = #view_query_args{},

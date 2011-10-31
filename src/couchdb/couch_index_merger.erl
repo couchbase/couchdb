@@ -26,6 +26,8 @@
 
 -include("couch_db.hrl").
 -include("couch_index_merger.hrl").
+% needed for #set_view_spec{}
+-include("couch_view_merger.hrl").
 
 -import(couch_util, [
     get_value/2,
@@ -59,6 +61,9 @@ do_query_index(Mod, #httpd{user_ctx = UserCtx} = Req, IndexMergeParams) ->
        conn_timeout = Timeout, ddoc_revision = DesiredDDocRevision,
        extra = Extra
     } = IndexMergeParams,
+
+    ?LOG_DEBUG("Running a index merging for the following indexes: ~p", [Indexes]),
+
     {ok, DDoc, IndexName} = get_first_ddoc(Indexes, UserCtx, Timeout),
     DDocRev = ddoc_rev(DDoc),
 
@@ -81,17 +86,21 @@ do_query_index(Mod, #httpd{user_ctx = UserCtx} = Req, IndexMergeParams) ->
         Req, DDoc, IndexName, IndexArgs, IndexMergeParams),
     NumFolders = length(Indexes),
     QueueLessFun = fun
+        (set_view_outdated, _) ->
+            true;
+        (_, set_view_outdated) ->
+            false;
         (revision_mismatch, _) ->
             true;
         (_, revision_mismatch) ->
             false;
-        ({error, _Url, _Reason}, _) ->
-            true;
-        (_, {error, _Url, _Reason}) ->
-            false;
         ({row_count, _}, _) ->
             true;
         (_, {row_count, _}) ->
+            false;
+        ({error, _Url, _Reason}, _) ->
+            true;
+        (_, {error, _Url, _Reason}) ->
             false;
         (RowA, RowB) ->
             case LessFun of
@@ -108,9 +117,8 @@ do_query_index(Mod, #httpd{user_ctx = UserCtx} = Req, IndexMergeParams) ->
     Folders = lists:foldr(
         fun(Index, Acc) ->
             Pid = spawn_link(fun() ->
-                index_folder(Mod, Index, IndexMergeParams, UserCtx, IndexArgs,
+                index_folder(Mod, Index, IndexMergeParams, Req, IndexArgs,
                     DDoc, Queue, FoldFun)
-                %FoldFun(Index, IndexMergeParams, UserCtx, IndexArgs, Queue)
             end),
             [Pid | Acc]
         end,
@@ -126,6 +134,8 @@ do_query_index(Mod, #httpd{user_ctx = UserCtx} = Req, IndexMergeParams) ->
     },
     try
         case MergeFun(MergeParams) of
+        set_view_outdated ->
+            throw({error, set_view_outdated});
         revision_mismatch ->
             case DesiredDDocRevision of
             auto ->
@@ -155,6 +165,17 @@ get_first_ddoc([], _UserCtx, _Timeout) ->
 get_first_ddoc([#simple_index_spec{index_name = <<"_all_docs">>} | _],
         _UserCtx, _Timeout) ->
     {ok, nil, <<"_all_docs">>};
+
+get_first_ddoc([#set_view_spec{} = Spec | _], UserCtx, Timeout) ->
+    #set_view_spec {
+        name = SetName, ddoc_id = Id, view_name = ViewName
+    } = Spec,
+
+    {ok, Db} = open_db(<<SetName/binary, "/master">>, UserCtx, Timeout),
+    {ok, DDoc} = get_ddoc(Db, Id),
+    close_db(Db),
+
+    {ok, DDoc, ViewName};
 
 get_first_ddoc([#simple_index_spec{} = Spec | _], UserCtx, Timeout) ->
     #simple_index_spec{
@@ -377,6 +398,8 @@ merge_indexes_no_acc(Params, MinRowFun) ->
         {ok, Resp};
     {ok, revision_mismatch} ->
         revision_mismatch;
+    {ok, set_view_outdated} ->
+        set_view_outdated;
     {ok, {error, _Url, _Reason} = Error} ->
         ok = couch_view_merger_queue:flush(Queue),
         case Col(Error) of
@@ -418,26 +441,31 @@ dec_counter(N) -> N - 1.
 
 
 index_folder(Mod, #simple_index_spec{database = <<"http://", _/binary>>} =
-        IndexSpec, MergeParams, _UserCtx, IndexArgs, DDoc, Queue, _FoldFun) ->
+        IndexSpec, MergeParams, _Req, IndexArgs, DDoc, Queue, _FoldFun) ->
     http_index_folder(Mod, IndexSpec, MergeParams, IndexArgs, DDoc, Queue);
 
 index_folder(Mod, #simple_index_spec{database = <<"https://", _/binary>>} =
-        IndexSpec, MergeParams, _UserCtx, IndexArgs, DDoc, Queue, _FoldFun) ->
+        IndexSpec, MergeParams, _Req, IndexArgs, DDoc, Queue, _FoldFun) ->
     http_index_folder(Mod, IndexSpec, MergeParams, IndexArgs, DDoc, Queue);
 
 index_folder(Mod, #merged_index_spec{} = IndexSpec,
-        MergeParams, _UserCtx, IndexArgs, DDoc, Queue, _FoldFun) ->
+        MergeParams, _Req, IndexArgs, DDoc, Queue, _FoldFun) ->
     http_index_folder(Mod, IndexSpec, MergeParams, IndexArgs, DDoc, Queue);
 
-index_folder(_Mod, IndexSpec, MergeParams, UserCtx, IndexArgs, DDoc, Queue,
-        FoldFun) ->
+index_folder(_Mod, #set_view_spec{} = ViewSpec, MergeParams,
+                Req, ViewArgs, DDoc, Queue, FoldFun) ->
+    % XXX vmx 20-11-01: nil for DB is a ugly hack
+    FoldFun(nil, ViewSpec, MergeParams, Req, ViewArgs, DDoc, Queue);
+
+index_folder(_Mod, IndexSpec, MergeParams, #httpd{user_ctx = UserCtx}=Req,
+        IndexArgs, DDoc, Queue, FoldFun) ->
     #simple_index_spec{
         database = DbName, ddoc_database = DDocDbName, ddoc_id = DDocId
     } = IndexSpec,
     case couch_db:open(DbName, [{user_ctx, UserCtx}]) of
     {ok, Db} ->
         try
-            FoldFun(Db, IndexSpec, MergeParams, IndexArgs, DDoc, Queue)
+            FoldFun(Db, IndexSpec, MergeParams, Req, IndexArgs, DDoc, Queue)
         catch
         {not_found, Reason} when Reason =:= missing; Reason =:= deleted ->
             ok = couch_view_merger_queue:queue(
@@ -510,6 +538,9 @@ http_index_folder(Mod, IndexSpec, MergeParams, IndexArgs, DDoc, Queue) ->
                         Queue, {error, Url, <<"not_found">>});
                 {<<"error">>, <<"revision_mismatch">>} ->
                     ok = couch_view_merger_queue:queue(Queue, revision_mismatch);
+                {<<"error">>, <<"set_view_outdated">>} ->
+                    ?LOG_DEBUG("Got `set_view_outdated` from ~s", [Url]),
+                    ok = couch_view_merger_queue:queue(Queue, set_view_outdated);
                 JsonError ->
                     ok = couch_view_merger_queue:queue(
                         Queue, {error, Url, to_binary(JsonError)})
@@ -571,6 +602,19 @@ ddoc_rev_str(DDoc) ->
 should_check_rev(#index_merge{ddoc_revision = DDocRevision}, DDoc) ->
     DDocRevision =/= nil andalso DDoc =/= nil.
 
+ddoc_unchanged(DbName, DDoc) when is_binary(DbName) ->
+    case couch_db:open_int(DbName, []) of
+    {ok, Db} ->
+        try
+            DDocId = DDoc#doc.id,
+            {ok, MaybeUpdatedDDoc} = get_ddoc(Db, DDocId),
+            ddoc_rev(DDoc) =:= ddoc_rev(MaybeUpdatedDDoc)
+        after
+            couch_db:close(Db)
+        end;
+    {not_found, _} ->
+        throw(ddoc_db_not_found)
+    end;
 ddoc_unchanged(Db, DDoc) ->
     DbName = couch_db:name(Db),
     case couch_db:open_int(DbName, []) of
