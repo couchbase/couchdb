@@ -219,7 +219,7 @@ view_less_fun(Collation, Dir, ViewType) ->
             fun({KeyA, _}, {KeyB, _}) -> couch_view:less_json(KeyA, KeyB) end
         end;
     <<"raw">> ->
-        fun erlang:'<'/2
+        fun(A, B) -> A < B end
     end,
     case Dir of
     fwd ->

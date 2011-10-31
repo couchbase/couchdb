@@ -304,7 +304,7 @@
     root,
     extract_kv = fun({_Key, _Value} = KV) -> KV end,
     assemble_kv = fun(Key, Value) -> {Key, Value} end,
-    less = fun erlang:'<'/2,
+    less = fun(A, B) -> A < B end,
     reduce = nil,
     compression = ?DEFAULT_COMPRESSION
 }).

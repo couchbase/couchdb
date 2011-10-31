@@ -852,7 +852,7 @@ init_group(Fd, #set_view_group{def_lang = Lang, views = Views} = Group, IndexHea
             <<"default">> ->
                 Less = fun couch_set_view:less_json_ids/2;
             <<"raw">> ->
-                Less = fun erlang:'<'/2
+                Less = fun(A,B) -> A < B end
             end,
             {ok, Btree} = couch_btree:open(BTState, Fd,
                     [{less, Less}, {reduce, ReduceFun},
