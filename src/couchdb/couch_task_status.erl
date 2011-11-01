@@ -44,7 +44,7 @@ stop() ->
 
 
 all() ->
-    gen_server:call(?MODULE, all).
+    gen_server:call(?MODULE, all, infinity).
 
 
 add_task(Props) ->
@@ -53,7 +53,7 @@ add_task(Props) ->
     TaskProps = lists:ukeysort(
         1, [{started_on, Ts}, {updated_on, Ts} | Props]),
     put(task_status_props, TaskProps),
-    gen_server:call(?MODULE, {add_task, TaskProps}).
+    gen_server:call(?MODULE, {add_task, TaskProps}, infinity).
 
 
 set_update_frequency(Msecs) ->
