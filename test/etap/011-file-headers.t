@@ -70,6 +70,7 @@ test() ->
         "Rewriting the same second header returns the same second size."),
 
     couch_file:write_header(Fd, erlang:make_tuple(5000, <<"CouchDB">>)),
+    ok = couch_file:flush(Fd),
     etap:is(
         couch_file:read_header(Fd),
         {ok, erlang:make_tuple(5000, <<"CouchDB">>)},
