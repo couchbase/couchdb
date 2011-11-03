@@ -28,6 +28,7 @@
 -include("couch_set_view.hrl").
 
 -define(CLEANUP_TIMEOUT, 3000).
+-define(DELAYED_COMMIT_PERIOD, 3000).
 -define(set_name(State), element(2, State#state.init_args)).
 -define(group_id(State), (State#state.group)#set_view_group.name).
 -define(db_set(State), (State#state.group)#set_view_group.db_set).
@@ -179,6 +180,7 @@ start_link(InitArgs) ->
 % init creates a closure which spawns the appropriate view_updater.
 init({{_, SetName, _} = InitArgs, ReturnPid, Ref}) ->
     process_flag(trap_exit, true),
+    put(last_checkpoint_log, now()),
     case prepare_group(InitArgs, false) of
     {ok, #set_view_group{fd = Fd, index_header = Header} = Group} ->
         case Header#set_view_index_header.num_partitions of
@@ -403,13 +405,13 @@ handle_cast({partial_update, Pid, NewGroup}, #state{updater_pid=Pid} = State) ->
     #state{
         waiting_commit = WaitingCommit
     } = State,
-    ?LOG_INFO("Checkpointing set view `~s` update for group `~s`",
-              [?set_name(State), NewGroup#set_view_group.name]),
     if not WaitingCommit ->
-        erlang:send_after(1000, self(), delayed_commit);
+        erlang:send_after(?DELAYED_COMMIT_PERIOD, self(), delayed_commit);
     true -> ok
     end,
-    {noreply, State#state{group = NewGroup, waiting_commit = true}};
+    NewState = State#state{group = NewGroup, waiting_commit = true},
+    maybe_log_checkpoint(NewState),
+    {noreply, NewState};
 handle_cast({partial_update, _, _}, State) ->
     %% message from an old (probably pre-compaction) updater; ignore
     {noreply, State, ?CLEANUP_TIMEOUT};
@@ -486,7 +488,7 @@ handle_info({'EXIT', UpPid, {new_group, NewGroup}},
             waiting_list = WaitList,
             waiting_commit = WaitingCommit} = State) ->
     if not WaitingCommit ->
-        erlang:send_after(1000, self(), delayed_commit);
+        erlang:send_after(?DELAYED_COMMIT_PERIOD, self(), delayed_commit);
     true -> ok
     end,
     reply_with_group(NewGroup, WaitList),
@@ -1291,7 +1293,7 @@ stop_updater(#state{updater_pid = Pid} = State, When) ->
         true ->
             ok;
         false ->
-            erlang:send_after(1000, self(), delayed_commit)
+            erlang:send_after(?DELAYED_COMMIT_PERIOD, self(), delayed_commit)
         end,
         case When of
         immediately ->
@@ -1420,6 +1422,17 @@ notify_cleanup_waiters(State) ->
         State
     end.
 
+
+maybe_log_checkpoint(State) ->
+    Now = now(),
+    case timer:now_diff(Now, get(last_checkpoint_log)) >= 5000000 of
+    true ->
+        put(last_checkpoint_log, Now),
+        ?LOG_INFO("Checkpointing set view `~s` update for group `~s`",
+            [?set_name(State), ?group_id(State)]);
+    false ->
+        ok
+    end.
 
 % Left mostly for development/debugging
 %% log_bitmask_changes(Old, New) ->
