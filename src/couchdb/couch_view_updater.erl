@@ -16,6 +16,10 @@
 
 -include("couch_db.hrl").
 
+-define(QUEUE_MAX_ITEMS, 500).
+-define(QUEUE_MAX_SIZE, 100000).
+-define(MIN_FLUSH_BATCH_SIZE, 250).
+
 -spec update(_, #group{}, Dbname::binary()) -> no_return().
 
 update(Owner, Group, DbName) when is_binary(DbName) ->
@@ -43,9 +47,9 @@ update(Owner, Group, #db{name = DbName} = Db) ->
         exit(reset)
     end,
     {ok, MapQueue} = couch_work_queue:new(
-        [{max_size, 100000}, {max_items, 500}]),
+        [{max_size, ?QUEUE_MAX_SIZE}, {max_items, ?QUEUE_MAX_ITEMS}]),
     {ok, WriteQueue} = couch_work_queue:new(
-        [{max_size, 100000}, {max_items, 500}]),
+        [{max_size, ?QUEUE_MAX_SIZE}, {max_items, ?QUEUE_MAX_ITEMS}]),
     Self = self(),
     spawn_link(fun() ->
         do_maps(add_query_server(Group), MapQueue, WriteQueue)
@@ -68,7 +72,7 @@ update(Owner, Group, #db{name = DbName} = Db) ->
             Group
         end,
         ViewEmptyKVs = [{View, []} || View <- Group2#group.views],
-        do_writes(Self, Owner, Group2, WriteQueue, Seq == 0, ViewEmptyKVs)
+        do_writes(Self, Owner, Group2, WriteQueue, Seq == 0, ViewEmptyKVs, [])
     end),
     % compute on all docs modified since we last computed.
     #group{ design_options = DesignOptions } = Group,
@@ -180,35 +184,51 @@ do_maps(#group{query_server = Qs} = Group, MapQueue, WriteQueue) ->
     end.
 
 
-do_writes(Parent, Owner, Group, WriteQueue, InitialBuild, ViewEmptyKVs) ->
+do_writes(Parent, Owner, Group, WriteQueue, InitialBuild, ViewEmptyKVs, Acc) ->
     case couch_work_queue:dequeue(WriteQueue) of
     closed ->
-        Parent ! {new_group, Group};
+         Group2 = flush_writes(
+             Parent, Owner, Group, InitialBuild, ViewEmptyKVs, Acc),
+         Parent ! {new_group, Group2};
     {ok, Queue} ->
-        {ViewKVs, DocIdViewIdKeys} = lists:foldr(
-            fun({_Seq, Id, []}, {ViewKVsAcc, DocIdViewIdKeysAcc}) ->
-                {ViewKVsAcc, [{Id, []} | DocIdViewIdKeysAcc]};
-            ({_Seq, Id, RawQueryResults}, {ViewKVsAcc, DocIdViewIdKeysAcc}) ->
-                QueryResults = [
-                    [list_to_tuple(FunResult) || FunResult <- FunRs] || FunRs <-
-                        couch_query_servers:raw_to_ejson(RawQueryResults)
-                ],
-                {NewViewKVs, NewViewIdKeys} = view_insert_doc_query_results(
-                        Id, QueryResults, ViewKVsAcc, [], []),
-                {NewViewKVs, [{Id, NewViewIdKeys} | DocIdViewIdKeysAcc]}
-            end,
-            {ViewEmptyKVs, []}, Queue),
-        {NewSeq, _, _} = lists:last(Queue),
-        Group2 = write_changes(
-            Group, ViewKVs, DocIdViewIdKeys, NewSeq, InitialBuild),
-        case Owner of
-        nil -> ok;
-        _ ->
-            ok = gen_server:cast(Owner, {partial_update, Parent, Group2})
-        end,
-        update_task(length(Queue)),
-        do_writes(Parent, Owner, Group2, WriteQueue, InitialBuild, ViewEmptyKVs)
+        Acc2 = Acc ++ Queue,
+        case length(Acc2) >= ?MIN_FLUSH_BATCH_SIZE of
+        true ->
+            Group2 = flush_writes(Parent, Owner, Group, InitialBuild, ViewEmptyKVs, Acc2),
+            do_writes(Parent, Owner, Group2, WriteQueue, InitialBuild, ViewEmptyKVs, []);
+        false ->
+            do_writes(Parent, Owner, Group, WriteQueue, InitialBuild, ViewEmptyKVs, Acc2)
+        end
     end.
+
+
+flush_writes(_Parent, _Owner, Group, _InitialBuild, _ViewEmptyKVs, []) ->
+    Group;
+flush_writes(Parent, Owner, Group, InitialBuild, ViewEmptyKVs, Queue) ->
+    {ViewKVs, DocIdViewIdKeys} = lists:foldr(
+        fun({_Seq, Id, []}, {ViewKVsAcc, DocIdViewIdKeysAcc}) ->
+            {ViewKVsAcc, [{Id, []} | DocIdViewIdKeysAcc]};
+        ({_Seq, Id, RawQueryResults}, {ViewKVsAcc, DocIdViewIdKeysAcc}) ->
+            QueryResults = [
+                [list_to_tuple(FunResult) || FunResult <- FunRs] || FunRs <-
+                    couch_query_servers:raw_to_ejson(RawQueryResults)
+            ],
+            {NewViewKVs, NewViewIdKeys} = view_insert_doc_query_results(
+                Id, QueryResults, ViewKVsAcc, [], []),
+            {NewViewKVs, [{Id, NewViewIdKeys} | DocIdViewIdKeysAcc]}
+        end,
+        {ViewEmptyKVs, []}, Queue),
+    {NewSeq, _, _} = lists:last(Queue),
+    Group2 = write_changes(
+        Group, ViewKVs, DocIdViewIdKeys, NewSeq, InitialBuild),
+    case Owner of
+    nil ->
+        ok;
+    _ ->
+        ok = gen_server:cast(Owner, {partial_update, Parent, Group2})
+    end,
+    update_task(length(Queue)),
+    Group2.
 
 
 view_insert_doc_query_results(_DocId, [], [], ViewKVsAcc, ViewIdKeysAcc) ->

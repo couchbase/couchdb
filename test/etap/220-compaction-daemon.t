@@ -48,7 +48,7 @@ test() ->
 
     add_design_doc(Db),
     couch_db:close(Db),
-    populate(70, 70, 200 * 1024),
+    populate(70, 20, 200 * 1024),
 
     {_, DbFileSize} = get_db_frag(),
     {_, ViewFileSize} = get_view_frag(),
@@ -59,7 +59,7 @@ test() ->
     ok = couch_config:set(
         "compactions",
         binary_to_list(test_db_name()),
-        "[{db_fragmentation, \"70%\"}, {view_fragmentation, \"70%\"}]",
+        "[{db_fragmentation, \"70%\"}, {view_fragmentation, \"20%\"}]",
         false),
 
     ok = timer:sleep(4000), % something >= check_interval
@@ -69,14 +69,14 @@ test() ->
     {ViewFrag2, ViewFileSize2} = get_view_frag(),
 
     etap:is(true, (DbFrag2 < 70), "Database fragmentation is < 70% after compaction"),
-    etap:is(true, (ViewFrag2 < 70), "View fragmentation is < 70% after compaction"),
+    etap:is(true, (ViewFrag2 < 20), "View fragmentation is < 20% after compaction"),
     etap:is(true, (DbFileSize2 < DbFileSize), "Database file size decreased"),
     etap:is(true, (ViewFileSize2 < ViewFileSize), "View file size decreased"),
 
     disable_compact_daemon(),
     ok = timer:sleep(6000), % 2 times check_interval
     etap:is(couch_db:is_idle(Db), true, "Database is idle"),
-    populate(70, 70, 200 * 1024),
+    populate(70, 20, 200 * 1024),
     {_, DbFileSize3} = get_db_frag(),
     {_, ViewFileSize3} = get_view_frag(),
 
@@ -84,7 +84,7 @@ test() ->
     ok = couch_config:set(
         "compactions",
         "_default",
-        "[{db_fragmentation, \"70%\"}, {view_fragmentation, \"70%\"}]",
+        "[{db_fragmentation, \"70%\"}, {view_fragmentation, \"20%\"}]",
         false),
 
     ok = timer:sleep(4000), % something >= check_interval
@@ -94,7 +94,7 @@ test() ->
     {ViewFrag4, ViewFileSize4} = get_view_frag(),
 
     etap:is(true, (DbFrag4 < 70), "Database fragmentation is < 70% after compaction"),
-    etap:is(true, (ViewFrag4 < 70), "View fragmentation is < 70% after compaction"),
+    etap:is(true, (ViewFrag4 < 20), "View fragmentation is < 20% after compaction"),
     etap:is(true, (DbFileSize4 < DbFileSize3), "Database file size decreased again"),
     etap:is(true, (ViewFileSize4 < ViewFileSize3), "View file size decreased again"),
 
