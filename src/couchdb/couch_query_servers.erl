@@ -20,6 +20,7 @@
 -export([reduce/3, rereduce/3,validate_doc_update/5]).
 -export([filter_docs/5]).
 -export([filter_view/3]).
+-export([map_docs_raw/2]).
 
 -export([with_ddoc_proc/2, proc_prompt/2, ddoc_prompt/3, ddoc_proc_prompt/3, json_doc/1]).
 
@@ -33,6 +34,7 @@
     lang,
     ddoc_keys = [],
     prompt_fun,
+    prompt_many_fun,
     set_timeout_fun,
     stop_fun
 }).
@@ -82,6 +84,16 @@ map_docs(Proc, Docs) ->
         end,
         Docs),
     {ok, Results}.
+
+map_docs_raw(Proc, DocList) ->
+    {Mod, Fun} = Proc#proc.prompt_many_fun,
+    CommandList = lists:map(
+        fun(Doc) ->
+            EJson = couch_doc:to_json_obj(Doc, []),
+            [<<"map_doc">>, EJson]
+        end,
+        DocList),
+    Mod:Fun(Proc#proc.pid, CommandList).
 
 map_doc_raw(Proc, Doc) ->
     Json = couch_doc:to_json_obj(Doc, []),
@@ -479,6 +491,7 @@ new_process(Langs, LangLimits, Lang) ->
                        pid=Pid,
                        % Called via proc_prompt, proc_set_timeout, and proc_stop
                        prompt_fun={Mod, prompt},
+                       prompt_many_fun={Mod, prompt_many},
                        set_timeout_fun={Mod, set_timeout},
                        stop_fun={Mod, stop}}};
         _ ->
