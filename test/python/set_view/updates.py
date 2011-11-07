@@ -135,3 +135,31 @@ class TestUpdates(unittest.TestCase):
             i -= 1
             j -= 1
 
+        # print "Deleting the documents that were added before"
+        i = 0
+        for doc in new_docs:
+            db = self._params["server"][self._params["setname"] + "/" + str(i)]
+            del db[doc["_id"]]
+            i = (i + 1) % self._params["nparts"]
+
+        new_total_doc_count = common.set_doc_count(self._params, [0, 1, 2, 3, 4, 5, 6, 7])
+        self.assertEqual(new_total_doc_count, (total_doc_count - len(new_docs)), "8 documents were deleted")
+
+        # print "Querying view again (steady state)"
+        (resp, view_result) = common.query(self._params, "mapview")
+
+        self.assertEqual(len(view_result["rows"]), new_total_doc_count,
+                         "number of received rows is %d" % new_total_doc_count)
+        self.assertEqual(view_result["total_rows"], new_total_doc_count,
+                         "total_rows is %d" % new_total_doc_count)
+        common.test_keys_sorted(view_result)
+
+        all_ids = {}
+        all_keys = {}
+        for row in view_result["rows"]:
+            all_ids[row["id"]] = True
+            all_keys[row["key"]] = True
+
+        for doc in new_docs:
+            self.assertFalse(doc["_id"] in all_ids, "deleted doc %s not in view results anymore")
+            self.assertFalse(doc["integer"] in all_keys, "deleted doc %s not in view results anymore")
