@@ -16,6 +16,7 @@ from filter_partitions import TestFilterPartitions
 from view_merge import TestViewMerge
 from burst_state_updates import TestBurstStateUpdates
 from many_partitions import TestManyPartitions
+from erlang_views import TestErlangViews
 
 
 def main():
@@ -34,6 +35,7 @@ def main():
     suite.addTest(unittest.makeSuite(TestFilterPartitions))
     suite.addTest(unittest.makeSuite(TestViewMerge))
     suite.addTest(unittest.makeSuite(TestBurstStateUpdates))
+    suite.addTest(unittest.makeSuite(TestErlangViews))
 
     unittest.TextTestRunner(verbosity = 2, failfast = True).run(suite)
 

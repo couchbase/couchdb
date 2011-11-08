@@ -224,3 +224,17 @@ def wait_set_view_compaction_complete(params):
             count += 1
 
     return count
+
+
+def set_config_parameter(params, section, name, value):
+    conn = httplib.HTTPConnection(params["host"])
+    conn.request(
+        "PUT",
+        "/_config/" + section + "/" + name,
+        json.dumps(str(value))
+        )
+    resp = conn.getresponse()
+    assert resp.status == 200, "config update response code is 200"
+    json.loads(resp.read())
+    conn.close()
+
