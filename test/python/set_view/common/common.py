@@ -119,6 +119,18 @@ def test_keys_sorted(view_result, comp = lambda a, b: a < b):
 
 def define_set_view(params, active_partitions, passive_partitions):
     conn = httplib.HTTPConnection(params["host"])
+    conn.request("GET", "/_config/couchdb/max_dbs_open")
+    resp = conn.getresponse()
+    assert resp.status == 200, "GET /_config/couchdb/max_dbs_open response code 200"
+    max_dbs_open = int(json.loads(resp.read()))
+
+    if params["nparts"] >= max_dbs_open:
+        max_dbs_open = params["nparts"] * 2
+        conn.request("PUT", "/_config/couchdb/max_dbs_open", json.dumps(str(max_dbs_open)))
+        resp = conn.getresponse()
+        assert resp.status == 200, "PUT /_config/couchdb/max_dbs_open response code 200"
+        json.loads(resp.read())
+
     conn.request(
         "POST",
         "/_set_view/" + params["setname"] + "/" + params["ddoc"]["_id"] + "/_define",
@@ -186,16 +198,8 @@ def compact_set_view(params, block = True):
         return
 
     while True:
-        conn.request("GET", "/_active_tasks")
-        resp = conn.getresponse()
-        assert resp.status == 200, "Active tasks response has status 200"
-
-        tasks = json.loads(resp.read())
-        task = None
-        for t in tasks:
-            if t["type"] == "view_compaction" and t["set"] == params["setname"]:
-                task = t
-        if task is None:
+        info = get_set_view_info(params)
+        if not info["compact_running"]:
             break
 
     conn.close()

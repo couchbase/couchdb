@@ -15,6 +15,7 @@ from update_cleanup import TestUpdateCleanup
 from filter_partitions import TestFilterPartitions
 from view_merge import TestViewMerge
 from burst_state_updates import TestBurstStateUpdates
+from many_partitions import TestManyPartitions
 
 
 def main():
@@ -23,6 +24,7 @@ def main():
     suite.addTest(unittest.makeSuite(TestIncludeDocs))
     suite.addTest(unittest.makeSuite(TestStale))
     suite.addTest(unittest.makeSuite(TestUpdates))
+    suite.addTest(unittest.makeSuite(TestManyPartitions))
     suite.addTest(unittest.makeSuite(TestPassivePartitions))
     suite.addTest(unittest.makeSuite(TestPassivePartitionsUpdate))
     suite.addTest(unittest.makeSuite(TestCleanup))

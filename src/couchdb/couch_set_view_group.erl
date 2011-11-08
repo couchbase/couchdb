@@ -535,9 +535,11 @@ handle_info({'EXIT', FromPid, Reason}, State) ->
 
 
 terminate(Reason, #state{updater_pid=Update, compactor_pid=Compact}=S) ->
+    ?LOG_INFO("Set view `~s`, group `~s`, terminating with reason: ~p~n",
+        [?set_name(S), ?group_id(S), Reason]),
     State2 = stop_cleaner(S),
     reply_all(State2, Reason),
-    case is_process_alive(?db_set(S)) of
+    case is_pid(?db_set(S)) andalso is_process_alive(?db_set(S)) of
     true ->
         couch_db_set:close(?db_set(S));
     false ->
