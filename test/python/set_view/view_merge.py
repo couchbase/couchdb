@@ -30,8 +30,11 @@ DDOC = {
             "map": "function(doc) { emit(doc.integer, doc.string); }"
         },
         "redview": {
-            "map": "function(doc) { emit(doc._id); }",
-            "reduce": "_count"
+            "map":  "function(doc) {" \
+                "emit([doc.integer, doc.string], doc.integer);" \
+                "emit([doc.integer + 1, doc.string], doc.integer + 1);" \
+                "}",
+            "reduce": "_sum"
         }
     }
 }
@@ -148,11 +151,20 @@ class TestViewMerge(unittest.TestCase):
         remote_merge = self.merge_spec(remote["host"], [], [remote_spec])
 
         full_spec = self.views_spec([remote_merge], [local_spec])
-        _, result = self.query(local["host"], full_spec)
 
-        self.assertEqual(len(result["rows"]), 1, "Query returned invalid number of rows")
-        self.assertEqual(result["rows"][0]["value"], local["ndocs"] + remote["ndocs"],
-                         "Non-grouped reduce value is not %d" % (local["ndocs"] + remote["ndocs"]))
+        _, result = self.query(local["host"], full_spec)
+        self.assertEqual(len(result["rows"]), 1,
+            "Query returned invalid number of rows (a)")
+        self.assertEqual(result["rows"][0]["value"], 100020000,
+                         "Non-grouped reduce value is not 100020000")
+
+        _, result = self.query(local["host"], full_spec, params={"group": True})
+        self.assertEqual(len(result["rows"]), 20000,
+                         "Query returned invalid number of rows (b)")
+
+        _, result = self.query(local["host"], full_spec, params={"group_level": 1})
+        self.assertEqual(len(result["rows"]), 10001,
+                         "Query returned invalid number of rows (c)")
 
 
     def do_test_include_docs(self, local, remote):
