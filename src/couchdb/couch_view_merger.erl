@@ -460,14 +460,15 @@ map_view_folder(Db, #simple_index_spec{index_name = <<"_all_docs">>},
     % TODO: add support for ?update_seq=true and offset
     fold_local_all_docs(Keys, Db, Queue, ViewArgs);
 
-map_view_folder(_Db, #set_view_spec{} = ViewSpec, MergeParams,
+map_view_folder(Db, #set_view_spec{} = ViewSpec, MergeParams,
                 Req, ViewArgs, DDoc, Queue) ->
     #index_merge{
         extra = #view_merge{
             keys = Keys
         }
     } = MergeParams,
-    map_set_view_folder(ViewSpec, MergeParams, Req, Keys, ViewArgs, DDoc, Queue);
+    map_set_view_folder(Db, ViewSpec, MergeParams, Req, Keys, ViewArgs, DDoc,
+        Queue);
 
 map_view_folder(Db, ViewSpec, MergeParams, _Req, ViewArgs, DDoc, Queue) ->
     #simple_index_spec{
@@ -509,10 +510,16 @@ map_view_folder(Db, ViewSpec, MergeParams, _Req, ViewArgs, DDoc, Queue) ->
     end,
     catch couch_db:close(DDocDb).
 
-map_set_view_folder(ViewSpec, MergeParams, Req, Keys, ViewArgs, DDoc, Queue) ->
+
+map_set_view_folder(_Db, ViewSpec, MergeParams, Req, Keys, ViewArgs, DDoc,
+        Queue) ->
     #set_view_spec{
         name = SetName, ddoc_id = DDocId
     } = ViewSpec,
+    #view_query_args{
+        include_docs = IncludeDocs,
+        conflicts = Conflicts
+    } = ViewArgs,
 
     DefaultViewArgs = #view_query_args{},
     Limit = DefaultViewArgs#view_query_args.limit,
@@ -526,37 +533,17 @@ map_set_view_folder(ViewSpec, MergeParams, Req, Keys, ViewArgs, DDoc, Queue) ->
         ok;
     {View, Group} ->
         try
-            StartRespFun =
-                fun (_Req, _Etag, _TotalViewCount, _Offset, RowFunAcc) ->
-                        {ok, nil, RowFunAcc}
-                end,
-            SendRowFun =
-                fun (_Resp, Row, nil, RowFunAcc) ->
-                        ok = couch_view_merger_queue:queue(Queue, Row),
-                        {ok, RowFunAcc};
-                    (_Resp, {Kd, Value}, Doc, RowFunAcc) ->
-                        Row = {Kd, Value, {doc, Doc}},
-                        ok = couch_view_merger_queue:queue(Queue, Row),
-                        {ok, RowFunAcc}
-                end,
-
-            HelperFuns =
-                #view_fold_helper_funs{
-                    start_response = StartRespFun,
-                    send_row = SendRowFun,
-                    reduce_count = fun couch_set_view:reduce_to_count/1
-                },
-
-            {ok, RowCount} = couch_set_view:get_row_count(View),
-
-            FoldFun = couch_httpd_set_view:make_view_fold_fun(Req, ViewArgs,
-                                                              nil, Group,
-                                                              RowCount, HelperFuns),
+            #set_view_group{
+                set_name = SetName
+            } = Group,
+            FoldFun = make_map_set_fold_fun(IncludeDocs, Conflicts, SetName,
+                Req#httpd.user_ctx, Queue),
             FoldAccInit = {Limit, Skip, undefined, []},
 
             case not(couch_index_merger:should_check_rev(MergeParams, DDoc)) orelse
                 couch_index_merger:ddoc_unchanged(DDocDbName, DDoc) of
             true ->
+                {ok, RowCount} = couch_set_view:get_row_count(View),
                 ok = couch_view_merger_queue:queue(Queue, {row_count, RowCount}),
 
                 case Keys of
@@ -817,13 +804,10 @@ reduce_view_folder(Db, ViewSpec, MergeParams, _Req, ViewArgs, DDoc, Queue) ->
     end,
     catch couch_db:close(DDocDb).
 
-reduce_set_view_folder(ViewSpec, MergeParams, Req, Keys, ViewArgs, DDoc, Queue) ->
+reduce_set_view_folder(ViewSpec, MergeParams, _Req, Keys, ViewArgs, DDoc, Queue) ->
     #set_view_spec{
         name = SetName, ddoc_id = DDocId
     } = ViewSpec,
-    #view_query_args{
-        group_level = GroupLevel
-    } = ViewArgs,
 
     DefaultViewArgs = #view_query_args{},
     Limit = DefaultViewArgs#view_query_args.limit,
@@ -836,25 +820,9 @@ reduce_set_view_folder(ViewSpec, MergeParams, Req, Keys, ViewArgs, DDoc, Queue) 
         ok;
     {View, Group} ->
         try
-            StartRespFun =
-                fun (_Req, _Etag, Acc) ->
-                    {ok, nil, Acc}
-                end,
-            SendRowFun =
-                fun (_Resp, Row, Acc) ->
-                    ok = couch_view_merger_queue:queue(Queue, Row),
-                    {ok, Acc}
-                end,
+            FoldFun = make_reduce_fold_fun(ViewArgs, Queue),
+            KeyGroupFun = make_group_rows_fun(ViewArgs),
 
-            HelperFuns =
-                #reduce_fold_helper_funs{
-                    start_response = StartRespFun,
-                    send_row = SendRowFun
-                },
-
-            {ok, KeyGroupFun, FoldFun} =
-                couch_httpd_set_view:make_reduce_fold_funs(
-                    Req, GroupLevel, ViewArgs, nil, HelperFuns),
             FoldAccInit = {Limit, Skip, undefined, []},
 
             case not(couch_index_merger:should_check_rev(MergeParams, DDoc)) orelse
@@ -953,6 +921,24 @@ get_map_view(Db, DDocDbName, DDocId, ViewName, Stale) ->
     case GroupId of
         {DDocDb, DDocId} -> {DDocDb, View};
         DDocId -> {nil, View}
+    end.
+
+make_map_set_fold_fun(false, _Conflicts, _SetName, _UserCtx, Queue) ->
+    fun({{Key, DocId}, {_PartId, Value}}, _, Acc) ->
+        Kv = {{Key, DocId}, Value},
+        ok = couch_view_merger_queue:queue(Queue, Kv),
+        {ok, Acc}
+    end;
+
+make_map_set_fold_fun(true, Conflicts, SetName, UserCtx, Queue) ->
+    DocOpenOpts = if Conflicts -> [conflicts]; true -> [] end,
+    fun({{Key, DocId}, {PartId, Value}}, _, Acc) ->
+        Kv = {{Key, DocId}, Value},
+        JsonDoc = couch_httpd_set_view:get_row_doc(
+                Kv, SetName, PartId, true, UserCtx, DocOpenOpts),
+        Row = {{Key, DocId}, Value, {doc, JsonDoc}},
+        ok = couch_view_merger_queue:queue(Queue, Row),
+        {ok, Acc}
     end.
 
 make_map_fold_fun(false, _Conflicts, _Db, Queue) ->
