@@ -448,7 +448,7 @@ prepare_set_view(ViewSpec, ViewArgs, Queue, GetSetViewFn) ->
     end.
 
 map_view_folder(Db, #simple_index_spec{index_name = <<"_all_docs">>},
-        MergeParams, _Req, ViewArgs, _DDoc, Queue) ->
+        MergeParams, _UserCtx, ViewArgs, _DDoc, Queue) ->
     #index_merge{
         extra = #view_merge{
             keys = Keys
@@ -460,17 +460,11 @@ map_view_folder(Db, #simple_index_spec{index_name = <<"_all_docs">>},
     % TODO: add support for ?update_seq=true and offset
     fold_local_all_docs(Keys, Db, Queue, ViewArgs);
 
-map_view_folder(Db, #set_view_spec{} = ViewSpec, MergeParams,
-                Req, ViewArgs, DDoc, Queue) ->
-    #index_merge{
-        extra = #view_merge{
-            keys = Keys
-        }
-    } = MergeParams,
-    map_set_view_folder(Db, ViewSpec, MergeParams, Req, Keys, ViewArgs, DDoc,
-        Queue);
+map_view_folder(_Db, #set_view_spec{} = ViewSpec, MergeParams,
+                UserCtx, ViewArgs, DDoc, Queue) ->
+    map_set_view_folder(ViewSpec, MergeParams, UserCtx, ViewArgs, DDoc, Queue);
 
-map_view_folder(Db, ViewSpec, MergeParams, _Req, ViewArgs, DDoc, Queue) ->
+map_view_folder(Db, ViewSpec, MergeParams, _UserCtx, ViewArgs, DDoc, Queue) ->
     #simple_index_spec{
         ddoc_database = DDocDbName, ddoc_id = DDocId, index_name = ViewName
     } = ViewSpec,
@@ -511,11 +505,15 @@ map_view_folder(Db, ViewSpec, MergeParams, _Req, ViewArgs, DDoc, Queue) ->
     catch couch_db:close(DDocDb).
 
 
-map_set_view_folder(_Db, ViewSpec, MergeParams, Req, Keys, ViewArgs, DDoc,
-        Queue) ->
+map_set_view_folder(ViewSpec, MergeParams, UserCtx, ViewArgs, DDoc, Queue) ->
     #set_view_spec{
         name = SetName, ddoc_id = DDocId
     } = ViewSpec,
+    #index_merge{
+        extra = #view_merge{
+            keys = Keys
+        }
+    } = MergeParams,
     #view_query_args{
         include_docs = IncludeDocs,
         conflicts = Conflicts
@@ -537,7 +535,7 @@ map_set_view_folder(_Db, ViewSpec, MergeParams, Req, Keys, ViewArgs, DDoc,
                 set_name = SetName
             } = Group,
             FoldFun = make_map_set_fold_fun(IncludeDocs, Conflicts, SetName,
-                Req#httpd.user_ctx, Queue),
+                UserCtx, Queue),
             FoldAccInit = {Limit, Skip, undefined, []},
 
             case not(couch_index_merger:should_check_rev(MergeParams, DDoc)) orelse
@@ -755,16 +753,11 @@ http_view_fold_queue_row({Props}, Queue) ->
     ok = couch_view_merger_queue:queue(Queue, Row).
 
 reduce_view_folder(_Db, #set_view_spec{} = ViewSpec, MergeParams,
-                   Req, ViewArgs, DDoc, Queue) ->
-    #index_merge{
-        extra = #view_merge{
-            keys = Keys
-        }
-    } = MergeParams,
-    reduce_set_view_folder(ViewSpec, MergeParams, Req,
-                           Keys, ViewArgs, DDoc, Queue);
+                   _UserCtx, ViewArgs, DDoc, Queue) ->
+    reduce_set_view_folder(ViewSpec, MergeParams, ViewArgs, DDoc, Queue);
 
-reduce_view_folder(Db, ViewSpec, MergeParams, _Req, ViewArgs, DDoc, Queue) ->
+reduce_view_folder(Db, ViewSpec, MergeParams, _UserCtx, ViewArgs, DDoc,
+        Queue) ->
     #simple_index_spec{
         ddoc_database = DDocDbName, ddoc_id = DDocId, index_name = ViewName
     } = ViewSpec,
@@ -804,10 +797,15 @@ reduce_view_folder(Db, ViewSpec, MergeParams, _Req, ViewArgs, DDoc, Queue) ->
     end,
     catch couch_db:close(DDocDb).
 
-reduce_set_view_folder(ViewSpec, MergeParams, _Req, Keys, ViewArgs, DDoc, Queue) ->
+reduce_set_view_folder(ViewSpec, MergeParams, ViewArgs, DDoc, Queue) ->
     #set_view_spec{
         name = SetName, ddoc_id = DDocId
     } = ViewSpec,
+    #index_merge{
+        extra = #view_merge{
+            keys = Keys
+        }
+    } = MergeParams,
 
     DefaultViewArgs = #view_query_args{},
     Limit = DefaultViewArgs#view_query_args.limit,

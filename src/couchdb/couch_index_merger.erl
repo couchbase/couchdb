@@ -117,7 +117,7 @@ do_query_index(Mod, #httpd{user_ctx = UserCtx} = Req, IndexMergeParams) ->
     Folders = lists:foldr(
         fun(Index, Acc) ->
             Pid = spawn_link(fun() ->
-                index_folder(Mod, Index, IndexMergeParams, Req, IndexArgs,
+                index_folder(Mod, Index, IndexMergeParams, UserCtx, IndexArgs,
                     DDoc, Queue, FoldFun)
             end),
             [Pid | Acc]
@@ -441,23 +441,22 @@ dec_counter(N) -> N - 1.
 
 
 index_folder(Mod, #simple_index_spec{database = <<"http://", _/binary>>} =
-        IndexSpec, MergeParams, _Req, IndexArgs, DDoc, Queue, _FoldFun) ->
+        IndexSpec, MergeParams, _UserCtx, IndexArgs, DDoc, Queue, _FoldFun) ->
     http_index_folder(Mod, IndexSpec, MergeParams, IndexArgs, DDoc, Queue);
 
 index_folder(Mod, #simple_index_spec{database = <<"https://", _/binary>>} =
-        IndexSpec, MergeParams, _Req, IndexArgs, DDoc, Queue, _FoldFun) ->
+        IndexSpec, MergeParams, _UserCtx, IndexArgs, DDoc, Queue, _FoldFun) ->
     http_index_folder(Mod, IndexSpec, MergeParams, IndexArgs, DDoc, Queue);
 
 index_folder(Mod, #merged_index_spec{} = IndexSpec,
-        MergeParams, _Req, IndexArgs, DDoc, Queue, _FoldFun) ->
+        MergeParams, _UserCtx, IndexArgs, DDoc, Queue, _FoldFun) ->
     http_index_folder(Mod, IndexSpec, MergeParams, IndexArgs, DDoc, Queue);
 
 index_folder(_Mod, #set_view_spec{} = ViewSpec, MergeParams,
-                Req, ViewArgs, DDoc, Queue, FoldFun) ->
-    % XXX vmx 20-11-01: nil for DB is a ugly hack
-    FoldFun(nil, ViewSpec, MergeParams, Req, ViewArgs, DDoc, Queue);
+                UserCtx, ViewArgs, DDoc, Queue, FoldFun) ->
+    FoldFun(nil, ViewSpec, MergeParams, UserCtx, ViewArgs, DDoc, Queue);
 
-index_folder(_Mod, IndexSpec, MergeParams, #httpd{user_ctx = UserCtx}=Req,
+index_folder(_Mod, IndexSpec, MergeParams, UserCtx,
         IndexArgs, DDoc, Queue, FoldFun) ->
     #simple_index_spec{
         database = DbName, ddoc_database = DDocDbName, ddoc_id = DDocId
@@ -465,7 +464,8 @@ index_folder(_Mod, IndexSpec, MergeParams, #httpd{user_ctx = UserCtx}=Req,
     case couch_db:open(DbName, [{user_ctx, UserCtx}]) of
     {ok, Db} ->
         try
-            FoldFun(Db, IndexSpec, MergeParams, Req, IndexArgs, DDoc, Queue)
+            FoldFun(Db, IndexSpec, MergeParams, UserCtx, IndexArgs, DDoc,
+                Queue)
         catch
         {not_found, Reason} when Reason =:= missing; Reason =:= deleted ->
             ok = couch_view_merger_queue:queue(
