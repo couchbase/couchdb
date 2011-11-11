@@ -1,5 +1,6 @@
 #!/usr/bin/python
 
+import sys
 import unittest
 
 # set view test files
@@ -20,6 +21,10 @@ from erlang_views import TestErlangViews
 
 
 def main():
+    if sys.version_info < (2, 7):
+        print "You need Python 2.7 or higher."
+        sys.exit(1)
+
     suite = unittest.TestSuite()
 
     suite.addTest(unittest.makeSuite(TestIncludeDocs))
