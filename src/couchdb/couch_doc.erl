@@ -20,7 +20,7 @@
 -export([doc_to_multi_part_stream/5, len_doc_to_multi_part_stream/4]).
 -export([abort_multi_part_stream/1]).
 -export([mp_parse_doc/2]).
--export([with_ejson_body/1]).
+-export([with_ejson_body/1,with_json_body/1]).
 
 -include("couch_db.hrl").
 
@@ -579,6 +579,14 @@ with_ejson_body(Doc) ->
     Uncompressed = with_uncompressed_body(Doc),
     #doc{body = Body} = Uncompressed,
     Uncompressed#doc{body = {to_ejson_body(false, Body)}}.
+
+with_json_body(Doc) ->
+    case with_uncompressed_body(Doc) of
+    #doc{body = Body} = Doc2 when is_binary(Body) ->
+        Doc2;
+    #doc{body = Body} = Doc2 when is_tuple(Body)->
+        Doc2#doc{body = ?JSON_ENCODE(Body)}
+    end.
 
 with_uncompressed_body(#doc{body = Body} = Doc) when is_binary(Body) ->
     case couch_compress:is_compressed(Body) of

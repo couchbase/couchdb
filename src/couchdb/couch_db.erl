@@ -164,6 +164,8 @@ apply_open_options2(#doc{atts=Atts,revs=Revs}=Doc,
         || #att{revpos=AttPos,data=Data}=A <- Atts]}, Rest);
 apply_open_options2(Doc, [ejson_body | Rest]) ->
     apply_open_options2(couch_doc:with_ejson_body(Doc), Rest);
+apply_open_options2(Doc, [json_bin_body | Rest]) ->
+apply_open_options2(couch_doc:with_json_body(Doc), Rest);
 apply_open_options2(Doc,[_|Rest]) ->
     apply_open_options2(Doc,Rest).
 
