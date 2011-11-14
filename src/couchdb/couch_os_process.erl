@@ -67,7 +67,8 @@ prompt_many(Pid, DataList) ->
         % Can throw badarg error, when OsProc Pid is dead or port was closed
         % by the readline function on error/timeout.
         (catch port_connect(OsProc#os_proc.port, Pid)),
-        unlink(OsProc#os_proc.port)
+        unlink(OsProc#os_proc.port),
+        drop_port_messages(OsProc#os_proc.port)
     end.
 
 send_many(_OsProc, []) ->
@@ -82,6 +83,13 @@ receive_many(N, #os_proc{reader = Reader} = OsProc, Acc) ->
     Line = Reader(OsProc),
     receive_many(N - 1, OsProc, [Line | Acc]).
 
+drop_port_messages(Port) ->
+    receive
+    {Port, _} ->
+        drop_port_messages(Port)
+    after 0 ->
+        ok
+    end.
 
 % Utility functions for reading and writing
 % in custom functions
