@@ -718,7 +718,7 @@ http_view_fold_errors_2(object_start, Queue) ->
 http_view_fold_queue_error({Props}, Queue) ->
     From0 = get_value(<<"from">>, Props, ?LOCAL),
     From = case From0 of
-        ?LOCAL ->
+    ?LOCAL ->
         get(from_url);
     _ ->
         From0
