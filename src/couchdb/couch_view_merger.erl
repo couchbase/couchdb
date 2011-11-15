@@ -519,9 +519,6 @@ map_set_view_folder(ViewSpec, MergeParams, UserCtx, ViewArgs, DDoc, Queue) ->
         conflicts = Conflicts
     } = ViewArgs,
 
-    DefaultViewArgs = #view_query_args{},
-    Limit = DefaultViewArgs#view_query_args.limit,
-    Skip = DefaultViewArgs#view_query_args.skip,
     DDocDbName = ?master_dbname(SetName),
 
     case prepare_set_view(ViewSpec, ViewArgs, Queue,
@@ -536,7 +533,6 @@ map_set_view_folder(ViewSpec, MergeParams, UserCtx, ViewArgs, DDoc, Queue) ->
             } = Group,
             FoldFun = make_map_set_fold_fun(IncludeDocs, Conflicts, SetName,
                 UserCtx, Queue),
-            FoldAccInit = {Limit, Skip, undefined, []},
 
             case not(couch_index_merger:should_check_rev(MergeParams, DDoc)) orelse
                 couch_index_merger:ddoc_unchanged(DDocDbName, DDoc) of
@@ -547,8 +543,8 @@ map_set_view_folder(ViewSpec, MergeParams, UserCtx, ViewArgs, DDoc, Queue) ->
                 case Keys of
                 nil ->
                     FoldOpts = couch_httpd_set_view:make_key_options(ViewArgs),
-                    {ok, _, _} = couch_set_view:fold(Group, View, FoldFun,
-                                     FoldAccInit, FoldOpts);
+                    {ok, _, _} = couch_set_view:fold(
+                        Group, View, FoldFun, [], FoldOpts);
                 _ when is_list(Keys) ->
                     {_, _} =
                         lists:foldl(
@@ -562,7 +558,7 @@ map_set_view_folder(ViewSpec, MergeParams, UserCtx, ViewArgs, DDoc, Queue) ->
                                     couch_set_view:fold(Group, View, FoldFun,
                                         FoldAcc, FoldOpts),
                         {LastReduce, FoldResult}
-                    end, {{[],[]}, FoldAccInit}, Keys)
+                    end, {{[],[]}, []}, Keys)
                 end;
             false ->
                 ok = couch_view_merger_queue:queue(Queue, revision_mismatch)
@@ -807,9 +803,6 @@ reduce_set_view_folder(ViewSpec, MergeParams, ViewArgs, DDoc, Queue) ->
         }
     } = MergeParams,
 
-    DefaultViewArgs = #view_query_args{},
-    Limit = DefaultViewArgs#view_query_args.limit,
-    Skip = DefaultViewArgs#view_query_args.skip,
     DDocDbName = ?master_dbname(SetName),
 
     case prepare_set_view(ViewSpec, ViewArgs, Queue,
@@ -821,8 +814,6 @@ reduce_set_view_folder(ViewSpec, MergeParams, ViewArgs, DDoc, Queue) ->
             FoldFun = make_reduce_fold_fun(ViewArgs, Queue),
             KeyGroupFun = make_group_rows_fun(ViewArgs),
 
-            FoldAccInit = {Limit, Skip, undefined, []},
-
             case not(couch_index_merger:should_check_rev(MergeParams, DDoc)) orelse
                 couch_index_merger:ddoc_unchanged(DDocDbName, DDoc) of
             true ->
@@ -831,7 +822,7 @@ reduce_set_view_folder(ViewSpec, MergeParams, ViewArgs, DDoc, Queue) ->
                     FoldOpts = [{key_group_fun, KeyGroupFun} |
                         couch_httpd_set_view:make_key_options(ViewArgs)],
                     {ok, _} = couch_set_view:fold_reduce(
-                                  Group, View, FoldFun, FoldAccInit, FoldOpts);
+                                  Group, View, FoldFun, [], FoldOpts);
                 _ when is_list(Keys) ->
                     lists:foreach(
                         fun(K) ->
@@ -841,7 +832,7 @@ reduce_set_view_folder(ViewSpec, MergeParams, ViewArgs, DDoc, Queue) ->
                                         start_key = K, end_key = K})],
                             {ok, _} =
                                 couch_set_view:fold_reduce(
-                                    Group, View, FoldFun, FoldAccInit, FoldOpts)
+                                    Group, View, FoldFun, [], FoldOpts)
                         end,
                         Keys)
                 end;
