@@ -142,18 +142,16 @@ pread_binary(Fd, Pos) ->
 
 
 pread_iolist(Fd, Pos) ->
-    case gen_server:call(Fd, {pread_iolist, Pos}, infinity) of
-    {ok, _IoList} = Ok ->
-        Ok;
+    case do_read(Fd, Pos) of
+    {ok, IoList} ->
+        {ok, IoList};
     {ok, IoList, Md5} ->
         case couch_util:md5(IoList) of
         Md5 ->
             {ok, IoList};
         _ ->
             exit({file_corruption, <<"file corruption">>})
-        end;
-    Error ->
-        Error
+        end
     end.
 
 
@@ -320,6 +318,7 @@ terminate(_Reason, #file{reader = Reader, writer = Writer}) ->
     couch_util:shutdown_sync(Reader),
     couch_util:shutdown_sync(Writer).
 
+
 handle_call({pread_iolist, Pos}, From, #file{reader = Reader} = File) ->
     Reader ! {read, Pos, From},
     {noreply, File};
@@ -379,6 +378,14 @@ handle_info({'EXIT', Pid, Reason}, #file{reader = Pid} = Fd) ->
 handle_info({'EXIT', _, Reason}, Fd) ->
     {stop, Reason, Fd}.
 
+
+do_read(Fd, Pos) ->
+    case get({Fd, fast_fd_read}) of
+    undefined ->
+        gen_server:call(Fd, {pread_iolist, Pos}, infinity);
+    ReaderFd ->
+        read_iolist(ReaderFd, Pos)
+    end.
 
 find_header(_Fd, -1) ->
     no_valid_header;
@@ -617,7 +624,7 @@ write_header_blocks(Fd, Eof, Header) ->
 reader_loop(Fd) ->
     receive
     {read, Pos, From} ->
-        read_iolist(Fd, Pos, From),
+        gen_server:reply(From, read_iolist(Fd, Pos)),
         reader_loop(Fd);
     {find_header, Eof, From} ->
         gen_server:reply(From, find_header(Fd, Eof div ?SIZE_BLOCK)),
@@ -627,10 +634,9 @@ reader_loop(Fd) ->
         exit(done)
     end.
 
+-compile({inline, [read_iolist/2]}).
 
--compile({inline, [read_iolist/3]}).
-
-read_iolist(Fd, Pos, From) ->
+read_iolist(Fd, Pos) ->
     {RawData, NextPos} = try
         % up to 8Kbs of read ahead
         read_raw_iolist_int(Fd, Pos, 2 * ?SIZE_BLOCK - (Pos rem ?SIZE_BLOCK))
@@ -642,10 +648,9 @@ read_iolist(Fd, Pos, From) ->
     <<Prefix:1/integer, Len:31/integer>> = iolist_to_binary(Begin),
     case Prefix of
     1 ->
-        {Md5, IoList} = extract_md5(
+        {Md5, Data} = extract_md5(
             maybe_read_more_iolist(RestRawData, 16 + Len, NextPos, Fd)),
-        gen_server:reply(From, {ok, IoList, Md5});
+        {ok, Data, Md5};
     0 ->
-        IoList = maybe_read_more_iolist(RestRawData, Len, NextPos, Fd),
-        gen_server:reply(From, {ok, IoList})
+        {ok, maybe_read_more_iolist(RestRawData, Len, NextPos, Fd)}
     end.

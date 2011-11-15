@@ -180,7 +180,7 @@
 -record(db,
     {main_pid = nil,
     update_pid = nil,
-    compactor_pid = nil,
+    compactor_info = nil,
     instance_start_time, % number of microsecs since jan 1 1970 as a binary string
     fd,
     fd_ref_counter,
@@ -200,7 +200,8 @@
     revs_limit = 1000,
     fsync_options = [],
     options = [],
-    compression
+    compression,
+    raw_reader_openers = []
     }).
 
 
