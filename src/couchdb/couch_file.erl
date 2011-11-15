@@ -408,14 +408,15 @@ load_header(Fd, Block) ->
     Md5Sig = couch_util:md5(HeaderBin),
     {ok, HeaderBin}.
 
-maybe_read_more_iolist(Buffer, DataSize, _, _)
-    when DataSize =< byte_size(Buffer) ->
-    <<Data:DataSize/binary, _/binary>> = Buffer,
-    [Data];
 maybe_read_more_iolist(Buffer, DataSize, NextPos, Fd) ->
-    {Missing, _} =
-        read_raw_iolist_int(Fd, NextPos, DataSize - byte_size(Buffer)),
-    [Buffer, Missing].
+    case iolist_size(Buffer) of
+    BufferSize when DataSize =< BufferSize ->
+        {Buffer2, _} = split_iolist(Buffer, DataSize, []),
+        Buffer2;
+    BufferSize ->
+        {Missing, _} = read_raw_iolist_int(Fd, NextPos, DataSize-BufferSize),
+        [Buffer, Missing]
+    end.
 
 read_raw_iolist_int(ReadFd, {Pos, _Size}, Len) -> % 0110 UPGRADE CODE
     read_raw_iolist_int(ReadFd, Pos, Len);
@@ -637,8 +638,8 @@ read_iolist(Fd, Pos, From) ->
     _:_ ->
         read_raw_iolist_int(Fd, Pos, 4)
     end,
-    <<Prefix:1/integer, Len:31/integer, RestRawData/binary>> =
-        iolist_to_binary(RawData),
+    {Begin, RestRawData} = split_iolist(RawData, 4, []),
+    <<Prefix:1/integer, Len:31/integer>> = iolist_to_binary(Begin),
     case Prefix of
     1 ->
         {Md5, IoList} = extract_md5(
