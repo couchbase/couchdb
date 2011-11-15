@@ -546,19 +546,17 @@ map_set_view_folder(ViewSpec, MergeParams, UserCtx, ViewArgs, DDoc, Queue) ->
                     {ok, _, _} = couch_set_view:fold(
                         Group, View, FoldFun, [], FoldOpts);
                 _ when is_list(Keys) ->
-                    {_, _} =
-                        lists:foldl(
-                            fun(Key, {_, FoldAcc}) ->
-                                FoldOpts =
-                                    couch_httpd_set_view:make_key_options(
-                                        ViewArgs#view_query_args{
-                                            start_key=Key, end_key=Key}),
-
-                                {ok, LastReduce, FoldResult} =
-                                    couch_set_view:fold(Group, View, FoldFun,
-                                        FoldAcc, FoldOpts),
-                        {LastReduce, FoldResult}
-                    end, {{[],[]}, []}, Keys)
+                    lists:foreach(
+                        fun(Key) ->
+                            FoldOpts = couch_httpd_set_view:make_key_options(
+                                ViewArgs#view_query_args{
+                                    start_key = Key,
+                                    end_key = Key
+                                }),
+                            {ok, _, _} = couch_set_view:fold(
+                                Group, View, FoldFun, [], FoldOpts)
+                        end,
+                        Keys)
                 end;
             false ->
                 ok = couch_view_merger_queue:queue(Queue, revision_mismatch)
