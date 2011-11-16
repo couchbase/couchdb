@@ -23,7 +23,7 @@ run: ../bin/couchdb.tpl
 	    -e "s|%bindir%|$(abs_top_builddir)/bin|g" \
 	    -e "s|%defaultini%|default_dev.ini|g" \
 	    -e "s|%localini%|local_dev.ini|g" \
-	    -e "s|%localerlanglibdir%|foo|g" \
+	    -e "s|%localerlanglibdir%|$(abs_top_builddir)\/src|g" \
 	    -e "s|%localerlanglibargs%|\
 			-pa $(abs_top_builddir)\/src\/couchdb \
 			-pa $(abs_top_builddir)\/src\/ejson \
