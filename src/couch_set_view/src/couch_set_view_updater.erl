@@ -15,7 +15,7 @@
 -export([update/2, update/3]).
 
 -include("couch_db.hrl").
--include("couch_set_view.hrl").
+-include_lib("couch_set_view/include/couch_set_view.hrl").
 
 -define(QUEUE_MAX_ITEMS, 500).
 -define(QUEUE_MAX_SIZE, 100 * 1024).

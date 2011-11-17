@@ -18,7 +18,7 @@ couchincludedir = $(couchlibdir)/include
 couchebindir = $(couchlibdir)/ebin
 
 couchinclude_DATA = couch_api_wrap.hrl couch_db.hrl couch_js_functions.hrl couch_replicator.hrl \
-	couch_view_merger.hrl couch_index_merger.hrl couch_set_view.hrl
+	couch_view_merger.hrl couch_index_merger.hrl
 couchebin_DATA = $(compiled_files)
 
 # dist_devdoc_DATA = $(doc_base) $(doc_modules)
@@ -103,18 +103,11 @@ source_files = \
     couch_view_merger.erl \
     couch_view_merger_queue.erl \
     couch_skew.erl \
-    couch_indexer_manager.erl \
-    couch_httpd_set_view.erl \
-    couch_set_view.erl \
-    couch_set_view_group.erl \
-    couch_set_view_compactor.erl \
-    couch_set_view_updater.erl \
-    couch_set_view_util.erl \
-    couch_db_set.erl
+    couch_indexer_manager.erl
 
 
 EXTRA_DIST = $(source_files) couch_api_wrap.hrl couch_db.hrl couch_js_functions.hrl couch_replicator.hrl \
-	couch_view_merger.hrl couch_index_merger.hrl couch_set_view.hrl
+	couch_view_merger.hrl couch_index_merger.hrl
 
 compiled_files = \
     couch.app \
@@ -193,14 +186,7 @@ compiled_files = \
     couch_view_merger.beam \
     couch_view_merger_queue.beam \
     couch_skew.beam \
-    couch_indexer_manager.beam \
-    couch_httpd_set_view.beam \
-    couch_set_view.beam \
-    couch_set_view_group.beam \
-    couch_set_view_compactor.beam \
-    couch_set_view_updater.beam \
-    couch_set_view_util.beam \
-    couch_db_set.beam
+    couch_indexer_manager.beam
 
 # doc_base = \
 #     erlang.png \
@@ -259,6 +245,6 @@ endif
 
 # $(ERL) -noshell -run edoc_run files [\"$<\"]
 
-%.beam: %.erl couch_api_wrap.hrl couch_db.hrl couch_js_functions.hrl couch_replicator.hrl couch_view_merger.hrl couch_index_merger.hrl couch_set_view.hrl
-	$(ERLC) $(ERLC_FLAGS) ${TEST} $<;
+%.beam: %.erl couch_api_wrap.hrl couch_db.hrl couch_js_functions.hrl couch_replicator.hrl couch_view_merger.hrl couch_index_merger.hrl
+	$(ERLC) -I$(top_srcdir)/src $(ERLC_FLAGS) ${TEST} $<;
 

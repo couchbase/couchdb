@@ -16,7 +16,7 @@
 -export([build_bitmask/1, decode_bitmask/1]).
 -export([make_btree_purge_fun/1]).
 
--include("couch_set_view.hrl").
+-include_lib("couch_set_view/include/couch_set_view.hrl").
 
 
 detuple_kvs([], Acc) ->

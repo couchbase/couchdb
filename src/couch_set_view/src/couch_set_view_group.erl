@@ -25,7 +25,7 @@
          terminate/2, code_change/3]).
 
 -include("couch_db.hrl").
--include("couch_set_view.hrl").
+-include_lib("couch_set_view/include/couch_set_view.hrl").
 
 -define(CLEANUP_TIMEOUT, 3000).
 -define(DELAYED_COMMIT_PERIOD, 3000).

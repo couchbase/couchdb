@@ -119,7 +119,7 @@ _session = {couch_httpd_auth, handle_session_req}
 _oauth = {couch_httpd_oauth, handle_oauth_req}
 _generate_load = {couch_internal_load_gen, handle_req}
 _view_merge = {couch_httpd_view_merger, handle_req}
-_set_view = {couch_httpd_set_view, handle_req}
+_set_view = {couch_set_view_http, handle_req}
 
 [httpd_db_handlers]
 _view_cleanup = {couch_httpd_db, handle_view_cleanup_req}

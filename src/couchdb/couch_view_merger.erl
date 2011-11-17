@@ -19,7 +19,7 @@
 -include("couch_db.hrl").
 -include("couch_index_merger.hrl").
 -include("couch_view_merger.hrl").
--include("couch_set_view.hrl").
+-include_lib("couch_set_view/include/couch_set_view.hrl").
 
 -define(LOCAL, <<"local">>).
 
@@ -542,13 +542,13 @@ map_set_view_folder(ViewSpec, MergeParams, UserCtx, ViewArgs, DDoc, Queue) ->
 
                 case Keys of
                 nil ->
-                    FoldOpts = couch_httpd_set_view:make_key_options(ViewArgs),
+                    FoldOpts = couch_set_view_http:make_key_options(ViewArgs),
                     {ok, _, _} = couch_set_view:fold(
                         Group, View, FoldFun, [], FoldOpts);
                 _ when is_list(Keys) ->
                     lists:foreach(
                         fun(Key) ->
-                            FoldOpts = couch_httpd_set_view:make_key_options(
+                            FoldOpts = couch_set_view_http:make_key_options(
                                 ViewArgs#view_query_args{
                                     start_key = Key,
                                     end_key = Key
@@ -818,14 +818,14 @@ reduce_set_view_folder(ViewSpec, MergeParams, ViewArgs, DDoc, Queue) ->
                 case Keys of
                 nil ->
                     FoldOpts = [{key_group_fun, KeyGroupFun} |
-                        couch_httpd_set_view:make_key_options(ViewArgs)],
+                        couch_set_view_http:make_key_options(ViewArgs)],
                     {ok, _} = couch_set_view:fold_reduce(
                                   Group, View, FoldFun, [], FoldOpts);
                 _ when is_list(Keys) ->
                     lists:foreach(
                         fun(K) ->
                             FoldOpts = [{key_group_fun, KeyGroupFun} |
-                                couch_httpd_set_view:make_key_options(
+                                couch_set_view_http:make_key_options(
                                     ViewArgs#view_query_args{
                                         start_key = K, end_key = K})],
                             {ok, _} =
@@ -921,7 +921,7 @@ make_map_set_fold_fun(true, Conflicts, SetName, UserCtx, Queue) ->
     DocOpenOpts = if Conflicts -> [conflicts]; true -> [] end,
     fun({{Key, DocId}, {PartId, Value}}, _, Acc) ->
         Kv = {{Key, DocId}, Value},
-        JsonDoc = couch_httpd_set_view:get_row_doc(
+        JsonDoc = couch_set_view_http:get_row_doc(
                 Kv, SetName, PartId, true, UserCtx, DocOpenOpts),
         Row = {{Key, DocId}, Value, {doc, JsonDoc}},
         ok = couch_view_merger_queue:queue(Queue, Row),

@@ -23,7 +23,7 @@
 -export([code_change/3, terminate/2]).
 
 -include("couch_db.hrl").
--include("couch_set_view.hrl").
+-include_lib("couch_set_view/include/couch_set_view.hrl").
 
 -record(state, {
     set_name,

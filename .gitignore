@@ -77,6 +77,7 @@ src/snappy/snappy.app
 src/snappy/google-snappy/snappy-stubs-public.h
 src/snappy/google-snappy/stamp-h2
 src/snappy/google-snappy/.deps/
+src/couch_set_view/ebin/
 test/local.ini
 test/etap/.deps/
 test/etap/run

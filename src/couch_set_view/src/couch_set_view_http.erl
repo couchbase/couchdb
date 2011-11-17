@@ -10,7 +10,7 @@
 % License for the specific language governing permissions and limitations under
 % the License.
 
--module(couch_httpd_set_view).
+-module(couch_set_view_http).
 
 -export([handle_req/1]).
 
@@ -26,7 +26,7 @@
     send_chunked_error/2]).
 
 -include("couch_db.hrl").
--include("couch_set_view.hrl").
+-include_lib("couch_set_view/include/couch_set_view.hrl").
 
 
 
