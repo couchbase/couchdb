@@ -52,8 +52,8 @@ handle_info({foregrounded}, Port) ->
     CurrentPort = mochiweb_socket_server:get(couch_httpd, port),
     ?LOG_INFO("iOS application suspended, restarting. Current port: ~p", [CurrentPort]),
     set_port(CurrentPort),
-    couch_server_sup:restart_core_server(),
-    {ok, Port};
+    couch_httpd:stop(),
+    {noreply, Port};
 
 handle_info(Msg, State) ->
     ?LOG_ERROR("Unexpected info message to ~p: ~p", [?MODULE, Msg]),
