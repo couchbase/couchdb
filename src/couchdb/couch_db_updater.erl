@@ -581,10 +581,10 @@ maybe_clobber(true, _Tree, Doc, _Client, _Rev, _Limit) ->
 % Used only when the clobber option is used on updates.
 new_revid(#doc_update_info{deleted = Del} = Doc, {OldPos, [OldRevId | _]}) ->
     #doc_update_info{
-        body_md5 = BodyMd5,
-        atts_md5 = AttsMd5
+        body_crc32 = BodyCrc,
+        atts_crc32 = AttsCrc
     } = Doc,
-    couch_util:md5(?term_to_bin({Del, OldPos, OldRevId, BodyMd5, AttsMd5})).
+    couch_util:md5(?term_to_bin({Del, OldPos, OldRevId, BodyCrc, AttsCrc})).
 
 
 modify_full_doc_info(Db, Id, MergeConflicts, Clobber, nil, Docs, Acc) ->
@@ -1090,5 +1090,5 @@ make_doc_summary(#db{compression = Comp}, {Body0, Atts0}) ->
     end,
     SummaryBin = ?term_to_bin({Body, Atts}),
     Summary = couch_file:assemble_file_chunk(
-        SummaryBin, couch_util:md5(SummaryBin)),
+        SummaryBin, erlang:crc32(SummaryBin)),
     {Summary, Body}.

@@ -979,8 +979,8 @@ prepare_doc_summaries(Db, BucketList, Options) ->
                     AttsInfo = [{N, T, M} ||
                         #att{name = N, type = T, md5 = M} <- Atts, M =/= <<>>],
                     DocUpdateInfo#doc_update_info{
-                        atts_md5 = couch_util:md5(?term_to_bin(AttsInfo)),
-                        body_md5 = couch_util:md5(CompressedBody)
+                        atts_crc32 = erlang:crc32(?term_to_bin(AttsInfo)),
+                        body_crc32 = erlang:crc32(CompressedBody)
                     };
                 false ->
                     DocUpdateInfo
