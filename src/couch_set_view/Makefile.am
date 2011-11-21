@@ -28,10 +28,12 @@ source_files = \
     src/couch_set_view_updater.erl \
     src/couch_set_view_compactor.erl \
     src/couch_set_view_util.erl \
-    src/couch_db_set.erl
+    src/couch_db_set.erl \
+    test/couch_set_view_test_util.erl
 
 test_files = \
-    test/01-load.t
+    test/01-load.t \
+    test/02-old-index-cleanup.t
 
 compiled_files = \
     ebin/couch_set_view.app \
@@ -41,13 +43,22 @@ compiled_files = \
     ebin/couch_set_view_updater.beam \
     ebin/couch_set_view_compactor.beam \
     ebin/couch_set_view_util.beam \
-    ebin/couch_db_set.beam
+    ebin/couch_db_set.beam \
+    test/couch_set_view_test_util.beam
 
-EXTRA_DIST = $(include_files) $(source_files) $(test_files)
-CLEANFILES = $(compiled_files)
+EXTRA_DIST = $(include_files) $(source_files) $(test_files) test/run.tpl
+CLEANFILES = $(compiled_files) test/run
+
+noinst_SCRIPTS = test/run
 
 check:
-	$(abs_top_builddir)/test/etap/run $(abs_top_srcdir)/src/couch_set_view/test
+	$(abs_top_builddir)/src/couch_set_view/test/run $(abs_top_srcdir)/src/couch_set_view/test
+
+test/run: test/run.tpl
+	sed -e "s|%abs_top_srcdir%|@abs_top_srcdir@|g" \
+	    -e "s|%abs_top_builddir%|@abs_top_builddir@|g" > \
+	$@ < $<
+	chmod +x $@
 
 ebin/%.app: src/%.app.src
 	@mkdir -p ebin/
@@ -59,3 +70,6 @@ ebin/%.beam: src/%.erl $(include_files)
 	$(ERLC) -Wall -I$(top_srcdir)/src -I$(top_srcdir)/src/couchdb \
         -o ebin/ $(ERLC_FLAGS) ${TEST} $<;
 
+test/%.beam: test/%.erl $(include_files)
+	$(ERLC) -Wall -I$(top_srcdir)/src -I$(top_srcdir)/src/couchdb \
+        -o test/ $(ERLC_FLAGS) ${TEST} $<;

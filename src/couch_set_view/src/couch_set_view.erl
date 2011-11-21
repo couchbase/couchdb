@@ -28,6 +28,8 @@
 
 -export([less_json/2, less_json_ids/2]).
 
+-export([handle_db_event/1]).
+
 % gen_server callbacks
 -export([init/1, terminate/2, handle_call/3, handle_cast/2, handle_info/2, code_change/3]).
 
@@ -35,8 +37,10 @@
 -include_lib("couch_set_view/include/couch_set_view.hrl").
 
 
--record(server,{
-    root_dir = []}).
+-record(server, {
+    root_dir = [],
+    db_notifier
+}).
 
 
 % For a "set view" we have multiple databases which are indexed.
@@ -178,9 +182,13 @@ cleanup_index_files(SetName) ->
     RegExp = "("++ string:join(Sigs, "|") ++")",
 
     % filter out the ones in use
-    DeleteFiles = [FilePath
-           || FilePath <- FileList,
-              re:run(FilePath, RegExp, [{capture, none}]) =:= nomatch],
+    DeleteFiles = case Sigs of
+    [] ->
+        FileList;
+    _ ->
+        [FilePath || FilePath <- FileList,
+            re:run(FilePath, RegExp, [{capture, none}]) =:= nomatch]
+    end,
     % delete unused files
     ?LOG_INFO("Deleting unused (old) set view `~s` index files:~n~n~s",
         [SetName, string:join(DeleteFiles, "\n")]),
@@ -368,27 +376,18 @@ init([]) ->
             exit(Self, config_change)
         end),
 
-    % {SetName, Signature}
-    ets:new(couch_setview_name_to_sig, [bag, private, named_table]),
+    % {SetName, {DDocId, Signature}}
+    ets:new(couch_setview_name_to_sig, [bag, protected, named_table]),
     % {{SetName, Signature}, Pid | WaitListPids}
     ets:new(couch_sig_to_setview_pid, [set, protected, named_table]),
     % {Pid, {SetName, Sig}}
     ets:new(couch_pid_to_setview_sig, [set, private, named_table]),
 
-    couch_db_update_notifier:start_link(
-        fun({deleted, DbName}) ->
-            ok = gen_server:cast(?MODULE, {reset_indexes, DbName});
-        ({created, _DbName}) ->
-            % TODO: deal with this
-            % ok = gen_server:cast(?MODULE, {reset_indexes, DbName});
-            ok;
-        (_Else) ->
-            ok
-        end),
+    {ok, Notifier} = couch_db_update_notifier:start_link(fun ?MODULE:handle_db_event/1),
 
     process_flag(trap_exit, true),
     ok = couch_file:init_delete_dir(RootDir),
-    {ok, #server{root_dir=RootDir}}.
+    {ok, #server{root_dir = RootDir, db_notifier = Notifier}}.
 
 
 terminate(_Reason, _Srv) ->
@@ -421,10 +420,14 @@ new_group(Root, SetName, #set_view_group{name=GroupId, sig=Sig} = Group) ->
     case (catch couch_set_view_group:start_link({Root, SetName, Group})) of
     {ok, NewPid} ->
         unlink(NewPid),
-        exit({SetName, Sig, {ok, NewPid}});
+        exit({SetName, GroupId, Sig, {ok, NewPid}});
     Error ->
-        exit({SetName, Sig, Error})
+        exit({SetName, GroupId, Sig, Error})
     end.
+
+handle_info({'EXIT', Pid, Reason}, #server{db_notifier = Pid} = Server) ->
+    ?LOG_ERROR("Database update notifer died with reason: ~p", [Reason]),
+    {stop, Reason, Server};
 
 handle_info({'EXIT', FromPid, Reason}, Server) ->
     case ets:lookup(couch_pid_to_setview_sig, FromPid) of
@@ -435,29 +438,33 @@ handle_info({'EXIT', FromPid, Reason}, Server) ->
             exit(Reason);
         true -> ok
         end;
-    [{_, {SetName, GroupId}}] ->
-        delete_from_ets(FromPid, SetName, GroupId)
+    [{_, {SetName, Sig}}] ->
+        [{SetName, {DDocId, Sig}}] = ets:match_object(
+            couch_setview_name_to_sig, {SetName, {'$1', Sig}}),
+        delete_from_ets(FromPid, SetName, DDocId, Sig)
     end,
     {noreply, Server};
 
-handle_info({'DOWN', _, _, _, {SetName, Sig, Reply}}, Server) ->
+handle_info({'DOWN', _, _, _, {SetName, DDocId, Sig, Reply}}, Server) ->
     [{_, WaitList}] = ets:lookup(couch_sig_to_setview_pid, {SetName, Sig}),
     [gen_server:reply(From, Reply) || From <- WaitList],
     case Reply of {ok, NewPid} ->
         link(NewPid),
-        add_to_ets(NewPid, SetName, Sig);
-     _ -> ok end,
+        add_to_ets(NewPid, SetName, DDocId, Sig);
+    _ ->
+        ok
+    end,
     {noreply, Server}.
 
-add_to_ets(Pid, SetName, Sig) ->
+add_to_ets(Pid, SetName, DDocId, Sig) ->
     true = ets:insert(couch_pid_to_setview_sig, {Pid, {SetName, Sig}}),
     true = ets:insert(couch_sig_to_setview_pid, {{SetName, Sig}, Pid}),
-    true = ets:insert(couch_setview_name_to_sig, {SetName, Sig}).
+    true = ets:insert(couch_setview_name_to_sig, {SetName, {DDocId, Sig}}).
 
-delete_from_ets(Pid, SetName, Sig) ->
+delete_from_ets(Pid, SetName, DDocId, Sig) ->
     true = ets:delete(couch_pid_to_setview_sig, Pid),
     true = ets:delete(couch_sig_to_setview_pid, {SetName, Sig}),
-    true = ets:delete_object(couch_setview_name_to_sig, {SetName, Sig}).
+    true = ets:delete_object(couch_setview_name_to_sig, {SetName, {DDocId, Sig}}).
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
@@ -488,10 +495,10 @@ maybe_reset_indexes(DbName, Root) ->
     [SetName0, "master"] ->
         SetName = ?l2b(SetName0),
         lists:foreach(
-            fun({_SetName, Sig} = Key) ->
+            fun({_SetName, {DDocId, Sig}} = Key) ->
                 [{_, Pid}] = ets:lookup(couch_sig_to_setview_pid, Key),
                 couch_util:shutdown_sync(Pid),
-                delete_from_ets(Pid, SetName, Sig)
+                delete_from_ets(Pid, SetName, DDocId, Sig)
             end,
             ets:lookup(couch_setview_name_to_sig, SetName)),
         delete_index_dir(Root, SetName);
@@ -534,3 +541,31 @@ modify_bitmasks(Group, Partitions) ->
     },
     Unindexed = couch_set_view_util:decode_bitmask(UnindexedBitmask),
     {Group#set_view_group{index_header = Header}, Unindexed}.
+
+
+handle_db_event({deleted, DbName}) ->
+    ok = gen_server:cast(?MODULE, {reset_indexes, DbName});
+handle_db_event({created, _DbName}) ->
+    % TODO: deal with this
+    % ok = gen_server:cast(?MODULE, {reset_indexes, DbName});
+    ok;
+handle_db_event({ddoc_updated, {DbName, DDocId}}) ->
+    case string:tokens(?b2l(DbName), "/") of
+    [SetNameStr, "master"] ->
+        SetName = ?l2b(SetNameStr),
+        case ets:match_object(couch_setview_name_to_sig, {SetName, {DDocId, '$1'}}) of
+        [] ->
+            ok;
+        [{SetName, {DDocId, Sig}}] ->
+            case ets:lookup(couch_sig_to_setview_pid, {SetName, Sig}) of
+            [{_, GroupPid}] ->
+                (catch gen_server:cast(GroupPid, ddoc_updated));
+            [] ->
+                ok
+            end
+        end;
+    _ ->
+        ok
+    end;
+handle_db_event(_) ->
+    ok.

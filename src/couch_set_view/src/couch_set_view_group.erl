@@ -66,7 +66,8 @@
     waiting_list = [],
     cleaner_pid = nil,
     cleanup_waiters = [],
-    stats = #stats{}
+    stats = #stats{},
+    shutdown = false
 }).
 
 -record(cleanup_waiter, {
@@ -422,8 +423,34 @@ handle_cast({cleanup_done, CleanupTime, CleanupKVCount}, State) ->
         last_cleanup_kv_count = CleanupKVCount,
         cleanups = (State#state.stats)#stats.cleanups + 1
     },
-    {noreply, State#state{stats = NewStats}}.
+    {noreply, State#state{stats = NewStats}};
 
+handle_cast(ddoc_updated, State) ->
+    #state{
+        waiting_list = Waiters,
+        group = #set_view_group{name = DDocId, sig = CurSig}
+    } = State,
+    DbName = ?master_dbname((?set_name(State))),
+    {ok, Db} = couch_db:open_int(DbName, []),
+    case couch_db:open_doc(Db, DDocId, [ejson_body]) of
+    {not_found, deleted} ->
+        NewSig = nil;
+    {ok, DDoc} ->
+        #set_view_group{sig = NewSig} =
+            design_doc_to_set_view_group(?set_name(State), DDoc)
+    end,
+    couch_db:close(Db),
+    case NewSig of
+    CurSig ->
+        {noreply, State#state{shutdown = false}};
+    _ ->
+        case Waiters of
+        [] ->
+            {stop, normal, State};
+        _ ->
+            {noreply, State#state{shutdown = true}}
+        end
+    end.
 
 
 handle_info(timeout, State) ->
@@ -435,7 +462,12 @@ handle_info({updater_state, Pid, UpdaterState}, #state{updater_pid = Pid} = Stat
     case UpdaterState of
     updating_passive when State#state.waiting_list =/= [] ->
         State3 = stop_updater(State2),
-        {noreply, start_updater(State3)};
+        case State#state.shutdown of
+        true ->
+            {stop, normal, State3};
+        false ->
+            {noreply, start_updater(State3)}
+        end;
     _ ->
         {noreply, State2}
     end;
@@ -486,24 +518,30 @@ handle_info({'EXIT', UpPid, {new_group, NewGroup}},
         #state{
             updater_pid = UpPid,
             waiting_list = WaitList,
+            shutdown = Shutdown,
             waiting_commit = WaitingCommit} = State) ->
     if not WaitingCommit ->
         erlang:send_after(?DELAYED_COMMIT_PERIOD, self(), delayed_commit);
     true -> ok
     end,
     reply_with_group(NewGroup, WaitList),
-    State2 = State#state{
-        updater_pid = nil,
-        updater_state = not_running,
-        waiting_commit = true,
-        waiting_list = [],
-        group = NewGroup,
-        stats = ?inc_updates(State#state.stats)
-    },
     ?LOG_INFO("Set view `~s`, group `~s`, updater finished",
-        [?set_name(State2), ?group_id(State2)]),
-    State3 = maybe_start_cleaner(State2),
-    {noreply, State3, ?CLEANUP_TIMEOUT};
+        [?set_name(State), ?group_id(State)]),
+    case Shutdown of
+    true ->
+        {stop, normal, State};
+    false ->
+        State2 = State#state{
+            updater_pid = nil,
+            updater_state = not_running,
+            waiting_commit = true,
+            waiting_list = [],
+            group = NewGroup,
+            stats = ?inc_updates(State#state.stats)
+        },
+        State3 = maybe_start_cleaner(State2),
+        {noreply, State3, ?CLEANUP_TIMEOUT}
+    end;
 
 handle_info({'EXIT', _, {new_group, _}}, State) ->
     %% message from an old (probably pre-compaction) updater; ignore

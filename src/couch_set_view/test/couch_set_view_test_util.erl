@@ -1,0 +1,229 @@
+%% -*- erlang -*-
+
+% Licensed under the Apache License, Version 2.0 (the "License"); you may not
+% use this file except in compliance with the License. You may obtain a copy of
+% the License at
+%
+%   http://www.apache.org/licenses/LICENSE-2.0
+%
+% Unless required by applicable law or agreed to in writing, software
+% distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+% WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+% License for the specific language governing permissions and limitations under
+% the License.
+
+-module(couch_set_view_test_util).
+
+-export([start_server/0, stop_server/0]).
+-export([create_set_dbs/2, delete_set_dbs/2]).
+-export([populate_set_alternated/3, update_ddoc/2, delete_ddoc/2]).
+-export([define_set_view/5]).
+-export([query_view/3, query_view/4]).
+-export([are_view_keys_sorted/2]).
+-export([get_db_ref_counters/2, compact_set_dbs/3]).
+
+-include("couch_db.hrl").
+
+
+start_server() ->
+    couch_server_sup:start_link(test_util:config_files()),
+    timer:sleep(1000),
+    put(addr, couch_config:get("httpd", "bind_address", "127.0.0.1")),
+    put(port, integer_to_list(mochiweb_socket_server:get(couch_httpd, port))).
+
+
+stop_server() ->
+    ok = timer:sleep(1000),
+    couch_server_sup:stop().
+
+
+admin_user_ctx() ->
+    {user_ctx, #user_ctx{roles = [<<"_admin">>]}}.
+
+
+create_set_dbs(SetName, NumPartitions) ->
+    lists:foreach(
+        fun(PartId) ->
+            DbName = iolist_to_binary([
+                SetName, $/, integer_to_list(PartId)
+            ]),
+            {ok, Db} = couch_db:create(DbName, [admin_user_ctx()]),
+            ok = couch_db:close(Db)
+        end,
+        lists:seq(0, NumPartitions - 1)),
+    MasterDbName = iolist_to_binary([SetName, "/master"]),
+    {ok, MasterDb} = couch_db:create(MasterDbName, [admin_user_ctx()]),
+    ok = couch_db:close(MasterDb).
+
+
+delete_set_dbs(SetName, NumPartitions) ->
+    lists:foreach(
+        fun(PartId) ->
+            DbName = iolist_to_binary([
+                SetName, $/, integer_to_list(PartId)
+            ]),
+            couch_server:delete(DbName, [admin_user_ctx()])
+        end,
+        lists:seq(0, NumPartitions - 1)),
+    MasterDbName = iolist_to_binary([SetName, "/master"]),
+    couch_server:delete(MasterDbName, [admin_user_ctx()]).
+
+
+compact_set_dbs(SetName, Partitions, BlockUntilFinished) ->
+    Dbs0 = open_set_dbs(SetName, Partitions),
+    {ok, MasterDb} = couch_db:open_int(
+        <<SetName/binary, "/master">>, [admin_user_ctx()]),
+    Dbs = [MasterDb | Dbs0],
+    MonRefs = lists:map(
+        fun(Db) ->
+            {ok, Pid} = couch_db:start_compact(Db),
+            ok = couch_db:close(Db),
+            {couch_db:name(Db), erlang:monitor(process, Pid)}
+        end,
+        Dbs),
+    case BlockUntilFinished of
+    true ->
+        lists:foreach(
+            fun({DbName, Ref}) ->
+                receive
+                {'DOWN', Ref, _, _, normal} ->
+                    ok;
+                {'DOWN', Ref, _, _, Reason} ->
+                    etap:bail("Compaction for database " ++ ?b2l(DbName) ++
+                        " failed: " ++ couch_util:to_list(Reason))
+                after 90000 ->
+                    etap:bail("Timeout waiting for compaction to finish for " ++
+                        "database " ++ ?b2l(DbName))
+                end
+            end,
+            MonRefs);
+    false ->
+        MonRefs
+    end.
+
+
+get_db_ref_counters(SetName, Partitions) ->
+    Dbs0 = open_set_dbs(SetName, Partitions),
+    {ok, MasterDb} = couch_db:open_int(
+        <<SetName/binary, "/master">>, [admin_user_ctx()]),
+    lists:map(
+        fun(Db) ->
+            ok = couch_db:close(Db),
+            {couch_db:name(Db), Db#db.fd_ref_counter}
+        end,
+        [MasterDb | Dbs0]).
+
+
+populate_set_alternated(SetName, Partitions, DocList) ->
+    Dbs = open_set_dbs(SetName, Partitions),
+    lists:foldl(
+        fun(DocJson, I) ->
+            Db = lists:nth(I + 1, Dbs),
+            Doc = couch_doc:from_json_obj(DocJson),
+            {ok, _} = couch_db:update_doc(Db, Doc, []),
+            (I + 1) rem length(Dbs)
+        end,
+        0,
+        DocList),
+    lists:foreach(fun couch_db:close/1, Dbs).
+
+
+update_ddoc(SetName, DDoc) ->
+    DbName = iolist_to_binary([SetName, "/master"]),
+    {ok, Db} = couch_db:open_int(DbName, [admin_user_ctx()]),
+    {ok, NewRev} = couch_db:update_doc(Db, couch_doc:from_json_obj(DDoc), []),
+    ok = couch_db:close(Db),
+    {ok, couch_doc:rev_to_str(NewRev)}.
+
+
+delete_ddoc(SetName, DDocId) ->
+    DbName = iolist_to_binary([SetName, "/master"]),
+    {ok, Db} = couch_db:open_int(DbName, [admin_user_ctx()]),
+    {ok, DDoc} = couch_db:open_doc(Db, DDocId, []),
+    {ok, _} = couch_db:update_doc(Db, DDoc#doc{deleted = true}, []),
+    ok = couch_db:close(Db).
+
+
+define_set_view(SetName, DDocId, NumPartitions, Active, Passive) ->
+    Url = set_url(SetName, DDocId) ++ "_define",
+    Def = {[
+        {<<"number_partitions">>, NumPartitions},
+        {<<"active_partitions">>, Active},
+        {<<"passive_partitions">>, Passive},
+        {<<"cleanup_partitions">>, []}
+    ]},
+    {ok, Code, _Headers, _Body} = test_util:request(
+        Url, [{"Content-Type", "application/json"}],
+        post, ejson:encode(Def)),
+    case Code of
+    201 ->
+        ok;
+    _ ->
+        etap:bail("Error defining set view: " ++ integer_to_list(Code))
+    end.
+
+
+query_view(SetName, DDocId, ViewName) ->
+    query_view(SetName, DDocId, ViewName, []).
+
+query_view(SetName, DDocId, ViewName, QueryString) ->
+    QueryUrl = set_view_url(SetName, DDocId, ViewName) ++
+        case QueryString of
+        [] ->
+            [];
+        _ ->
+            "?" ++ QueryString
+        end,
+    {ok, Code, _Headers, Body} = test_util:request(QueryUrl, [], get),
+    case Code of
+    200 ->
+        ok;
+    _ ->
+        etap:bail("View response status is not 200 (got " ++
+            integer_to_list(Code) ++ ")")
+    end,
+    {ok, ejson:decode(Body)}.
+
+
+are_view_keys_sorted({ViewResult}, KeyCompFun) ->
+    Rows = couch_util:get_value(<<"rows">>, ViewResult),
+    case Rows of
+    [] ->
+        true;
+    [First | Rest] ->
+        {AreSorted, _} = lists:foldl(
+           fun({Row}, {Sorted, {Prev}}) ->
+              Key = couch_util:get_value(<<"key">>, Row),
+              PrevKey = couch_util:get_value(<<"key">>, Prev),
+              {Sorted andalso KeyCompFun(PrevKey, Key), {Row}}
+           end,
+           {true, First},
+           Rest),
+        AreSorted
+    end.
+
+
+set_url(SetName, DDocId) ->
+    ?b2l(iolist_to_binary([
+        "http://", get(addr), ":", get(port), "/", "_set_view", "/",
+        SetName, "/", DDocId, "/"
+    ])).
+
+
+set_view_url(SetName, DDocId, ViewName) ->
+    ?b2l(iolist_to_binary([
+        "http://", get(addr), ":", get(port), "/", "_set_view", "/",
+        SetName, "/", DDocId, "/", "_view", "/", ViewName
+    ])).
+
+
+open_set_dbs(SetName, Partitions) ->
+    lists:map(
+        fun(PartId) ->
+            DbName = iolist_to_binary([
+                SetName, $/, integer_to_list(PartId)
+            ]),
+            {ok, Db} = couch_db:open_int(DbName, [admin_user_ctx()]),
+            Db
+        end,
+        Partitions).
