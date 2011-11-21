@@ -47,7 +47,8 @@
     revs_limit = 1000,
     fsync_options = [],
     options = [],
-    compression
+    compression,
+    raw_reader_openers = []
 }).
 
 -record(rep, {

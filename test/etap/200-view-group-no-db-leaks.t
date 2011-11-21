@@ -42,7 +42,8 @@
     revs_limit = 1000,
     fsync_options = [],
     options = [],
-    compression
+    compression,
+    raw_reader_openers = []
 }).
 
 test_db_name() -> <<"couch_test_view_group_db_leaks">>.
