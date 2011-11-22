@@ -33,7 +33,8 @@ source_files = \
 
 test_files = \
     test/01-load.t \
-    test/02-old-index-cleanup.t
+    test/02-old-index-cleanup.t \
+    test/03-db-compaction-file-leaks.t
 
 compiled_files = \
     ebin/couch_set_view.app \
