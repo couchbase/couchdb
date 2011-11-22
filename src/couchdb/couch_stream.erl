@@ -154,9 +154,7 @@ gzip_init(Options) ->
     case couch_util:get_value(compression_level, Options, 0) of
     Lvl when Lvl >= 1 andalso Lvl =< 9 ->
         Z = zlib:open(),
-        % 15 = ?MAX_WBITS (defined in the zlib module)
-        % the 16 + ?MAX_WBITS formula was obtained by inspecting zlib:gzip/1
-        ok = zlib:deflateInit(Z, Lvl, deflated, 16 + 15, 8, default),
+        ok = zlib:deflateInit(Z, Lvl),
         {
             fun(Data) ->
                 zlib:deflate(Z, Data)
@@ -174,7 +172,7 @@ gzip_init(Options) ->
 
 ungzip_init() ->
     Z = zlib:open(),
-    zlib:inflateInit(Z, 16 + 15),
+    zlib:inflateInit(Z),
     {
         fun(Data) ->
             zlib:inflate(Z, Data)
