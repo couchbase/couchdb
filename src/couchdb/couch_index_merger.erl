@@ -14,15 +14,15 @@
 
 -export([query_index/3]).
 
-% only needed for indexer implemetation. Those functions should perhaps go into
-% a utils module
-% open_db/3, dec_counter/1, should_check_rev/2, get_ddoc/2 are also needed
-% by this file
+% Only needed for indexer implementation. Those functions should perhaps go into
+% a utils module.
+% The functions open_db/3, dec_counter/1, should_check_rev/2, get_ddoc/2 are
+% also needed by this file
 -export([open_db/3, collect_rows/4, collect_row_count/6,
     merge_indexes_no_acc/2, merge_indexes_no_limit/1, handle_skip/1,
     dec_counter/1, get_group_id/2, void_event/1, should_check_rev/2,
     ddoc_rev_str/1, ddoc_unchanged/2, validate_revision_param/1,
-    rem_passwd/1]).
+    rem_passwd/1, ddoc_not_found_msg/2]).
 
 -include("couch_db.hrl").
 -include("couch_index_merger.hrl").
