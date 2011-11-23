@@ -44,7 +44,10 @@
     passive_partitions = []
 }).
 
+-define(LATEST_COUCH_SET_VIEW_HEADER_VERSION, 1).
+
 -record(set_view_index_header, {
+    version = ?LATEST_COUCH_SET_VIEW_HEADER_VERSION,
     % maximum number of partitions this set view supports
     num_partitions = nil,  % nil means not yet defined
     % active partitions bitmap
