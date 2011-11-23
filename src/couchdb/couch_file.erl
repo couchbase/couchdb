@@ -26,9 +26,9 @@
 % public API
 -export([open/1, open/2, close/1, bytes/1, flush/1, sync/1, truncate/2]).
 -export([pread_term/2, pread_iolist/2, pread_binary/2]).
--export([append_binary/2, append_binary_crc32/2]).
+-export([append_binary/2, append_binary_md5/2]).
 -export([append_raw_chunk/2, assemble_file_chunk/1, assemble_file_chunk/2]).
--export([append_term/2, append_term/3, append_term_crc32/2, append_term_crc32/3]).
+-export([append_term/2, append_term/3, append_term_md5/2, append_term_md5/3]).
 -export([write_header/2, read_header/1]).
 -export([delete/2, delete/3, init_delete_dir/1]).
 
@@ -85,12 +85,12 @@ append_term(Fd, Term, Options) ->
     Comp = couch_util:get_value(compression, Options, ?DEFAULT_COMPRESSION),
     append_binary(Fd, couch_compress:compress(Term, Comp)).
 
-append_term_crc32(Fd, Term) ->
-    append_term_crc32(Fd, Term, []).
+append_term_md5(Fd, Term) ->
+    append_term_md5(Fd, Term, []).
 
-append_term_crc32(Fd, Term, Options) ->
+append_term_md5(Fd, Term, Options) ->
     Comp = couch_util:get_value(compression, Options, ?DEFAULT_COMPRESSION),
-    append_binary_crc32(Fd, couch_compress:compress(Term, Comp)).
+    append_binary_md5(Fd, couch_compress:compress(Term, Comp)).
 
 %%----------------------------------------------------------------------
 %% Purpose: To append an Erlang binary to the end of the file.
@@ -103,9 +103,9 @@ append_term_crc32(Fd, Term, Options) ->
 append_binary(Fd, Bin) ->
     gen_server:call(Fd, {append_bin, assemble_file_chunk(Bin)}, infinity).
     
-append_binary_crc32(Fd, Bin) ->
+append_binary_md5(Fd, Bin) ->
     gen_server:call(Fd,
-        {append_bin, assemble_file_chunk(Bin, erlang:crc32(Bin))}, infinity).
+        {append_bin, assemble_file_chunk(Bin, couch_util:md5(Bin))}, infinity).
 
 append_raw_chunk(Fd, Chunk) ->
     gen_server:call(Fd, {append_bin, Chunk}, infinity).
@@ -113,8 +113,8 @@ append_raw_chunk(Fd, Chunk) ->
 assemble_file_chunk(Bin) ->
     [<<0:1/integer, (iolist_size(Bin)):31/integer>>, Bin].
 
-assemble_file_chunk(Bin, Crc32) ->
-    [<<1:1/integer, (iolist_size(Bin)):31/integer, Crc32:32/integer>>, Bin].
+assemble_file_chunk(Bin, Md5) ->
+    [<<1:1/integer, (iolist_size(Bin)):31/integer>>, Md5, Bin].
 
 %%----------------------------------------------------------------------
 %% Purpose: Reads a term from a file that was written with append_term
@@ -145,9 +145,9 @@ pread_iolist(Fd, Pos) ->
     case do_read(Fd, Pos) of
     {ok, IoList} ->
         {ok, IoList};
-    {ok, IoList, <<Crc32:32/integer>>} ->
-        case erlang:crc32(IoList) of
-        Crc32 ->
+    {ok, IoList, Md5} ->
+        case couch_util:md5(IoList) of
+        Md5 ->
             {ok, IoList};
         _ ->
             exit({file_corruption, <<"file corruption">>})
@@ -433,10 +433,10 @@ read_raw_iolist_int(ReadFd, Pos, Len) ->
     {ok, <<RawBin:TotalBytes/binary>>} = file:pread(ReadFd, Pos, TotalBytes),
     {remove_block_prefixes(BlockOffset, RawBin), Pos + TotalBytes}.
 
--spec extract_crc32(iolist()) -> {binary(), iolist()}.
-extract_crc32(FullIoList) ->
-    {CrcList, IoList} = split_iolist(FullIoList, 4, []),
-    {iolist_to_binary(CrcList), IoList}.
+-spec extract_md5(iolist()) -> {binary(), iolist()}.
+extract_md5(FullIoList) ->
+    {Md5List, IoList} = split_iolist(FullIoList, 16, []),
+    {iolist_to_binary(Md5List), IoList}.
 
 calculate_total_read_len(0, FinalLen) ->
     calculate_total_read_len(1, FinalLen) + 1;
@@ -648,9 +648,9 @@ read_iolist(Fd, Pos) ->
     <<Prefix:1/integer, Len:31/integer>> = iolist_to_binary(Begin),
     case Prefix of
     1 ->
-        {Crc32, Data} = extract_crc32(
-            maybe_read_more_iolist(RestRawData, 4 + Len, NextPos, Fd)),
-        {ok, Data, Crc32};
+        {Md5, Data} = extract_md5(
+            maybe_read_more_iolist(RestRawData, 16 + Len, NextPos, Fd)),
+        {ok, Data, Md5};
     0 ->
         {ok, maybe_read_more_iolist(RestRawData, Len, NextPos, Fd)}
     end.

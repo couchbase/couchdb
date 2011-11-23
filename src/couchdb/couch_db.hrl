@@ -123,8 +123,8 @@
     summary,
     size_atts,
     fd,
-    body_crc32 = <<>>,
-    atts_crc32 = <<>>
+    body_md5 = <<>>,
+    atts_md5 = <<>>
     }).
 
 -record(att,
