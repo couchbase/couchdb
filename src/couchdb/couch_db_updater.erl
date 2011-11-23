@@ -251,6 +251,10 @@ handle_info({update_docs, Client, GroupedDocs, NonRepDocs, MergeConflicts,
         lists:foreach(fun(DDocId) ->
             couch_db_update_notifier:notify({ddoc_updated, {Db#db.name, DDocId}})
         end, UpdatedDDocIds),
+        % added because we were seeing unexplained memory blowups under
+        % non-json mode testing. We aren't sure why, but this makes it
+        % much better.
+        garbage_collect(),
         {noreply, Db2}
     catch
         throw: retry ->
