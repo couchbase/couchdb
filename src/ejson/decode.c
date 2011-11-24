@@ -421,16 +421,19 @@ check_rest(unsigned char* data, unsigned int size, unsigned int used)
 ERL_NIF_TERM
 validate_doc(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 {
+    yajl_parser_config conf = {0, 1};
+    yajl_handle handle;
+
+    yajl_status status;
+    ErlNifBinary json;
+    ERL_NIF_TERM ret;
+
     validate_ctx ctx;
     ctx.depth = 0;
     ctx.fill_offset = 0;
     ctx.error = 0;
 
-    yajl_parser_config conf = {0, 1};
-    yajl_handle handle = yajl_alloc(&validate_callbacks, &conf, NULL, &ctx);
-    yajl_status status;
-    ErlNifBinary json;
-    ERL_NIF_TERM ret;
+    handle = yajl_alloc(&validate_callbacks, &conf, NULL, &ctx);
 
     if(!enif_inspect_iolist_as_binary(env, argv[0], &json))
     {

@@ -19,8 +19,7 @@ ejson_msbuild = $(EJSON_OUTPUT_DIR)/msbuild.bat
 ejson_vcproj = $(EJSON_OUTPUT_DIR)/ejson.vcxproj
 WIN_ERL_INCLUDE = $(EJSON_OUTPUT_DIR)/win_erl_include.tmp
 EJSON = $(EJSON_OUTPUT_DIR)/ejson.dll
-endif
-
+else
 CLEANFILES = \
     $(ejsonebin_make_generated_file_list) \
     $(ejsonpriv_make_generated_file_list) \
@@ -49,6 +48,7 @@ EJSON_C_HDRS = \
     yajl/yajl_lex.h \
     yajl/yajl_parse.h \
     yajl/yajl_parser.h
+endif
 
 ejson_file_collection = \
     ejson.app.in \
@@ -66,8 +66,14 @@ EXTRA_DIST = \
 	$(EJSON_C_HDRS) \
 	$(ejson_file_collection)
 
+if WINDOWS
+ejsonebin_DATA = \
+    $(ejsonebin_make_generated_file_list) \
+    $(EJSON)
+else
 ejsonebin_DATA = \
     $(ejsonebin_make_generated_file_list)
+endif
 
 if !WINDOWS
 if USE_OTP_NIFS

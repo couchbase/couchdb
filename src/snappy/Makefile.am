@@ -19,8 +19,7 @@ snappy_msbuild = $(SNAPPY_OUTPUT_DIR)/msbuild.bat
 snappy_vcproj = $(SNAPPY_OUTPUT_DIR)/snappy.vcxproj
 WIN_ERL_INCLUDE = $(SNAPPY_OUTPUT_DIR)/win_erl_include.tmp
 SNAPPY_NIF = $(SNAPPY_OUTPUT_DIR)/snappy_nif.dll
-endif
-
+else
 snappy_cxx_srcs = \
 	snappy_nif.cc \
 	google-snappy/snappy.cc \
@@ -34,7 +33,7 @@ snappy_cxx_hdrs = \
 	google-snappy/snappy-sinksource.h \
 	google-snappy/snappy-stubs-internal.h \
 	google-snappy/snappy-stubs-public.h
-
+endif
 snappy_file_collection = \
     snappy.app.in \
     snappy.erl
@@ -51,8 +50,13 @@ CLEANFILES = \
     $(snappyebin_make_generated_file_list) \
 	priv/snappy_nif.so
 
+if WINDOWS
+snappyebin_DATA = $(SNAPPY_NIF) \
+    $(snappyebin_make_generated_file_list)
+else
 snappyebin_DATA = \
     $(snappyebin_make_generated_file_list)
+endif
 
 if !WINDOWS
 if USE_OTP_NIFS
