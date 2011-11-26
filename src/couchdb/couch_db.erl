@@ -844,7 +844,14 @@ update_docs(Db, Docs, Options, interactive_edit) ->
                     Result
                 end, Docs)};
         true ->
-            Errors = CommitResults ++ PreCommitFailures,
+            CommitErrors = lists:dropwhile(
+                fun({{_Id,_Rev}, Result}) ->
+                    case Result of
+                    {ok, _} -> true;
+                    _ -> false
+                    end
+                end, CommitResults),
+            Errors = CommitErrors ++ PreCommitFailures,
             {ok, [{Id, Error} || {{Id,_rev}, Error} <- Errors]}
         end
     end.
