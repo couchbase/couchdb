@@ -122,7 +122,7 @@ populate_set_alternated(SetName, Partitions, DocList) ->
         fun(DocJson, I) ->
             Db = lists:nth(I + 1, Dbs),
             Doc = couch_doc:from_json_obj(DocJson),
-            {ok, _} = couch_db:update_doc(Db, Doc, []),
+            ok = couch_db:update_doc(Db, Doc, []),
             (I + 1) rem length(Dbs)
         end,
         0,
@@ -133,16 +133,15 @@ populate_set_alternated(SetName, Partitions, DocList) ->
 update_ddoc(SetName, DDoc) ->
     DbName = iolist_to_binary([SetName, "/master"]),
     {ok, Db} = couch_db:open_int(DbName, [admin_user_ctx()]),
-    {ok, NewRev} = couch_db:update_doc(Db, couch_doc:from_json_obj(DDoc), []),
-    ok = couch_db:close(Db),
-    {ok, couch_doc:rev_to_str(NewRev)}.
+    ok = couch_db:update_doc(Db, couch_doc:from_json_obj(DDoc), []),
+    ok = couch_db:close(Db).
 
 
 delete_ddoc(SetName, DDocId) ->
     DbName = iolist_to_binary([SetName, "/master"]),
     {ok, Db} = couch_db:open_int(DbName, [admin_user_ctx()]),
     {ok, DDoc} = couch_db:open_doc(Db, DDocId, []),
-    {ok, _} = couch_db:update_doc(Db, DDoc#doc{deleted = true}, []),
+    ok = couch_db:update_doc(Db, DDoc#doc{deleted = true}, []),
     ok = couch_db:close(Db).
 
 

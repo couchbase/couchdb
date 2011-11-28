@@ -52,32 +52,24 @@
 
 -define(LOG_ERROR(Format, Args), couch_log:error(Format, Args)).
 
-% Tree::term() is really a tree(), but we don't want to require R13B04 yet
--type branch() :: {Key::term(), Value::term(), Tree::term()}.
--type path() :: {Start::pos_integer(), branch()}.
--type tree() :: [branch()]. % sorted by key
-
--record(rev_info,
-    {
-    rev,
-    seq = 0,
-    deleted = false,
-    body_sp = nil % stream pointer
-    }).
-
 -record(doc_info,
     {
     id = <<"">>,
-    high_seq = 0,
-    revs = [] % rev_info
+    deleted = false,
+    local_seq,
+    rev = {0, <<>>},
+    body_ptr,
+    size = 0
     }).
 
--record(full_doc_info,
-    {id = <<"">>,
-    update_seq = 0,
+-record(doc_update_info,
+    {
+    id = <<"">>,
     deleted = false,
-    rev_tree = [],
-    leafs_size = 0
+    rev,
+    body_ptr,
+    size = 0,
+    fd
     }).
 
 -record(httpd,
@@ -99,49 +91,20 @@
 
 -record(doc,
     {
-    id = <<"">>,
-    revs = {0, []},
+    id = <<>>,
+    rev = {0, <<>>},
 
-    % the json body object.
-    body = <<"{}">>,
+    % the json body object and metadata
+    json = <<"{}">>,
 
-    atts = [], % attachments
+    % the binary body, if not json
+    binary = nil,
 
     deleted = false,
 
     % key/value tuple of meta information, provided when using special options:
     % couch_db:open_doc(Db, Id, Options).
     meta = []
-    }).
-
-
--record(doc_update_info,
-    {
-    id,
-    revs,
-    deleted,
-    summary,
-    size_atts,
-    fd,
-    body_md5 = <<>>,
-    atts_md5 = <<>>
-    }).
-
--record(att,
-    {
-    name,
-    type,
-    att_len,
-    disk_len, % length of the attachment in its identity form
-              % (that is, without a content encoding applied to it)
-              % differs from att_len when encoding /= identity
-    md5= <<>>,
-    revpos=0,
-    data,
-    encoding=identity % currently supported values are:
-                      %     identity, gzip
-                      % additional values to support in the future:
-                      %     deflate, compress
     }).
 
 
@@ -162,13 +125,13 @@
 % if the disk revision is incremented, then new upgrade logic will need to be
 % added to couch_db_updater:init_db.
 
--define(LATEST_DISK_VERSION, 6).
+-define(LATEST_DISK_VERSION, 7).
 
 -record(db_header,
     {disk_version = ?LATEST_DISK_VERSION,
      update_seq = 0,
      unused = 0,
-     fulldocinfo_by_id_btree_state = nil,
+     docinfo_by_id_btree_state = nil,
      docinfo_by_seq_btree_state = nil,
      local_docs_btree_state = nil,
      purge_seq = 0,
@@ -186,7 +149,7 @@
     fd_ref_counter,
     header = #db_header{},
     committed_update_seq,
-    fulldocinfo_by_id_btree,
+    docinfo_by_id_btree,
     docinfo_by_seq_btree,
     local_docs_btree,
     update_seq,

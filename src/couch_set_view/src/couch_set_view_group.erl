@@ -812,7 +812,7 @@ sum_btree_sizes(Size1, Size2) ->
     Size1 + Size2.
 
 % maybe move to another module
-design_doc_to_set_view_group(SetName, #doc{id=Id,body={Fields}}) ->
+design_doc_to_set_view_group(SetName, #doc{id=Id,json={Fields}}) ->
     Language = couch_util:get_value(<<"language">>, Fields, <<"javascript">>),
     {DesignOptions} = couch_util:get_value(<<"options">>, Fields, {[]}),
     {RawViews} = couch_util:get_value(<<"views">>, Fields, {[]}),

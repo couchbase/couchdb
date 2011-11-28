@@ -40,7 +40,7 @@ test() ->
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
     couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
 
-    {ok, DDocRev} = populate_set(),
+    ok = populate_set(),
 
     GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
     query_view(num_docs(), []),
@@ -50,7 +50,7 @@ test() ->
 
     etap:is(all_index_files(), [IndexFile], "Index file found"),
 
-    {ok, _} = update_ddoc(DDocRev),
+    ok = update_ddoc(),
     ok = timer:sleep(1000),
     NewGroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
     etap:isnt(NewGroupPid, GroupPid, "Got new group after ddoc update"),
@@ -132,7 +132,7 @@ populate_set() ->
             ]}}
         ]}}
     ]},
-    {ok, DDocRev} = couch_set_view_test_util:update_ddoc(test_set_name(), DDoc),
+    ok = couch_set_view_test_util:update_ddoc(test_set_name(), DDoc),
     DocList = lists:map(
         fun(I) ->
             {[
@@ -151,13 +151,12 @@ populate_set() ->
         num_set_partitions(),
         lists:seq(0, num_set_partitions() - 1),
         []),
-    {ok, DDocRev}.
+    ok.
 
 
-update_ddoc(DDocRev) ->
+update_ddoc() ->
     NewDDoc = {[
         {<<"_id">>, ddoc_id()},
-        {<<"_rev">>, DDocRev},
         {<<"language">>, <<"javascript">>},
         {<<"views">>, {[
             {<<"test">>, {[
@@ -165,14 +164,14 @@ update_ddoc(DDocRev) ->
             ]}}
         ]}}
     ]},
-    {ok, NewRev} = couch_set_view_test_util:update_ddoc(test_set_name(), NewDDoc),
+    ok = couch_set_view_test_util:update_ddoc(test_set_name(), NewDDoc),
     ok = couch_set_view_test_util:define_set_view(
         test_set_name(),
         ddoc_id(),
         num_set_partitions(),
         lists:seq(0, num_set_partitions() - 1),
         []),
-    {ok, NewRev}.
+    ok.
 
 
 get_group_sig() ->

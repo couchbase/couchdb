@@ -15,14 +15,12 @@
 % the License.
 
 %% XXX: Figure out how to -include("couch_db.hrl")
--record(doc, {id= <<"">>, revs={0, []}, body={[]},
-            atts=[], deleted=false, meta=[]}).
--record(att, {name, type, att_len, disk_len, md5= <<>>, revpos=0, data,
-            encoding=identity}).
+-record(doc, {id= <<"">>, rev={0, <<>>}, json={[]},
+            binary=nil, deleted=false, meta=[]}).
 
 main(_) ->
     test_util:init_code_path(),
-    etap:plan(26),
+    etap:plan(21),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -62,46 +60,14 @@ test_from_json_success() ->
             "_local/document ids."
         },
         {
-            {[{<<"_rev">>, <<"4-230234">>}]},
-            #doc{revs={4, [<<"230234">>]}},
+            {[{<<"_rev">>, <<"4-1111">>}]},
+            #doc{rev={4, <<17,17>>}},
             "_rev stored in revs."
         },
         {
             {[{<<"soap">>, 35}]},
-            #doc{body={[{<<"soap">>, 35}]}},
+            #doc{json={[{<<"soap">>, 35}]}},
             "Non underscore prefixed fields stored in body."
-        },
-        {
-            {[{<<"_attachments">>, {[
-                {<<"my_attachment.fu">>, {[
-                    {<<"stub">>, true},
-                    {<<"content_type">>, <<"application/awesome">>},
-                    {<<"length">>, 45}
-                ]}},
-                {<<"noahs_private_key.gpg">>, {[
-                    {<<"data">>, <<"SSBoYXZlIGEgcGV0IGZpc2gh">>},
-                    {<<"content_type">>, <<"application/pgp-signature">>}
-                ]}}
-            ]}}]},
-            #doc{atts=[
-                #att{
-                    name = <<"my_attachment.fu">>,
-                    data = stub,
-                    type = <<"application/awesome">>,
-                    att_len = 45,
-                    disk_len = 45,
-                    revpos = nil
-                },
-                #att{
-                    name = <<"noahs_private_key.gpg">>,
-                    data = <<"I have a pet fish!">>,
-                    type = <<"application/pgp-signature">>,
-                    att_len = 18,
-                    disk_len = 18,
-                    revpos = 0
-                }
-            ]},
-            "Attachments are parsed correctly."
         },
         {
             {[{<<"_deleted">>, true}]},
@@ -112,17 +78,6 @@ test_from_json_success() ->
             {[{<<"_deleted">>, false}]},
             #doc{},
             "{\"_deleted\": false} is ok."
-        },
-        {
-            {[
-                {<<"_revisions">>, {[
-                    {<<"start">>, 4},
-                    {<<"ids">>, [<<"foo1">>, <<"phi3">>, <<"omega">>]}
-                ]}},
-                {<<"_rev">>, <<"6-something">>}
-            ]},
-            #doc{revs={4, [<<"foo1">>, <<"phi3">>, <<"omega">>]}},
-            "_revisions attribute are preferred to _rev."
         },
         {
             {[{<<"_revs_info">>, dropping}]},
@@ -192,27 +147,6 @@ test_from_json_errors() ->
         {
             {[{<<"_rev">>, "foo-bar"}]},
             "Error if _rev's integer expection is broken."
-        },
-        {
-            {[{<<"_revisions">>, {[{<<"start">>, true}]}}]},
-            {doc_validation, "_revisions.start isn't an integer."},
-            "_revisions.start must be an integer."
-        },
-        {
-            {[{<<"_revisions">>, {[
-                {<<"start">>, 0},
-                {<<"ids">>, 5}
-            ]}}]},
-            {doc_validation, "_revisions.ids isn't a array."},
-            "_revions.ids must be a list."
-        },
-        {
-            {[{<<"_revisions">>, {[
-                {<<"start">>, 0},
-                {<<"ids">>, [5]}
-            ]}}]},
-            {doc_validation, "RevId isn't a string"},
-            "Revision ids must be strings."
         },
         {
             {[{<<"_something">>, 5}]},

@@ -34,9 +34,6 @@ get_db_info(Db) ->
 update_doc(Db, Doc, Options) ->
     couch_db:update_doc(Db, Doc, Options).
 
-update_doc(Db, Doc, Options, UpdateType) ->
-    couch_db:update_doc(Db, Doc, Options, UpdateType).
-
 -spec ensure_full_commit(any(), integer()) -> {ok, binary()}.
 ensure_full_commit(Db, RequiredSeq) ->
     UpdateSeq = couch_db:get_update_seq(Db),
@@ -88,8 +85,9 @@ delete_db(DbName, UserCtx) ->
 update_docs(Db, Docs, Options) ->
     couch_db:update_docs(Db, Docs, Options).
 
-update_docs(Db, Docs, Options, Type) ->
-    couch_db:update_docs(Db, Docs, Options, Type).
+update_docs(Db, Docs, Options, replicated_changes) ->
+    ok = couch_db:update_docs(Db, Docs, Options),
+    {ok, []}.
 
 purge_docs(Db, IdsRevs) ->
     couch_db:purge_docs(Db, IdsRevs).
@@ -109,20 +107,16 @@ set_revs_limit(Db, Limit) ->
 get_revs_limit(Db) ->
     couch_db:get_revs_limit(Db).
 
-open_doc_revs(Db, DocId, Revs, Options) ->
-    couch_db:open_doc_revs(Db, DocId, Revs, Options).
-
 open_doc(Db, DocId, Options) ->
     couch_db:open_doc(Db, DocId, Options).
 
-make_attachment_fold(_Att, ReqAcceptsAttEnc) ->
-    case ReqAcceptsAttEnc of
-        false -> fun couch_doc:att_foldl_decode/3;
-        _ -> fun couch_doc:att_foldl/3
+couch_doc_open(Db, DocId, Options) ->
+    case couch_db:open_doc(Db, DocId, Options) of
+    {ok, Doc} ->
+        Doc;
+    Error ->
+        throw(Error)
     end.
-
-range_att_foldl(Att, From, To, Fun, Acc) ->
-    couch_doc:range_att_foldl(Att, From, To, Fun, Acc).
 
 all_databases() ->
     couch_server:all_databases().
@@ -159,26 +153,6 @@ stats_aggregator_get_json(Key, Range) ->
 
 stats_aggregator_collect_sample() ->
     couch_stats_aggregator:collect_sample().
-
-couch_doc_open(Db, DocId, Rev, Options) ->
-    case Rev of
-    nil -> % open most recent rev
-        case open_doc(Db, DocId, Options) of
-        {ok, Doc} ->
-            Doc;
-         Error ->
-             throw(Error)
-         end;
-  _ -> % open a specific rev (deletions come back as stubs)
-      case open_doc_revs(Db, DocId, [Rev], Options) of
-          {ok, [{ok, Doc}]} ->
-              Doc;
-          {ok, [{{not_found, missing}, Rev}]} ->
-              throw(not_found);
-          {ok, [Else]} ->
-              throw(Else)
-      end
-  end.
 
 welcome_message(WelcomeMessage) ->
     [

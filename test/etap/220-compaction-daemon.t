@@ -138,7 +138,7 @@ add_design_doc(Db) ->
             ]}}
         ]}}
     ]}),
-    {ok, _} = couch_db:update_docs(Db, [DDoc]),
+    ok = couch_db:update_docs(Db, [DDoc]),
     {ok, _} = couch_db:ensure_full_commit(Db),
     ok.
 
@@ -165,7 +165,7 @@ update() ->
     Docs = lists:map(
         fun(_) ->
             Doc = couch_doc:from_json_obj({[{<<"_id">>, couch_uuids:new()}]}),
-            {ok, _} = couch_db:update_docs(Db, [Doc])
+            ok = couch_db:update_docs(Db, [Doc])
         end,
         lists:seq(1, 100)),
     couch_db:close(Db),

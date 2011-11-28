@@ -124,7 +124,6 @@ class TestPassivePartitionsUpdate(unittest.TestCase):
 
     def do_test_set_passive_partitions_when_updater_is_running(self):
         # print "Re-creating databases"
-        del self._params["ddoc"]["_rev"]
         common.create_dbs(self._params)
         common.populate(self._params)
         # print "Configuring set view with all partitions active"

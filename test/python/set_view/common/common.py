@@ -62,8 +62,7 @@ def populate(params, make_doc = lambda i: {"_id": str(i), "integer": i, "string"
 
         assert resp.status == 201, "_bulk_docs response had status 201"
         results = json.loads(resp.read())
-        for r in results:
-            assert r["ok"], "Document %s created" % (r["id"])
+        assert results["ok"] == True, "Documents uploaded"
 
     def populate_db(db_num, db_name):
         docs = []
@@ -86,6 +85,18 @@ def populate(params, make_doc = lambda i: {"_id": str(i), "integer": i, "string"
 
     for t in threads:
         t.join()
+
+
+def delete_doc(params, db_name, id):
+    conn = httplib.HTTPConnection(params["host"])
+    conn.request(
+        "DELETE",
+        "/" + urllib.quote_plus(db_name) + "/" + urllib.quote_plus(id)
+        )
+    resp = conn.getresponse()
+    assert resp.status == 200, "Doc delete response has status 200"
+    body = json.loads(resp.read())
+    conn.close()
 
 
 def query(params, viewname, query_params = {}):

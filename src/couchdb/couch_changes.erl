@@ -110,32 +110,24 @@ os_filter_fun(FilterName, Style, Req, Db) ->
     case [list_to_binary(couch_httpd:unquote(Part))
             || Part <- string:tokens(FilterName, "/")] of
     [] ->
-        fun(_Db2, #doc_info{revs=Revs}) ->
-                builtin_results(Style, Revs)
+        fun(_Db2, #doc_info{rev=Rev}) ->
+                builtin_results(Style, Rev)
         end;
     [DName, FName] ->
         DesignId = <<"_design/", DName/binary>>,
-        DDoc = couch_db_frontend:couch_doc_open(Db, DesignId, nil, [ejson_body]),
+        DDoc = couch_db_frontend:couch_doc_open(Db, DesignId, [ejson_body]),
         % validate that the ddoc has the filter fun
-        #doc{body={Props}} = DDoc,
+        #doc{json={Props}} = DDoc,
         couch_util:get_nested_json_value({Props}, [<<"filters">>, FName]),
         fun(Db2, DocInfo) ->
-            DocInfos =
-            case Style of
-            main_only ->
-                [DocInfo];
-            all_docs ->
-                [DocInfo#doc_info{revs=[Rev]}|| Rev <- DocInfo#doc_info.revs]
-            end,
-            Docs = [Doc || {ok, Doc} <- [
-                    couch_db:open_doc(Db2, DocInfo2, [deleted, conflicts])
-                        || DocInfo2 <- DocInfos]],
+            {ok, Doc} =
+                    couch_db:open_doc(Db2, DocInfo, [deleted, conflicts]),
             {ok, Passes} = couch_query_servers:filter_docs(
-                Req, Db2, DDoc, FName, Docs
+                Req, Db2, DDoc, FName, [Doc]
             ),
-            [{[{<<"rev">>, couch_doc:rev_to_str({RevPos,RevId})}]}
-                || {Pass, #doc{revs={RevPos,[RevId|_]}}}
-                <- lists:zip(Passes, Docs), Pass == true]
+            [{<<"rev">>, couch_doc:rev_to_str({RevPos,RevId})}
+                || {Pass, #doc{rev={RevPos,RevId}}}
+                <- lists:zip(Passes, [Doc]), Pass == true]
         end;
     _Else ->
         throw({bad_request,
@@ -161,66 +153,53 @@ builtin_filter_fun(_FilterName, _Style, _Req, _Db) ->
     throw({bad_request, "unknown builtin filter name"}).
 
 filter_docids(DocIds, Style) when is_list(DocIds)->
-    fun(_Db, #doc_info{id=DocId, revs=Revs}) ->
-            case lists:member(DocId, DocIds) of
-                true ->
-                    builtin_results(Style, Revs);
-                _ -> []
-            end
+    fun(_Db, DocInfo) ->
+        #doc_info{id=DocId, rev=Rev} = DocInfo,
+        case lists:member(DocId, DocIds) of
+            true ->
+                builtin_results(Style, Rev);
+            _ -> null
+        end
     end;
 filter_docids(_, _) ->
     throw({bad_request, "`doc_ids` filter parameter is not a list."}).
 
 filter_designdoc(Style) ->
-    fun(_Db, #doc_info{id=DocId, revs=Revs}) ->
+    fun(_Db, #doc_info{id=DocId, rev=Rev}) ->
             case DocId of
             <<"_design", _/binary>> ->
-                    builtin_results(Style, Revs);
-                _ -> []
+                    builtin_results(Style, Rev);
+                _ -> null
             end
     end.
 
 filter_view("", _Style, _Db) ->
     throw({bad_request, "`view` filter parameter is not provided."});
-filter_view(ViewName, Style, Db) ->
+filter_view(ViewName, _Style, Db) ->
     case [list_to_binary(couch_httpd:unquote(Part))
             || Part <- string:tokens(ViewName, "/")] of
         [] ->
             throw({bad_request, "Invalid `view` parameter."});
         [DName, VName] ->
             DesignId = <<"_design/", DName/binary>>,
-            DDoc = couch_db_frontend:couch_doc_open(Db, DesignId, nil, [ejson_body]),
+            {ok, DDoc} = couch_db_frontend:open_doc(Db, DesignId, [ejson_body]),
             % validate that the ddoc has the filter fun
-            #doc{body={Props}} = DDoc,
+            #doc{json={Props}} = DDoc,
             couch_util:get_nested_json_value({Props}, [<<"views">>, VName]),
             fun(Db2, DocInfo) ->
-                DocInfos =
-                case Style of
-                main_only ->
-                    [DocInfo];
-                all_docs ->
-                    [DocInfo#doc_info{revs=[Rev]}|| Rev <- DocInfo#doc_info.revs]
-                end,
-                Docs = [Doc || {ok, Doc} <- [
-                        couch_db:open_doc(Db2, DocInfo2, [deleted, conflicts])
-                            || DocInfo2 <- DocInfos]],
+                {ok, Doc} =
+                        couch_db:open_doc(Db2, DocInfo, [deleted, conflicts]),
                 {ok, Passes} = couch_query_servers:filter_view(
-                    DDoc, VName, Docs
+                    DDoc, VName, [Doc]
                 ),
-                [{[{<<"rev">>, couch_doc:rev_to_str({RevPos,RevId})}]}
-                    || {Pass, #doc{revs={RevPos,[RevId|_]}}}
-                    <- lists:zip(Passes, Docs), Pass == true]
+                [{<<"rev">>, couch_doc:rev_to_str({RevPos,RevId})}
+                    || {Pass, #doc{rev={RevPos,RevId}}}
+                    <- lists:zip(Passes, [Doc]), Pass == true]
             end
         end.
 
-builtin_results(Style, [#rev_info{rev=Rev}|_]=Revs) ->
-    case Style of
-        main_only ->
-            [{[{<<"rev">>, couch_doc:rev_to_str(Rev)}]}];
-        all_docs ->
-            [{[{<<"rev">>, couch_doc:rev_to_str(R)}]}
-                || #rev_info{rev=R} <- Revs]
-    end.
+builtin_results(_Style, Rev) ->
+    {[{<<"rev">>, couch_doc:rev_to_str(Rev)}]}.
 
 get_changes_timeout(Args, Callback) ->
     #changes_args{
@@ -298,28 +277,28 @@ send_changes(Args, Callback, UserAcc, Db, StartSeq, Prepend, FirstRound) ->
 
 
 send_changes_doc_ids(DocIds, Db, StartSeq, Dir, Fun, Acc0) ->
-    Lookups = couch_btree:lookup(Db#db.fulldocinfo_by_id_btree, DocIds),
-    FullDocInfos = lists:foldl(
-        fun({ok, FDI}, Acc) ->
-            [FDI | Acc];
+    Lookups = couch_btree:lookup(Db#db.docinfo_by_id_btree, DocIds),
+    DocInfos = lists:foldl(
+        fun({ok, DI}, Acc) ->
+            [DI | Acc];
         (not_found, Acc) ->
             Acc
         end,
         [], Lookups),
-    send_lookup_changes(FullDocInfos, StartSeq, Dir, Db, Fun, Acc0).
+    send_lookup_changes(DocInfos, StartSeq, Dir, Db, Fun, Acc0).
 
 
 send_changes_design_docs(Db, StartSeq, Dir, Fun, Acc0) ->
-    FoldFun = fun(FullDocInfo, _, Acc) ->
-        {ok, [FullDocInfo | Acc]}
+    FoldFun = fun(DocInfo, _, Acc) ->
+        {ok, [DocInfo | Acc]}
     end,
     KeyOpts = [{start_key, <<"_design/">>}, {end_key_gt, <<"_design0">>}],
-    {ok, _, FullDocInfos} = couch_btree:fold(
-        Db#db.fulldocinfo_by_id_btree, FoldFun, [], KeyOpts),
-    send_lookup_changes(FullDocInfos, StartSeq, Dir, Db, Fun, Acc0).
+    {ok, _, DocInfos} = couch_btree:fold(
+        Db#db.docinfo_by_id_btree, FoldFun, [], KeyOpts),
+    send_lookup_changes(DocInfos, StartSeq, Dir, Db, Fun, Acc0).
 
 
-send_lookup_changes(FullDocInfos, StartSeq, Dir, Db, Fun, Acc0) ->
+send_lookup_changes(DocInfos, StartSeq, Dir, Db, Fun, Acc0) ->
     FoldFun = case Dir of
     fwd ->
         fun lists:foldl/3;
@@ -332,18 +311,17 @@ send_lookup_changes(FullDocInfos, StartSeq, Dir, Db, Fun, Acc0) ->
     rev ->
         fun(A, B) -> A =< B end
     end,
-    DocInfos = lists:foldl(
-        fun(FDI, Acc) ->
-            DI = couch_doc:to_doc_info(FDI),
-            case GreaterFun(DI#doc_info.high_seq, StartSeq) of
+    DocInfos2 = lists:foldl(
+        fun(DI, Acc) ->
+            case GreaterFun(DI#doc_info.local_seq, StartSeq) of
             true ->
                 [DI | Acc];
             false ->
                 Acc
             end
         end,
-        [], FullDocInfos),
-    SortedDocInfos = lists:keysort(#doc_info.high_seq, DocInfos),
+        [], DocInfos),
+    SortedDocInfos = lists:keysort(#doc_info.local_seq, DocInfos2),
     FinalAcc = try
         FoldFun(
             fun(DocInfo, Acc) ->
@@ -374,7 +352,6 @@ keep_sending_changes(Args, Callback, UserAcc, Db, StartSeq, Prepend, Timeout,
         limit = Limit,
         db_open_options = DbOptions
     } = Args,
-
     {ok, ChangesAcc} = send_changes(
         Args#changes_args{dir=fwd},
         Callback,
@@ -425,15 +402,14 @@ changes_enumerator(DocInfo, #changes_acc{resp_type = "continuous"} = Acc) ->
         filter = FilterFun, callback = Callback,
         user_acc = UserAcc, limit = Limit, db = Db
     } = Acc,
-    #doc_info{high_seq = Seq} = DocInfo,
-    Results0 = FilterFun(Db, DocInfo),
-    Results = [Result || Result <- Results0, Result /= null],
-    Go = if Limit =< 1 -> stop; true -> ok end,
-    case Results of
-    [] ->
+    #doc_info{local_seq = Seq} = DocInfo,
+    Result = FilterFun(Db, DocInfo),
+    Go = if (Limit =< 1) andalso Result =/= null-> stop; true -> ok end,
+    case Result of
+    null ->
         {Go, Acc#changes_acc{seq = Seq}};
     _ ->
-        ChangesRow = changes_row(Results, DocInfo, Acc),
+        ChangesRow = changes_row(Result, DocInfo, Acc),
         UserAcc2 = Callback({change, ChangesRow, <<>>}, "continuous", UserAcc),
         {Go, Acc#changes_acc{seq = Seq, user_acc = UserAcc2, limit = Limit - 1}}
     end;
@@ -442,15 +418,14 @@ changes_enumerator(DocInfo, Acc) ->
         filter = FilterFun, callback = Callback, prepend = Prepend,
         user_acc = UserAcc, limit = Limit, resp_type = ResponseType, db = Db
     } = Acc,
-    #doc_info{high_seq = Seq} = DocInfo,
-    Results0 = FilterFun(Db, DocInfo),
-    Results = [Result || Result <- Results0, Result /= null],
-    Go = if (Limit =< 1) andalso Results =/= [] -> stop; true -> ok end,
-    case Results of
-    [] ->
+    #doc_info{local_seq = Seq} = DocInfo,
+    Result = FilterFun(Db, DocInfo),
+    Go = if (Limit =< 1) andalso Result =/= null -> stop; true -> ok end,
+    case Result of
+    null ->
         {Go, Acc#changes_acc{seq = Seq}};
     _ ->
-        ChangesRow = changes_row(Results, DocInfo, Acc),
+        ChangesRow = changes_row(Result, DocInfo, Acc),
         UserAcc2 = Callback({change, ChangesRow, Prepend}, ResponseType, UserAcc),
         {Go, Acc#changes_acc{
             seq = Seq, prepend = <<",\n">>,
@@ -458,12 +433,12 @@ changes_enumerator(DocInfo, Acc) ->
     end.
 
 
-changes_row(Results, DocInfo, Acc) ->
+changes_row(Result, DocInfo, Acc) ->
     #doc_info{
-        id = Id, high_seq = Seq, revs = [#rev_info{deleted = Del} | _]
+        id = Id, local_seq = Seq, deleted = Del
     } = DocInfo,
     #changes_acc{db = Db, include_docs = IncDoc, conflicts = Conflicts} = Acc,
-    {[{<<"seq">>, Seq}, {<<"id">>, Id}, {<<"changes">>, Results}] ++
+    {[{<<"seq">>, Seq}, {<<"id">>, Id}, {<<"changes">>, Result}] ++
         deleted_item(Del) ++ case IncDoc of
             true ->
                 Options = if Conflicts -> [conflicts]; true -> [] end,

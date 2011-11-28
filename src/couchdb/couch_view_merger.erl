@@ -173,7 +173,7 @@ http_index_folder_req_details(#simple_index_spec{
 view_details(nil, <<"_all_docs">>) ->
     {<<"raw">>, map, nil};
 
-view_details(#doc{body = DDoc}, ViewName) ->
+view_details(#doc{json = DDoc}, ViewName) ->
     {Props} = DDoc,
     {ViewDef} = get_nested_json_value(DDoc, [<<"views">>, ViewName]),
     {ViewOptions} = get_value(<<"options">>, ViewDef, {[]}),
@@ -188,7 +188,7 @@ view_details(#doc{body = DDoc}, ViewName) ->
     {Collation, ViewType, Lang}.
 
 
-reduce_function(#doc{body = DDoc}, ViewName) ->
+reduce_function(#doc{json = DDoc}, ViewName) ->
     {ViewDef} = get_nested_json_value(DDoc, [<<"views">>, ViewName]),
     get_value(<<"reduce">>, ViewDef).
 
@@ -610,13 +610,11 @@ fold_local_all_docs(nil, Db, Queue, ViewArgs) ->
         {start_key, StartId}, {dir, Dir},
         {if InclusiveEnd -> end_key; true -> end_key_gt end, EndId}
     ],
-    FoldFun = fun(FullDocInfo, _Offset, Acc) ->
-        DocInfo = couch_doc:to_doc_info(FullDocInfo),
-        #doc_info{revs = [#rev_info{deleted = Deleted} | _]} = DocInfo,
-        case Deleted of
-        true ->
+    FoldFun = fun(DocInfo, _Offset, Acc) ->
+        case DocInfo of
+        #doc_info{deleted = true} ->
             ok;
-        false ->
+        _ ->
             Row = all_docs_row(DocInfo, Db, IncludeDocs, Conflicts),
             ok = couch_view_merger_queue:queue(Queue, Row)
         end,
@@ -649,8 +647,7 @@ fold_local_all_docs(Keys, Db, Queue, ViewArgs) ->
 
 
 all_docs_row(DocInfo, Db, IncludeDoc, Conflicts) ->
-    #doc_info{id = Id, revs = [RevInfo | _]} = DocInfo,
-    #rev_info{rev = Rev, deleted = Del} = RevInfo,
+    #doc_info{id = Id, rev = Rev, deleted = Del} = DocInfo,
     Value = {[{<<"rev">>, couch_doc:rev_to_str(Rev)}] ++ case Del of
     true ->
         [{<<"deleted">>, true}];
@@ -955,18 +952,12 @@ make_map_fold_fun(true, Conflicts, Db, Queue) ->
         ok = couch_view_merger_queue:queue(Queue, Row),
         {ok, Acc};
     ({{_Key, DocId} = Kd, {Props} = Value}, _, Acc) ->
-        Rev = case get_value(<<"_rev">>, Props, nil) of
-        nil ->
-            nil;
-        Rev0 ->
-            couch_doc:parse_rev(Rev0)
-        end,
         IncludeId = get_value(<<"_id">>, Props, DocId),
-        [Doc] = couch_httpd_view:doc_member(Db, {IncludeId, Rev}, DocOpenOpts),
+        [Doc] = couch_httpd_view:doc_member(Db, IncludeId, DocOpenOpts),
         ok = couch_view_merger_queue:queue(Queue, {Kd, Value, Doc}),
         {ok, Acc};
     ({{_Key, DocId} = Kd, Value}, _, Acc) ->
-        [Doc] = couch_httpd_view:doc_member(Db, {DocId, nil}, DocOpenOpts),
+        [Doc] = couch_httpd_view:doc_member(Db, DocId, DocOpenOpts),
         ok = couch_view_merger_queue:queue(Queue, {Kd, Value, Doc}),
         {ok, Acc}
     end.

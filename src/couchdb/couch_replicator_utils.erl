@@ -120,7 +120,7 @@ filter_code(Filter, Source, UserCtx) ->
     try
         Body = case (catch couch_api_wrap:open_doc(
             Db, <<"_design/", DDocName/binary>>, [ejson_body])) of
-        {ok, #doc{body = Body0}} ->
+        {ok, #doc{json = Body0}} ->
             Body0;
         DocError ->
             DocErrorMsg = io_lib:format(

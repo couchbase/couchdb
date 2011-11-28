@@ -70,5 +70,3 @@ class TestIncludeDocs(unittest.TestCase):
             doc = row["doc"]
             self.assertEqual(doc["integer"], row["key"], "doc.integer same as row.key")
             self.assertEqual(doc["string"], str(row["key"]), "doc.string same as String(row.key)")
-            self.assertEqual(doc["_rev"].find("1-"), 0, "doc._rev starts with 1-")
-

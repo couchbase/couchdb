@@ -103,7 +103,7 @@ init({Cp, Source, Target, ChangesManager, MaxConns}) ->
     {ok, State}.
 
 
-handle_call({fetch_doc, {_Id, _Revs, _PAs} = Params}, {Pid, _} = From,
+handle_call({fetch_doc, {_Id, _Rev} = Params}, {Pid, _} = From,
     #state{loop = Pid, readers = Readers, pending_fetch = nil,
         source = Src, target = Tgt, max_parallel_conns = MaxConns} = State) ->
     case length(Readers) of
@@ -270,16 +270,8 @@ local_process_batch([IdRevs | Rest], Cp, Source, Target, Batch, Stats) ->
 remote_process_batch([], _Parent) ->
     ok;
 
-remote_process_batch([{Id, Revs, PAs} | Rest], Parent) ->
-    % When the source is a remote database, we fetch a single document revision
-    % per HTTP request. This is mostly to facilitate retrying of HTTP requests
-    % due to network transient failures. It also helps not exceeding the maximum
-    % URL length allowed by proxies and Mochiweb.
-    lists:foreach(
-        fun(Rev) ->
-            ok = gen_server:call(Parent, {fetch_doc, {Id, [Rev], PAs}}, infinity)
-        end,
-        Revs),
+remote_process_batch([{Id, Rev} | Rest], Parent) ->
+    ok = gen_server:call(Parent, {fetch_doc, {Id, Rev}}, infinity),
     remote_process_batch(Rest, Parent).
 
 
@@ -293,63 +285,21 @@ spawn_doc_reader(Source, Target, FetchParams) ->
     end).
 
 
-fetch_doc(Source, {Id, Revs, PAs}, DocHandler, Acc) ->
-    try
-        couch_api_wrap:open_doc_revs(
-            Source, Id, Revs, [{atts_since, PAs}], DocHandler, Acc)
-    catch
-    throw:{missing_stub, _} ->
-        ?LOG_ERROR("Retrying fetch and update of document `~p` due to out of "
-            "sync attachment stubs. Missing revisions are: ~s",
-            [Id, couch_doc:revs_to_strs(Revs)]),
-        couch_api_wrap:open_doc_revs(Source, Id, Revs, [], DocHandler, Acc)
-    end.
+fetch_doc(Source, {Id, _Rev}, DocHandler, Acc) ->
+    couch_api_wrap:open_doc(
+            Source, Id, [], DocHandler, Acc).
 
 
 local_doc_handler({ok, Doc}, {Target, DocList, Stats, Cp}) ->
     Stats2 = ?inc_stat(#rep_stats.docs_read, Stats, 1),
-    case batch_doc(Doc) of
-    true ->
-        {ok, {Target, [Doc | DocList], Stats2, Cp}};
-    false ->
-        ?LOG_DEBUG("Worker flushing doc with attachments", []),
-        Target2 = open_db(Target),
-        Success = (flush_doc(Target2, Doc) =:= ok),
-        close_db(Target2),
-        Stats3 = case Success of
-        true ->
-            ?inc_stat(#rep_stats.docs_written, Stats2, 1);
-        false ->
-            ?inc_stat(#rep_stats.doc_write_failures, Stats2, 1)
-        end,
-        Stats4 = maybe_report_stats(Cp, Stats3),
-        {ok, {Target, DocList, Stats4, Cp}}
-    end;
+    {ok, {Target, [Doc | DocList], Stats2, Cp}};
 local_doc_handler(_, Acc) ->
     {ok, Acc}.
 
 
-remote_doc_handler({ok, #doc{atts = []} = Doc}, {Parent, _} = Acc) ->
+remote_doc_handler({ok, Doc}, {Parent, _} = Acc) ->
     ok = gen_server:call(Parent, {batch_doc, Doc}, infinity),
     {ok, Acc};
-remote_doc_handler({ok, Doc}, {Parent, Target} = Acc) ->
-    % Immediately flush documents with attachments received from a remote
-    % source. The data property of each attachment is a function that starts
-    % streaming the attachment data from the remote source, therefore it's
-    % convenient to call it ASAP to avoid ibrowse inactivity timeouts.
-    Stats = #rep_stats{docs_read = 1},
-    ?LOG_DEBUG("Worker flushing doc with attachments", []),
-    Target2 = open_db(Target),
-    Success = (flush_doc(Target2, Doc) =:= ok),
-    close_db(Target2),
-    {Result, Stats2} = case Success of
-    true ->
-        {{ok, Acc}, ?inc_stat(#rep_stats.docs_written, Stats, 1)};
-    false ->
-        {{skip, Acc}, ?inc_stat(#rep_stats.doc_write_failures, Stats, 1)}
-    end,
-    ok = gen_server:call(Parent, {add_stats, Stats2}, infinity),
-    Result;
 remote_doc_handler(_, Acc) ->
     {ok, Acc}.
 
@@ -398,25 +348,14 @@ maybe_flush_docs(Doc,State) ->
 
 maybe_flush_docs(#httpdb{} = Target, Batch, Doc) ->
     #batch{docs = DocAcc, size = SizeAcc} = Batch,
-    case batch_doc(Doc) of
-    false ->
-        ?LOG_DEBUG("Worker flushing doc with attachments", []),
-        case flush_doc(Target, Doc) of
-        ok ->
-            {Batch, #rep_stats{docs_written = 1}};
-        _ ->
-            {Batch, #rep_stats{doc_write_failures = 1}}
-        end;
-    true ->
-        JsonDoc = ?JSON_ENCODE(couch_doc:to_json_obj(Doc, [revs, attachments])),
-        case SizeAcc + iolist_size(JsonDoc) of
-        SizeAcc2 when SizeAcc2 > ?DOC_BUFFER_BYTE_SIZE ->
-            ?LOG_DEBUG("Worker flushing doc batch of size ~p bytes", [SizeAcc2]),
-            Stats = flush_docs(Target, [JsonDoc | DocAcc]),
-            {#batch{}, Stats};
-        SizeAcc2 ->
-            {#batch{docs = [JsonDoc | DocAcc], size = SizeAcc2}, #rep_stats{}}
-        end
+    JsonDoc = ?JSON_ENCODE(couch_doc:to_json_obj(Doc, [revs, attachments])),
+    case SizeAcc + iolist_size(JsonDoc) of
+    SizeAcc2 when SizeAcc2 > ?DOC_BUFFER_BYTE_SIZE ->
+        ?LOG_DEBUG("Worker flushing doc batch of size ~p bytes", [SizeAcc2]),
+        Stats = flush_docs(Target, [JsonDoc | DocAcc]),
+        {#batch{}, Stats};
+    SizeAcc2 ->
+        {#batch{docs = [JsonDoc | DocAcc], size = SizeAcc2}, #rep_stats{}}
     end;
 
 maybe_flush_docs(#db{} = Target, #batch{docs = DocAcc, size = SizeAcc}, Doc) ->
@@ -429,15 +368,6 @@ maybe_flush_docs(#db{} = Target, #batch{docs = DocAcc, size = SizeAcc}, Doc) ->
         {#batch{docs = [Doc | DocAcc], size = SizeAcc2}, #rep_stats{}}
     end.
 
-
-batch_doc(#doc{atts = []}) ->
-    true;
-batch_doc(#doc{atts = Atts}) ->
-    (length(Atts) =< ?MAX_BULK_ATTS_PER_DOC) andalso
-        lists:all(
-            fun(#att{disk_len = L, data = Data}) ->
-                (L =< ?MAX_BULK_ATT_SIZE) andalso (Data =/= stub)
-            end, Atts).
 
 
 flush_docs(_Target, []) ->
@@ -459,37 +389,11 @@ flush_docs(Target, DocList) ->
         doc_write_failures = length(Errors)
     }.
 
-flush_doc(Target, #doc{id = Id, revs = {Pos, [RevId | _]}} = Doc) ->
-    try couch_api_wrap:update_doc(Target, Doc, [], replicated_changes) of
-    {ok, _} ->
-        ok;
-    Error ->
-        ?LOG_ERROR("Replicator: error writing document `~s` to `~s`: ~s",
-            [Id, couch_api_wrap:db_uri(Target), couch_util:to_binary(Error)]),
-        Error
-    catch
-    throw:{missing_stub, _} = MissingStub ->
-        throw(MissingStub);
-    throw:{Error, Reason} ->
-        ?LOG_ERROR("Replicator: couldn't write document `~s`, revision `~s`,"
-            " to target database `~s`. Error: `~s`, reason: `~s`.",
-            [Id, couch_doc:rev_to_str({Pos, RevId}),
-                couch_api_wrap:db_uri(Target), to_binary(Error), to_binary(Reason)]),
-        {error, Error};
-    throw:Err ->
-        ?LOG_ERROR("Replicator: couldn't write document `~s`, revision `~s`,"
-            " to target database `~s`. Error: `~s`.",
-            [Id, couch_doc:rev_to_str({Pos, RevId}),
-                couch_api_wrap:db_uri(Target), to_binary(Err)]),
-        {error, Err}
-    end.
-
 
 find_missing(DocInfos, Target) ->
     {IdRevs, AllRevsCount} = lists:foldr(
-        fun(#doc_info{id = Id, revs = RevsInfo}, {IdRevAcc, CountAcc}) ->
-            Revs = [Rev || #rev_info{rev = Rev} <- RevsInfo],
-            {[{Id, Revs} | IdRevAcc], CountAcc + length(Revs)}
+        fun(#doc_info{id = Id, rev = Rev}, {IdRevAcc, CountAcc}) ->
+            {[{Id, Rev} | IdRevAcc], CountAcc + 1}
         end,
         {[], 0}, DocInfos),
     {ok, Missing} = couch_api_wrap:get_missing_revs(Target, IdRevs),

@@ -18,7 +18,7 @@
 -export([make_view_fold_fun/6, finish_view_fold/4, finish_view_fold/5, view_row_obj/2]).
 -export([view_etag/2, view_etag/3, make_reduce_fold_funs/5]).
 -export([design_doc_view/6, parse_bool_param/1]).
--export([make_key_options/1]).
+-export([make_key_options/1,get_row_doc/6]).
 
 -import(couch_httpd,
     [send_json/2,send_json/3,send_json/4,send_method_not_allowed/2,send_chunk/2,
@@ -504,24 +504,18 @@ get_row_doc(_Kv, _SetName, _PartId, false, _UserCtx, _DocOpenOptions) ->
     nil;
 
 get_row_doc({{_Key, DocId}, {Props}}, SetName, PartId, true, UserCtx, DocOpenOptions) ->
-    Rev = case couch_util:get_value(<<"_rev">>, Props) of
-    undefined ->
-        nil;
-    Rev0 ->
-        couch_doc:parse_rev(Rev0)
-    end,
     Id = couch_util:get_value(<<"_id">>, Props, DocId),
-    open_row_doc(SetName, PartId, Id, Rev, UserCtx, DocOpenOptions);
+    open_row_doc(SetName, PartId, Id, UserCtx, DocOpenOptions);
 
 get_row_doc({{_Key, DocId}, _Value}, SetName, PartId, true, UserCtx, DocOpenOptions) ->
-    open_row_doc(SetName, PartId, DocId, nil, UserCtx, DocOpenOptions).
+    open_row_doc(SetName, PartId, DocId, UserCtx, DocOpenOptions).
 
 
-open_row_doc(SetName, PartId, Id, Rev, UserCtx, DocOptions) ->
+open_row_doc(SetName, PartId, Id, UserCtx, DocOptions) ->
     {ok, Db} = couch_db:open(
         ?dbname(SetName, PartId), [{user_ctx, UserCtx}]),
-    JsonDoc = case (catch couch_db_frontend:couch_doc_open(Db, Id, Rev, DocOptions)) of
-    #doc{} = Doc ->
+    JsonDoc = case (catch couch_db_frontend:open_doc(Db, Id, DocOptions)) of
+    {ok, #doc{} = Doc} ->
         couch_doc:to_json_obj(Doc, []);
     _ ->
         null

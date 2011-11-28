@@ -28,6 +28,7 @@
 -export([url_strip_password/1]).
 -export([encode_doc_id/1]).
 -export([brace/1, debrace/1]).
+-export([split_iolist/2]).
 
 -include("couch_db.hrl").
 
@@ -439,3 +440,34 @@ debrace(IoList) ->
 
 brace(JsonBinary) ->
     iolist_to_binary(["{", JsonBinary, "}"]).
+
+
+%% @doc Returns a tuple where the first element contains the leading SplitAt
+%% bytes of the original iolist, and the 2nd element is the tail. If SplitAt
+%% is larger than byte_size(IoList), return the difference.
+-spec split_iolist(IoList::iolist(), SplitAt::non_neg_integer()) ->
+    {iolist(), iolist()} | non_neg_integer().
+
+split_iolist(List, SplitAt) ->
+    split_iolist(List, SplitAt, []).
+
+split_iolist(List, 0, BeginAcc) ->
+    {lists:reverse(BeginAcc), List};
+split_iolist([], SplitAt, _BeginAcc) ->
+    SplitAt;
+split_iolist([<<Bin/binary>> | Rest], SplitAt, BeginAcc) when SplitAt > byte_size(Bin) ->
+    split_iolist(Rest, SplitAt - byte_size(Bin), [Bin | BeginAcc]);
+split_iolist([<<Bin/binary>> | Rest], SplitAt, BeginAcc) ->
+    <<Begin:SplitAt/binary,End/binary>> = Bin,
+    split_iolist([End | Rest], 0, [Begin | BeginAcc]);
+split_iolist([Sublist| Rest], SplitAt, BeginAcc) when is_list(Sublist) ->
+    case split_iolist(Sublist, SplitAt, BeginAcc) of
+    {Begin, End} ->
+        {Begin, [End | Rest]};
+    SplitRemaining ->
+        split_iolist(Rest, SplitAt - (SplitAt - SplitRemaining), [Sublist | BeginAcc])
+    end;
+split_iolist([Byte | Rest], SplitAt, BeginAcc) when is_integer(Byte) ->
+    split_iolist(Rest, SplitAt - 1, [Byte | BeginAcc]).
+
+

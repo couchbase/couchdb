@@ -63,7 +63,6 @@ do_query_index(Mod, #httpd{user_ctx = UserCtx} = Req, IndexMergeParams) ->
     } = IndexMergeParams,
 
     ?LOG_DEBUG("Running a index merging for the following indexes: ~p", [Indexes]),
-
     {ok, DDoc, IndexName} = get_first_ddoc(Indexes, UserCtx, Timeout),
     DDocRev = ddoc_rev(DDoc),
 
@@ -598,8 +597,8 @@ void_event(_Ev) ->
 
 ddoc_rev(nil) ->
     nil;
-ddoc_rev(#doc{revs = {Pos, [RevId | _]}}) ->
-    {Pos, RevId}.
+ddoc_rev(#doc{rev = Rev}) ->
+    Rev.
 
 ddoc_rev_str(DDoc) ->
     couch_doc:rev_to_str(ddoc_rev(DDoc)).

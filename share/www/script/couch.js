@@ -72,8 +72,12 @@ function CouchDB(name, httpHeaders) {
 
   // Deletes a document from the database
   this.deleteDoc = function(doc) {
+    var rev = '';
+    if (doc._rev!==undefined) {
+        rev = "?rev=" + doc._rev;
+    }
     this.last_req = this.request("DELETE", this.uri + encodeURIComponent(doc._id)
-      + "?rev=" + doc._rev);
+      + rev);
     CouchDB.maybeThrowError(this.last_req);
     var result = JSON.parse(this.last_req.responseText);
     doc._rev = result.rev; //record rev in input document
@@ -83,8 +87,12 @@ function CouchDB(name, httpHeaders) {
 
   // Deletes an attachment from a document
   this.deleteDocAttachment = function(doc, attachment_name) {
+    var rev = '';
+    if (doc._rev!==undefined) {
+        rev = "?rev=" + doc._rev;
+    }
     this.last_req = this.request("DELETE", this.uri + encodeURIComponent(doc._id)
-      + "/" + attachment_name + "?rev=" + doc._rev);
+      + "/" + attachment_name + rev);
     CouchDB.maybeThrowError(this.last_req);
     var result = JSON.parse(this.last_req.responseText);
     doc._rev = result.rev; //record rev in input document

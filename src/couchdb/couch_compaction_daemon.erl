@@ -210,9 +210,9 @@ maybe_compact_views(DbName, [DDocName | Rest], Config) ->
 db_ddoc_names(Db) ->
     {ok, _, DDocNames} = couch_db:enum_docs(
         Db,
-        fun(#full_doc_info{id = <<"_design/", _/binary>>, deleted = true}, _, Acc) ->
+        fun(#doc_info{id = <<"_design/", _/binary>>, deleted = true}, _, Acc) ->
             {ok, Acc};
-        (#full_doc_info{id = <<"_design/", Id/binary>>}, _, Acc) ->
+        (#doc_info{id = <<"_design/", Id/binary>>}, _, Acc) ->
             {ok, [Id | Acc]};
         (_, _, Acc) ->
             {stop, Acc}

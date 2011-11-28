@@ -55,7 +55,7 @@ compact_group(Group, EmptyGroup, SetName) ->
     IdsCount = lists:foldl(
         fun({PartId, _}, Acc) ->
             {ok, Db} = couch_db:open_int(?dbname(SetName, PartId), []),
-            {ok, DbReduce} = couch_btree:full_reduce(Db#db.fulldocinfo_by_id_btree),
+            {ok, DbReduce} = couch_btree:full_reduce(Db#db.docinfo_by_id_btree),
             ok = couch_db:close(Db),
             Acc + element(1, DbReduce)
         end,

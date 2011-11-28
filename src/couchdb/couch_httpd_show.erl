@@ -29,7 +29,7 @@
 % then it sends the response from the query server to the http client.
 
 maybe_open_doc(#httpd{db_frontend=DbFrontend}, Db, DocId) ->
-    case catch DbFrontend:couch_doc_open(Db, DocId, nil, [conflicts]) of
+    case catch DbFrontend:open_doc(Db, DocId, [conflicts]) of
         {not_found, missing} -> nil;
         {not_found,deleted} -> nil;
         Doc -> Doc
@@ -109,7 +109,7 @@ handle_doc_update_req(#httpd{
         path_parts=[_, _, _, _, UpdateName, DocId],
         db_frontend=DbFrontend
     }=Req, Db, DDoc) ->
-    Doc = try DbFrontend:couch_doc_open(Db, DocId, nil, [conflicts])
+    Doc = try DbFrontend:open_doc(Db, DocId, [conflicts])
     catch
       _ -> nil
     end,

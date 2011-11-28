@@ -260,9 +260,9 @@ ddoc_prompt(DDoc, FunPath, Args) ->
         proc_prompt(Proc, [<<"ddoc">>, DDocId, FunPath, Args])
     end).
 
-with_ddoc_proc(#doc{id=DDocId,revs={Start, [DiskRev|_]}}=DDoc, Fun) ->
-    Rev = couch_doc:rev_to_str({Start, DiskRev}),
-    DDocKey = {DDocId, Rev},
+with_ddoc_proc(#doc{id=DDocId,rev=Rev}=DDoc, Fun) ->
+    RevStr = couch_doc:rev_to_str(Rev),
+    DDocKey = {DDocId, RevStr},
     Proc = get_ddoc_process(DDoc, DDocKey),
     try Fun({Proc, DDocId})
     after
@@ -315,7 +315,7 @@ terminate(_Reason, #qserver{pid_procs=PidProcs}) ->
     ok.
 
 handle_call({get_proc, DDoc1, DDocKey}, From, Server) ->
-    #doc{body = {Props}} = DDoc = couch_doc:with_ejson_body(DDoc1),
+    #doc{json = {Props}} = DDoc = couch_doc:with_ejson_body(DDoc1),
     Lang = couch_util:get_value(<<"language">>, Props, <<"javascript">>),
     case lang_proc(Lang, Server, fun(Procs) ->
             % find a proc in the set that has the DDoc
@@ -416,7 +416,7 @@ service_waitlist(#qserver{waitlist=Waitlist}=Server) ->
     end.
 
 % todo get rid of duplication
-service_waiting({{#doc{body={Props}}=DDoc, DDocKey}, From}, Server) ->
+service_waiting({{#doc{json={Props}}=DDoc, DDocKey}, From}, Server) ->
     Lang = couch_util:get_value(<<"language">>, Props, <<"javascript">>),
     case lang_proc(Lang, Server, fun(Procs) ->
             % find a proc in the set that has the DDoc

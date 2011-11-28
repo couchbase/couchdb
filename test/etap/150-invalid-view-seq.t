@@ -91,7 +91,7 @@ create_docs() ->
         {<<"value">>, 3}
 
     ]}),
-    {ok, _} = couch_db:update_docs(Db, [Doc1, Doc2, Doc3]),
+    ok = couch_db:update_docs(Db, [Doc1, Doc2, Doc3]),
     couch_db:ensure_full_commit(Db),
     couch_db:close(Db).
 
@@ -106,7 +106,7 @@ create_design_doc() ->
             ]}}
         ]}}
     ]}),
-    {ok, _} = couch_db:update_docs(Db, [DDoc]),
+    ok = couch_db:update_docs(Db, [DDoc]),
     couch_db:ensure_full_commit(Db),
     couch_db:close(Db).
 
@@ -123,7 +123,7 @@ create_new_doc() ->
         {<<"value">>, 999}
 
     ]}),
-    {ok, _} = couch_db:update_docs(Db, [Doc666]),
+    ok = couch_db:update_docs(Db, [Doc666]),
     couch_db:ensure_full_commit(Db),
     couch_db:close(Db).
 

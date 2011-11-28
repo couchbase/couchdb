@@ -33,7 +33,6 @@ EXTRA_DIST = \
     run.tpl \
     test_web.erl \
     random_port.ini \
-    001-couchbase-clobber_head.t \
     001-load.t \
     002-icu-driver.t \
     010-file-basics.t \
@@ -49,16 +48,8 @@ EXTRA_DIST = \
     041-uuid-gen-utc.ini \
     041-uuid-gen.t \
     042-work-queue.t \
-    050-stream.t \
-    060-kt-merging.t \
-    061-kt-missing-leaves.t \
-    062-kt-remove-leaves.t \
-    063-kt-get-leaves.t \
-    064-kt-counting.t \
-    065-kt-stemming.t \
     070-couch-db.t \
     073-changes.t \
-    074-doc-update-conflicts.t \
     080-config-get-set.t \
     081-config-override.1.ini \
     081-config-override.2.ini \
@@ -71,10 +62,7 @@ EXTRA_DIST = \
     121-stats-aggregates.cfg \
     121-stats-aggregates.ini \
     121-stats-aggregates.t \
-    130-attachments-md5.t \
-    140-attachment-comp.t \
     150-invalid-view-seq.t \
-    160-vhosts.t \
     170-os-daemons.es \
     170-os-daemons.t \
     171-os-daemons-config.es \
@@ -92,7 +80,4 @@ EXTRA_DIST = \
     201-view-group-shutdown.t \
     210-os-proc-pool.t \
     220-compaction-daemon.t \
-    230-httpc-pool.t \
-    240-replication-compact.t \
-    241-replication-large-atts.t \
-    242-replication-many-leaves.t
+    230-httpc-pool.t

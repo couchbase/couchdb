@@ -130,7 +130,7 @@ populate_set() ->
             ]}}
         ]}}
     ]},
-    {ok, _DDocRev} = couch_set_view_test_util:update_ddoc(test_set_name(), DDoc),
+    ok = couch_set_view_test_util:update_ddoc(test_set_name(), DDoc),
     DocList = lists:map(
         fun(I) ->
             {[

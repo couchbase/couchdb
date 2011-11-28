@@ -172,7 +172,7 @@ create_main_db() ->
             ]}}
         ]}}
     ]}),
-    {ok, _} = couch_db:update_doc(Db, DDoc, []),
+    ok = couch_db:update_doc(Db, DDoc, []),
     ok = populate_main_db(Db, 1000, 20000),
     update_view(Db#db.name, <<"_design/foo">>, <<"foo">>),
     {ok, Db}.
@@ -187,7 +187,7 @@ populate_main_db(Db, BatchSize, N) when N > 0 ->
             ]})
         end,
         lists:seq(1, BatchSize)),
-    {ok, _} = couch_db:update_docs(Db, Docs, []),
+    ok = couch_db:update_docs(Db, Docs, [sort_docs]),
     populate_main_db(Db, BatchSize, N - length(Docs));
 populate_main_db(_Db, _, _) ->
     ok.

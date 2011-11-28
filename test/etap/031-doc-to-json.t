@@ -15,14 +15,12 @@
 % the License.
 
 %% XXX: Figure out how to -include("couch_db.hrl")
--record(doc, {id= <<"">>, revs={0, []}, body={[]},
-            atts=[], deleted=false, meta=[]}).
--record(att, {name, type, att_len, disk_len, md5= <<>>, revpos=0, data,
-            encoding=identity}).
+-record(doc, {id= <<"">>, rev={0, <<>>}, json={[]},
+            binary=nil, deleted=false, meta=[]}).
 
 main(_) ->
     test_util:init_code_path(),
-    etap:plan(12),
+    etap:plan(6),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -51,139 +49,24 @@ test_to_json_success() ->
             "_id is added."
         },
         {
-            #doc{revs={5, ["foo"]}},
-            {[{<<"_id">>, <<>>}, {<<"_rev">>, <<"5-foo">>}]},
+            #doc{rev={5, <<0>>}},
+            {[{<<"_id">>, <<>>}, {<<"_rev">>, <<"5-00">>}]},
             "_rev is added."
         },
         {
-            [revs],
-            #doc{revs={5, [<<"first">>, <<"second">>]}},
-            {[
-                {<<"_id">>, <<>>},
-                {<<"_rev">>, <<"5-first">>},
-                {<<"_revisions">>, {[
-                    {<<"start">>, 5},
-                    {<<"ids">>, [<<"first">>, <<"second">>]}
-                ]}}
-            ]},
-            "_revisions include with revs option"
-        },
-        {
-            #doc{body={[{<<"foo">>, <<"bar">>}]}},
+            #doc{json={[{<<"foo">>, <<"bar">>}]}},
             {[{<<"_id">>, <<>>}, {<<"foo">>, <<"bar">>}]},
             "Arbitrary fields are added."
         },
         {
-            #doc{deleted=true, body={[{<<"foo">>, <<"bar">>}]}},
+            #doc{deleted=true, json={[{<<"foo">>, <<"bar">>}]}},
             {[{<<"_id">>, <<>>}, {<<"foo">>, <<"bar">>}, {<<"_deleted">>, true}]},
             "Deleted docs no longer drop body members."
-        },
-        {
-            #doc{meta=[
-                {revs_info, 4, [{<<"fin">>, deleted}, {<<"zim">>, missing}]}
-            ]},
-            {[
-                {<<"_id">>, <<>>},
-                {<<"_revs_info">>, [
-                    {[{<<"rev">>, <<"4-fin">>}, {<<"status">>, <<"deleted">>}]},
-                    {[{<<"rev">>, <<"3-zim">>}, {<<"status">>, <<"missing">>}]}
-                ]}
-            ]},
-            "_revs_info field is added correctly."
         },
         {
             #doc{meta=[{local_seq, 5}]},
             {[{<<"_id">>, <<>>}, {<<"_local_seq">>, 5}]},
             "_local_seq is added as an integer."
-        },
-        {
-            #doc{meta=[{conflicts, [{3, <<"yep">>}, {1, <<"snow">>}]}]},
-            {[
-                {<<"_id">>, <<>>},
-                {<<"_conflicts">>, [<<"3-yep">>, <<"1-snow">>]}
-            ]},
-            "_conflicts is added as an array of strings."
-        },
-        {
-            #doc{meta=[{deleted_conflicts, [{10923, <<"big_cowboy_hat">>}]}]},
-            {[
-                {<<"_id">>, <<>>},
-                {<<"_deleted_conflicts">>, [<<"10923-big_cowboy_hat">>]}
-            ]},
-            "_deleted_conflicsts is added as an array of strings."
-        },
-        {
-            #doc{atts=[
-                #att{
-                    name = <<"big.xml">>, 
-                    type = <<"xml/sucks">>, 
-                    data = fun() -> ok end,
-                    revpos = 1,
-                    att_len = 400,
-                    disk_len = 400
-                },
-                #att{
-                    name = <<"fast.json">>, 
-                    type = <<"json/ftw">>, 
-                    data = <<"{\"so\": \"there!\"}">>,
-                    revpos = 1,
-                    att_len = 16,
-                    disk_len = 16
-                }
-            ]},
-            {[
-                {<<"_id">>, <<>>},
-                {<<"_attachments">>, {[
-                    {<<"big.xml">>, {[
-                        {<<"content_type">>, <<"xml/sucks">>},
-                        {<<"revpos">>, 1},
-                        {<<"length">>, 400},
-                        {<<"stub">>, true}
-                    ]}},
-                    {<<"fast.json">>, {[
-                        {<<"content_type">>, <<"json/ftw">>},
-                        {<<"revpos">>, 1},
-                        {<<"length">>, 16},
-                        {<<"stub">>, true}
-                    ]}}
-                ]}}
-            ]},
-            "Attachments attached as stubs only include a length."
-        },
-        {
-            [attachments],
-            #doc{atts=[
-                #att{
-                    name = <<"stuff.txt">>,
-                    type = <<"text/plain">>,
-                    data = fun() -> <<"diet pepsi">> end,
-                    revpos = 1,
-                    att_len = 10,
-                    disk_len = 10
-                },
-                #att{
-                    name = <<"food.now">>,
-                    type = <<"application/food">>,
-                    revpos = 1,
-                    data = <<"sammich">>
-                }
-            ]},
-            {[
-                {<<"_id">>, <<>>},
-                {<<"_attachments">>, {[
-                    {<<"stuff.txt">>, {[
-                        {<<"content_type">>, <<"text/plain">>},
-                        {<<"revpos">>, 1},
-                        {<<"data">>, <<"ZGlldCBwZXBzaQ==">>}
-                    ]}},
-                    {<<"food.now">>, {[
-                        {<<"content_type">>, <<"application/food">>},
-                        {<<"revpos">>, 1},
-                        {<<"data">>, <<"c2FtbWljaA==">>}
-                    ]}}
-                ]}}
-            ]},
-            "Attachments included inline with attachments option."
         }
     ],
 

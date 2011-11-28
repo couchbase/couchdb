@@ -653,14 +653,8 @@ view_row_obj(_Db, {{Key, error}, Value}, _IncludeDocs, _Conflicts) ->
     {[{key, Key}, {error, Value}]};
 % include docs in the view output
 view_row_obj(Db, {{Key, DocId}, {Props}}, true, Conflicts) ->
-    Rev = case couch_util:get_value(<<"_rev">>, Props) of
-    undefined ->
-        nil;
-    Rev0 ->
-        couch_doc:parse_rev(Rev0)
-    end,
     IncludeId = couch_util:get_value(<<"_id">>, Props, DocId),
-    view_row_with_doc(Db, {{Key, DocId}, {Props}}, {IncludeId, Rev}, Conflicts);
+    view_row_with_doc(Db, {{Key, DocId}, {Props}}, IncludeId, Conflicts);
 view_row_obj(Db, {{Key, DocId}, Value}, true, Conflicts) ->
     view_row_with_doc(Db, {{Key, DocId}, Value}, {DocId, nil}, Conflicts);
 % the normal case for rendering a view row
@@ -671,7 +665,7 @@ view_row_with_doc(Db, {{Key, DocId}, Value}, IdRev, Conflicts) ->
     {[{id, DocId}, {key, Key}, {value, Value}] ++
         doc_member(Db, IdRev, if Conflicts -> [conflicts]; true -> [] end)}.
 
-doc_member(Db, #doc_info{id = Id, revs = [#rev_info{rev = Rev} | _]} = Info,
+doc_member(Db, #doc_info{id = Id, rev = Rev} = Info,
         Options) ->
     ?LOG_DEBUG("Include Doc: ~p ~p", [Id, Rev]),
     case couch_db:open_doc(Db, Info, [deleted | Options]) of
@@ -680,10 +674,10 @@ doc_member(Db, #doc_info{id = Id, revs = [#rev_info{rev = Rev} | _]} = Info,
     _ ->
         [{doc, null}]
     end;
-doc_member(Db, {DocId, Rev}, Options) ->
-    ?LOG_DEBUG("Include Doc: ~p ~p", [DocId, Rev]),
-    case (catch couch_db_frontend:couch_doc_open(Db, DocId, Rev, Options)) of
-    #doc{} = Doc ->
+doc_member(Db, DocId, Options) ->
+    ?LOG_DEBUG("Include Doc: ~p", [DocId]),
+    case (catch couch_db_frontend:open_doc(Db, DocId, Options)) of
+    {ok, #doc{} = Doc} ->
         JsonDoc = couch_doc:to_json_obj(Doc, []),
         [{doc, JsonDoc}];
     _Else ->

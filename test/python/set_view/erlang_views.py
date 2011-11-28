@@ -110,8 +110,8 @@ class TestErlangViews(unittest.TestCase):
         # print "Deleting the documents that were added before"
         i = 0
         for doc in new_docs:
-            db = self._params["server"][self._params["setname"] + "/" + str(i)]
-            del db[doc["_id"]]
+            db = self._params["setname"] + "/" + str(i)
+            common.delete_doc(self._params, db, doc["_id"])
             i = (i + 1) % self._params["nparts"]
 
         new_total_doc_count = common.set_doc_count(self._params, range(self._params["nparts"]))

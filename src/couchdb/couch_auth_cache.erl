@@ -278,7 +278,7 @@ refresh_entries(AuthDb) ->
     end.
 
 
-refresh_entry(Db, #doc_info{high_seq = DocSeq} = DocInfo) ->
+refresh_entry(Db, #doc_info{local_seq = DocSeq} = DocInfo) ->
     case is_user_doc(DocInfo) of
     {true, UserName} ->
         case ets:lookup(?BY_USER, UserName) of
@@ -391,7 +391,7 @@ ensure_auth_ddoc_exists(Db, DDocId) ->
     case couch_db:open_doc(Db, DDocId) of
     {not_found, _Reason} ->
         {ok, AuthDesign} = auth_design_doc(DDocId),
-        {ok, _Rev} = couch_db:update_doc(Db, AuthDesign, []);
+        ok = couch_db:update_doc(Db, AuthDesign, []);
     _ ->
         ok
     end,

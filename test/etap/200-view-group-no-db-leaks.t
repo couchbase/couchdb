@@ -72,7 +72,7 @@ test() ->
     create_db(),
 
     create_docs(),
-    {ok, DDocRev} = create_design_doc(),
+    ok = create_design_doc(),
 
     ViewGroup = couch_view:get_group_server(
         test_db_name(), <<"_design/", (ddoc_name())/binary>>),
@@ -108,7 +108,7 @@ test() ->
     etap:is(is_process_alive(ViewGroup), true, "view group pid is alive"),
 
     etap:diag("updating the design document with a new view definition"),
-    {ok, _NewDDocRev} = update_ddoc_view(DDocRev),
+    ok = update_ddoc_view(),
 
     NewViewGroup = couch_view:get_group_server(
         test_db_name(), <<"_design/", (ddoc_name())/binary>>),
@@ -226,7 +226,7 @@ create_docs() ->
         {<<"_id">>, <<"doc3">>},
         {<<"value">>, 3}
     ]}),
-    {ok, _} = couch_db:update_docs(Db, [Doc1, Doc2, Doc3]),
+    ok = couch_db:update_docs(Db, [Doc1, Doc2, Doc3]),
     couch_db:ensure_full_commit(Db),
     couch_db:close(Db).
 
@@ -241,16 +241,14 @@ create_design_doc() ->
             ]}}
         ]}}
     ]}),
-    {ok, Rev} = couch_db:update_doc(Db, DDoc, []),
+    ok = couch_db:update_doc(Db, DDoc, []),
     couch_db:ensure_full_commit(Db),
-    couch_db:close(Db),
-    {ok, Rev}.
+    couch_db:close(Db).
 
-update_ddoc_view(DDocRev) ->
+update_ddoc_view() ->
     {ok, Db} = couch_db:open(test_db_name(), [admin_user_ctx()]),
     DDoc = couch_doc:from_json_obj({[
         {<<"_id">>, <<"_design/", (ddoc_name())/binary>>},
-        {<<"_rev">>, couch_doc:rev_to_str(DDocRev)},
         {<<"language">>, <<"javascript">>},
         {<<"views">>, {[
             {<<"bar">>, {[
@@ -258,10 +256,9 @@ update_ddoc_view(DDocRev) ->
             ]}}
         ]}}
     ]}),
-    {ok, NewRev} = couch_db:update_doc(Db, DDoc, []),
+    ok = couch_db:update_doc(Db, DDoc, []),
     couch_db:ensure_full_commit(Db),
-    couch_db:close(Db),
-    {ok, NewRev}.
+    couch_db:close(Db).
 
 create_new_doc(Id) ->
     {ok, Db} = couch_db:open(test_db_name(), [admin_user_ctx()]),
@@ -269,7 +266,7 @@ create_new_doc(Id) ->
         {<<"_id">>, Id},
         {<<"value">>, 999}
     ]}),
-    {ok, _} = couch_db:update_docs(Db, [Doc666]),
+    ok = couch_db:update_docs(Db, [Doc666]),
     couch_db:ensure_full_commit(Db),
     couch_db:close(Db).
 

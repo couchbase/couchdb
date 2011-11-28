@@ -290,8 +290,6 @@ split_path(Path) ->
 
 make_spec([], Acc) ->
     lists:reverse(Acc);
-make_spec([""|R], Acc) ->
-    make_spec(R, Acc);
 make_spec(["*"|R], Acc) ->
     make_spec(R, [?MATCH_ALL|Acc]);
 make_spec([P|R], Acc) ->

@@ -82,6 +82,7 @@ THANKS.gz: $(top_srcdir)/THANKS
 	-gzip -9 < $< > $@
 
 check: dev
+	rm -fr $(top_builddir)/tmp/lib/*
 	$(top_builddir)/test/etap/run test/etap
 
 cover: dev

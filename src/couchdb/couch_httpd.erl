@@ -29,6 +29,7 @@
 -export([send_response/4,send_method_not_allowed/2,send_error/4, send_redirect/2,send_chunked_error/2]).
 -export([send_json/2,send_json/3,send_json/4,last_chunk/1,parse_multipart_request/3]).
 -export([accepted_encodings/1,handle_request_int/6,validate_referer/1,validate_ctype/2]).
+-export([is_ctype/2]).
 
 start_link() ->
     start_link(http).
@@ -362,15 +363,23 @@ validate_referer(Req) ->
     end.
 
 validate_ctype(Req, Ctype) ->
+    case is_ctype(Req, Ctype) of
+    true ->
+        ok;
+    false ->
+        throw({bad_ctype, "Content-Type must be "++Ctype})
+    end.
+
+is_ctype(Req, Ctype) ->
     case header_value(Req, "Content-Type") of
     undefined ->
-        throw({bad_ctype, "Content-Type must be "++Ctype});
+        false;
     ReqCtype ->
         case string:tokens(ReqCtype, ";") of
-        [Ctype] -> ok;
-        [Ctype, _Rest] -> ok;
+        [Ctype] -> true;
+        [Ctype, _Rest] -> true;
         _Else ->
-            throw({bad_ctype, "Content-Type must be "++Ctype})
+            false
         end
     end.
 
@@ -521,7 +530,7 @@ json_body_obj(Httpd) ->
 
 
 
-doc_etag(#doc{revs={Start, [DiskRev|_]}}) ->
+doc_etag(#doc{rev={Start, DiskRev}}) ->
     "\"" ++ ?b2l(couch_doc:rev_to_str({Start, DiskRev})) ++ "\"".
 
 make_etag(Term) ->
