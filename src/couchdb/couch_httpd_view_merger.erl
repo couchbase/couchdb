@@ -66,7 +66,7 @@ handle_req(#httpd{method = 'GET'} = Req) ->
         extra = ViewMergeParams
     },
     MergeParams1 = apply_http_config(Req, [], MergeParams0),
-    couch_index_merger:query_index(couch_view_merger, Req, MergeParams1);
+    couch_index_merger:query_index(couch_view_merger, MergeParams1, Req);
 
 handle_req(#httpd{method = 'POST'} = Req) ->
     couch_httpd:validate_ctype(Req, "application/json"),
@@ -89,7 +89,7 @@ handle_req(#httpd{method = 'POST'} = Req) ->
         extra = ViewMergeParams
     },
     MergeParams1 = apply_http_config(Req, Props, MergeParams0),
-    couch_index_merger:query_index(couch_view_merger, Req, MergeParams1);
+    couch_index_merger:query_index(couch_view_merger, MergeParams1, Req);
 
 handle_req(Req) ->
     couch_httpd:send_method_not_allowed(Req, "GET,POST").
@@ -338,7 +338,7 @@ validate_sets_param({[_ | _] = Sets}) ->
             throw({bad_request, "Invalid set view merge definition object."})
         end, Sets);
 validate_sets_param(_) ->
-    throw({bad_request, <<"`views` parameter must be an object with at ",
+    throw({bad_request, <<"`sets` parameter must be an object with at ",
                           "least 1 property.">>}).
 
 parse_view_name(Name) ->

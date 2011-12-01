@@ -34,6 +34,9 @@
 -define(set_purge_seqs(SetViewGroup),
         (SetViewGroup#set_view_group.index_header)#set_view_index_header.purge_seqs).
 
+-define(set_replicas_on_transfer(SetViewGroup),
+        (SetViewGroup#set_view_group.index_header)#set_view_index_header.replicas_on_transfer).
+
 
 % Used to configure a new set view.
 -record(set_view_params, {
@@ -41,7 +44,8 @@
     % list of initial active partitions (list of integers in the range 0 .. N - 1)
     active_partitions = [],
     % list of initial passive partitions (list of integers in the range 0 .. N - 1)
-    passive_partitions = []
+    passive_partitions = [],
+    use_replica_index = false
 }).
 
 -define(LATEST_COUCH_SET_VIEW_HEADER_VERSION, 1).
@@ -61,7 +65,9 @@
     % purge seq numbers from each partition, format: [ {PartitionId, Seq} ]
     purge_seqs = [],
     id_btree_state = nil,
-    view_states = nil
+    view_states = nil,
+    has_replica = false,
+    replicas_on_transfer = []
 }).
 
 -record(set_view_group, {
@@ -78,7 +84,9 @@
     waiting_delayed_commit = nil,
     ref_counter = nil,
     index_header = nil,
-    db_set = nil
+    db_set = nil,
+    type = main,     % 'main' | 'replica'
+    replica_group = nil
 }).
 
 -record(set_view, {

@@ -21,9 +21,9 @@
 -export([get_group_info/2, cleanup_index_files/1]).
 
 -export([is_view_defined/2]).
--export([set_partition_states/5]).
+-export([set_partition_states/5, add_replica_partitions/3, remove_replica_partitions/3]).
 
--export([fold/5, fold_reduce/5]).
+-export([fold/5, fold_reduce/6]).
 -export([get_row_count/1, reduce_to_count/1, extract_map_view/1]).
 
 -export([less_json/2, less_json_ids/2]).
@@ -34,12 +34,19 @@
 -export([init/1, terminate/2, handle_call/3, handle_cast/2, handle_info/2, code_change/3]).
 
 -include("couch_db.hrl").
+-include("couch_index_merger.hrl").
+-include("couch_view_merger.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
 
 
 -record(server, {
     root_dir = [],
     db_notifier
+}).
+
+-record(merge_acc, {
+    fold_fun,
+    acc
 }).
 
 
@@ -88,7 +95,12 @@ release_group(Group) ->
 
 define_group(SetName, DDocId, #set_view_params{} = Params) ->
     GroupPid = get_group_pid(SetName, DDocId),
-    ok = couch_set_view_group:define_view(GroupPid, Params).
+    case couch_set_view_group:define_view(GroupPid, Params) of
+    ok ->
+        ok;
+    Error ->
+        throw(Error)
+    end.
 
 
 is_view_defined(SetName, DDocId) ->
@@ -125,10 +137,49 @@ is_view_defined(SetName, DDocId) ->
 % New partitions are added by specifying them for the first time in the active
 % or passive state lists.
 %
+% If a request asks to set to active a partition that is currently marked as a
+% replica partition, data from that partition will start to be transfered from
+% the replica index into the main index.
+%
 set_partition_states(SetName, DDocId, ActivePartitions, PassivePartitions, CleanupPartitions) ->
     GroupPid = get_group_pid(SetName, DDocId),
     case couch_set_view_group:set_state(
         GroupPid, ActivePartitions, PassivePartitions, CleanupPartitions) of
+    ok ->
+        ok;
+    Error ->
+        throw(Error)
+    end.
+
+
+% Mark a set of partitions as replicas. They will be indexed in the replica index.
+% This will only work if the view was defined with the option "use_replica_index".
+%
+% All the given partitions must not be in the active nor passive state.
+% Like set_partition_states, this is an incremental operation.
+%
+add_replica_partitions(SetName, DDocId, Partitions) ->
+    GroupPid = get_group_pid(SetName, DDocId),
+    case couch_set_view_group:add_replica_partitions(
+        GroupPid, Partitions) of
+    ok ->
+        ok;
+    Error ->
+        throw(Error)
+    end.
+
+
+% Unmark a set of partitions as replicas. Their data will be cleaned from the
+% replica index. This will only work if the view was defined with the option
+% "use_replica_index".
+%
+% This is a no-op for partitions not currently marked as replicas.
+% Like set_partition_states, this is an incremental operation.
+%
+remove_replica_partitions(SetName, DDocId, Partitions) ->
+    GroupPid = get_group_pid(SetName, DDocId),
+    case couch_set_view_group:remove_replica_partitions(
+        GroupPid, Partitions) of
     ok ->
         ok;
     Error ->
@@ -210,7 +261,59 @@ get_row_count(#set_view{btree=Bt}) ->
 extract_map_view({reduce, _N, _Lang, View}) ->
     View.
 
-fold_reduce(Group, View, Fun, Acc, Options0) ->
+
+fold_reduce(#set_view_group{replica_group = #set_view_group{} = RepGroup} = Group, View, FoldFun, FoldAcc, _KeyGroupFun, ViewQueryArgs) ->
+    {reduce, NthRed, Lang, #set_view{id_num = Id}} = View,
+    RepView = {reduce, NthRed, Lang, lists:nth(Id + 1, RepGroup#set_view_group.views)},
+    ViewSpecs = [
+        #set_view_spec{
+            name = Group#set_view_group.set_name,
+            ddoc_id = Group#set_view_group.name,
+            view_name = ViewQueryArgs#view_query_args.view_name,
+            partitions = [],  % not needed in this context
+            group = Group#set_view_group{replica_group = nil},
+            view = View
+        },
+        #set_view_spec{
+            name = RepGroup#set_view_group.set_name,
+            ddoc_id = RepGroup#set_view_group.name,
+            view_name = ViewQueryArgs#view_query_args.view_name,
+            partitions = [],  % not needed in this context
+            group = RepGroup,
+            view = RepView
+        }
+    ],
+    MergeParams = #index_merge{
+        indexes = ViewSpecs,
+        callback = fun reduce_view_merge_callback/2,
+        user_acc = #merge_acc{fold_fun = FoldFun, acc = FoldAcc},
+        user_ctx = #user_ctx{roles = [<<"_admin">>]},
+        http_params = ViewQueryArgs,
+        extra = #view_merge{
+            keys = ViewQueryArgs#view_query_args.keys,
+            make_row_fun = fun(RowData) -> RowData end
+        }
+    },
+    #merge_acc{acc = FinalAcc} = couch_index_merger:query_index(couch_view_merger, MergeParams),
+    {ok, FinalAcc};
+
+fold_reduce(Group, View, FoldFun, FoldAcc, KeyGroupFun, #view_query_args{keys = nil} = ViewQueryArgs) ->
+    Options = [{key_group_fun, KeyGroupFun} | couch_set_view_util:make_key_options(ViewQueryArgs)],
+    do_fold_reduce(Group, View, FoldFun, FoldAcc, Options);
+
+fold_reduce(Group, View, FoldFun, FoldAcc, KeyGroupFun, #view_query_args{keys = Keys} = ViewQueryArgs0) ->
+    {_, FinalAcc} = lists:foldl(
+        fun(Key, {_, Acc}) ->
+            ViewQueryArgs = ViewQueryArgs0#view_query_args{start_key = Key, end_key = Key},
+            Options = [{key_group_fun, KeyGroupFun} | couch_set_view_util:make_key_options(ViewQueryArgs)],
+            do_fold_reduce(Group, View, FoldFun, Acc, Options)
+        end,
+        {ok, FoldAcc},
+        Keys),
+    {ok, FinalAcc}.
+
+
+do_fold_reduce(Group, View, Fun, Acc, Options0) ->
     {reduce, NthRed, Lang, #set_view{btree = Bt, reduce_funs = RedFuns}} = View,
     Options = case (?set_pbitmask(Group) bor ?set_cbitmask(Group)) of
     0 ->
@@ -259,6 +362,7 @@ fold_reduce(Group, View, Fun, Acc, Options0) ->
             Fun(GroupedKey, lists:nth(NthRed, Reds), Acc0)
         end,
     couch_btree:fold_reduce(Bt, WrapperFun, Acc, Options).
+
 
 get_key_pos(_Key, [], _N) ->
     0;
@@ -340,18 +444,57 @@ reduce_to_count(Reductions) ->
     Count.
 
 
+fold(#set_view_group{replica_group = #set_view_group{} = RepGroup} = Group, View, Fun, Acc, ViewQueryArgs) ->
+    RepView = lists:nth(View#set_view.id_num + 1, RepGroup#set_view_group.views),
+    ViewSpecs = [
+        #set_view_spec{
+            name = Group#set_view_group.set_name,
+            ddoc_id = Group#set_view_group.name,
+            view_name = ViewQueryArgs#view_query_args.view_name,
+            partitions = [],  % not needed in this context
+            group = Group#set_view_group{replica_group = nil},
+            view = View
+        },
+        #set_view_spec{
+            name = RepGroup#set_view_group.set_name,
+            ddoc_id = RepGroup#set_view_group.name,
+            view_name = ViewQueryArgs#view_query_args.view_name,
+            partitions = [],  % not needed in this context
+            group = RepGroup,
+            view = RepView
+        }
+    ],
+    MergeParams = #index_merge{
+        indexes = ViewSpecs,
+        callback = fun map_view_merge_callback/2,
+        user_acc = #merge_acc{fold_fun = Fun, acc = Acc},
+        user_ctx = #user_ctx{roles = [<<"_admin">>]},
+        % FoldFun does include_docs=true logic
+        http_params = ViewQueryArgs#view_query_args{include_docs = false},
+        extra = #view_merge{
+            keys = ViewQueryArgs#view_query_args.keys,
+            make_row_fun = fun(RowData) -> RowData end
+        }
+    },
+    #merge_acc{acc = FinalAcc} = couch_index_merger:query_index(couch_view_merger, MergeParams),
+    {ok, nil, FinalAcc};
 
-fold_fun(_Fun, [], _, Acc) ->
-    {ok, Acc};
-fold_fun(Fun, [KV|Rest], {KVReds, Reds}, Acc) ->
-    case Fun(KV, {KVReds, Reds}, Acc) of
-    {ok, Acc2} ->
-        fold_fun(Fun, Rest, {[KV|KVReds], Reds}, Acc2);
-    {stop, Acc2} ->
-        {stop, Acc2}
-    end.
+fold(Group, View, Fun, Acc, #view_query_args{keys = nil} = ViewQueryArgs) ->
+    Options = couch_set_view_util:make_key_options(ViewQueryArgs),
+    do_fold(Group, View, Fun, Acc, Options);
 
-fold(Group, #set_view{btree=Btree}, Fun, Acc, Options) ->
+fold(Group, View, Fun, Acc, #view_query_args{keys = Keys} = ViewQueryArgs0) ->
+    lists:foldl(
+        fun(Key, {ok, _, FoldAcc}) ->
+            ViewQueryArgs = ViewQueryArgs0#view_query_args{start_key = Key, end_key = Key},
+            Options = couch_set_view_util:make_key_options(ViewQueryArgs),
+            do_fold(Group, View, Fun, FoldAcc, Options)
+        end,
+        {ok, {[], []}, Acc},
+        Keys).
+
+
+do_fold(Group, #set_view{btree=Btree}, Fun, Acc, Options) ->
     WrapperFun = case ?set_pbitmask(Group) bor ?set_cbitmask(Group) of
     0 ->
         fun(KV, Reds, Acc2) ->
@@ -365,6 +508,17 @@ fold(Group, #set_view{btree=Btree}, Fun, Acc, Options) ->
         end
     end,
     {ok, _LastReduce, _AccResult} = couch_btree:fold(Btree, WrapperFun, Acc, Options).
+
+
+fold_fun(_Fun, [], _, Acc) ->
+    {ok, Acc};
+fold_fun(Fun, [KV|Rest], {KVReds, Reds}, Acc) ->
+    case Fun(KV, {KVReds, Reds}, Acc) of
+    {ok, Acc2} ->
+        fold_fun(Fun, Rest, {[KV|KVReds], Reds}, Acc2);
+    {stop, Acc2} ->
+        {stop, Acc2}
+    end.
 
 
 init([]) ->
@@ -551,8 +705,14 @@ less_json(A,B) ->
 
 modify_bitmasks(Group, []) ->
     {Group, []};
-modify_bitmasks(Group, Partitions) ->
-    IndexedBitmask = ?set_abitmask(Group) bor ?set_pbitmask(Group),
+modify_bitmasks(#set_view_group{replica_group = RepGroup} = Group, Partitions) ->
+    IndexedBitmask0 = ?set_abitmask(Group) bor ?set_pbitmask(Group),
+    case RepGroup of
+    #set_view_group{} ->
+        IndexedBitmask = IndexedBitmask0 bor ?set_abitmask(RepGroup);
+    _ ->
+        IndexedBitmask = IndexedBitmask0
+    end,
     WantedBitmask = couch_set_view_util:build_bitmask(Partitions),
     UnindexedBitmask = WantedBitmask band (bnot IndexedBitmask),
     ABitmask2 = WantedBitmask band IndexedBitmask,
@@ -591,3 +751,39 @@ handle_db_event({ddoc_updated, {DbName, DDocId}}) ->
     end;
 handle_db_event(_) ->
     ok.
+
+
+map_view_merge_callback(start, Acc) ->
+    {ok, Acc};
+
+map_view_merge_callback({start, _}, Acc) ->
+    {ok, Acc};
+
+map_view_merge_callback(stop, Acc) ->
+    {ok, Acc};
+
+map_view_merge_callback({row, Row}, #merge_acc{fold_fun = Fun, acc = Acc} = Macc) ->
+    case Fun(Row, nil, Acc) of
+    {ok, Acc2} ->
+        {ok, Macc#merge_acc{acc = Acc2}};
+    {stop, Acc2} ->
+        {stop, Macc#merge_acc{acc = Acc2}}
+    end.
+
+
+reduce_view_merge_callback(start, Acc) ->
+    {ok, Acc};
+
+reduce_view_merge_callback({start, _}, Acc) ->
+    {ok, Acc};
+
+reduce_view_merge_callback(stop, Acc) ->
+    {ok, Acc};
+
+reduce_view_merge_callback({row, {Key, Red}}, #merge_acc{fold_fun = Fun, acc = Acc} = Macc) ->
+    case Fun(Key, Red, Acc) of
+    {ok, Acc2} ->
+        {ok, Macc#merge_acc{acc = Acc2}};
+    {stop, Acc2} ->
+        {stop, Macc#merge_acc{acc = Acc2}}
+    end.

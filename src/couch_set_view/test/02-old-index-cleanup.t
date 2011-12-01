@@ -46,7 +46,7 @@ test() ->
     query_view(num_docs(), []),
     etap:is(is_process_alive(GroupPid), true, "Group alive after query"),
     GroupSig = get_group_sig(),
-    IndexFile = binary_to_list(GroupSig) ++ ".view",
+    IndexFile = "main_" ++ binary_to_list(GroupSig) ++ ".view",
 
     etap:is(all_index_files(), [IndexFile], "Index file found"),
 
@@ -67,7 +67,7 @@ test() ->
     NewGroupSig = get_group_sig(),
     etap:isnt(NewGroupSig, GroupSig, "New group has a different signature"),
 
-    NewIndexFile = binary_to_list(NewGroupSig) ++ ".view",
+    NewIndexFile = "main_" ++ binary_to_list(NewGroupSig) ++ ".view",
     AllIndexFiles = all_index_files(),
     etap:is(lists:member(NewIndexFile, AllIndexFiles), true,
         "New index file found"),

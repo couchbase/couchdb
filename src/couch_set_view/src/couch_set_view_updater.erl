@@ -12,7 +12,7 @@
 
 -module(couch_set_view_updater).
 
--export([update/2, update/3]).
+-export([update/3]).
 
 -include("couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
@@ -20,15 +20,24 @@
 -define(QUEUE_ITEMS, 500).
 -define(replace(L, K, V), lists:keystore(K, 1, L, {K, V})).
 
+-record(writer_acc, {
+    parent,
+    owner,
+    group,
+    write_queue,
+    initial_build,
+    view_empty_kvs,
+    kvs = [],
+    last_part_id = nil,   % ID of the partition of the last KV written to the index
+    final_batch = false
+}).
 
-update(Owner, #set_view_group{db_set = DbSet} = Group) ->
-    {ok, NewSeqs} = couch_db_set:get_seqs(DbSet),
-    update(Owner, Group, NewSeqs).
 
 update(Owner, Group, NewSeqs) ->
     #set_view_group{
         set_name = SetName,
         name = GroupName,
+        type = Type,
         index_header = #set_view_index_header{seqs = SinceSeqs}
     } = Group,
 
@@ -43,8 +52,6 @@ update(Owner, Group, NewSeqs) ->
     {ok, WriteQueue} = couch_work_queue:new(
         [{max_size, 100000}, {max_items, ?QUEUE_ITEMS}]),
 
-    ok = couch_indexer_manager:enter(),
-
     spawn_link(fun() ->
         do_maps(add_query_server(Group), MapQueue, WriteQueue)
     end),
@@ -55,6 +62,7 @@ update(Owner, Group, NewSeqs) ->
             {type, indexer},
             {set, SetName},
             {design_document, GroupName},
+            {indexer_type, Type},
             {progress, 0},
             {changes_done, 0},
             {total_changes, NumChanges}
@@ -78,15 +86,21 @@ update(Owner, Group, NewSeqs) ->
 
         InitialBuild = (0 =:= lists:sum([S || {_, S} <- ?set_seqs(Group)])),
         ViewEmptyKVs = [{View, []} || View <- Group2#set_view_group.views],
-        NewGroup = do_writes(
-            Parent, Owner, Group2, WriteQueue, InitialBuild, ViewEmptyKVs, []),
+        WriterAcc = #writer_acc{
+            parent = Parent,
+            owner = Owner,
+            group = Group2,
+            write_queue = WriteQueue,
+            initial_build = InitialBuild,
+            view_empty_kvs = ViewEmptyKVs
+        },
+        NewGroup = do_writes(WriterAcc),
         Parent ! {new_group, NewGroup}
     end),
 
     load_changes(Owner, Group, SinceSeqs, MapQueue, Writer),
     receive
     {new_group, _} = NewGroup ->
-        ok = couch_indexer_manager:leave(),
         exit(NewGroup)
     end.
 
@@ -94,6 +108,7 @@ update(Owner, Group, NewSeqs) ->
 load_changes(Owner, Group, SinceSeqs, MapQueue, Writer) ->
     #set_view_group{
         set_name = SetName,
+        type = GroupType,
         db_set = DbSet,
         design_options = DesignOptions
     } = Group,
@@ -109,22 +124,40 @@ load_changes(Owner, Group, SinceSeqs, MapQueue, Writer) ->
     FoldFun = fun({partition, Id, Since}, Type) ->
             maybe_stop(Type),
             ?LOG_INFO("Reading changes (since sequence ~p) from ~p partition ~s to"
-                " update set view `~s`", [Since, Type, ?dbname(SetName, Id), SetName]),
+                      " update ~s set view group `~s`",
+                      [Since, Type, ?dbname(SetName, Id), GroupType, SetName]),
             {ok, Type};
         (starting_active, _) ->
-            notify_owner(Owner, updating_active),
+            notify_owner(Owner, {state, updating_active}),
             {ok, active};
         (starting_passive, _) ->
             maybe_stop(passive),
-            notify_owner(Owner, updating_passive),
+            notify_owner(Owner, {state, updating_passive}),
             {ok, passive};
         ({doc_info, DocInfo, PartId, Db}, Type) ->
             maybe_stop(Type),
             load_doc(Db, PartId, DocInfo, MapQueue, DocOpts, IncludeDesign),
             {ok, Type}
     end,
+    SeqFoldOptions = case (?set_replicas_on_transfer(Group) =/= []) of
+    true ->
+        SortPassiveFun = fun(Passive) ->
+            {Reps, NonReps} = lists:partition(
+                fun({P, _}) -> ordsets:is_element(P, ?set_replicas_on_transfer(Group)) end,
+                Passive),
+            ordsets:from_list(Reps) ++ ordsets:from_list(NonReps)
+        end,
+        [{passive_sort_fun, SortPassiveFun}];
+    false ->
+        []
+    end,
     try
-        {ok, _} = couch_db_set:enum_docs_since(DbSet, SinceSeqs, FoldFun, active)
+        {ok, _} = couch_db_set:enum_docs_since(
+            DbSet,
+            SinceSeqs,
+            FoldFun,
+            active,
+            SeqFoldOptions)
     catch
     throw:stop ->
         Writer ! stop
@@ -150,10 +183,10 @@ maybe_stop(passive) ->
     end.
 
 
-notify_owner(nil, _State) ->
+notify_owner(nil, _Msg) ->
     ok;
-notify_owner(Owner, State) when is_pid(Owner) ->
-    Owner ! {updater_state, self(), State}.
+notify_owner(Owner, Msg) when is_pid(Owner) ->
+    Owner ! {updater_info, self(), Msg}.
 
 
 add_query_server(#set_view_group{query_server = nil} = Group) ->
@@ -245,28 +278,42 @@ do_maps(#set_view_group{query_server = Qs} = Group, MapQueue, WriteQueue) ->
     end.
 
 
-do_writes(Parent, Owner, Group, WriteQueue, InitialBuild, ViewEmptyKVs, Acc) ->
+do_writes(#writer_acc{kvs = Kvs, write_queue = WriteQueue} = Acc) ->
     case couch_work_queue:dequeue(WriteQueue) of
     closed ->
-        flush_writes(Parent, Owner, Group, InitialBuild, ViewEmptyKVs, Acc);
+        #writer_acc{group = NewGroup} = flush_writes(Acc#writer_acc{final_batch = true}),
+        NewGroup;
     {ok, Queue} ->
-        Acc2 = Acc ++ Queue,
-        case length(Acc2) >= ?QUEUE_ITEMS of
+        Kvs2 = Kvs ++ Queue,
+        case length(Kvs2) >= ?QUEUE_ITEMS of
         true ->
-            Group2 = flush_writes(Parent, Owner, Group, InitialBuild, ViewEmptyKVs, Acc2),
-            NewAcc = [];
+            Acc2 = flush_writes(Acc#writer_acc{kvs = Kvs2});
         false ->
-            Group2 = Group,
-            NewAcc = Acc2
+            Acc2 = Acc#writer_acc{kvs = Kvs2}
         end,
-        do_writes(Parent, Owner, Group2, WriteQueue, InitialBuild, ViewEmptyKVs, NewAcc)
+        do_writes(Acc2)
     end.
 
 
-flush_writes(_Parent, _Owner, Group, _InitialBuild, _ViewEmptyKVs, []) ->
-    Group;
-flush_writes(Parent, Owner, Group, InitialBuild, ViewEmptyKVs, Queue) ->
-    {ViewKVs, DocIdViewIdKeys, PartIdSeqs} = lists:foldr(
+flush_writes(#writer_acc{kvs = [], owner = Owner, parent = Parent, group = Group} = Acc) ->
+    #writer_acc{group = NewGroup} = Acc2 = update_transferred_replicas(Acc, orddict:new()),
+    case NewGroup of
+    Group ->
+        ok;
+    _ ->
+        ok = gen_server:cast(Owner, {partial_update, Parent, NewGroup})
+    end,
+    Acc2;
+flush_writes(Acc) ->
+    #writer_acc{
+        kvs = Queue,
+        initial_build = InitialBuild,
+        view_empty_kvs = ViewEmptyKVs,
+        group = Group,
+        parent = Parent,
+        owner = Owner
+    } = Acc,
+    {ViewKVs, DocIdViewIdKeys, PartIdSeqs} = lists:foldl(
         fun({Seq, DocId, PartId, []}, {ViewKVsAcc, DocIdViewIdKeysAcc, PartIdSeqs}) ->
             PartIdSeqs2 = update_part_seq(Seq, PartId, PartIdSeqs),
             {ViewKVsAcc, [{DocId, {PartId, []}} | DocIdViewIdKeysAcc], PartIdSeqs2};
@@ -280,14 +327,16 @@ flush_writes(Parent, Owner, Group, InitialBuild, ViewEmptyKVs, Queue) ->
             PartIdSeqs2 = update_part_seq(Seq, PartId, PartIdSeqs),
             {NewViewKVs, [{DocId, {PartId, NewViewIdKeys}} | DocIdViewIdKeysAcc], PartIdSeqs2}
         end,
-        {ViewEmptyKVs, [], dict:new()}, Queue),
+        {ViewEmptyKVs, [], orddict:new()}, Queue),
     {Group2, CleanupTime, CleanupKVCount} = write_changes(
         Group, ViewKVs, DocIdViewIdKeys, PartIdSeqs, InitialBuild),
+    #writer_acc{group = Group3} = Acc2 =
+        update_transferred_replicas(Acc#writer_acc{group = Group2, kvs = []}, PartIdSeqs),
     case Owner of
     nil ->
         ok;
     _ ->
-        ok = gen_server:cast(Owner, {partial_update, Parent, Group2}),
+        ok = gen_server:cast(Owner, {partial_update, Parent, Group3}),
         case ?set_cbitmask(Group) of
         0 ->
             ok;
@@ -296,15 +345,65 @@ flush_writes(Parent, Owner, Group, InitialBuild, ViewEmptyKVs, Queue) ->
         end
     end,
     update_task(length(Queue)),
-    Group2.
+    Acc2.
+
+
+update_transferred_replicas(#writer_acc{group = Group} = Acc, _PartIdSeqs) when ?set_replicas_on_transfer(Group) =:= [] ->
+    Acc;
+update_transferred_replicas(Acc, PartIdSeqs) ->
+    #writer_acc{
+        group = #set_view_group{index_header = Header} = Group,
+        last_part_id = LastPartId,
+        final_batch = FinalBatch
+    } = Acc,
+    case FinalBatch of
+    true ->
+        PartIds0 = orddict:fetch_keys(PartIdSeqs),
+        LastPartId2 = nil;
+    false ->
+        Keys = orddict:fetch_keys(PartIdSeqs),
+        LastPartId2 = lists:last(Keys),
+        PartIds0 = ordsets:del_element(LastPartId2, Keys)
+    end,
+    case is_integer(LastPartId) andalso
+        ((PartIds0 =/= [] andalso hd(PartIds0) =/= LastPartId) orelse
+            (PartIds0 =:= [] andalso LastPartId =/= LastPartId2)) of
+    true ->
+        PartIds = ordsets:add_element(LastPartId, PartIds0);
+    false ->
+        PartIds = PartIds0
+    end,
+    case ordsets:intersection(?set_replicas_on_transfer(Group), PartIds) of
+    [] ->
+        Acc#writer_acc{last_part_id = LastPartId2};
+    RepPartIds ->
+        ReplicasOnTransfer2 = ordsets:subtract(?set_replicas_on_transfer(Group), RepPartIds),
+        {Abitmask2, Pbitmask2} = lists:foldl(
+            fun(Id, {A, P}) ->
+                Mask = 1 bsl Id,
+                Mask = ?set_pbitmask(Group) band Mask,
+                0 = ?set_abitmask(Group) band Mask,
+                {A bor Mask, P bxor Mask}
+            end,
+            {?set_abitmask(Group), ?set_pbitmask(Group)},
+            RepPartIds),
+        Group2 = Group#set_view_group{
+            index_header = Header#set_view_index_header{
+                abitmask = Abitmask2,
+                pbitmask = Pbitmask2,
+                replicas_on_transfer = ReplicasOnTransfer2
+            }
+        },
+        Acc#writer_acc{group = Group2, last_part_id = LastPartId2}
+    end.
 
 
 update_part_seq(Seq, PartId, Acc) ->
-    case dict:find(PartId, Acc) of
+    case orddict:find(PartId, Acc) of
     {ok, Max} when Max >= Seq ->
         Acc;
     _ ->
-        dict:store(PartId, Seq, Acc)
+        orddict:store(PartId, Seq, Acc)
     end.
 
 
@@ -336,7 +435,8 @@ write_changes(Group, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs, InitialBui
         id_btree = IdBtree,
         fd = Fd,
         set_name = SetName,
-        name = GroupName
+        name = GroupName,
+        type = GroupType
     } = Group,
 
     AddDocIdViewIdKeys = [{DocId, ViewIdKeys} || {DocId, ViewIdKeys} <- DocIdViewIdKeys, ViewIdKeys /= []],
@@ -409,9 +509,9 @@ write_changes(Group, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs, InitialBui
         CleanupTime = nil;
     _ ->
         CleanupTime = timer:now_diff(now(), CleanupStart),
-        ?LOG_INFO("Updater for set view `~s`, group `~s`, performed cleanup "
+        ?LOG_INFO("Updater for set view `~s`, ~s group `~s`, performed cleanup "
             "of ~p key/value pairs in ~.3f seconds",
-            [SetName, GroupName, CleanupKvCount, CleanupTime / 1000000])
+            [SetName, GroupType, GroupName, CleanupKvCount, CleanupTime / 1000000])
     end,
     NewGroup = Group#set_view_group{
         views = Views2,
@@ -422,7 +522,7 @@ write_changes(Group, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs, InitialBui
 
 
 update_seqs(PartIdSeqs, Seqs) ->
-    dict:fold(
+    orddict:fold(
         fun(PartId, S, Acc) -> ?replace(Acc, PartId, S) end,
         Seqs, PartIdSeqs).
 

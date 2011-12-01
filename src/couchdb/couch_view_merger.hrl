@@ -13,12 +13,15 @@
 -record(view_merge, {
     keys = nil,
     rereduce_fun = nil,
-    rereduce_fun_lang = <<"javascript">>
+    rereduce_fun_lang = <<"javascript">>,
+    make_row_fun = nil
 }).
 
 -record(set_view_spec, {
     name,
     ddoc_id,
     view_name,
-    partitions
+    partitions,
+    view = nil,
+    group = nil
 }).

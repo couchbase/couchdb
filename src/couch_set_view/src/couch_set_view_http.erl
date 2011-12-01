@@ -14,11 +14,10 @@
 
 -export([handle_req/1]).
 
--export([parse_view_params/3]).
 -export([make_view_fold_fun/6, finish_view_fold/4, finish_view_fold/5, view_row_obj/2]).
 -export([view_etag/2, view_etag/3, make_reduce_fold_funs/5]).
 -export([design_doc_view/6, parse_bool_param/1]).
--export([make_key_options/1,get_row_doc/6]).
+-export([get_row_doc/6]).
 
 -import(couch_httpd,
     [send_json/2,send_json/3,send_json/4,send_method_not_allowed/2,send_chunk/2,
@@ -50,7 +49,8 @@ route_request(#httpd{method = 'POST'} = Req, SetName, DDocId, [<<"_define">>]) -
     SetViewParams = #set_view_params{
         max_partitions = couch_util:get_value(<<"number_partitions">>, Fields, 0),
         active_partitions = couch_util:get_value(<<"active_partitions">>, Fields, []),
-        passive_partitions = couch_util:get_value(<<"passive_partitions">>, Fields, [])
+        passive_partitions = couch_util:get_value(<<"passive_partitions">>, Fields, []),
+        use_replica_index = couch_util:get_value(<<"use_replica_index">>, Fields, false)
     },
     ok = couch_set_view:define_group(SetName, DDocId, SetViewParams),
     couch_httpd:send_json(Req, 201, {[{ok, true}]});
@@ -97,6 +97,18 @@ route_request(#httpd{method = 'POST'} = Req, SetName, DDocId, [<<"_set_partition
     Cleanup = couch_util:get_value(<<"cleanup">>, Fields, []),
     ok = couch_set_view:set_partition_states(
         SetName, DDocId, Active, Passive, Cleanup),
+    couch_httpd:send_json(Req, 201, {[{ok, true}]});
+
+route_request(#httpd{method = 'POST'} = Req, SetName, DDocId, [<<"_add_replica_partitions">>]) ->
+    couch_httpd:validate_ctype(Req, "application/json"),
+    List = [_ | _] = couch_httpd:json_body(Req),
+    ok = couch_set_view:add_replica_partitions(SetName, DDocId, List),
+    couch_httpd:send_json(Req, 201, {[{ok, true}]});
+
+route_request(#httpd{method = 'POST'} = Req, SetName, DDocId, [<<"_remove_replica_partitions">>]) ->
+    couch_httpd:validate_ctype(Req, "application/json"),
+    List = [_ | _] = couch_httpd:json_body(Req),
+    ok = couch_set_view:remove_replica_partitions(SetName, DDocId, List),
     couch_httpd:send_json(Req, 201, {[{ok, true}]}).
 
 
@@ -116,21 +128,21 @@ design_doc_view(Req, SetName, DDocId, ViewName, FilteredPartitions, Keys) ->
     Reduce = get_reduce_type(Req),
     case couch_set_view:get_map_view(SetName, DDocId, ViewName, Stale, FilteredPartitions) of
     {ok, View, Group, _} ->
-        QueryArgs = parse_view_params(Req, Keys, map),
-        Result = output_map_view(Req, View, Group, QueryArgs, Keys),
+        QueryArgs = parse_view_params(Req, Keys, ViewName, map),
+        Result = output_map_view(Req, View, Group, QueryArgs),
         couch_set_view:release_group(Group);
     {not_found, Reason} ->
         case couch_set_view:get_reduce_view(SetName, DDocId, ViewName, Stale, FilteredPartitions) of
         {ok, ReduceView, Group, _} ->
             case Reduce of
             false ->
-                QueryArgs = parse_view_params(Req, Keys, red_map),
+                QueryArgs = parse_view_params(Req, Keys, ViewName, red_map),
                 MapView = couch_set_view:extract_map_view(ReduceView),
-                Result = output_map_view(Req, MapView, Group, QueryArgs, Keys),
+                Result = output_map_view(Req, MapView, Group, QueryArgs),
                 couch_set_view:release_group(Group);
             _ ->
-                QueryArgs = parse_view_params(Req, Keys, reduce),
-                Result = output_reduce_view(Req, ReduceView, Group, QueryArgs, Keys),
+                QueryArgs = parse_view_params(Req, Keys, ViewName, reduce),
+                Result = output_reduce_view(Req, ReduceView, Group, QueryArgs),
                 couch_set_view:release_group(Group)
             end;
         _ ->
@@ -141,94 +153,54 @@ design_doc_view(Req, SetName, DDocId, ViewName, FilteredPartitions, Keys) ->
     couch_stats_collector:increment({httpd, view_reads}),
     Result.
 
-output_map_view(Req, View, Group, QueryArgs, nil) ->
+output_map_view(Req, View, Group, QueryArgs) ->
     #view_query_args{
         limit = Limit,
         skip = SkipCount
     } = QueryArgs,
-    CurrentEtag = view_etag(Group, View),
+    CurrentEtag = view_etag(Group, View, QueryArgs#view_query_args.keys),
     couch_httpd:etag_respond(Req, CurrentEtag, fun() ->
-        {ok, RowCount} = couch_set_view:get_row_count(View),
-        FoldlFun = make_view_fold_fun(Req, QueryArgs, CurrentEtag, Group, RowCount, #view_fold_helper_funs{reduce_count=fun couch_set_view:reduce_to_count/1}),
+        RowCount = get_row_count(Group, View),
+        RedCountFun = get_reduce_count_fun(Group),
+        FoldHelpers = #view_fold_helper_funs{reduce_count = RedCountFun},
+        FoldlFun = make_view_fold_fun(Req, QueryArgs, CurrentEtag, Group, RowCount, FoldHelpers),
         FoldAccInit = {Limit, SkipCount, undefined, []},
-        {ok, LastReduce, FoldResult} = couch_set_view:fold(Group, View,
-                FoldlFun, FoldAccInit, make_key_options(QueryArgs)),
-        finish_view_fold(Req, RowCount,
-                couch_set_view:reduce_to_count(LastReduce), FoldResult)
-    end);
-
-output_map_view(Req, View, Group, QueryArgs, Keys) ->
-    #view_query_args{
-        limit = Limit,
-        skip = SkipCount
-    } = QueryArgs,
-    CurrentEtag = view_etag(Group, View, Keys),
-    couch_httpd:etag_respond(Req, CurrentEtag, fun() ->
-        {ok, RowCount} = couch_set_view:get_row_count(View),
-        FoldAccInit = {Limit, SkipCount, undefined, []},
-        {LastReduce, FoldResult} = lists:foldl(fun(Key, {_, FoldAcc}) ->
-            FoldlFun = make_view_fold_fun(Req, QueryArgs#view_query_args{},
-                    CurrentEtag, Group, RowCount,
-                    #view_fold_helper_funs{
-                        reduce_count = fun couch_set_view:reduce_to_count/1
-                    }),
-            {ok, LastReduce, FoldResult} = couch_set_view:fold(Group, View, FoldlFun,
-                    FoldAcc, make_key_options(
-                         QueryArgs#view_query_args{start_key=Key, end_key=Key})),
-            {LastReduce, FoldResult}
-        end, {{[],[]}, FoldAccInit}, Keys),
-        finish_view_fold(Req, RowCount, couch_set_view:reduce_to_count(LastReduce),
-                FoldResult, [])
+        {ok, LastReduce, FoldResult} = couch_set_view:fold(Group, View, FoldlFun, FoldAccInit, QueryArgs),
+        finish_view_fold(Req, RowCount, RedCountFun(LastReduce), FoldResult)
     end).
 
-output_reduce_view(Req, View, Group, QueryArgs, nil) ->
+output_reduce_view(Req, View, Group, QueryArgs) ->
     #view_query_args{
         limit = Limit,
         skip = Skip,
         group_level = GroupLevel
     } = QueryArgs,
-    CurrentEtag = view_etag(Group, View),
+    CurrentEtag = view_etag(Group, View, QueryArgs#view_query_args.keys),
     couch_httpd:etag_respond(Req, CurrentEtag, fun() ->
-        {ok, GroupRowsFun, RespFun} = make_reduce_fold_funs(Req, GroupLevel,
-                QueryArgs, CurrentEtag, #reduce_fold_helper_funs{}),
+        {ok, KeyGroupFun, FoldFun} = make_reduce_fold_funs(
+            Req, GroupLevel, QueryArgs, CurrentEtag, #reduce_fold_helper_funs{}),
         FoldAccInit = {Limit, Skip, undefined, []},
         {ok, {_, _, Resp, _}} = couch_set_view:fold_reduce(
-                Group, View,
-                RespFun, FoldAccInit, [{key_group_fun, GroupRowsFun} |
-                make_key_options(QueryArgs)]),
+            Group, View, FoldFun, FoldAccInit, KeyGroupFun, QueryArgs),
         finish_reduce_fold(Req, Resp)
-    end);
-
-output_reduce_view(Req, View, Group, QueryArgs, Keys) ->
-    #view_query_args{
-        limit = Limit,
-        skip = Skip,
-        group_level = GroupLevel
-    } = QueryArgs,
-    CurrentEtag = view_etag(Group, View, Keys),
-    couch_httpd:etag_respond(Req, CurrentEtag, fun() ->
-        {ok, GroupRowsFun, RespFun} = make_reduce_fold_funs(Req, GroupLevel,
-                QueryArgs, CurrentEtag, #reduce_fold_helper_funs{}),
-        {Resp, _RedAcc3} = lists:foldl(
-            fun(Key, {Resp, RedAcc}) ->
-                % run the reduce once for each key in keys, with limit etc
-                % reapplied for each key
-                FoldAccInit = {Limit, Skip, Resp, RedAcc},
-                {_, {_, _, Resp2, RedAcc2}} = couch_set_view:fold_reduce(
-                        Group, View,
-                        RespFun, FoldAccInit, [{key_group_fun, GroupRowsFun} |
-                        make_key_options(QueryArgs#view_query_args{
-                            start_key=Key, end_key=Key})]),
-                % Switch to comma
-                {Resp2, RedAcc2}
-            end,
-        {undefined, []}, Keys), % Start with no comma
-        finish_reduce_fold(Req, Resp, [])
     end).
 
-reverse_key_default(?MIN_STR) -> ?MAX_STR;
-reverse_key_default(?MAX_STR) -> ?MIN_STR;
-reverse_key_default(Key) -> Key.
+
+get_row_count(#set_view_group{replica_group = nil}, View) ->
+    {ok, RowCount} = couch_set_view:get_row_count(View),
+    RowCount;
+get_row_count(#set_view_group{replica_group = RepGroup}, View) ->
+    RepView = lists:nth(View#set_view.id_num + 1, RepGroup#set_view_group.views),
+    {ok, RowCount1} = couch_set_view:get_row_count(View),
+    {ok, RowCount2} = couch_set_view:get_row_count(RepView),
+    RowCount1 + RowCount2.
+
+
+get_reduce_count_fun(#set_view_group{replica_group = nil}) ->
+    fun couch_set_view:reduce_to_count/1;
+get_reduce_count_fun(#set_view_group{replica_group = #set_view_group{}}) ->
+    fun(_) -> nil end.
+
 
 get_stale_type(Req) ->
     list_to_existing_atom(couch_httpd:qs_value(Req, "stale", "false")).
@@ -236,218 +208,9 @@ get_stale_type(Req) ->
 get_reduce_type(Req) ->
     list_to_existing_atom(couch_httpd:qs_value(Req, "reduce", "true")).
 
-% query_parse_error could be removed
-% we wouldn't need to pass the view type, it'd just parse params.
-% I'm not sure what to do about the error handling, but
-% it might simplify things to have a parse_view_params function
-% that doesn't throw().
-parse_view_params(Req, Keys, ViewType) ->
-    QueryList = couch_httpd:qs(Req),
-    QueryParams =
-    lists:foldl(fun({K, V}, Acc) ->
-        parse_view_param(K, V) ++ Acc
-    end, [], QueryList),
-    IsMultiGet = (Keys =/= nil),
-    Args = #view_query_args{
-        view_type=ViewType,
-        multi_get=IsMultiGet
-    },
-    QueryArgs = lists:foldl(fun({K, V}, Args2) ->
-        validate_view_query(K, V, Args2)
-    end, Args, lists:reverse(QueryParams)), % Reverse to match QS order.
-    warn_on_empty_key_range(QueryArgs),
-    GroupLevel = QueryArgs#view_query_args.group_level,
-    case {ViewType, GroupLevel, IsMultiGet} of
-    {reduce, exact, true} ->
-        QueryArgs;
-    {reduce, _, false} ->
-        QueryArgs;
-    {reduce, _, _} ->
-        % we can simplify code if we just drop this error message.
-        Msg = <<"Multi-key fetchs for reduce "
-                "view must include `group=true`">>,
-        throw({query_parse_error, Msg});
-    _ ->
-        QueryArgs
-    end,
-    QueryArgs.
-
-parse_view_param("", _) ->
-    [];
-parse_view_param("key", Value) ->
-    JsonKey = ?JSON_DECODE(Value),
-    [{start_key, JsonKey}, {end_key, JsonKey}];
-% TODO: maybe deprecate startkey_docid
-parse_view_param("startkey_docid", Value) ->
-    [{start_docid, ?l2b(Value)}];
-parse_view_param("start_key_doc_id", Value) ->
-    [{start_docid, ?l2b(Value)}];
-% TODO: maybe deprecate endkey_docid
-parse_view_param("endkey_docid", Value) ->
-    [{end_docid, ?l2b(Value)}];
-parse_view_param("end_key_doc_id", Value) ->
-    [{end_docid, ?l2b(Value)}];
-% TODO: maybe deprecate startkey
-parse_view_param("startkey", Value) ->
-    [{start_key, ?JSON_DECODE(Value)}];
-parse_view_param("start_key", Value) ->
-    [{start_key, ?JSON_DECODE(Value)}];
-% TODO: maybe deprecate endkey
-parse_view_param("endkey", Value) ->
-    [{end_key, ?JSON_DECODE(Value)}];
-parse_view_param("end_key", Value) ->
-    [{end_key, ?JSON_DECODE(Value)}];
-parse_view_param("limit", Value) ->
-    [{limit, parse_positive_int_param(Value)}];
-parse_view_param("count", _Value) ->
-    throw({query_parse_error, <<"Query parameter 'count' is now 'limit'.">>});
-parse_view_param("stale", "ok") ->
-    [{stale, ok}];
-parse_view_param("stale", "update_after") ->
-    [{stale, update_after}];
-parse_view_param("stale", _Value) ->
-    throw({query_parse_error,
-            <<"stale only available as stale=ok or as stale=update_after">>});
-parse_view_param("update", _Value) ->
-    throw({query_parse_error, <<"update=false is now stale=ok">>});
-parse_view_param("descending", Value) ->
-    [{descending, parse_bool_param(Value)}];
-parse_view_param("skip", Value) ->
-    [{skip, parse_int_param(Value)}];
-parse_view_param("group", Value) ->
-    case parse_bool_param(Value) of
-        true -> [{group_level, exact}];
-        false -> [{group_level, 0}]
-    end;
-parse_view_param("group_level", Value) ->
-    [{group_level, parse_positive_int_param(Value)}];
-parse_view_param("inclusive_end", Value) ->
-    [{inclusive_end, parse_bool_param(Value)}];
-parse_view_param("reduce", Value) ->
-    [{reduce, parse_bool_param(Value)}];
-parse_view_param("include_docs", Value) ->
-    [{include_docs, parse_bool_param(Value)}];
-parse_view_param("conflicts", Value) ->
-    [{conflicts, parse_bool_param(Value)}];
-parse_view_param("list", Value) ->
-    [{list, ?l2b(Value)}];
-parse_view_param("callback", _) ->
-    []; % Verified in the JSON response functions
-parse_view_param(Key, Value) ->
-    [{extra, {Key, Value}}].
-
-warn_on_empty_key_range(#view_query_args{start_key=undefined}) ->
-    ok;
-warn_on_empty_key_range(#view_query_args{end_key=undefined}) ->
-    ok;
-warn_on_empty_key_range(#view_query_args{start_key=A, end_key=A}) ->
-    ok;
-warn_on_empty_key_range(#view_query_args{
-    start_key=StartKey, end_key=EndKey, direction=Dir}) ->
-    case {Dir, couch_set_view:less_json(StartKey, EndKey)} of
-        {fwd, false} ->
-            throw({query_parse_error,
-            <<"No rows can match your key range, reverse your ",
-                "start_key and end_key or set descending=true">>});
-        {rev, true} ->
-            throw({query_parse_error,
-            <<"No rows can match your key range, reverse your ",
-                "start_key and end_key or set descending=false">>});
-        _ -> ok
-    end.
-
-validate_view_query(start_key, Value, Args) ->
-    case Args#view_query_args.multi_get of
-    true ->
-        Msg = <<"Query parameter `start_key` is "
-                "not compatible with multi-get">>,
-        throw({query_parse_error, Msg});
-    _ ->
-        Args#view_query_args{start_key=Value}
-    end;
-validate_view_query(start_docid, Value, Args) ->
-    Args#view_query_args{start_docid=Value};
-validate_view_query(end_key, Value, Args) ->
-    case Args#view_query_args.multi_get of
-    true->
-        Msg = <<"Query parameter `end_key` is "
-                "not compatible with multi-get">>,
-        throw({query_parse_error, Msg});
-    _ ->
-        Args#view_query_args{end_key=Value}
-    end;
-validate_view_query(end_docid, Value, Args) ->
-    Args#view_query_args{end_docid=Value};
-validate_view_query(limit, Value, Args) ->
-    Args#view_query_args{limit=Value};
-validate_view_query(list, Value, Args) ->
-    Args#view_query_args{list=Value};
-validate_view_query(stale, ok, Args) ->
-    Args#view_query_args{stale=ok};
-validate_view_query(stale, update_after, Args) ->
-    Args#view_query_args{stale=update_after};
-validate_view_query(stale, _, Args) ->
-    Args;
-validate_view_query(descending, true, Args) ->
-    case Args#view_query_args.direction of
-    rev -> Args; % Already reversed
-    fwd ->
-        Args#view_query_args{
-            direction = rev,
-            start_docid =
-                reverse_key_default(Args#view_query_args.start_docid),
-            end_docid =
-                reverse_key_default(Args#view_query_args.end_docid)
-        }
-    end;
-validate_view_query(descending, false, Args) ->
-    Args; % Ignore default condition
-validate_view_query(skip, Value, Args) ->
-    Args#view_query_args{skip=Value};
-validate_view_query(group_level, Value, Args) ->
-    case Args#view_query_args.view_type of
-    reduce ->
-        Args#view_query_args{group_level=Value};
-    _ ->
-        Msg = <<"Invalid URL parameter 'group' or "
-                " 'group_level' for non-reduce view.">>,
-        throw({query_parse_error, Msg})
-    end;
-validate_view_query(inclusive_end, Value, Args) ->
-    Args#view_query_args{inclusive_end=Value};
-validate_view_query(reduce, false, Args) ->
-    Args;
-validate_view_query(reduce, _, Args) ->
-    case Args#view_query_args.view_type of
-    map ->
-        Msg = <<"Invalid URL parameter `reduce` for map view.">>,
-        throw({query_parse_error, Msg});
-    _ ->
-        Args
-    end;
-validate_view_query(include_docs, true, Args) ->
-    case Args#view_query_args.view_type of
-    reduce ->
-        Msg = <<"Query parameter `include_docs` "
-                "is invalid for reduce views.">>,
-        throw({query_parse_error, Msg});
-    _ ->
-        Args#view_query_args{include_docs=true}
-    end;
-% Use the view_query_args record's default value
-validate_view_query(include_docs, _Value, Args) ->
-    Args;
-validate_view_query(conflicts, true, Args) ->
-    case Args#view_query_args.view_type of
-    reduce ->
-        Msg = <<"Query parameter `conflicts` "
-                "is invalid for reduce views.">>,
-        throw({query_parse_error, Msg});
-    _ ->
-        Args#view_query_args{conflicts = true}
-    end;
-validate_view_query(extra, _Value, Args) ->
-    Args.
+parse_view_params(Req, Keys, ViewName, ViewType) ->
+    Params = couch_httpd_view:parse_view_params(Req, Keys, ViewType),
+    Params#view_query_args{view_name = ViewName}.
 
 make_view_fold_fun(Req, QueryArgs, Etag, Group, TotalViewCount, HelperFuns) ->
     #view_fold_helper_funs{
@@ -625,41 +388,18 @@ apply_default_helper_funs(
         send_row = SendRow2
     }.
 
-make_key_options(#view_query_args{direction = Dir}=QueryArgs) ->
-     [{dir,Dir} | make_start_key_option(QueryArgs) ++
-            make_end_key_option(QueryArgs)].
-
-make_start_key_option(
-        #view_query_args{
-            start_key = StartKey,
-            start_docid = StartDocId}) ->
-    if StartKey == undefined ->
-        [];
-    true ->
-        [{start_key, {StartKey, StartDocId}}]
-    end.
-
-make_end_key_option(#view_query_args{end_key = undefined}) ->
-    [];
-make_end_key_option(
-        #view_query_args{end_key = EndKey,
-            end_docid = EndDocId,
-            inclusive_end = true}) ->
-    [{end_key, {EndKey, EndDocId}}];
-make_end_key_option(
-        #view_query_args{
-            end_key = EndKey,
-            end_docid = EndDocId,
-            inclusive_end = false}) ->
-    [{end_key_gt, {EndKey,reverse_key_default(EndDocId)}}].
-
-json_view_start_resp(Req, Etag, TotalViewCount, Offset, _Acc) ->
+json_view_start_resp(Req, Etag, TotalRowCount, Offset, _Acc) ->
     {ok, Resp} = start_json_response(Req, 200, [{"Etag", Etag}]),
-    % TODO: likely, remove offset, won't make sense with passive partitions
-    BeginBody = io_lib:format(
-        "{\"total_rows\":~w,\"offset\":~w,\"rows\":[\r\n",
-        [TotalViewCount, Offset]),
-    {ok, Resp, BeginBody}.
+    % TODO: likely, remove offset, won't make sense with passive partitions.
+    %       Also, merged views don't have it.
+    BeginBody0 = io_lib:format("{\"total_rows\":~w,", [TotalRowCount]),
+    BeginBody = case is_number(Offset) of
+    true ->
+        [BeginBody0, io_lib:format("\"offset\":~w,", [Offset])];
+    false ->
+        BeginBody0
+    end,
+    {ok, Resp, [BeginBody, "\"rows\":[\r\n"]}.
 
 send_json_view_row(Resp, Kv, Doc, RowFront) ->
     JsonObj = view_row_obj(Kv, Doc),
@@ -706,11 +446,13 @@ finish_view_fold(Req, TotalRows, Offset, FoldResult, Fields) ->
     {_, _, undefined, _} ->
         % nothing found in the view or keys, nothing has been returned
         % send empty view
-        send_json(Req, 200, {[
-            {total_rows, TotalRows},
-            {offset, Offset},
-            {rows, []}
-        ] ++ Fields});
+        Props = case is_number(Offset) of
+        true ->
+            [{total_rows, TotalRows}, {offset, Offset}, {rows, []}];
+        false ->
+            [{total_rows, TotalRows}, {rows, []}]
+        end,
+        send_json(Req, 200, {Props ++ Fields});
     {_, _, Resp, _} ->
         % end the view
         send_chunk(Resp, "\r\n]}"),
@@ -732,30 +474,4 @@ finish_reduce_fold(Req, Resp, Fields) ->
     end.
 
 parse_bool_param(Val) ->
-    case string:to_lower(Val) of
-    "true" -> true;
-    "false" -> false;
-    _ ->
-        Msg = io_lib:format("Invalid boolean parameter: ~p", [Val]),
-        throw({query_parse_error, ?l2b(Msg)})
-    end.
-
-parse_int_param(Val) ->
-    case (catch list_to_integer(Val)) of
-    IntVal when is_integer(IntVal) ->
-        IntVal;
-    _ ->
-        Msg = io_lib:format("Invalid value for integer parameter: ~p", [Val]),
-        throw({query_parse_error, ?l2b(Msg)})
-    end.
-
-parse_positive_int_param(Val) ->
-    case parse_int_param(Val) of
-    IntVal when IntVal >= 0 ->
-        IntVal;
-    _ ->
-        Fmt = "Invalid value for positive integer parameter: ~p",
-        Msg = io_lib:format(Fmt, [Val]),
-        throw({query_parse_error, ?l2b(Msg)})
-    end.
-
+    couch_httpd_view:parse_bool_param(Val).

@@ -15,6 +15,7 @@
 -export([detuple_kvs/2, expand_dups/2, expand_dups/3, partitions_map/2]).
 -export([build_bitmask/1, decode_bitmask/1]).
 -export([make_btree_purge_fun/1]).
+-export([make_key_options/1]).
 
 -include_lib("couch_set_view/include/couch_set_view.hrl").
 
@@ -117,3 +118,7 @@ btree_purge_fun(branch, Red, {go, Acc}, Cbitmask) ->
             {partial_purge, {go, Acc}}
         end
     end.
+
+
+make_key_options(QueryArgs) ->
+    couch_httpd_view:make_key_options(QueryArgs).

@@ -18,6 +18,8 @@ from view_merge import TestViewMerge
 from burst_state_updates import TestBurstStateUpdates
 from many_partitions import TestManyPartitions
 from erlang_views import TestErlangViews
+from replica_index import TestReplicaIndex
+from view_params import TestViewParams
 
 
 def main():
@@ -29,6 +31,7 @@ def main():
 
     suite.addTest(unittest.makeSuite(TestIncludeDocs))
     suite.addTest(unittest.makeSuite(TestStale))
+    suite.addTest(unittest.makeSuite(TestViewParams))
     suite.addTest(unittest.makeSuite(TestUpdates))
     suite.addTest(unittest.makeSuite(TestManyPartitions))
     suite.addTest(unittest.makeSuite(TestPassivePartitions))
@@ -41,6 +44,7 @@ def main():
     suite.addTest(unittest.makeSuite(TestViewMerge))
     suite.addTest(unittest.makeSuite(TestBurstStateUpdates))
     suite.addTest(unittest.makeSuite(TestErlangViews))
+    suite.addTest(unittest.makeSuite(TestReplicaIndex))
 
     unittest.TextTestRunner(verbosity = 2, failfast = True).run(suite)
 

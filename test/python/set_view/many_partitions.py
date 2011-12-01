@@ -14,9 +14,9 @@ import unittest
 
 HOST = "localhost:5984"
 SET_NAME = "test_suite_set_view"
-# Can't use something higher than 256 on Mac OS X, start getting
+# Can't use something higher than 96 on Mac OS X, start getting
 # system_limit errors due to too many file descriptors used
-NUM_PARTS = 256
+NUM_PARTS = 96
 NUM_DOCS = 2000
 DDOC = {
     "_id": "_design/test",

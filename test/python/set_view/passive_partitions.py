@@ -14,7 +14,7 @@ import unittest
 HOST = "localhost:5984"
 SET_NAME = "test_suite_set_view"
 NUM_PARTS = 4
-NUM_DOCS = 100000
+NUM_DOCS = 40000
 DDOC = {
     "_id": "_design/test",
     "language": "javascript",

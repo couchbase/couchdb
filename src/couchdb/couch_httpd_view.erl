@@ -260,7 +260,7 @@ parse_view_params(Req, Keys, ViewType) ->
     _ ->
         QueryArgs
     end,
-    QueryArgs.
+    QueryArgs#view_query_args{keys = Keys}.
 
 parse_view_param("", _) ->
     [];
@@ -406,14 +406,14 @@ validate_view_query(group_level, Value, Args) ->
 validate_view_query(inclusive_end, Value, Args) ->
     Args#view_query_args{inclusive_end=Value};
 validate_view_query(reduce, false, Args) ->
-    Args;
-validate_view_query(reduce, _, Args) ->
+    Args#view_query_args{run_reduce = false};
+validate_view_query(reduce, RunReduce, Args) ->
     case Args#view_query_args.view_type of
     map ->
         Msg = <<"Invalid URL parameter `reduce` for map view.">>,
         throw({query_parse_error, Msg});
     _ ->
-        Args
+        Args#view_query_args{run_reduce = RunReduce}
     end;
 validate_view_query(include_docs, true, Args) ->
     case Args#view_query_args.view_type of

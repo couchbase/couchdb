@@ -188,7 +188,12 @@
     stale = false,
     multi_get = false,
     callback = nil,
-    list = nil
+    list = nil,
+
+    % Used by view/index merger.
+    run_reduce = true,
+    keys = nil,
+    view_name = nil
 }).
 
 -record(view_fold_helper_funs, {

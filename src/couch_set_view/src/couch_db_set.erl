@@ -15,7 +15,7 @@
 
 % public API
 -export([open/4, close/1]).
--export([get_seqs/1, enum_docs_since/4]).
+-export([get_seqs/1, enum_docs_since/4, enum_docs_since/5]).
 -export([set_active/2, set_passive/2, remove_partitions/2]).
 
 % gen_server API
@@ -62,6 +62,9 @@ get_seqs(Pid) ->
     {ok, lists:keysort(1, Seqs)}.
 
 enum_docs_since(Pid, SinceSeqs, Fun, Acc0) ->
+    enum_docs_since(Pid, SinceSeqs, Fun, Acc0, []).
+
+enum_docs_since(Pid, SinceSeqs, Fun, Acc0, Options) ->
     {ok, Active, Passive, UserCtx} = gen_server:call(Pid, get_dbs, infinity),
     Wrapper = fun({P, DbName}, Acc) ->
         Since = couch_util:get_value(P, SinceSeqs),
@@ -77,7 +80,13 @@ enum_docs_since(Pid, SinceSeqs, Fun, Acc0) ->
     {ok, Acc1} = Fun(starting_active, Acc0),
     Acc2 = lists:foldl(Wrapper, Acc1, lists:keysort(1, Active)),
     {ok, Acc3} = Fun(starting_passive, Acc2),
-    Acc4 = lists:foldl(Wrapper, Acc3, lists:keysort(1, Passive)),
+    Passive2 = case couch_util:get_value(passive_sort_fun, Options) of
+    undefined ->
+        lists:keysort(1, Passive);
+    ReorderFun ->
+        ReorderFun(Passive)
+    end,
+    Acc4 = lists:foldl(Wrapper, Acc3, Passive2),
     {ok, Acc4}.
 
 
@@ -230,11 +239,7 @@ code_change(_OldVsn, State, _Extra) ->
 
 
 terminate(_Reason, State) ->
-    couch_db_update_notifier:stop(State#state.db_notifier),
-    CloseFun = fun(_Name, {Db, _, _}, _Acc) -> catch couch_db:close(Db) end,
-    catch couch_db:close(State#state.master_db),
-    dict:fold(CloseFun, ok, State#state.dbs_active),
-    dict:fold(CloseFun, ok, State#state.dbs_passive).
+    couch_db_update_notifier:stop(State#state.db_notifier).
 
 
 switch_partitions_state(PartList, SetName, OpenOpts, SetA, SetB) ->

@@ -44,7 +44,6 @@ test() ->
     GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
 
     IndexFile = group_index_file(),
-    io:format("Index file: ~p~n", [IndexFile]),
     etap:is(filelib:is_file(IndexFile), true, "Index file exists"),
 
     query_view(4000, []),
@@ -159,7 +158,7 @@ group_index_file() ->
             filename:join([
                 couch_config:get("couchdb", "view_index_dir"),
                 "set_view_" ++ binary_to_list(test_set_name()) ++ "_design",
-                couch_util:get_value(signature, Info)
+                "main_" ++ binary_to_list(couch_util:get_value(signature, Info))
             ]),
             ".view"
         ])).

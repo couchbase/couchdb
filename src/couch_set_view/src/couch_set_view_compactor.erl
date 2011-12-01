@@ -43,6 +43,7 @@ compact_group(Group, EmptyGroup, SetName) ->
         id_btree = IdBtree,
         views = Views,
         name = GroupId,
+        type = Type,
         index_header = Header
     } = Group,
 
@@ -75,6 +76,7 @@ compact_group(Group, EmptyGroup, SetName) ->
         {design_document, GroupId},
         {changes_done, 0},
         {total_changes, TotalChanges},
+        {indexer_type, Type},
         {progress, 0}
     ]),
 
@@ -123,8 +125,9 @@ maybe_retry_compact(NewGroup, SetName) ->
     ok ->
         ok;
     update ->
+        {ok, NewSeqs} = couch_db_set:get_seqs(NewGroup#set_view_group.db_set),
         {_, Ref} = erlang:spawn_monitor(fun() ->
-            couch_set_view_updater:update(nil, NewGroup)
+            couch_set_view_updater:update(nil, NewGroup, NewSeqs)
         end),
         receive
         {'DOWN', Ref, _, _, {new_group, NewGroup2}} ->

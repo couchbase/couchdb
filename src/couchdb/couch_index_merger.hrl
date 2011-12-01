@@ -30,8 +30,10 @@
    % parameters that matter only when there are remote views to merge
    conn_timeout = 60000,    % milliseconds
    on_error = continue,     % 'continue' | 'stop'
-   % extra is for index implementation specific properties
    ddoc_revision = nil,    % nil | auto | Revision
+   http_params = nil,
+   user_ctx = nil,
+   % extra is for index implementation specific properties
    extra = nil
 }).
 

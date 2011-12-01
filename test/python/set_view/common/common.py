@@ -4,6 +4,7 @@ import couchdb
 import httplib
 import urllib
 from threading import Thread
+import time
 
 
 def create_dbs(params, del_only = False):
@@ -128,7 +129,7 @@ def test_keys_sorted(view_result, comp = lambda a, b: a < b):
             (json.dumps(row_a["key"]), json.dumps(row_b["key"]))
 
 
-def define_set_view(params, active_partitions, passive_partitions):
+def define_set_view(params, active_partitions, passive_partitions, use_replica_index = False):
     conn = httplib.HTTPConnection(params["host"])
     conn.request("GET", "/_config/couchdb/max_dbs_open")
     resp = conn.getresponse()
@@ -149,7 +150,8 @@ def define_set_view(params, active_partitions, passive_partitions):
             {
                 "number_partitions": params["nparts"],
                 "active_partitions": active_partitions,
-                "passive_partitions": passive_partitions
+                "passive_partitions": passive_partitions,
+                "use_replica_index": use_replica_index
                 }),
         headers = {"Content-Type": "application/json"}
         )
@@ -176,6 +178,38 @@ def set_partition_states(params, active = [], passive = [], cleanup = []):
         )
     resp = conn.getresponse()
     assert resp.status == 201, "_set_partition_states response has status 201"
+    body = json.loads(resp.read())
+    conn.close()
+
+
+def add_replica_partitions(params, partitions):
+    body = json.dumps(partitions)
+    conn = httplib.HTTPConnection(params["host"])
+    conn.request(
+        "POST",
+        "/_set_view/" + params["setname"] + "/" + \
+            params["ddoc"]["_id"] + "/_add_replica_partitions",
+        body,
+        {"Content-Type": "application/json"}
+        )
+    resp = conn.getresponse()
+    assert resp.status == 201, "_add_replica_partitions response has status 201"
+    body = json.loads(resp.read())
+    conn.close()
+
+
+def remove_replica_partitions(params, partitions):
+    body = json.dumps(partitions)
+    conn = httplib.HTTPConnection(params["host"])
+    conn.request(
+        "POST",
+        "/_set_view/" + params["setname"] + "/" + \
+            params["ddoc"]["_id"] + "/_remove_replica_partitions",
+        body,
+        {"Content-Type": "application/json"}
+        )
+    resp = conn.getresponse()
+    assert resp.status == 201, "_remove_replica_partitions response has status 201"
     body = json.loads(resp.read())
     conn.close()
 
@@ -248,4 +282,20 @@ def set_config_parameter(params, section, name, value):
     assert resp.status == 200, "config update response code is 200"
     json.loads(resp.read())
     conn.close()
+
+
+def restart_server(params):
+    conn = httplib.HTTPConnection(params["host"])
+    conn.request(
+        "POST",
+        "/_restart/",
+        headers = {'Content-Type': 'application/json'}
+        )
+    try:
+        resp = conn.getresponse()
+        json.loads(resp.read())
+        conn.close()
+    except:
+        pass
+    time.sleep(10)
 

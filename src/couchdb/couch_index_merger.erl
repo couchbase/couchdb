@@ -12,7 +12,7 @@
 
 -module(couch_index_merger).
 
--export([query_index/3]).
+-export([query_index/2, query_index/3]).
 
 % Only needed for indexer implementation. Those functions should perhaps go into
 % a utils module.
@@ -41,31 +41,57 @@
 -define(RETRY_INTERVAL, 1000).
 -define(MAX_RETRIES, 30).
 
-query_index(Mod, Req, IndexMergeParams) ->
-    query_index_loop(Mod, Req, IndexMergeParams, ?MAX_RETRIES).
 
-query_index_loop(_Mod, _Req, _IndexMergeParams, 0) ->
+query_index(Mod, #index_merge{http_params = HttpParams, user_ctx = UserCtx} = IndexMergeParams) when HttpParams =/= nil, UserCtx =/= nil ->
+    #index_merge{
+        indexes = Indexes,
+        user_ctx = UserCtx,
+        conn_timeout = Timeout
+    } = IndexMergeParams,
+    {ok, DDoc, IndexName} = get_first_ddoc(Indexes, UserCtx, Timeout),
+    query_index_loop(Mod, IndexMergeParams, DDoc, IndexName, ?MAX_RETRIES).
+
+query_index(Mod, IndexMergeParams0, #httpd{user_ctx = UserCtx} = Req) ->
+    #index_merge{
+        indexes = Indexes,
+        conn_timeout = Timeout,
+        extra = Extra
+    } = IndexMergeParams0,
+    {ok, DDoc, IndexName} = get_first_ddoc(Indexes, UserCtx, Timeout),
+    IndexMergeParams = IndexMergeParams0#index_merge{
+        user_ctx = UserCtx,
+        http_params = Mod:parse_http_params(Req, DDoc, IndexName, Extra)
+    },
+    query_index_loop(Mod, IndexMergeParams, DDoc, IndexName, ?MAX_RETRIES).
+
+
+query_index_loop(_Mod, _IndexMergeParams, _DDoc, _IndexName, 0) ->
     throw({error, revision_sync_failed});
-query_index_loop(Mod, Req, IndexMergeParams, N) ->
+query_index_loop(Mod, IndexMergeParams, DDoc, IndexName, N) ->
     try
-        do_query_index(Mod, Req, IndexMergeParams)
+        do_query_index(Mod, IndexMergeParams, DDoc, IndexName)
     catch
     throw:retry ->
         timer:sleep(?RETRY_INTERVAL),
-        query_index_loop(Mod, Req, IndexMergeParams, N - 1)
+        #index_merge{
+            indexes = Indexes,
+            user_ctx = UserCtx,
+            conn_timeout = Timeout
+        } = IndexMergeParams,
+        {ok, DDoc2, IndexName} = get_first_ddoc(Indexes, UserCtx, Timeout),
+        query_index_loop(Mod, IndexMergeParams, DDoc2, IndexName, N - 1)
     end.
 
-do_query_index(Mod, #httpd{user_ctx = UserCtx} = Req, IndexMergeParams) ->
+
+do_query_index(Mod, IndexMergeParams, DDoc, IndexName) ->
     #index_merge{
        indexes = Indexes, callback = Callback, user_acc = UserAcc,
-       conn_timeout = Timeout, ddoc_revision = DesiredDDocRevision,
-       extra = Extra
+       ddoc_revision = DesiredDDocRevision, user_ctx = UserCtx
     } = IndexMergeParams,
 
     ?LOG_DEBUG("Running a index merging for the following indexes: ~p", [Indexes]),
-    {ok, DDoc, IndexName} = get_first_ddoc(Indexes, UserCtx, Timeout),
-    DDocRev = ddoc_rev(DDoc),
 
+    DDocRev = ddoc_rev(DDoc),
     case should_check_rev(IndexMergeParams, DDoc) of
     true ->
         case DesiredDDocRevision of
@@ -80,9 +106,8 @@ do_query_index(Mod, #httpd{user_ctx = UserCtx} = Req, IndexMergeParams) ->
         ok
     end,
 
-    IndexArgs = Mod:parse_http_params(Req, DDoc, IndexName, Extra),
     {LessFun, FoldFun, MergeFun, CollectorFun, Extra2} = Mod:make_funs(
-        Req, DDoc, IndexName, IndexArgs, IndexMergeParams),
+        DDoc, IndexName, IndexMergeParams),
     NumFolders = length(Indexes),
     QueueLessFun = fun
         (set_view_outdated, _) ->
@@ -116,13 +141,12 @@ do_query_index(Mod, #httpd{user_ctx = UserCtx} = Req, IndexMergeParams) ->
     Folders = lists:foldr(
         fun(Index, Acc) ->
             Pid = spawn_link(fun() ->
-                index_folder(Mod, Index, IndexMergeParams, UserCtx, IndexArgs,
-                    DDoc, Queue, FoldFun)
+                index_folder(Mod, Index, IndexMergeParams, UserCtx, DDoc, Queue, FoldFun)
             end),
             [Pid | Acc]
         end,
         [], Indexes),
-    {Skip, Limit} = Mod:get_skip_and_limit(IndexArgs),
+    {Skip, Limit} = Mod:get_skip_and_limit(IndexMergeParams#index_merge.http_params),
     MergeParams = #merge_params{
         index_name = IndexName,
         queue = Queue,
@@ -344,14 +368,12 @@ collect_row_count(RecvCount, AccCount, PreprocessFun, Callback, UserAcc,
             %       compute them?
             {ok, UserAcc2} = Callback({start, AccCount2}, UserAcc),
             {ok, fun (Item2) ->
-                collect_rows(PreprocessFun, Callback,
-                    UserAcc2, Item2)
+                collect_rows(PreprocessFun, Callback, UserAcc2, Item2)
             end};
         true ->
             {ok, fun (Item2) ->
                 collect_row_count(
-                    RecvCount - 1, AccCount2, PreprocessFun, Callback,
-                    UserAcc, Item2)
+                    RecvCount - 1, AccCount2, PreprocessFun, Callback, UserAcc, Item2)
             end}
         end
     end.
@@ -441,31 +463,29 @@ dec_counter(N) -> N - 1.
 
 
 index_folder(Mod, #simple_index_spec{database = <<"http://", _/binary>>} =
-        IndexSpec, MergeParams, _UserCtx, IndexArgs, DDoc, Queue, _FoldFun) ->
-    http_index_folder(Mod, IndexSpec, MergeParams, IndexArgs, DDoc, Queue);
+        IndexSpec, MergeParams, _UserCtx, DDoc, Queue, _FoldFun) ->
+    http_index_folder(Mod, IndexSpec, MergeParams, DDoc, Queue);
 
 index_folder(Mod, #simple_index_spec{database = <<"https://", _/binary>>} =
-        IndexSpec, MergeParams, _UserCtx, IndexArgs, DDoc, Queue, _FoldFun) ->
-    http_index_folder(Mod, IndexSpec, MergeParams, IndexArgs, DDoc, Queue);
+        IndexSpec, MergeParams, _UserCtx, DDoc, Queue, _FoldFun) ->
+    http_index_folder(Mod, IndexSpec, MergeParams, DDoc, Queue);
 
 index_folder(Mod, #merged_index_spec{} = IndexSpec,
-        MergeParams, _UserCtx, IndexArgs, DDoc, Queue, _FoldFun) ->
-    http_index_folder(Mod, IndexSpec, MergeParams, IndexArgs, DDoc, Queue);
+        MergeParams, _UserCtx, DDoc, Queue, _FoldFun) ->
+    http_index_folder(Mod, IndexSpec, MergeParams, DDoc, Queue);
 
 index_folder(_Mod, #set_view_spec{} = ViewSpec, MergeParams,
-                UserCtx, ViewArgs, DDoc, Queue, FoldFun) ->
-    FoldFun(nil, ViewSpec, MergeParams, UserCtx, ViewArgs, DDoc, Queue);
+        UserCtx, DDoc, Queue, FoldFun) ->
+    FoldFun(nil, ViewSpec, MergeParams, UserCtx, DDoc, Queue);
 
-index_folder(_Mod, IndexSpec, MergeParams, UserCtx,
-        IndexArgs, DDoc, Queue, FoldFun) ->
+index_folder(_Mod, IndexSpec, MergeParams, UserCtx, DDoc, Queue, FoldFun) ->
     #simple_index_spec{
         database = DbName, ddoc_database = DDocDbName, ddoc_id = DDocId
     } = IndexSpec,
     case couch_db:open(DbName, [{user_ctx, UserCtx}]) of
     {ok, Db} ->
         try
-            FoldFun(Db, IndexSpec, MergeParams, UserCtx, IndexArgs, DDoc,
-                Queue)
+            FoldFun(Db, IndexSpec, MergeParams, UserCtx, DDoc, Queue)
         catch
         {not_found, Reason} when Reason =:= missing; Reason =:= deleted ->
             ok = couch_view_merger_queue:queue(
@@ -492,10 +512,10 @@ parse_error(Error) ->
     {error, ?LOCAL, to_binary(Error)}.
 
 % Fold function for remote indexes
-http_index_folder(Mod, IndexSpec, MergeParams, IndexArgs, DDoc, Queue) ->
-    EventFun = Mod:make_event_fun(IndexArgs, Queue),
+http_index_folder(Mod, IndexSpec, MergeParams, DDoc, Queue) ->
+    EventFun = Mod:make_event_fun(MergeParams#index_merge.http_params, Queue),
     {Url, Method, Headers, Body, Options} = Mod:http_index_folder_req_details(
-        IndexSpec, MergeParams, IndexArgs, DDoc),
+        IndexSpec, MergeParams, DDoc),
     {ok, Conn} = ibrowse:spawn_link_worker_process(Url),
 
     #index_merge{
