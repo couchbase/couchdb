@@ -161,8 +161,9 @@ do_query_index(Mod, #httpd{user_ctx = UserCtx} = Req, IndexMergeParams) ->
 get_first_ddoc([], _UserCtx, _Timeout) ->
     throw({error, <<"A view spec can not consist of merges exclusively.">>});
 
-get_first_ddoc([#simple_index_spec{index_name = <<"_all_docs">>} | _],
+get_first_ddoc([#simple_index_spec{ddoc_id = nil} = Spec | _],
         _UserCtx, _Timeout) ->
+    #simple_index_spec{index_name = <<"_all_docs">>} = Spec,
     {ok, nil, <<"_all_docs">>};
 
 get_first_ddoc([#set_view_spec{} = Spec | _], UserCtx, Timeout) ->
