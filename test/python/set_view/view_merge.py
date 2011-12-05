@@ -35,6 +35,12 @@ DDOC = {
                 "emit([doc.integer + 1, doc.string], doc.integer + 1);" \
                 "}",
             "reduce": "_sum"
+        },
+        "redview2": {
+            "map":  "function(doc) {" \
+                "emit(doc.integer, doc.string);" \
+                "}",
+            "reduce": "_count"
         }
     }
 }
@@ -83,6 +89,7 @@ class TestViewMerge(unittest.TestCase):
     def test_view_merge(self):
         self.do_test_mapview(self._params_local, self._params_remote)
         self.do_test_redview(self._params_local, self._params_remote)
+        self.do_test_redview2(self._params_local, self._params_remote)
         self.do_test_include_docs(self._params_local, self._params_remote)
         self.do_test_limit(self._params_local, self._params_remote)
         self.do_test_skip(self._params_local, self._params_remote)
@@ -165,6 +172,38 @@ class TestViewMerge(unittest.TestCase):
         _, result = self.query(local["host"], full_spec, params={"group_level": 1})
         self.assertEqual(len(result["rows"]), 10001,
                          "Query returned invalid number of rows (c)")
+
+
+    def do_test_redview2(self, local, remote):
+        local_spec = self.set_spec(local["setname"], "redview2", range(local["nparts"]))
+        remote_spec = self.set_spec(remote["setname"], "redview2", range(remote["nparts"]))
+        remote_merge = self.merge_spec(remote["host"], [], [remote_spec])
+
+        full_spec = self.views_spec([remote_merge], [local_spec])
+
+        expected_row_count = common.set_doc_count(local, range(local["nparts"])) + \
+            common.set_doc_count(remote, range(remote["nparts"]))
+        _, result = self.query(local["host"], full_spec, {"reduce": "false"})
+        self.assertEqual(len(result["rows"]), expected_row_count,
+            "redview2?reduce=false query returned %d rows" % expected_row_count)
+
+        common.test_keys_sorted(result)
+
+        _, result = self.query(local["host"], full_spec)
+        self.assertEqual(len(result["rows"]), 1, "redview2?reduce=true query returned 1 row")
+        self.assertEqual(result["rows"][0]["value"], expected_row_count,
+                         "Non-grouped reduce value is %d" % expected_row_count)
+
+        _, result = self.query(local["host"], full_spec, {"group": "true"})
+        self.assertEqual(len(result["rows"]), expected_row_count,
+            "redview2?group=true query returned %d rows" % expected_row_count)
+
+        for i in xrange(0, len(result["rows"]) - 1):
+            row1 = result["rows"][i]
+            row2 = result["rows"][i + 1]
+            self.assertTrue(row1["key"] < row2["key"], "row1.key < row2.key")
+            self.assertEqual(row1["value"], 1, "row1.value == 1")
+            self.assertEqual(row2["value"], 1, "row2.value == 1")
 
 
     def do_test_include_docs(self, local, remote):

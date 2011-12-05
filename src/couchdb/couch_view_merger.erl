@@ -437,7 +437,9 @@ prepare_set_view(ViewSpec, ViewArgs, Queue, GetSetViewFn) ->
             couch_set_view:release_group(Group),
             couch_view_merger_queue:queue(Queue, set_view_outdated),
             couch_view_merger_queue:done(Queue),
-            error
+            error;
+        {not_found, missing_named_view} ->
+            not_found
         end
     catch
     view_undefined ->
@@ -521,8 +523,21 @@ map_set_view_folder(ViewSpec, MergeParams, UserCtx, ViewArgs, DDoc, Queue) ->
 
     DDocDbName = ?master_dbname(SetName),
 
-    case prepare_set_view(ViewSpec, ViewArgs, Queue,
-                          fun couch_set_view:get_map_view/5) of
+    PrepareResult = case prepare_set_view(
+        ViewSpec, ViewArgs, Queue, fun couch_set_view:get_map_view/5) of
+    not_found ->
+        case prepare_set_view(
+            ViewSpec, ViewArgs, Queue, fun couch_set_view:get_reduce_view/5) of
+        {RedView, Group0} ->
+            {couch_set_view:extract_map_view(RedView), Group0};
+        Else ->
+            Else
+        end;
+    Else ->
+        Else
+    end,
+
+    case PrepareResult of
     error ->
         %%  handled by prepare_set_view
         ok;
