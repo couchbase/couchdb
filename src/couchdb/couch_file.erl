@@ -50,27 +50,7 @@ open(Filepath) ->
     open(Filepath, []).
 
 open(Filepath, Options) ->
-    case gen_server:start_link(couch_file,
-            {Filepath, Options, self(), Ref = make_ref()}, []) of
-    {ok, Fd} ->
-        {ok, Fd};
-    ignore ->
-        % get the error
-        receive
-        {Ref, Pid, Error} ->
-            case process_info(self(), trap_exit) of
-            {trap_exit, true} -> receive {'EXIT', Pid, _} -> ok end;
-            {trap_exit, false} -> ok
-            end,
-            case Error of
-            {error, eacces} -> {file_permission_error, Filepath};
-            _ -> Error
-            end
-        end;
-    Error ->
-        Error
-    end.
-
+    proc_lib:start_link(?MODULE, init, [{Filepath, Options}]).
 
 %%----------------------------------------------------------------------
 %% Purpose: To append an Erlang term to the end of the file.
@@ -257,25 +237,27 @@ write_header(Fd, Data) ->
     ok = gen_server:call(Fd, {write_header, FinalBin}, infinity).
 
 
-
-
-init_status_error(ReturnPid, Ref, Error) ->
-    ReturnPid ! {Ref, self(), Error},
-    ignore.
-
 % server functions
 
-init({Filepath, Options, ReturnPid, Ref}) ->
+init({Filepath, Options}) ->
    try
        ok = maybe_create_file(Filepath, Options),
        process_flag(trap_exit, true),
        {ok, Reader} = proc_lib:start_link(?MODULE, spawn_reader, [Filepath]),
        {ok, Writer, Eof} = proc_lib:start_link(?MODULE, spawn_writer, [Filepath]),
        maybe_track_open_os_files(Options),
-       {ok, #file{reader = Reader, writer = Writer, eof = Eof}}
+       proc_lib:init_ack({ok, self()}),
+       InitState = #file{
+           reader = Reader,
+           writer = Writer,
+           eof = Eof
+       },
+       gen_server:enter_loop(?MODULE, [], InitState)
    catch
+   error:{badmatch, {error, eacces}} ->
+       proc_lib:init_ack({file_permission_error, Filepath});
    error:{badmatch, Error} ->
-       init_status_error(ReturnPid, Ref, Error)
+       proc_lib:init_ack(Error)
    end.
 
 maybe_create_file(Filepath, Options) ->
