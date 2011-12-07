@@ -323,7 +323,7 @@ validate_map_key(void* vctx, const unsigned char* data, unsigned int size)
             }
         }
     }
-    yajl_string_encode2(fill_buffer_str, vctx, data, size);
+    fill_buffer_str(vctx, data, size);
     if (ctx->error)
         return CANCEL;
     ctx->bin.data[ctx->fill_offset++] = ':';
@@ -375,7 +375,7 @@ static int
 validate_string(void* vctx, const unsigned char* str, unsigned int size)
 {
     validate_ctx* ctx = (validate_ctx*)vctx;
-    yajl_string_encode2(fill_buffer_str, vctx, str, size);
+    fill_buffer_str(vctx, str, size);
     if (ctx->error)
         return CANCEL;
     ctx->bin.data[ctx->fill_offset++] = ',';
