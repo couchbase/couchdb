@@ -244,19 +244,6 @@ fill_buffer(validate_ctx* ctx, const char* str, unsigned int len)
     return CONTINUE;
 }
 
-/* on success, always ensures one extra char available in out bin */
-static void
-fill_buffer_str(void* vctx, const char* str, unsigned int len)
-{
-    validate_ctx* ctx = (validate_ctx*)vctx;
-    if (ctx->error || (ctx->error = ensure_buffer(ctx, len + 3)))
-        return;
-    ctx->bin.data[ctx->fill_offset++] = '"';
-    memcpy(ctx->bin.data + ctx->fill_offset, str, len);
-    ctx->fill_offset += len;
-    ctx->bin.data[ctx->fill_offset++] = '"';
-}
-
 static int
 validate_start_array(void* vctx)
 {
@@ -323,9 +310,13 @@ validate_map_key(void* vctx, const unsigned char* data, unsigned int size)
             }
         }
     }
-    fill_buffer_str(vctx, data, size);
-    if (ctx->error)
+    if (ctx->error || (ctx->error = ensure_buffer(ctx, 1)))
         return CANCEL;
+    ctx->bin.data[ctx->fill_offset++] = '"';
+    yajl_string_encode2(fill_buffer, vctx, data, size);
+    if (ctx->error || (ctx->error = ensure_buffer(ctx, 2)))
+        return CANCEL;
+    ctx->bin.data[ctx->fill_offset++] = '"';
     ctx->bin.data[ctx->fill_offset++] = ':';
     return CONTINUE;
 }
@@ -375,9 +366,13 @@ static int
 validate_string(void* vctx, const unsigned char* str, unsigned int size)
 {
     validate_ctx* ctx = (validate_ctx*)vctx;
-    fill_buffer_str(vctx, str, size);
-    if (ctx->error)
-        return CANCEL;
+    if (ctx->error || (ctx->error = ensure_buffer(ctx, 1)))
+        return;
+    ctx->bin.data[ctx->fill_offset++] = '"';
+    yajl_string_encode2(fill_buffer, vctx, str, size);
+    if (ctx->error || (ctx->error = ensure_buffer(ctx, 2)))
+        return;
+    ctx->bin.data[ctx->fill_offset++] = '"';
     ctx->bin.data[ctx->fill_offset++] = ',';
     return CONTINUE;
 }
