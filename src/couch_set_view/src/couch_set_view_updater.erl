@@ -17,10 +17,7 @@
 -include("couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
 
--define(QUEUE_MAX_ITEMS, 500).
--define(QUEUE_MAX_SIZE, 100 * 1024).
--define(MIN_FLUSH_BATCH_SIZE, 500).
--define(MIN_MAP_BATCH_SIZE, 500).
+-define(QUEUE_ITEMS, 500).
 -define(replace(L, K, V), lists:keystore(K, 1, L, {K, V})).
 
 
@@ -42,14 +39,14 @@ update(Owner, Group, NewSeqs) ->
         0, lists:zip(NewSeqs, SinceSeqs)),
 
     {ok, MapQueue} = couch_work_queue:new(
-        [{max_size, ?QUEUE_MAX_SIZE}, {max_items, ?QUEUE_MAX_ITEMS}]),
+        [{max_size, 100000}, {max_items, ?QUEUE_ITEMS}]),
     {ok, WriteQueue} = couch_work_queue:new(
-        [{max_size, ?QUEUE_MAX_SIZE}, {max_items, ?QUEUE_MAX_ITEMS}]),
+        [{max_size, 100000}, {max_items, ?QUEUE_ITEMS}]),
 
     ok = couch_indexer_manager:enter(),
 
     spawn_link(fun() ->
-        do_maps(add_query_server(Group), MapQueue, WriteQueue, [])
+        do_maps(add_query_server(Group), MapQueue, WriteQueue)
     end),
 
     Parent = self(),
@@ -228,44 +225,24 @@ load_doc(Db, PartitionId, DocInfo, MapQueue, DocOpts, IncludeDesign) ->
         end
     end.
 
-do_maps(#set_view_group{query_server = Qs} = Group, MapQueue, WriteQueue, Acc) ->
+do_maps(#set_view_group{query_server = Qs} = Group, MapQueue, WriteQueue) ->
     case couch_work_queue:dequeue(MapQueue) of
     closed ->
-        compute_map_results(Group, WriteQueue, Acc),
         couch_work_queue:close(WriteQueue),
-        couch_query_servers:stop_doc_map(Qs);
+        couch_query_servers:stop_doc_map(Group#set_view_group.query_server);
     {ok, Queue} ->
-        Acc2 = Acc ++ Queue,
-        case length(Acc2) >= ?MIN_MAP_BATCH_SIZE of
-        true ->
-            compute_map_results(Group, WriteQueue, Acc2),
-            do_maps(Group, MapQueue, WriteQueue, []);
-        false ->
-            do_maps(Group, MapQueue, WriteQueue, Acc2)
-        end
+        lists:foreach(
+            fun({Seq, #doc{id = Id, deleted = true}, PartitionId}) ->
+                Item = {Seq, Id, PartitionId, []},
+                ok = couch_work_queue:queue(WriteQueue, Item);
+            ({Seq, #doc{id = Id, deleted = false} = Doc, PartitionId}) ->
+                {ok, Result} = couch_query_servers:map_doc_raw(Qs, Doc),
+                Item = {Seq, Id, PartitionId, Result},
+                ok = couch_work_queue:queue(WriteQueue, Item)
+            end,
+            Queue),
+        do_maps(Group, MapQueue, WriteQueue)
     end.
-
-
-compute_map_results(_Group, _WriteQueue, []) ->
-    ok;
-compute_map_results(#set_view_group{query_server = Qs}, WriteQueue, Queue) ->
-    {Deleted, NotDeleted} = lists:partition(
-        fun({_Seq, Doc, _PartId}) -> Doc#doc.deleted end,
-        Queue),
-    NotDeletedDocs = [Doc || {_Seq, Doc, _PartId} <- NotDeleted],
-    {ok, MapResultList} = couch_query_servers:map_docs_raw(Qs, NotDeletedDocs),
-    lists:foreach(
-        fun({MapResults, {Seq, Doc, PartId}}) ->
-            Item = {Seq, Doc#doc.id, PartId, MapResults},
-            ok = couch_work_queue:queue(WriteQueue, Item)
-        end,
-        lists:zip(MapResultList, NotDeleted)),
-    lists:foreach(
-        fun({Seq, #doc{id = Id, deleted = true}, PartId}) ->
-            Item = {Seq, Id, PartId, []},
-            ok = couch_work_queue:queue(WriteQueue, Item)
-        end,
-        Deleted).
 
 
 do_writes(Parent, Owner, Group, WriteQueue, InitialBuild, ViewEmptyKVs, Acc) ->
@@ -274,7 +251,7 @@ do_writes(Parent, Owner, Group, WriteQueue, InitialBuild, ViewEmptyKVs, Acc) ->
         flush_writes(Parent, Owner, Group, InitialBuild, ViewEmptyKVs, Acc);
     {ok, Queue} ->
         Acc2 = Acc ++ Queue,
-        case length(Acc2) >= ?MIN_FLUSH_BATCH_SIZE of
+        case length(Acc2) >= ?QUEUE_ITEMS of
         true ->
             Group2 = flush_writes(Parent, Owner, Group, InitialBuild, ViewEmptyKVs, Acc2),
             NewAcc = [];
