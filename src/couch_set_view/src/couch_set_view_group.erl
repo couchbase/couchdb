@@ -127,9 +127,16 @@ define_view(Pid, Params) ->
     false ->
         ok
     end,
-    ok = gen_server:call(
+    R = gen_server:call(
         Pid, {define_view, NumPartitions, ActiveList, ActiveBitmask,
-            PassiveList, PassiveBitmask}, infinity).
+            PassiveList, PassiveBitmask}, infinity),
+
+    case R of
+    ok ->
+        ok;
+    view_already_defined ->
+        throw(view_already_defined)
+    end.
 
 is_view_defined(Pid) ->
     gen_server:call(Pid, is_view_defined, infinity).
@@ -256,6 +263,10 @@ handle_call({define_view, NumPartitions, ActiveList, ActiveBitmask,
               "initial passive partitions ~w",
               [?set_name(State), DDocId, NumPartitions, ActiveList, PassiveList]),
     {reply, ok, NewState, ?CLEANUP_TIMEOUT};
+
+handle_call({define_view, _NumPartitions, _ActiveList, _ActiveBitmask,
+    _PassiveList, _PassiveBitmask}, _From, State) ->
+    {reply, view_already_defined, State};
 
 handle_call(is_view_defined, _From, #state{group = Group} = State) ->
     {reply, is_integer(?set_num_partitions(Group)), State, ?CLEANUP_TIMEOUT};
