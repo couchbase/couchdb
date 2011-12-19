@@ -497,9 +497,14 @@ http_index_folder(Mod, IndexSpec, MergeParams, IndexArgs, DDoc, Queue) ->
     {Url, Method, Headers, Body, Options} = Mod:http_index_folder_req_details(
         IndexSpec, MergeParams, IndexArgs, DDoc),
     {ok, Conn} = ibrowse:spawn_link_worker_process(Url),
+
+    #index_merge{
+        conn_timeout = Timeout
+    } = MergeParams,
+
     R = ibrowse:send_req_direct(
             Conn, Url, Headers, Method, Body,
-            [{stream_to, {self(), once}} | Options]),
+            [{stream_to, {self(), once}} | Options], Timeout),
 
     case R of
     {error, Reason} ->
