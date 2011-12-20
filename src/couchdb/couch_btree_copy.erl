@@ -167,7 +167,7 @@ finish_copy(#acc{cur_level = Level, max_level = Level, nodes = Nodes} = Acc) ->
 
 finish_copy(#acc{cur_level = Level, nodes = Nodes} = Acc) ->
     case dict:fetch(Level, Nodes) of
-    [] when Level =:= 1 ->
+    [] ->
         Acc2 = Acc#acc{cur_level = Level + 1},
         finish_copy(Acc2);
     [{LastKey, _} | _] = NodeList ->

@@ -29,7 +29,7 @@ path(FileName) ->
 
 main(_) ->
     test_util:init_code_path(),
-    etap:plan(72),
+    etap:plan(76),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -55,6 +55,7 @@ test() ->
     test_copy(700, ReduceCount),
     test_copy(811, ReduceCount),
     test_copy(2333, ReduceCount),
+    test_copy(6594, ReduceCount),
     test_copy(6666, ReduceCount),
     test_copy(9999, ReduceCount),
     test_copy(15003, ReduceCount),
@@ -68,6 +69,7 @@ test() ->
 
 
 test_copy(NumItems, ReduceFun) ->
+    etap:diag("Running btree copy test for " ++ integer_to_list(NumItems) ++ " items"),
     KVs = [{I, I} || I <- lists:seq(1, NumItems)],
 
     OriginalFileName = path(
