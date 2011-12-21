@@ -16,6 +16,7 @@
 
 -export([start_server/0, stop_server/0]).
 -export([create_set_dbs/2, delete_set_dbs/2]).
+-export([open_set_db/2, get_db_main_pid/1, delete_set_db/2]).
 -export([populate_set_alternated/3, update_ddoc/2, delete_ddoc/2]).
 -export([define_set_view/5]).
 -export([query_view/3, query_view/4]).
@@ -23,6 +24,7 @@
 -export([get_db_ref_counters/2, compact_set_dbs/3]).
 
 -include("couch_db.hrl").
+-include_lib("couch_set_view/include/couch_set_view.hrl").
 
 
 start_server() ->
@@ -227,3 +229,19 @@ open_set_dbs(SetName, Partitions) ->
             Db
         end,
         Partitions).
+
+
+open_set_db(SetName, master) ->
+    {ok, _} = couch_db:open_int(?master_dbname(SetName), [admin_user_ctx()]);
+open_set_db(SetName, PartId) ->
+    {ok, _} = couch_db:open_int(?dbname(SetName, PartId), [admin_user_ctx()]).
+
+
+get_db_main_pid(#db{main_pid = Pid}) ->
+    Pid.
+
+
+delete_set_db(SetName, master) ->
+    ok = couch_server:delete(?master_dbname(SetName), [admin_user_ctx()]);
+delete_set_db(SetName, PartId) ->
+    ok = couch_server:delete(?dbname(SetName, PartId), [admin_user_ctx()]).

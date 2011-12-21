@@ -448,7 +448,8 @@ handle_info({'EXIT', FromPid, Reason}, Server) ->
 handle_info({'DOWN', _, _, _, {SetName, DDocId, Sig, Reply}}, Server) ->
     [{_, WaitList}] = ets:lookup(couch_sig_to_setview_pid, {SetName, Sig}),
     [gen_server:reply(From, Reply) || From <- WaitList],
-    case Reply of {ok, NewPid} ->
+    case Reply of
+    {ok, NewPid} ->
         link(NewPid),
         add_to_ets(NewPid, SetName, DDocId, Sig);
     _ ->
@@ -471,7 +472,11 @@ code_change(_OldVsn, State, _Extra) ->
 
 
 delete_index_dir(RootDir, SetName) ->
-    nuke_dir(RootDir, RootDir ++ "/set_view_" ++ ?b2l(SetName) ++ "_design/").
+    DirName = set_index_dir(RootDir, SetName),
+    nuke_dir(RootDir, DirName).
+
+set_index_dir(RootDir, SetName) ->
+    RootDir ++ "/set_view_" ++ ?b2l(SetName) ++ "_design/".
 
 nuke_dir(RootDelDir, Dir) ->
     case file:list_dir(Dir) of
@@ -492,26 +497,43 @@ nuke_dir(RootDelDir, Dir) ->
 
 maybe_reset_indexes(DbName, Root) ->
     case string:tokens(?b2l(DbName), "/") of
-    [SetName0, "master"] ->
-        SetName = ?l2b(SetName0),
-        lists:foreach(
-            fun({_SetName, {DDocId, Sig}} = Key) ->
-                [{_, Pid}] = ets:lookup(couch_sig_to_setview_pid, Key),
-                couch_util:shutdown_sync(Pid),
-                delete_from_ets(Pid, SetName, DDocId, Sig)
-            end,
-            ets:lookup(couch_setview_name_to_sig, SetName)),
-        delete_index_dir(Root, SetName);
-    [SetName0, PartId0] ->
-        SetName = ?l2b(SetName0),
-        case (catch list_to_integer(PartId0)) of
-        PartId when is_number(PartId) ->
-            delete_index_dir(Root, SetName);
-        _ ->
+    [SetName, "master"] ->
+        reset_indexes(?l2b(SetName), DbName, master, Root);
+    [SetName, Rest] ->
+        PartId = (catch list_to_integer(Rest)),
+        case is_integer(PartId) of
+        true ->
+            reset_indexes(?l2b(SetName), DbName, PartId, Root);
+        false ->
             ok
         end;
     _ ->
-        nil
+        ok
+    end.
+
+reset_indexes(SetName, DbName, PartId, RootDir) ->
+    DeleteIndexDir = lists:foldl(
+        fun({_SetName, {DDocId, Sig}}, Acc) ->
+            [{_, Pid}] = ets:lookup(couch_sig_to_setview_pid, {SetName, Sig}),
+            case couch_set_view_group:partition_deleted(Pid, PartId) of
+            shutdown ->
+                ?LOG_INFO("View group `~s` for set `~s` (PID ~p), shutdown because "
+                    "database `~s` was deleted", [DDocId, SetName, Pid, DbName]),
+                delete_from_ets(Pid, SetName, DDocId, Sig),
+                Acc;
+            ignore ->
+                false
+            end
+        end,
+        true,
+        ets:lookup(couch_setview_name_to_sig, SetName)),
+    case DeleteIndexDir andalso filelib:is_dir(set_index_dir(RootDir, SetName)) of
+    true ->
+        ?LOG_INFO("Deleting index files for set `~s` because database "
+            "partition `~s` was deleted", [SetName, DbName]),
+        delete_index_dir(RootDir, SetName);
+    false ->
+        ok
     end.
 
 % keys come back in the language of btree - tuples.

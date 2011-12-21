@@ -19,6 +19,7 @@
 -export([request_group/2, release_group/1]).
 -export([is_view_defined/1, define_view/2]).
 -export([set_state/4]).
+-export([partition_deleted/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -108,6 +109,19 @@ request_group_info(Pid) ->
         {ok, GroupInfoList};
     Error ->
         throw(Error)
+    end.
+
+% Returns 'ignore' or 'shutdown'.
+partition_deleted(_Pid, master) ->
+    shutdown;
+partition_deleted(Pid, PartId) ->
+    try
+        gen_server:call(Pid, {partition_deleted, PartId}, infinity)
+    catch
+    _:_ ->
+        % May have stopped already, because partition was part of the
+        % group's db set (active or passive partition).
+        shutdown
     end.
 
 define_view(Pid, Params) ->
@@ -276,6 +290,16 @@ handle_call(_Msg, _From, #state{
             index_header = #set_view_index_header{num_partitions = nil}
         }} = State) ->
     {reply, view_undefined, State};
+
+handle_call({partition_deleted, PartId}, _From, #state{group = Group} = State) ->
+    Mask = 1 bsl PartId,
+    case ((?set_abitmask(Group) band Mask) =/= 0) orelse
+        ((?set_pbitmask(Group) band Mask) =/= 0) of
+    true ->
+        {stop, shutdown, shutdown, State};
+    false ->
+        {reply, ignore, State}
+    end;
 
 handle_call({set_state, ActiveList, PassiveList, CleanupList}, From, State) ->
     try
