@@ -161,7 +161,7 @@ handle_design_req(#httpd{
     }=Req, Db) ->
     % load ddoc
     DesignId = <<"_design/", DesignName/binary>>,
-    DDoc = DbFrontend:open_doc(Db, DesignId, [ejson_body]),
+    {ok, DDoc} = DbFrontend:open_doc(Db, DesignId, [ejson_body]),
     Handler = couch_util:dict_find(Action, DesignUrlHandlers, fun(_, _, _) ->
             throw({not_found, <<"missing handler: ", Action/binary>>})
         end),
@@ -615,11 +615,7 @@ db_doc_req(Req, _Db, _DocId) ->
 send_doc(Req, Doc, Options) ->
     case Doc#doc.meta of
     [] ->
-        DiskEtag = couch_httpd:doc_etag(Doc),
-        % output etag only when we have no meta
-        couch_httpd:etag_respond(Req, DiskEtag, fun() ->
-            send_doc_efficiently(Req, Doc, [{"Etag", DiskEtag}], Options)
-        end);
+        send_doc_efficiently(Req, Doc, [], Options);
     _ ->
         send_doc_efficiently(Req, Doc, [], Options)
     end.

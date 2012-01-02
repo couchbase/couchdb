@@ -656,7 +656,7 @@ view_row_obj(Db, {{Key, DocId}, {Props}}, true, Conflicts) ->
     IncludeId = couch_util:get_value(<<"_id">>, Props, DocId),
     view_row_with_doc(Db, {{Key, DocId}, {Props}}, IncludeId, Conflicts);
 view_row_obj(Db, {{Key, DocId}, Value}, true, Conflicts) ->
-    view_row_with_doc(Db, {{Key, DocId}, Value}, {DocId, nil}, Conflicts);
+    view_row_with_doc(Db, {{Key, DocId}, Value}, DocId, Conflicts);
 % the normal case for rendering a view row
 view_row_obj(_Db, {{Key, DocId}, Value}, _IncludeDocs, _Conflicts) ->
     {[{id, DocId}, {key, Key}, {value, Value}]}.
