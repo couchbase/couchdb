@@ -12,7 +12,7 @@
 
 -module(couch_compress).
 
--export([compress/2, decompress/1, is_compressed/1]).
+-export([compress/2, compress_bin/2, decompress/1, is_compressed/1]).
 -export([get_compression_method/0]).
 
 -include("couch_db.hrl").
@@ -38,6 +38,27 @@ get_compression_method() ->
             list_to_existing_atom(Method);
         [Method, Level] ->
             {list_to_existing_atom(Method), list_to_integer(Level)}
+        end
+    end.
+
+
+compress_bin(Bin, none) ->
+    Bin;
+compress_bin(Bin, snappy) ->
+    case byte_size(Bin) < ?SNAPPY_COMPRESS_THRESHOLD of
+    true ->
+        Bin;
+    false ->
+        try
+            {ok, CompressedBin} = snappy:compress(Bin),
+            case byte_size(CompressedBin) < byte_size(Bin) of
+            true ->
+                <<?SNAPPY_PREFIX, CompressedBin/binary>>;
+            false ->
+                Bin
+            end
+        catch exit:snappy_nif_not_loaded ->
+            Bin
         end
     end.
 

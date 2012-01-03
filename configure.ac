@@ -134,6 +134,12 @@ AC_ARG_WITH([erlang], [AC_HELP_STRING([--with-erlang=PATH],
           ])
 ])
 
+ERL_INTERFACE_DIR_INCLUDE="-I`${ERL} -eval 'io:put_chars(code:lib_dir(erl_interface) ++ "/include"), erlang:halt().' -noshell -noinput`"
+AC_SUBST(ERL_INTERFACE_DIR_INCLUDE)
+
+ERL_INTERFACE_DIR_LIB="-L`${ERL} -eval 'io:put_chars(code:lib_dir(erl_interface) ++ "/lib"), erlang:halt().' -noshell -noinput`"
+AC_SUBST(ERL_INTERFACE_DIR_LIB)
+
 AC_ARG_WITH([js-include], [AC_HELP_STRING([--with-js-include=PATH],
     [set PATH to the SpiderMonkey include directory])], [
     JS_INCLUDE="$withval"
@@ -500,6 +506,8 @@ if test x${IS_WINDOWS} = xTRUE; then
 else
     AC_SUBST([locallibbindir], [${locallibdir}/bin])
     AC_SUBST([localerlanglibdir], [${locallibdir}/erlang/lib])
+    AC_SUBST([localerl_interfacelibdir], [${locallibdir}/erlang/lib])
+    AC_SUBST([localerl_interfaceincdir], [${locallibdir}/erlang/lib])
 fi
 
 # fix for older autotools that don't define "abs_top_YYY" by default

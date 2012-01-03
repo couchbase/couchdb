@@ -426,7 +426,7 @@ update_docs_int(Db, DocsList, NonRepDocs, FullCommit) ->
             {K, V} = btree_by_id_split(DocInfo),
             [{fetch, K, nil}, {insert, K, V}]
         end, NewDocInfos),
-    {ok, OldInfos, DocInfoByIdBTree2} = couch_btree:query_modify_raw(
+    {ok, OldInfos, DocInfoByIdBTree2} = couch_btree_nif:query_modify_raw(Db,
             DocInfoByIdBTree, RawKeys),
 
     OldSeqs = [OldSeq || {ok, #doc_info{local_seq=OldSeq}} <- OldInfos],
@@ -435,7 +435,7 @@ update_docs_int(Db, DocsList, NonRepDocs, FullCommit) ->
             {K, V} = btree_by_seq_split(DocInfo),
             {insert, K, V}
         end, NewDocInfos),
-    {ok, [], DocInfoBySeqBTree2} = couch_btree:query_modify_raw(DocInfoBySeqBTree, RemoveBySeq ++ InsertBySeq),
+    {ok, [], DocInfoBySeqBTree2} = couch_btree_nif:query_modify_raw(Db, DocInfoBySeqBTree, RemoveBySeq ++ InsertBySeq),
 
     {ok, Db2} = update_local_docs(Db, NonRepDocs),
 

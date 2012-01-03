@@ -451,6 +451,16 @@ handle_cast(unused, Fd) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
+handle_info(heart, File) ->
+    {noreply, File};
+handle_info({append_bin_btnif, Comp, Rsrc, TermBin}, #file{writer = W, eof = Pos} = File) ->
+    Bin = assemble_file_chunk(couch_compress:compress_bin(TermBin, Comp)),
+    Size = calculate_total_read_len(Pos rem ?SIZE_BLOCK, iolist_size(Bin)),
+    couch_btree_nif:write_response(Rsrc, Pos, Size),
+    W ! {chunk, Bin},
+    {noreply, File#file{eof = Pos + Size}};
+handle_info({'EXIT', _, normal}, Fd) ->
+    {noreply, Fd};
 handle_info({'EXIT', Pid, Reason}, #file{writer = Pid} = Fd) ->
     {stop, {write_loop_died, Reason}, Fd};
 handle_info({'EXIT', Pid, Reason}, #file{reader = Pid} = Fd) ->
