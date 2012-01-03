@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 
 import sys
+sys.path.insert(0, "../lib")
+sys.path.insert(0, "common")
 import unittest
 
 # set view test files
@@ -23,10 +25,6 @@ from view_params import TestViewParams
 
 
 def main():
-    if sys.version_info < (2, 7):
-        print "You need Python 2.7 or higher."
-        sys.exit(1)
-
     suite = unittest.TestSuite()
 
     suite.addTest(unittest.makeSuite(TestIncludeDocs))
@@ -46,7 +44,10 @@ def main():
     suite.addTest(unittest.makeSuite(TestErlangViews))
     suite.addTest(unittest.makeSuite(TestReplicaIndex))
 
-    unittest.TextTestRunner(verbosity = 2, failfast = True).run(suite)
+    if sys.version_info < (2, 7):
+        unittest.TextTestRunner(verbosity = 2).run(suite)
+    else:
+        unittest.TextTestRunner(verbosity = 2, failfast = True).run(suite)
 
 
 main()

@@ -1,8 +1,5 @@
 #!/usr/bin/python
 
-import sys
-sys.path.append("../lib")
-sys.path.append("common")
 try: import simplejson as json
 except ImportError: import json
 import couchdb

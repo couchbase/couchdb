@@ -1,8 +1,5 @@
 #!/usr/bin/env python
 
-import sys
-sys.path.append("../lib")
-sys.path.append("common")
 from copy import deepcopy
 
 import couchdb
@@ -48,10 +45,9 @@ DDOC = {
 
 class TestViewMerge(unittest.TestCase):
 
-    @classmethod
-    def setUpClass(cls):
+    def setUp(self):
         server = couchdb.Server(url = "http://" + HOST)
-        cls._params_local = {
+        self._params_local = {
             "host": HOST,
             "ddoc": deepcopy(DDOC),
             "nparts": NUM_PARTS,
@@ -59,7 +55,7 @@ class TestViewMerge(unittest.TestCase):
             "setname": SET_NAME_LOCAL,
             "server": server
             }
-        cls._params_remote = {
+        self._params_remote = {
             "host": HOST,
             "ddoc": deepcopy(DDOC),
             "nparts": NUM_PARTS,
@@ -69,21 +65,20 @@ class TestViewMerge(unittest.TestCase):
             "server": server
             }
         # print "Creating databases"
-        common.create_dbs(cls._params_local)
-        common.create_dbs(cls._params_remote)
-        common.populate(cls._params_local)
-        common.populate(cls._params_remote)
+        common.create_dbs(self._params_local)
+        common.create_dbs(self._params_remote)
+        common.populate(self._params_local)
+        common.populate(self._params_remote)
 
-        common.define_set_view(cls._params_local, range(NUM_PARTS), [])
-        common.define_set_view(cls._params_remote, range(NUM_PARTS), [])
+        common.define_set_view(self._params_local, range(NUM_PARTS), [])
+        common.define_set_view(self._params_remote, range(NUM_PARTS), [])
         # print "Databases created"
 
 
-    @classmethod
-    def tearDownClass(cls):
+    def tearDown(self):
         # print "Deleting test data"
-        common.create_dbs(cls._params_local, True)
-        common.create_dbs(cls._params_remote, True)
+        common.create_dbs(self._params_local, True)
+        common.create_dbs(self._params_remote, True)
 
 
     def test_view_merge(self):

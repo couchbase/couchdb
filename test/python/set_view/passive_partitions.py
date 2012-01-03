@@ -1,8 +1,5 @@
 #!/usr/bin/python
 
-import sys
-sys.path.append("../lib")
-sys.path.append("common")
 try: import simplejson as json
 except ImportError: import json
 import couchdb
@@ -42,9 +39,8 @@ DDOC = {
 
 class TestPassivePartitions(unittest.TestCase):
 
-    @classmethod
-    def setUpClass(cls):
-        cls._params = {
+    def setUp(self):
+        self._params = {
             "host": HOST,
             "ddoc": DDOC,
             "nparts": NUM_PARTS,
@@ -53,22 +49,22 @@ class TestPassivePartitions(unittest.TestCase):
             "server": couchdb.Server(url = "http://" + HOST)
             }
         # print "Creating databases"
-        common.create_dbs(cls._params)
-        common.populate(cls._params)
-        common.define_set_view(cls._params, range(NUM_PARTS), [])
+        common.create_dbs(self._params)
+        common.populate(self._params)
+        common.define_set_view(self._params, range(NUM_PARTS), [])
         # print "Databases created"
 
 
-    @classmethod
-    def tearDownClass(cls):
+    def tearDown(self):
         # print "Deleting test data"
-        common.create_dbs(cls._params, True)
+        common.create_dbs(self._params, True)
 
 
     def test_passive_partitions(self):
         self.do_test_maps()
         self.do_test_reduce("redview1")
         self.do_test_reduce("redview2")
+        self.do_test_view_updates()
 
 
     def do_test_maps(self):
@@ -409,7 +405,7 @@ class TestPassivePartitions(unittest.TestCase):
                          "Same number of rows for responses 9 and 10")
 
 
-    def test_view_updates(self):
+    def do_test_view_updates(self):
         # print "Setting partition 2 state to passive"
         common.set_partition_states(self._params, passive = [1])
 

@@ -1,8 +1,5 @@
 #!/usr/bin/python
 
-import sys
-sys.path.append("../lib")
-sys.path.append("common")
 try: import simplejson as json
 except ImportError: import json
 import couchdb
@@ -33,9 +30,8 @@ DDOC = {
 
 class TestCompaction(unittest.TestCase):
 
-    @classmethod
-    def setUpClass(cls):
-        cls._params = {
+    def setUp(self):
+        self._params = {
             "host": HOST,
             "ddoc": DDOC,
             "nparts": NUM_PARTS,
@@ -44,16 +40,15 @@ class TestCompaction(unittest.TestCase):
             "server": couchdb.Server(url = "http://" + HOST)
             }
         # print "Creating databases"
-        common.create_dbs(cls._params)
-        common.populate(cls._params)
-        common.define_set_view(cls._params, range(NUM_PARTS), [])
+        common.create_dbs(self._params)
+        common.populate(self._params)
+        common.define_set_view(self._params, range(NUM_PARTS), [])
         # print "Databases created"
 
 
-    @classmethod
-    def tearDownClass(cls):
+    def tearDown(self):
         # print "Deleting test data"
-        common.create_dbs(cls._params, True)
+        common.create_dbs(self._params, True)
 
 
     def test_compaction(self):

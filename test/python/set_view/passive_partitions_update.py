@@ -1,8 +1,5 @@
 #!/usr/bin/python
 
-import sys
-sys.path.append("../lib")
-sys.path.append("common")
 try: import simplejson as json
 except ImportError: import json
 import couchdb
@@ -29,9 +26,8 @@ DDOC = {
 
 class TestPassivePartitionsUpdate(unittest.TestCase):
 
-    @classmethod
-    def setUpClass(cls):
-        cls._params = {
+    def setUp(self):
+        self._params = {
             "host": HOST,
             "ddoc": DDOC,
             "nparts": NUM_PARTS,
@@ -41,10 +37,9 @@ class TestPassivePartitionsUpdate(unittest.TestCase):
             }
 
 
-    @classmethod
-    def tearDownClass(cls):
+    def tearDown(self):
         # print "Deleting test data"
-        common.create_dbs(cls._params, True)
+        common.create_dbs(self._params, True)
 
 
     def test_updates(self):

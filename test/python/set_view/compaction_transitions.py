@@ -1,8 +1,5 @@
 #!/usr/bin/python
 
-import sys
-sys.path.append("../lib")
-sys.path.append("common")
 try: import simplejson as json
 except ImportError: import json
 import couchdb
@@ -30,9 +27,8 @@ DDOC = {
 
 class TestCompactionTransitions(unittest.TestCase):
 
-    @classmethod
-    def setUpClass(cls):
-        cls._params = {
+    def setUp(self):
+        self._params = {
             "host": HOST,
             "ddoc": DDOC,
             "nparts": NUM_PARTS,
@@ -41,19 +37,18 @@ class TestCompactionTransitions(unittest.TestCase):
             "server": couchdb.Server(url = "http://" + HOST)
             }
         # print "Creating databases"
-        common.create_dbs(cls._params)
-        common.populate(cls._params)
+        common.create_dbs(self._params)
+        common.populate(self._params)
         # print "Configuring set view with:"
         # print "\tmaximum of 8 partitions"
         # print "\tactive partitions = [0, 1, 2, 3, 4]"
         # print "\tpassive partitions = []"
-        common.define_set_view(cls._params, [0, 1, 2, 3], [])
+        common.define_set_view(self._params, [0, 1, 2, 3], [])
 
 
-    @classmethod
-    def tearDownClass(cls):
+    def tearDown(self):
         # print "Deleting test data"
-        common.create_dbs(cls._params, True)
+        common.create_dbs(self._params, True)
 
 
     def test_compaction_transitions(self):
