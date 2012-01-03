@@ -33,6 +33,7 @@
 
 -include("couch_db.hrl").
 
+-define(FD_CLOSE_TIMEOUT_MS, 10). % Fds will close after msecs of non-use
 
 start_link(DbName, Filepath, Options) ->
     case open_db_file(Filepath, Options) of
@@ -45,7 +46,8 @@ start_link(DbName, Filepath, Options) ->
     end.
 
 open_db_file(Filepath, Options) ->
-    case couch_file:open(Filepath, Options) of
+    case couch_file:open(Filepath,
+            [{fd_close_after, ?FD_CLOSE_TIMEOUT_MS} | Options]) of
     {ok, Fd} ->
         {ok, Fd};
     {error, enoent} ->
@@ -56,7 +58,8 @@ open_db_file(Filepath, Options) ->
             ?LOG_INFO("Found ~s~s compaction file, using as primary storage.", [Filepath, ".compact"]),
             ok = file:rename(Filepath ++ ".compact", Filepath),
             ok = couch_file:sync(Fd),
-            {ok, Fd};
+            couch_file:close(Fd),
+            open_db_file(Filepath, Options);
         {error, enoent} ->
             {not_found, no_db_file}
         end;
@@ -427,7 +430,7 @@ update_docs(#db{name=DbName}=Db, Docs, Options0) ->
     end,
     Options = set_commit_option(Options0),
     FullCommit = lists:member(full_commit, Options),
-    Docs3 = write_doc_bodies(Db, Docs2),
+    Docs3 = write_doc_bodies_retry_closed(Db, Docs2),
     MRef = erlang:monitor(process, Db#db.update_pid),
     try
         Db#db.update_pid ! {update_docs, self(), Docs3, NonRepDocs,
@@ -487,19 +490,36 @@ get_result(UpdatePid, MRef) ->
     end.
 
 
+write_doc_bodies_retry_closed(Db, Docs) ->
+    try
+        write_doc_bodies(Db, Docs)
+    catch
+        throw:{update_error, compaction_retry} ->
+            {ok, Db2} = open_ref_counted(Db#db.main_pid, self()),
+            % We only retry once
+            Docs2 = write_doc_bodies(Db2, Docs),
+            close(Db2),
+            Docs2
+    end.
+
+
 write_doc_bodies(Db, Docs) ->
     lists:map(
         fun(#doc{json = Body, binary = Binary} = Doc) ->
             Prepped = prep_doc_body_binary(Body, Binary),
-            {ok, BodyPtr, Size} = couch_file:append_binary_crc32(Db#db.fd, Prepped),
-            #doc_update_info{
-                id=Doc#doc.id,
-                rev=Doc#doc.rev,
-                deleted=Doc#doc.deleted,
-                body_ptr=BodyPtr,
-                fd=Db#db.fd,
-                size=Size
-            }
+            case couch_file:append_binary_crc32(Db#db.fd, Prepped) of
+            {ok, BodyPtr, Size} ->
+                #doc_update_info{
+                    id=Doc#doc.id,
+                    rev=Doc#doc.rev,
+                    deleted=Doc#doc.deleted,
+                    body_ptr=BodyPtr,
+                    fd=Db#db.fd,
+                    size=Size
+                };
+            {error, write_closed} ->
+                throw({update_error, compaction_retry})
+            end
         end,
         Docs).
 

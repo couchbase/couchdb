@@ -21,7 +21,7 @@ filename() -> test_util:build_file("test/etap/temp.010").
 
 main(_) ->
     test_util:init_code_path(),
-    etap:plan(19),
+    etap:plan(21),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -41,7 +41,8 @@ test() ->
         "Invalid flags to open are ignored."
     ),
 
-    {ok, Fd} = couch_file:open(filename() ++ ".0", [create, overwrite]),
+    {ok, Fd} = couch_file:open(filename() ++ ".0", [create, overwrite,
+                {fd_close_after, 1}]),
     etap:ok(is_pid(Fd),
         "Returned file descriptor is a Pid"),
 
@@ -109,9 +110,20 @@ test() ->
     %    "Reading data that was truncated fails.")
     etap:skip(fun() -> ok end,
         "No idea how to test reading beyond EOF"),
+    
+    % make sure we can read after sleeping beyond the fd_close_after timeout
+     ok = timer:sleep(1000),
 
     etap:is({ok, foo}, couch_file:pread_term(Fd, 0),
         "Truncating does not affect data located before the truncation mark."),
+
+    ok = couch_file:only_snapshot_reads(Fd),
+
+    etap:is({error, write_closed}, couch_file:append_term(Fd, shouldntwork),
+        "Cannot write to files with snaphot_reads called"),
+
+    etap:is({ok, foo}, couch_file:pread_term(Fd, 0),
+        "Can read from files with snaphot_reads called"),
 
     etap:is(ok, couch_file:close(Fd),
         "Files close properly."),

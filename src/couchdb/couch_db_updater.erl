@@ -154,7 +154,7 @@ handle_call(cancel_compact, _From, #db{compactor_info = Pid} = Db) ->
 
 
 handle_call({compact_done, CompactFilepath}, _From, #db{filepath=Filepath,
-        main_pid=MainPid}=Db) ->
+        main_pid=MainPid, fd=OldFd}=Db) ->
     {ok, NewFd} = couch_file:open(CompactFilepath),
     {ok, NewHeader} = couch_file:read_header(NewFd),
     #db{update_seq=NewSeq} = NewDb =
@@ -185,6 +185,7 @@ handle_call({compact_done, CompactFilepath}, _From, #db{filepath=Filepath,
         {'EXIT', MainPid, Reason} ->
             exit(Reason)
         end,
+        couch_file:only_snapshot_reads(OldFd),
         couch_file:delete(RootDir, Filepath),
         ok = file:rename(CompactFilepath, Filepath),
         MainPid ! compaction_file_switch_done,

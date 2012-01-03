@@ -29,7 +29,7 @@
 -export([append_binary/2, append_binary_crc32/2]).
 -export([append_raw_chunk/2, assemble_file_chunk/1, assemble_file_chunk/2]).
 -export([append_term/2, append_term/3, append_term_crc32/2, append_term_crc32/3]).
--export([write_header/2, read_header/1]).
+-export([write_header/2, read_header/1,only_snapshot_reads/1]).
 -export([delete/2, delete/3, init_delete_dir/1]).
 
 % gen_server callbacks
@@ -37,10 +37,15 @@
 -export([handle_call/3, handle_cast/2, handle_info/2]).
 
 % for proc_lib
--export([spawn_reader/1, spawn_writer/1]).
+-export([spawn_reader/2, spawn_writer/2]).
 
 %%----------------------------------------------------------------------
 %% Args:   Valid Options are [create] and [create,overwrite].
+%%  and [{fd_close_after, Ms}].
+%%  The fd_close_after will close the OS file descriptor if not used
+%% for the specified # of Millisecs. When using the fd_close_after option
+%% with any setting but 'infinity', the file should not be renamed or deleted
+%% while in use, as the file will not be able to reopen the same file.
 %%  Files are opened in read/write mode.
 %% Returns: On success, {ok, Fd}
 %%  or {error, Reason} if the file could not be opened.
@@ -182,6 +187,14 @@ flush(Fd) ->
 close(Fd) ->
     couch_util:shutdown_sync(Fd).
 
+%%----------------------------------------------------------------------
+%% Purpose: Prevents writing to the file and keeps the read file open.
+%% This allows the file to be used after deletion for snapshot reads
+%% Returns: ok
+%%----------------------------------------------------------------------
+only_snapshot_reads(Fd) ->
+    gen_server:call(Fd, snapshot_reads, infinity).
+
 
 delete(RootDir, Filepath) ->
     delete(RootDir, Filepath, true).
@@ -241,10 +254,13 @@ write_header(Fd, Data) ->
 
 init({Filepath, Options}) ->
    try
+       CloseTimeout = proplists:get_value(fd_close_after, Options, infinity),
        ok = maybe_create_file(Filepath, Options),
        process_flag(trap_exit, true),
-       {ok, Reader} = proc_lib:start_link(?MODULE, spawn_reader, [Filepath]),
-       {ok, Writer, Eof} = proc_lib:start_link(?MODULE, spawn_writer, [Filepath]),
+       {ok, Reader} = proc_lib:start_link(?MODULE, spawn_reader,
+            [Filepath, CloseTimeout]),
+       {ok, Writer, Eof} = proc_lib:start_link(?MODULE, spawn_writer,
+            [Filepath, CloseTimeout]),
        maybe_track_open_os_files(Options),
        proc_lib:init_ack({ok, self()}),
        InitState = #file{
@@ -301,7 +317,11 @@ maybe_track_open_os_files(FileOptions) ->
 
 terminate(_Reason, #file{reader = Reader, writer = Writer}) ->
     couch_util:shutdown_sync(Reader),
-    couch_util:shutdown_sync(Writer).
+    case Writer of
+    nil -> ok;
+    _ ->
+        couch_util:shutdown_sync(Writer)
+    end.
 
 
 handle_call({pread_iolist, Pos}, From, #file{reader = Reader} = File) ->
@@ -320,6 +340,8 @@ handle_call({truncate, Pos}, _From, #file{writer = W} = File) ->
     receive {W, truncated, Pos} -> ok end,
     {reply, ok, File#file{eof = Pos}};
 
+handle_call({append_bin, _Bin}, _From, #file{writer = nil} = File) ->
+    {reply, {error, write_closed}, File};
 handle_call({append_bin, Bin}, From, #file{writer = W, eof = Pos} = File) ->
     Size = calculate_total_read_len(Pos rem ?SIZE_BLOCK, iolist_size(Bin)),
     gen_server:reply(From, {ok, Pos, Size}),
@@ -346,7 +368,15 @@ handle_call(flush, From, #file{writer =  W} = File) ->
 
 handle_call(find_header, From, #file{reader = Reader, eof = Eof} = File) ->
     Reader ! {find_header, Eof, From},
-    {noreply, File}.
+    {noreply, File};
+
+handle_call(snapshot_reads, _From, #file{reader = R, writer = W} = File) ->
+    R ! {set_close_after, infinity, self()},
+    couch_util:shutdown_sync(W),
+    receive
+        {ok, R} -> ok
+    end,
+    {reply, ok, File#file{writer=nil}}.
 
 handle_cast(close, Fd) ->
     {stop,normal,Fd}.
@@ -470,77 +500,109 @@ make_blocks(BlockOffset, IoList) ->
     end.
 
 
-spawn_writer(Filepath) ->
-    case file:open(Filepath, [binary, append, raw]) of
+try_open_fd(FilePath, Options, Timewait) ->
+    case file:open(FilePath, Options) of
+    {ok, Fd} ->
+        {ok, Fd};
+    {error, emfile} ->
+        ?LOG_INFO("Too many file descriptors open, waiting"
+                     ++ " ~pms to retry", [Timewait]),
+        receive
+        after Timewait ->
+            try_open_fd(FilePath, Options, Timewait)
+        end;
+    Error ->
+        Error
+    end.
+
+
+spawn_writer(Filepath, CloseTimeout) ->
+    case try_open_fd(Filepath, [binary, append, raw], CloseTimeout) of
     {ok, Fd} ->
         {ok, Eof} = file:position(Fd, eof),
         proc_lib:init_ack({ok, self(), Eof}),
-        writer_loop(Fd, Eof);
+        writer_loop(Fd, Filepath, Eof, CloseTimeout);
     Error ->
         proc_lib:init_ack(Error)
     end.
 
 
-spawn_reader(Filepath) ->
-    case file:open(Filepath, [binary, read, raw]) of
+spawn_reader(Filepath, CloseTimeout) ->
+    case try_open_fd(Filepath, [binary, read, raw], CloseTimeout) of
     {ok, Fd} ->
         proc_lib:init_ack({ok, self()}),
-        reader_loop(Fd);
+        reader_loop(Fd, Filepath, CloseTimeout);
     Error ->
         proc_lib:init_ack(Error)
     end.
 
-
-writer_loop(Fd, Eof) ->
+writer_loop(Fd, FilePath, Eof, CloseTimeout) ->
     receive
+    Msg ->
+        handle_write_message(Msg, Fd, FilePath, Eof, CloseTimeout)
+    after CloseTimeout ->
+        % after nonuse timeout we close the Fd.
+        file:close(Fd),
+        receive
+        stop ->
+            exit(done);
+        Msg ->
+            {ok, Fd2} = try_open_fd(FilePath, [binary, append, raw],
+                    CloseTimeout),
+            handle_write_message(Msg, Fd2, FilePath, Eof, CloseTimeout)
+        end
+    end.
+
+handle_write_message(Msg, Fd, FilePath, Eof, CloseTimeout)->
+    case Msg of
     {chunk, Chunk} ->
-        writer_collect_chunks(Fd, Eof, [Chunk]);
+        writer_collect_chunks(Fd, FilePath, Eof, CloseTimeout, [Chunk]);
     {header, Header} ->
         Eof2 = write_header_blocks(Fd, Eof, Header),
-        writer_loop(Fd, Eof2);
+        writer_loop(Fd, FilePath, Eof2, CloseTimeout);
     {truncate, Pos, From} ->
         {ok, Pos} = file:position(Fd, Pos),
         ok = file:truncate(Fd),
         From ! {self(), truncated, Pos},
-        writer_loop(Fd, Pos);
+        writer_loop(Fd, FilePath, Pos, CloseTimeout);
     {flush, From} ->
         gen_server:reply(From, ok),
-        writer_loop(Fd, Eof);
+        writer_loop(Fd, FilePath, Eof, CloseTimeout);
     {sync, From} ->
         ok = file:sync(Fd),
         gen_server:reply(From, ok),
-        writer_loop(Fd, Eof);
+        writer_loop(Fd, FilePath, Eof, CloseTimeout);
     stop ->
         ok = file:close(Fd),
         exit(done)
     end.
 
-writer_collect_chunks(Fd, Eof, Acc) ->
+writer_collect_chunks(Fd, FilePath, Eof, CloseTimeout, Acc) ->
     receive
     {chunk, Chunk} ->
-        writer_collect_chunks(Fd, Eof, [Chunk | Acc]);
+        writer_collect_chunks(Fd, FilePath, Eof, CloseTimeout, [Chunk | Acc]);
     {header, Header} ->
         Eof2 = write_blocks(Fd, Eof, Acc),
         Eof3 = write_header_blocks(Fd, Eof2, Header),
-        writer_loop(Fd, Eof3);
+        writer_loop(Fd, FilePath, Eof3, CloseTimeout);
     {truncate, Pos, From} ->
         _ = write_blocks(Fd, Eof, Acc),
         {ok, Pos} = file:position(Fd, Pos),
         ok = file:truncate(Fd),
         From ! {self(), truncated, Pos},
-        writer_loop(Fd, Pos);
+        writer_loop(Fd, FilePath, Pos, CloseTimeout);
     {flush, From} ->
         Eof2 = write_blocks(Fd, Eof, Acc),
         gen_server:reply(From, ok),
-        writer_loop(Fd, Eof2);
+        writer_loop(Fd, FilePath, Eof2, CloseTimeout);
     {sync, From} ->
         Eof2 = write_blocks(Fd, Eof, Acc),
         ok = file:sync(Fd),
         gen_server:reply(From, ok),
-        writer_loop(Fd, Eof2)
+        writer_loop(Fd, FilePath, Eof2, CloseTimeout)
     after 0 ->
         Eof2 = write_blocks(Fd, Eof, Acc),
-        writer_loop(Fd, Eof2)
+        writer_loop(Fd, FilePath, Eof2, CloseTimeout)
     end.
 
 
@@ -564,14 +626,34 @@ write_header_blocks(Fd, Eof, Header) ->
     Eof + iolist_size(FinalHeader).
 
 
-reader_loop(Fd) ->
+reader_loop(Fd, FilePath, CloseTimeout) ->
     receive
+    Msg ->
+        handle_reader_message(Msg, Fd, FilePath, CloseTimeout)
+    after CloseTimeout ->
+        % after nonuse timeout we close the Fd.
+        file:close(Fd),
+        receive
+        stop ->
+            exit(done);
+        Msg ->
+            {ok, Fd2} = try_open_fd(FilePath, [binary, read, raw],
+                    CloseTimeout),
+            handle_reader_message(Msg, Fd2, FilePath, CloseTimeout)
+        end
+    end.
+
+handle_reader_message(Msg, Fd, FilePath, CloseTimeout) ->
+    case Msg of
     {read, Pos, From} ->
         gen_server:reply(From, read_iolist(Fd, Pos)),
-        reader_loop(Fd);
+        reader_loop(Fd, FilePath, CloseTimeout);
     {find_header, Eof, From} ->
         gen_server:reply(From, find_header(Fd, Eof div ?SIZE_BLOCK)),
-        reader_loop(Fd);
+        reader_loop(Fd, FilePath, CloseTimeout);
+    {set_close_after, NewCloseTimeout, From} ->
+        From ! {ok, self()},
+        reader_loop(Fd, FilePath, NewCloseTimeout);
     stop ->
         ok = file:close(Fd),
         exit(done)
