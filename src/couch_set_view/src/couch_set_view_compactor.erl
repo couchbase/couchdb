@@ -73,6 +73,8 @@ compact_group(Group, EmptyGroup, SetName) ->
         {type, view_compaction},
         {set, SetName},
         {design_document, GroupId},
+        {changes_done, 0},
+        {total_changes, TotalChanges},
         {progress, 0}
     ]),
 
@@ -150,5 +152,9 @@ compact_view(Fd, View, #set_view{btree = ViewBtree} = EmptyView, FilterFun, Acc0
 
 update_task(#acc{changes = Changes, total_changes = Total} = Acc, ChangesInc) ->
     Changes2 = Changes + ChangesInc,
-    couch_task_status:update([{progress, (Changes2 * 100) div Total}]),
+    couch_task_status:update([
+        {changes_done, Changes2},
+        {total_changes, Total},
+        {progress, (Changes2 * 100) div Total}
+    ]),
     Acc#acc{changes = Changes2}.
