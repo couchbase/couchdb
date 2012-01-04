@@ -29,43 +29,58 @@
 -export([init/1,terminate/2,handle_call/3,handle_cast/2,code_change/3,handle_info/2]).
 -export([changes_since/4,changes_since/5]).
 -export([check_is_admin/1, check_is_member/1]).
--export([reopen/1,get_current_seq/1,fast_reads/2]).
+-export([reopen/1,get_current_seq/1,fast_reads/2,get_trailing_file_num/1]).
 
 -include("couch_db.hrl").
 
 start_link(DbName, Filepath, Options) ->
     case open_db_file(Filepath, Options) of
-    {ok, Fd} ->
-        StartResult = gen_server:start_link(couch_db, {DbName, Filepath, Fd, Options}, []),
+    {ok, Fd, RealFilePath} ->
+        StartResult = gen_server:start_link(couch_db, {DbName, RealFilePath, Fd, Options}, []),
         unlink(Fd),
         StartResult;
     Else ->
         Else
     end.
 
+get_trailing_file_num(FileName) ->
+    list_to_integer(lists:last(string:tokens(FileName, "."))).
+
+
 open_db_file(Filepath, Options) ->
-    case couch_file:open(Filepath,
-            [{fd_close_after, ?FD_CLOSE_TIMEOUT_MS} | Options]) of
-    {ok, Fd} ->
-        RootDir = couch_config:get("couchdb", "database_dir", "."),
-        % Delete any lingering compaction file that might be hanging around
-        couch_file:delete(RootDir, Filepath ++ ".compact"),
-        {ok, Fd};
-    {error, enoent} ->
-        % couldn't find file. is there a compact version? This can happen if
-        % crashed during the file switch.
-        case couch_file:open(Filepath ++ ".compact") of
-        {ok, Fd} ->
-            ?LOG_INFO("Found ~s~s compaction file, using as primary storage.", [Filepath, ".compact"]),
-            ok = file:rename(Filepath ++ ".compact", Filepath),
-            ok = couch_file:sync(Fd),
-            couch_file:close(Fd),
-            open_db_file(Filepath, Options);
-        {error, enoent} ->
+    case filelib:wildcard(Filepath ++ ".*") of
+    [] ->
+        case lists:member(create, Options) of
+        true ->
+            case couch_file:open(Filepath ++ ".1",
+                    [{fd_close_after, ?FD_CLOSE_TIMEOUT_MS} | Options]) of
+            {ok, Fd} ->
+                {ok, Fd, Filepath ++ ".1"};
+            Error ->
+                Error
+            end;
+        false ->
             {not_found, no_db_file}
         end;
-    Error ->
-        Error
+    MatchingFiles ->
+        {CompactFiles, MatchingFiles2} =
+            lists:partition(
+                fun(FileName) ->
+                    "compact" == lists:last(string:tokens(FileName, "."))
+                end, MatchingFiles),
+        % parse out the trailing #s and sort highest to lowest
+        [NewestFile | RestOld] = lists:sort(fun(A,B) ->
+            get_trailing_file_num(A) > get_trailing_file_num(B)
+        end, MatchingFiles2),
+        case couch_file:open(NewestFile,
+                [{fd_close_after, ?FD_CLOSE_TIMEOUT_MS} | Options]) of
+        {ok, Fd} ->
+            % delete the old files
+            [file:delete(F) || F <- RestOld ++ CompactFiles],
+            {ok, Fd, NewestFile};
+        Error ->
+            Error
+        end
     end.
 
 

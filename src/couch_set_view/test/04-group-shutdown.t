@@ -158,7 +158,7 @@ test_partition_not_found_when_group_starts() ->
     couch_util:shutdown_sync(whereis(couch_server)),
 
     etap:diag("Deleting database of active partition 1 after view group shutdown"),
-    DbFile = iolist_to_binary([test_set_name(), "/0.couch"]),
+    DbFile = iolist_to_binary([test_set_name(), "/0.couch.1"]),
     DbDir = couch_config:get("couchdb", "database_dir"),
     ok = file:delete(filename:join([DbDir, DbFile])),
     ok = timer:sleep(1000),

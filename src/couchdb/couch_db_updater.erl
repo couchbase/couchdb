@@ -166,18 +166,17 @@ handle_call({compact_done, CompactFilepath}, _From, #db{filepath=Filepath,
         {ok, _, LocalDocs} = couch_btree:foldl(Db#db.local_docs_btree,
                 fun(Value, _Offset, Acc) -> {ok, [Value | Acc]} end, []),
         {ok, NewLocalBtree} = couch_btree:add(NewDb#db.local_docs_btree, LocalDocs),
-
+        NewFilePath = increment_filepath(Filepath),
         NewDb2 = commit_data(NewDb#db{
             local_docs_btree = NewLocalBtree,
             main_pid = Db#db.main_pid,
-            filepath = Filepath,
+            filepath = NewFilePath,
             instance_start_time = Db#db.instance_start_time,
             revs_limit = Db#db.revs_limit
         }),
 
         ?LOG_DEBUG("CouchDB swapping files ~s and ~s.",
-                [Filepath, CompactFilepath]),
-        RootDir = couch_config:get("couchdb", "database_dir", "."),
+                [NewFilePath, CompactFilepath]),
         MainPid ! compaction_file_switch,
         receive
         continue_compaction_file_switch ->
@@ -185,13 +184,15 @@ handle_call({compact_done, CompactFilepath}, _From, #db{filepath=Filepath,
         {'EXIT', MainPid, Reason} ->
             exit(Reason)
         end,
-        % ensure the fd won't close, because after we delete, it can't reopen
+        % ensure the fd won't close, because after we delete and close,
+        % it can't reopen
         ok = couch_file:set_close_after(OldFd, infinity),
+        RootDir = couch_config:get("couchdb", "database_dir", "."),
         couch_file:delete(RootDir, Filepath),
         ok = gen_server:call(Db#db.main_pid, {db_updated, NewDb2}, infinity),
         ok = couch_file:only_snapshot_reads(OldFd), % prevent writes to the fd
         close_db(Db),
-        ok = couch_file:rename(NewFd, Filepath),
+        ok = couch_file:rename(NewFd, NewFilePath),
         ok = couch_file:sync(NewFd),
         ok = couch_file:set_close_after(NewFd, ?FD_CLOSE_TIMEOUT_MS),
         MainPid ! compaction_file_switch_done,
@@ -246,6 +247,11 @@ handle_info({'EXIT', _Pid, Reason}, Db) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
+
+increment_filepath(FilePath) ->
+    Tokens = string:tokens(FilePath, "."),
+    NumStr = integer_to_list(list_to_integer(lists:last(Tokens)) + 1),
+    string:join(lists:sublist(Tokens, length(Tokens) - 1) ++ [NumStr], ".").
 
 btree_by_seq_split(#doc_info{id=Id, local_seq=Seq, rev=Rev,
         deleted=Deleted, body_ptr=Bp, size=Size}) ->

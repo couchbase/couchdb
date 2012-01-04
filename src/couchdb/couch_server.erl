@@ -161,18 +161,23 @@ all_databases() ->
         fun(DbName, Acc) -> {ok, [DbName | Acc]} end, []),
     {ok, lists:usort(DbList)}.
 
+strip_file_num(FilePath) ->
+    Tokens = string:tokens(FilePath, "."),
+    string:join(lists:sublist(Tokens, length(Tokens) - 1), ".").
+
 all_databases(Fun, Acc0) ->
     {ok, #server{root_dir=Root}} = gen_server:call(couch_server, get_server),
     NormRoot = couch_util:normpath(Root),
     FinalAcc = try
-        filelib:fold_files(Root, "^[a-z0-9\\_\\$()\\+\\-]*[\\.]couch$", true,
+        filelib:fold_files(Root, "^[a-z0-9\\_\\$()\\+\\-]*[\\.]couch[\\.][0-9]*$", true,
             fun(Filename, AccIn) ->
                 NormFilename = couch_util:normpath(Filename),
                 case NormFilename -- NormRoot of
                 [$/ | RelativeFilename] -> ok;
                 RelativeFilename -> ok
                 end,
-                case Fun(?l2b(filename:rootname(RelativeFilename, ".couch")), AccIn) of
+                RF = strip_file_num(RelativeFilename),
+                case Fun(?l2b(filename:rootname(RF, ".couch")), AccIn) of
                 {ok, NewAcc} -> NewAcc;
                 {stop, NewAcc} -> throw({stop, Fun, NewAcc})
                 end
@@ -366,18 +371,17 @@ handle_call({delete, DbName, _Options}, _From, Server) ->
         false ->
             Server
         end,
+        Files = filelib:wildcard(FullFilepath ++ ".*"),
+        Result =
+            [catch couch_file:delete(Server#server.root_dir, F) || F <- Files],
 
-        %% Delete any leftover .compact files.  If we don't do this a subsequent
-        %% request for this DB will try to open the .compact file and use it.
-        couch_file:delete(Server#server.root_dir, FullFilepath ++ ".compact"),
-
-        case couch_file:delete(Server#server.root_dir, FullFilepath) of
-        ok ->
+        case Result of
+        [ok|_] ->
             couch_db_update_notifier:notify({deleted, DbName}),
             {reply, ok, Server2};
-        {error, enoent} ->
+        [] ->
             {reply, not_found, Server2};
-        Else ->
+        [Else|_] ->
             {reply, Else, Server2}
         end;
     Error ->

@@ -112,7 +112,7 @@ create_design_doc() ->
 
 backup_db_file() ->
     DbFile = test_util:build_file("tmp/lib/" ++
-        binary_to_list(test_db_name()) ++ ".couch"),
+        binary_to_list(test_db_name()) ++ ".couch.1"),
     {ok, _} = file:copy(DbFile, DbFile ++ ".backup"),
     ok.
 
@@ -158,7 +158,7 @@ restore_backup_db_file() ->
     couch_server_sup:stop(),
     timer:sleep(3000),
     DbFile = test_util:build_file("tmp/lib/" ++
-        binary_to_list(test_db_name()) ++ ".couch"),
+        binary_to_list(test_db_name()) ++ ".couch.1"),
     ok = file:delete(DbFile),
     ok = file:rename(DbFile ++ ".backup", DbFile),
     couch_server_sup:start_link(test_util:config_files()),
