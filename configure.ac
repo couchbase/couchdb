@@ -543,6 +543,8 @@ AC_CONFIG_FILES([test/etap/Makefile])
 AC_CONFIG_FILES([test/etap/test_util.erl])
 AC_CONFIG_FILES([test/javascript/Makefile])
 AC_CONFIG_FILES([test/view_server/Makefile])
+AC_CONFIG_FILES([test/python/Makefile])
+AC_CONFIG_FILES([test/python/set_view/Makefile])
 AC_CONFIG_FILES([utils/Makefile])
 AC_CONFIG_FILES([var/Makefile])
 if test x${IS_WINDOWS} = xTRUE; then

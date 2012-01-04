@@ -10,5 +10,5 @@
 ## License for the specific language governing permissions and limitations under
 ## the License.
 
-SUBDIRS = bench etap javascript view_server python
+SUBDIRS = set_view
 

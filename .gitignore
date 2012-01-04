@@ -40,6 +40,7 @@ stamp-h1
 test/.deps/
 test/Makefile
 test/javascript/run_js_tests.sh
+test/python/set_view/run.py
 var/Makefile
 
 # for make

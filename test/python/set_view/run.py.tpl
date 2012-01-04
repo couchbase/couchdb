@@ -1,9 +1,12 @@
 #!/usr/bin/env python
 
 import sys
-sys.path.insert(0, "../lib")
-sys.path.insert(0, "common")
+sys.path.insert(0, "%abs_top_builddir%/test/python/lib")
+sys.path.insert(0, "%abs_top_builddir%/test/python/set_view")
+sys.path.insert(0, "%abs_top_builddir%/test/python/set_view/common")
 import unittest
+from subprocess import call
+from time import sleep
 
 # set view test files
 from include_docs import TestIncludeDocs
@@ -24,7 +27,17 @@ from replica_index import TestReplicaIndex
 from view_params import TestViewParams
 
 
+def stop_couch():
+    call(["%abs_top_builddir%/utils/run", "-d"])
+
+def start_couch():
+    stop_couch()
+    call(["%abs_top_builddir%/utils/run", "-b"])
+    sleep(5)
+
+
 def main():
+    print "\nStarting set view tests\n"
     suite = unittest.TestSuite()
 
     suite.addTest(unittest.makeSuite(TestIncludeDocs))
@@ -44,10 +57,16 @@ def main():
     suite.addTest(unittest.makeSuite(TestErlangViews))
     suite.addTest(unittest.makeSuite(TestReplicaIndex))
 
-    if sys.version_info < (2, 7):
-        unittest.TextTestRunner(verbosity = 2).run(suite)
-    else:
-        unittest.TextTestRunner(verbosity = 2, failfast = True).run(suite)
+    start_couch()
+    result = None
+
+    try:
+        result = unittest.TextTestRunner(verbosity = 2).run(suite)
+    finally:
+        stop_couch()
+
+    print "\nFinished execution of the set view tests\n"
+    sys.exit(len(result.failures) + len(result.errors))
 
 
 main()
