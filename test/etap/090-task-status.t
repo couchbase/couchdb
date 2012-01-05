@@ -84,6 +84,7 @@ wait(Pid) ->
     end.
 
 test() ->
+    {ok, TaskEventsPid} = gen_event:start_link({local, couch_task_events}),
     {ok, TaskStatusPid} = couch_task_status:start_link(),
 
     TaskUpdater = fun() -> loop() end,
@@ -278,5 +279,13 @@ test() ->
         1000 ->
             throw(timeout_error)
     end,
-
-    ok.
+    erlang:unlink(TaskEventsPid),
+    erlang:exit(TaskEventsPid, kill),
+    erlang:monitor(process, TaskEventsPid),
+    receive
+        {'DOWN', _, _, TaskEventsPid, _} ->
+            ok
+    after
+        1000 ->
+            throw(timeout_error)
+    end.

@@ -105,8 +105,9 @@ terminate(_Reason,_State) ->
 handle_call({add_task, TaskProps}, {From, _}, Server) ->
     case ets:lookup(?MODULE, From) of
     [] ->
-        true = ets:insert(?MODULE, {From, TaskProps}),
+        true = ets:insert(?MODULE, EtsTuple = {From, TaskProps}),
         erlang:monitor(process, From),
+        gen_event:notify(couch_task_events, {created, EtsTuple}),
         {reply, ok, Server};
     [_] ->
         {reply, {add_task_error, already_registered}, Server}
@@ -135,7 +136,7 @@ handle_cast(stop, State) ->
     {stop, normal, State}.
 
 handle_info({'DOWN', _MonitorRef, _Type, Pid, _Info}, Server) ->
-    %% should we also erlang:demonitor(_MonitorRef), ?
+    gen_event:notify(couch_task_events, {deleted, Pid}),
     ets:delete(?MODULE, Pid),
     {noreply, Server}.
 
