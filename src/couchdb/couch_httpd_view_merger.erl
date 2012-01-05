@@ -97,11 +97,13 @@ handle_req(Req) ->
 
 apply_http_config(Req, Body, MergeParams) ->
     DefConnTimeout = MergeParams#index_merge.conn_timeout,
-    ConnTimeout = case get_value(<<"connection_timeout">>, Body, nil) of
-    nil ->
-        qs_json_value(Req, "connection_timeout", DefConnTimeout);
+    QsTimeout = qs_json_value(Req, "connection_timeout", DefConnTimeout),
+    ConnTimeout = case get_value(<<"connection_timeout">>, Body, QsTimeout) of
     T when is_integer(T) ->
-        T
+        T;
+    _ ->
+        Msg = "Query parameter `connection_timeout` must be an integer",
+        throw({bad_request, Msg})
     end,
     OnError = case get_value(<<"on_error">>, Body, nil) of
     nil ->

@@ -857,6 +857,25 @@ couchTests.view_merging = function(debug) {
   resp2 = JSON.parse(xhr.responseText);
   compareViewResults(resp, resp2);
 
+  // test parsing of connection_timeout
+  xhr = CouchDB.request("POST",
+    '/_view_merge?connection_timeout="30000"', {
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  resp = JSON.parse(xhr.responseText);
+  TEquals(resp.error, 'bad_request');
+  TEquals(true, /connection_timeout/.test(resp.reason));
+
+  // test parsing/validation of on_error
+  xhr = CouchDB.request("POST",
+    '/_view_merge?on_error="foo"', {
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  resp = JSON.parse(xhr.responseText);
+  TEquals(resp.error, 'bad_request');
+  TEquals(true, /on_error/.test(resp.reason));
 
   /**
    * End of tests with map views.

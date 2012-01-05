@@ -94,6 +94,7 @@ class TestViewMerge(unittest.TestCase):
         self.do_test_key(self._params_local, self._params_remote)
         self.do_test_keys(self._params_local, self._params_remote)
         self.do_test_set_view_outdated_local(self._params_local, self._params_remote)
+        self.do_test_query_args(self._params_local, self._params_remote)
 
 
     def set_spec(self, name, view, partitions):
@@ -376,3 +377,26 @@ class TestViewMerge(unittest.TestCase):
         full_spec = self.views_spec([remote_merge], [local_spec])
         (resp, body) = self.do_query(local["host"], full_spec)
         self.assertTrue('error' in body and body.get('reason', 'set_view_outdated'))
+
+
+    def do_test_query_args(self, local, remote):
+        local_spec = self.set_spec(local["setname"], "mapview", range(local["nparts"]))
+        remote_spec = self.set_spec(remote["setname"], "mapview", range(remote["nparts"]))
+        remote_merge = self.merge_spec(remote["host"], [], [remote_spec])
+
+        full_spec = self.views_spec([remote_merge], [local_spec])
+        resp, result = self.do_query(local["host"], full_spec,
+                                     {"connection_timeout": '"30000"'})
+
+        self.assertEqual(resp.status, 400, "Return status is correct")
+        self.assertEqual(result["error"], "bad_request", "Correct error")
+        self.assertNotEqual(result["reason"].find("connection_timeout"), -1,
+                            "Correct messsage")
+
+        resp, result = self.do_query(local["host"], full_spec,
+                                     {"on_error": '"foo"'})
+
+        self.assertEqual(resp.status, 400, "Return status is correct")
+        self.assertEqual(result["error"], "bad_request", "Correct error")
+        self.assertNotEqual(result["reason"].find("on_error"), -1,
+                            "Correct messsage")
