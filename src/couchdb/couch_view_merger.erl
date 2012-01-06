@@ -359,6 +359,9 @@ merge_reduce_min_row(Params, MinRow) ->
                 {{row, {K, RedVal}}, Col}
             catch
             _Tag:Error ->
+                Stack = erlang:get_stacktrace(),
+                ?LOG_ERROR("Caught unexpected error while "
+                           "merging reduce view: ~p~n~p", [Error, Stack]),
                 on_rereduce_error(Col, Error)
             end
         end,
@@ -589,6 +592,10 @@ map_set_view_folder(ViewSpec, MergeParams, UserCtx, DDoc, Queue) ->
                 Queue, {error, ?LOCAL,
                     couch_index_merger:ddoc_not_found_msg(DDocDbName, DDocId)});
         _Tag:Error ->
+            Stack = erlang:get_stacktrace(),
+            ?LOG_ERROR("Caught unexpected error "
+                       "while serving view query ~s/~s: ~p~n~p",
+                       [SetName, DDocId, Error, Stack]),
             couch_view_merger_queue:queue(Queue, {error, ?LOCAL, to_binary(Error)})
         after
             couch_set_view:release_group(Group),
@@ -849,6 +856,10 @@ reduce_set_view_folder(ViewSpec, MergeParams, DDoc, Queue) ->
                 Queue, {error, ?LOCAL,
                     couch_index_merger:ddoc_not_found_msg(DDocDbName, DDocId)});
         _Tag:Error ->
+            Stack = erlang:get_stacktrace(),
+            ?LOG_ERROR("Caught unexpected error "
+                       "while serving view query ~s/~s: ~p~n~p",
+                       [SetName, DDocId, Error, Stack]),
             couch_view_merger_queue:queue(Queue, {error, ?LOCAL, to_binary(Error)})
         after
             couch_set_view:release_group(Group),

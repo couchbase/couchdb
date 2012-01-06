@@ -494,6 +494,9 @@ index_folder(_Mod, IndexSpec, MergeParams, UserCtx, DDoc, Queue, FoldFun) ->
             ok = couch_view_merger_queue:queue(
                 Queue, {error, ?LOCAL, ddoc_not_found_msg(DDocDbName, DDocId)});
         _Tag:Error ->
+            Stack = erlang:get_stacktrace(),
+            ?LOG_ERROR("Caught unexpected error while serving "
+                       "index query for `~s/~s`:~n~p", [DbName, DDocId, Stack]),
             couch_view_merger_queue:queue(Queue, parse_error(Error))
         after
             ok = couch_view_merger_queue:done(Queue),
