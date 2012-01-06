@@ -103,21 +103,54 @@
 
 % api methods
 request_group(Pid, StaleType) ->
+    request_group(Pid, StaleType, 1).
+
+request_group(Pid, StaleType, Retries) ->
     case gen_server:call(Pid, {request_group, StaleType}, infinity) of
-    {ok, #set_view_group{ref_counter = RefCounter, replica_group = RepGroup} = Group} ->
+    {ok, Group} ->
+        #set_view_group{
+            ref_counter = RefCounter,
+            replica_group = RepGroup,
+            replica_pid = RepPid,
+            name = GroupName,
+            set_name = SetName
+        } = Group,
         % TODO: there's a very tiny chance for a race condition here.
         % The ref counter add calls should be done inside the view group server.
         couch_ref_counter:add(RefCounter),
         case RepGroup of
         nil ->
-            ok;
-        #set_view_group{ref_counter = RepRefCounter} ->
-            couch_ref_counter:add(RepRefCounter)
-        end,
-        {ok, Group};
+            {ok, Group};
+        #set_view_group{} ->
+            case request_replica_group(RepPid, RepGroup, StaleType) of
+            {ok, #set_view_group{ref_counter = RepRefCounter} = RepGroup2} ->
+                couch_ref_counter:add(RepRefCounter),
+                {ok, Group#set_view_group{replica_group = RepGroup2}};
+            retry ->
+                 ?LOG_INFO("Retrying group `~s` request, stale=~s,"
+                      " set `~s`, retry attempt #~p",
+                      [GroupName, StaleType, SetName, Retries]),
+                 couch_ref_counter:drop(RefCounter),
+                 request_group(Pid, StaleType, Retries + 1)
+            end
+        end;
     Error ->
         Error
     end.
+
+
+request_replica_group(RepPid, BaseRepGroup, false) ->
+    {ok, RepGroup2} = gen_server:call(RepPid, {request_group, false}, infinity),
+    case ?set_abitmask(RepGroup2) =:= ?set_abitmask(BaseRepGroup) of
+    true ->
+        {ok, RepGroup2};
+    false ->
+        retry
+    end;
+request_replica_group(_RepPid, BaseRepGroup, ok) ->
+    {ok, BaseRepGroup};
+request_replica_group(_RepPid, BaseRepGroup, update_after) ->
+    {ok, BaseRepGroup}.
 
 
 release_group(#set_view_group{ref_counter = RefCounter}) ->
@@ -226,12 +259,12 @@ init({_, SetName, _, Type} = InitArgs) when Type =:= main; Type =:= replica ->
         {ok, RefCounter} = couch_ref_counter:start([Fd]),
         case Header#set_view_index_header.has_replica of
         false ->
-            ReplicaGroup = nil,
+            ReplicaPid = nil,
             ReplicaParts = [];
         true ->
-            ReplicaGroup = open_replica_group(InitArgs),
-            maybe_fix_replica_group(ReplicaGroup, Group),
-            ReplicaParts = get_replica_partitions(ReplicaGroup)
+            ReplicaPid = open_replica_group(InitArgs),
+            maybe_fix_replica_group(ReplicaPid, Group),
+            ReplicaParts = get_replica_partitions(ReplicaPid)
         end,
         case is_integer(Header#set_view_index_header.num_partitions) of
         false ->
@@ -272,13 +305,13 @@ init({_, SetName, _, Type} = InitArgs) when Type =:= main; Type =:= replica ->
         end,
         InitState = #state{
             init_args = InitArgs,
-            replica_group = ReplicaGroup,
+            replica_group = ReplicaPid,
             replica_partitions = ReplicaParts,
             group = Group#set_view_group{
                 ref_counter = RefCounter,
                 db_set = DbSet,
                 type = Type,
-                replica_group = ReplicaGroup
+                replica_pid = ReplicaPid
             }
         },
         proc_lib:init_ack({ok, self()}),
@@ -323,6 +356,7 @@ handle_call({define_view, NumPartitions, ActiveList, ActiveBitmask,
     NewGroup = Group#set_view_group{
         db_set = DbSet,
         index_header = NewHeader,
+        replica_pid = ReplicaPid,
         views = lists:map(
             fun(V) -> V#set_view{update_seqs = Seqs, purge_seqs = Seqs} end, Views)
     },
@@ -666,6 +700,10 @@ handle_info({updater_info, Pid, {state, UpdaterState}}, #state{updater_pid = Pid
     _ ->
         {noreply, State2}
     end;
+
+handle_info({updater_info, _Pid, {state, _UpdaterState}}, State) ->
+    % Message from an old updater, ignore.
+    {noreply, State, ?TIMEOUT};
 
 handle_info(delayed_commit, #state{group = Group} = State) ->
     commit_header(Group, false),
@@ -1778,7 +1816,8 @@ maybe_update_replica_index(#state{group = Group, updater_state = not_running} = 
             Acc + (CurSeq - UpSeq)
         end,
         0, lists:zip(CurSeqs, ?set_seqs(Group))),
-    case ChangesCount >= ?MIN_CHANGES_AUTO_UPDATE of
+    case (ChangesCount >= ?MIN_CHANGES_AUTO_UPDATE) orelse
+        (ChangesCount > 0 andalso ?set_cbitmask(Group) =/= 0) of
     true ->
         do_start_updater(State, CurSeqs);
     false ->
@@ -1848,7 +1887,7 @@ process_partial_update(#state{group = Group} = State, NewGroup) ->
     }.
 
 
-add_replica_group(#set_view_group{replica_group = Pid} = Group) when is_pid(Pid) ->
+add_replica_group(#set_view_group{replica_pid = Pid} = Group) when is_pid(Pid) ->
     case ?set_replicas_on_transfer(Group) of
     [] ->
         Group#set_view_group{replica_group = nil};

@@ -86,7 +86,8 @@
     index_header = nil,
     db_set = nil,
     type = main,     % 'main' | 'replica'
-    replica_group = nil
+    replica_group = nil,
+    replica_pid = nil
 }).
 
 -record(set_view, {
