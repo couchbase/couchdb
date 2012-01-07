@@ -16,14 +16,13 @@
 
 -include("couch_db.hrl").
 
--define(CHUNK_THRESHOLD, 16#4ff).
-
 -record(acc, {
     btree,
     fd,
     before_kv_write = {fun(Item, Acc) -> {Item, Acc} end, []},
     filter = fun(_) -> true end,
     compression = ?DEFAULT_COMPRESSION,
+    chunk_threshold,
     nodes = dict:from_list([{1, []}]),
     cur_level = 1,
     max_level = 1
@@ -37,9 +36,14 @@ copy(Btree, Fd, Options) ->
     false ->
         ok
     end,
-    Acc0 = apply_options(Options, #acc{btree = Btree, fd = Fd}),
+    Acc0 = #acc{
+        btree = Btree,
+        fd = Fd,
+        chunk_threshold = Btree#btree.chunk_threshold
+    },
+    Acc = apply_options(Options, Acc0),
     {ok, _, #acc{cur_level = 1} = FinalAcc0} = couch_btree:fold(
-        Btree, fun fold_copy/3, Acc0, []),
+        Btree, fun fold_copy/3, Acc, []),
     {ok, CopyRootState, FinalAcc} = finish_copy(FinalAcc0),
     ok = couch_file:flush(Fd),
     ok = couch_file:sync(Fd),
@@ -56,7 +60,9 @@ apply_options([{filter, Fun} | Rest], Acc) ->
 apply_options([override | Rest], Acc) ->
     apply_options(Rest, Acc);
 apply_options([{compression, Comp} | Rest], Acc) ->
-    apply_options(Rest, Acc#acc{compression = Comp}).
+    apply_options(Rest, Acc#acc{compression = Comp});
+apply_options([{chunk_threshold, Threshold} | Rest], Acc) ->
+    apply_options(Rest, Acc#acc{chunk_threshold = Threshold}).
 
 
 extract(#acc{btree = #btree{extract_kv = Extract}}, Value) ->
@@ -108,7 +114,7 @@ fold_copy(Item, _Reds, #acc{nodes = Nodes, cur_level = 1, filter = Filter} = Acc
         {K, V} = extract(Acc, Item),
         LevelNode = dict:fetch(1, Nodes),
         LevelNodes2 = [{K, V} | LevelNode],
-        NextAcc = case ?term_size(LevelNodes2) >= ?CHUNK_THRESHOLD of
+        NextAcc = case ?term_size(LevelNodes2) >= Acc#acc.chunk_threshold of
         true ->
             {LeafState, Acc2} = flush_leaf(LevelNodes2, Acc),
             bubble_up({K, LeafState}, Acc2);
@@ -122,8 +128,8 @@ fold_copy(Item, _Reds, #acc{nodes = Nodes, cur_level = 1, filter = Filter} = Acc
 bubble_up({Key, NodeState}, #acc{cur_level = Level} = Acc) ->
     bubble_up({Key, NodeState}, Level, Acc).
 
-bubble_up({Key, NodeState}, Level, #acc{max_level = MaxLevel,
-                                        nodes = Nodes} = Acc) ->
+bubble_up({Key, NodeState}, Level, Acc) ->
+    #acc{max_level = MaxLevel, nodes = Nodes} = Acc,
     Acc2 = Acc#acc{nodes = dict:store(Level, [], Nodes)},
     case Level of
     MaxLevel ->
@@ -134,7 +140,7 @@ bubble_up({Key, NodeState}, Level, #acc{max_level = MaxLevel,
     _ when Level < MaxLevel ->
         NextLevelNodes = dict:fetch(Level + 1, Acc2#acc.nodes),
         NextLevelNodes2 = [{Key, NodeState} | NextLevelNodes],
-        case ?term_size(NextLevelNodes2) >= ?CHUNK_THRESHOLD of
+        case ?term_size(NextLevelNodes2) >= Acc#acc.chunk_threshold of
         true ->
             {ok, NewNodeState} = write_kp_node(
                 Acc2, lists:reverse(NextLevelNodes2)),

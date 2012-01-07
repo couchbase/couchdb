@@ -19,7 +19,6 @@
 -export([guided_purge/3]).
 
 -include("couch_db.hrl").
--define(CHUNK_THRESHOLD, 16#4ff).
 
 extract(#btree{extract_kv=Extract}, Value) ->
     Extract(Value).
@@ -45,7 +44,10 @@ set_options(Bt, [{less, Less}|Rest]) ->
 set_options(Bt, [{reduce, Reduce}|Rest]) ->
     set_options(Bt#btree{reduce=Reduce}, Rest);
 set_options(Bt, [{compression, Comp}|Rest]) ->
-    set_options(Bt#btree{compression=Comp}, Rest).
+    set_options(Bt#btree{compression=Comp}, Rest);
+set_options(Bt, [{chunk_threshold, Threshold}|Rest]) ->
+    set_options(Bt#btree{chunk_threshold = Threshold}, Rest).
+
 
 open(State, Fd, Options) ->
     {ok, set_options(#btree{root=State, fd=Fd}, Options)}.
@@ -317,10 +319,10 @@ complete_root(Bt, KPs) ->
 % written. Plus with the "case byte_size(term_to_binary(InList)) of" code
 % it's probably really inefficient.
 
-chunkify(InList) ->
+chunkify(#btree{chunk_threshold = ChunkThreshold0}, InList) ->
     case ?term_size(InList) of
-    Size when Size > ?CHUNK_THRESHOLD ->
-        NumberOfChunksLikely = ((Size div ?CHUNK_THRESHOLD) + 1),
+    Size when Size > ChunkThreshold0 ->
+        NumberOfChunksLikely = ((Size div ChunkThreshold0) + 1),
         ChunkThreshold = Size div NumberOfChunksLikely,
         chunkify(InList, ChunkThreshold, [], 0, []);
     _Else ->
@@ -398,7 +400,7 @@ get_node(#btree{fd = Fd}, NodePos) ->
 
 write_node(#btree{fd = Fd, compression = Comp} = Bt, NodeType, NodeList) ->
     % split up nodes into smaller sizes
-    NodeListList = chunkify(NodeList),
+    NodeListList = chunkify(Bt, NodeList),
     % now write out each chunk and return the KeyPointer pairs for those nodes
     ResultList = [
         begin

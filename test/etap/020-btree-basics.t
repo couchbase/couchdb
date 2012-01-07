@@ -24,7 +24,8 @@ rows() -> 250.
     assemble_kv,
     less,
     reduce,
-    compression
+    compression,
+    chunk_threshold = 16#4ff
 }).
 
 main(_) ->
