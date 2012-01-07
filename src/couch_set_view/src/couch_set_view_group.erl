@@ -32,6 +32,7 @@
 -define(TIMEOUT, 3000).
 -define(DELAYED_COMMIT_PERIOD, 5000).
 -define(MIN_CHANGES_AUTO_UPDATE, 5000).
+-define(BTREE_CHUNK_THRESHOLD, 5120).
 
 -define(root_dir(State), element(1, State#state.init_args)).
 -define(set_name(State), element(2, State#state.init_args)).
@@ -1121,7 +1122,6 @@ init_group(Fd, #set_view_group{def_lang = Lang, views = Views} = Group, IndexHea
         (State) -> {State, [], []}
     end,
     ViewStates2 = lists:map(StateUpdate, ViewStates),
-    Compression = couch_compress:get_compression_method(),
     IdTreeReduce = fun(reduce, KVs) ->
         {length(KVs), couch_set_view_util:partitions_map(KVs, 0)};
     (rereduce, [First | Rest]) ->
@@ -1129,8 +1129,12 @@ init_group(Fd, #set_view_group{def_lang = Lang, views = Views} = Group, IndexHea
             fun({S, M}, {T, A}) -> {S + T, M bor A} end,
             First, Rest)
     end,
+    BtreeOptions = [
+        {chunk_threshold, ?BTREE_CHUNK_THRESHOLD},
+        {compression, snappy}
+    ],
     {ok, IdBtree} = couch_btree:open(
-        IdBtreeState, Fd, [{compression, Compression}, {reduce, IdTreeReduce}]),
+        IdBtreeState, Fd, [{reduce, IdTreeReduce} | BtreeOptions]),
     Views2 = lists:zipwith(
         fun({BTState, USeqs, PSeqs}, #set_view{reduce_funs=RedFuns,options=Options}=View) ->
             FunSrcs = [FunSrc || {_Name, FunSrc} <- RedFuns],
@@ -1160,10 +1164,8 @@ init_group(Fd, #set_view_group{def_lang = Lang, views = Views} = Group, IndexHea
             <<"raw">> ->
                 Less = fun(A,B) -> A < B end
             end,
-            {ok, Btree} = couch_btree:open(BTState, Fd,
-                    [{less, Less}, {reduce, ReduceFun},
-                        {compression, Compression}]
-            ),
+            {ok, Btree} = couch_btree:open(
+                BTState, Fd, [{less, Less}, {reduce, ReduceFun} | BtreeOptions]),
             View#set_view{btree=Btree, update_seqs=USeqs, purge_seqs=PSeqs}
         end,
         ViewStates2, Views),
