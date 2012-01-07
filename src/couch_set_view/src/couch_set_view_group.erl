@@ -30,7 +30,7 @@
 -include_lib("couch_set_view/include/couch_set_view.hrl").
 
 -define(TIMEOUT, 3000).
--define(DELAYED_COMMIT_PERIOD, 3000).
+-define(DELAYED_COMMIT_PERIOD, 5000).
 -define(MIN_CHANGES_AUTO_UPDATE, 5000).
 
 -define(root_dir(State), element(1, State#state.init_args)).
@@ -632,7 +632,6 @@ handle_call(cancel_compact, _From, #state{compactor_pid = Pid} = State) ->
 
 handle_cast({partial_update, Pid, NewGroup}, #state{updater_pid = Pid} = State) ->
     NewState = process_partial_update(State, NewGroup),
-    maybe_log_checkpoint(NewState),
     {noreply, NewState};
 handle_cast({partial_update, _, _}, State) ->
     %% message from an old (probably pre-compaction) updater; ignore
@@ -706,6 +705,8 @@ handle_info({updater_info, _Pid, {state, _UpdaterState}}, State) ->
     {noreply, State, ?TIMEOUT};
 
 handle_info(delayed_commit, #state{group = Group} = State) ->
+    ?LOG_INFO("Checkpointing set view `~s` update for ~s group `~s`",
+        [?set_name(State), ?type(State), ?group_id(State)]),
     commit_header(Group, false),
     {noreply, State#state{commit_ref = nil}, ?TIMEOUT};
 
@@ -1780,18 +1781,6 @@ notify_cleanup_waiters(State) ->
         State2#state{cleanup_waiters = RestWaiters};
     _ ->
         State
-    end.
-
-
-maybe_log_checkpoint(State) ->
-    Now = now(),
-    case timer:now_diff(Now, get(last_checkpoint_log)) >= 5000000 of
-    true ->
-        put(last_checkpoint_log, Now),
-        ?LOG_INFO("Checkpointing set view `~s` update for ~s group `~s`",
-            [?set_name(State), ?type(State), ?group_id(State)]);
-    false ->
-        ok
     end.
 
 
