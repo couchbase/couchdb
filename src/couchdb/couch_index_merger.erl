@@ -31,9 +31,7 @@
 
 -import(couch_util, [
     get_value/2,
-    get_value/3,
-    to_binary/1,
-    get_nested_json_value/2
+    to_binary/1
 ]).
 
 -define(LOCAL, <<"local">>).
