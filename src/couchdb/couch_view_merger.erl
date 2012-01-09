@@ -41,7 +41,8 @@ parse_http_params(Req, DDoc, ViewName, #view_merge{keys = Keys}) ->
     _ ->
        ViewType0
     end,
-    couch_httpd_view:parse_view_params(Req, Keys, ViewType).
+    QueryArgs = couch_httpd_view:parse_view_params(Req, Keys, ViewType),
+    QueryArgs#view_query_args{view_name = ViewName}.
 
 % callback!
 make_funs(DDoc, ViewName, IndexMergeParams) ->
