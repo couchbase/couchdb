@@ -203,9 +203,8 @@ flush_rows(Resp) ->
     RowsRev = get(rows),
     flush_rows(Resp, RowsRev).
 
-flush_rows(_Resp, []) ->
-    put(rows_count, 0),
-    put(rows, []);
+flush_rows(_Resp, undefined) ->
+    ok;
 flush_rows(Resp, RowsRev) ->
     Rows = lists:reverse(RowsRev),
     couch_httpd:send_chunk(Resp, Rows),

@@ -375,7 +375,10 @@ collect_row_count(RecvCount, AccCount, PreprocessFun, Callback, UserAcc,
                 collect_row_count(
                     RecvCount - 1, AccCount2, PreprocessFun, Callback, UserAcc, Item2)
             end}
-        end
+        end;
+    stop ->
+        {_, UserAcc2} = Callback(stop, UserAcc),
+        {stop, UserAcc2}
     end.
 
 % PreprocessFun is called on every row (which comes from the fold function
