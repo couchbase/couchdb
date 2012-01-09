@@ -545,7 +545,7 @@ handle_call({start_compact, _}, _From, State) ->
     %% compact already running, this is a no-op
     {reply, {ok, State#state.compactor_pid}, State};
 
-handle_call({compact_done, NewGroup0}, {Pid, _}, #state{compactor_pid = Pid} = State) ->
+handle_call({compact_done, NewGroup0, Duration}, {Pid, _}, #state{compactor_pid = Pid} = State) ->
     #state{
         group = Group,
         updater_pid = UpdaterPid,
@@ -561,8 +561,8 @@ handle_call({compact_done, NewGroup0}, {Pid, _}, #state{compactor_pid = Pid} = S
             index_header = get_index_header_data(NewGroup0)
         },
         ok = commit_header(NewGroup, true),
-        ?LOG_INFO("Set view `~s`, ~s group `~s`, compaction complete",
-            [?set_name(State), ?type(State), ?group_id(State)]),
+        ?LOG_INFO("Set view `~s`, ~s group `~s`, compaction complete in ~.3f seconds",
+            [?set_name(State), ?type(State), ?group_id(State), Duration / 1000000]),
         FileName = index_file_name(
             ?root_dir(State), ?set_name(State), ?type(State), GroupSig),
         CompactName = index_file_name(
@@ -610,7 +610,7 @@ handle_call({compact_done, NewGroup0}, {Pid, _}, #state{compactor_pid = Pid} = S
             [?set_name(State), ?group_id(State)]),
         {reply, update, State}
     end;
-handle_call({compact_done, _NewGroup}, {OldPid, _}, State) ->
+handle_call({compact_done, _NewGroup, _Duration}, {OldPid, _}, State) ->
     % From a previous compactor that was killed/stopped, ignore.
     false = is_process_alive(OldPid),
     {noreply, State};

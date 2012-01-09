@@ -46,6 +46,7 @@ compact_group(Group, EmptyGroup, SetName) ->
         type = Type,
         index_header = Header
     } = Group,
+    StartTime = now(),
 
     #set_view_group{
         id_btree = EmptyIdBtree,
@@ -117,11 +118,12 @@ compact_group(Group, EmptyGroup, SetName) ->
             cbitmask = 0
         }
     },
-    maybe_retry_compact(NewGroup, SetName).
+    maybe_retry_compact(NewGroup, SetName, StartTime).
 
-maybe_retry_compact(NewGroup, SetName) ->
+maybe_retry_compact(NewGroup, SetName, StartTime) ->
+    Duration = timer:now_diff(now(), StartTime),
     Pid = couch_set_view:get_group_pid(SetName, NewGroup#set_view_group.name),
-    case gen_server:call(Pid, {compact_done, NewGroup}) of
+    case gen_server:call(Pid, {compact_done, NewGroup, Duration}) of
     ok ->
         ok;
     update ->
@@ -131,7 +133,7 @@ maybe_retry_compact(NewGroup, SetName) ->
         end),
         receive
         {'DOWN', Ref, _, _, {new_group, NewGroup2}} ->
-            maybe_retry_compact(NewGroup2, SetName)
+            maybe_retry_compact(NewGroup2, SetName, StartTime)
         end
     end.
 
