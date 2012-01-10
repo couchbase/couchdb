@@ -28,7 +28,6 @@ icu_driver_vcproj = $(ICU_OUTPUT_DIR)/couch_icu_driver.vcxproj
 WIN_ICU_INCLUDE = $(ICU_OUTPUT_DIR)/win_icu_include.tmp
 WIN_ICU_LIB_DIR = $(ICU_OUTPUT_DIR)/win_icu_dir.tmp
 WIN_ERL_INCLUDE = $(ICU_OUTPUT_DIR)/win_erl_include.tmp
-COUCH_ICU_DRIVER = $(ICU_OUTPUT_DIR)/couch_icu_driver.dll
 EJSON_COMPARE_DIR = couch_ejson_compare/win32
 EJSON_COMPARE_MSBUILD = $(EJSON_COMPARE_DIR)/msbuild.bat
 EJSON_COMPARE_VCPROJ = $(EJSON_COMPARE_DIR)/couch_ejson_compare.vcxproj
@@ -37,7 +36,7 @@ else
 ICU_LOCAL_FLAGS = $(ICU_LOCAL_CFLAGS) $(ICU_LOCAL_LDFLAGS)
 ICU_LOCAL_LIBS=-licuuc -licudata -licui18n
 
-couchprivlib_LTLIBRARIES = couch_icu_driver.la
+couchprivlib_LTLIBRARIES =
 if USE_OTP_NIFS
 couchprivlib_LTLIBRARIES += couch_ejson_compare.la
 couch_ejson_compare_la_SOURCES = couch_ejson_compare/couch_ejson_compare.c
@@ -45,10 +44,6 @@ couch_ejson_compare_la_CFLAGS = -D_BSD_SOURCE $(ICU_LOCAL_FLAGS)
 couch_ejson_compare_la_LDFLAGS = -module -avoid-version $(ICU_LOCAL_FLAGS)
 couch_ejson_compare_la_LIBADD = $(ICU_LOCAL_LIBS)
 endif
-couch_icu_driver_la_SOURCES = icu_driver/couch_icu_driver.c
-couch_icu_driver_la_LDFLAGS = -module -avoid-version $(ICU_LOCAL_FLAGS)
-couch_icu_driver_la_CFLAGS = $(ICU_LOCAL_FLAGS)
-couch_icu_driver_la_LIBADD = $(ICU_LOCAL_LIBS)
 endif
 
 if WINDOWS
@@ -56,7 +51,7 @@ couchjs_msbuild = couch_js/win32/msbuild.bat
 couchjs_vcproj = couch_js/win32/couchjs.vcxproj
 WIN_JS_INCLUDE = couch_js/win32/win_js_include.tmp
 WIN_JS_LIB_DIR = couch_js/win32/win_js_dir.tmp
-couchpriv_DATA = stat_descriptions.cfg $(COUCH_ICU_DRIVER) $(COUCH_EJSON_COMPARE)
+couchpriv_DATA = stat_descriptions.cfg $(COUCH_EJSON_COMPARE)
 endif
 
 COUCHJS_SRCS = \
@@ -91,13 +86,7 @@ endif
 
 if WINDOWS
 
-$(COUCH_ICU_DRIVER) : icu_driver/couch_icu_driver.c $(icu_driver_msbuild) $(icu_driver_vcproj)
-	$(MKDIR_P) "$(couchprivlibdir)" || true
-	(cd icu_driver/win32 && ./msbuild.bat)
-	cp $(ICU_OUTPUT_DIR)/couch_icu_driver.dll $(couchprivlibdir)
-	cp $(ICU_OUTPUT_DIR)/couch_icu_driver.lib $(couchprivlibdir)
-
-all: $(COUCH_ICU_DRIVER)
+all:
 
 $(icu_driver_msbuild): $(icu_driver_msbuild).tpl
 	sed -e "s|%msbuild_dir%|$(msbuild_dir)|" \
@@ -167,11 +156,6 @@ endif
 # couchjs.exe *does* get copied.  *shrug*  So just clobber it with the 
 # correct one as the last step. See bug COUCHDB-439
 install-data-hook:
-	if test -f "$(DESTDIR)$(couchprivlibdir)/couch_icu_driver"; then \
-	    rm -f "$(DESTDIR)$(couchprivlibdir)/couch_icu_driver.so"; \
-	    cd "$(DESTDIR)$(couchprivlibdir)" && \
-	        $(LN_S) couch_icu_driver couch_icu_driver.so; \
-	fi
 	if test -f "$(DESTDIR)$(couchprivlibdir)/couch_ejson_compare_nif"; then \
 	    rm -f "$(DESTDIR)$(couchprivlibdir)/couch_ejson_compare_nif.so"; \
 	    cd "$(DESTDIR)$(couchprivlibdir)" && \
