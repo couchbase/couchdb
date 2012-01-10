@@ -44,7 +44,10 @@ start_link(NumProducers, LessFun) when is_integer(NumProducers), NumProducers > 
 pop(Pid) ->
     try
         gen_server:call(Pid, pop, infinity)
-    catch _:_ ->
+    catch
+    exit:{noproc, _} ->
+        closed;
+    exit:{normal, {gen_server, call, [Pid, pop, infinity]}} ->
         closed
     end.
 

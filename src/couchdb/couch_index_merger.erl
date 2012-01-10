@@ -139,6 +139,9 @@ do_query_index(Mod, IndexMergeParams, DDoc, IndexName) ->
     Folders = lists:foldr(
         fun(Index, Acc) ->
             Pid = spawn_link(fun() ->
+                % The parent might be blocked on queue gen_server call when one
+                % of the folders die, which will make it blocked forever.
+                link(Queue),
                 index_folder(Mod, Index, IndexMergeParams, UserCtx, DDoc, Queue, FoldFun)
             end),
             [Pid | Acc]
@@ -153,6 +156,7 @@ do_query_index(Mod, IndexMergeParams, DDoc, IndexName) ->
         limit = Limit,
         extra = Extra2
     },
+    TrapExitBefore = process_flag(trap_exit, true),
     try
         case MergeFun(MergeParams) of
         set_view_outdated ->
@@ -173,10 +177,13 @@ do_query_index(Mod, IndexMergeParams, DDoc, IndexName) ->
         lists:foreach(
             fun (P) ->
                 catch unlink(P),
-                catch exit(P, kill)
+                catch exit(P, kill),
+                receive {'EXIT', P, _} -> ok after 0 -> ok end
             end, Folders),
         catch unlink(Queue),
-        catch exit(Queue, kill)
+        catch exit(Queue, kill),
+        receive {'EXIT', Queue, _} -> ok after 0 -> ok end,
+        process_flag(trap_exit, TrapExitBefore)
     end.
 
 
