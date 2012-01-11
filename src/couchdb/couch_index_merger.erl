@@ -134,13 +134,17 @@ do_query_index(Mod, IndexMergeParams, DDoc, IndexName) ->
                 LessFun(RowA, RowB)
             end
     end,
+    % We want to trap exits to avoid this process (mochiweb worker) to die.
+    % If the mochiweb worker dies, the client will not get a response back.
+    % Link the queue to the folders, so that if one folder dies, all the others
+    % will be killed and not hang forever (mochiweb reuses workers for different
+    % requests).
+    TrapExitBefore = process_flag(trap_exit, true),
     {ok, Queue} = couch_view_merger_queue:start_link(NumFolders, QueueLessFun),
     Collector = CollectorFun(NumFolders, Callback, UserAcc),
     Folders = lists:foldr(
         fun(Index, Acc) ->
             Pid = spawn_link(fun() ->
-                % The parent might be blocked on queue gen_server call when one
-                % of the folders die, which will make it blocked forever.
                 link(Queue),
                 index_folder(Mod, Index, IndexMergeParams, UserCtx, DDoc, Queue, FoldFun)
             end),
@@ -156,7 +160,6 @@ do_query_index(Mod, IndexMergeParams, DDoc, IndexName) ->
         limit = Limit,
         extra = Extra2
     },
-    TrapExitBefore = process_flag(trap_exit, true),
     try
         case MergeFun(MergeParams) of
         set_view_outdated ->
@@ -177,13 +180,29 @@ do_query_index(Mod, IndexMergeParams, DDoc, IndexName) ->
         lists:foreach(
             fun (P) ->
                 catch unlink(P),
-                catch exit(P, kill),
-                receive {'EXIT', P, _} -> ok after 0 -> ok end
+                catch exit(P, kill)
             end, Folders),
         catch unlink(Queue),
         catch exit(Queue, kill),
-        receive {'EXIT', Queue, _} -> ok after 0 -> ok end,
-        process_flag(trap_exit, TrapExitBefore)
+        Reason = clean_exit_messages(normal),
+        process_flag(trap_exit, TrapExitBefore),
+        case Reason of
+        normal ->
+            ok;
+        _ ->
+            exit(Reason)
+        end
+    end.
+
+
+clean_exit_messages(FinalReason) ->
+    receive
+    {'EXIT', _Pid, normal} ->
+        clean_exit_messages(FinalReason);
+    {'EXIT', _Pid, Reason} ->
+        clean_exit_messages(Reason)
+    after 0 ->
+        FinalReason
     end.
 
 
