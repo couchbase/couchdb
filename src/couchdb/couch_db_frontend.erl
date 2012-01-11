@@ -86,8 +86,7 @@ update_docs(Db, Docs, Options) ->
     couch_db:update_docs(Db, Docs, Options).
 
 update_docs(Db, Docs, Options, replicated_changes) ->
-    ok = couch_db:update_docs(Db, Docs, Options),
-    {ok, []}.
+    ok = couch_db:update_docs(Db, Docs, Options).
 
 purge_docs(Db, IdsRevs) ->
     couch_db:purge_docs(Db, IdsRevs).

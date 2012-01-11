@@ -319,18 +319,22 @@ db_req(#httpd{method='POST',
             case DbFrontend:update_docs(Db, Docs, [sort_docs | Options2]) of
             ok ->
                 send_json(Req, 201, {[{ok, true}]});
-            {aborted, Errors} ->
-                ErrorsJson =
-                    lists:map(fun update_doc_result_to_json/1, Errors),
-                send_json(Req, 417, ErrorsJson)
+            {ok, Error} ->
+                ErrorJson = update_doc_result_to_json(Error),
+                send_json(Req, 417, ErrorJson)
             end;
         false ->
             Docs = lists:map(fun(JsonObj) ->
                     Doc = couch_doc:from_json_obj(JsonObj),
                     Doc
                 end, DocsArray),
-            ok = DbFrontend:update_docs(Db, Docs, [sort_docs | Options], replicated_changes),
-            send_json(Req, 201, {[{ok, true}]})
+            case DbFrontend:update_docs(Db, Docs, [sort_docs | Options], replicated_changes) of
+            ok ->
+                send_json(Req, 201, {[{ok, true}]});
+            {ok, Error} ->
+                ErrorJson = update_doc_result_to_json(Error),
+                send_json(Req, 417, ErrorJson)
+            end
         end
     end;
 db_req(#httpd{path_parts=[_,<<"_bulk_docs">>]}=Req, _Db) ->
@@ -375,20 +379,6 @@ db_req(#httpd{path_parts=[_,<<"_all_docs">>]}=Req, _Db) ->
     send_method_not_allowed(Req, "GET,HEAD,POST");
 
 db_req(#httpd{method='POST',
-              path_parts=[_,<<"_missing_revs">>],
-              db_frontend=DbFrontend}=Req, Db) ->
-    {JsonDocIdRevs} = couch_httpd:json_body_obj(Req),
-    JsonDocIdRevs2 = [{Id, [couch_doc:parse_rev(RevStr) || RevStr <- RevStrs]} || {Id, RevStrs} <- JsonDocIdRevs],
-    {ok, Results} = DbFrontend:get_missing_revs(Db, JsonDocIdRevs2),
-    Results2 = [{Id, couch_doc:revs_to_strs(Revs)} || {Id, Revs, _} <- Results],
-    send_json(Req, {[
-        {missing_revs, {Results2}}
-    ]});
-
-db_req(#httpd{path_parts=[_,<<"_missing_revs">>]}=Req, _Db) ->
-    send_method_not_allowed(Req, "POST");
-
-db_req(#httpd{method='POST',
               path_parts=[_,<<"_revs_diff">>],
               db_frontend=DbFrontend}=Req, Db) ->
     {JsonDocIdRevs} = couch_httpd:json_body_obj(Req),
@@ -396,9 +386,9 @@ db_req(#httpd{method='POST',
         [{Id, couch_doc:parse_rev(RevStr)} || {Id, RevStr} <- JsonDocIdRevs],
     {ok, Results} = DbFrontend:get_missing_revs(Db, JsonDocIdRevs2),
     Results2 =
-    lists:map(fun({Id, MissingRevs}) ->
+    lists:map(fun({Id, MissingRev}) ->
         {Id,
-            {[{missing, couch_doc:revs_to_strs(MissingRevs)}]}}
+            {[{missing, couch_doc:rev_to_str(MissingRev)}]}}
     end, Results),
     send_json(Req, {Results2});
 

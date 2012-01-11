@@ -784,12 +784,7 @@ update_checkpoint(Db, Doc, DbType) ->
 
 update_checkpoint(Db, #doc{id = LogId, body = LogBody, rev = Rev} = Doc) ->
     try
-        case couch_api_wrap:update_doc(Db, Doc, [delay_commit]) of
-        ok ->
-            Rev;
-        {error, Reason} ->
-            throw({checkpoint_commit_failure, Reason})
-        end
+        ok = couch_api_wrap:update_doc(Db, Doc, [delay_commit])
     catch throw:conflict ->
         case (catch couch_api_wrap:open_doc(Db, LogId, [ejson_body])) of
         {ok, #doc{body = LogBody, rev = Rev}} ->

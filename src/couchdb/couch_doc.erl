@@ -16,7 +16,7 @@
 -export([from_json_obj/1,to_json_obj/2,from_binary/3]).
 -export([validate_docid/1,with_uncompressed_body/1]).
 -export([with_ejson_body/1,with_json_body/1]).
--export([to_raw_json_binary/1]).
+-export([to_raw_json_binary/1,to_raw_json_binary/2]).
 
 -include("couch_db.hrl").
 
@@ -178,9 +178,12 @@ validate_docid(Id) ->
     ?LOG_DEBUG("Document id is not a string: ~p", [Id]),
     throw({bad_request, <<"Document id must be a string">>}).
 
-transfer_fields([], #doc{body=Fields}=Doc) ->
+transfer_fields([], #doc{body=Fields}=Doc) when is_list(Fields) ->
     % convert fields back to json object
     Doc#doc{body=?JSON_ENCODE({lists:reverse(Fields)})};
+
+transfer_fields([], #doc{}=Doc) ->
+    Doc;
 
 transfer_fields([{<<"_id">>, Id} | Rest], Doc) ->
     validate_docid(Id),
@@ -197,6 +200,9 @@ transfer_fields([{<<"_rev">>, _Rev} | Rest], Doc) ->
 
 transfer_fields([{<<"_deleted">>, B} | Rest], Doc) when is_boolean(B) ->
     transfer_fields(Rest, Doc#doc{deleted=B});
+
+transfer_fields([{<<"_bin">>, Bin} | Rest], Doc) ->
+    transfer_fields(Rest, Doc#doc{body=base64:decode(Bin), content_meta=?CONTENT_META_INVALID_JSON});
 
 % ignored fields
 transfer_fields([{<<"_revs_info">>, _} | Rest], Doc) ->
@@ -251,8 +257,10 @@ with_uncompressed_body(#doc{body = Body, content_meta = Meta} = Doc)
 with_uncompressed_body(Doc) ->
     Doc.
 
-
 to_raw_json_binary(Doc) ->
+    to_raw_json_binary(Doc, true).
+
+to_raw_json_binary(Doc, IncludeMemcachedMeta) ->
     #doc{
         id = Id,
         body = Json,
@@ -262,6 +270,7 @@ to_raw_json_binary(Doc) ->
     % TODO: if needed later, include the meta fields (like _local_seq)
     iolist_to_binary([
         <<"{\"_id\":\"">>, Id, <<"\"">>,
+
         case Start of
         0 ->
             <<>>;
@@ -269,23 +278,37 @@ to_raw_json_binary(Doc) ->
             [<<",\"_rev\":\"">>,
                 integer_to_list(Start), <<"-">>, revid_to_str(RevId), <<"\"">>]
         end,
-        case revid_to_memcached_meta(RevId) of
-        nil ->
-            <<>>;
-        {Exp, Flags} ->
-            [<<",\"$expiration\":">>, integer_to_list(Exp),
-                <<",\"$flags\":">>, integer_to_list(Flags)]
+
+        case IncludeMemcachedMeta of
+        true ->
+            [
+                case revid_to_memcached_meta(RevId) of
+                nil ->
+                    <<>>;
+                {Exp, Flags} ->
+                    [<<",\"$expiration\":">>, integer_to_list(Exp),
+                        <<",\"$flags\":">>, integer_to_list(Flags)]
+                end,
+                case content_meta_to_memcached_meta(ContentMeta) of
+                nil ->
+                    <<>>;
+                AttReason ->
+                    [<<",\"$att_reason\":\"">>, AttReason, <<"\"">>]
+                end
+            ];
+        false ->
+            <<>>
         end,
-        case content_meta_to_memcached_meta(ContentMeta) of
-        nil ->
-            <<>>;
-        AttReason ->
-            [<<",\"$att_reason\":\"">>, AttReason, <<"\"">>]
-        end,
-        case iolist_to_binary(Json) of
-        <<"{}">> ->
-            <<"}">>;
-        <<${, JsonRest/binary>> ->
-            <<",", JsonRest/binary>>
+
+        case ContentMeta of
+        ?CONTENT_META_JSON ->
+            case iolist_to_binary(Json) of
+            <<"{}">> ->
+                <<"}">>;
+            <<${, JsonRest/binary>> ->
+                <<",", JsonRest/binary>>
+            end;
+        _ ->
+            [<<",\"_bin\":\"">>, base64:encode(iolist_to_binary(Json)), <<"\"}">>]
         end
     ]).

@@ -152,10 +152,10 @@ get_missing_revs(Db, IdRevList) ->
 
 
 open_doc(#httpdb{}, _Id, _Options, Fun, Acc) ->
-    {ok, Fun({error, <<"not_found">>}, Acc)};
+    Fun({error, <<"not_found">>}, Acc);
 open_doc(Db, Id, Options, Fun, Acc) ->
-    {ok, Result} = couch_db:open_doc(Db, Id, Options),
-    {ok, Fun(Result, Acc)}.
+    Result = couch_db:open_doc(Db, Id, Options),
+    Fun(Result, Acc).
 
 
 open_doc(#httpdb{}, _Id, _Options) ->
@@ -177,16 +177,65 @@ couch_doc_open(Db, DocId, Options) ->
         throw(Error)
     end.
 
-
+update_doc(_Db, #doc{id = <<"_local/", _/binary>>}, _Options) ->
+    ok;
 update_doc(Db, Doc, Options) ->
     couch_db:update_doc(Db, Doc, Options).
 
 update_docs(Db, DocList, Options) ->
-    ok = couch_db:update_docs(Db, DocList, Options).
+    update_docs(Db, DocList, Options, interactive_edit).
 
+
+update_docs(_, [], _, _) ->
+    ok;
+update_docs(#httpdb{} = HttpDb, DocList, Options, UpdateType) ->
+    FullCommit = atom_to_list(not lists:member(delay_commit, Options)),
+    Prefix = case UpdateType of
+    replicated_changes ->
+        <<"{\"new_edits\":false,\"docs\":[">>;
+    interactive_edit ->
+        <<"{\"docs\":[">>
+    end,
+    Suffix = <<"]}">>,
+    % Note: nginx and other servers don't like PUT/POST requests without
+    % a Content-Length header, so we can't do a chunked transfer encoding
+    % and JSON encode each doc only before sending it through the socket.
+    {Docs, Len} = lists:mapfoldl(
+        fun(#doc{} = Doc, Acc) ->
+            Json = ?JSON_ENCODE(couch_doc:to_json_obj(Doc, [encode_binary_body])),
+            {Json, Acc + iolist_size(Json)};
+        (Doc, Acc) ->
+            {Doc, Acc + iolist_size(Doc)}
+        end,
+        byte_size(Prefix) + byte_size(Suffix) + length(DocList) - 1,
+        DocList),
+    BodyFun = fun(eof) ->
+            eof;
+        ([]) ->
+            {ok, Suffix, eof};
+        ([prefix | Rest]) ->
+            {ok, Prefix, Rest};
+        ([Doc]) ->
+            {ok, Doc, []};
+        ([Doc | RestDocs]) ->
+            {ok, [Doc, ","], RestDocs}
+    end,
+    Headers = [
+        {"Content-Length", Len},
+        {"Content-Type", "application/json"},
+        {"X-Couch-Full-Commit", FullCommit}
+    ],
+    send_req(
+        HttpDb,
+        [{method, post}, {path, "_bulk_docs"},
+            {body, {BodyFun, [prefix | Docs]}}, {headers, Headers}],
+        fun(201, _, _) ->
+                ok;
+           (_, _, Error) ->
+                {ok, Error}
+        end);
 update_docs(Db, DocList, Options, replicated_changes) ->
-    ok = couch_db:update_docs(Db, DocList, Options),
-    {ok, []}.
+    ok = couch_db:update_docs(Db, DocList, Options).
 
 
 changes_since(#httpdb{headers = Headers1} = HttpDb, Style, StartSeq,

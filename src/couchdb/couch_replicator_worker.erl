@@ -287,7 +287,7 @@ spawn_doc_reader(Source, Target, FetchParams) ->
 
 fetch_doc(Source, {Id, _Rev}, DocHandler, Acc) ->
     couch_api_wrap:open_doc(
-            Source, Id, [], DocHandler, Acc).
+            Source, Id, [deleted], DocHandler, Acc).
 
 
 local_doc_handler({ok, Doc}, {Target, DocList, Stats, Cp}) ->
@@ -348,7 +348,7 @@ maybe_flush_docs(Doc,State) ->
 
 maybe_flush_docs(#httpdb{} = Target, Batch, Doc) ->
     #batch{docs = DocAcc, size = SizeAcc} = Batch,
-    JsonDoc = couch_doc:to_raw_json_binary(Doc),
+    JsonDoc = couch_doc:to_raw_json_binary(Doc, false),
     case SizeAcc + iolist_size(JsonDoc) of
     SizeAcc2 when SizeAcc2 > ?DOC_BUFFER_BYTE_SIZE ->
         ?LOG_DEBUG("Worker flushing doc batch of size ~p bytes", [SizeAcc2]),
@@ -374,20 +374,20 @@ flush_docs(_Target, []) ->
     #rep_stats{};
 
 flush_docs(Target, DocList) ->
-    {ok, Errors} = couch_api_wrap:update_docs(
-        Target, DocList, [delay_commit], replicated_changes),
-    DbUri = couch_api_wrap:db_uri(Target),
-    lists:foreach(
-        fun({Props}) ->
+    case couch_api_wrap:update_docs(Target, DocList, [delay_commit],
+                                    replicated_changes) of
+        ok ->
+            #rep_stats{docs_written = length(DocList)};
+        {ok, {Props}} ->
+            DbUri = couch_api_wrap:db_uri(Target),
             ?LOG_ERROR("Replicator: couldn't write document `~s`, revision `~s`,"
                 " to target database `~s`. Error: `~s`, reason: `~s`.",
                 [get_value(id, Props, ""), get_value(rev, Props, ""), DbUri,
-                    get_value(error, Props, ""), get_value(reason, Props, "")])
-        end, Errors),
-    #rep_stats{
-        docs_written = length(DocList) - length(Errors),
-        doc_write_failures = length(Errors)
-    }.
+                    get_value(error, Props, ""), get_value(reason, Props, "")]),
+            #rep_stats{
+                docs_written = 0, doc_write_failures = length(DocList)
+            }
+    end.
 
 
 find_missing(DocInfos, Target) ->
@@ -397,9 +397,7 @@ find_missing(DocInfos, Target) ->
         end,
         {[], 0}, DocInfos),
     {ok, Missing} = couch_api_wrap:get_missing_revs(Target, IdRevs),
-    MissingRevsCount = lists:foldl(
-        fun({_Id, MissingRevs, _PAs}, Acc) -> Acc + length(MissingRevs) end,
-        0, Missing),
+    MissingRevsCount = length(Missing),
     Stats = #rep_stats{
         missing_checked = AllRevsCount,
         missing_found = MissingRevsCount
