@@ -32,7 +32,8 @@
     view_empty_kvs,
     kvs = [],
     last_part_id = nil,   % ID of the partition of the last KV written to the index
-    final_batch = false
+    final_batch = false,
+    state = updating_active
 }).
 
 
@@ -140,7 +141,6 @@ load_changes(Owner, Group, SinceSeqs, MapQueue, Writer) ->
             {ok, active};
         (starting_passive, _) ->
             maybe_stop(passive),
-            notify_owner(Owner, {state, updating_passive}),
             {ok, passive};
         ({doc_info, DocInfo, PartId, Db}, Type) ->
             maybe_stop(Type),
@@ -190,11 +190,13 @@ maybe_stop(passive) ->
         ok
     end.
 
+notify_owner(Owner, Msg) ->
+    notify_owner(Owner, Msg, self()).
 
-notify_owner(nil, _Msg) ->
+notify_owner(nil, _Msg, _UpdaterPid) ->
     ok;
-notify_owner(Owner, Msg) when is_pid(Owner) ->
-    Owner ! {updater_info, self(), Msg}.
+notify_owner(Owner, Msg, UpdaterPid) when is_pid(Owner) ->
+    Owner ! {updater_info, UpdaterPid, Msg}.
 
 
 add_query_server(#set_view_group{query_server = nil} = Group) ->
@@ -358,7 +360,7 @@ do_writes(#writer_acc{kvs = Kvs, write_queue = WriteQueue} = Acc) ->
 
 
 flush_writes(#writer_acc{kvs = [], owner = Owner, parent = Parent, group = Group} = Acc) ->
-    #writer_acc{group = NewGroup} = Acc2 = update_transferred_replicas(Acc, orddict:new()),
+    #writer_acc{group = NewGroup} = Acc2 = update_transferred_replicas(Acc, []),
     case NewGroup of
     Group ->
         ok;
@@ -392,8 +394,9 @@ flush_writes(Acc) ->
         {ViewEmptyKVs, [], orddict:new()}, Queue),
     {Group2, CleanupTime, CleanupKVCount} = write_changes(
         Group, ViewKVs, DocIdViewIdKeys, PartIdSeqs, InitialBuild),
+    PartIds = orddict:fetch_keys(PartIdSeqs),
     #writer_acc{group = Group3} = Acc2 =
-        update_transferred_replicas(Acc#writer_acc{group = Group2, kvs = []}, PartIdSeqs),
+        update_transferred_replicas(Acc#writer_acc{group = Group2, kvs = []}, PartIds),
     case Owner of
     nil ->
         ok;
@@ -407,12 +410,21 @@ flush_writes(Acc) ->
         end
     end,
     update_task(length(Queue)),
-    Acc2.
+    case (Acc2#writer_acc.state =:= updating_active) andalso
+        lists:any(fun(PartId) ->
+            ((1 bsl PartId) band ?set_pbitmask(Group) =/= 0)
+        end, PartIds) of
+    true ->
+        notify_owner(Owner, {state, updating_passive}, Parent),
+        Acc2#writer_acc{state = updating_passive};
+    false ->
+        Acc2
+    end.
 
 
-update_transferred_replicas(#writer_acc{group = Group} = Acc, _PartIdSeqs) when ?set_replicas_on_transfer(Group) =:= [] ->
+update_transferred_replicas(#writer_acc{group = Group} = Acc, _PartIdsDone) when ?set_replicas_on_transfer(Group) =:= [] ->
     Acc;
-update_transferred_replicas(Acc, PartIdSeqs) ->
+update_transferred_replicas(Acc, PartIdsDone) ->
     #writer_acc{
         group = #set_view_group{index_header = Header} = Group,
         last_part_id = LastPartId,
@@ -420,12 +432,11 @@ update_transferred_replicas(Acc, PartIdSeqs) ->
     } = Acc,
     case FinalBatch of
     true ->
-        PartIds0 = orddict:fetch_keys(PartIdSeqs),
+        PartIds0 = PartIdsDone,
         LastPartId2 = nil;
     false ->
-        Keys = orddict:fetch_keys(PartIdSeqs),
-        LastPartId2 = lists:last(Keys),
-        PartIds0 = ordsets:del_element(LastPartId2, Keys)
+        LastPartId2 = lists:last(PartIdsDone),
+        PartIds0 = ordsets:del_element(LastPartId2, PartIdsDone)
     end,
     case is_integer(LastPartId) andalso
         ((PartIds0 =/= [] andalso hd(PartIds0) =/= LastPartId) orelse

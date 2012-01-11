@@ -685,10 +685,10 @@ handle_info(timeout, State) ->
     end;
 
 handle_info({updater_info, Pid, {state, UpdaterState}}, #state{updater_pid = Pid} = State) ->
+    #state{waiting_list = WaitList, cleanup_waiters = CleanupWaiters} = State,
     State2 = State#state{updater_state = UpdaterState},
-    % TODO: stop the updater only if there are cleanup waiters
     case UpdaterState of
-    updating_passive when State#state.waiting_list =/= [] ->
+    updating_passive when WaitList =/= [] andalso CleanupWaiters =/= [] ->
         State3 = stop_updater(State2),
         case State#state.shutdown of
         true ->
@@ -696,6 +696,9 @@ handle_info({updater_info, Pid, {state, UpdaterState}}, #state{updater_pid = Pid
         false ->
             {noreply, start_updater(State3)}
         end;
+    updating_passive when WaitList =/= [] ->
+        reply_with_group(State2#state.group, WaitList),
+        {noreply, State2#state{waiting_list = []}};
     _ ->
         {noreply, State2}
     end;
