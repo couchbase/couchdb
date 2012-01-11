@@ -35,7 +35,8 @@ test_files = \
     test/01-load.t \
     test/02-old-index-cleanup.t \
     test/03-db-compaction-file-leaks.t \
-    test/04-group-shutdown.t
+    test/04-group-shutdown.t \
+    test/05-replicas-transfer.t
 
 compiled_files = \
     ebin/couch_set_view.app \

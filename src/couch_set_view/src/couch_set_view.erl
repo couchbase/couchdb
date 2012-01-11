@@ -705,14 +705,9 @@ less_json(A,B) ->
 
 modify_bitmasks(Group, []) ->
     {Group, []};
-modify_bitmasks(#set_view_group{replica_group = RepGroup} = Group, Partitions) ->
-    IndexedBitmask0 = ?set_abitmask(Group) bor ?set_pbitmask(Group),
-    case RepGroup of
-    #set_view_group{} ->
-        IndexedBitmask = IndexedBitmask0 bor ?set_abitmask(RepGroup);
-    _ ->
-        IndexedBitmask = IndexedBitmask0
-    end,
+
+modify_bitmasks(#set_view_group{replica_group = nil} = Group, Partitions) ->
+    IndexedBitmask = ?set_abitmask(Group) bor ?set_pbitmask(Group),
     WantedBitmask = couch_set_view_util:build_bitmask(Partitions),
     UnindexedBitmask = WantedBitmask band (bnot IndexedBitmask),
     ABitmask2 = WantedBitmask band IndexedBitmask,
@@ -722,7 +717,36 @@ modify_bitmasks(#set_view_group{replica_group = RepGroup} = Group, Partitions) -
         pbitmask = PBitmask2
     },
     Unindexed = couch_set_view_util:decode_bitmask(UnindexedBitmask),
-    {Group#set_view_group{index_header = Header}, Unindexed}.
+    {Group#set_view_group{index_header = Header}, Unindexed};
+
+modify_bitmasks(#set_view_group{replica_group = RepGroup} = Group, Partitions) ->
+    IndexedBitmaskMain = ?set_abitmask(Group) bor ?set_pbitmask(Group),
+    IndexedBitmaskRep = ?set_abitmask(RepGroup) bor ?set_pbitmask(RepGroup),
+    WantedBitmask = couch_set_view_util:build_bitmask(Partitions),
+
+    UnindexedBitmaskMain = (WantedBitmask band (bnot IndexedBitmaskMain)) band (bnot IndexedBitmaskRep),
+    UnindexedBitmaskRep = (WantedBitmask band (bnot IndexedBitmaskRep)) band (bnot IndexedBitmaskMain),
+
+    ABitmaskRep2 = WantedBitmask band IndexedBitmaskRep,
+    ABitmaskMain2 = (WantedBitmask band IndexedBitmaskMain) band (bnot ABitmaskRep2),
+
+    PBitmaskMain2 = (bnot ABitmaskMain2) band IndexedBitmaskMain,
+    PBitmaskRep2 = (bnot ABitmaskRep2) band IndexedBitmaskRep,
+
+    HeaderMain = (Group#set_view_group.index_header)#set_view_index_header{
+        abitmask = ABitmaskMain2 band (bnot ?set_cbitmask(Group)),
+        pbitmask = PBitmaskMain2
+    },
+    HeaderRep = (RepGroup#set_view_group.index_header)#set_view_index_header{
+        abitmask = ABitmaskRep2 band (bnot ?set_cbitmask(RepGroup)),
+        pbitmask = PBitmaskRep2
+    },
+    Unindexed = couch_set_view_util:decode_bitmask(UnindexedBitmaskMain bor UnindexedBitmaskRep),
+    Group2 = Group#set_view_group{
+        index_header = HeaderMain,
+        replica_group = RepGroup#set_view_group{index_header = HeaderRep}
+    },
+    {Group2, Unindexed}.
 
 
 handle_db_event({deleted, DbName}) ->

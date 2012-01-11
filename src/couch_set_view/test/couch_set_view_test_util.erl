@@ -15,9 +15,9 @@
 -module(couch_set_view_test_util).
 
 -export([start_server/0, stop_server/0]).
--export([create_set_dbs/2, delete_set_dbs/2]).
+-export([create_set_dbs/2, delete_set_dbs/2, doc_count/2]).
 -export([open_set_db/2, get_db_main_pid/1, delete_set_db/2]).
--export([populate_set_alternated/3, update_ddoc/2, delete_ddoc/2]).
+-export([populate_set_alternated/3, populate_set_sequentially/3, update_ddoc/2, delete_ddoc/2]).
 -export([define_set_view/5]).
 -export([query_view/3, query_view/4]).
 -export([are_view_keys_sorted/2]).
@@ -128,6 +128,27 @@ populate_set_alternated(SetName, Partitions, DocList) ->
         0,
         DocList),
     lists:foreach(fun couch_db:close/1, Dbs).
+
+
+populate_set_sequentially(SetName, Partitions, DocList) ->
+    N = round(length(DocList) / length(Partitions)),
+    populate_set_sequentially(SetName, Partitions, DocList, N).
+
+populate_set_sequentially(_SetName, _Partitions, [], _N) ->
+    ok;
+populate_set_sequentially(SetName, [PartId | Rest], DocList, N) when N > 0 ->
+    NumDocs = erlang:min(N, length(DocList)),
+    case Rest of
+    [] ->
+        Docs = DocList,
+        DocList2 = [];
+    _ ->
+        {Docs, DocList2} = lists:split(NumDocs, DocList)
+    end,
+    {ok, Db} = open_set_db(SetName, PartId),
+    ok = couch_db:update_docs(Db, [couch_doc:from_json_obj(Doc) || Doc <- Docs], [sort_docs]),
+    ok = couch_db:close(Db),
+    populate_set_sequentially(SetName, Rest, DocList2, N).
 
 
 update_ddoc(SetName, DDoc) ->
@@ -244,3 +265,15 @@ delete_set_db(SetName, master) ->
     ok = couch_server:delete(?master_dbname(SetName), [admin_user_ctx()]);
 delete_set_db(SetName, PartId) ->
     ok = couch_server:delete(?dbname(SetName, PartId), [admin_user_ctx()]).
+
+
+doc_count(SetName, Partitions) ->
+    Dbs = open_set_dbs(SetName, Partitions),
+    Count = lists:foldl(
+        fun(#db{docinfo_by_id_btree = IdBtree}, Acc) ->
+            {ok, DbReduction} = couch_btree:full_reduce(IdBtree),
+            Acc + element(1, DbReduction)
+        end,
+        0, Dbs),
+    lists:foreach(fun couch_db:close/1, Dbs),
+    Count.
