@@ -86,7 +86,17 @@ route_request(#httpd{method = 'POST'} = Req, SetName, DDocId, [<<"_view">>, View
 
 route_request(#httpd{method = 'POST'} = Req, SetName, DDocId, [<<"_compact">>]) ->
     couch_httpd:validate_ctype(Req, "application/json"),
-    {ok, _Pid} = couch_set_view_compactor:start_compact(SetName, DDocId),
+    {ok, _Pid} = couch_set_view_compactor:start_compact(SetName, DDocId, main),
+    couch_httpd:send_json(Req, 202, {[{ok, true}]});
+
+route_request(#httpd{method = 'POST'} = Req, SetName, DDocId, [<<"_compact">>, <<"main">>]) ->
+    couch_httpd:validate_ctype(Req, "application/json"),
+    {ok, _Pid} = couch_set_view_compactor:start_compact(SetName, DDocId, main),
+    couch_httpd:send_json(Req, 202, {[{ok, true}]});
+
+route_request(#httpd{method = 'POST'} = Req, SetName, DDocId, [<<"_compact">>, <<"replica">>]) ->
+    couch_httpd:validate_ctype(Req, "application/json"),
+    {ok, _Pid} = couch_set_view_compactor:start_compact(SetName, DDocId, replica),
     couch_httpd:send_json(Req, 202, {[{ok, true}]});
 
 route_request(#httpd{method = 'POST'} = Req, SetName, DDocId, [<<"_set_partition_states">>]) ->

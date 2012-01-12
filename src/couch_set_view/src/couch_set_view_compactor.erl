@@ -15,7 +15,7 @@
 -include ("couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
 
--export([start_compact/2, cancel_compact/2]).
+-export([start_compact/2, start_compact/3, cancel_compact/2, cancel_compact/3]).
 
 -record(acc, {
    last_id = nil,
@@ -23,15 +23,21 @@
    total_changes
 }).
 
-%% @spec start_compact(DbName::binary(), GroupId:binary()) -> ok
-%% @doc Compacts the views.  GroupId must not include the _design/ prefix
-start_compact(SetName, GroupId) ->
-    Pid = couch_set_view:get_group_pid(SetName, GroupId),
+start_compact(SetName, DDocId) ->
+    start_compact(SetName, DDocId, main).
+
+start_compact(SetName, DDocId, Type) ->
+    {ok, Pid} = get_group_pid(SetName, DDocId, Type),
     gen_server:call(Pid, {start_compact, fun compact_group/3}).
 
-cancel_compact(SetName, GroupId) ->
-    Pid = couch_set_view:get_group_pid(SetName, GroupId),
+
+cancel_compact(SetName, DDocId) ->
+    cancel_compact(SetName, DDocId, main).
+
+cancel_compact(SetName, DDocId, Type) ->
+    {ok, Pid} = get_group_pid(SetName, DDocId, Type),
     gen_server:call(Pid, cancel_compact).
+
 
 %%=============================================================================
 %% internal functions
@@ -121,13 +127,18 @@ compact_group(Group, EmptyGroup, SetName) ->
     maybe_retry_compact(NewGroup, SetName, StartTime).
 
 maybe_retry_compact(NewGroup, SetName, StartTime) ->
+    #set_view_group{
+        name = DDocId,
+        type = Type,
+        db_set = DbSet
+    } = NewGroup,
     Duration = timer:now_diff(now(), StartTime),
-    Pid = couch_set_view:get_group_pid(SetName, NewGroup#set_view_group.name),
+    {ok, Pid} = get_group_pid(SetName, DDocId, Type),
     case gen_server:call(Pid, {compact_done, NewGroup, Duration}) of
     ok ->
         ok;
     update ->
-        {ok, NewSeqs} = couch_db_set:get_seqs(NewGroup#set_view_group.db_set),
+        {ok, NewSeqs} = couch_db_set:get_seqs(DbSet),
         {_, Ref} = erlang:spawn_monitor(fun() ->
             couch_set_view_updater:update(nil, NewGroup, NewSeqs)
         end),
@@ -136,6 +147,21 @@ maybe_retry_compact(NewGroup, SetName, StartTime) ->
             maybe_retry_compact(NewGroup2, SetName, StartTime)
         end
     end.
+
+
+get_group_pid(SetName, DDocId, main) ->
+    Pid = couch_set_view:get_group_pid(SetName, DDocId),
+    {ok, Pid};
+get_group_pid(SetName, DDocId, replica) ->
+    Pid = couch_set_view:get_group_pid(SetName, DDocId),
+    {ok, #set_view_group{replica_pid = RepPid}} = couch_set_view_group:request_group(Pid, ok),
+    case is_pid(RepPid) of
+    true ->
+        {ok, RepPid};
+    false ->
+        no_replica_group_found
+    end.
+
 
 %% @spec compact_view(Fd, View, EmptyView, Acc) -> {CompactView, NewAcc}
 compact_view(Fd, View, #set_view{btree = ViewBtree} = EmptyView, FilterFun, Acc0) ->

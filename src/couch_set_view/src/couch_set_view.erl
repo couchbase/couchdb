@@ -241,8 +241,13 @@ cleanup_index_files(SetName) ->
             re:run(FilePath, RegExp, [{capture, none}]) =:= nomatch]
     end,
     % delete unused files
-    ?LOG_INFO("Deleting unused (old) set view `~s` index files:~n~n~s",
-        [SetName, string:join(DeleteFiles, "\n")]),
+    case DeleteFiles of
+    [] ->
+        ok;
+    _ ->
+        ?LOG_INFO("Deleting unused (old) set view `~s` index files:~n~n~s",
+            [SetName, string:join(DeleteFiles, "\n")])
+    end,
     RootDir = couch_config:get("couchdb", "view_index_dir"),
     lists:foreach(
         fun(File) -> couch_file:delete(RootDir, File, false) end,
