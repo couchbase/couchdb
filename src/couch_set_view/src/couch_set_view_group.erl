@@ -254,7 +254,6 @@ start_link(InitArgs) ->
 
 init({_, SetName, _, Type} = InitArgs) when Type =:= main; Type =:= replica ->
     process_flag(trap_exit, true),
-    put(last_checkpoint_log, now()),
     case prepare_group(InitArgs, false) of
     {ok, #set_view_group{fd = Fd, index_header = Header} = Group} ->
         {ok, RefCounter} = couch_ref_counter:start([Fd]),
