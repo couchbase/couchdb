@@ -31,7 +31,7 @@
     initial_build,
     view_empty_kvs,
     kvs = [],
-    last_part_id = nil,   % ID of the partition of the last KV written to the index
+    rep_part_ids = [],
     final_batch = false,
     state = updating_active
 }).
@@ -427,30 +427,16 @@ update_transferred_replicas(#writer_acc{group = Group} = Acc, _PartIdsDone) when
 update_transferred_replicas(Acc, PartIdsDone) ->
     #writer_acc{
         group = #set_view_group{index_header = Header} = Group,
-        last_part_id = LastPartId,
+        rep_part_ids = RepPartIdsAcc,
         final_batch = FinalBatch
     } = Acc,
-    case FinalBatch of
+    RepPartIds = ordsets:intersection(?set_replicas_on_transfer(Group), PartIdsDone),
+    RepPartIdsAcc2 = ordsets:union(RepPartIdsAcc, RepPartIds),
+    case FinalBatch orelse lists:any(
+        fun(P) -> not ordsets:is_element(P, ?set_replicas_on_transfer(Group)) end,
+        PartIdsDone) of
     true ->
-        PartIds0 = PartIdsDone,
-        LastPartId2 = nil;
-    false ->
-        LastPartId2 = lists:last(PartIdsDone),
-        PartIds0 = ordsets:del_element(LastPartId2, PartIdsDone)
-    end,
-    case is_integer(LastPartId) andalso
-        ((PartIds0 =/= [] andalso hd(PartIds0) =/= LastPartId) orelse
-            (PartIds0 =:= [] andalso LastPartId =/= LastPartId2)) of
-    true ->
-        PartIds = ordsets:add_element(LastPartId, PartIds0);
-    false ->
-        PartIds = PartIds0
-    end,
-    case ordsets:intersection(?set_replicas_on_transfer(Group), PartIds) of
-    [] ->
-        Acc#writer_acc{last_part_id = LastPartId2};
-    RepPartIds ->
-        ReplicasOnTransfer2 = ordsets:subtract(?set_replicas_on_transfer(Group), RepPartIds),
+        ReplicasOnTransfer2 = ordsets:subtract(?set_replicas_on_transfer(Group), RepPartIdsAcc2),
         {Abitmask2, Pbitmask2} = lists:foldl(
             fun(Id, {A, P}) ->
                 Mask = 1 bsl Id,
@@ -459,7 +445,7 @@ update_transferred_replicas(Acc, PartIdsDone) ->
                 {A bor Mask, P bxor Mask}
             end,
             {?set_abitmask(Group), ?set_pbitmask(Group)},
-            RepPartIds),
+            RepPartIdsAcc2),
         Group2 = Group#set_view_group{
             index_header = Header#set_view_index_header{
                 abitmask = Abitmask2,
@@ -467,7 +453,9 @@ update_transferred_replicas(Acc, PartIdsDone) ->
                 replicas_on_transfer = ReplicasOnTransfer2
             }
         },
-        Acc#writer_acc{group = Group2, last_part_id = LastPartId2}
+        Acc#writer_acc{group = Group2, rep_part_ids = []};
+    false ->
+        Acc#writer_acc{rep_part_ids = RepPartIdsAcc2}
     end.
 
 
