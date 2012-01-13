@@ -115,13 +115,10 @@ compact_group(Group, EmptyGroup, SetName) ->
     NewGroup = EmptyGroup#set_view_group{
         id_btree = NewIdBtree,
         views = NewViews,
-        index_header = #set_view_index_header{
-            num_partitions = Header#set_view_index_header.num_partitions,
-            seqs = ?set_seqs(Group),
-            purge_seqs = ?set_purge_seqs(Group),
-            abitmask = Header#set_view_index_header.abitmask,
-            pbitmask = Header#set_view_index_header.pbitmask,
-            cbitmask = 0
+        index_header = Header#set_view_index_header{
+            cbitmask = 0,
+            id_btree_state = nil,
+            view_states = nil
         }
     },
     maybe_retry_compact(NewGroup, SetName, StartTime).

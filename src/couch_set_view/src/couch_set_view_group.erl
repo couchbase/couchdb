@@ -599,7 +599,10 @@ handle_call({compact_done, NewGroup0, Duration}, {Pid, _}, #state{compactor_pid 
                 false -> not_running
             end,
             group = NewGroup#set_view_group{
-                ref_counter = NewRefCounter
+                ref_counter = NewRefCounter,
+                index_header = (NewGroup#set_view_group.index_header)#set_view_index_header{
+                    replicas_on_transfer = ?set_replicas_on_transfer(Group)
+                }
             },
             stats = ?inc_compactions(State#state.stats)
         },
@@ -1425,7 +1428,7 @@ set_cleanup_partitions([PartId | Rest], Abitmask, Pbitmask, Cbitmask, Seqs, Purg
                     Rest, Abitmask, Pbitmask bxor PartMask, Cbitmask2, Seqs2, PurgeSeqs2);
             0 ->
                 set_cleanup_partitions(
-                    Rest, Abitmask, Pbitmask, Cbitmask2, Seqs2, PurgeSeqs2)
+                    Rest, Abitmask, Pbitmask, Cbitmask, Seqs, PurgeSeqs)
             end
         end
     end.
