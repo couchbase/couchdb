@@ -32,7 +32,7 @@ num_docs() -> 123789.
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(15),
+    etap:plan(16),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -62,6 +62,8 @@ test() ->
     ok = couch_set_view:remove_replica_partitions(test_set_name(), ddoc_id(), lists:seq(8, 63)),
     verify_group_info_after_replica_removal(),
 
+    DiskSizeBefore = replica_index_disk_size(),
+
     etap:diag("Trigerring replica group compaction"),
     {ok, CompactPid} = couch_set_view_compactor:start_compact(test_set_name(), ddoc_id(), replica),
     etap:diag("Waiting for replica group compaction to finish"),
@@ -80,6 +82,9 @@ test() ->
     etap:is(couch_util:get_value(compactions, Stats), 1, "Replica had 1 full compaction in stats"),
     etap:is(couch_util:get_value(cleanups, Stats), 1, "Replica had 1 full cleanup in stats"),
     verify_group_info_after_replica_compact(),
+
+    DiskSizeAfter = replica_index_disk_size(),
+    etap:is(DiskSizeAfter < DiskSizeBefore, true, "Index file size is smaller after compaction"),
 
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
     ok = timer:sleep(1000),
@@ -184,6 +189,14 @@ get_replica_group_info() ->
     {ok, MainInfo} = couch_set_view:get_group_info(test_set_name(), ddoc_id()),
     {RepInfo} = couch_util:get_value(replica_group_info, MainInfo),
     RepInfo.
+
+
+replica_index_disk_size() ->
+    Info = get_replica_group_info(),
+    Size = couch_util:get_value(disk_size, Info),
+    true = is_integer(Size),
+    true = (Size >= 0),
+    Size.
 
 
 populate_set() ->
