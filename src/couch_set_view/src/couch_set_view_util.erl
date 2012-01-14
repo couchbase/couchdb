@@ -110,13 +110,10 @@ btree_purge_fun(branch, Red, {go, Acc}, Cbitmask) ->
     case Bitmap band Cbitmask of
     0 ->
         {keep, {go, Acc}};
+    Bitmap ->
+        {purge, {go, Acc + element(1, Red)}};
     _ ->
-        case Bitmap bxor Cbitmask of
-        0 ->
-            {purge, {go, Acc + element(1, Red)}};
-        _ ->
-            {partial_purge, {go, Acc}}
-        end
+        {partial_purge, {go, Acc}}
     end.
 
 

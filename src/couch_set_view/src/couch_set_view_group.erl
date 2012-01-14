@@ -96,9 +96,12 @@
 -define(inc_updater_stops(Stats), ?inc_stat(#stats.updater_stops, Stats)).
 -define(inc_cleanups(Stats), ?inc_stat(#stats.cleanups, Stats)).
 -define(inc_cleanup_stops(Stats), ?inc_stat(#stats.cleanup_stops, Stats)).
--define(inc_compactions(Stats), Stats#stats{
+-define(inc_compactions(Stats, OldGroup), Stats#stats{
      compactions = Stats#stats.compactions + 1,
-     cleanups = Stats#stats.cleanups + 1
+     cleanups = case (?set_cbitmask(OldGroup)) of
+         0 -> Stats#stats.cleanups;
+         _ -> Stats#stats.cleanups + 1
+     end
 }).
 
 
@@ -604,7 +607,7 @@ handle_call({compact_done, NewGroup0, Duration}, {Pid, _}, #state{compactor_pid 
                     replicas_on_transfer = ?set_replicas_on_transfer(Group)
                 }
             },
-            stats = ?inc_compactions(State#state.stats)
+            stats = ?inc_compactions(State#state.stats, Group)
         },
         State3 = notify_cleanup_waiters(State2),
         {reply, ok, State3, ?TIMEOUT};
