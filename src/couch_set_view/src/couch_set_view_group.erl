@@ -1642,7 +1642,7 @@ restart_compactor(#state{compactor_pid = nil} = State, _Reason) ->
 restart_compactor(#state{compactor_pid = Pid} = State, Reason) ->
     true = is_process_alive(Pid),
     ?LOG_INFO("Restarting compaction for ~s group `~s`, set view `~s`. Reason: ~s",
-        [?group_id(State), ?type(State), ?set_name(State), Reason]),
+        [?type(State), ?group_id(State), ?set_name(State), Reason]),
     unlink(Pid),
     exit(Pid, kill),
     State2 = case ?set_cbitmask(State#state.group) of
