@@ -113,8 +113,12 @@ assemble_file_chunk(Bin, Crc32) ->
 
 
 pread_term(Fd, Pos) ->
-    {ok, Bin} = pread_binary(Fd, Pos),
-    {ok, couch_compress:decompress(Bin)}.
+    case pread_binary(Fd, Pos) of
+    {ok, Bin} ->
+        {ok, couch_compress:decompress(Bin)};
+    Else ->
+        Else
+    end.
 
 
 %%----------------------------------------------------------------------
@@ -125,8 +129,12 @@ pread_term(Fd, Pos) ->
 %%----------------------------------------------------------------------
 
 pread_binary(Fd, Pos) ->
-    {ok, L} = pread_iolist(Fd, Pos),
-    {ok, iolist_to_binary(L)}.
+    case pread_iolist(Fd, Pos) of
+    {ok, L} ->
+        {ok, iolist_to_binary(L)};
+    Else ->
+        Else
+    end.
 
 
 pread_iolist(Fd, Pos) ->
@@ -139,7 +147,9 @@ pread_iolist(Fd, Pos) ->
             {ok, IoList};
         _ ->
             exit({file_corruption, <<"file corruption">>})
-        end
+        end;
+    Else ->
+        Else
     end.
 
 
@@ -445,8 +455,20 @@ read_raw_iolist_int(ReadFd, {Pos, _Size}, Len) -> % 0110 UPGRADE CODE
 read_raw_iolist_int(ReadFd, Pos, Len) ->
     BlockOffset = Pos rem ?SIZE_BLOCK,
     TotalBytes = calculate_total_read_len(BlockOffset, Len),
-    {ok, <<RawBin:TotalBytes/binary>>} = file:pread(ReadFd, Pos, TotalBytes),
-    {remove_block_prefixes(BlockOffset, RawBin), Pos + TotalBytes}.
+    case file:pread(ReadFd, Pos, TotalBytes) of
+    {ok, <<RawBin:TotalBytes/binary>>} ->
+        {remove_block_prefixes(BlockOffset, RawBin), Pos + TotalBytes};
+    {ok, RawBin} ->
+        UnexpectedBin = {
+            unexpected_binary,
+            {at, Pos},
+            {wanted_bytes, TotalBytes},
+            {got, byte_size(RawBin), RawBin}
+        },
+        throw({read_error, UnexpectedBin});
+    Else ->
+        throw({read_error, Else})
+    end.
 
 -spec extract_crc32(iolist()) -> {binary(), iolist()}.
 extract_crc32(FullIoList) ->
@@ -659,9 +681,15 @@ handle_reader_message(Msg, Fd, FilePath, CloseTimeout) ->
         exit(done)
     end.
 
--compile({inline, [read_iolist/2]}).
 
 read_iolist(Fd, Pos) ->
+    try
+        do_read_iolist(Fd, Pos)
+    catch throw:{read_error, Error} ->
+        Error
+    end.
+
+do_read_iolist(Fd, Pos) ->
     {RawData, NextPos} = try
         % up to 8Kbs of read ahead
         read_raw_iolist_int(Fd, Pos, 2 * ?SIZE_BLOCK - (Pos rem ?SIZE_BLOCK))
