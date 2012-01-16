@@ -1517,7 +1517,7 @@ maybe_start_cleaner(#state{group = Group} = State) ->
     true ->
         State;
     false ->
-        Cleaner = spawn_link(fun() -> cleaner(Group) end),
+        Cleaner = spawn_link(fun() -> cleaner(State) end),
         ?LOG_INFO("Started cleanup process ~p for set view `~s`, ~s group `~s`",
                   [Cleaner, ?set_name(State), ?type(State), ?group_id(State)]),
         State#state{cleaner_pid = Cleaner}
@@ -1561,14 +1561,17 @@ stop_cleaner(#state{cleaner_pid = Pid, group = OldGroup} = State) when is_pid(Pi
     end.
 
 
-cleaner(Group) ->
+cleaner(#state{group = Group} = State) ->
     #set_view_group{
         index_header = Header,
         views = Views,
         id_btree = IdBtree,
-        fd = Fd
+        fd = Fd,
+        sig = Sig
     } = Group,
-    ok = couch_file:flush(Fd),
+    FileName = index_file_name(?root_dir(State), ?set_name(State), ?type(State), Sig),
+    {ok, RawReadFd} = file:open(FileName, [binary, read, raw]),
+    erlang:put({Fd, fast_fd_read}, RawReadFd),
     StartTime = now(),
     PurgeFun = couch_set_view_util:make_btree_purge_fun(Group),
     {ok, NewIdBtree, {Go, IdPurgedCount}} =
@@ -1579,6 +1582,8 @@ cleaner(Group) ->
     stop ->
         {IdPurgedCount, Views}
     end,
+    ok = file:close(RawReadFd),
+    erlang:erase({Fd, fast_fd_read}),
     {ok, {_, IdBitmap}} = couch_btree:full_reduce(NewIdBtree),
     CombinedBitmap = lists:foldl(
         fun(#set_view{btree = Bt}, AccMap) ->
@@ -1633,9 +1638,10 @@ start_compactor(State, CompactFun) ->
     State2 = stop_cleaner(State),
     ?LOG_INFO("Set view `~s`, ~s group `~s`, compaction starting",
               [?set_name(State2), ?type(State), ?group_id(State2)]),
-    NewGroup = compact_group(State2),
+    #set_view_group{sig = Sig} = NewGroup = compact_group(State2),
     Pid = spawn_link(fun() ->
-        CompactFun(State2#state.group, NewGroup, ?set_name(State2))
+        FileName = index_file_name(?root_dir(State), ?set_name(State), ?type(State), Sig),
+        CompactFun(State2#state.group, NewGroup, ?set_name(State2), FileName)
     end),
     State2#state{compactor_pid = Pid, compactor_fun = CompactFun}.
 

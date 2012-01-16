@@ -28,7 +28,7 @@ start_compact(SetName, DDocId) ->
 
 start_compact(SetName, DDocId, Type) ->
     {ok, Pid} = get_group_pid(SetName, DDocId, Type),
-    gen_server:call(Pid, {start_compact, fun compact_group/3}).
+    gen_server:call(Pid, {start_compact, fun compact_group/4}).
 
 
 cancel_compact(SetName, DDocId) ->
@@ -43,14 +43,15 @@ cancel_compact(SetName, DDocId, Type) ->
 %% internal functions
 %%=============================================================================
 
-%% @spec compact_group(Group, NewGroup) -> ok
-compact_group(Group, EmptyGroup, SetName) ->
+%% @spec compact_group(Group, NewGroup, SetName, FileName) -> ok
+compact_group(Group, EmptyGroup, SetName, FileName) ->
     #set_view_group{
         id_btree = IdBtree,
         views = Views,
         name = GroupId,
         type = Type,
-        index_header = Header
+        index_header = Header,
+        fd = GroupFd
     } = Group,
     StartTime = now(),
 
@@ -87,6 +88,9 @@ compact_group(Group, EmptyGroup, SetName) ->
         {progress, 0}
     ]),
 
+    {ok, RawReadFd} = file:open(FileName, [binary, read, raw]),
+    erlang:put({GroupFd, fast_fd_read}, RawReadFd),
+
     BeforeKVWriteFun = fun({DocId, _} = KV, #acc{last_id = LastDocId} = Acc) ->
         if DocId =:= LastDocId -> % COUCHDB-999
             ?LOG_ERROR("Duplicates of document `~s` detected in set view `~s`"
@@ -121,9 +125,9 @@ compact_group(Group, EmptyGroup, SetName) ->
             view_states = nil
         }
     },
-    maybe_retry_compact(NewGroup, SetName, StartTime).
+    maybe_retry_compact(NewGroup, SetName, StartTime, GroupFd).
 
-maybe_retry_compact(NewGroup, SetName, StartTime) ->
+maybe_retry_compact(NewGroup, SetName, StartTime, GroupFd) ->
     #set_view_group{
         name = DDocId,
         type = Type,
@@ -133,7 +137,8 @@ maybe_retry_compact(NewGroup, SetName, StartTime) ->
     {ok, Pid} = get_group_pid(SetName, DDocId, Type),
     case gen_server:call(Pid, {compact_done, NewGroup, Duration}) of
     ok ->
-        ok;
+        RawReadFd = erlang:erase({GroupFd, fast_fd_read}),
+        ok = file:close(RawReadFd);
     update ->
         {ok, NewSeqs} = couch_db_set:get_seqs(DbSet),
         {_, Ref} = erlang:spawn_monitor(fun() ->
@@ -141,7 +146,7 @@ maybe_retry_compact(NewGroup, SetName, StartTime) ->
         end),
         receive
         {'DOWN', Ref, _, _, {new_group, NewGroup2}} ->
-            maybe_retry_compact(NewGroup2, SetName, StartTime)
+            maybe_retry_compact(NewGroup2, SetName, StartTime, GroupFd)
         end
     end.
 
