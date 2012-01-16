@@ -52,7 +52,7 @@ test_single_consumer_max_item_count() ->
     etap:is(ping(Producer), ok, "Producer not blocked"),
 
     etap:is(ping(Consumer), ok, "Consumer unblocked"),
-    etap:is(last_consumer_items(Consumer), {ok, [Item1]},
+    etap:is(last_consumer_items(Consumer), {ok, [Item1], 10},
         "Consumer received the right item"),
 
     Item2 = produce(Producer, 20),
@@ -70,14 +70,14 @@ test_single_consumer_max_item_count() ->
     consume(Consumer, 2),
     etap:is(ping(Consumer), ok,
         "Consumer not blocked when attempting to dequeue 2 items from queue"),
-    etap:is(last_consumer_items(Consumer), {ok, [Item2, Item3]},
+    etap:is(last_consumer_items(Consumer), {ok, [Item2, Item3], 35},
         "Consumer received the right items"),
     etap:is(couch_work_queue:item_count(Q), 1, "Queue item count is 1"),
 
     consume(Consumer, 2),
     etap:is(ping(Consumer), ok,
         "Consumer not blocked when attempting to dequeue 2 items from queue"),
-    etap:is(last_consumer_items(Consumer), {ok, [Item4]},
+    etap:is(last_consumer_items(Consumer), {ok, [Item4], 3},
         "Consumer received the right item"),
     etap:is(couch_work_queue:item_count(Q), 0, "Queue item count is 0"),
 
@@ -103,14 +103,14 @@ test_single_consumer_max_item_count() ->
     etap:is(couch_work_queue:item_count(Q), 3, "Queue item count is 3"),
 
     etap:is(ping(Consumer), ok, "Consumer unblocked"),
-    etap:is(last_consumer_items(Consumer), {ok, [Item5]},
+    etap:is(last_consumer_items(Consumer), {ok, [Item5], 11},
         "Consumer received the first queued item"),
     etap:is(couch_work_queue:item_count(Q), 3, "Queue item count is 3"),
 
     consume(Consumer, all),
     etap:is(ping(Consumer), ok,
         "Consumer not blocked when attempting to dequeue all items from queue"),
-    etap:is(last_consumer_items(Consumer), {ok, [Item6, Item7, Item8]},
+    etap:is(last_consumer_items(Consumer), {ok, [Item6, Item7, Item8], 54},
         "Consumer received all queued items"),
 
     etap:is(couch_work_queue:item_count(Q), 0, "Queue item count is 0"),
@@ -145,7 +145,7 @@ test_single_consumer_max_size() ->
     etap:is(ping(Producer), ok, "Producer not blocked"),
 
     etap:is(ping(Consumer), ok, "Consumer unblocked"),
-    etap:is(last_consumer_items(Consumer), {ok, [Item1]},
+    etap:is(last_consumer_items(Consumer), {ok, [Item1], 50},
         "Consumer received the right item"),
 
     etap:is(couch_work_queue:item_count(Q), 0, "Queue item count is 0"),
@@ -169,7 +169,7 @@ test_single_consumer_max_size() ->
     consume(Consumer, 1),
     etap:is(ping(Consumer), ok,
         "Consumer not blocked when attempting to dequeue 1 item from full queue"),
-    etap:is(last_consumer_items(Consumer), {ok, [Item2]},
+    etap:is(last_consumer_items(Consumer), {ok, [Item2], 50},
         "Consumer received the right item"),
     etap:is(couch_work_queue:item_count(Q), 2, "Queue item count is 2"),
     etap:is(couch_work_queue:size(Q), 111, "Queue size is 111 bytes"),
@@ -190,7 +190,7 @@ test_single_consumer_max_size() ->
     consume(Consumer, 2),
     etap:is(ping(Consumer), ok,
         "Consumer not blocked when attempting to dequeue 2 items from full queue"),
-    etap:is(last_consumer_items(Consumer), {ok, [Item3, Item4]},
+    etap:is(last_consumer_items(Consumer), {ok, [Item3, Item4], 111},
         "Consumer received the right items"),
     etap:is(couch_work_queue:item_count(Q), 2, "Queue item count is 2"),
     etap:is(couch_work_queue:size(Q), 60, "Queue size is 60 bytes"),
@@ -201,7 +201,7 @@ test_single_consumer_max_size() ->
     consume(Consumer, all),
     etap:is(ping(Consumer), ok,
         "Consumer not blocked when attempting to dequeue all items from queue"),
-    etap:is(last_consumer_items(Consumer), {ok, [Item5, Item6]},
+    etap:is(last_consumer_items(Consumer), {ok, [Item5, Item6], 60},
         "Consumer received the right items"),
 
     etap:is(couch_work_queue:item_count(Q), closed, "Queue closed"),
@@ -239,7 +239,7 @@ test_single_consumer_max_item_count_and_size() ->
     consume(Consumer, all),
     etap:is(ping(Consumer), ok,
         "Consumer not blocked when attempting to dequeue all items from queue"),
-    etap:is(last_consumer_items(Consumer), {ok, [Item1, Item2]},
+    etap:is(last_consumer_items(Consumer), {ok, [Item1, Item2], 210},
         "Consumer received the right items"),
     etap:is(couch_work_queue:item_count(Q), 0, "Queue item count is 0"),
     etap:is(couch_work_queue:size(Q), 0, "Queue size is 0 bytes"),
@@ -265,7 +265,7 @@ test_single_consumer_max_item_count_and_size() ->
     consume(Consumer, 1),
     etap:is(ping(Consumer), ok,
         "Consumer not blocked when attempting to dequeue 1 item from queue"),
-    etap:is(last_consumer_items(Consumer), {ok, [Item3]},
+    etap:is(last_consumer_items(Consumer), {ok, [Item3], 10},
        "Consumer received 1 item"),
     etap:is(couch_work_queue:item_count(Q), 2, "Queue item count is 2"),
     etap:is(couch_work_queue:size(Q), 6, "Queue size is 6 bytes"),
@@ -276,7 +276,7 @@ test_single_consumer_max_item_count_and_size() ->
     consume(Consumer, 1),
     etap:is(ping(Consumer), ok,
         "Consumer not blocked when attempting to dequeue 1 item from queue"),
-    etap:is(last_consumer_items(Consumer), {ok, [Item4]},
+    etap:is(last_consumer_items(Consumer), {ok, [Item4], 4},
        "Consumer received 1 item"),
     etap:is(couch_work_queue:item_count(Q), 1, "Queue item count is 1"),
     etap:is(couch_work_queue:size(Q), 2, "Queue size is 2 bytes"),
@@ -291,7 +291,7 @@ test_single_consumer_max_item_count_and_size() ->
     consume(Consumer, all),
     etap:is(ping(Consumer), ok,
         "Consumer not blocked when attempting to dequeue all items from queue"),
-    etap:is(last_consumer_items(Consumer), {ok, [Item5, Item6]},
+    etap:is(last_consumer_items(Consumer), {ok, [Item5, Item6], 52},
        "Consumer received all queued items"),
 
     etap:is(couch_work_queue:item_count(Q), closed, "Queue closed"),
@@ -344,19 +344,19 @@ test_multiple_consumers() ->
     etap:is(couch_work_queue:size(Q), 0, "Queue size is 0 bytes"),
 
     etap:is(ping(Consumer1), ok, "Consumer 1 unblocked"),
-    etap:is(last_consumer_items(Consumer1), {ok, [Item1]},
+    etap:is(last_consumer_items(Consumer1), {ok, [Item1], 50},
        "Consumer 1 received 1 item"),
     etap:is(couch_work_queue:item_count(Q), 0, "Queue item count is 0"),
     etap:is(couch_work_queue:size(Q), 0, "Queue size is 0 bytes"),
 
     etap:is(ping(Consumer2), ok, "Consumer 2 unblocked"),
-    etap:is(last_consumer_items(Consumer2), {ok, [Item2]},
+    etap:is(last_consumer_items(Consumer2), {ok, [Item2], 50},
        "Consumer 2 received 1 item"),
     etap:is(couch_work_queue:item_count(Q), 0, "Queue item count is 0"),
     etap:is(couch_work_queue:size(Q), 0, "Queue size is 0 bytes"),
 
     etap:is(ping(Consumer3), ok, "Consumer 3 unblocked"),
-    etap:is(last_consumer_items(Consumer3), {ok, [Item3]},
+    etap:is(last_consumer_items(Consumer3), {ok, [Item3], 50},
        "Consumer 3 received 1 item"),
     etap:is(couch_work_queue:item_count(Q), 0, "Queue item count is 0"),
     etap:is(couch_work_queue:size(Q), 0, "Queue size is 0 bytes"),
@@ -379,7 +379,7 @@ test_multiple_consumers() ->
     etap:is(close_queue(Q), ok, "Closed queue"),
 
     etap:is(ping(Consumer1), ok, "Consumer 1 unblocked"),
-    etap:is(last_consumer_items(Consumer1), {ok, [Item4]},
+    etap:is(last_consumer_items(Consumer1), {ok, [Item4], 50},
        "Consumer 1 received 1 item"),
 
     etap:is(couch_work_queue:item_count(Q), closed, "Queue closed"),

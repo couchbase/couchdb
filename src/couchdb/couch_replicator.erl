@@ -655,7 +655,7 @@ changes_manager_loop_open(Parent, ChangesQueue, BatchSize, Ts) ->
         case couch_work_queue:dequeue(ChangesQueue, BatchSize) of
         closed ->
             From ! {closed, self()};
-        {ok, Changes} ->
+        {ok, Changes, _Size} ->
             #doc_info{local_seq = Seq} = lists:last(Changes),
             ReportSeq = {Ts, Seq},
             ok = gen_server:cast(Parent, {report_seq, ReportSeq}),

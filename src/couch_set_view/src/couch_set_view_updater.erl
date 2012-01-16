@@ -288,7 +288,7 @@ do_maps(#set_view_group{query_server = Qs} = Group, MapQueue, WriteQueue) ->
     closed ->
         couch_work_queue:close(WriteQueue),
         couch_query_servers:stop_doc_map(Group#set_view_group.query_server);
-    {ok, Queue} ->
+    {ok, Queue, _QueueSize} ->
         lists:foreach(
             fun({Seq, #doc{id = Id, deleted = true}, PartitionId}) ->
                 Item = {Seq, Id, PartitionId, []},
@@ -310,7 +310,7 @@ do_batched_maps(#set_view_group{query_server = Qs} = Group, MapQueue, WriteQueue
         compute_map_results(Group, WriteQueue, Acc),
         couch_work_queue:close(WriteQueue),
         couch_query_servers:stop_doc_map(Qs);
-    {ok, Queue} ->
+    {ok, Queue, _QueueSize} ->
         Acc2 = Acc ++ Queue,
         case length(Acc2) >= ?MIN_MAP_BATCH_SIZE of
         true ->
@@ -350,7 +350,7 @@ do_writes(#writer_acc{kvs = Kvs, write_queue = WriteQueue} = Acc) ->
     closed ->
         #writer_acc{group = NewGroup} = flush_writes(Acc#writer_acc{final_batch = true}),
         NewGroup;
-    {ok, Queue} ->
+    {ok, Queue, _QueueSize} ->
         Kvs2 = Kvs ++ Queue,
         case length(Kvs2) >= ?MIN_FLUSH_BATCH_SIZE of
         true ->

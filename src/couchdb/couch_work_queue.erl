@@ -102,8 +102,8 @@ handle_call({queue, Item, Size}, From, #q{work_waiters = []} = Q0) ->
         {reply, ok, Q}
     end;
 
-handle_call({queue, Item, _}, _From, #q{work_waiters = [{W, _Max} | Rest]} = Q) ->
-    gen_server:reply(W, {ok, [Item]}),
+handle_call({queue, Item, Size}, _From, #q{work_waiters = [{W, _Max} | Rest]} = Q) ->
+    gen_server:reply(W, {ok, [Item], Size}),
     {reply, ok, Q#q{work_waiters = Rest}};
 
 handle_call({dequeue, Max}, From, Q) ->
@@ -144,16 +144,16 @@ deliver_queue_items(Max, Q) ->
         Q2 = Q#q{
             items = Count - Max, size = Size2, blocked = Blocked2, queue = Queue2
         },
-        {reply, {ok, Items}, Q2};
+        {reply, {ok, Items, Size - Size2}, Q2};
     true ->
         lists:foreach(fun(F) -> gen_server:reply(F, ok) end, Blocked),
         Q2 = Q#q{items = 0, size = 0, blocked = [], queue = queue:new()},
         Items = [Item || {Item, _} <- queue:to_list(Queue)],
         case Close of
         false ->
-            {reply, {ok, Items}, Q2};
+            {reply, {ok, Items, Size}, Q2};
         true ->
-            {stop, normal, {ok, Items}, Q2}
+            {stop, normal, {ok, Items, Size}, Q2}
         end
     end.
 

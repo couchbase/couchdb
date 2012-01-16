@@ -169,7 +169,7 @@ do_maps(#group{query_server = Qs} = Group, MapQueue, WriteQueue) ->
     closed ->
         couch_work_queue:close(WriteQueue),
         couch_query_servers:stop_doc_map(Group#group.query_server);
-    {ok, Queue} ->
+    {ok, Queue, _QueueSize} ->
         lists:foreach(
             fun({Seq, #doc{id = Id, deleted = true}}) ->
                 Item = {Seq, Id, []},
@@ -190,7 +190,7 @@ do_writes(Parent, Owner, Group, WriteQueue, InitialBuild, ViewEmptyKVs, Acc) ->
          Group2 = flush_writes(
              Parent, Owner, Group, InitialBuild, ViewEmptyKVs, Acc),
          Parent ! {new_group, Group2};
-    {ok, Queue} ->
+    {ok, Queue, _QueueSize} ->
         Acc2 = Acc ++ Queue,
         case length(Acc2) >= ?MIN_FLUSH_BATCH_SIZE of
         true ->
