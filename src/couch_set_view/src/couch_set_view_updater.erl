@@ -56,6 +56,8 @@ update(Owner, Group, NewSeqs) ->
     {ok, WriteQueue} = couch_work_queue:new(
         [{max_size, ?QUEUE_MAX_SIZE}, {max_items, ?QUEUE_MAX_ITEMS}]),
 
+    ok = couch_indexer_manager:enter(),
+
     spawn_link(fun() ->
         case can_do_batched_maps(Group) of
         true ->
@@ -110,6 +112,7 @@ update(Owner, Group, NewSeqs) ->
     load_changes(Owner, Group, SinceSeqs, MapQueue, Writer),
     receive
     {new_group, _} = NewGroup ->
+        ok = couch_indexer_manager:leave(),
         exit(NewGroup)
     end.
 
