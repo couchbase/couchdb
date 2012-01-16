@@ -17,10 +17,8 @@
 -include("couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
 
--define(QUEUE_MAX_ITEMS, 500).
+-define(QUEUE_MAX_ITEMS, 1000).
 -define(QUEUE_MAX_SIZE, 100 * 1024).
--define(MIN_FLUSH_BATCH_SIZE, 500).
--define(MIN_MAP_BATCH_SIZE, 500).
 -define(replace(L, K, V), lists:keystore(K, 1, L, {K, V})).
 
 -record(writer_acc, {
@@ -31,6 +29,7 @@
     initial_build,
     view_empty_kvs,
     kvs = [],
+    kvs_size = 0,
     rep_part_ids = [],
     final_batch = false,
     state = updating_active
@@ -61,7 +60,7 @@ update(Owner, Group, NewSeqs) ->
     spawn_link(fun() ->
         case can_do_batched_maps(Group) of
         true ->
-            do_batched_maps(add_query_server(Group), MapQueue, WriteQueue, []);
+            do_batched_maps(add_query_server(Group), MapQueue, WriteQueue, [], 0);
         false->
             do_maps(add_query_server(Group), MapQueue, WriteQueue)
         end
@@ -304,20 +303,21 @@ do_maps(#set_view_group{query_server = Qs} = Group, MapQueue, WriteQueue) ->
 
 
 % TODO: batch by byte size as well, not just changes #
-do_batched_maps(#set_view_group{query_server = Qs} = Group, MapQueue, WriteQueue, Acc) ->
+do_batched_maps(#set_view_group{query_server = Qs} = Group, MapQueue, WriteQueue, Acc, AccSize) ->
     case couch_work_queue:dequeue(MapQueue) of
     closed ->
         compute_map_results(Group, WriteQueue, Acc),
         couch_work_queue:close(WriteQueue),
         couch_query_servers:stop_doc_map(Qs);
-    {ok, Queue, _QueueSize} ->
+    {ok, Queue, QueueSize} ->
         Acc2 = Acc ++ Queue,
-        case length(Acc2) >= ?MIN_MAP_BATCH_SIZE of
+        AccSize2 = AccSize + QueueSize,
+        case (AccSize2 >= ?QUEUE_MAX_SIZE) orelse (length(Acc2) >= ?QUEUE_MAX_ITEMS) of
         true ->
             compute_map_results(Group, WriteQueue, Acc2),
-            do_batched_maps(Group, MapQueue, WriteQueue, []);
+            do_batched_maps(Group, MapQueue, WriteQueue, [], 0);
         false ->
-            do_batched_maps(Group, MapQueue, WriteQueue, Acc2)
+            do_batched_maps(Group, MapQueue, WriteQueue, Acc2, AccSize2)
         end
     end.
 
@@ -345,18 +345,20 @@ compute_map_results(#set_view_group{query_server = Qs}, WriteQueue, Queue) ->
 
 
 % TODO: batch by byte size as well, not just changes #
-do_writes(#writer_acc{kvs = Kvs, write_queue = WriteQueue} = Acc) ->
+do_writes(#writer_acc{kvs = Kvs, kvs_size = KvsSize, write_queue = WriteQueue} = Acc) ->
     case couch_work_queue:dequeue(WriteQueue) of
     closed ->
         #writer_acc{group = NewGroup} = flush_writes(Acc#writer_acc{final_batch = true}),
         NewGroup;
-    {ok, Queue, _QueueSize} ->
+    {ok, Queue, QueueSize} ->
         Kvs2 = Kvs ++ Queue,
-        case length(Kvs2) >= ?MIN_FLUSH_BATCH_SIZE of
+        KvsSize2 = KvsSize + QueueSize,
+        case (KvsSize2 >= ?QUEUE_MAX_SIZE) orelse (length(Kvs2) >= ?QUEUE_MAX_ITEMS) of
         true ->
-            Acc2 = flush_writes(Acc#writer_acc{kvs = Kvs2});
+            Acc1 = flush_writes(Acc#writer_acc{kvs = Kvs2, kvs_size = KvsSize2}),
+            Acc2 = Acc1#writer_acc{kvs = [], kvs_size = 0};
         false ->
-            Acc2 = Acc#writer_acc{kvs = Kvs2}
+            Acc2 = Acc#writer_acc{kvs = Kvs2, kvs_size = KvsSize2}
         end,
         do_writes(Acc2)
     end.
@@ -399,7 +401,7 @@ flush_writes(Acc) ->
         Group, ViewKVs, DocIdViewIdKeys, PartIdSeqs, InitialBuild),
     PartIds = orddict:fetch_keys(PartIdSeqs),
     #writer_acc{group = Group3} = Acc2 =
-        update_transferred_replicas(Acc#writer_acc{group = Group2, kvs = []}, PartIds),
+        update_transferred_replicas(Acc#writer_acc{group = Group2}, PartIds),
     case Owner of
     nil ->
         ok;

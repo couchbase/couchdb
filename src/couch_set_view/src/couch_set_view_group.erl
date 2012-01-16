@@ -31,7 +31,7 @@
 
 -define(TIMEOUT, 3000).
 -define(DELAYED_COMMIT_PERIOD, 5000).
--define(MIN_CHANGES_AUTO_UPDATE, 5000).
+-define(MIN_CHANGES_AUTO_UPDATE, 20000).
 -define(BTREE_CHUNK_THRESHOLD, 5120).
 
 -define(root_dir(State), element(1, State#state.init_args)).
