@@ -73,7 +73,9 @@ enum_docs_since(Pid, SinceSeqs, Fun, Acc0, Options) ->
         DocInfoWrapper = fun(DI, _, A) ->
             Fun({doc_info, DI, P, Db}, A)
         end,
-        {ok, _, Acc3} = couch_db:enum_docs_since(Db, Since, DocInfoWrapper, Acc2, []),
+        {ok, _, Acc3} = couch_db:fast_reads(Db, fun() ->
+            couch_db:enum_docs_since(Db, Since, DocInfoWrapper, Acc2, [])
+        end),
         catch couch_db:close(Db),
         Acc3
     end,
