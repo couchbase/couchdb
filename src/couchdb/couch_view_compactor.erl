@@ -106,6 +106,7 @@ compact_group(Group, EmptyGroup, DbName) ->
         views=NewViews,
         current_seq=Seq
     },
+    ok = couch_file:flush(NewGroup#group.fd),
     maybe_retry_compact(Db, GroupId, NewGroup).
 
 maybe_retry_compact(#db{name = DbName} = Db, GroupId, NewGroup) ->

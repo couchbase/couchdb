@@ -125,6 +125,7 @@ compact_group(Group, EmptyGroup, SetName, FileName) ->
             view_states = nil
         }
     },
+    ok = couch_file:flush(NewGroup#set_view_group.fd),
     maybe_retry_compact(NewGroup, SetName, StartTime, GroupFd).
 
 maybe_retry_compact(NewGroup, SetName, StartTime, GroupFd) ->

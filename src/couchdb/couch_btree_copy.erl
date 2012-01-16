@@ -45,8 +45,6 @@ copy(Btree, Fd, Options) ->
     {ok, _, #acc{cur_level = 1} = FinalAcc0} = couch_btree:fold(
         Btree, fun fold_copy/3, Acc, []),
     {ok, CopyRootState, FinalAcc} = finish_copy(FinalAcc0),
-    ok = couch_file:flush(Fd),
-    ok = couch_file:sync(Fd),
     {_, LastUserAcc} = FinalAcc#acc.before_kv_write,
     {ok, CopyRootState, LastUserAcc}.
 
