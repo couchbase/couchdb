@@ -295,6 +295,8 @@ parse_view_param("stale", "ok") ->
     [{stale, ok}];
 parse_view_param("stale", "update_after") ->
     [{stale, update_after}];
+parse_view_param("stale", "false") ->
+    [{stale, false}];
 parse_view_param("stale", _Value) ->
     throw({query_parse_error,
             <<"stale only available as stale=ok or as stale=update_after">>});

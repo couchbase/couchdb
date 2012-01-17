@@ -114,6 +114,9 @@ class TestViewMerge(unittest.TestCase):
 
 
     def do_query(self, server, spec, params = {}):
+        params = deepcopy(params)
+        params.setdefault("stale", "false")
+
         url = "http://%s/_view_merge/" % server
         if params:
             url += "?%s" % urllib.urlencode(params)

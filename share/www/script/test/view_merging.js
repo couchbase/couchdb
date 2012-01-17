@@ -64,6 +64,7 @@ couchTests.view_merging = function(debug) {
     };
 
     options = options || {};
+    options.stale = options.stale || "false";
 
     for (var i = 0; i < dbs.length; i++) {
       if (typeof dbs[i] === "string") {
@@ -224,7 +225,7 @@ couchTests.view_merging = function(debug) {
   subviewspec.views[dbE.name] = "testfoobar/foobar";
   body.views[CouchDB.protocol + CouchDB.host + '/_view_merge'] = subviewspec;
 
-  xhr = CouchDB.request("POST", "/_view_merge", {
+  xhr = CouchDB.request("POST", "/_view_merge?stale=false", {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
   });
@@ -244,7 +245,7 @@ couchTests.view_merging = function(debug) {
     "_id": "_design/testfoobar",
     "views": { "foobar": { "map": "function(doc) { emit(doc._id, 1); }" } }
   });
-  xhr = CouchDB.request("POST", "/_view_merge", {
+  xhr = CouchDB.request("POST", "/_view_merge?stale=false", {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
   });
@@ -848,7 +849,7 @@ couchTests.view_merging = function(debug) {
   body.views[CouchDB.protocol + CouchDB.host + '/_view_merge'] = subviewspec;
 
   xhr = CouchDB.request("POST",
-    "/_view_merge?include_docs=true", {
+    "/_view_merge?include_docs=true&stale=false", {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
   });
@@ -859,7 +860,7 @@ couchTests.view_merging = function(debug) {
 
   // test parsing of connection_timeout
   xhr = CouchDB.request("POST",
-    '/_view_merge?connection_timeout="30000"', {
+    '/_view_merge?connection_timeout="30000"&stale=false', {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
   });
@@ -869,7 +870,7 @@ couchTests.view_merging = function(debug) {
 
   // test parsing/validation of on_error
   xhr = CouchDB.request("POST",
-    '/_view_merge?on_error="foo"', {
+    '/_view_merge?on_error="foo"&stale=false', {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
   });
@@ -980,7 +981,7 @@ couchTests.view_merging = function(debug) {
   body.views[CouchDB.protocol + CouchDB.host + '/_view_merge'] = subviewspec;
 
   xhr = CouchDB.request("POST",
-    "/_view_merge?group=true&startkey=" + startkeyJson, {
+    "/_view_merge?group=true&stale=false&startkey=" + startkeyJson, {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
   });
@@ -1090,7 +1091,7 @@ couchTests.view_merging = function(debug) {
   subviewspec.views[dbC.name] = "test/badredview";
   body.views[CouchDB.protocol + CouchDB.host + '/_view_merge'] = subviewspec;
 
-  xhr = CouchDB.request("POST", "/_view_merge", {
+  xhr = CouchDB.request("POST", "/_view_merge?stale=false", {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
   });
@@ -1193,7 +1194,7 @@ couchTests.view_merging = function(debug) {
   subviewspec.views[dbC.name] = "test/badredview";
   body.views[CouchDB.protocol + CouchDB.host + '/_view_merge'] = subviewspec;
 
-  xhr = CouchDB.request("POST", "/_view_merge", {
+  xhr = CouchDB.request("POST", "/_view_merge?stale=false", {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
   });
@@ -1307,7 +1308,7 @@ couchTests.view_merging = function(debug) {
   body.views[dbUri(dbC)] = "test1/mapview1";
   body.views[dbB.name] = "test2/mapview2";
 
-  xhr = CouchDB.request("POST", "/_view_merge", {
+  xhr = CouchDB.request("POST", "/_view_merge?stale=false", {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
   });
@@ -1353,7 +1354,7 @@ couchTests.view_merging = function(debug) {
     return sum(values);
   }).toString();
 
-  xhr = CouchDB.request("POST", "/_view_merge", {
+  xhr = CouchDB.request("POST", "/_view_merge?stale=false", {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
   });
@@ -1444,7 +1445,7 @@ couchTests.view_merging = function(debug) {
   body.views[CouchDB.protocol + CouchDB.host + '/_view_merge'] = subviewspec;
 
   xhr = CouchDB.request("POST",
-    "/_view_merge", {
+    "/_view_merge?stale=false", {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
   });
@@ -1500,7 +1501,7 @@ couchTests.view_merging = function(debug) {
   body.views[CouchDB.protocol + CouchDB.host + '/_view_merge'] = subviewspec;
 
   xhr = CouchDB.request("POST",
-    "/_view_merge?include_docs=true", {
+    "/_view_merge?include_docs=true&stale=false", {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
   });

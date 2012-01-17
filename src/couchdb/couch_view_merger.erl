@@ -30,6 +30,8 @@
     get_nested_json_value/2
 ]).
 
+-define(DEFAULT_STALENESS, update_after).
+
 
 % callback!
 parse_http_params(Req, DDoc, ViewName, #view_merge{keys = Keys}) ->
@@ -41,8 +43,17 @@ parse_http_params(Req, DDoc, ViewName, #view_merge{keys = Keys}) ->
     _ ->
        ViewType0
     end,
+
+    StaleDefined = couch_httpd:qs_value(Req, "stale") =/= undefined,
     QueryArgs = couch_httpd_view:parse_view_params(Req, Keys, ViewType),
-    QueryArgs#view_query_args{view_name = ViewName}.
+    QueryArgs1 = QueryArgs#view_query_args{view_name = ViewName},
+
+    case StaleDefined of
+    true ->
+        QueryArgs1;
+    false ->
+        QueryArgs#view_query_args{stale = ?DEFAULT_STALENESS}
+    end.
 
 % callback!
 make_funs(DDoc, ViewName, IndexMergeParams) ->
@@ -1067,7 +1078,8 @@ view_qs(ViewArgs) ->
     false ->
         ["conflicts=" ++ atom_to_list(Conflicts)]
     end ++
-    case Stale =:= DefViewArgs#view_query_args.stale of
+    %% we now have different default
+    case Stale =:= ?DEFAULT_STALENESS of
     true ->
         [];
     false ->
