@@ -764,17 +764,16 @@ handle_db_event({ddoc_updated, {DbName, DDocId}}) ->
     case string:tokens(?b2l(DbName), "/") of
     [SetNameStr, "master"] ->
         SetName = ?l2b(SetNameStr),
-        case ets:match_object(couch_setview_name_to_sig, {SetName, {DDocId, '$1'}}) of
-        [] ->
-            ok;
-        [{SetName, {DDocId, Sig}}] ->
-            case ets:lookup(couch_sig_to_setview_pid, {SetName, Sig}) of
-            [{_, GroupPid}] ->
-                (catch gen_server:cast(GroupPid, ddoc_updated));
-            [] ->
-                ok
-            end
-        end;
+        lists:foreach(
+            fun({_SetName, {_DDocId, Sig}}) ->
+                case ets:lookup(couch_sig_to_setview_pid, {SetName, Sig}) of
+                [{_, GroupPid}] ->
+                    (catch gen_server:cast(GroupPid, ddoc_updated));
+                [] ->
+                    ok
+                end
+            end,
+            ets:match_object(couch_setview_name_to_sig, {SetName, {DDocId, '$1'}}));
     _ ->
         ok
     end;
