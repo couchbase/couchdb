@@ -36,7 +36,7 @@
 
 -define(root_dir(State), element(1, State#state.init_args)).
 -define(set_name(State), element(2, State#state.init_args)).
--define(type(State), element(4, State#state.init_args)).
+-define(type(State), (element(3, State#state.init_args))#set_view_group.type).
 -define(group_id(State), (State#state.group)#set_view_group.name).
 -define(db_set(State), (State#state.group)#set_view_group.db_set).
 -define(is_defined(State),
@@ -250,15 +250,15 @@ remove_replica_partitions(Pid, Partitions) ->
     gen_server:call(Pid, {remove_replicas, ordsets:from_list(Partitions)}, infinity).
 
 
-start_link(InitArgs) ->
-    Args = list_to_tuple(tuple_to_list(InitArgs) ++ [main]),
+start_link({RootDir, SetName, Group}) ->
+    Args = {RootDir, SetName, Group#set_view_group{type = main}},
     proc_lib:start_link(?MODULE, init, [Args]).
 
 
-init({_, SetName, _, Type} = InitArgs) when Type =:= main; Type =:= replica ->
+init({_, SetName, _} = InitArgs) ->
     process_flag(trap_exit, true),
     case prepare_group(InitArgs, false) of
-    {ok, #set_view_group{fd = Fd, index_header = Header} = Group} ->
+    {ok, #set_view_group{fd = Fd, index_header = Header, type = Type} = Group} ->
         {ok, RefCounter} = couch_ref_counter:start([Fd]),
         case Header#set_view_index_header.has_replica of
         false ->
@@ -313,7 +313,6 @@ init({_, SetName, _, Type} = InitArgs) when Type =:= main; Type =:= replica ->
             group = Group#set_view_group{
                 ref_counter = RefCounter,
                 db_set = DbSet,
-                type = Type,
                 replica_pid = ReplicaPid
             }
         },
@@ -850,7 +849,7 @@ reply_all(#state{waiting_list=WaitList}=State, Reply) ->
     [catch gen_server:reply(From, Reply) || From <- WaitList],
     State#state{waiting_list=[]}.
 
-prepare_group({RootDir, SetName, #set_view_group{sig = Sig} = Group, Type}, ForceReset)->
+prepare_group({RootDir, SetName, #set_view_group{sig = Sig, type = Type} = Group}, ForceReset)->
     case open_index_file(RootDir, SetName, Type, Sig) of
     {ok, Fd} ->
         if ForceReset ->
@@ -1800,8 +1799,8 @@ notify_cleanup_waiters(State) ->
     end.
 
 
-open_replica_group(InitArgs) ->
-    ReplicaArgs = setelement(4, InitArgs, replica),
+open_replica_group({RootDir, SetName, Group} = _InitArgs) ->
+    ReplicaArgs = {RootDir, SetName, Group#set_view_group{type = replica}},
     {ok, Pid} = proc_lib:start_link(?MODULE, init, [ReplicaArgs]),
     Pid.
 

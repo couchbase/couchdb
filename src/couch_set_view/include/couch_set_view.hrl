@@ -85,7 +85,7 @@
     ref_counter = nil,
     index_header = nil,
     db_set = nil,
-    type = main,     % 'main' | 'replica'
+    type,     % 'main' | 'replica'
     replica_group = nil,
     replica_pid = nil
 }).
