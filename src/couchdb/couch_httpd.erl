@@ -782,6 +782,8 @@ error_info({missing_stub, Reason}) ->
     {412, <<"missing_stub">>, Reason};
 error_info({Error, Reason}) ->
     {500, couch_util:to_binary(Error), couch_util:to_binary(Reason)};
+error_info({Status, Error, Reason}) ->
+    {Status, couch_util:to_binary(Error), couch_util:to_binary(Reason)};
 error_info(Error) ->
     {500, <<"unknown_error">>, couch_util:to_binary(Error)}.
 
