@@ -184,9 +184,9 @@ handle_call({compact_done, #group{current_seq=NewSeq} = NewGroup}, _From,
 
     ?LOG_INFO("View index compaction complete for ~s ~s", [DbName, GroupId]),
     FileName = index_file_name(RootDir, DbName, GroupSig),
-    CompactName = index_file_name(compact, RootDir, DbName, GroupSig),
+    ok = couch_file:only_snapshot_reads(OldFd),
     ok = couch_file:delete(RootDir, FileName),
-    ok = file:rename(CompactName, FileName),
+    ok = couch_file:rename(NewGroup#group.fd, FileName),
 
     %% if an updater is running, kill it and start a new one
     NewUpdaterPid =

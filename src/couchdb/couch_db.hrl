@@ -14,6 +14,7 @@
 -define(DESIGN_DOC_PREFIX0, "_design").
 -define(DESIGN_DOC_PREFIX, "_design/").
 -define(DEFAULT_COMPRESSION, snappy).
+-define(FD_CLOSE_TIMEOUT_MS, 10). % Fds will close after msecs of non-use
 
 -define(MIN_STR, <<"">>).
 -define(MAX_STR, <<255>>). % illegal utf string

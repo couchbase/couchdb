@@ -567,10 +567,9 @@ handle_call({compact_done, NewGroup0, Duration}, {Pid, _}, #state{compactor_pid 
             [?set_name(State), ?type(State), ?group_id(State), Duration / 1000000]),
         FileName = index_file_name(
             ?root_dir(State), ?set_name(State), ?type(State), GroupSig),
-        CompactName = index_file_name(
-            compact, ?root_dir(State), ?set_name(State), ?type(State), GroupSig),
+        ok = couch_file:only_snapshot_reads(OldFd),
         ok = couch_file:delete(?root_dir(State), FileName),
-        ok = file:rename(CompactName, FileName),
+        ok = couch_file:rename(NewGroup#set_view_group.fd, FileName),
 
         NewUpdaterPid =
         if is_pid(UpdaterPid) ->

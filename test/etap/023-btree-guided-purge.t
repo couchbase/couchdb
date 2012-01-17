@@ -31,6 +31,7 @@ main(_) ->
 
 
 test() ->
+    couch_file_write_guard:sup_start_link(),
     no_purged_items_test(),
     all_purged_items_test(),
     partial_purges_test(),

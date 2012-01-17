@@ -33,8 +33,6 @@
 
 -include("couch_db.hrl").
 
--define(FD_CLOSE_TIMEOUT_MS, 10). % Fds will close after msecs of non-use
-
 start_link(DbName, Filepath, Options) ->
     case open_db_file(Filepath, Options) of
     {ok, Fd} ->

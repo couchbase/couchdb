@@ -44,6 +44,7 @@ main(_) ->
 %% broken into multiple nodes. AKA "How do we appropiately detect if multiple
 %% nodes were created."
 test()->
+    couch_file_write_guard:sup_start_link(),
     Sorted = [{Seq, random:uniform()} || Seq <- lists:seq(1, rows())],
     etap:ok(test_kvs(Sorted), "Testing sorted keys"),
     etap:ok(test_kvs(lists:reverse(Sorted)), "Testing reversed sorted keys"),

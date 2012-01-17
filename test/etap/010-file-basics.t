@@ -32,6 +32,7 @@ main(_) ->
     ok.
 
 test() ->
+    couch_file_write_guard:sup_start_link(),
     etap:is({error, enoent}, couch_file:open("not a real file"),
         "Opening a non-existant file should return an enoent error."),
 

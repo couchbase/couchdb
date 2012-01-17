@@ -30,6 +30,7 @@ main(_) ->
     ok.
 
 test()->
+    couch_file_write_guard:sup_start_link(),
     ReduceFun = fun
         (reduce, KVs) -> length(KVs);
         (rereduce, Reds) -> lists:sum(Reds)

@@ -19,7 +19,8 @@
         couch_stats_aggregator,
         couch_stats_collector,
         couch_task_status,
-        couch_view
+        couch_view,
+        couch_file_write_guard
     ]},
     {mod, {couch_app, [
         "%localconfdir%/@defaultini@",

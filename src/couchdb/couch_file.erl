@@ -25,8 +25,8 @@
 
 % public API
 -export([open/1, open/2, close/1, bytes/1, flush/1, sync/1, truncate/2]).
--export([pread_term/2, pread_iolist/2, pread_binary/2]).
--export([append_binary/2, append_binary_crc32/2]).
+-export([pread_term/2, pread_iolist/2, pread_binary/2,rename/2]).
+-export([append_binary/2, append_binary_crc32/2,set_close_after/2]).
 -export([append_raw_chunk/2, assemble_file_chunk/1, assemble_file_chunk/2]).
 -export([append_term/2, append_term/3, append_term_crc32/2, append_term_crc32/3]).
 -export([write_header/2, read_header/1,only_snapshot_reads/1]).
@@ -206,6 +206,25 @@ only_snapshot_reads(Fd) ->
     gen_server:call(Fd, snapshot_reads, infinity).
 
 
+%%----------------------------------------------------------------------
+%% Purpose: Sets the timeout where an unused FD will automatically close
+%% itself after MS has passed. Set to 'infinity' to never close.
+%% Returns: ok
+%%----------------------------------------------------------------------
+set_close_after(Fd, AfterMS) ->
+    gen_server:call(Fd, {set_close_after, AfterMS}, infinity).
+
+
+%%----------------------------------------------------------------------
+%% Purpose: Renames the files safely and coordinates with couch_file_write_guard
+%% NOTE: it is not safe to call this on a file with set_close_after called
+%% with anything other than 'infinity'.
+%% Returns: ok
+%%----------------------------------------------------------------------
+rename(Fd, NewFilepath) ->
+    gen_server:call(Fd, {rename, NewFilepath}, infinity).
+
+
 delete(RootDir, Filepath) ->
     delete(RootDir, Filepath, true).
 
@@ -271,6 +290,7 @@ init({Filepath, Options}) ->
             [Filepath, CloseTimeout]),
        {ok, Writer, Eof} = proc_lib:start_link(?MODULE, spawn_writer,
             [Filepath, CloseTimeout]),
+       ok = couch_file_write_guard:add(Filepath, Writer),
        maybe_track_open_os_files(Options),
        proc_lib:init_ack({ok, self()}),
        InitState = #file{
@@ -282,6 +302,8 @@ init({Filepath, Options}) ->
    catch
    error:{badmatch, {error, eacces}} ->
        proc_lib:init_ack({file_permission_error, Filepath});
+   error:{badmatch, already_added_to_file_write_guard} ->
+       proc_lib:init_ack({file_already_opened, Filepath});
    error:{badmatch, Error} ->
        proc_lib:init_ack(Error)
    end.
@@ -384,22 +406,54 @@ handle_call(snapshot_reads, _From, #file{reader = R, writer = W} = File) ->
     R ! {set_close_after, infinity, self()},
     couch_util:shutdown_sync(W),
     receive
-        {ok, R} -> ok
+        {ok, R} -> ok;
+        {'EXIT', R, Reason} ->
+            exit({read_loop_died, Reason})
     end,
-    {reply, ok, File#file{writer=nil}}.
+    {reply, ok, File#file{writer=nil}};
 
-handle_cast(close, Fd) ->
-    {stop,normal,Fd}.
+handle_call({set_close_after, Ms}, _From, #file{reader = R, writer = W} = File) ->
+    R ! {set_close_after, Ms, self()},
+    W ! {set_close_after, Ms, self()},
+    receive
+        {ok, R} -> ok;
+        {'EXIT', R, Reason} ->
+            exit({read_loop_died, Reason})
+    end,
+    receive
+        {ok, W} -> ok;
+        {'EXIT', W, Reason2} ->
+            exit({write_loop_died, Reason2})
+    end,
+    {reply, ok, File};
+
+handle_call({rename, Filepath}, _From, #file{reader = R, writer = W} = File) ->
+    R ! {rename, Filepath, self()},
+    W ! {rename, Filepath, self()},
+    receive
+        {ok, R} -> ok;
+        {'EXIT', R, Reason} ->
+            exit({read_loop_died, Reason})
+    end,
+    receive
+        {ok, W} -> ok;
+        {'EXIT', W, Reason2} ->
+            exit({write_loop_died, Reason2})
+    end,
+    {reply, ok, File}.
+
+handle_cast(unused, Fd) ->
+    {stop,bad_message,Fd}.
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-handle_info({'EXIT', _, normal}, Fd) ->
-    {noreply, Fd};
 handle_info({'EXIT', Pid, Reason}, #file{writer = Pid} = Fd) ->
     {stop, {write_loop_died, Reason}, Fd};
 handle_info({'EXIT', Pid, Reason}, #file{reader = Pid} = Fd) ->
     {stop, {read_loop_died, Reason}, Fd};
+handle_info({'EXIT', _, normal}, Fd) ->
+    {noreply, Fd};
 handle_info({'EXIT', _, Reason}, Fd) ->
     {stop, Reason, Fd}.
 
@@ -543,6 +597,7 @@ spawn_writer(Filepath, CloseTimeout) ->
     {ok, Fd} ->
         {ok, Eof} = file:position(Fd, eof),
         proc_lib:init_ack({ok, self(), Eof}),
+        process_flag(trap_exit, true),
         writer_loop(Fd, Filepath, Eof, CloseTimeout);
     Error ->
         proc_lib:init_ack(Error)
@@ -553,6 +608,7 @@ spawn_reader(Filepath, CloseTimeout) ->
     case try_open_fd(Filepath, [binary, read, raw], CloseTimeout) of
     {ok, Fd} ->
         proc_lib:init_ack({ok, self()}),
+        process_flag(trap_exit, true),
         reader_loop(Fd, Filepath, CloseTimeout);
     Error ->
         proc_lib:init_ack(Error)
@@ -566,8 +622,9 @@ writer_loop(Fd, FilePath, Eof, CloseTimeout) ->
         % after nonuse timeout we close the Fd.
         file:close(Fd),
         receive
-        stop ->
-            exit(done);
+        {'EXIT', _From, Reason} ->
+            ok = couch_file_write_guard:remove(self()),
+            exit(Reason);
         Msg ->
             {ok, Fd2} = try_open_fd(FilePath, [binary, append, raw],
                     CloseTimeout),
@@ -575,7 +632,7 @@ writer_loop(Fd, FilePath, Eof, CloseTimeout) ->
         end
     end.
 
-handle_write_message(Msg, Fd, FilePath, Eof, CloseTimeout)->
+handle_write_message(Msg, Fd, FilePath, Eof, CloseTimeout) ->
     case Msg of
     {chunk, Chunk} ->
         writer_collect_chunks(Fd, FilePath, Eof, CloseTimeout, [Chunk]);
@@ -594,34 +651,28 @@ handle_write_message(Msg, Fd, FilePath, Eof, CloseTimeout)->
         ok = file:sync(Fd),
         gen_server:reply(From, ok),
         writer_loop(Fd, FilePath, Eof, CloseTimeout);
-    stop ->
+    {set_close_after, NewCloseTimeout, From} ->
+        From ! {ok, self()},
+        writer_loop(Fd, FilePath, Eof, NewCloseTimeout);
+    {rename, NewFilepath, From} ->
+        ok = file:rename(FilePath, NewFilepath),
+        ok = couch_file_write_guard:remove(self()),
+        ok = couch_file_write_guard:add(NewFilepath, self()),
+        From ! {ok, self()},
+        writer_loop(Fd, NewFilepath, Eof, CloseTimeout);
+    {'EXIT', _From, Reason} ->
+        ok = couch_file_write_guard:remove(self()),
         ok = file:close(Fd),
-        exit(done)
+        exit(Reason)
     end.
 
 writer_collect_chunks(Fd, FilePath, Eof, CloseTimeout, Acc) ->
     receive
     {chunk, Chunk} ->
         writer_collect_chunks(Fd, FilePath, Eof, CloseTimeout, [Chunk | Acc]);
-    {header, Header} ->
+    Msg ->
         Eof2 = write_blocks(Fd, Eof, Acc),
-        Eof3 = write_header_blocks(Fd, Eof2, Header),
-        writer_loop(Fd, FilePath, Eof3, CloseTimeout);
-    {truncate, Pos, From} ->
-        _ = write_blocks(Fd, Eof, Acc),
-        {ok, Pos} = file:position(Fd, Pos),
-        ok = file:truncate(Fd),
-        From ! {self(), truncated, Pos},
-        writer_loop(Fd, FilePath, Pos, CloseTimeout);
-    {flush, From} ->
-        Eof2 = write_blocks(Fd, Eof, Acc),
-        gen_server:reply(From, ok),
-        writer_loop(Fd, FilePath, Eof2, CloseTimeout);
-    {sync, From} ->
-        Eof2 = write_blocks(Fd, Eof, Acc),
-        ok = file:sync(Fd),
-        gen_server:reply(From, ok),
-        writer_loop(Fd, FilePath, Eof2, CloseTimeout)
+        handle_write_message(Msg, Fd, FilePath, Eof2, CloseTimeout)
     after 0 ->
         Eof2 = write_blocks(Fd, Eof, Acc),
         writer_loop(Fd, FilePath, Eof2, CloseTimeout)
@@ -656,8 +707,8 @@ reader_loop(Fd, FilePath, CloseTimeout) ->
         % after nonuse timeout we close the Fd.
         file:close(Fd),
         receive
-        stop ->
-            exit(done);
+        {'EXIT', _From, Reason} ->
+            exit(Reason);
         Msg ->
             {ok, Fd2} = try_open_fd(FilePath, [binary, read, raw],
                     CloseTimeout),
@@ -676,9 +727,12 @@ handle_reader_message(Msg, Fd, FilePath, CloseTimeout) ->
     {set_close_after, NewCloseTimeout, From} ->
         From ! {ok, self()},
         reader_loop(Fd, FilePath, NewCloseTimeout);
-    stop ->
+    {rename, NewFilepath, From} ->
+        From ! {ok, self()},
+        reader_loop(Fd, NewFilepath, CloseTimeout);
+    {'EXIT', _From, Reason} ->
         ok = file:close(Fd),
-        exit(done)
+        exit(Reason)
     end.
 
 

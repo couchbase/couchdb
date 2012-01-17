@@ -33,6 +33,7 @@ main(_) ->
     ok.
 
 test() ->
+    couch_file_write_guard:sup_start_link(),
     {ok, Fd} = couch_file:open(filename(), [create,overwrite]),
 
     etap:is({ok, 0}, couch_file:bytes(Fd),
