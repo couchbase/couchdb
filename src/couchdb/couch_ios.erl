@@ -53,6 +53,7 @@ handle_info({foregrounded}, Port) ->
     ?LOG_INFO("iOS application suspended, restarting. Current port: ~p", [CurrentPort]),
     set_port(CurrentPort),
     couch_httpd:stop(),
+    application:stop(inets),
     {noreply, Port};
 
 handle_info(Msg, State) ->
