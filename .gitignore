@@ -17,6 +17,7 @@ build-aux
 *.pyc
 
 # ./configure
+/config.cache
 
 Makefile
 bin/Makefile
