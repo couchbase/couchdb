@@ -79,19 +79,19 @@ copy Release\snappy.lib .\snappy_nif.lib</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="..\google-snappy\snappy-sinksource.cc" />
-    <ClCompile Include="..\google-snappy\snappy-stubs-internal.cc" />
-    <ClCompile Include="..\google-snappy\snappy.cc" />
+    <ClCompile Include="..\snappy-%SNAPPY_VERSION%\snappy-sinksource.cc" />
+    <ClCompile Include="..\snappy-%SNAPPY_VERSION%\snappy-stubs-internal.cc" />
+    <ClCompile Include="..\snappy-%SNAPPY_VERSION%\snappy.cc" />
     <ClCompile Include="..\snappy_nif.cc" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\erl_nif_compat.h" />
-    <ClInclude Include="..\google-snappy\config.h" />
-    <ClInclude Include="..\google-snappy\snappy-internal.h" />
-    <ClInclude Include="..\google-snappy\snappy-sinksource.h" />
-    <ClInclude Include="..\google-snappy\snappy-stubs-internal.h" />
-    <ClInclude Include="..\google-snappy\snappy-stubs-public.h" />
-    <ClInclude Include="..\google-snappy\snappy.h" />
+    <ClInclude Include="..\snappy-%SNAPPY_VERSION%\config.h" />
+    <ClInclude Include="..\snappy-%SNAPPY_VERSION%\snappy-internal.h" />
+    <ClInclude Include="..\snappy-%SNAPPY_VERSION%\snappy-sinksource.h" />
+    <ClInclude Include="..\snappy-%SNAPPY_VERSION%\snappy-stubs-internal.h" />
+    <ClInclude Include="..\snappy-%SNAPPY_VERSION%\snappy-stubs-public.h" />
+    <ClInclude Include="..\snappy-%SNAPPY_VERSION%\snappy.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

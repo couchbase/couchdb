@@ -10,8 +10,9 @@
 ## License for the specific language governing permissions and limitations under
 ## the License.
 
-snappyebindir = $(localerlanglibdir)/snappy-1.0.3/ebin
-snappyprivdir = $(localerlanglibdir)/snappy-1.0.3/priv
+SNAPPY_VERSION = $(SNAPPY_MAJOR).$(SNAPPY_MINOR).$(SNAPPY_PATCHLEVEL)
+snappyebindir = $(localerlanglibdir)/snappy-$(SNAPPY_VERSION)/ebin
+snappyprivdir = $(localerlanglibdir)/snappy-$(SNAPPY_VERSION)/priv
 
 if WINDOWS
 SNAPPY_OUTPUT_DIR = win32
@@ -22,17 +23,17 @@ SNAPPY_NIF = $(SNAPPY_OUTPUT_DIR)/snappy_nif.dll
 else
 snappy_cxx_srcs = \
 	snappy_nif.cc \
-	google-snappy/snappy.cc \
-	google-snappy/snappy-sinksource.cc \
-	google-snappy/snappy-stubs-internal.cc
+	snappy-$(SNAPPY_VERSION)/snappy.cc \
+	snappy-$(SNAPPY_VERSION)/snappy-sinksource.cc \
+	snappy-$(SNAPPY_VERSION)/snappy-stubs-internal.cc
 
 snappy_cxx_hdrs = \
 	erl_nif_compat.h \
-	google-snappy/snappy.h \
-	google-snappy/snappy-internal.h \
-	google-snappy/snappy-sinksource.h \
-	google-snappy/snappy-stubs-internal.h \
-	google-snappy/snappy-stubs-public.h
+	snappy-$(SNAPPY_VERSION)/snappy.h \
+	snappy-$(SNAPPY_VERSION)/snappy-internal.h \
+	snappy-$(SNAPPY_VERSION)/snappy-sinksource.h \
+	snappy-$(SNAPPY_VERSION)/snappy-stubs-internal.h \
+	snappy-$(SNAPPY_VERSION)/snappy-stubs-public.h
 endif
 snappy_file_collection = \
     snappy.app.in \
@@ -61,6 +62,7 @@ endif
 if !WINDOWS
 if USE_OTP_NIFS
 snappypriv_LTLIBRARIES = snappy_nif.la
+snappy_nif_la_AM_CPPFLAGS = $(AM_CPPFLAGS) -Isnappy-$(SNAPPY_VERSION)
 snappy_nif_la_SOURCES = $(snappy_cxx_srcs)
 snappy_nif_la_LDFLAGS = -module -avoid-version
 
@@ -83,6 +85,7 @@ all: $(SNAPPY_NIF)
 $(snappy_msbuild): $(snappy_msbuild).tpl
 	sed -e "s|%msbuild_dir%|$(msbuild_dir)|" \
 	    -e "s|%msbuild_name%|$(msbuild_name)|" \
+        -e "s|%SNAPPY_VERSION%|$(SNAPPY_VERSION)| \
 	    -e "s|^/cygdrive/\([a-zA-Z]\)|\1:|" \
 	< $< > $@
 

@@ -19,8 +19,8 @@
 #include <cstring>
 
 #include "erl_nif_compat.h"
-#include "google-snappy/snappy.h"
-#include "google-snappy/snappy-sinksource.h"
+#include "snappy.h"
+#include "snappy-sinksource.h"
 
 #ifdef OTP_R13B03
 #error OTP R13B03 not supported. Upgrade to R13B04 or later.

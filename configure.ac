@@ -19,7 +19,6 @@ AC_CONFIG_AUX_DIR([build-aux])
 AC_CONFIG_MACRO_DIR([m4])
 
 AM_CONFIG_HEADER([config.h])
-AC_CONFIG_HEADERS([src/snappy/google-snappy/config.h])
 
 AM_INIT_AUTOMAKE([1.6.3 foreign])
 
@@ -34,7 +33,8 @@ AC_PROG_LN_S
 dnl Config for google snappy
 m4_define([snappy_major], [1])
 m4_define([snappy_minor], [0])
-m4_define([snappy_patchlevel], [3])
+m4_define([snappy_patchlevel], [4])
+AC_CONFIG_HEADERS([src/snappy/snappy-1.0.4/config.h])
 
 AC_PROG_CXX
 AC_LANG([C++])
@@ -534,7 +534,7 @@ AC_CONFIG_FILES([src/etap/Makefile])
 AC_CONFIG_FILES([src/ibrowse/Makefile])
 AC_CONFIG_FILES([src/mochiweb/Makefile])
 AC_CONFIG_FILES([src/snappy/Makefile])
-AC_CONFIG_FILES([src/snappy/google-snappy/snappy-stubs-public.h])
+AC_CONFIG_FILES([src/snappy/snappy-$SNAPPY_MAJOR.$SNAPPY_MINOR.$SNAPPY_PATCHLEVEL/snappy-stubs-public.h])
 AC_CONFIG_FILES([src/ejson/Makefile])
 AC_CONFIG_FILES([src/couch_set_view/Makefile])
 AC_CONFIG_FILES([test/Makefile])
