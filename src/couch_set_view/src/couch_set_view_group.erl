@@ -612,8 +612,8 @@ handle_call({compact_done, NewGroup0, Duration}, {Pid, _}, #state{compactor_pid 
         State3 = notify_cleanup_waiters(State2),
         {reply, ok, State3, ?TIMEOUT};
     false ->
-        ?LOG_INFO("Set view `~s`, group `~s`, compaction still behind, retrying",
-            [?set_name(State), ?group_id(State)]),
+        ?LOG_INFO("Set view `~s`, ~s group `~s`, compaction still behind, retrying",
+            [?set_name(State), ?type(State), ?group_id(State)]),
         {reply, update, State}
     end;
 handle_call({compact_done, _NewGroup, _Duration}, {OldPid, _}, State) ->
