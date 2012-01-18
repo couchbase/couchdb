@@ -73,6 +73,7 @@
     % 'not_running' | 'starting' | 'updating_active' | 'updating_passive'
     updater_state = not_running,
     compactor_pid = nil,
+    compactor_file = nil,
     compactor_fun = nil,
     commit_ref = nil,
     waiting_list = [],
@@ -562,6 +563,11 @@ handle_call({compact_done, NewGroup0, Duration}, {Pid, _}, #state{compactor_pid 
         NewGroup = NewGroup0#set_view_group{
             index_header = get_index_header_data(NewGroup0)
         },
+        if is_pid(UpdaterPid) ->
+            couch_util:shutdown_sync(UpdaterPid);
+        true ->
+            ok
+        end,
         ok = commit_header(NewGroup, true),
         ?LOG_INFO("Set view `~s`, ~s group `~s`, compaction complete in ~.3f seconds",
             [?set_name(State), ?type(State), ?group_id(State), Duration / 1000000]),
@@ -573,8 +579,6 @@ handle_call({compact_done, NewGroup0, Duration}, {Pid, _}, #state{compactor_pid 
 
         NewUpdaterPid =
         if is_pid(UpdaterPid) ->
-            unlink(UpdaterPid),
-            exit(UpdaterPid, view_compaction_complete),
             Owner = self(),
             {true, NewSeqs} = index_needs_update(State),
             spawn_link(fun() ->
@@ -593,6 +597,7 @@ handle_call({compact_done, NewGroup0, Duration}, {Pid, _}, #state{compactor_pid 
 
         State2 = State#state{
             compactor_pid = nil,
+            compactor_file = nil,
             compactor_fun = nil,
             updater_pid = NewUpdaterPid,
             updater_state = case is_pid(NewUpdaterPid) of
@@ -630,7 +635,7 @@ handle_call(cancel_compact, _From, #state{compactor_pid = Pid} = State) ->
     CompactFile = index_file_name(
         compact, ?root_dir(State), ?set_name(State), ?type(State), GroupSig),
     ok = couch_file:delete(?root_dir(State), CompactFile),
-    State2 = maybe_start_cleaner(State#state{compactor_pid = nil}),
+    State2 = maybe_start_cleaner(State#state{compactor_pid = nil, compactor_file = nil}),
     {reply, ok, State2, ?TIMEOUT}.
 
 
@@ -1636,23 +1641,32 @@ start_compactor(State, CompactFun) ->
     State2 = stop_cleaner(State),
     ?LOG_INFO("Set view `~s`, ~s group `~s`, compaction starting",
               [?set_name(State2), ?type(State), ?group_id(State2)]),
+    #set_view_group{
+        sig = Sig,
+        fd = CompactFd
+    } = NewGroup = compact_group(State2),
+    unlink(CompactFd),
     Pid = spawn_link(fun() ->
-        #set_view_group{sig = Sig} = NewGroup = compact_group(State2),
+        link(CompactFd),
         FileName = index_file_name(?root_dir(State), ?set_name(State), ?type(State), Sig),
         CompactFun(State2#state.group, NewGroup, ?set_name(State2), FileName),
-        unlink(NewGroup#set_view_group.fd)
+        unlink(CompactFd)
     end),
-    State2#state{compactor_pid = Pid, compactor_fun = CompactFun}.
+    State2#state{
+        compactor_pid = Pid,
+        compactor_fun = CompactFun,
+        compactor_file = CompactFd
+    }.
 
 
 restart_compactor(#state{compactor_pid = nil} = State, _Reason) ->
     State;
-restart_compactor(#state{compactor_pid = Pid} = State, Reason) ->
+restart_compactor(#state{compactor_pid = Pid, compactor_file = CompactFd} = State, Reason) ->
     true = is_process_alive(Pid),
     ?LOG_INFO("Restarting compaction for ~s group `~s`, set view `~s`. Reason: ~s",
         [?type(State), ?group_id(State), ?set_name(State), Reason]),
-    unlink(Pid),
-    exit(Pid, kill),
+    couch_util:shutdown_sync(Pid),
+    couch_util:shutdown_sync(CompactFd),
     State2 = case ?set_cbitmask(State#state.group) of
     0 ->
         State;
