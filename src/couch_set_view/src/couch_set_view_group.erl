@@ -1637,10 +1637,11 @@ start_compactor(State, CompactFun) ->
     State2 = stop_cleaner(State),
     ?LOG_INFO("Set view `~s`, ~s group `~s`, compaction starting",
               [?set_name(State2), ?type(State), ?group_id(State2)]),
-    #set_view_group{sig = Sig} = NewGroup = compact_group(State2),
     Pid = spawn_link(fun() ->
+        #set_view_group{sig = Sig} = NewGroup = compact_group(State2),
         FileName = index_file_name(?root_dir(State), ?set_name(State), ?type(State), Sig),
-        CompactFun(State2#state.group, NewGroup, ?set_name(State2), FileName)
+        CompactFun(State2#state.group, NewGroup, ?set_name(State2), FileName),
+        unlink(NewGroup#set_view_group.fd)
     end),
     State2#state{compactor_pid = Pid, compactor_fun = CompactFun}.
 
