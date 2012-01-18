@@ -389,12 +389,6 @@ handle_call({define_view, _, _, _, _, _, _}, _From, State) ->
 handle_call(is_view_defined, _From, #state{group = Group} = State) ->
     {reply, is_integer(?set_num_partitions(Group)), State, ?TIMEOUT};
 
-handle_call(_Msg, _From, #state{
-        group = #set_view_group{
-            index_header = #set_view_index_header{num_partitions = nil}
-        }} = State) ->
-    {reply, view_undefined, State};
-
 handle_call({partition_deleted, PartId}, _From, #state{group = Group} = State) ->
     Mask = 1 bsl PartId,
     case ((?set_abitmask(Group) band Mask) =/= 0) orelse
@@ -402,8 +396,14 @@ handle_call({partition_deleted, PartId}, _From, #state{group = Group} = State) -
     true ->
         {stop, shutdown, shutdown, State};
     false ->
-        {reply, ignore, State}
+        {reply, ignore, State, ?TIMEOUT}
     end;
+
+handle_call(_Msg, _From, #state{
+        group = #set_view_group{
+            index_header = #set_view_index_header{num_partitions = nil}
+        }} = State) ->
+    {reply, view_undefined, State};
 
 handle_call({set_state, ActiveList, PassiveList, CleanupList}, From, State) ->
     try
