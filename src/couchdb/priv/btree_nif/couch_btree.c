@@ -1,3 +1,5 @@
+#include "config_static.h"
+
 #include <stdlib.h>
 #include <string.h>
 
@@ -127,6 +129,7 @@ void free_modres(couchfile_modify_result* mr)
 
 int mr_push_action(couchfile_modify_action *act, couchfile_modify_result *dst)
 {
+    nodelist* n = make_nodelist();
     //For ACTION_INSERT
     couchfile_leaf_value* lv = malloc(sizeof(couchfile_leaf_value) +
            act->key->size + act->value->size + 2);
@@ -143,7 +146,6 @@ int mr_push_action(couchfile_modify_action *act, couchfile_modify_result *dst)
     memcpy(lv->term.buf + 2 + act->key->size,
             act->value->buf, act->value->size);
 
-    nodelist* n = make_nodelist();
     if(!n)
         goto fail;
     dst->values_end->next = n;
@@ -178,16 +180,19 @@ fail:
 
 int mr_push_kv_range(char* buf, int pos, int bound, int end, couchfile_modify_result *dst)
 {
+    nodelist* n = make_nodelist();
     int current = 0;
     int term_begin_pos;
-    ei_decode_list_header(buf, &pos, NULL);
     int errcode = 0;
+    ei_decode_list_header(buf, &pos, NULL);
     while(current < end && errcode == 0)
     {
         term_begin_pos = pos;
         ei_skip_term(buf, &pos);
         if(current >= bound)
-        { //Parse KV pair into a leaf_value
+        { 
+            nodelist* n = make_nodelist();
+            //Parse KV pair into a leaf_value
             couchfile_leaf_value *lv = malloc(sizeof(couchfile_leaf_value));
             if(!lv)
             {
@@ -198,13 +203,13 @@ int mr_push_kv_range(char* buf, int pos, int bound, int end, couchfile_modify_re
             lv->term.buf = buf+term_begin_pos;
             lv->term.size = pos-term_begin_pos;
 
-            nodelist* n = make_nodelist();
             if(!n)
             {
                 errcode = ERROR_ALLOC_FAIL;
                 free(lv);
                 break;
             }
+
             dst->values_end->next = n;
             dst->values_end = n;
             n->value.leaf = lv;
@@ -238,9 +243,10 @@ couchfile_pointer_info* read_pointer(char* buf, int pos)
 
 int mr_push_kp_range(char* buf, int pos, int bound, int end, couchfile_modify_result *dst)
 {
-    couchfile_pointer_info *read;
-    DBG("Moving items %d - %d into result.\r\n", bound, end);
+    couchfile_pointer_info *read= NULL;
     int current = 0;
+    DBG("Moving items %d - %d into result.\r\n", bound, end);
+
     ei_decode_list_header(buf, &pos, NULL);
     while(current < end)
     {
@@ -259,18 +265,18 @@ int mr_push_kp_range(char* buf, int pos, int bound, int end, couchfile_modify_re
 }
 
 inline void append_buf(void* dst, int *dstpos, void* src, int len) {
-    memcpy(dst + *dstpos, src, len);
+    char* tmp = (char*)dst;
+    memcpy(tmp + *dstpos, src, len);
     *dstpos += len;
 }
 
 int wait_pointer(couchfile_modify_request* rq, couchfile_pointer_info *ptr)
 {
-    if(ptr->writerq_resource == NULL)
-        return 0;
-
     int ret = 0;
     btreenif_state *state = rq->globalstate;
 
+    if(ptr->writerq_resource == NULL)
+        return 0;
     enif_mutex_lock(state->writer_cond.mtx);
 
     while(ptr->pointer == 0)
@@ -305,10 +311,18 @@ int flush_mr(couchfile_modify_result *res)
     long long subtreesize = 0;
     eterm_buf reduce_value;
     //default reduce value []
-    reduce_value.buf = "\x6A"; //NIL_EXT
-    reduce_value.size = 1;
+
     int reduced = 0;
     int errcode = 0;
+    nif_writerq *wrq = NULL;
+    char *nodebuf = NULL;
+    nodelist* i = NULL;
+    eterm_buf last_key;
+    nodelist* pel = NULL;
+    couchfile_pointer_info* ptr = NULL;
+
+    reduce_value.buf = "\x6A"; //NIL_EXT
+    reduce_value.size = 1;
 
     if(res->values_end == res->values || !res->modified)
     {
@@ -317,8 +331,8 @@ int flush_mr(couchfile_modify_result *res)
     }
 
     res->node_len += 19; //tuple header and node type tuple, list header and tail
-    nif_writerq *wrq = nif_writerq_alloc(res->node_len);
-    char *nodebuf = wrq->buf;
+    wrq = nif_writerq_alloc(res->node_len);
+    nodebuf = wrq->buf;
 
     //External term header; tuple header arity 2;
     ei_encode_version(nodebuf, &nbufpos);
@@ -351,9 +365,8 @@ int flush_mr(couchfile_modify_result *res)
 
     ei_encode_list_header(nodebuf, &nbufpos, res->count);
 
-    nodelist* i = res->values->next;
+    i = res->values->next;
 
-    eterm_buf last_key;
     while(i != NULL)
     {
         if(res->node_type == KV_NODE) //writing value in a kv_node
@@ -396,7 +409,7 @@ int flush_mr(couchfile_modify_result *res)
     //NIL_EXT (list tail)
     ei_encode_empty_list(nodebuf, &nbufpos);
 
-    couchfile_pointer_info* ptr = malloc(sizeof(couchfile_pointer_info) +
+    ptr = malloc(sizeof(couchfile_pointer_info) +
             last_key.size + reduce_value.size);
     if(!ptr)
     {
@@ -418,13 +431,14 @@ int flush_mr(couchfile_modify_result *res)
 
     ptr->subtreesize = subtreesize;
 
-    nodelist* pel = make_nodelist();
+    pel = make_nodelist();
     if(!pel)
     {
         errcode = ERROR_ALLOC_FAIL;
         free(ptr);
         goto cleanup;
     }
+
     pel->value.pointer = ptr;
     res->pointers_end->next = pel;
     res->pointers_end = pel;
@@ -453,13 +467,15 @@ cleanup:
 int mr_move_pointers(couchfile_modify_result *src, couchfile_modify_result *dst)
 {
     int errcode = 0;
+    nodelist *ptr = NULL;
+    nodelist *next = NULL;
     if(src->pointers_end == src->pointers)
     {
         return 0;
     }
 
-    nodelist *ptr = src->pointers->next;
-    nodelist *next = ptr;
+    ptr = src->pointers->next;
+    next = ptr;
     while(ptr != NULL && errcode == 0)
     {
         //max on disk len of a pointer node
@@ -492,6 +508,7 @@ int modify_node(couchfile_modify_request *rq, couchfile_pointer_info *nptr,
     int node_bound = 0;
     int errcode = 0;
     int kpos = 0;
+    couchfile_modify_result *local_result = NULL;
 
     char node_type[MAXATOMLEN + 1];
     node_type[0] = 0;
@@ -518,7 +535,7 @@ int modify_node(couchfile_modify_request *rq, couchfile_pointer_info *nptr,
         curnode_pos++; //Skip over 131.
     }
 
-    couchfile_modify_result *local_result = make_modres(rq);
+    local_result = make_modres(rq);
     if(!local_result)
     {
         errcode = ERROR_ALLOC_FAIL;
@@ -677,6 +694,7 @@ int modify_node(couchfile_modify_request *rq, couchfile_pointer_info *nptr,
 
             if(rq->cmp.list_pos == (node_len - 1)) //got last item in kp_node
             {
+                couchfile_pointer_info *desc = NULL;
                 //Push all items except last onto mr
                 errcode = mr_push_kp_range(current_node.buf, list_start_pos, node_bound,
                         rq->cmp.list_pos, local_result);
@@ -685,12 +703,13 @@ int modify_node(couchfile_modify_request *rq, couchfile_pointer_info *nptr,
                     goto cleanup;
                 }
                 DBG("  ...descending into final item of kpnode\r\n");
-                couchfile_pointer_info *desc = read_pointer(current_node.buf, kpos);
+                desc = read_pointer(current_node.buf, kpos);
                 if(!desc)
                 {
                     errcode = ERROR_ALLOC_FAIL;
                     goto cleanup;
                 }
+
                 errcode = modify_node(rq, desc, start, end, local_result);
                 if(local_result->values_end->value.pointer != desc)
                 {
@@ -706,6 +725,9 @@ int modify_node(couchfile_modify_request *rq, couchfile_pointer_info *nptr,
             }
             else
             {
+                int range_end = start;
+                couchfile_pointer_info *desc = NULL;
+
                 //Get all actions with key <= the key of the current item in the
                 //kp_node
 
@@ -716,7 +738,7 @@ int modify_node(couchfile_modify_request *rq, couchfile_pointer_info *nptr,
                 {
                     goto cleanup;
                 }
-                int range_end = start;
+
                 while(range_end < end &&
                       ((*rq->cmp.compare)(rq->actions[range_end].cmp_key, rq->cmp.last_cmp_key) <= 0))
                 {
@@ -725,12 +747,13 @@ int modify_node(couchfile_modify_request *rq, couchfile_pointer_info *nptr,
 
                 DBG("  ...descending into item %d of kpnode\r\n", rq->cmp.list_pos);
                 node_bound = rq->cmp.list_pos + 1;
-                couchfile_pointer_info *desc = read_pointer(current_node.buf, kpos);
+                desc = read_pointer(current_node.buf, kpos);
                 if(!desc)
                 {
                     errcode = ERROR_ALLOC_FAIL;
                     goto cleanup;
                 }
+
                 errcode = modify_node(rq, desc, start, range_end, local_result);
                 if(local_result->values_end->value.pointer != desc)
                 {
@@ -812,6 +835,7 @@ couchfile_pointer_info* finish_root(couchfile_modify_request* rq,
         }
         else
         {
+            couchfile_modify_result *tmp = NULL;
             //The root result split into more than one kp_node.
             //Move the pointer list to the value list and write out the new node.
             *errcode = mr_move_pointers(root_result, collector);
@@ -826,7 +850,7 @@ couchfile_pointer_info* finish_root(couchfile_modify_request* rq,
                 goto cleanup;
             }
             //Swap root_result and collector mr's.
-            couchfile_modify_result *tmp = root_result;
+            tmp = root_result;
             root_result = collector;
             collector = tmp;
         }

@@ -1,13 +1,20 @@
 //This mostly comes from couch_file.erl
+#include "config_static.h"
 
 #include <stdio.h>
 #include <stdlib.h>
+#ifdef HAVE_UNISTD_H
 #include <unistd.h>
+#endif
+
 #include <string.h>
+
+#ifdef HAVE_NETINET_IN_H
 #include <netinet/in.h>
+#endif
+
 #include "snappy-c.h"
 #include "ei.h"
-
 
 #define SIZE_BLOCK 4096
 
@@ -69,14 +76,17 @@ int remove_block_prefixes(char* buf, off_t offset, ssize_t len)
 // Increases pos by read len.
 int raw_read(int fd, off_t *pos, ssize_t len, char** dst)
 {
+    ssize_t got_bytes = 0;
     off_t blockoffs = *pos % SIZE_BLOCK;
     ssize_t total = total_read_len(blockoffs, len);
     *dst = (char*) malloc(total);
+
     if(!*dst)
     {
         return -1;
     }
-    ssize_t got_bytes = pread(fd, *dst, total, *pos);
+    got_bytes = pread(fd, *dst, total, *pos);
+
     if(got_bytes <= 0)
         goto fail;
 
@@ -158,14 +168,16 @@ fail:
 int pread_bin(int fd, off_t pos, char **ret_ptr)
 {
     char *new_buf;
+    size_t new_len;
     int len = pread_bin_int(fd, pos, ret_ptr);
     if(len < 0)
     {
         return len;
     }
-    size_t new_len;
+
     if((*ret_ptr)[0] == 1) //Snappy
     {
+        snappy_status ss;
         if(snappy_uncompressed_length((*ret_ptr) + 1, len - 1, &new_len)
                 != SNAPPY_OK)
         {
@@ -181,7 +193,8 @@ int pread_bin(int fd, off_t pos, char **ret_ptr)
             return -1;
         }
 
-        snappy_status ss = (snappy_uncompress((*ret_ptr) + 1, len - 1, new_buf, &new_len));
+        ss = (snappy_uncompress((*ret_ptr) + 1, len - 1, new_buf, &new_len));
+
         if(ss == SNAPPY_OK)
         {
             free(*ret_ptr);

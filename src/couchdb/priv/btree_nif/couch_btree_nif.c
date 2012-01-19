@@ -1,7 +1,13 @@
+#include "config_static.h"
+
 #include <fcntl.h>
 #include <string.h>
 #include <stdio.h>
+
+#ifdef HAVE_SYS_PARAM_H
 #include <sys/param.h>
+#endif
+
 #include <time.h>
 
 #include "couch_btree.h"
@@ -41,9 +47,10 @@ void* term_from_ext(compare_info* c, char* buf, int pos) {
 }
 
 int ebin_cmp(void* k1, void* k2) {
+    int size, cmp;
     eterm_buf *e1 = (eterm_buf*)k1;
     eterm_buf *e2 = (eterm_buf*)k2;
-    int size;
+
     if(e2->size < e1->size)
     {
         size = e2->size;
@@ -53,7 +60,8 @@ int ebin_cmp(void* k1, void* k2) {
         size = e1->size;
     }
 
-    int cmp = memcmp(e1->buf, e2->buf, size);
+    cmp = strncmp(e1->buf, e2->buf, size);
+
     if(cmp == 0)
     {
         if(size < e2->size)
@@ -65,6 +73,7 @@ int ebin_cmp(void* k1, void* k2) {
             return 1;
         }
     }
+
     return cmp;
 }
 
@@ -85,11 +94,13 @@ int long_term_cmp(void *k1, void *k2) {
 
 
 void by_seq_reduce (eterm_buf* dst, nodelist* leaflist, int count) {
+    int pos = 0;
+
     //will be freed by flush_mr
     dst->buf = malloc(12);
     if(!dst->buf)
         return;
-    int pos = 0;
+
     ei_encode_long(dst->buf, &pos, count);
     dst->size = pos;
 }
@@ -99,12 +110,14 @@ void by_seq_rereduce (eterm_buf* dst, nodelist* leaflist, int count) {
     long current = 0;
     int r_pos = 0;
     int pos = 0;
+    nodelist* i = NULL;
 
     //will be freed by flush_mr
     dst->buf = malloc(12);
     if(!dst->buf)
         return;
-    nodelist* i = leaflist;
+    i = leaflist;
+    dst->buf = malloc(12);
     while(i != NULL)
     {
         r_pos = 0;
@@ -120,19 +133,21 @@ void by_id_rereduce(eterm_buf *dst, nodelist* leaflist, int count)
 {
     //Source term {NotDeleted, Deleted, Size}
     //Result term {NotDeleted, Deleted, Size}
-    dst->buf = malloc(30);
-    if(!dst->buf)
-        return;
     int dstpos = 0;
     int srcpos = 0;
     long notdeleted = 0, deleted = 0, size = 0;
     nodelist* i = leaflist;
+
+    dst->buf = malloc(30);
+    if(!dst->buf)
+        return;
+    dst->buf = malloc(30);
     while(i != NULL)
     {
-        srcpos = 0;
         long long src_deleted = 0;
         long long src_notdeleted = 0;
         long long src_size = 0;
+        srcpos = 0;
         ei_decode_tuple_header(i->value.pointer->reduce_value.buf, &srcpos, NULL);
         ei_decode_longlong(i->value.pointer->reduce_value.buf, &srcpos, &src_notdeleted);
         ei_decode_longlong(i->value.pointer->reduce_value.buf, &srcpos, &src_deleted);
@@ -154,18 +169,19 @@ void by_id_reduce(eterm_buf *dst, nodelist* leaflist, int count)
 {
     //Source term {Key, {Seq, Rev, Bp, Deleted, Size}}
     //Result term {NotDeleted, Deleted, Size}
-    dst->buf = malloc(30);
-    if(!dst->buf)
-        return;
     int dstpos = 0;
     int srcpos = 0;
     long notdeleted = 0, deleted = 0, size = 0;
     nodelist* i = leaflist;
+    dst->buf = malloc(30);
+    if(!dst->buf)
+        return;
+    dst->buf = malloc(30);
     while(i != NULL)
     {
-        srcpos = 0;
         long src_deleted = 0;
         long long src_size = 0;
+        srcpos = 0;
         ei_decode_tuple_header(i->value.leaf->term.buf, &srcpos, NULL);
         ei_skip_term(i->value.leaf->term.buf, &srcpos); //skip key
         ei_decode_tuple_header(i->value.leaf->term.buf, &srcpos, NULL);
@@ -274,15 +290,15 @@ void *query_modify_thread(void *arg)
     couchfile_modify_request *rq = arg;
     int errcode = 0;
     eterm_buf ebcmp;
+    couchfile_pointer_info *oldroot = NULL;
+    couchfile_pointer_info *newroot = NULL;
 
     rq->cmp.arg = &ebcmp;
-
-    couchfile_pointer_info *oldroot = NULL;
     if(rq->root.pointer != 0)
     {
         oldroot = &rq->root;
     }
-    couchfile_pointer_info *newroot = modify_btree(rq, oldroot, &errcode);
+    newroot = modify_btree(rq, oldroot, &errcode);
     if(errcode < 0)
     {
         enif_send(rq->caller_env, &rq->caller, rq->nif_env,
@@ -335,6 +351,13 @@ static ERL_NIF_TERM query_modify(ErlNifEnv* env, int argc, const ERL_NIF_TERM ar
     ERL_NIF_TERM term;
     int fd, reducetype, comparetype;
     char filename[MAXPATHLEN];
+    couchfile_modify_request* rq = NULL;
+    char* actbuf = NULL;
+    eterm_buf* values = NULL;
+    eterm_buf* keys = NULL;
+    eterm_buf* cmp_keys = NULL;
+    ERL_NIF_TERM ref;
+
     ERL_NIF_TERM nil_root_term = get_atom(env, "nil");
     btreenif_state* globalstate = enif_priv_data(env);
     enif_cond_broadcast(globalstate->writer_cond.cond);
@@ -357,7 +380,7 @@ static ERL_NIF_TERM query_modify(ErlNifEnv* env, int argc, const ERL_NIF_TERM ar
     enif_get_int(env, argv[3], &reducetype);
     enif_get_int(env, argv[2], &comparetype);
 
-    couchfile_modify_request* rq = enif_alloc(sizeof(couchfile_modify_request));
+    rq = enif_alloc(sizeof(couchfile_modify_request));
 
     if(!enif_get_local_pid(env, argv[5], &rq->writer))
     {
@@ -381,20 +404,19 @@ static ERL_NIF_TERM query_modify(ErlNifEnv* env, int argc, const ERL_NIF_TERM ar
     rq->root.writerq_resource = NULL;
     rq->globalstate = globalstate;
 
-
-    char* actbuf = enif_alloc(
+    actbuf = enif_alloc(
             (sizeof(eterm_buf) * 3 + sizeof(couchfile_modify_action)) * num_actions);
 
     rq->actions = (couchfile_modify_action*) actbuf;
 
-    eterm_buf* keys = (eterm_buf*)
+    keys = (eterm_buf*)
         (actbuf + sizeof(couchfile_modify_action) * num_actions);
 
-    eterm_buf* cmp_keys = (eterm_buf*)
+    cmp_keys = (eterm_buf*)
         (actbuf + sizeof(couchfile_modify_action) * num_actions
                 + sizeof(eterm_buf) * num_actions);
 
-    eterm_buf* values = (eterm_buf*)
+    values = (eterm_buf*)
         (actbuf + sizeof(couchfile_modify_action) * num_actions
                 + sizeof(eterm_buf) * num_actions * 2);
 
@@ -483,7 +505,7 @@ static ERL_NIF_TERM query_modify(ErlNifEnv* env, int argc, const ERL_NIF_TERM ar
         get_pointer_info(env, argv[4], &rq->root);
     }
 
-    ERL_NIF_TERM ref = enif_make_ref(env);
+    ref = enif_make_ref(env);
     rq->ref = enif_make_copy(rq->nif_env, ref);
     rq->caller_env = NULL;
 
@@ -556,8 +578,10 @@ void queue_request(btreenif_state* state, couchfile_modify_request* rq)
 
 static int btreenif_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM load_info)
 {
-    writerq_type = enif_open_resource_type(env, NULL, "writerq", NULL, ERL_NIF_RT_CREATE, NULL);
+    ErlNifTid workertid;
     btreenif_state *state = enif_alloc(sizeof(btreenif_state));
+
+    writerq_type = enif_open_resource_type(env, NULL, "writerq", NULL, ERL_NIF_RT_CREATE, NULL);
     *priv = state;
 
     state->writer_cond.cond = enif_cond_create("btreenif_cond");
@@ -568,7 +592,7 @@ static int btreenif_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM load_info)
 
     state->work_queue_cond.cond = enif_cond_create("btreenif_workqueue_cond");
     state->work_queue_cond.mtx = enif_mutex_create("btreenif_workqueue_mtx");
-    ErlNifTid workertid;
+
     enif_thread_create("native_btree_worker", &workertid, &worker_thread, state, NULL);
 
     return 0;

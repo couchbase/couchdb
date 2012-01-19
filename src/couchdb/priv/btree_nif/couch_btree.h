@@ -1,4 +1,6 @@
+#ifdef HAVE_UNISTD_H
 #include <unistd.h>
+#endif
 #include <stdint.h>
 
 #include "erl_nif.h"
