@@ -583,12 +583,17 @@ copy_compact(Db, NewDb0, Retry) ->
         couch_task_status:set_update_frequency(500)
     end,
 
-    {ok, _, {NewDb2, Uncopied, _, _}} =
-        couch_btree:foldl(Db#db.docinfo_by_seq_btree, EnumBySeqFun,
-            {NewDb, [], 0, 0},
-            [{start_key, NewDb#db.update_seq + 1}]),
+    case Retry of
+    false ->
+        NewDb3 = initial_copy_compact(Db, NewDb);
+    true ->
+        {ok, _, {NewDb2, Uncopied, _, _}} =
+            couch_btree:foldl(Db#db.docinfo_by_seq_btree, EnumBySeqFun,
+                {NewDb, [], 0, 0},
+                [{start_key, NewDb#db.update_seq + 1}]),
+        NewDb3 = copy_docs(Db, NewDb2, lists:reverse(Uncopied), Retry)
+    end,
 
-    NewDb3 = copy_docs(Db, NewDb2, lists:reverse(Uncopied), Retry),
     TotalChanges = couch_task_status:get(changes_done),
 
     % copy misc header values
@@ -600,9 +605,51 @@ copy_compact(Db, NewDb0, Retry) ->
     true ->
         NewDb4 = NewDb3
     end,
-
     ok = couch_file:flush(NewDb4#db.fd),
     commit_data(NewDb4#db{update_seq=Db#db.update_seq}).
+
+
+initial_copy_compact(#db{docinfo_by_seq_btree=SrcBySeq,
+        docinfo_by_id_btree=SrcById, fd=SrcFd},
+        #db{docinfo_by_seq_btree=DestBySeq,
+        docinfo_by_id_btree=DestById, fd=DestFd} = NewDb) ->
+    CopyBodyFun = fun(#doc_info{body_ptr=Bp}=Info, ok) ->
+        {ok, Body} = couch_file:pread_iolist(SrcFd, Bp),
+        {ok, BpNew, _} = couch_file:append_binary_crc32(DestFd, Body),
+        update_compact_task(1),
+        {Info#doc_info{body_ptr = BpNew}, ok}
+    end,
+    % first copy the by_seq index and the values.
+    {ok, NewBySeqRoot, ok} = couch_btree_copy:copy(
+            SrcBySeq, DestFd, [{before_kv_write, {CopyBodyFun, ok}}]),
+    % now dump the new by_seq to a temp file, sort and output to new file
+    ok = couch_file:flush(DestFd),
+    DbRootDir = couch_config:get("couchdb", "database_dir", "."),
+    {A,B,C}=now(),
+    TempName = lists:flatten(io_lib:format("~p.~p.~p",[A,B,C])),
+    TempDir = couch_file:get_delete_dir(DbRootDir),
+    TempFilepath = filename:join(TempDir, TempName),
+    {ok, TempFd} = file:open(TempFilepath, [raw, delayed_write, append]),
+    NewBySeqBtree = DestBySeq#btree{root=NewBySeqRoot},
+    {ok, _, ok} = couch_btree:foldl(NewBySeqBtree, fun(DocInfo,_Offset,ok) ->
+            Bin = term_to_binary(DocInfo),
+            Size = size(Bin),
+            ok = file:write(TempFd, [<<Size:32, Bin/binary>>]),
+            {ok, ok}
+        end,
+        ok,
+        []),
+    ok = file:close(TempFd),
+    BtreeOutputFun = couch_btree_copy:file_sort_output_fun(
+            SrcById, DestFd, []),
+    % no need to specify a sort function, the built in erlang sort will
+    % sort the terms by the first differing slot, which is id
+    {ok, NewByIdRoot} = file_sorter:sort([TempFilepath],
+            BtreeOutputFun,[{tmpdir, TempDir}]),
+    ok = file:delete(TempFilepath),
+    ok = couch_file:flush(DestFd),
+    NewDb#db{docinfo_by_seq_btree=NewBySeqBtree,
+            docinfo_by_id_btree=DestById#btree{root=NewByIdRoot}}.
 
 start_copy_compact(#db{name=Name,filepath=Filepath,header=#db_header{purge_seq=PurgeSeq}}=Db) ->
     CompactFile = Filepath ++ ".compact",

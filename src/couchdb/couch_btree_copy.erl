@@ -12,7 +12,7 @@
 
 -module(couch_btree_copy).
 
--export([copy/3]).
+-export([copy/3, file_sort_output_fun/3]).
 
 -include("couch_db.hrl").
 
@@ -47,6 +47,29 @@ copy(Btree, Fd, Options) ->
     {ok, CopyRootState, FinalAcc} = finish_copy(FinalAcc0),
     {_, LastUserAcc} = FinalAcc#acc.before_kv_write,
     {ok, CopyRootState, LastUserAcc}.
+
+% this will create a function suitable for receiving the output of
+% Erlang file_sorter:sort/2.
+file_sort_output_fun(OrigBtree, Fd, Options) ->
+    Acc0 = #acc{
+        btree = OrigBtree,
+        fd = Fd,
+        chunk_threshold = OrigBtree#btree.chunk_threshold
+    },
+    Acc = apply_options(Options, Acc0),
+    fun(Item) -> file_sort_loop(Item, Acc) end.
+
+
+file_sort_loop(close, Acc) ->
+    {ok, CopyRootState, _FinalAcc} = finish_copy(Acc),
+    {ok, CopyRootState};
+file_sort_loop(Binaries, Acc) ->
+    Items = [binary_to_term(Bin) || Bin <- Binaries],
+    Acc4 = lists:foldl(fun(Item, Acc2) ->
+        {ok, Acc3} = fold_copy(Item, ignored, Acc2),
+        Acc3
+        end, Acc, Items),
+    fun(Item2) -> file_sort_loop(Item2, Acc4) end.
 
 
 apply_options([], Acc) ->

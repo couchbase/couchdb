@@ -47,6 +47,9 @@ open_db_file(Filepath, Options) ->
     case couch_file:open(Filepath,
             [{fd_close_after, ?FD_CLOSE_TIMEOUT_MS} | Options]) of
     {ok, Fd} ->
+        RootDir = couch_config:get("couchdb", "database_dir", "."),
+        % Delete any lingering compaction file that might be hanging around
+        couch_file:delete(RootDir, Filepath ++ ".compact"),
         {ok, Fd};
     {error, enoent} ->
         % couldn't find file. is there a compact version? This can happen if

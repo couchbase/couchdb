@@ -30,7 +30,7 @@
 -export([append_raw_chunk/2, assemble_file_chunk/1, assemble_file_chunk/2]).
 -export([append_term/2, append_term/3, append_term_crc32/2, append_term_crc32/3]).
 -export([write_header/2, read_header/1,only_snapshot_reads/1]).
--export([delete/2, delete/3, init_delete_dir/1]).
+-export([delete/2, delete/3, init_delete_dir/1,get_delete_dir/1]).
 
 % gen_server callbacks
 -export([init/1, terminate/2, code_change/3]).
@@ -244,8 +244,11 @@ delete(RootDir, Filepath, Async) ->
     end.
 
 
+get_delete_dir(RootDir) ->
+    filename:join(RootDir,".delete").
+
 init_delete_dir(RootDir) ->
-    Dir = filename:join(RootDir,".delete"),
+    Dir = get_delete_dir(RootDir),
     % note: ensure_dir requires an actual filename companent, which is the
     % reason for "foo".
     filelib:ensure_dir(filename:join(Dir,"foo")),
