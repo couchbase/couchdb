@@ -813,6 +813,7 @@ handle_info({'EXIT', Pid, normal}, State) ->
     {noreply, State, ?TIMEOUT};
 
 handle_info({'EXIT', Pid, Reason}, #state{compactor_pid = Pid} = State) ->
+    couch_util:shutdown_sync(State#state.compactor_file),
     {stop, {compactor_died, Reason}, State};
 
 handle_info({'EXIT', Pid, Reason}, #state{group = #set_view_group{db_set = Pid}} = State) ->
