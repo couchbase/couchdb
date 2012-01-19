@@ -679,6 +679,8 @@ reset_indexes(SetName, DbName, PartId, RootDir) ->
                 ?LOG_INFO("View group `~s` for set `~s` (PID ~p), shutdown because "
                     "database `~s` was deleted", [DDocId, SetName, Pid, DbName]),
                 delete_from_ets(Pid, SetName, DDocId, Sig),
+                unlink(Pid),
+                receive {'EXIT', Pid, _} -> ok after 0 -> ok end,
                 Acc;
             ignore ->
                 false
