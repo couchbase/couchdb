@@ -13,7 +13,7 @@ import unittest
 HOST = "localhost:5984"
 SET_NAME = "test_suite_set_view_compact"
 NUM_PARTS = 8
-NUM_DOCS = 400000
+NUM_DOCS = 800000
 DDOC = {
     "_id": "_design/test",
     "language": "javascript",
@@ -91,8 +91,13 @@ class TestCompactionTransitions(unittest.TestCase):
         self.assertEqual(info["cleanup_partitions"], [], "right cleanup partitions list")
 
         # print "Waiting for compaction to finish"
-        compaction_was_running = (common.wait_set_view_compaction_complete(self._params) > 0)
-        self.assertTrue(compaction_was_running, "Compaction was running when the view update was triggered")
+        count = 0
+        while info["stats"]["compactions"] < 1:
+            time.sleep(0.5)
+            count += 1
+            info = common.get_set_view_info(self._params)
+
+        self.assertTrue((count > 0), "Compaction was running when the partition states were updated")
 
         # print "Verifying group info"
         info = common.get_set_view_info(self._params)
@@ -126,8 +131,14 @@ class TestCompactionTransitions(unittest.TestCase):
         common.set_partition_states(self._params, passive = [4, 5])
 
         # print "Waiting for compaction to finish"
-        compaction_was_running = (common.wait_set_view_compaction_complete(self._params) > 0)
-        self.assertTrue(compaction_was_running, "Compaction was running when the view update was triggered")
+        info = common.get_set_view_info(self._params)
+        count = 0
+        while info["stats"]["compactions"] < 2:
+            time.sleep(0.5)
+            count += 1
+            info = common.get_set_view_info(self._params)
+
+        self.assertTrue((count > 0), "Compaction was running when the partition states were updated")
 
         # print "Verifying group info"
         info = common.get_set_view_info(self._params)
