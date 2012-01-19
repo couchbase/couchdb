@@ -185,13 +185,16 @@ handle_call({compact_done, CompactFilepath}, _From, #db{filepath=Filepath,
         {'EXIT', MainPid, Reason} ->
             exit(Reason)
         end,
-        couch_file:only_snapshot_reads(OldFd),
+        % ensure the fd won't close, because after we delete, it can't reopen
+        ok = couch_file:set_close_after(OldFd, infinity),
         couch_file:delete(RootDir, Filepath),
+        ok = gen_server:call(Db#db.main_pid, {db_updated, NewDb2}, infinity),
+        ok = couch_file:only_snapshot_reads(OldFd), % prevent writes to the fd
+        close_db(Db),
         ok = couch_file:rename(NewFd, Filepath),
+        ok = couch_file:sync(NewFd),
         ok = couch_file:set_close_after(NewFd, ?FD_CLOSE_TIMEOUT_MS),
         MainPid ! compaction_file_switch_done,
-        close_db(Db),
-        ok = gen_server:call(Db#db.main_pid, {db_updated, NewDb2}, infinity),
         couch_db_update_notifier:notify({compacted, NewDb2#db.name}),
         ?LOG_INFO("Compaction for db \"~s\" completed.", [Db#db.name]),
         {reply, ok, NewDb2#db{compactor_info=nil}};
