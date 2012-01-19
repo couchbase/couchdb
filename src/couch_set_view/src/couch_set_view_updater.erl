@@ -505,12 +505,12 @@ write_changes(Group, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs, InitialBui
         type = GroupType
     } = Group,
 
-    AddDocIdViewIdKeys = [{DocId, ViewIdKeys} || {DocId, ViewIdKeys} <- DocIdViewIdKeys, ViewIdKeys /= []],
+    AddDocIdViewIdKeys = [{DocId, {PartId, ViewIdKeys}} || {DocId, {PartId, ViewIdKeys}} <- DocIdViewIdKeys, ViewIdKeys /= []],
     if InitialBuild ->
         RemoveDocIds = [],
         LookupDocIds = [];
     true ->
-        RemoveDocIds = [DocId || {DocId, ViewIdKeys} <- DocIdViewIdKeys, ViewIdKeys == []],
+        RemoveDocIds = [DocId || {DocId, {_PartId, ViewIdKeys}} <- DocIdViewIdKeys, ViewIdKeys == []],
         LookupDocIds = [DocId || {DocId, _ViewIdKeys} <- DocIdViewIdKeys]
     end,
     CleanupFun = case ?set_cbitmask(Group) of
