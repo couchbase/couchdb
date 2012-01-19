@@ -16,7 +16,9 @@
 -export([build_bitmask/1, decode_bitmask/1]).
 -export([make_btree_purge_fun/1]).
 -export([make_key_options/1]).
+-export([design_doc_to_set_view_group/2, get_ddoc_ids_with_sig/2]).
 
+-include("couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
 
 
@@ -119,3 +121,84 @@ btree_purge_fun(branch, Red, {go, Acc}, Cbitmask) ->
 
 make_key_options(QueryArgs) ->
     couch_httpd_view:make_key_options(QueryArgs).
+
+
+get_ddoc_ids_with_sig(SetName, ViewGroupSig) ->
+    {ok, Db} = couch_db:open_int(?master_dbname(SetName), []),
+    {ok, DDocList} = couch_db:get_design_docs(Db, no_deletes),
+    ok = couch_db:close(Db),
+    lists:foldl(
+        fun(#doc{id = Id} = DDoc, Acc) ->
+            case design_doc_to_set_view_group(SetName, DDoc) of
+            #set_view_group{sig = ViewGroupSig} ->
+                [Id | Acc];
+            #set_view_group{sig = _OtherSig} ->
+                Acc
+            end
+        end,
+        [], DDocList).
+
+
+design_doc_to_set_view_group(SetName, #doc{id = Id, json = {Fields}}) ->
+    Language = couch_util:get_value(<<"language">>, Fields, <<"javascript">>),
+    {DesignOptions} = couch_util:get_value(<<"options">>, Fields, {[]}),
+    {RawViews} = couch_util:get_value(<<"views">>, Fields, {[]}),
+    Lib = couch_util:get_value(<<"lib">>, RawViews, {[]}),
+    % add the views to a dictionary object, with the map source as the key
+    DictBySrc =
+    lists:foldl(
+        fun({Name, {MRFuns}}, DictBySrcAcc) ->
+            case couch_util:get_value(<<"map">>, MRFuns) of
+            undefined -> DictBySrcAcc;
+            MapSrc ->
+                RedSrc = couch_util:get_value(<<"reduce">>, MRFuns, null),
+                {ViewOptions} = couch_util:get_value(<<"options">>, MRFuns, {[]}),
+                View =
+                case dict:find({MapSrc, ViewOptions}, DictBySrcAcc) of
+                    {ok, View0} -> View0;
+                    error -> #set_view{def = MapSrc, options = ViewOptions}
+                end,
+                View2 =
+                if RedSrc == null ->
+                    View#set_view{map_names = [Name | View#set_view.map_names]};
+                true ->
+                    View#set_view{reduce_funs = [{Name, RedSrc} | View#set_view.reduce_funs]}
+                end,
+                dict:store({MapSrc, ViewOptions}, View2, DictBySrcAcc)
+            end
+        end, dict:new(), RawViews),
+    % number the views
+    {Views, _N} = lists:mapfoldl(
+        fun({_Src, View}, N) ->
+            {View#set_view{id_num = N}, N + 1}
+        end,
+        0, lists:sort(dict:to_list(DictBySrc))),
+    SetViewGroup = #set_view_group{
+        set_name = SetName,
+        name = Id,
+        lib = Lib,
+        views = Views,
+        def_lang = Language,
+        design_options = DesignOptions
+    },
+    set_view_sig(SetViewGroup).
+
+
+set_view_sig(#set_view_group{
+            views = Views,
+            lib = Lib,
+            def_lang = Language,
+            design_options = DesignOptions} = G) ->
+    Sig = couch_util:md5(term_to_binary({Views, Language, DesignOptions, sort_lib(Lib)})),
+    G#set_view_group{sig = Sig}.
+
+
+sort_lib({Lib}) ->
+    sort_lib(Lib, []).
+sort_lib([], LAcc) ->
+    lists:keysort(1, LAcc);
+sort_lib([{LName, {LObj}}|Rest], LAcc) ->
+    LSorted = sort_lib(LObj, []), % descend into nested object
+    sort_lib(Rest, [{LName, LSorted}|LAcc]);
+sort_lib([{LName, LCode}|Rest], LAcc) ->
+    sort_lib(Rest, [{LName, LCode}|LAcc]).

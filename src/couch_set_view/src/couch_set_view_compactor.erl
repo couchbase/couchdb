@@ -51,7 +51,8 @@ compact_group(Group, EmptyGroup, SetName, FileName, CompactFileName) ->
         name = GroupId,
         type = Type,
         index_header = Header,
-        fd = GroupFd
+        fd = GroupFd,
+        sig = GroupSig
     } = Group,
     StartTime = now(),
 
@@ -64,10 +65,11 @@ compact_group(Group, EmptyGroup, SetName, FileName, CompactFileName) ->
     TotalChanges = total_kv_count(Group),
     Acc0 = #acc{total_changes = TotalChanges},
 
+    DDocIds = couch_set_view_util:get_ddoc_ids_with_sig(SetName, GroupSig),
     couch_task_status:add_task([
         {type, view_compaction},
         {set, SetName},
-        {design_document, GroupId},
+        {design_documents, DDocIds},
         {changes_done, 0},
         {total_changes, TotalChanges},
         {indexer_type, Type},

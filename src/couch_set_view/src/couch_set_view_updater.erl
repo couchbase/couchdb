@@ -39,10 +39,10 @@
 update(Owner, Group, NewSeqs, FileName) ->
     #set_view_group{
         set_name = SetName,
-        name = GroupName,
         type = Type,
         index_header = #set_view_index_header{seqs = SinceSeqs},
-        fd = GroupFd
+        fd = GroupFd,
+        sig = GroupSig
     } = Group,
 
     StartTime = now(),
@@ -73,10 +73,11 @@ update(Owner, Group, NewSeqs, FileName) ->
         {ok, RawReadFd} = file:open(FileName, [read, raw, binary]),
         erlang:put({GroupFd, fast_fd_read}, RawReadFd),
 
+        DDocIds = couch_set_view_util:get_ddoc_ids_with_sig(SetName, GroupSig),
         couch_task_status:add_task([
             {type, indexer},
             {set, SetName},
-            {design_document, GroupName},
+            {design_documents, DDocIds},
             {indexer_type, Type},
             {progress, 0},
             {changes_done, 0},
