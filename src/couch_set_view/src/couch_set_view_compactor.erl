@@ -28,7 +28,7 @@ start_compact(SetName, DDocId) ->
 
 start_compact(SetName, DDocId, Type) ->
     {ok, Pid} = get_group_pid(SetName, DDocId, Type),
-    gen_server:call(Pid, {start_compact, fun compact_group/4}).
+    gen_server:call(Pid, {start_compact, fun compact_group/5}).
 
 
 cancel_compact(SetName, DDocId) ->
@@ -44,7 +44,7 @@ cancel_compact(SetName, DDocId, Type) ->
 %%=============================================================================
 
 %% @spec compact_group(Group, NewGroup, SetName, FileName) -> ok
-compact_group(Group, EmptyGroup, SetName, FileName) ->
+compact_group(Group, EmptyGroup, SetName, FileName, CompactFileName) ->
     #set_view_group{
         id_btree = IdBtree,
         views = Views,
@@ -126,9 +126,9 @@ compact_group(Group, EmptyGroup, SetName, FileName) ->
         }
     },
     ok = couch_file:flush(NewGroup#set_view_group.fd),
-    maybe_retry_compact(NewGroup, SetName, StartTime, GroupFd).
+    maybe_retry_compact(NewGroup, SetName, StartTime, GroupFd, CompactFileName).
 
-maybe_retry_compact(NewGroup, SetName, StartTime, GroupFd) ->
+maybe_retry_compact(NewGroup, SetName, StartTime, GroupFd, CompactFileName) ->
     #set_view_group{
         name = DDocId,
         type = Type,
@@ -143,11 +143,11 @@ maybe_retry_compact(NewGroup, SetName, StartTime, GroupFd) ->
     update ->
         {ok, NewSeqs} = couch_db_set:get_seqs(DbSet),
         {_, Ref} = erlang:spawn_monitor(fun() ->
-            couch_set_view_updater:update(nil, NewGroup, NewSeqs)
+            couch_set_view_updater:update(nil, NewGroup, NewSeqs, CompactFileName)
         end),
         receive
         {'DOWN', Ref, _, _, {new_group, NewGroup2}} ->
-            maybe_retry_compact(NewGroup2, SetName, StartTime, GroupFd)
+            maybe_retry_compact(NewGroup2, SetName, StartTime, GroupFd, CompactFileName)
         end
     end.
 

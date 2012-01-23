@@ -12,7 +12,7 @@
 
 -module(couch_set_view_updater).
 
--export([update/3]).
+-export([update/4]).
 
 -include("couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
@@ -36,12 +36,13 @@
 }).
 
 
-update(Owner, Group, NewSeqs) ->
+update(Owner, Group, NewSeqs, FileName) ->
     #set_view_group{
         set_name = SetName,
         name = GroupName,
         type = Type,
-        index_header = #set_view_index_header{seqs = SinceSeqs}
+        index_header = #set_view_index_header{seqs = SinceSeqs},
+        fd = GroupFd
     } = Group,
 
     NumChanges = lists:foldl(
@@ -68,6 +69,9 @@ update(Owner, Group, NewSeqs) ->
 
     Parent = self(),
     Writer = spawn_link(fun() ->
+        {ok, RawReadFd} = file:open(FileName, [read, raw, binary]),
+        erlang:put({GroupFd, fast_fd_read}, RawReadFd),
+
         couch_task_status:add_task([
             {type, indexer},
             {set, SetName},
@@ -105,7 +109,8 @@ update(Owner, Group, NewSeqs) ->
             view_empty_kvs = ViewEmptyKVs
         },
         NewGroup = do_writes(WriterAcc),
-        Parent ! {new_group, NewGroup}
+        Parent ! {new_group, NewGroup},
+        ok = file:close(RawReadFd)
     end),
 
     load_changes(Owner, Group, SinceSeqs, MapQueue, Writer),

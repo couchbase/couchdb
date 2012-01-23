@@ -37,6 +37,7 @@
 -define(root_dir(State), element(1, State#state.init_args)).
 -define(set_name(State), element(2, State#state.init_args)).
 -define(type(State), (element(3, State#state.init_args))#set_view_group.type).
+-define(group_sig(State), (element(3, State#state.init_args))#set_view_group.sig).
 -define(group_id(State), (State#state.group)#set_view_group.name).
 -define(db_set(State), (State#state.group)#set_view_group.db_set).
 -define(is_defined(State),
@@ -593,7 +594,7 @@ handle_call({compact_done, NewGroup0, Duration}, {Pid, _}, #state{compactor_pid 
             Owner = self(),
             {true, NewSeqs} = index_needs_update(State),
             spawn_link(fun() ->
-                couch_set_view_updater:update(Owner, NewGroup, NewSeqs)
+                couch_set_view_updater:update(Owner, NewGroup, NewSeqs, index_file_name(State))
             end);
         true ->
             nil
@@ -900,6 +901,11 @@ hex_sig(GroupSig) ->
 
 design_root(RootDir, SetName) ->
     RootDir ++ "/set_view_" ++ ?b2l(SetName) ++ "_design/".
+
+index_file_name(State) ->
+    index_file_name(?root_dir(State), ?set_name(State), ?type(State), ?group_sig(State)).
+index_file_name(State, compact) ->
+    index_file_name(compact, ?root_dir(State), ?set_name(State), ?type(State), ?group_sig(State)).
 
 index_file_name(RootDir, SetName, main, GroupSig) ->
     design_root(RootDir, SetName) ++ "main_" ++ hex_sig(GroupSig) ++".view";
@@ -1650,18 +1656,18 @@ make_partition_lists([{PartId, _} | Rest], Abitmask, Pbitmask, Active, Passive) 
 
 
 start_compactor(State, CompactFun) ->
-    State2 = stop_cleaner(State),
+    #state{group = Group} = State2 = stop_cleaner(State),
     ?LOG_INFO("Set view `~s`, ~s group `~s`, compaction starting",
               [?set_name(State2), ?type(State), ?group_id(State2)]),
     #set_view_group{
-        sig = Sig,
         fd = CompactFd
     } = NewGroup = compact_group(State2),
     unlink(CompactFd),
     Pid = spawn_link(fun() ->
         link(CompactFd),
-        FileName = index_file_name(?root_dir(State), ?set_name(State), ?type(State), Sig),
-        CompactFun(State2#state.group, NewGroup, ?set_name(State2), FileName),
+        FileName = index_file_name(State2),
+        CompactFileName = index_file_name(State2, compact),
+        CompactFun(Group, NewGroup, ?set_name(State2), FileName, CompactFileName),
         unlink(CompactFd)
     end),
     State2#state{
@@ -1771,7 +1777,7 @@ do_start_updater(State, NewSeqs) ->
         [?set_name(State), ?type(State), ?group_id(State)]),
     Owner = self(),
     Pid = spawn_link(fun() ->
-        couch_set_view_updater:update(Owner, Group, NewSeqs)
+        couch_set_view_updater:update(Owner, Group, NewSeqs, index_file_name(State))
     end),
     State2#state{
         updater_pid = Pid,
