@@ -172,8 +172,6 @@ request_group_info(Pid) ->
 
 
 % Returns 'ignore' or 'shutdown'.
-partition_deleted(_Pid, master) ->
-    shutdown;
 partition_deleted(Pid, PartId) ->
     try
         gen_server:call(Pid, {partition_deleted, PartId}, infinity)
@@ -256,8 +254,20 @@ start_link({RootDir, SetName, Group}) ->
     proc_lib:start_link(?MODULE, init, [Args]).
 
 
-init({_, SetName, _} = InitArgs) ->
+init(InitArgs) ->
     process_flag(trap_exit, true),
+    try
+        {ok, State} = do_init(InitArgs),
+        proc_lib:init_ack({ok, self()}),
+        gen_server:enter_loop(?MODULE, [], State, 1)
+    catch
+    _:{error, Error} ->
+        exit(Error);
+    _:Error ->
+        exit(Error)
+    end.
+
+do_init({_, SetName, _} = InitArgs) ->
     case prepare_group(InitArgs, false) of
     {ok, #set_view_group{fd = Fd, index_header = Header, type = Type} = Group} ->
         {ok, RefCounter} = couch_ref_counter:start([Fd]),
@@ -277,7 +287,12 @@ init({_, SetName, _} = InitArgs) ->
                       [Type, SetName, Group#set_view_group.name]);
         true ->
             {ActiveList, PassiveList} = make_partition_lists(Group),
-            {ok, DbSet} = couch_db_set:open(SetName, ActiveList, PassiveList, []),
+            DbSet = case (catch couch_db_set:open(SetName, ActiveList, PassiveList, [])) of
+            {ok, SetPid} ->
+                SetPid;
+            Error ->
+                throw(Error)
+            end,
             ?LOG_INFO("Started ~s set view group `~s`, group `~s`~n"
                       "active partitions:  ~w~n"
                       "passive partitions: ~w~n"
@@ -317,10 +332,9 @@ init({_, SetName, _} = InitArgs) ->
                 replica_pid = ReplicaPid
             }
         },
-        proc_lib:init_ack({ok, self()}),
-        gen_server:enter_loop(?MODULE, [], InitState, 1);
+        {ok, InitState};
     Error ->
-        proc_lib:init_ack(Error)
+        Error
     end.
 
 handle_call({define_view, NumPartitions, ActiveList, ActiveBitmask,
@@ -341,47 +355,42 @@ handle_call({define_view, NumPartitions, ActiveList, ActiveBitmask,
         purge_seqs = Seqs,
         has_replica = UseReplicaIndex
     },
-    case is_pid(Group#set_view_group.db_set) of
-    false ->
-        {ok, DbSet} = couch_db_set:open(?set_name(State), ActiveList, PassiveList, []);
-    true ->
-        DbSet = Group#set_view_group.db_set,
-        ok = couch_db_set:set_active(DbSet, ActiveList),
-        ok = couch_db_set:set_passive(DbSet, PassiveList)
-    end,
-    case (?type(State) =:= main) andalso UseReplicaIndex of
-    false ->
-        ReplicaPid = nil;
-    true ->
-        ReplicaPid = open_replica_group(InitArgs),
-        ok = gen_server:call(ReplicaPid, {define_view, NumPartitions, [], 0, [], 0, false}, infinity)
-    end,
-    NewGroup = Group#set_view_group{
-        db_set = DbSet,
-        index_header = NewHeader,
-        replica_pid = ReplicaPid,
-        views = lists:map(
-            fun(V) -> V#set_view{update_seqs = Seqs, purge_seqs = Seqs} end, Views)
-    },
-    ok = commit_header(NewGroup, true),
-    NewState = State#state{
-        group = NewGroup,
-        replica_group = ReplicaPid
-    },
-    ?LOG_INFO("Set view `~s`, ~s group `~s`, configured with:~n"
-              "~p partitions~n"
-              "~sreplica support~n"
-              "initial active partitions ~w~n"
-              "initial passive partitions ~w",
-              [?set_name(State), ?type(State), DDocId, NumPartitions,
-               case UseReplicaIndex of
-               true ->
-                    "";
-               false ->
-                    "no "
-               end,
-               ActiveList, PassiveList]),
-    {reply, ok, NewState, ?TIMEOUT};
+    case (catch couch_db_set:open(?set_name(State), ActiveList, PassiveList, [])) of
+    {ok, DbSet} ->
+        case (?type(State) =:= main) andalso UseReplicaIndex of
+        false ->
+            ReplicaPid = nil;
+        true ->
+            ReplicaPid = open_replica_group(InitArgs),
+            ok = gen_server:call(ReplicaPid, {define_view, NumPartitions, [], 0, [], 0, false}, infinity)
+        end,
+        NewGroup = Group#set_view_group{
+            db_set = DbSet,
+            index_header = NewHeader,
+            replica_pid = ReplicaPid,
+            views = lists:map(
+                fun(V) -> V#set_view{update_seqs = Seqs, purge_seqs = Seqs} end, Views)
+        },
+        ok = commit_header(NewGroup, true),
+        NewState = State#state{
+            group = NewGroup,
+            replica_group = ReplicaPid
+        },
+        ?LOG_INFO("Set view `~s`, ~s group `~s`, configured with:~n"
+            "~p partitions~n"
+            "~sreplica support~n"
+            "initial active partitions ~w~n"
+            "initial passive partitions ~w",
+            [?set_name(State), ?type(State), DDocId, NumPartitions,
+            case UseReplicaIndex of
+            true ->  "";
+            false -> "no "
+            end,
+            ActiveList, PassiveList]),
+        {reply, ok, NewState, ?TIMEOUT};
+    Error ->
+        {reply, Error, State, ?TIMEOUT}
+    end;
 
 handle_call({define_view, _, _, _, _, _, _}, _From, State) ->
     {reply, view_already_defined, State, ?TIMEOUT};
@@ -389,6 +398,8 @@ handle_call({define_view, _, _, _, _, _, _}, _From, State) ->
 handle_call(is_view_defined, _From, #state{group = Group} = State) ->
     {reply, is_integer(?set_num_partitions(Group)), State, ?TIMEOUT};
 
+handle_call({partition_deleted, master}, _From, State) ->
+    {stop, shutdown, shutdown, State};
 handle_call({partition_deleted, PartId}, _From, #state{group = Group} = State) ->
     Mask = 1 bsl PartId,
     case ((?set_abitmask(Group) band Mask) =/= 0) orelse

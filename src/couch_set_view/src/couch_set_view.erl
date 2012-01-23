@@ -574,6 +574,7 @@ handle_cast({reset_indexes, DbName}, #server{root_dir=Root}=Server) ->
     {noreply, Server}.
 
 new_group(Root, SetName, #set_view_group{name=GroupId, sig=Sig} = Group) ->
+    process_flag(trap_exit, true),
     ?LOG_DEBUG("Spawning new group server for view group ~s, set ~s.",
         [GroupId, SetName]),
     case (catch couch_set_view_group:start_link({Root, SetName, Group})) of

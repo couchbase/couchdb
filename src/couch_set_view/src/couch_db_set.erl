@@ -37,7 +37,7 @@
 
 open(SetName, Active, Passive, DbOpenOptions) ->
     Args = {SetName, Active, Passive, DbOpenOptions},
-    gen_server:start_link(?MODULE, Args, []).
+    proc_lib:start_link(?MODULE, init, [Args]).
 
 close(Pid) ->
     ok = gen_server:call(Pid, close, infinity).
@@ -92,17 +92,35 @@ enum_docs_since(Pid, SinceSeqs, Fun, Acc0, Options) ->
     {ok, Acc4}.
 
 
-init({SetName, Active0, Passive0, DbOpenOptions}) ->
+init(Args) ->
+    try
+        {ok, State} = do_init(Args),
+        proc_lib:init_ack({ok, self()}),
+        gen_server:enter_loop(?MODULE, [], State)
+    catch _:Error ->
+        exit(Error)
+    end.
+
+do_init({SetName, Active0, Passive0, DbOpenOptions}) ->
     Active = lists:usort(Active0),
     Passive = lists:usort(Passive0),
     OpenFun = fun(P, Acc) ->
         Name = ?dbname(SetName, P),
-        {ok, Db} = couch_db:open(Name, DbOpenOptions),
-        dict:store(Name, {Db, P, couch_db:monitor(Db)}, Acc)
+        case couch_db:open(Name, DbOpenOptions) of
+        {ok, Db} ->
+            dict:store(Name, {Db, P, couch_db:monitor(Db)}, Acc);
+        Error ->
+            raise_db_open_error(Name, Error)
+        end
     end,
     DbsActive = lists:foldl(OpenFun, dict:new(), Active),
     DbsPassive = lists:foldl(OpenFun, dict:new(), Passive),
-    {ok, MasterDb} = couch_db:open_int(?master_dbname(SetName), []),
+    MasterDb = case couch_db:open_int(?master_dbname(SetName), []) of
+    {ok, Db} ->
+        Db;
+    Error ->
+        raise_db_open_error(?master_dbname(SetName), Error)
+    end,
     _Ref = couch_db:monitor(MasterDb),
     Server = self(),
     EventFun = fun({compacted, Name} = Ev) ->
@@ -263,3 +281,8 @@ switch_partitions_state(PartList, SetName, OpenOpts, SetA, SetB) ->
             end
         end,
         {SetA, SetB}, PartList).
+
+
+raise_db_open_error(DbName, Error) ->
+    Msg = io_lib:format("Couldn't open database `~s`, reason: ~w", [DbName, Error]),
+    throw({db_open_error, DbName, Error, iolist_to_binary(Msg)}).
