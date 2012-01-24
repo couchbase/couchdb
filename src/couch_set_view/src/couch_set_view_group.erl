@@ -254,10 +254,8 @@ init(InitArgs) ->
         proc_lib:init_ack({ok, self()}),
         gen_server:enter_loop(?MODULE, [], State, 1)
     catch
-    _:{error, Error} ->
-        exit(Error);
     _:Error ->
-        exit(Error)
+        proc_lib:init_ack(Error)
     end.
 
 do_init({_, SetName, _} = InitArgs) ->
