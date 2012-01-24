@@ -85,12 +85,12 @@ all: $(SNAPPY_NIF)
 $(snappy_msbuild): $(snappy_msbuild).tpl
 	sed -e "s|%msbuild_dir%|$(msbuild_dir)|" \
 	    -e "s|%msbuild_name%|$(msbuild_name)|" \
-        -e "s|%SNAPPY_VERSION%|$(SNAPPY_VERSION)| \
 	    -e "s|^/cygdrive/\([a-zA-Z]\)|\1:|" \
 	< $< > $@
 
 $(snappy_vcproj): $(snappy_vcproj).tpl $(WIN_ERL_INCLUDE)
 	 sed -e "s|%ERLANG_INCLUDE%|`cat $(WIN_ERL_INCLUDE)`|" \
+	     -e "s|%SNAPPY_VERSION%|$(SNAPPY_VERSION)|" \
 	< $< > $@
 
 $(WIN_ERL_INCLUDE):$(ERLANG_INCLUDE)
