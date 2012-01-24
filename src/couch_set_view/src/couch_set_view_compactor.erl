@@ -61,21 +61,7 @@ compact_group(Group, EmptyGroup, SetName, FileName, CompactFileName) ->
         fd = Fd
     } = EmptyGroup,
 
-    IdsCount = lists:foldl(
-        fun({PartId, _}, Acc) ->
-            {ok, Db} = couch_db:open_int(?dbname(SetName, PartId), []),
-            {ok, DbReduce} = couch_btree:full_reduce(Db#db.docinfo_by_id_btree),
-            ok = couch_db:close(Db),
-            Acc + element(1, DbReduce)
-        end,
-        0, ?set_seqs(Group)),
-
-    TotalChanges = lists:foldl(
-        fun(View, Acc) ->
-            {ok, Kvs} = couch_set_view:get_row_count(View),
-            Acc + Kvs
-        end,
-        IdsCount, Views),
+    TotalChanges = total_kv_count(Group),
     Acc0 = #acc{total_changes = TotalChanges},
 
     couch_task_status:add_task([
@@ -85,7 +71,7 @@ compact_group(Group, EmptyGroup, SetName, FileName, CompactFileName) ->
         {changes_done, 0},
         {total_changes, TotalChanges},
         {indexer_type, Type},
-        {progress, 0}
+        {progress, case TotalChanges of 0 -> 100; _ -> 0 end}
     ]),
 
     {ok, RawReadFd} = file:open(FileName, [binary, read, raw]),
@@ -125,18 +111,19 @@ compact_group(Group, EmptyGroup, SetName, FileName, CompactFileName) ->
             view_states = nil
         }
     },
+    CleanupKVCount = TotalChanges - total_kv_count(NewGroup),
     ok = couch_file:flush(NewGroup#set_view_group.fd),
-    maybe_retry_compact(NewGroup, SetName, StartTime, GroupFd, CompactFileName).
+    maybe_retry_compact(NewGroup, CleanupKVCount, SetName, StartTime, GroupFd, CompactFileName).
 
-maybe_retry_compact(NewGroup, SetName, StartTime, GroupFd, CompactFileName) ->
+maybe_retry_compact(NewGroup, CleanupKVCount, SetName, StartTime, GroupFd, CompactFileName) ->
     #set_view_group{
         name = DDocId,
         type = Type,
         db_set = DbSet
     } = NewGroup,
-    Duration = timer:now_diff(now(), StartTime),
+    Duration = timer:now_diff(now(), StartTime) / 1000000,
     {ok, Pid} = get_group_pid(SetName, DDocId, Type),
-    case gen_server:call(Pid, {compact_done, NewGroup, Duration}) of
+    case gen_server:call(Pid, {compact_done, NewGroup, Duration, CleanupKVCount}) of
     ok ->
         RawReadFd = erlang:erase({GroupFd, fast_fd_read}),
         ok = file:close(RawReadFd);
@@ -146,8 +133,11 @@ maybe_retry_compact(NewGroup, SetName, StartTime, GroupFd, CompactFileName) ->
             couch_set_view_updater:update(nil, NewGroup, NewSeqs, CompactFileName)
         end),
         receive
-        {'DOWN', Ref, _, _, {new_group, NewGroup2}} ->
-            maybe_retry_compact(NewGroup2, SetName, StartTime, GroupFd, CompactFileName)
+        {'DOWN', Ref, _, _, {updater_finished, NewGroup2, _}} ->
+            maybe_retry_compact(
+                NewGroup2, CleanupKVCount, SetName, StartTime, GroupFd, CompactFileName);
+        {'DOWN', Ref, _, _, Reason} ->
+            exit(Reason)
         end
     end.
 
@@ -184,11 +174,23 @@ compact_view(Fd, View, #set_view{btree = ViewBtree} = EmptyView, FilterFun, Acc0
     },
     {NewView, Acc2}.
 
+
+update_task(#acc{total_changes = 0} = Acc, _ChangesInc) ->
+    Acc;
 update_task(#acc{changes = Changes, total_changes = Total} = Acc, ChangesInc) ->
     Changes2 = Changes + ChangesInc,
     couch_task_status:update([
         {changes_done, Changes2},
-        {total_changes, Total},
         {progress, (Changes2 * 100) div Total}
     ]),
     Acc#acc{changes = Changes2}.
+
+
+total_kv_count(#set_view_group{id_btree = IdBtree, views = Views}) ->
+    {ok, {IdCount, _}} = couch_btree:full_reduce(IdBtree),
+    lists:foldl(
+        fun(#set_view{btree = Bt}, Acc) ->
+            {ok, {Count, _, _}} = couch_btree:full_reduce(Bt),
+            Acc + Count
+        end,
+        IdCount, Views).

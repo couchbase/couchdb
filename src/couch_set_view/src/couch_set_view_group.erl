@@ -45,6 +45,8 @@
 -define(replicas_on_transfer(State),
         ((State#state.group)#set_view_group.index_header)#set_view_index_header.replicas_on_transfer).
 
+-define(MAX_HIST_SIZE, 10).
+
 -record(stats, {
     updates = 0,
     % # of updates that only finished updating the active partitions
@@ -60,10 +62,9 @@
     % hopefully closer to a clean state).
     cleanup_stops = 0,
     cleanups = 0,
-    % Time the last full (uninterrupted) cleanup took and number of KVs it
-    % removed from the index.
-    last_cleanup_duration = 0,
-    last_cleanup_kv_count = 0
+    update_history = [],
+    compaction_history = [],
+    cleanup_history = []
 }).
 
 -record(state, {
@@ -93,18 +94,9 @@
 }).
 
 -define(inc_stat(S, Stats), setelement(S, Stats, element(S, Stats) + 1)).
--define(inc_updates(Stats), ?inc_stat(#stats.updates, Stats)).
 -define(inc_partial_updates(Stats), ?inc_stat(#stats.partial_updates, Stats)).
 -define(inc_updater_stops(Stats), ?inc_stat(#stats.updater_stops, Stats)).
--define(inc_cleanups(Stats), ?inc_stat(#stats.cleanups, Stats)).
 -define(inc_cleanup_stops(Stats), ?inc_stat(#stats.cleanup_stops, Stats)).
--define(inc_compactions(Stats, OldGroup), Stats#stats{
-     compactions = Stats#stats.compactions + 1,
-     cleanups = case (?set_cbitmask(OldGroup)) of
-         0 -> Stats#stats.cleanups;
-         _ -> Stats#stats.cleanups + 1
-     end
-}).
 
 
 % api methods
@@ -560,7 +552,7 @@ handle_call({start_compact, _}, _From, State) ->
     %% compact already running, this is a no-op
     {reply, {ok, State#state.compactor_pid}, State};
 
-handle_call({compact_done, NewGroup0, Duration}, {Pid, _}, #state{compactor_pid = Pid} = State) ->
+handle_call({compact_done, NewGroup0, Duration, CleanupKVCount}, {Pid, _}, #state{compactor_pid = Pid} = State) ->
     #state{
         group = Group,
         updater_pid = UpdaterPid,
@@ -581,8 +573,9 @@ handle_call({compact_done, NewGroup0, Duration}, {Pid, _}, #state{compactor_pid 
             ok
         end,
         ok = commit_header(NewGroup, true),
-        ?LOG_INFO("Set view `~s`, ~s group `~s`, compaction complete in ~.3f seconds",
-            [?set_name(State), ?type(State), ?group_id(State), Duration / 1000000]),
+        ?LOG_INFO("Set view `~s`, ~s group `~s`, compaction complete in ~.3f seconds,"
+            " filtered ~p key-value pairs",
+            [?set_name(State), ?type(State), ?group_id(State), Duration, CleanupKVCount]),
         FileName = index_file_name(
             ?root_dir(State), ?set_name(State), ?type(State), GroupSig),
         ok = couch_file:only_snapshot_reads(OldFd),
@@ -622,7 +615,7 @@ handle_call({compact_done, NewGroup0, Duration}, {Pid, _}, #state{compactor_pid 
                     replicas_on_transfer = ?set_replicas_on_transfer(Group)
                 }
             },
-            stats = ?inc_compactions(State#state.stats, Group)
+            stats = inc_compactions(State#state.stats, Duration, CleanupKVCount)
         },
         State3 = notify_cleanup_waiters(State2),
         {reply, ok, State3, ?TIMEOUT};
@@ -631,7 +624,7 @@ handle_call({compact_done, NewGroup0, Duration}, {Pid, _}, #state{compactor_pid 
             [?set_name(State), ?type(State), ?group_id(State)]),
         {reply, update, State}
     end;
-handle_call({compact_done, _NewGroup, _Duration}, {OldPid, _}, State) ->
+handle_call({compact_done, _NewGroup, _Duration, _CleanupKVCount}, {OldPid, _}, State) ->
     % From a previous compactor that was killed/stopped, ignore.
     false = is_process_alive(OldPid),
     {noreply, State};
@@ -659,11 +652,7 @@ handle_cast({partial_update, _, _}, State) ->
     {noreply, State, ?TIMEOUT};
 
 handle_cast({cleanup_done, CleanupTime, CleanupKVCount}, State) ->
-    NewStats = (State#state.stats)#stats{
-        last_cleanup_duration = CleanupTime,
-        last_cleanup_kv_count = CleanupKVCount,
-        cleanups = (State#state.stats)#stats.cleanups + 1
-    },
+    NewStats = inc_cleanups(State#state.stats, CleanupTime, CleanupKVCount),
     {noreply, State#state{stats = NewStats}};
 
 handle_cast(ddoc_updated, State) ->
@@ -751,7 +740,7 @@ handle_info({'EXIT', Pid, {clean_group, NewGroup, Count, Time}}, #state{cleaner_
           false ->
                []
           end,
-          [?set_name(State), ?type(State), ?group_id(State), Count, Time / 1000000,
+          [?set_name(State), ?type(State), ?group_id(State), Count, Time,
            couch_set_view_util:decode_bitmask(?set_abitmask(OldGroup)),
            couch_set_view_util:decode_bitmask(?set_abitmask(NewGroup)),
            couch_set_view_util:decode_bitmask(?set_pbitmask(OldGroup)),
@@ -767,11 +756,7 @@ handle_info({'EXIT', Pid, {clean_group, NewGroup, Count, Time}}, #state{cleaner_
     State2 = State#state{
         cleaner_pid = nil,
         group = NewGroup,
-        stats = Stats#stats{
-            cleanups = Stats#stats.cleanups + 1,
-            last_cleanup_duration = Time,
-            last_cleanup_kv_count = Count
-        }
+        stats = inc_cleanups(Stats, Time, Count)
     },
     {noreply, notify_cleanup_waiters(State2)};
 
@@ -784,15 +769,15 @@ handle_info({'EXIT', Pid, shutdown},
               "was shutdown", [?set_name(State), ?type(State), ?group_id(State)]),
     {stop, normal, State};
 
-handle_info({'EXIT', Pid, {new_group, NewGroup}}, #state{updater_pid = Pid} = State) ->
+handle_info({'EXIT', Pid, {updater_finished, NewGroup, Duration}}, #state{updater_pid = Pid} = State) ->
     #state{
         waiting_list = WaitList,
         shutdown = Shutdown
     } = State,
     ok = commit_header(NewGroup, false),
     reply_with_group(NewGroup, WaitList),
-    ?LOG_INFO("Set view `~s`, ~s group `~s`, updater finished",
-        [?set_name(State), ?type(State), ?group_id(State)]),
+    ?LOG_INFO("Set view `~s`, ~s group `~s`, updater finished, ran for ~.3f seconds",
+        [?set_name(State), ?type(State), ?group_id(State), Duration]),
     case Shutdown of
     true ->
         {stop, normal, State};
@@ -804,7 +789,7 @@ handle_info({'EXIT', Pid, {new_group, NewGroup}}, #state{updater_pid = Pid} = St
             commit_ref = nil,
             waiting_list = [],
             group = NewGroup,
-            stats = ?inc_updates(State#state.stats)
+            stats = inc_updates(State#state.stats, Duration)
         },
         State3 = maybe_start_cleaner(State2),
         {noreply, State3, ?TIMEOUT}
@@ -1015,8 +1000,9 @@ get_group_info(State) ->
         {waiting_clients, length(WaitersList)},
         {cleanup_interruptions, Stats#stats.cleanup_stops},
         {cleanup_blocked_processes, length(State#state.cleanup_waiters)},
-        {last_cleanup_duration, Stats#stats.last_cleanup_duration / 1000000},
-        {last_cleanup_kv_count, Stats#stats.last_cleanup_kv_count}
+        {update_history, Stats#stats.update_history},
+        {compaction_history, Stats#stats.compaction_history},
+        {cleanup_history, Stats#stats.cleanup_history}
     ]},
     {ok, Size} = couch_file:bytes(Fd),
     [
@@ -1557,16 +1543,12 @@ stop_cleaner(#state{cleaner_pid = Pid, group = OldGroup} = State) when is_pid(Pi
              "Removed ~p values from the index in ~.3f seconds~n"
              "New set of partitions to cleanup: ~w~n"
              "Old set of partitions to cleanup: ~w~n",
-             [?set_name(State), ?type(State), ?group_id(State), Count, Time / 1000000,
+             [?set_name(State), ?type(State), ?group_id(State), Count, Time,
                  couch_set_view_util:decode_bitmask(?set_cbitmask(NewGroup)),
                  couch_set_view_util:decode_bitmask(?set_cbitmask(OldGroup))]),
         case ?set_cbitmask(NewGroup) of
         0 ->
-            NewStats = (State#state.stats)#stats{
-                last_cleanup_duration = Time,
-                last_cleanup_kv_count = Count,
-                cleanups = (State#state.stats)#stats.cleanups + 1
-            };
+            NewStats = inc_cleanups(State#state.stats, Time, Count);
         _ ->
             NewStats = ?inc_cleanup_stops(State#state.stats)
         end,
@@ -1618,7 +1600,7 @@ cleaner(#state{group = Group} = State) ->
         views = NewViews,
         index_header = Header#set_view_index_header{cbitmask = NewCbitmask}
     },
-    Duration = timer:now_diff(now(), StartTime),
+    Duration = timer:now_diff(now(), StartTime) / 1000000,
     commit_header(NewGroup, true),
     exit({clean_group, NewGroup, TotalPurgedCount, Duration}).
 
@@ -1721,9 +1703,9 @@ stop_updater(#state{updater_pid = Pid} = State, When) ->
             [?set_name(State), ?type(State), ?group_id(State)])
     end,
     receive
-    {'EXIT', Pid, {new_group, NewGroup}} ->
-        ?LOG_INFO("Set view `~s`, ~s group `~s`, updater stopped",
-            [?set_name(State), ?type(State), ?group_id(State)]),
+    {'EXIT', Pid, {updater_finished, NewGroup, Duration}} ->
+        ?LOG_INFO("Set view `~s`, ~s group `~s`, updater stopped, ran for ~.3f seconds",
+            [?set_name(State), ?type(State), ?group_id(State), Duration]),
         State2 = process_partial_update(State, NewGroup),
         case When of
         immediately ->
@@ -1733,7 +1715,7 @@ stop_updater(#state{updater_pid = Pid} = State, When) ->
             reply_with_group(NewGroup, State2#state.waiting_list),
             NewStats = case ?set_pbitmask(NewGroup) of
             0 ->
-                ?inc_updates(State2#state.stats);
+                inc_updates(State2#state.stats, Duration);
             _ ->
                 ?inc_partial_updates(State2#state.stats)
             end,
@@ -1933,3 +1915,39 @@ add_replica_group(#set_view_group{replica_pid = Pid} = Group) when is_pid(Pid) -
     end;
 add_replica_group(Group) ->
     Group.
+
+
+inc_updates(#stats{update_history = Hist} = Stats, Duration) ->
+    Entry = {[
+        {<<"duration">>, Duration}
+    ]},
+    Stats#stats{
+        updates = Stats#stats.updates + 1,
+        update_history = lists:sublist([Entry | Hist], ?MAX_HIST_SIZE)
+    }.
+
+inc_cleanups(#stats{cleanup_history = Hist} = Stats, Duration, Count) ->
+    Entry = {[
+        {<<"duration">>, Duration},
+        {<<"kv_count">>, Count}
+    ]},
+    Stats#stats{
+        cleanups = Stats#stats.cleanups + 1,
+        cleanup_history = lists:sublist([Entry | Hist], ?MAX_HIST_SIZE)
+    }.
+
+inc_compactions(#stats{compaction_history = Hist} = Stats, Duration, CleanupKVCount) ->
+    Entry = {[
+        {<<"duration">>, Duration},
+        {<<"cleanup_kv_count">>, CleanupKVCount}
+    ]},
+    Stats#stats{
+        compactions = Stats#stats.compactions + 1,
+        compaction_history = lists:sublist([Entry | Hist], ?MAX_HIST_SIZE),
+        cleanups = case CleanupKVCount of
+            0 ->
+                Stats#stats.cleanups;
+            _ ->
+                Stats#stats.cleanups + 1
+        end
+    }.

@@ -45,6 +45,7 @@ update(Owner, Group, NewSeqs, FileName) ->
         fd = GroupFd
     } = Group,
 
+    StartTime = now(),
     NumChanges = lists:foldl(
         fun({{PartId, NewSeq}, {PartId, OldSeq}}, Acc) ->
              Acc + (NewSeq - OldSeq)
@@ -115,9 +116,10 @@ update(Owner, Group, NewSeqs, FileName) ->
 
     load_changes(Owner, Group, SinceSeqs, MapQueue, Writer),
     receive
-    {new_group, _} = NewGroup ->
+    {new_group, NewGroup} ->
+        Duration = timer:now_diff(now(), StartTime) / 1000000,
         ok = couch_indexer_manager:leave(),
-        exit(NewGroup)
+        exit({updater_finished, NewGroup, Duration})
     end.
 
 
@@ -579,10 +581,10 @@ write_changes(Group, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs, InitialBui
     0 ->
         CleanupTime = nil;
     _ ->
-        CleanupTime = timer:now_diff(now(), CleanupStart),
+        CleanupTime = timer:now_diff(now(), CleanupStart) / 1000000,
         ?LOG_INFO("Updater for set view `~s`, ~s group `~s`, performed cleanup "
             "of ~p key/value pairs in ~.3f seconds",
-            [SetName, GroupType, GroupName, CleanupKvCount, CleanupTime / 1000000])
+            [SetName, GroupType, GroupName, CleanupKvCount, CleanupTime])
     end,
     NewGroup = Group#set_view_group{
         views = Views2,
