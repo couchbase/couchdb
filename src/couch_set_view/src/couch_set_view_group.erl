@@ -105,50 +105,39 @@ request_group(Pid, StaleType) ->
 
 request_group(Pid, StaleType, Retries) ->
     case gen_server:call(Pid, {request_group, StaleType}, infinity) of
-    {ok, Group} ->
+    {ok, Group, ActiveReplicasBitmask} ->
         #set_view_group{
             ref_counter = RefCounter,
-            replica_group = RepGroup,
             replica_pid = RepPid,
             name = GroupName,
             set_name = SetName
         } = Group,
-        % TODO: there's a very tiny chance for a race condition here.
-        % The ref counter add calls should be done inside the view group server.
-        couch_ref_counter:add(RefCounter),
-        case RepGroup of
-        nil ->
-            {ok, Group};
-        #set_view_group{} ->
-            case request_replica_group(RepPid, RepGroup, StaleType) of
-            {ok, #set_view_group{ref_counter = RepRefCounter} = RepGroup2} ->
-                couch_ref_counter:add(RepRefCounter),
-                {ok, Group#set_view_group{replica_group = RepGroup2}};
-            retry ->
-                 ?LOG_INFO("Retrying group `~s` request, stale=~s,"
-                      " set `~s`, retry attempt #~p",
-                      [GroupName, StaleType, SetName, Retries]),
-                 couch_ref_counter:drop(RefCounter),
-                 request_group(Pid, StaleType, Retries + 1)
-            end
+        case request_replica_group(RepPid, ActiveReplicasBitmask, StaleType) of
+        {ok, RepGroup} ->
+            {ok, Group#set_view_group{replica_group = RepGroup}};
+        retry ->
+            ?LOG_INFO("Retrying group `~s` request, stale=~s,"
+                  " set `~s`, retry attempt #~p",
+                  [GroupName, StaleType, SetName, Retries]),
+            couch_ref_counter:drop(RefCounter),
+            request_group(Pid, StaleType, Retries + 1)
         end;
     Error ->
         Error
     end.
 
 
-request_replica_group(RepPid, BaseRepGroup, false) ->
-    {ok, RepGroup2} = gen_server:call(RepPid, {request_group, false}, infinity),
-    case ?set_abitmask(RepGroup2) =:= ?set_abitmask(BaseRepGroup) of
+request_replica_group(_RepPid, 0, _Staleness) ->
+    {ok, nil};
+request_replica_group(RepPid, ActiveReplicasBitmask, Staleness) ->
+    {ok, RepGroup, 0} = gen_server:call(RepPid, {request_group, Staleness}, infinity),
+    case ?set_abitmask(RepGroup) =:= ActiveReplicasBitmask of
     true ->
-        {ok, RepGroup2};
+        {ok, RepGroup};
     false ->
+        couch_ref_counter:drop(RepGroup#set_view_group.ref_counter),
         retry
-    end;
-request_replica_group(_RepPid, BaseRepGroup, ok) ->
-    {ok, BaseRepGroup};
-request_replica_group(_RepPid, BaseRepGroup, update_after) ->
-    {ok, BaseRepGroup}.
+    end.
 
 
 release_group(#set_view_group{ref_counter = RefCounter, replica_group = RepGroup}) ->
@@ -407,10 +396,7 @@ handle_call({partition_deleted, PartId}, _From, #state{group = Group} = State) -
         {reply, ignore, State, ?TIMEOUT}
     end;
 
-handle_call(_Msg, _From, #state{
-        group = #set_view_group{
-            index_header = #set_view_index_header{num_partitions = nil}
-        }} = State) ->
+handle_call(_Msg, _From, State) when not ?is_defined(State) ->
     {reply, view_undefined, State};
 
 handle_call({set_state, ActiveList, PassiveList, CleanupList}, From, State) ->
@@ -526,17 +512,19 @@ handle_call({request_group, false}, From,
         State2 = start_updater(State#state{waiting_list = [From | WaitList]}),
         {noreply, State2, ?TIMEOUT};
     _ when is_pid(UpPid), UpState =:= updating_passive ->
-        {reply, {ok, add_replica_group(Group)}, State, ?TIMEOUT};
+        reply_with_group(Group, [From]),
+        {noreply, State, ?TIMEOUT};
     _ when is_pid(UpPid) ->
         State2 = State#state{waiting_list = [From | WaitList]},
         {noreply, State2, ?TIMEOUT}
     end;
 
-handle_call({request_group, ok}, _From, #state{group = Group} = State) ->
-    {reply, {ok, add_replica_group(Group)}, State, ?TIMEOUT};
+handle_call({request_group, ok}, From, #state{group = Group} = State) ->
+    reply_with_group(Group, [From]),
+    {noreply, State, ?TIMEOUT};
 
 handle_call({request_group, update_after}, From, #state{group = Group} = State) ->
-    gen_server:reply(From, {ok, add_replica_group(Group)}),
+    reply_with_group(Group, [From]),
     case State#state.updater_pid of
     Pid when is_pid(Pid) ->
         {noreply, State};
@@ -847,9 +835,13 @@ code_change(_OldVsn, State, _Extra) ->
 
 %% Local Functions
 
-reply_with_group(Group0, WaitList) ->
-    Group = add_replica_group(Group0),
-    lists:foreach(fun(From) -> gen_server:reply(From, {ok, Group}) end, WaitList).
+reply_with_group(#set_view_group{ref_counter = RefCnt} = Group, WaitList) ->
+    ActiveReplicasBitmask = couch_set_view_util:build_bitmask(
+        ?set_replicas_on_transfer(Group)),
+    lists:foreach(fun({Pid, _} = From) ->
+        couch_ref_counter:add(RefCnt, Pid),
+        gen_server:reply(From, {ok, Group, ActiveReplicasBitmask})
+    end, WaitList).
 
 reply_all(#state{waiting_list=WaitList}=State, Reply) ->
     [catch gen_server:reply(From, Reply) || From <- WaitList],
@@ -1824,7 +1816,7 @@ open_replica_group({RootDir, SetName, Group} = _InitArgs) ->
 
 
 get_replica_partitions(ReplicaPid) ->
-    {ok, Group} = gen_server:call(ReplicaPid, {request_group, ok}, infinity),
+    {ok, Group, 0} = gen_server:call(ReplicaPid, {request_group, ok}, infinity),
     ordsets:from_list(couch_set_view_util:decode_bitmask(
         ?set_abitmask(Group) bor ?set_pbitmask(Group))).
 
@@ -1848,7 +1840,7 @@ maybe_update_replica_index(#state{group = Group, updater_state = not_running} = 
 
 
 maybe_fix_replica_group(ReplicaPid, Group) ->
-    {ok, RepGroup} = gen_server:call(ReplicaPid, {request_group, ok}, infinity),
+    {ok, RepGroup, 0} = gen_server:call(ReplicaPid, {request_group, ok}, infinity),
     RepGroupActive = couch_set_view_util:decode_bitmask(?set_abitmask(RepGroup)),
     RepGroupPassive = couch_set_view_util:decode_bitmask(?set_pbitmask(RepGroup)),
     CleanupList = lists:foldl(
@@ -1907,18 +1899,6 @@ process_partial_update(#state{group = Group} = State, NewGroup) ->
         commit_ref = CommitRef2,
         replica_partitions = ordsets:subtract(State#state.replica_partitions, ReplicasTransferred)
     }.
-
-
-add_replica_group(#set_view_group{replica_pid = Pid} = Group) when is_pid(Pid) ->
-    case ?set_replicas_on_transfer(Group) of
-    [] ->
-        Group#set_view_group{replica_group = nil};
-    _ ->
-        {ok, RepGroup} = gen_server:call(Pid, {request_group, update_after}, infinity),
-        Group#set_view_group{replica_group = RepGroup}
-    end;
-add_replica_group(Group) ->
-    Group.
 
 
 inc_updates(#stats{update_history = Hist} = Stats, Duration) ->
