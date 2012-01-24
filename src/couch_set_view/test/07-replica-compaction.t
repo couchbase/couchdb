@@ -121,10 +121,20 @@ verify_group_info_after_replica_removal() ->
         [],
         "Replica group has [ ] as passive partitions"),
     CleanupParts = couch_util:get_value(cleanup_partitions, RepGroupInfo),
-    etap:is(
-        length(CleanupParts) > 0,
-        true,
-        "Replica group has non-empty set of cleanup partitions"),
+    {Stats} = couch_util:get_value(stats, RepGroupInfo),
+    CleanupHist = couch_util:get_value(cleanup_history, Stats),
+    case length(CleanupHist) > 0 of
+    true ->
+        etap:is(
+            length(CleanupParts),
+            0,
+            "Replica group has a right value for cleanup partitions");
+    false ->
+        etap:is(
+            length(CleanupParts) > 0,
+            true,
+           "Replica group has a right value for cleanup partitions")
+    end,
     etap:is(
         ordsets:intersection(CleanupParts, lists:seq(0, 7)),
         [],
