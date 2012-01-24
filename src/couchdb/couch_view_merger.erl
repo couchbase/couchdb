@@ -52,7 +52,7 @@ parse_http_params(Req, DDoc, ViewName, #view_merge{keys = Keys}) ->
     true ->
         QueryArgs1;
     false ->
-        QueryArgs#view_query_args{stale = ?DEFAULT_STALENESS}
+        QueryArgs1#view_query_args{stale = ?DEFAULT_STALENESS}
     end.
 
 % callback!
