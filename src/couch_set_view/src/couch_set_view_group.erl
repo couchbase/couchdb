@@ -151,8 +151,14 @@ request_replica_group(_RepPid, BaseRepGroup, update_after) ->
     {ok, BaseRepGroup}.
 
 
-release_group(#set_view_group{ref_counter = RefCounter}) ->
-    couch_ref_counter:drop(RefCounter).
+release_group(#set_view_group{ref_counter = RefCounter, replica_group = RepGroup}) ->
+    couch_ref_counter:drop(RefCounter),
+    case RepGroup of
+    #set_view_group{ref_counter = RepRefCounter} ->
+        couch_ref_counter:drop(RepRefCounter);
+    nil ->
+        ok
+    end.
 
 
 request_group_info(Pid) ->
