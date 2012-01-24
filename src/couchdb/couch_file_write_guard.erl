@@ -49,7 +49,10 @@ init([]) ->
 
 
 terminate(_Reason, _Srv) ->
-    [couch_util:shutdown_sync(Pid) || {_, Pid} <-
+    % kill all files we are guarding, then wait for their 'DOWN'
+    [exit(Pid, kill) || {_, Pid} <-
+            ets:tab2list(couch_files_by_name)],
+    [receive {'DOWN', _MonRef, _Type, Pid, _Reason} -> ok end || {_, Pid} <-
             ets:tab2list(couch_files_by_name)],
     ok.
 
@@ -71,7 +74,7 @@ handle_call({remove, Pid}, _From, Server) ->
         true = ets:delete(couch_files_by_pid, Pid),
         {reply, ok, Server};
     _ ->
-        exit(removing_unadded_file)
+        {reply, removing_unadded_file, Server}
     end.
 
 
