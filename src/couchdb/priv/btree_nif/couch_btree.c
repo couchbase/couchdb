@@ -677,7 +677,7 @@ int modify_node(couchfile_modify_request *rq, couchfile_pointer_info *nptr,
 
             if(rq->cmp.list_pos == (node_len - 1)) //got last item in kp_node
             {
-                //Push all items in node onto mr
+                //Push all items except last onto mr
                 errcode = mr_push_kp_range(current_node.buf, list_start_pos, node_bound,
                         rq->cmp.list_pos, local_result);
                 if(errcode < 0)
@@ -711,7 +711,7 @@ int modify_node(couchfile_modify_request *rq, couchfile_pointer_info *nptr,
 
                 //Push items in node up to but not including current onto mr
                 errcode = mr_push_kp_range(current_node.buf, list_start_pos, node_bound,
-                        rq->cmp.list_pos - 1, local_result);
+                        rq->cmp.list_pos, local_result);
                 if(errcode < 0)
                 {
                     goto cleanup;
