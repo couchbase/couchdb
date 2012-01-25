@@ -18,7 +18,7 @@ export ERL_LIBS="$BUILDDIR/src/:$ERL_LIBS"
 export ERL_FLAGS="$ERL_FLAGS -pa $BUILDDIR/test/etap/"
 
 if test $# -eq 1; then
-    OPTS=""
+    OPTS="-v"
     TGT=$1
 else
     OPTS=$1
