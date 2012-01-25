@@ -78,8 +78,8 @@ plan(N) when is_integer(N), N > 0 ->
 %% @todo This should probably be done in the test_server process.
 end_tests() ->
     ensure_coverage_ends(),
-    etap_server ! {self(), state},
-    State = receive X -> X end,
+    etap_server ! {self(), state, Ref = make_ref()},
+    State = receive {Ref, X} -> X end,
     if
         State#test_state.planned == -1 ->
             io:format("1..~p~n", [State#test_state.count]);
@@ -367,8 +367,8 @@ test_server(State) ->
                 count = State#test_state.count + 1,
                 fail = State#test_state.fail + 1
             };
-        {From, state} ->
-            From ! State,
+        {From, state, Ref} ->
+            From ! {Ref, State},
             State;
         {_From, diag, Message} ->
             io:format("~s~n", [Message]),
@@ -376,8 +376,8 @@ test_server(State) ->
         {From, count} ->
             From ! State#test_state.count,
             State;
-        {From, is_skip} ->
-            From ! State#test_state.skip,
+        {From, is_skip, Ref} ->
+            From ! {Ref, State#test_state.skip},
             State;
         done ->
             exit(normal)
@@ -387,7 +387,8 @@ test_server(State) ->
 %% @private
 %% @doc Process the result of a test and send it to the etap_server process.
 mk_tap(Result, Desc) ->
-    IsSkip = lib:sendw(etap_server, is_skip),
+    etap_server ! {self(), is_skip, Ref = make_ref()} ,
+    receive {Ref, IsSkip} ->ok end,
     case [IsSkip, Result] of
         [_, true] ->
             etap_server ! {self(), pass, Desc},
