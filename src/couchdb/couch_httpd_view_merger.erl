@@ -192,7 +192,7 @@ http_sender({error, Url, Reason}, #sender_acc{on_error = stop} = SAcc) ->
         couch_httpd:send_chunk(Resp2, Start),
         couch_httpd:send_chunk(Resp2, [<<",\r\n">>, <<"\"errors\":[">>]),
         couch_httpd:send_chunk(Resp2, [?JSON_ENCODE(Row), "]"]),
-        couch_httpd:send_chunk(Resp2, <<"\r\n]}">>);
+        couch_httpd:send_chunk(Resp2, <<"\r\n}">>);
     _ ->
        Resp2 = Resp,
        flush_rows(Resp2),
@@ -200,6 +200,7 @@ http_sender({error, Url, Reason}, #sender_acc{on_error = stop} = SAcc) ->
        couch_httpd:send_chunk(Resp2, [?JSON_ENCODE(Row), "]"]),
        couch_httpd:send_chunk(Resp2, <<"\r\n}">>)
     end,
+    couch_httpd:end_json_response(Resp2),
     {stop, Resp2}.
 
 flush_rows(Resp) ->
