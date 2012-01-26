@@ -120,8 +120,7 @@ compact_group(Group, EmptyGroup, SetName, FileName, CompactFileName) ->
 maybe_retry_compact(NewGroup, CleanupKVCount, SetName, StartTime, GroupFd, CompactFileName) ->
     #set_view_group{
         name = DDocId,
-        type = Type,
-        db_set = DbSet
+        type = Type
     } = NewGroup,
     Duration = timer:now_diff(now(), StartTime) / 1000000,
     {ok, Pid} = get_group_pid(SetName, DDocId, Type),
@@ -130,12 +129,11 @@ maybe_retry_compact(NewGroup, CleanupKVCount, SetName, StartTime, GroupFd, Compa
         RawReadFd = erlang:erase({GroupFd, fast_fd_read}),
         ok = file:close(RawReadFd);
     update ->
-        {ok, NewSeqs} = couch_db_set:get_seqs(DbSet),
         {_, Ref} = erlang:spawn_monitor(fun() ->
-            couch_set_view_updater:update(nil, NewGroup, NewSeqs, CompactFileName)
+            couch_set_view_updater:update(nil, NewGroup, CompactFileName)
         end),
         receive
-        {'DOWN', Ref, _, _, {updater_finished, NewGroup2, _}} ->
+        {'DOWN', Ref, _, _, {updater_finished, NewGroup2, _, _}} ->
             maybe_retry_compact(
                 NewGroup2, CleanupKVCount, SetName, StartTime, GroupFd, CompactFileName);
         {'DOWN', Ref, _, _, Reason} ->

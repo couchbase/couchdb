@@ -15,7 +15,7 @@
 
 % public API
 -export([open/4, close/1]).
--export([get_seqs/1, enum_docs_since/4, enum_docs_since/5]).
+-export([get_seqs/1]).
 -export([set_active/2, set_passive/2, remove_partitions/2]).
 
 % gen_server API
@@ -60,36 +60,6 @@ remove_partitions(Pid, PartList) ->
 get_seqs(Pid) ->
     {ok, Seqs} = gen_server:call(Pid, get_seqs, infinity),
     {ok, lists:keysort(1, Seqs)}.
-
-enum_docs_since(Pid, SinceSeqs, Fun, Acc0) ->
-    enum_docs_since(Pid, SinceSeqs, Fun, Acc0, []).
-
-enum_docs_since(Pid, SinceSeqs, Fun, Acc0, Options) ->
-    {ok, Active, Passive, UserCtx} = gen_server:call(Pid, get_dbs, infinity),
-    Wrapper = fun({P, DbName}, Acc) ->
-        Since = couch_util:get_value(P, SinceSeqs),
-        {ok, Acc2} = Fun({partition, P, Since}, Acc),
-        {ok, Db} = couch_db:open(DbName, [{user_ctx, UserCtx}]),
-        DocInfoWrapper = fun(DI, _, A) ->
-            Fun({doc_info, DI, P, Db}, A)
-        end,
-        {ok, _, Acc3} = couch_db:fast_reads(Db, fun() ->
-            couch_db:enum_docs_since(Db, Since, DocInfoWrapper, Acc2, [])
-        end),
-        catch couch_db:close(Db),
-        Acc3
-    end,
-    {ok, Acc1} = Fun(starting_active, Acc0),
-    Acc2 = lists:foldl(Wrapper, Acc1, lists:keysort(1, Active)),
-    {ok, Acc3} = Fun(starting_passive, Acc2),
-    Passive2 = case couch_util:get_value(passive_sort_fun, Options) of
-    undefined ->
-        lists:keysort(1, Passive);
-    ReorderFun ->
-        ReorderFun(Passive)
-    end,
-    Acc4 = lists:foldl(Wrapper, Acc3, Passive2),
-    {ok, Acc4}.
 
 
 init(Args) ->

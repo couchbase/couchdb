@@ -113,8 +113,39 @@ request_group(Pid, StaleType, Retries) ->
             set_name = SetName
         } = Group,
         case request_replica_group(RepPid, ActiveReplicasBitmask, StaleType) of
-        {ok, RepGroup} ->
+        {ok, RepGroup} when is_record(RepGroup, set_view_group) ->
+            case couch_log:debug_on() of
+            true ->
+                Active = ordsets:from_list(couch_set_view_util:decode_bitmask(?set_abitmask(Group))),
+                RepActive = ordsets:from_list(couch_set_view_util:decode_bitmask(?set_abitmask(RepGroup))),
+                ?LOG_DEBUG("Client ~w got view group `~s` for set `~s`~n"
+                           "Active partitions:              ~w~n"
+                           "Active replica partitions:      ~w~n"
+                           "Active partitions seqs:         ~w~n"
+                           "Active replica partitions seqs: ~w~n",
+                           [self(), GroupName, SetName,
+                            Active,
+                            RepActive,
+                            [{P, S} || {P, S} <- ?set_seqs(Group), ordsets:is_element(P, Active)],
+                            [{P, S} || {P, S} <- ?set_seqs(RepGroup), ordsets:is_element(P, RepActive)]]);
+            false ->
+                ok
+            end,
             {ok, Group#set_view_group{replica_group = RepGroup}};
+        {ok, nil} ->
+            case couch_log:debug_on() of
+            true ->
+                Active = ordsets:from_list(couch_set_view_util:decode_bitmask(?set_abitmask(Group))),
+                ?LOG_DEBUG("Client ~w got view group `~s` for set `~s`~n"
+                           "Active partitions:      ~w~n"
+                           "Active partitions seqs: ~w~n",
+                           [self(), GroupName, SetName,
+                            Active,
+                            [{P, S} || {P, S} <- ?set_seqs(Group), ordsets:is_element(P, Active)]]);
+            false ->
+                ok
+            end,
+            {ok, Group#set_view_group{replica_group = nil}};
         retry ->
             ?LOG_INFO("Retrying group `~s` request, stale=~s,"
                   " set `~s`, retry attempt #~p",
@@ -250,7 +281,7 @@ init(InitArgs) ->
         gen_server:enter_loop(?MODULE, [], State, 1)
     catch
     _:Error ->
-        proc_lib:init_ack(Error)
+        exit(Error)
     end.
 
 do_init({_, SetName, _} = InitArgs) ->
@@ -509,12 +540,16 @@ handle_call({request_group, false}, From,
         } = State) ->
     case UpPid of
     nil ->
+        ?LOG_INFO("Set view `~s`, ~s group `~s`, blocking client ~w on group request~n",
+                  [?set_name(State), ?type(State), ?group_id(State), From]),
         State2 = start_updater(State#state{waiting_list = [From | WaitList]}),
         {noreply, State2, ?TIMEOUT};
     _ when is_pid(UpPid), UpState =:= updating_passive ->
         reply_with_group(Group, [From]),
         {noreply, State, ?TIMEOUT};
     _ when is_pid(UpPid) ->
+        ?LOG_INFO("Set view `~s`, ~s group `~s`, blocking client ~w on group request~n",
+                  [?set_name(State), ?type(State), ?group_id(State), From]),
         State2 = State#state{waiting_list = [From | WaitList]},
         {noreply, State2, ?TIMEOUT}
     end;
@@ -577,9 +612,8 @@ handle_call({compact_done, NewGroup0, Duration, CleanupKVCount}, {Pid, _}, #stat
         NewUpdaterPid =
         if is_pid(UpdaterPid) ->
             Owner = self(),
-            {true, NewSeqs} = index_needs_update(State),
             spawn_link(fun() ->
-                couch_set_view_updater:update(Owner, NewGroup, NewSeqs, index_file_name(State))
+                couch_set_view_updater:update(Owner, NewGroup, index_file_name(State))
             end);
         true ->
             nil
@@ -761,7 +795,7 @@ handle_info({'EXIT', Pid, shutdown},
               "was shutdown", [?set_name(State), ?type(State), ?group_id(State)]),
     {stop, normal, State};
 
-handle_info({'EXIT', Pid, {updater_finished, NewGroup, Duration}}, #state{updater_pid = Pid} = State) ->
+handle_info({'EXIT', Pid, {updater_finished, NewGroup, _UpState, Duration}}, #state{updater_pid = Pid} = State) ->
     #state{
         waiting_list = WaitList,
         shutdown = Shutdown
@@ -835,12 +869,20 @@ code_change(_OldVsn, State, _Extra) ->
 
 %% Local Functions
 
-reply_with_group(#set_view_group{ref_counter = RefCnt} = Group, WaitList) ->
+reply_with_group(Group, WaitList) ->
+    #set_view_group{
+        ref_counter = RefCnt,
+        set_name = SetName,
+        type = Type,
+        name = GroupId
+    } = Group,
     ActiveReplicasBitmask = couch_set_view_util:build_bitmask(
         ?set_replicas_on_transfer(Group)),
     lists:foreach(fun({Pid, _} = From) ->
         couch_ref_counter:add(RefCnt, Pid),
-        gen_server:reply(From, {ok, Group, ActiveReplicasBitmask})
+        gen_server:reply(From, {ok, Group, ActiveReplicasBitmask}),
+        ?LOG_INFO("Set view `~s`, ~s group `~s`, replied to client ~w",
+                  [SetName, Type, GroupId, From])
     end, WaitList).
 
 reply_all(#state{waiting_list=WaitList}=State, Reply) ->
@@ -1535,7 +1577,7 @@ clean_views(go, PurgeFun, [#set_view{btree = Btree} = View | Rest], Count, Acc) 
 
 index_needs_update(#state{group = Group} = State) ->
     {ok, CurSeqs} = couch_db_set:get_seqs(?db_set(State)),
-    {CurSeqs > ?set_seqs(Group), CurSeqs}.
+    CurSeqs > ?set_seqs(Group).
 
 
 make_partition_lists(Group) ->
@@ -1620,15 +1662,15 @@ stop_updater(#state{updater_pid = Pid} = State, When) ->
             [?set_name(State), ?type(State), ?group_id(State)])
     end,
     receive
-    {'EXIT', Pid, {updater_finished, NewGroup, Duration}} ->
+    {'EXIT', Pid, {updater_finished, NewGroup, UpdaterFinishState, Duration}} ->
         ?LOG_INFO("Set view `~s`, ~s group `~s`, updater stopped, ran for ~.3f seconds",
             [?set_name(State), ?type(State), ?group_id(State), Duration]),
         State2 = process_partial_update(State, NewGroup),
-        case When of
-        immediately ->
+        case UpdaterFinishState of
+        updating_active ->
             NewStats = ?inc_updater_stops(State2#state.stats),
             WaitingList2 = State2#state.waiting_list;
-        after_active_indexed ->
+        updating_passive ->
             reply_with_group(NewGroup, State2#state.waiting_list),
             NewStats = case ?set_pbitmask(NewGroup) of
             0 ->
@@ -1657,9 +1699,9 @@ start_updater(#state{updater_pid = Pid} = State) when is_pid(Pid) ->
     State;
 start_updater(#state{updater_pid = nil, updater_state = not_running} = State) ->
     case index_needs_update(State) of
-    {true, NewSeqs} ->
-        do_start_updater(State, NewSeqs);
-    {false, _} ->
+    true ->
+        do_start_updater(State);
+    false ->
         case State#state.waiting_list of
         [] ->
             State;
@@ -1670,13 +1712,13 @@ start_updater(#state{updater_pid = nil, updater_state = not_running} = State) ->
     end.
 
 
-do_start_updater(State, NewSeqs) ->
+do_start_updater(State) ->
     #state{group = Group} = State2 = stop_cleaner(State),
     ?LOG_INFO("Starting updater for set view `~s`, ~s group `~s`",
         [?set_name(State), ?type(State), ?group_id(State)]),
     Owner = self(),
     Pid = spawn_link(fun() ->
-        couch_set_view_updater:update(Owner, Group, NewSeqs, index_file_name(State))
+        couch_set_view_updater:update(Owner, Group, index_file_name(State))
     end),
     State2#state{
         updater_pid = Pid,
@@ -1754,7 +1796,7 @@ maybe_update_replica_index(#state{group = Group, updater_state = not_running} = 
     case (ChangesCount >= ?MIN_CHANGES_AUTO_UPDATE) orelse
         (ChangesCount > 0 andalso ?set_cbitmask(Group) =/= 0) of
     true ->
-        do_start_updater(State, CurSeqs);
+        do_start_updater(State);
     false ->
         maybe_start_cleaner(State)
     end.
