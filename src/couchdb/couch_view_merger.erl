@@ -146,7 +146,7 @@ http_index_folder_req_details(#merged_index_spec{
     } = MergeParams,
     {ok, #httpdb{url = Url, ibrowse_options = Options} = Db} =
         couch_index_merger:open_db(MergeUrl0, nil, Timeout),
-    MergeUrl = Url ++ view_qs(ViewArgs),
+    MergeUrl = Url ++ view_qs(ViewArgs, MergeParams),
     Headers = [{"Content-Type", "application/json"} | Db#httpdb.headers],
 
     EJson1 = case Keys of
@@ -186,7 +186,7 @@ http_index_folder_req_details(#simple_index_spec{
         "_all_docs";
     _ ->
         ?b2l(DDocId) ++ "/_view/" ++ ?b2l(ViewName)
-    end ++ view_qs(ViewArgs),
+    end ++ view_qs(ViewArgs, MergeParams),
     Headers = [{"Content-Type", "application/json"} | Db#httpdb.headers],
     put(from_url, DbUrl),
     case Keys of
@@ -985,7 +985,7 @@ view_undefined_msg(SetName, DDocId) ->
             [SetName, DDocId]),
     iolist_to_binary(Msg).
 
-view_qs(ViewArgs) ->
+view_qs(ViewArgs, MergeParams) ->
     DefViewArgs = #view_query_args{},
     #view_query_args{
         start_key = StartKey, end_key = EndKey,
@@ -998,6 +998,7 @@ view_qs(ViewArgs) ->
         conflicts = Conflicts,
         stale = Stale
     } = ViewArgs,
+    #index_merge{on_error = OnError} = MergeParams,
 
     QsList = case StartKey =:= DefViewArgs#view_query_args.start_key of
     true ->
@@ -1084,6 +1085,12 @@ view_qs(ViewArgs) ->
         [];
     false ->
         ["stale=" ++ atom_to_list(Stale)]
+    end ++
+    case OnError =:= ?ON_ERROR_DEFAULT of
+    true ->
+        [];
+    false ->
+        ["on_error=" ++ atom_to_list(OnError)]
     end,
     case QsList of
     [] ->

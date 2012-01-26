@@ -870,7 +870,7 @@ couchTests.view_merging = function(debug) {
 
   // test parsing/validation of on_error
   xhr = CouchDB.request("POST",
-    '/_view_merge?on_error="foo"&stale=false', {
+    '/_view_merge?on_error=foo&stale=false', {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
   });

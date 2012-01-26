@@ -25,7 +25,8 @@
     to_binary/1
 ]).
 -import(couch_httpd, [
-    qs_json_value/3
+    qs_json_value/3,
+    qs_value/3
 ]).
 
 -record(sender_acc, {
@@ -107,7 +108,7 @@ apply_http_config(Req, Body, MergeParams) ->
     end,
     OnError = case get_value(<<"on_error">>, Body, nil) of
     nil ->
-       qs_json_value(Req, "on_error", <<"continue">>);
+       qs_value(Req, "on_error", "continue");
     Policy when is_binary(Policy) ->
        Policy
     end,
@@ -384,9 +385,9 @@ validate_lang_param(_) ->
     throw({bad_request, "`language` parameter is not a string."}).
 
 
-validate_on_error_param(<<"continue">>) ->
+validate_on_error_param("continue") ->
     continue;
-validate_on_error_param(<<"stop">>) ->
+validate_on_error_param("stop") ->
     stop;
 validate_on_error_param(Value) ->
     Msg = io_lib:format("Invalid value (`~s`) for the parameter `on_error`."

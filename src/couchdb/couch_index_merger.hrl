@@ -10,6 +10,8 @@
 % License for the specific language governing permissions and limitations under
 % the License.
 
+-define(ON_ERROR_DEFAULT, continue).
+
 -record(simple_index_spec, {
     database,
     ddoc_database = nil, % Couchbase specific
@@ -28,9 +30,9 @@
    callback,
    user_acc,
    % parameters that matter only when there are remote views to merge
-   conn_timeout = 60000,    % milliseconds
-   on_error = continue,     % 'continue' | 'stop'
-   ddoc_revision = nil,    % nil | auto | Revision
+   conn_timeout = 60000,             % milliseconds
+   on_error = ?ON_ERROR_DEFAULT,     % 'continue' | 'stop'
+   ddoc_revision = nil,              % nil | auto | Revision
    http_params = nil,
    user_ctx = nil,
    % extra is for index implementation specific properties
