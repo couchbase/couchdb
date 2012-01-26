@@ -134,10 +134,10 @@ AC_ARG_WITH([erlang], [AC_HELP_STRING([--with-erlang=PATH],
           ])
 ])
 
-ERL_INTERFACE_DIR_INCLUDE="-I`${ERL} -eval 'io:put_chars(code:lib_dir(erl_interface) ++ "/include"), erlang:halt().' -noshell -noinput`"
+ERL_INTERFACE_DIR_INCLUDE="-I`${ERL} -eval 'io:put_chars(code:lib_dir(erl_interface) ++ "/include"), timer:sleep(10), erlang:halt().' -noshell -noinput`"
 AC_SUBST(ERL_INTERFACE_DIR_INCLUDE)
 
-ERL_INTERFACE_DIR_LIB="-L`${ERL} -eval 'io:put_chars(code:lib_dir(erl_interface) ++ "/lib"), erlang:halt().' -noshell -noinput`"
+ERL_INTERFACE_DIR_LIB="-L`${ERL} -eval 'io:put_chars(code:lib_dir(erl_interface) ++ "/lib"), timer:sleep(10), erlang:halt().' -noshell -noinput`"
 AC_SUBST(ERL_INTERFACE_DIR_LIB)
 
 AC_ARG_WITH([js-include], [AC_HELP_STRING([--with-js-include=PATH],
