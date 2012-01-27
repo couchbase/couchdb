@@ -64,8 +64,8 @@ test_single_consumer_max_item_count() ->
     etap:is(couch_work_queue:item_count(Q), 2, "Queue item count is 2"),
 
     Item4 = produce(Producer, 3),
-    etap:is(couch_work_queue:item_count(Q), 3, "Queue item count is 3"),
     etap:is(ping(Producer), timeout, "Producer blocked with full queue"),
+    etap:is(couch_work_queue:item_count(Q), 3, "Queue item count is 3"),
 
     consume(Consumer, 2),
     etap:is(ping(Consumer), ok,
