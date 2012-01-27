@@ -77,7 +77,8 @@ update(Owner, Group, FileName) ->
                   "Active partitions # docs:               ~w~n"
                   "Active partitions # deleted docs:       ~w~n"
                   "Passive partitions # docs:              ~w~n"
-                  "Passive partitions # deleted docs:      ~w~n",
+                  "Passive partitions # deleted docs:      ~w~n"
+                  "Replicas to transfer:                   ~w~n",
                   [SetName, Type, DDocId,
                    ActiveParts,
                    PassiveParts,
@@ -88,7 +89,8 @@ update(Owner, Group, FileName) ->
                    lists:reverse(ActiveNotDelCounts),
                    lists:reverse(ActiveDelCounts),
                    lists:reverse(PassiveNotDelCounts),
-                   lists:reverse(PassiveDelCounts)
+                   lists:reverse(PassiveDelCounts),
+                   ?set_replicas_on_transfer(Group)
                   ]);
     false ->
         ok
