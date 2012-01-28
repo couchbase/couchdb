@@ -19,7 +19,7 @@ filename() -> "./test/etap/temp.023".
 
 main(_) ->
     test_util:init_code_path(),
-    etap:plan(20),
+    etap:plan(27),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -35,6 +35,7 @@ test() ->
     no_purged_items_test(),
     all_purged_items_test(),
     partial_purges_test(),
+    partial_purges_test_2(),
     partial_purges_test_with_stop(),
     add_remove_and_purge_test(),
     ok.
@@ -47,7 +48,7 @@ no_purged_items_test() ->
     end,
 
     {ok, Fd} = couch_file:open(filename(), [create, overwrite]),
-    {ok, Btree} = couch_btree:open(nil, Fd, [{reduce, ReduceFun}]),
+    {ok, Btree} = couch_btree:open(nil, Fd, [{reduce, ReduceFun}, {chunk_threshold, 6 * 1024}]),
 
     N = 211341,
     KVs = [{I, I} || I <- lists:seq(1, N)],
@@ -85,7 +86,7 @@ all_purged_items_test() ->
     end,
 
     {ok, Fd} = couch_file:open(filename(), [create, overwrite]),
-    {ok, Btree} = couch_btree:open(nil, Fd, [{reduce, ReduceFun}]),
+    {ok, Btree} = couch_btree:open(nil, Fd, [{reduce, ReduceFun}, {chunk_threshold, 6 * 1024}]),
 
     N = 211341,
     KVs = [{I, I} || I <- lists:seq(1, N)],
@@ -127,7 +128,7 @@ partial_purges_test() ->
     end,
 
     {ok, Fd} = couch_file:open(filename(), [create, overwrite]),
-    {ok, Btree} = couch_btree:open(nil, Fd, [{reduce, ReduceFun}]),
+    {ok, Btree} = couch_btree:open(nil, Fd, [{reduce, ReduceFun}, {chunk_threshold, 6 * 1024}]),
 
     N = 211341,
     KVs = [{I, I} || I <- lists:seq(1, N)],
@@ -175,6 +176,72 @@ partial_purges_test() ->
         end,
         KVs2),
     etap:diag("Btree has no odd values after guided purge"),
+    etap:is(lists:reverse([K || {K, _} <- KVs2]), lists:sort([K || {K, _} <- KVs2]), "Btree keys are sorted"),
+
+    couch_file:close(Fd).
+
+
+partial_purges_test_2() ->
+    ReduceFun = fun
+        (reduce, KVs) ->
+            {length(KVs), ordsets:from_list([P || {_K, {P, _I}} <- KVs])};
+        (rereduce, Reds) ->
+            {lists:sum([C || {C, _} <- Reds]), ordsets:union([S || {_, S} <- Reds])}
+    end,
+
+    {ok, Fd} = couch_file:open(filename(), [create, overwrite]),
+    {ok, Btree} = couch_btree:open(nil, Fd, [{reduce, ReduceFun}, {chunk_threshold, 6 * 1024}]),
+
+    N = 320000,
+    KVs = [{iolist_to_binary(io_lib:format("doc_~6..0b", [I])), {I rem 64, I}} || I <- lists:seq(1, N)],
+
+    {ok, Btree2} = couch_btree:add_remove(Btree, KVs, []),
+    ok = couch_file:flush(Fd),
+
+    {ok, Red} = couch_btree:full_reduce(Btree2),
+    etap:is(Red, {N, lists:seq(0, 63)}, "Initial reduce value equals {N, lists:seq(0, 63)}"),
+
+    PurgeFun = fun
+        (value, {_K, {P, _V}}, Count) ->
+            case P >= 32 of
+            true ->
+                {purge, Count + 1};
+            false ->
+                {keep, Count}
+            end;
+        (branch, {C, S}, Count) ->
+            RemSet = lists:seq(32, 63),
+            case ordsets:intersection(S, RemSet) of
+            [] ->
+                {keep, Count};
+            S ->
+                {purge, Count + C};
+            _ ->
+                {partial_purge, Count}
+            end
+    end,
+    {ok, Btree3, Acc1} = couch_btree:guided_purge(Btree2, PurgeFun, 0),
+    ok = couch_file:flush(Fd),
+    etap:is(Acc1, N div 2, "guided_purge returned right accumulator - N div 2"),
+    {ok, Red2} = couch_btree:full_reduce(Btree3),
+    etap:is(Red2, {N div 2, lists:seq(0, 31)}, "Reduce value after guided purge equals {N div 2, lists:seq(0, 31)}"),
+
+    FoldFun = fun(KV, _, Acc) ->
+        {ok, [KV | Acc]}
+    end,
+    {ok, _, KVs2} = couch_btree:foldl(Btree3, FoldFun, []),
+    lists:foreach(
+        fun({_K, {P, V}}) ->
+            case ordsets:is_element(P, lists:seq(0, 31)) of
+            true ->
+                ok;
+            false ->
+                etap:bail("Got value outside the range [0 .. 31]: " ++ integer_to_list(V))
+            end
+        end,
+        KVs2),
+    etap:diag("Btree has no values outside the range [0 .. 31]"),
+    etap:is(lists:reverse([K || {K, _} <- KVs2]), lists:sort([K || {K, _} <- KVs2]), "Btree keys are sorted"),
 
     couch_file:close(Fd).
 
@@ -190,7 +257,7 @@ partial_purges_test_with_stop() ->
     end,
 
     {ok, Fd} = couch_file:open(filename(), [create, overwrite]),
-    {ok, Btree} = couch_btree:open(nil, Fd, [{reduce, ReduceFun}]),
+    {ok, Btree} = couch_btree:open(nil, Fd, [{reduce, ReduceFun}, {chunk_threshold, 6 * 1024}]),
 
     N = 211341,
     KVs = [{I, I} || I <- lists:seq(1, N)],
@@ -240,6 +307,7 @@ partial_purges_test_with_stop() ->
         end,
         KVs2),
     etap:diag("Btree has no odd values after guided purge"),
+    etap:is(lists:reverse([K || {K, _} <- KVs2]), lists:sort([K || {K, _} <- KVs2]), "Btree keys are sorted"),
 
     couch_file:close(Fd).
 
@@ -255,7 +323,7 @@ add_remove_and_purge_test() ->
     end,
 
     {ok, Fd} = couch_file:open(filename(), [create, overwrite]),
-    {ok, Btree} = couch_btree:open(nil, Fd, [{reduce, ReduceFun}]),
+    {ok, Btree} = couch_btree:open(nil, Fd, [{reduce, ReduceFun}, {chunk_threshold, 6 * 1024}]),
 
     N = 211341,
     KVs = [{I, I} || I <- lists:seq(1, N)],
@@ -320,6 +388,7 @@ add_remove_and_purge_test() ->
     etap:is(couch_util:get_value(4, KVs2), undefined, "Key 2 not in tree anymore"),
     etap:is(couch_util:get_value(10, KVs2), undefined, "Key 10 not in tree anymore"),
     etap:is(couch_util:get_value(200000, KVs2), undefined, "Key 200000 not in tree anymore"),
+    etap:is(lists:reverse([K || {K, _} <- KVs2]), lists:sort([K || {K, _} <- KVs2]), "Btree keys are sorted"),
 
     couch_file:close(Fd).
 

@@ -927,6 +927,6 @@ kp_guided_purge(Bt, [{Key, NodeState} | Rest] = KpList, GuideFun, GuideAcc, Resu
         ok ->
             kp_guided_purge(Bt2, Rest, GuideFun, GuideAcc3, lists:reverse(ChildKPs, ResultNode));
         stop ->
-            {ok, lists:reverse(ChildKPs, ResultNode) ++ Rest, GuideAcc3, Bt2, stop}
+            {ok, lists:reverse(ResultNode) ++ ChildKPs ++ Rest, GuideAcc3, Bt2, stop}
         end
     end.
