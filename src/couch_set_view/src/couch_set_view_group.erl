@@ -113,39 +113,8 @@ request_group(Pid, StaleType, Retries) ->
             set_name = SetName
         } = Group,
         case request_replica_group(RepPid, ActiveReplicasBitmask, StaleType) of
-        {ok, RepGroup} when is_record(RepGroup, set_view_group) ->
-            case couch_log:debug_on() of
-            true ->
-                Active = ordsets:from_list(couch_set_view_util:decode_bitmask(?set_abitmask(Group))),
-                RepActive = ordsets:from_list(couch_set_view_util:decode_bitmask(?set_abitmask(RepGroup))),
-                ?LOG_DEBUG("Client ~w got view group `~s` for set `~s`~n"
-                           "Active partitions:              ~w~n"
-                           "Active replica partitions:      ~w~n"
-                           "Active partitions seqs:         ~w~n"
-                           "Active replica partitions seqs: ~w~n",
-                           [self(), GroupName, SetName,
-                            Active,
-                            RepActive,
-                            [{P, S} || {P, S} <- ?set_seqs(Group), ordsets:is_element(P, Active)],
-                            [{P, S} || {P, S} <- ?set_seqs(RepGroup), ordsets:is_element(P, RepActive)]]);
-            false ->
-                ok
-            end,
+        {ok, RepGroup} ->
             {ok, Group#set_view_group{replica_group = RepGroup}};
-        {ok, nil} ->
-            case couch_log:debug_on() of
-            true ->
-                Active = ordsets:from_list(couch_set_view_util:decode_bitmask(?set_abitmask(Group))),
-                ?LOG_DEBUG("Client ~w got view group `~s` for set `~s`~n"
-                           "Active partitions:      ~w~n"
-                           "Active partitions seqs: ~w~n",
-                           [self(), GroupName, SetName,
-                            Active,
-                            [{P, S} || {P, S} <- ?set_seqs(Group), ordsets:is_element(P, Active)]]);
-            false ->
-                ok
-            end,
-            {ok, Group#set_view_group{replica_group = nil}};
         retry ->
             ?LOG_INFO("Retrying group `~s` request, stale=~s,"
                   " set `~s`, retry attempt #~p",
