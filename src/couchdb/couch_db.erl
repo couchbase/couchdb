@@ -410,14 +410,22 @@ update_docs(Db, Docs) ->
 % overhead with couch_file.
 fast_reads(#db{main_pid=Pid}=Db, Fun) ->
     ok = gen_server:call(Pid, {raw_read_open_ok, self()}, infinity),
-    {ok, FastReadFd} = file:open(Db#db.filepath, [binary, read, raw]),
+    Result = file:open(Db#db.filepath, [binary, read, raw]),
     ok = gen_server:call(Pid, {raw_read_open_done, self()}, infinity),
-    put({Db#db.fd, fast_fd_read}, FastReadFd),
-    try
+    case Result of
+    {ok, FastReadFd} ->
+        put({Db#db.fd, fast_fd_read}, FastReadFd),
+        try
+            Fun()
+        after
+            file:close(FastReadFd),
+            erase({Db#db.fd, fast_fd_read})
+        end;
+    {error, enoent} ->
+        ?LOG_INFO("Couldn't do fast read, compaction must have deleted" ++
+            " previous storage file ~s, making reopening the raw file " ++ 
+            "impossible. Reverting to slower reads", [Db#db.filepath]),
         Fun()
-    after
-        file:close(FastReadFd),
-        erase({Db#db.fd, fast_fd_read})
     end.
 
 
