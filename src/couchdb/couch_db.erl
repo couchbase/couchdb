@@ -707,7 +707,9 @@ handle_info(compaction_file_switch, #db{update_pid = Updater,
 handle_info(compaction_file_switch_done, #db{
         raw_reader_openers=Openers}=Db) ->
     Openers2 = lists:map(
-            fun({Pid, MonRef, From}) ->
+            fun({_, _, ok} = Opener) ->
+                Opener;
+            ({Pid, MonRef, From}) ->
                 % signal to all raw file openers they can continue and
                 % put them into the opening state.
                 % Note, we can't have any active openers at this state,
