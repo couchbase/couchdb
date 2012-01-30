@@ -547,6 +547,9 @@ write_doc_bodies(Db, Docs) ->
         end,
         Docs).
 
+prep_doc_body_binary(EJson, Binary) when is_tuple(EJson)->
+    % convert ejson to json
+    prep_doc_body_binary(?JSON_ENCODE(EJson), Binary);
 prep_doc_body_binary(Body, Binary) ->
     BodyCompressed = couch_compress:compress(Body, snappy),
     Size = iolist_size(BodyCompressed),

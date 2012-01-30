@@ -452,7 +452,7 @@ update_docs_int(Db, DocsList, NonRepDocs, FullCommit) ->
 update_local_docs(Db, []) ->
     {ok, Db};
 update_local_docs(#db{local_docs_btree=Btree}=Db, Docs) ->
-    KVsAdd = [{Id, Body} ||
+    KVsAdd = [{Id, if is_tuple(Body) -> ?JSON_ENCODE(Body); true -> Body end} ||
             #doc{id=Id, deleted=false, json=Body} <- Docs],
     IdsRemove = [Id || #doc{id=Id, deleted=true} <- Docs],
     {ok, Btree2} =
