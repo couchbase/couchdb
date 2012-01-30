@@ -55,7 +55,8 @@
     db_set = nil,
     type = main,
     replica_group = nil,
-    replica_pid = nil
+    replica_pid = nil,
+    debug = false
 }).
 
 test_set_name() -> <<"couch_test_set_index_main_compact">>.

@@ -46,7 +46,8 @@
     list = nil,
     run_reduce = true,
     keys = nil,
-    view_name = nil
+    view_name = nil,
+    debug = false
 }).
 
 

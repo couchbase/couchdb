@@ -95,6 +95,7 @@ class TestViewMerge(unittest.TestCase):
         self.do_test_keys(self._params_local, self._params_remote)
         self.do_test_set_view_outdated_local(self._params_local, self._params_remote)
         self.do_test_query_args(self._params_local, self._params_remote)
+        self.do_test_debug_info(self._params_local, self._params_remote)
 
 
     def set_spec(self, name, view, partitions):
@@ -403,3 +404,46 @@ class TestViewMerge(unittest.TestCase):
         self.assertEqual(result["error"], "bad_request", "Correct error")
         self.assertNotEqual(result["reason"].find("on_error"), -1,
                             "Correct messsage")
+
+
+    def do_test_debug_info(self, local, remote):
+        local_spec = self.set_spec(local["setname"], "mapview", range(local["nparts"]))
+        remote_spec = self.set_spec(remote["setname"], "mapview", range(remote["nparts"]))
+        remote_merge = self.merge_spec(remote["host"], [], [remote_spec])
+
+        full_spec = self.views_spec([remote_merge], [local_spec])
+        _, result = self.query(local["host"], full_spec, {"debug": "true"})
+
+        self.assertEqual(result["total_rows"], local["ndocs"] + remote["ndocs"],
+                         "Total rows differs from %d" % (local["ndocs"] + remote["ndocs"]))
+        self.assertEqual(len(result["rows"]), local["ndocs"] + remote["ndocs"],
+                         "len(rows) from %d" % (local["ndocs"] + remote["ndocs"]))
+
+        self.assertTrue("debug_info" in result, "Got debug_info field in response")
+        debug_info = result["debug_info"]
+        self.assertTrue(type(debug_info) == dict, "debug_info field is an object")
+        self.assertEqual(len(debug_info), 2, "debug_info field has 2 fields")
+
+        for (key, info) in debug_info.iteritems():
+            self.assertTrue(type(info) == dict, "debug_info field is an object")
+
+        common.test_keys_sorted(result)
+
+        local_spec = self.set_spec(local["setname"], "redview", range(local["nparts"]))
+        remote_spec = self.set_spec(remote["setname"], "redview", range(remote["nparts"]))
+        remote_merge = self.merge_spec(remote["host"], [], [remote_spec])
+
+        full_spec = self.views_spec([remote_merge], [local_spec])
+
+        _, result = self.query(local["host"], full_spec, {"debug": "true"})
+        self.assertEqual(len(result["rows"]), 1,
+            "Query returned invalid number of rows (a)")
+        self.assertEqual(result["rows"][0]["value"], 100020000,
+                         "Non-grouped reduce value is not 100020000")
+        self.assertTrue("debug_info" in result, "Got debug_info field in response")
+        debug_info = result["debug_info"]
+        self.assertTrue(type(debug_info) == dict, "debug_info field is an object")
+        self.assertEqual(len(debug_info), 2, "debug_info field has 2 fields")
+
+        for (key, info) in debug_info.iteritems():
+            self.assertTrue(type(info) == dict, "debug_info field is an object")

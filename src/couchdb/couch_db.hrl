@@ -194,7 +194,9 @@
     % Used by view/index merger.
     run_reduce = true,
     keys = nil,
-    view_name = nil
+    view_name = nil,
+
+    debug = false
 }).
 
 -record(view_fold_helper_funs, {

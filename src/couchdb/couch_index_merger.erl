@@ -116,6 +116,10 @@ do_query_index(Mod, IndexMergeParams, DDoc, IndexName) ->
             true;
         (_, revision_mismatch) ->
             false;
+        ({debug_info, _Url, _Info}, _) ->
+            true;
+        (_, {debug_info, _Url, _Info}) ->
+            false;
         ({row_count, _}, _) ->
             true;
         (_, {row_count, _}) ->
@@ -360,8 +364,7 @@ ibrowse_options(#httpdb{timeout = T, url = Url}) ->
     end.
 
 
-collect_row_count(RecvCount, AccCount, PreprocessFun, Callback, UserAcc,
-        Item) ->
+collect_row_count(RecvCount, AccCount, PreprocessFun, Callback, UserAcc, Item) ->
     case Item of
     {error, _DbUrl, _Reason} = Error ->
         case Callback(Error, UserAcc) of
@@ -400,6 +403,11 @@ collect_row_count(RecvCount, AccCount, PreprocessFun, Callback, UserAcc,
                     RecvCount - 1, AccCount2, PreprocessFun, Callback, UserAcc, Item2)
             end}
         end;
+    {debug_info, _From, _Info} = DebugInfo ->
+        {ok, UserAcc2} = Callback(DebugInfo, UserAcc),
+        {ok, fun (Item2) ->
+            collect_row_count(RecvCount, AccCount, PreprocessFun, Callback, UserAcc2, Item2)
+        end};
     stop ->
         {_, UserAcc2} = Callback(stop, UserAcc),
         {stop, UserAcc2}
@@ -425,6 +433,11 @@ collect_rows(PreprocessFun, Callback, UserAcc, Item) ->
         {ok, fun (Item2) ->
             collect_rows(PreprocessFun, Callback, UserAcc2, Item2)
         end};
+    {debug_info, _From, _Info} = DebugInfo ->
+        {ok, UserAcc2} = Callback(DebugInfo, UserAcc),
+        {ok, fun (Item2) ->
+            collect_rows(PreprocessFun, Callback, UserAcc2, Item2)
+        end};
     stop ->
         {ok, UserAcc2} = Callback(stop, UserAcc),
         {stop, UserAcc2}
@@ -445,6 +458,10 @@ merge_indexes_no_acc(Params, MinRowFun) ->
     closed ->
         {stop, Resp} = Col(stop),
         {ok, Resp};
+    {ok, {debug_info, _From, _Info} = DebugInfo} ->
+        ok = couch_view_merger_queue:flush(Queue),
+        {ok, Col2} = Col(DebugInfo),
+        merge_indexes_no_acc(Params#merge_params{collector = Col2}, MinRowFun);
     {ok, revision_mismatch} ->
         revision_mismatch;
     {ok, set_view_outdated} ->
@@ -454,14 +471,14 @@ merge_indexes_no_acc(Params, MinRowFun) ->
         case Col(Error) of
         {ok, Col2} ->
             merge_indexes_no_acc(
-                Params#merge_params{collector=Col2}, MinRowFun);
+                Params#merge_params{collector = Col2}, MinRowFun);
         {stop, Resp} ->
             {stop, Resp}
         end;
     {ok, {row_count, _} = RowCount} ->
         {ok, Col2} = Col(RowCount),
         ok = couch_view_merger_queue:flush(Queue),
-        merge_indexes_no_acc(Params#merge_params{collector=Col2}, MinRowFun);
+        merge_indexes_no_acc(Params#merge_params{collector = Col2}, MinRowFun);
     {ok, MinRow} ->
         Params2 = MinRowFun(Params, MinRow),
         {params, Params2}

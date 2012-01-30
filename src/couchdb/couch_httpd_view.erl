@@ -325,6 +325,8 @@ parse_view_param("list", Value) ->
     [{list, ?l2b(Value)}];
 parse_view_param("callback", _) ->
     []; % Verified in the JSON response functions
+parse_view_param("debug", Value) ->
+    [{debug, parse_bool_param(Value)}];
 parse_view_param(Key, Value) ->
     [{extra, {Key, Value}}].
 
@@ -438,6 +440,8 @@ validate_view_query(conflicts, true, Args) ->
     _ ->
         Args#view_query_args{conflicts = true}
     end;
+validate_view_query(debug, Value, Args) ->
+    Args#view_query_args{debug = Value};
 validate_view_query(extra, _Value, Args) ->
     Args.
 

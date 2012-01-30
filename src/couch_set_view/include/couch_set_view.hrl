@@ -70,6 +70,32 @@
     replicas_on_transfer = []
 }).
 
+-record(set_view_debug_info, {
+    original_abitmask,
+    original_pbitmask,
+    stats
+}).
+
+-record(set_view_group_stats, {
+    updates = 0,
+    % # of updates that only finished updating the active partitions
+    % (in the phase of updating passive partitions). Normally its value
+    % is full_updates - 1.
+    partial_updates = 0,
+    % # of times the updater was forced to stop (because partition states
+    % were updated) while it was still indexing the active partitions.
+    updater_stops = 0,
+    compactions = 0,
+    % # of interrupted cleanups. Cleanups which were stopped (in order to do
+    % higher priority tasks) and left the index in a not yet clean state (but
+    % hopefully closer to a clean state).
+    cleanup_stops = 0,
+    cleanups = 0,
+    update_history = [],
+    compaction_history = [],
+    cleanup_history = []
+}).
+
 -record(set_view_group, {
     sig = nil,
     fd = nil,
@@ -87,7 +113,8 @@
     db_set = nil,
     type,     % 'main' | 'replica'
     replica_group = nil,
-    replica_pid = nil
+    replica_pid = nil,
+    debug_info = #set_view_debug_info{}
 }).
 
 -record(set_view, {

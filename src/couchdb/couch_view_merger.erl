@@ -585,6 +585,7 @@ map_set_view_folder(ViewSpec, MergeParams, UserCtx, DDoc, Queue) ->
         %%  handled by prepare_set_view
         ok;
     {View, Group} ->
+        queue_debug_info(ViewArgs, Group, Queue),
         try
             FoldFun = make_map_set_fold_fun(IncludeDocs, Conflicts, SetName,
                 UserCtx, Queue),
@@ -718,7 +719,7 @@ http_view_fold_rows_1(_Ev, Queue) ->
     fun(Ev) -> http_view_fold_rows_1(Ev, Queue) end.
 
 http_view_fold_rows_2(array_end, Queue) ->
-    fun(Ev) -> http_view_fold_errors_1(Ev, Queue) end;
+    fun(Ev) -> http_view_fold_extra(Ev, Queue) end;
 http_view_fold_rows_2(object_start, Queue) ->
     fun(Ev) ->
         json_stream_parse:collect_object(
@@ -729,28 +730,50 @@ http_view_fold_rows_2(object_start, Queue) ->
             end)
     end.
 
-http_view_fold_errors_1({key, <<"errors">>}, Queue) ->
-    fun(array_start) -> fun(Ev) -> http_view_fold_errors_2(Ev, Queue) end end;
-http_view_fold_errors_1(_Ev, _Queue) ->
+http_view_fold_extra({key, <<"errors">>}, Queue) ->
+    fun(array_start) -> fun(Ev) -> http_view_fold_errors(Ev, Queue) end end;
+http_view_fold_extra({key, <<"debug_info">>}, Queue) ->
+    fun(object_start) -> fun(Ev) -> http_view_fold_debug_info(Ev, Queue, []) end end;
+http_view_fold_extra(_Ev, _Queue) ->
     fun couch_index_merger:void_event/1.
 
-http_view_fold_errors_2(array_end, _Queue) ->
+http_view_fold_errors(array_end, _Queue) ->
     fun couch_index_merger:void_event/1;
-http_view_fold_errors_2(object_start, Queue) ->
+http_view_fold_errors(object_start, Queue) ->
     fun(Ev) ->
         json_stream_parse:collect_object(
             Ev,
             fun(Error) ->
                 http_view_fold_queue_error(Error, Queue),
-                fun(Ev2) -> http_view_fold_errors_2(Ev2, Queue) end
+                fun(Ev2) -> http_view_fold_errors(Ev2, Queue) end
             end)
     end.
 
+http_view_fold_debug_info({key, Key}, Queue, Acc) ->
+    fun(object_start) ->
+        fun(Ev) ->
+            json_stream_parse:collect_object(
+                Ev,
+                fun(DebugInfo) ->
+                    fun(Ev2) -> http_view_fold_debug_info(Ev2, Queue, [{Key, DebugInfo} | Acc]) end
+                end)
+        end
+    end;
+http_view_fold_debug_info(object_end, Queue, Acc) ->
+    case Acc of
+    [{?LOCAL, Info}] ->
+        ok;
+    _ ->
+        Info = {lists:reverse(Acc)}
+    end,
+    ok = couch_view_merger_queue:queue(Queue, {debug_info, ?l2b(get(from_url)), Info}),
+    fun(Ev2) -> http_view_fold_extra(Ev2, Queue) end.
+
 
 http_view_fold_queue_error({Props}, Queue) ->
-    From0 = get_value(<<"from">>, Props, ?LOCAL),
+    From0 = get_value(<<"from">>, Props),
     From = case From0 of
-    ?LOCAL ->
+    undefined ->
         get(from_url);
     _ ->
         From0
@@ -851,6 +874,7 @@ reduce_set_view_folder(ViewSpec, MergeParams, DDoc, Queue) ->
         %%  handled by prepare_set_view
         ok;
     {View, Group} ->
+        queue_debug_info(ViewArgs, Group, Queue),
         try
             FoldFun = make_reduce_fold_fun(ViewArgs, Queue),
             KeyGroupFun = make_group_rows_fun(ViewArgs),
@@ -996,7 +1020,8 @@ view_qs(ViewArgs, MergeParams) ->
         view_type = ViewType,
         include_docs = IncDocs,
         conflicts = Conflicts,
-        stale = Stale
+        stale = Stale,
+        debug = Debug
     } = ViewArgs,
     #index_merge{on_error = OnError} = MergeParams,
 
@@ -1091,6 +1116,12 @@ view_qs(ViewArgs, MergeParams) ->
         [];
     false ->
         ["on_error=" ++ atom_to_list(OnError)]
+    end ++
+    case Debug =:= DefViewArgs#view_query_args.debug of
+    true ->
+        [];
+    false ->
+        ["debug=" ++ atom_to_list(Debug)]
     end,
     case QsList of
     [] ->
@@ -1105,3 +1136,97 @@ json_qs_val(Value) ->
 reverse_key_default(?MIN_STR) -> ?MAX_STR;
 reverse_key_default(?MAX_STR) -> ?MIN_STR;
 reverse_key_default(Key) -> Key.
+
+
+queue_debug_info(#view_query_args{debug = false}, _Group, _Queue) ->
+    ok;
+queue_debug_info(_QueryArgs, #set_view_group{} = Group, Queue) ->
+    #set_view_debug_info{
+        original_abitmask = OrigMainAbitmask,
+        original_pbitmask = OrigMainPbitmask,
+        stats = Stats
+    } = Group#set_view_group.debug_info,
+    #set_view_group_stats{
+        updates = Updates,
+        updater_stops = UpdaterStops,
+        compactions = Compactions,
+        cleanup_stops = CleanupStops,
+        cleanups = Cleanups,
+        update_history = UpdateHist,
+        compaction_history = CompactHist,
+        cleanup_history = CleanupHist
+    } = Stats,
+    OrigMainActive = couch_set_view_util:decode_bitmask(OrigMainAbitmask),
+    ModMainActive = couch_set_view_util:decode_bitmask(?set_abitmask(Group)),
+    OrigMainPassive = couch_set_view_util:decode_bitmask(OrigMainPbitmask),
+    ModMainPassive = couch_set_view_util:decode_bitmask(?set_pbitmask(Group)),
+    MainCleanup = couch_set_view_util:decode_bitmask(?set_cbitmask(Group)),
+    % 0 padded so that a pretty print JSON can sanely sort the keys (partition IDs)
+    IndexedSeqs = [{?l2b(io_lib:format("~4..0b", [P])), S} || {P, S} <- ?set_seqs(Group)],
+    MainInfo = [
+        {<<"active_partitions">>, ordsets:from_list(ModMainActive)},
+        {<<"original_active_partitions">>, ordsets:from_list(OrigMainActive)},
+        {<<"passive_partitions">>, ordsets:from_list(ModMainPassive)},
+        {<<"original_passive_partitions">>, ordsets:from_list(OrigMainPassive)},
+        {<<"cleanup_partitions">>, ordsets:from_list(MainCleanup)},
+        {<<"indexed_seqs">>, {IndexedSeqs}},
+        {<<"stats">>, {[
+            {<<"updates">>, Updates},
+            {<<"updater_stops">>, UpdaterStops},
+            {<<"compactions">>, Compactions},
+            {<<"cleanup_stops">>, CleanupStops},
+            {<<"cleanups">>, Cleanups},
+            {<<"update_history">>, UpdateHist},
+            {<<"cleanup_history">>, CleanupHist},
+            {<<"compaction_history">>, CompactHist}
+        ]}}
+    ],
+    RepInfo = replica_group_debug_info(Group),
+    Info = {MainInfo ++ RepInfo},
+    ok = couch_view_merger_queue:queue(Queue, {debug_info, ?LOCAL, Info}).
+
+replica_group_debug_info(#set_view_group{replica_group = nil}) ->
+    [];
+replica_group_debug_info(#set_view_group{replica_group = RepGroup}) ->
+    #set_view_group{
+        debug_info = #set_view_debug_info{
+            original_abitmask = OrigRepAbitmask,
+            original_pbitmask = OrigRepPbitmask,
+            stats = Stats
+        }
+    } = RepGroup,
+    #set_view_group_stats{
+        updates = Updates,
+        updater_stops = UpdaterStops,
+        compactions = Compactions,
+        cleanup_stops = CleanupStops,
+        cleanups = Cleanups,
+        update_history = UpdateHist,
+        compaction_history = CompactHist,
+        cleanup_history = CleanupHist
+    } = Stats,
+    OrigRepActive = couch_set_view_util:decode_bitmask(OrigRepAbitmask),
+    ModRepActive = couch_set_view_util:decode_bitmask(?set_abitmask(RepGroup)),
+    OrigRepPassive = couch_set_view_util:decode_bitmask(OrigRepPbitmask),
+    ModRepPassive = couch_set_view_util:decode_bitmask(?set_pbitmask(RepGroup)),
+    RepCleanup = couch_set_view_util:decode_bitmask(?set_cbitmask(RepGroup)),
+    % 0 padded so that a pretty print JSON can sanely sort the keys (partition IDs)
+    IndexedSeqs = [{?l2b(io_lib:format("~4..0b", [P])), S} || {P, S} <- ?set_seqs(RepGroup)],
+    [
+        {<<"replica_active_partitions">>, ordsets:from_list(ModRepActive)},
+        {<<"replica_original_active_partitions">>, ordsets:from_list(OrigRepActive)},
+        {<<"replica_passive_partitions">>, ordsets:from_list(ModRepPassive)},
+        {<<"replica_original_passive_partitions">>, ordsets:from_list(OrigRepPassive)},
+        {<<"replica_cleanup_partitions">>, ordsets:from_list(RepCleanup)},
+        {<<"replica_indexed_seqs">>, {IndexedSeqs}},
+        {<<"replica_stats">>, {[
+            {<<"updates">>, Updates},
+            {<<"updater_stops">>, UpdaterStops},
+            {<<"compactions">>, Compactions},
+            {<<"cleanup_stops">>, CleanupStops},
+            {<<"cleanups">>, Cleanups},
+            {<<"update_history">>, UpdateHist},
+            {<<"cleanup_history">>, CleanupHist},
+            {<<"compaction_history">>, CompactHist}
+        ]}}
+    ].
