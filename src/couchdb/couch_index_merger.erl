@@ -177,12 +177,12 @@ do_query_index(Mod, IndexMergeParams, DDoc, IndexName) ->
             Resp
         end
     after
+        catch unlink(Queue),
         lists:foreach(
             fun (P) ->
                 catch unlink(P),
                 catch exit(P, kill)
             end, Folders),
-        catch unlink(Queue),
         catch exit(Queue, kill),
         Reason = clean_exit_messages(normal),
         process_flag(trap_exit, TrapExitBefore),
