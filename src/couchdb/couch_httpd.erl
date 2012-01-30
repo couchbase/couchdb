@@ -745,7 +745,7 @@ validate_callback([Char | Rest]) ->
 
 
 error_info({Error, Reason}) when is_list(Reason) ->
-    error_info({Error, ?l2b(Reason)});
+    error_info({Error, couch_util:to_binary(Reason)});
 error_info(bad_request) ->
     {400, <<"bad_request">>, <<>>};
 error_info({bad_request, Reason}) ->
