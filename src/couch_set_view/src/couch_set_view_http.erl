@@ -14,10 +14,9 @@
 
 -export([handle_req/1]).
 
--export([make_view_fold_fun/6, finish_view_fold/4, finish_view_fold/5, view_row_obj/2]).
+-export([make_view_fold_fun/6, finish_view_fold/4, finish_view_fold/5]).
 -export([view_etag/2, view_etag/3, make_reduce_fold_funs/5]).
 -export([design_doc_view/6, parse_bool_param/1]).
--export([get_row_doc/6]).
 
 -import(couch_httpd,
     [send_json/2,send_json/3,send_json/4,send_method_not_allowed/2,send_chunk/2,
@@ -231,7 +230,8 @@ make_view_fold_fun(Req, QueryArgs, Etag, Group, TotalViewCount, HelperFuns) ->
 
     #view_query_args{
         include_docs = IncludeDocs,
-        conflicts = Conflicts
+        conflicts = Conflicts,
+        debug = Debug
     } = QueryArgs,
     #set_view_group{
         set_name = SetName
@@ -243,7 +243,7 @@ make_view_fold_fun(Req, QueryArgs, Etag, Group, TotalViewCount, HelperFuns) ->
         []
     end,
     
-    fun({{Key, DocId}, {PartId, Value}}, OffsetReds,
+    fun({{_Key, _DocId}, {_PartId, _Value}} = Kv, OffsetReds,
             {AccLimit, AccSkip, Resp, RowFunAcc}) ->
         case {AccLimit, AccSkip, Resp} of
         {0, _, _} ->
@@ -257,30 +257,28 @@ make_view_fold_fun(Req, QueryArgs, Etag, Group, TotalViewCount, HelperFuns) ->
             Offset = ReduceCountFun(OffsetReds),
             {ok, Resp2, RowFunAcc0} = StartRespFun(Req, Etag,
                 TotalViewCount, Offset, RowFunAcc),
-            Kv = {{Key, DocId}, Value},
             JsonDoc = get_row_doc(
-                Kv, SetName, PartId, IncludeDocs, Req#httpd.user_ctx, DocOpenOptions),
-            {Go, RowFunAcc2} = SendRowFun(Resp2, Kv, JsonDoc, RowFunAcc0),
+                Kv, SetName, IncludeDocs, Req#httpd.user_ctx, DocOpenOptions),
+            {Go, RowFunAcc2} = SendRowFun(Resp2, Kv, JsonDoc, RowFunAcc0, Debug),
             {Go, {AccLimit - 1, 0, Resp2, RowFunAcc2}};
         {AccLimit, _, Resp} when (AccLimit > 0) ->
             % rendering all other rows
-            Kv = {{Key, DocId}, Value},
             JsonDoc = get_row_doc(
-                Kv, SetName, PartId, IncludeDocs, Req#httpd.user_ctx, DocOpenOptions),
-            {Go, RowFunAcc2} = SendRowFun(Resp, Kv, JsonDoc, RowFunAcc),
+                Kv, SetName, IncludeDocs, Req#httpd.user_ctx, DocOpenOptions),
+            {Go, RowFunAcc2} = SendRowFun(Resp, Kv, JsonDoc, RowFunAcc, Debug),
             {Go, {AccLimit - 1, 0, Resp, RowFunAcc2}}
         end
     end.
 
 
-get_row_doc(_Kv, _SetName, _PartId, false, _UserCtx, _DocOpenOptions) ->
+get_row_doc(_Kv, _SetName, false, _UserCtx, _DocOpenOptions) ->
     nil;
 
-get_row_doc({{_Key, DocId}, {Props}}, SetName, PartId, true, UserCtx, DocOpenOptions) ->
+get_row_doc({{_Key, DocId}, {PartId, {Props}}}, SetName, true, UserCtx, DocOpenOptions) ->
     Id = couch_util:get_value(<<"_id">>, Props, DocId),
     open_row_doc(SetName, PartId, Id, UserCtx, DocOpenOptions);
 
-get_row_doc({{_Key, DocId}, _Value}, SetName, PartId, true, UserCtx, DocOpenOptions) ->
+get_row_doc({{_Key, DocId}, {PartId, _Value}}, SetName, true, UserCtx, DocOpenOptions) ->
     open_row_doc(SetName, PartId, DocId, UserCtx, DocOpenOptions).
 
 
@@ -368,7 +366,7 @@ apply_default_helper_funs(
     end,
 
     SendRow2 = case SendRow of
-    undefined -> fun send_json_view_row/4;
+    undefined -> fun send_json_view_row/5;
     _ -> SendRow
     end,
 
@@ -411,8 +409,8 @@ json_view_start_resp(Req, Etag, TotalRowCount, Offset, _Acc) ->
     end,
     {ok, Resp, [BeginBody, "\"rows\":[\r\n"]}.
 
-send_json_view_row(Resp, Kv, Doc, RowFront) ->
-    JsonObj = view_row_obj(Kv, Doc),
+send_json_view_row(Resp, Kv, Doc, RowFront, DebugMode) ->
+    JsonObj = view_row_obj(Kv, Doc, DebugMode),
     send_chunk(Resp, RowFront ++  ?JSON_ENCODE(JsonObj)),
     {ok, ",\r\n"}.
 
@@ -440,12 +438,16 @@ view_etag(#set_view_group{sig = Sig, index_header = Header},
         {Sig, UpdateSeqs, PurgeSeqs, Extra, NumPartitions, Abitmask}).
 
 % the view row has an error
-view_row_obj({{Key, error}, Value}, _Doc) ->
+view_row_obj({{Key, error}, Value}, _Doc, _DebugMode) ->
     {[{key, Key}, {error, Value}]};
-view_row_obj({{Key, DocId}, Value}, nil) ->
+view_row_obj({{Key, DocId}, {_PartId, Value}}, nil, false) ->
     {[{id, DocId}, {key, Key}, {value, Value}]};
-view_row_obj({{Key, DocId}, Value}, Doc) ->
-    {[{id, DocId}, {key, Key}, {value, Value}, {doc, Doc}]}.
+view_row_obj({{Key, DocId}, {PartId, Value}}, nil, true) ->
+    {[{id, DocId}, {key, Key}, {partition, PartId}, {value, Value}]};
+view_row_obj({{Key, DocId}, {_PartId, Value}}, Doc, false) ->
+    {[{id, DocId}, {key, Key}, {value, Value}, {doc, Doc}]};
+view_row_obj({{Key, DocId}, {PartId, Value}}, Doc, true) ->
+    {[{id, DocId}, {key, Key}, {partition, PartId}, {value, Value}, {doc, Doc}]}.
 
 
 finish_view_fold(Req, TotalRows, Offset, FoldResult) ->

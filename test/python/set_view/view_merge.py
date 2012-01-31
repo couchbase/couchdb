@@ -429,6 +429,12 @@ class TestViewMerge(unittest.TestCase):
 
         common.test_keys_sorted(result)
 
+        next_part = 0
+        for row in result["rows"]:
+            part = row["partition"]
+            self.assertEqual(part, next_part, "row for key %d has right partition id field" % row["key"])
+            next_part = (next_part + 1) % NUM_PARTS
+
         local_spec = self.set_spec(local["setname"], "redview", range(local["nparts"]))
         remote_spec = self.set_spec(remote["setname"], "redview", range(remote["nparts"]))
         remote_merge = self.merge_spec(remote["host"], [], [remote_spec])
@@ -447,3 +453,5 @@ class TestViewMerge(unittest.TestCase):
 
         for (key, info) in debug_info.iteritems():
             self.assertTrue(type(info) == dict, "debug_info field is an object")
+
+        self.assertFalse("partition" in result["rows"][0], "reduce row has no partition field")

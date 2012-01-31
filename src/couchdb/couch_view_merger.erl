@@ -59,7 +59,7 @@ parse_http_params(Req, DDoc, ViewName, #view_merge{keys = Keys}) ->
 make_funs(DDoc, ViewName, IndexMergeParams) ->
     #index_merge{
        extra = Extra,
-       http_params = ViewArgs
+       http_params = #view_query_args{debug = DebugMode} = ViewArgs
     } = IndexMergeParams,
     #view_merge{
        rereduce_fun = InRedFun,
@@ -98,7 +98,7 @@ make_funs(DDoc, ViewName, IndexMergeParams) ->
                 true ->
                     MakeRowFun0;
                 false ->
-                    fun view_row_obj_reduce/1
+                    fun(RowDetails) -> view_row_obj_reduce(RowDetails, DebugMode) end
                 end,
                 couch_index_merger:collect_rows(MakeRowFun, Callback2, UserAcc3, Item)
             end
@@ -111,7 +111,7 @@ make_funs(DDoc, ViewName, IndexMergeParams) ->
                 true ->
                     MakeRowFun0;
                 false ->
-                    fun view_row_obj_map/1
+                    fun(RowDetails) -> view_row_obj_map(RowDetails, DebugMode) end
                 end,
                 couch_index_merger:collect_row_count(
                     NumFolders, 0, MakeRowFun, Callback2, UserAcc2, Item)
@@ -241,24 +241,28 @@ view_less_fun(Collation, Dir, ViewType) ->
         fun(A, B) -> not LessFun(A, B) end
     end.
 
-view_row_obj_map({{Key, error}, Value}) ->
+view_row_obj_map({{Key, error}, Value}, _DebugMode) ->
     {[{key, Key}, {error, Value}]};
 
 % set view
-view_row_obj_map({{Key, DocId}, {_PartId, Value}}) ->
+view_row_obj_map({{Key, DocId}, {PartId, Value}}, true) ->
+    {[{id, DocId}, {key, Key}, {partition, PartId}, {value, Value}]};
+view_row_obj_map({{Key, DocId}, {_PartId, Value}}, false) ->
     {[{id, DocId}, {key, Key}, {value, Value}]};
 
-view_row_obj_map({{Key, DocId}, Value}) ->
+view_row_obj_map({{Key, DocId}, Value}, _DebugMode) ->
     {[{id, DocId}, {key, Key}, {value, Value}]};
 
 % set view
-view_row_obj_map({{Key, DocId}, {_PartId, Value}, Doc}) ->
+view_row_obj_map({{Key, DocId}, {PartId, Value}, Doc}, true) ->
+    {[{id, DocId}, {key, Key}, {partition, PartId}, {value, Value}, Doc]};
+view_row_obj_map({{Key, DocId}, {_PartId, Value}, Doc}, false) ->
     {[{id, DocId}, {key, Key}, {value, Value}, Doc]};
 
-view_row_obj_map({{Key, DocId}, Value, Doc}) ->
+view_row_obj_map({{Key, DocId}, Value, Doc}, _DebugMode) ->
     {[{id, DocId}, {key, Key}, {value, Value}, Doc]}.
 
-view_row_obj_reduce({Key, Value}) ->
+view_row_obj_reduce({Key, Value}, _DebugMode) ->
     {[{key, Key}, {value, Value}]}.
 
 
@@ -786,6 +790,12 @@ http_view_fold_queue_row({Props}, Queue) ->
     Key = get_value(<<"key">>, Props, null),
     Id = get_value(<<"id">>, Props, nil),
     Val = get_value(<<"value">>, Props),
+    Value = case get_value(<<"partition">>, Props, nil) of
+    nil ->
+        Val;
+    PartId ->
+        {PartId, Val}
+    end,
     Row = case get_value(<<"error">>, Props, nil) of
     nil ->
         case Id of
@@ -796,9 +806,9 @@ http_view_fold_queue_row({Props}, Queue) ->
             % map row
             case get_value(<<"doc">>, Props, nil) of
             nil ->
-                {{Key, Id}, Val};
+                {{Key, Id}, Value};
             Doc ->
-                {{Key, Id}, Val, {doc, Doc}}
+                {{Key, Id}, Value, {doc, Doc}}
             end
         end;
     Error ->
