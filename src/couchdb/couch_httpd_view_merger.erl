@@ -35,10 +35,12 @@
     on_error,
     acc = <<>>,
     error_acc = [],
-    debug_info_acc = []
+    debug_info_acc = [],
+    rows_acc = [],
+    rows_acc_size = 0
 }).
 
--define(CHUNK_SIZE, 10).
+-define(MAX_ROWS_ACC_SIZE, 4096).
 
 
 setup_http_sender(MergeParams, Req) ->
@@ -124,42 +126,26 @@ http_sender({debug_info, From, Info}, SAcc) ->
     {ok, SAcc#sender_acc{debug_info_acc = DebugInfoAcc2}};
 
 http_sender(start, #sender_acc{req = Req} = SAcc) ->
-    put(rows_count, 0),
-    put(rows, []),
-
     {ok, Resp} = couch_httpd:start_json_response(Req, 200, []),
     couch_httpd:send_chunk(Resp, <<"{\"rows\":[">>),
     {ok, SAcc#sender_acc{resp = Resp, acc = <<"\r\n">>}};
 
 http_sender({start, RowCount}, #sender_acc{req = Req} = SAcc) ->
-    put(rows_count, 0),
-    put(rows, []),
-
     Start = io_lib:format(
         "{\"total_rows\":~w,\"rows\":[", [RowCount]),
     {ok, Resp} = couch_httpd:start_json_response(Req, 200, []),
     couch_httpd:send_chunk(Resp, Start),
     {ok, SAcc#sender_acc{resp = Resp, acc = <<"\r\n">>}};
 
-http_sender({row, Row}, #sender_acc{resp = Resp, acc = Acc} = SAcc) ->
-    RowsCount = get(rows_count) + 1,
-    RowsRev = [[Acc, ?JSON_ENCODE(Row)] | get(rows)],
+http_sender({row, Row}, SAcc) ->
+    SAcc2 = maybe_flush_rows(Row, SAcc),
+    {ok, SAcc2#sender_acc{acc = <<",\r\n">>}};
 
-    put(rows_count, RowsCount),
-    put(rows, RowsRev),
-
-    case RowsCount >= ?CHUNK_SIZE of
-    true ->
-        flush_rows(Resp, RowsRev);
-    false ->
-        ok
-    end,
-
-    {ok, SAcc#sender_acc{acc = <<",\r\n">>}};
-
-http_sender(stop, #sender_acc{resp = Resp, error_acc = ErrorAcc} = SAcc) ->
-    flush_rows(Resp),
-
+http_sender(stop, SAcc) ->
+    #sender_acc{
+        error_acc = ErrorAcc,
+        resp = Resp
+    }= SAcc2 = flush_rows(SAcc),
     case ErrorAcc of
     [] ->
         couch_httpd:send_chunk(Resp, <<"\r\n]">>);
@@ -173,7 +159,7 @@ http_sender(stop, #sender_acc{resp = Resp, error_acc = ErrorAcc} = SAcc) ->
             <<"\r\n">>, ErrorAcc),
         couch_httpd:send_chunk(Resp, <<"\r\n]">>)
     end,
-    send_debug_info(SAcc),
+    send_debug_info(SAcc2),
     couch_httpd:send_chunk(Resp, <<"\r\n}">>),
     {ok, couch_httpd:end_json_response(Resp)};
 
@@ -210,23 +196,37 @@ http_sender({error, Url, Reason}, #sender_acc{on_error = stop} = SAcc) ->
     couch_httpd:end_json_response(Resp2),
     {stop, Resp2}.
 
+maybe_flush_rows(NewRow, SAcc) ->
+    #sender_acc{
+        acc = Acc,
+        rows_acc = RowsAcc,
+        rows_acc_size = RowsAccSize
+    } = SAcc,
+    JsonRow = ?JSON_ENCODE(NewRow),
+    RowsAccSize2 = RowsAccSize + iolist_size(JsonRow),
+    SAcc2 = SAcc#sender_acc{
+        rows_acc = [[Acc, JsonRow] | RowsAcc],
+        rows_acc_size = RowsAccSize2
+    },
+    case RowsAccSize2 >= ?MAX_ROWS_ACC_SIZE of
+    true ->
+        flush_rows(SAcc2);
+    false ->
+        SAcc2
+    end.
+
+flush_rows(#sender_acc{rows_acc = []} = SAcc) ->
+    SAcc;
+flush_rows(#sender_acc{rows_acc = RowsAcc, resp = Resp} = SAcc) ->
+    couch_httpd:send_chunk(Resp, lists:reverse(RowsAcc)),
+    SAcc#sender_acc{rows_acc = [], rows_acc_size = 0}.
+
 send_debug_info(#sender_acc{debug_info_acc = []}) ->
     ok;
 send_debug_info(#sender_acc{debug_info_acc = DebugInfoAcc, resp = Resp}) ->
     DebugInfo = ?JSON_ENCODE({lists:reverse(DebugInfoAcc)}),
     couch_httpd:send_chunk(Resp, [<<",\r\n">>, <<"\"debug_info\":">>, DebugInfo]).
 
-flush_rows(Resp) ->
-    RowsRev = get(rows),
-    flush_rows(Resp, RowsRev).
-
-flush_rows(_Resp, undefined) ->
-    ok;
-flush_rows(Resp, RowsRev) ->
-    Rows = lists:reverse(RowsRev),
-    couch_httpd:send_chunk(Resp, Rows),
-    put(rows_count, 0),
-    put(rows, []).
 
 %% Valid `views` example:
 %%
