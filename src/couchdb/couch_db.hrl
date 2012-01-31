@@ -160,8 +160,7 @@
     waiting_delayed_commit = nil,
     fsync_options = [],
     options = [],
-    compression,
-    raw_reader_openers = []
+    compression
     }).
 
 

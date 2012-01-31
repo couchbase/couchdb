@@ -170,13 +170,6 @@ handle_call({compact_done, CompactFilepath}, _From, #db{filepath=Filepath,
 
         ?LOG_DEBUG("CouchDB swapping files ~s and ~s.",
                 [NewFilePath, CompactFilepath]),
-        MainPid ! compaction_file_switch,
-        receive
-        continue_compaction_file_switch ->
-            ok;
-        {'EXIT', MainPid, Reason} ->
-            exit(Reason)
-        end,
         % ensure the fd won't close, because after we delete and close,
         % it can't reopen
         ok = couch_file:set_close_after(OldFd, infinity),
@@ -188,7 +181,6 @@ handle_call({compact_done, CompactFilepath}, _From, #db{filepath=Filepath,
         ok = couch_file:rename(NewFd, NewFilePath),
         ok = couch_file:sync(NewFd),
         ok = couch_file:set_close_after(NewFd, ?FD_CLOSE_TIMEOUT_MS),
-        MainPid ! compaction_file_switch_done,
         couch_db_update_notifier:notify({compacted, NewDb2#db.name}),
         ?LOG_INFO("Compaction for db \"~s\" completed.", [Db#db.name]),
         {reply, ok, NewDb2#db{compactor_info=nil}};

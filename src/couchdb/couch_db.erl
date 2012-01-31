@@ -399,10 +399,7 @@ update_docs(Db, Docs) ->
 % docs_since or enum_docs, it's often faster as it avoids the messaging
 % overhead with couch_file.
 fast_reads(#db{main_pid=Pid}=Db, Fun) ->
-    ok = gen_server:call(Pid, {raw_read_open_ok, self()}, infinity),
-    Result = file:open(Db#db.filepath, [binary, read, raw]),
-    ok = gen_server:call(Pid, {raw_read_open_done, self()}, infinity),
-    case Result of
+    case file:open(Db#db.filepath, [binary, read, raw]) of
     {ok, FastReadFd} ->
         put({Db#db.fd, fast_fd_read}, FastReadFd),
         try
@@ -628,8 +625,7 @@ handle_call(is_idle, _From, #db{fd_ref_counter=RefCntr, compactor_info=Compact,
     % Idle means no referrers. Unless in the middle of a compaction file switch,
     % there are always at least 2 referrers, couch_db_updater and us.
     {reply, (Delay == nil) andalso (Compact == nil) andalso (couch_ref_counter:count(RefCntr) == 2), Db};
-handle_call({db_updated, NewDb}, _From, #db{fd_ref_counter=OldRefCntr,
-        raw_reader_openers=Openers}) ->
+handle_call({db_updated, NewDb}, _From, #db{fd_ref_counter=OldRefCntr}) ->
     #db{fd_ref_counter=NewRefCntr}=NewDb,
     case NewRefCntr =:= OldRefCntr of
     true -> ok;
@@ -637,45 +633,9 @@ handle_call({db_updated, NewDb}, _From, #db{fd_ref_counter=OldRefCntr,
         couch_ref_counter:add(NewRefCntr),
         couch_ref_counter:drop(OldRefCntr)
     end,
-    {reply, ok, NewDb#db{raw_reader_openers=Openers}};
+    {reply, ok, NewDb};
 handle_call(get_db, _From, Db) ->
     {reply, {ok, Db}, Db};
-handle_call({raw_read_open_ok, Pid}, From, #db{compactor_info=Compactor,
-        raw_reader_openers=Openers}=Db) ->
-    MonRef = erlang:monitor(process, Pid),
-    case Compactor of
-    compaction_file_switching ->
-        % don't message to caller, it must wait until the
-        % compaction_file_switch is done
-        {noreply, Db#db{raw_reader_openers=[{Pid, MonRef, From}|Openers]}};
-    compaction_file_switch_waiting ->
-        % don't message to caller, it must wait until the
-        % compaction_file_switch is done (it takes precedence here)
-        {noreply, Db#db{raw_reader_openers=[{Pid, MonRef, From}|Openers]}};
-    _Else ->
-        {reply, ok, Db#db{raw_reader_openers=[{Pid, MonRef, ok}|Openers]}}
-    end;
-handle_call({raw_read_open_done, Pid}, _From, #db{compactor_info=Compactor,
-        raw_reader_openers=Openers}=Db) ->
-    {value, {Pid, MonRef, ok}, Openers2} = lists:keytake(Pid, 1, Openers),
-    erlang:demonitor(MonRef, [flush]),
-    case Compactor of
-    compaction_file_switch_waiting ->
-        case lists:keysearch(ok, 3, Openers2) of
-        false ->
-            % no one is opening a raw file. signal back to updater that it's
-            % ok to continue to the file switch.
-            Compactor2 = compaction_file_switching,
-            Db#db.update_pid ! continue_compaction_file_switch;
-        _ ->
-            % We still have concurrent openers of a raw file, we can't let
-            % the compaction file switch continue yet.
-            Compactor2 = compaction_file_switch_waiting
-        end;
-    _ ->
-        Compactor2 = Compactor
-    end,
-    {reply, ok, Db#db{raw_reader_openers=Openers2, compactor_info=Compactor2}};
 handle_call(get_current_seq, _From, #db{update_seq = Seq} = Db) ->
     {reply, {ok, Seq}, Db}.
 
@@ -688,40 +648,6 @@ code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 
-handle_info(compaction_file_switch, #db{update_pid = Updater,
-        raw_reader_openers=Openers}=Db) ->
-    case Openers of
-    [] ->
-        Updater ! continue_compaction_file_switch,
-        {noreply, Db#db{compactor_info=compaction_file_switching}};
-    _ ->
-        {noreply, Db#db{compactor_info=compaction_file_switch_waiting}}
-    end;
-handle_info(compaction_file_switch_done, #db{
-        raw_reader_openers=Openers}=Db) ->
-    Openers2 = lists:map(
-            fun({_, _, ok} = Opener) ->
-                Opener;
-            ({Pid, MonRef, From}) ->
-                % signal to all raw file openers they can continue and
-                % put them into the opening state.
-                % Note, we can't have any active openers at this state,
-                % only openers waiting for the ok
-                gen_server:reply(From, ok),
-                {Pid, MonRef, ok}
-            end, Openers),
-    % leave the compactor_info as is, will be overwritten soon with
-    % db_updated message.
-    {noreply, Db#db{raw_reader_openers=Openers2}};
-handle_info({'DOWN', _MonitorRef, _Type, Pid, _Info}, #db{
-        raw_reader_openers=Openers}=Db) ->
-    case lists:keytake(Pid, 1, Openers) of
-    {value, {Pid, _MonRef, _}, Openers2} ->
-        ?LOG_INFO("Raw file opener crashed before open completed. ~p", [Db]),
-        {noreply, Db#db{raw_reader_openers=Openers2}};
-    false ->
-        exit({exit, "Error, bad DOWN message!"})
-    end;
 handle_info({'EXIT', _Pid, normal}, Db) ->
     {noreply, Db};
 handle_info({'EXIT', _Pid, Reason}, Server) ->

@@ -40,8 +40,7 @@
     waiting_delayed_commit = nil,
     fsync_options = [],
     options = [],
-    compression,
-    raw_reader_openers = []
+    compression
 }).
 
 test_db_name() -> <<"couch_test_view_group_db_leaks">>.
