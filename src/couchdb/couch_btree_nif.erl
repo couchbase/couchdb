@@ -87,7 +87,7 @@ query_modify_raw_native(Db, #btree{fd = Fd} = Bt, SortedActions) ->
     end.
 
 do_native_modify(_, _, _, _, _, _) ->
-    {error, nif_not_loaded}.
+    erlang:nif_error(nif_not_loaded).
 
 write_response(_, _, _) ->
-    {error, nif_not_loaded}.
+    erlang:nif_error(nif_not_loaded).
