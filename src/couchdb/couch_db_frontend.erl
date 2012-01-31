@@ -101,12 +101,6 @@ set_security(Db, SecurityObj) ->
 get_security(Db) ->
     couch_db:get_security(Db).
 
-set_revs_limit(Db, Limit) ->
-    couch_db:set_revs_limit(Db, Limit).
-
-get_revs_limit(Db) ->
-    couch_db:get_revs_limit(Db).
-
 open_doc(Db, DocId, Options) ->
     couch_db:open_doc(Db, DocId, Options).
 

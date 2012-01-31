@@ -72,12 +72,6 @@ handle_call({set_security, NewSec}, _From, #db{compression = Comp} = Db) ->
     ok = gen_server:call(Db2#db.main_pid, {db_updated, Db2}),
     {reply, ok, Db2};
 
-handle_call({set_revs_limit, Limit}, _From, Db) ->
-    Db2 = commit_data(Db#db{revs_limit=Limit,
-            update_seq=Db#db.update_seq+1}),
-    ok = gen_server:call(Db2#db.main_pid, {db_updated, Db2}),
-    {reply, ok, Db2};
-
 handle_call({purge_docs, _IdRevs}, _From,
         #db{compactor_info=Pid}=Db) when Pid /= nil ->
     {reply, {error, purge_during_compaction}, Db};
@@ -171,8 +165,7 @@ handle_call({compact_done, CompactFilepath}, _From, #db{filepath=Filepath,
             local_docs_btree = NewLocalBtree,
             main_pid = Db#db.main_pid,
             filepath = NewFilePath,
-            instance_start_time = Db#db.instance_start_time,
-            revs_limit = Db#db.revs_limit
+            instance_start_time = Db#db.instance_start_time
         }),
 
         ?LOG_DEBUG("CouchDB swapping files ~s and ~s.",
@@ -318,11 +311,6 @@ init_db(DbName, Filepath, Fd, Header0, Options) ->
     Header1 = simple_upgrade_record(Header0, #db_header{}),
     Header =
     case element(2, Header1) of
-    1 -> throw({database_disk_version_error, ?OLD_DISK_VERSION_ERROR});
-    2 -> throw({database_disk_version_error, ?OLD_DISK_VERSION_ERROR});
-    3 -> throw({database_disk_version_error, ?OLD_DISK_VERSION_ERROR});
-    4 -> Header1#db_header{security_ptr = nil}; % 0.10 and pre 0.11
-    5 -> Header1; % pre 1.2
     ?LATEST_DISK_VERSION -> Header1;
     _ -> throw({database_disk_version_error, "Incorrect disk header version"})
     end,
@@ -377,7 +365,6 @@ init_db(DbName, Filepath, Fd, Header0, Options) ->
         security = Security,
         security_ptr = SecurityPtr,
         instance_start_time = StartTime,
-        revs_limit = Header#db_header.revs_limit,
         fsync_options = FsyncOptions,
         options = Options,
         compression = Compression
@@ -470,8 +457,7 @@ db_to_header(Db, Header) ->
         docinfo_by_seq_btree_state = couch_btree:get_state(Db#db.docinfo_by_seq_btree),
         docinfo_by_id_btree_state = couch_btree:get_state(Db#db.docinfo_by_id_btree),
         local_docs_btree_state = couch_btree:get_state(Db#db.local_docs_btree),
-        security_ptr = Db#db.security_ptr,
-        revs_limit = Db#db.revs_limit}.
+        security_ptr = Db#db.security_ptr}.
 
 commit_data(#db{waiting_delayed_commit=nil} = Db, true) ->
     Db#db{waiting_delayed_commit=erlang:send_after(1000,self(),delayed_commit)};
