@@ -456,7 +456,7 @@ handle_info(heart, File) ->
 handle_info({append_bin_btnif, Comp, Rsrc, TermBin}, #file{writer = W, eof = Pos} = File) ->
     Bin = assemble_file_chunk(couch_compress:compress_bin(TermBin, Comp)),
     Size = calculate_total_read_len(Pos rem ?SIZE_BLOCK, iolist_size(Bin)),
-    couch_btree_nif:write_response(Rsrc, Pos, Size),
+    ok = couch_btree_nif:write_response(Rsrc, Pos, Size),
     W ! {chunk, Bin},
     {noreply, File#file{eof = Pos + Size}};
 handle_info({'EXIT', _, normal}, Fd) ->
