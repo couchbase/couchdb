@@ -184,7 +184,10 @@ builtin_reduce(rereduce, [<<"_count",_/binary>>|BuiltinReds], KVs, Acc) ->
     builtin_reduce(rereduce, BuiltinReds, KVs, [Count|Acc]);
 builtin_reduce(Re, [<<"_stats",_/binary>>|BuiltinReds], KVs, Acc) ->
     Stats = builtin_stats(Re, KVs),
-    builtin_reduce(Re, BuiltinReds, KVs, [Stats|Acc]).
+    builtin_reduce(Re, BuiltinReds, KVs, [Stats|Acc]);
+builtin_reduce(_Re, [InvalidBuiltin | _BuiltinReds], _KVs, _Acc) ->
+    throw({invalid_builtin_reduce_function, InvalidBuiltin}).
+
 
 builtin_sum_rows(KVs) ->
     lists:foldl(fun

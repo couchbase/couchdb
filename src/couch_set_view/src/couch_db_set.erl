@@ -62,12 +62,16 @@ get_seqs(Pid) ->
     {ok, lists:keysort(1, Seqs)}.
 
 
-init(Args) ->
+init({SetName, Active, Passive, _} = Args) ->
     try
         {ok, State} = do_init(Args),
         proc_lib:init_ack({ok, self()}),
         gen_server:enter_loop(?MODULE, [], State)
     catch _:Error ->
+        ?LOG_ERROR("Error opening database set `~s`: ~p~n"
+            "initial active partitions:  ~w~n"
+            "initial passive partitions: ~w~n",
+            [SetName, Error, Active, Passive]),
         exit(Error)
     end.
 

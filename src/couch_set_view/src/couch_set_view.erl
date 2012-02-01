@@ -555,15 +555,27 @@ terminate(_Reason, _Srv) ->
     ok.
 
 
-handle_call({get_group_server, SetName, #set_view_group{sig=Sig}=Group}, From,
-    #server{root_dir=Root}=Server) ->
+handle_call({get_group_server, SetName, Group}, From, Server) ->
+    #set_view_group{sig = Sig, name = DDocId} = Group,
     case ets:lookup(couch_sig_to_setview_pid, {SetName, Sig}) of
     [] ->
-        spawn_monitor(fun() -> new_group(Root, SetName, Group) end),
-        ets:insert(couch_sig_to_setview_pid, {{SetName, Sig}, [From]}),
+        WaitList = [From],
+        Worker = spawn_monitor(fun() ->
+            new_group(Server#server.root_dir, SetName, Group)
+        end),
+        ?LOG_INFO("~s spawned worker ~w to open set view group `~s`, "
+            "set `~s`, signature `~s`, new waiting list: ~w",
+            [?MODULE, Worker, DDocId, SetName,
+                couch_util:to_hex(?b2l(Sig)), WaitList]),
+        ets:insert(couch_sig_to_setview_pid, {{SetName, Sig}, WaitList}),
         {noreply, Server};
     [{_, WaitList}] when is_list(WaitList) ->
-        ets:insert(couch_sig_to_setview_pid, {{SetName, Sig}, [From | WaitList]}),
+        WaitList2 = [From | WaitList],
+        ?LOG_INFO("~s blocking client ~w because set view group `~s`, "
+            "set `~s`, signature `~s`, is being open, new waiting list: ~w",
+            [?MODULE, From, DDocId, SetName,
+                couch_util:to_hex(?b2l(Sig)), WaitList2]),
+        ets:insert(couch_sig_to_setview_pid, {{SetName, Sig}, WaitList2}),
         {noreply, Server};
     [{_, ExistingPid}] ->
         {reply, {ok, ExistingPid}, Server}
@@ -573,19 +585,21 @@ handle_cast({reset_indexes, DbName}, #server{root_dir=Root}=Server) ->
     maybe_reset_indexes(DbName, Root),
     {noreply, Server}.
 
-new_group(Root, SetName, #set_view_group{name=GroupId, sig=Sig} = Group) ->
+new_group(Root, SetName, #set_view_group{name = DDocId, sig = Sig} = Group) ->
     process_flag(trap_exit, true),
-    ?LOG_DEBUG("Spawning new group server for view group ~s, set ~s.",
-        [GroupId, SetName]),
-    case (catch couch_set_view_group:start_link({Root, SetName, Group})) of
+    Reply = case (catch couch_set_view_group:start_link({Root, SetName, Group})) of
     {ok, NewPid} ->
         unlink(NewPid),
-        exit({SetName, GroupId, Sig, {ok, NewPid}});
+        {ok, NewPid};
     {error, Reason} ->
-        exit({SetName, GroupId, Sig, Reason});
+        Reason;
     Error ->
-        exit({SetName, GroupId, Sig, Error})
-    end.
+        Error
+    end,
+    ?LOG_INFO("~s opener worker ~w for set view group `~s`, set `~s`, signature `~s`,"
+        " finishing with reply ~p",
+        [?MODULE, self(), DDocId, SetName, couch_util:to_hex(?b2l(Sig)), Reply]),
+    exit({SetName, DDocId, Sig, Reply}).
 
 handle_info({'EXIT', Pid, Reason}, #server{db_notifier = Pid} = Server) ->
     ?LOG_ERROR("Database update notifer died with reason: ~p", [Reason]),
@@ -607,12 +621,16 @@ handle_info({'EXIT', FromPid, Reason}, Server) ->
     end,
     {noreply, Server};
 
-handle_info({'DOWN', _, _, _, {SetName, DDocId, Sig, Reply}}, Server) ->
+handle_info({'DOWN', MonRef, _, Pid, {SetName, DDocId, Sig, Reply}}, Server) ->
+    Worker = {MonRef, Pid},
     [{_, WaitList}] = ets:lookup(couch_sig_to_setview_pid, {SetName, Sig}),
-    [gen_server:reply(From, Reply) || From <- WaitList],
+    ?LOG_INFO("~s set view group `~s`, set `~s`, signature `~s`, opener worker ~w finished.~n"
+        "Replying with ~p to waiting list: ~w",
+        [?MODULE, DDocId, SetName, couch_util:to_hex(?b2l(Sig)), Worker, Reply, WaitList]),
+    lists:foreach(fun(From) -> gen_server:reply(From, Reply) end, WaitList),
     case Reply of
     {ok, NewPid} ->
-        link(NewPid),
+        true = link(NewPid),
         add_to_ets(NewPid, SetName, DDocId, Sig);
     _ ->
         ok

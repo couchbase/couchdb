@@ -39,7 +39,8 @@ test_files = \
     test/05-replicas-transfer.t \
     test/06-main-compaction.t \
     test/07-replica-compaction.t \
-    test/08-deletes-cleanup.t
+    test/08-deletes-cleanup.t \
+    test/09-errors.t
 
 compiled_files = \
     ebin/couch_set_view.app \

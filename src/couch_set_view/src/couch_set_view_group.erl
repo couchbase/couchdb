@@ -222,7 +222,7 @@ start_link({RootDir, SetName, Group}) ->
     proc_lib:start_link(?MODULE, init, [Args]).
 
 
-init(InitArgs) ->
+init({_, _, Group} = InitArgs) ->
     process_flag(trap_exit, true),
     try
         {ok, State} = do_init(InitArgs),
@@ -230,6 +230,8 @@ init(InitArgs) ->
         gen_server:enter_loop(?MODULE, [], State, 1)
     catch
     _:Error ->
+        ?LOG_ERROR("~s error opening set view group `~s` from set `~s`: ~p",
+            [?MODULE, Group#set_view_group.name, Group#set_view_group.set_name, Error]),
         exit(Error)
     end.
 
@@ -765,6 +767,25 @@ handle_info({'EXIT', Pid, {updater_finished, NewGroup, _UpState, Duration}}, #st
         State3 = maybe_start_cleaner(State2),
         {noreply, State3, ?TIMEOUT}
     end;
+
+handle_info({'EXIT', Pid, {updater_error, Error}}, #state{updater_pid = Pid} = State) ->
+    ?LOG_ERROR("Set view `~s`, ~s group `~s`, received error from updater: ~p",
+        [?set_name(State), ?type(State), ?group_id(State), Error]),
+    case State#state.shutdown of
+    true ->
+        {stop, normal, reply_all(State, {error, Error})};
+    false ->
+        State2 = State#state{
+            updater_pid = nil,
+            updater_state = not_running
+        },
+        State3 = reply_all(State2, {error, Error}),
+        {noreply, maybe_start_cleaner(State3), ?TIMEOUT}
+    end;
+
+handle_info({'EXIT', _Pid, {updater_error, _Error}}, State) ->
+    % from old, shutdown updater, ignore
+    {noreply, State, ?TIMEOUT};
 
 handle_info({'EXIT', UpPid, reset}, #state{updater_pid = UpPid} = State) ->
     State2 = stop_cleaner(State),

@@ -108,6 +108,7 @@ update(Owner, Group, FileName, ActiveDbs, PassiveDbs, MaxSeqs) ->
         sig = GroupSig
     } = Group,
 
+    process_flag(trap_exit, true),
     StartTime = now(),
     NumChanges = lists:foldl(
         fun({{PartId, NewSeq}, {PartId, OldSeq}}, Acc) ->
@@ -122,12 +123,17 @@ update(Owner, Group, FileName, ActiveDbs, PassiveDbs, MaxSeqs) ->
 
     ok = couch_indexer_manager:enter(),
 
-    spawn_link(fun() ->
-        case can_do_batched_maps(Group) of
-        true ->
-            do_batched_maps(add_query_server(Group), MapQueue, WriteQueue, [], 0);
-        false->
-            do_maps(add_query_server(Group), MapQueue, WriteQueue)
+    Mapper = spawn_link(fun() ->
+        try
+            QsGroup = add_query_server(Group),
+            case can_do_batched_maps(Group) of
+            true ->
+                do_batched_maps(QsGroup, MapQueue, WriteQueue, [], 0);
+            false->
+                do_maps(QsGroup, MapQueue, WriteQueue)
+            end
+        catch _:Error ->
+            exit(Error)
         end
     end),
 
@@ -174,21 +180,45 @@ update(Owner, Group, FileName, ActiveDbs, PassiveDbs, MaxSeqs) ->
             view_empty_kvs = ViewEmptyKVs,
             max_seqs = MaxSeqs
         },
-        #writer_acc{group = NewGroup, state = UpState} = do_writes(WriterAcc),
-        Parent ! {new_group, NewGroup, UpState},
-        ok = file:close(RawReadFd)
+        try
+            #writer_acc{group = NewGroup, state = UpState} = do_writes(WriterAcc),
+            Parent ! {new_group, NewGroup, UpState}
+        catch _:Error ->
+            exit(Error)
+        after
+            ok = file:close(RawReadFd)
+        end
     end),
 
-    load_changes(Owner, Group, MapQueue, Writer, ActiveDbs, PassiveDbs),
+    DocLoader = spawn_link(fun() ->
+        load_changes(Owner, Parent, Group, MapQueue, Writer, ActiveDbs, PassiveDbs)
+    end),
+
+    Result = wait_result_loop(StartTime, DocLoader, Mapper, Writer),
+    ok = couch_indexer_manager:leave(),
+    exit(Result).
+
+
+wait_result_loop(StartTime, DocLoader, Mapper, Writer) ->
     receive
     {new_group, NewGroup, UpState} ->
         Duration = timer:now_diff(now(), StartTime) / 1000000,
-        ok = couch_indexer_manager:leave(),
-        exit({updater_finished, NewGroup, UpState, Duration})
+        {updater_finished, NewGroup, UpState, Duration};
+    stop_after_active ->
+        DocLoader ! stop_after_active,
+        wait_result_loop(StartTime, DocLoader, Mapper, Writer);
+    stop_immediately ->
+        DocLoader ! stop_immediately,
+        wait_result_loop(StartTime, DocLoader, Mapper, Writer);
+    {'EXIT', _, Reason} when Reason =/= normal ->
+        couch_util:shutdown_sync(DocLoader),
+        couch_util:shutdown_sync(Mapper),
+        couch_util:shutdown_sync(Writer),
+        {updater_error, Reason}
     end.
 
 
-load_changes(Owner, Group, MapQueue, Writer, ActiveDbs, PassiveDbs) ->
+load_changes(Owner, Updater, Group, MapQueue, Writer, ActiveDbs, PassiveDbs) ->
     #set_view_group{
         set_name = SetName,
         type = GroupType,
@@ -214,7 +244,7 @@ load_changes(Owner, Group, MapQueue, Writer, ActiveDbs, PassiveDbs) ->
         PartType
     end,
 
-    notify_owner(Owner, {state, updating_active}),
+    notify_owner(Owner, {state, updating_active}, Updater),
     try
         active = lists:foldl(FoldFun, active, ActiveDbs),
         passive = lists:foldl(FoldFun, passive, PassiveDbs)
@@ -240,9 +270,6 @@ maybe_stop(passive) ->
     after 0 ->
         ok
     end.
-
-notify_owner(Owner, Msg) ->
-    notify_owner(Owner, Msg, self()).
 
 notify_owner(nil, _Msg, _UpdaterPid) ->
     ok;
