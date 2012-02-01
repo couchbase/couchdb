@@ -92,7 +92,12 @@ compact_group(Group, EmptyGroup, SetName, FileName, CompactFileName) ->
     end,
 
     FilterFun = fun({_Key, {PartId, _}}) ->
-        ((1 bsl PartId) band ?set_cbitmask(Group)) =:= 0
+        try
+            ((1 bsl PartId) band ?set_cbitmask(Group)) =:= 0
+        catch Tag:Error ->
+            % TODO remove this try catch expression - left for debugging MB-4732
+            erlang:error({compact_filter_error, {Tag, Error}, {part_id, PartId}, {cbitmask, ?set_cbitmask(Group)}})
+        end
     end,
     % First copy the id btree.
     {ok, NewIdBtreeRoot, Acc1} = couch_btree_copy:copy(
