@@ -606,14 +606,10 @@ handle_call({compact_done, _NewGroup, _Duration, _CleanupKVCount}, {OldPid, _}, 
 
 handle_call(cancel_compact, _From, #state{compactor_pid = nil} = State) ->
     {reply, ok, State, ?TIMEOUT};
-handle_call(cancel_compact, _From, #state{compactor_pid = Pid} = State) ->
-    unlink(Pid),
-    exit(Pid, kill),
-    #state{
-        group = #set_view_group{sig = GroupSig}
-    } = State,
-    CompactFile = index_file_name(
-        compact, ?root_dir(State), ?set_name(State), ?type(State), GroupSig),
+handle_call(cancel_compact, _From, #state{compactor_pid = Pid, compactor_file = CompactFd} = State) ->
+    couch_util:shutdown_sync(Pid),
+    couch_util:shutdown_sync(CompactFd),
+    CompactFile = index_file_name(State, compact),
     ok = couch_file:delete(?root_dir(State), CompactFile),
     State2 = maybe_start_cleaner(State#state{compactor_pid = nil, compactor_file = nil}),
     {reply, ok, State2, ?TIMEOUT}.
