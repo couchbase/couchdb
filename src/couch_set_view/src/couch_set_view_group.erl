@@ -998,20 +998,13 @@ get_replica_group_info(_) ->
     [].
 
 
-view_group_data_size(MainBtree, Views) ->
+view_group_data_size(IdBtree, Views) ->
     lists:foldl(
         fun(#set_view{btree = Btree}, Acc) ->
-            sum_btree_sizes(Acc, couch_btree:size(Btree))
+            Acc + couch_btree:size(Btree)
         end,
-        couch_btree:size(MainBtree),
+        couch_btree:size(IdBtree),
         Views).
-
-sum_btree_sizes(nil, _) ->
-    null;
-sum_btree_sizes(_, nil) ->
-    null;
-sum_btree_sizes(Size1, Size2) ->
-    Size1 + Size2.
 
 
 reset_group(#set_view_group{views = Views} = Group) ->
