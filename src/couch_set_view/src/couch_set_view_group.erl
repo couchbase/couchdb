@@ -602,7 +602,7 @@ handle_call({compact_done, NewGroup0, Duration, CleanupKVCount}, {Pid, _}, #stat
 handle_call({compact_done, _NewGroup, _Duration, _CleanupKVCount}, {OldPid, _}, State) ->
     % From a previous compactor that was killed/stopped, ignore.
     false = is_process_alive(OldPid),
-    {noreply, State};
+    {noreply, State, ?TIMEOUT};
 
 handle_call(cancel_compact, _From, #state{compactor_pid = nil} = State) ->
     {reply, ok, State, ?TIMEOUT};
@@ -643,7 +643,7 @@ handle_cast(ddoc_updated, State) ->
     couch_db:close(Db),
     case NewSig of
     CurSig ->
-        {noreply, State#state{shutdown = false}};
+        {noreply, State#state{shutdown = false}, ?TIMEOUT};
     _ ->
         case Waiters of
         [] ->
