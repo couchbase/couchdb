@@ -398,7 +398,7 @@ update_docs(Db, Docs) ->
 % to the overhead of opening a new FD. But for lots of reads like,
 % docs_since or enum_docs, it's often faster as it avoids the messaging
 % overhead with couch_file.
-fast_reads(#db{main_pid=Pid}=Db, Fun) ->
+fast_reads(Db, Fun) ->
     case file:open(Db#db.filepath, [binary, read, raw]) of
     {ok, FastReadFd} ->
         put({Db#db.fd, fast_fd_read}, FastReadFd),
