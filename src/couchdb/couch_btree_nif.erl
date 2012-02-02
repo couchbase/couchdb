@@ -60,12 +60,18 @@ format_action(Action) ->
     end.
 
 query_modify_raw(Db, Bt, SortedActions) ->
-    try query_modify_raw_native(Db, Bt, SortedActions)
-    catch
-    % Fall back onto the normal updater if we can't use the NIF
-        Type:Error ->
-            io:format("Didn't work!!!!!!!!:~p:~p~n", [Type, Error]),
-            couch_btree:query_modify_raw(Bt, SortedActions)
+    case couch_config:get("couchdb", "btree_implementation", "native") of
+        "native" ->
+            try query_modify_raw_native(Db, Bt, SortedActions)
+            catch
+            % Fall back onto the normal updater if we can't use the NIF
+                _Type:_Error ->
+                    couch_btree:query_modify_raw(Bt, SortedActions)
+            end;
+        "erlang" ->
+            couch_btree:query_modify_raw(Bt, SortedActions);
+        _ ->
+            {error, unknown_btree_implementation}
     end.
 
 query_modify_raw_native(Db, #btree{fd = Fd} = Bt, SortedActions) ->
