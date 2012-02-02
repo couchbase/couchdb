@@ -40,7 +40,8 @@ test_files = \
     test/06-main-compaction.t \
     test/07-replica-compaction.t \
     test/08-deletes-cleanup.t \
-    test/09-errors.t
+    test/09-updates-cleanup.t \
+    test/10-errors.t
 
 compiled_files = \
     ebin/couch_set_view.app \
