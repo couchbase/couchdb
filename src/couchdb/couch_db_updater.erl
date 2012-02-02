@@ -147,8 +147,8 @@ handle_call(cancel_compact, _From, #db{compactor_info = Pid} = Db) ->
     {reply, ok, Db#db{compactor_info = nil}};
 
 
-handle_call({compact_done, CompactFilepath}, _From, #db{filepath=Filepath,
-        main_pid=MainPid, fd=OldFd}=Db) ->
+handle_call({compact_done, CompactFilepath}, _From, Db) ->
+    #db{filepath = Filepath, fd = OldFd} = Db,
     {ok, NewFd} = couch_file:open(CompactFilepath),
     {ok, NewHeader} = couch_file:read_header(NewFd),
     #db{update_seq=NewSeq} = NewDb =
