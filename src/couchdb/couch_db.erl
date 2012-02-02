@@ -67,18 +67,24 @@ open_db_file(Filepath, Options) ->
                 fun(FileName) ->
                     "compact" == lists:last(string:tokens(FileName, "."))
                 end, MatchingFiles),
-        % parse out the trailing #s and sort highest to lowest
-        [NewestFile | RestOld] = lists:sort(fun(A,B) ->
-            get_trailing_file_num(A) > get_trailing_file_num(B)
-        end, MatchingFiles2),
-        case couch_file:open(NewestFile,
-                [{fd_close_after, ?FD_CLOSE_TIMEOUT_MS} | Options]) of
-        {ok, Fd} ->
-            % delete the old files
-            [file:delete(F) || F <- RestOld ++ CompactFiles],
-            {ok, Fd, NewestFile};
-        Error ->
-            Error
+        case MatchingFiles2 of
+        [] ->
+            [file:delete(F) || F <- CompactFiles],
+            {not_found, no_db_file};
+        [ _ | _ ] ->
+            % parse out the trailing #s and sort highest to lowest
+            [NewestFile | RestOld] = lists:sort(fun(A,B) ->
+                get_trailing_file_num(A) > get_trailing_file_num(B)
+            end, MatchingFiles2),
+            case couch_file:open(NewestFile,
+                    [{fd_close_after, ?FD_CLOSE_TIMEOUT_MS} | Options]) of
+            {ok, Fd} ->
+                % delete the old files
+                [file:delete(F) || F <- RestOld ++ CompactFiles],
+                {ok, Fd, NewestFile};
+            Error ->
+                Error
+            end
         end
     end.
 

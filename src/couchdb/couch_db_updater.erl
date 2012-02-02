@@ -174,13 +174,13 @@ handle_call({compact_done, CompactFilepath}, _From, Db) ->
         % it can't reopen
         ok = couch_file:set_close_after(OldFd, infinity),
         RootDir = couch_config:get("couchdb", "database_dir", "."),
-        couch_file:delete(RootDir, Filepath),
         ok = gen_server:call(Db#db.main_pid, {db_updated, NewDb2}, infinity),
         ok = couch_file:only_snapshot_reads(OldFd), % prevent writes to the fd
         close_db(Db),
         ok = couch_file:rename(NewFd, NewFilePath),
         ok = couch_file:sync(NewFd),
         ok = couch_file:set_close_after(NewFd, ?FD_CLOSE_TIMEOUT_MS),
+        couch_file:delete(RootDir, Filepath),
         couch_db_update_notifier:notify({compacted, NewDb2#db.name}),
         ?LOG_INFO("Compaction for db \"~s\" completed.", [Db#db.name]),
         {reply, ok, NewDb2#db{compactor_info=nil}};
