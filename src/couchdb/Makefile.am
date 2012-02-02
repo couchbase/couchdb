@@ -52,7 +52,6 @@ source_files = \
     couch_external_manager.erl \
     couch_external_server.erl \
     couch_file.erl \
-    couch_file_nif.erl \
     couch_db_frontend.erl \
     couch_httpc_pool.erl \
     couch_httpd.erl \
