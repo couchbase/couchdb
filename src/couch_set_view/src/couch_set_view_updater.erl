@@ -641,17 +641,16 @@ write_changes(Group, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs, InitialBui
                 {ok, {_, CleanupCount}, ViewBtree2} = couch_btree:add_remove(
                     View#set_view.btree, AddKeyValues, KeysToRemove, CleanupFun, {go, 0})
             end,
-            NewView = case ViewBtree2 =/= View#set_view.btree of
-                true ->
-                    NewUpSeqs = update_seqs(PartIdSeqs, View#set_view.update_seqs),
-                    View#set_view{btree=ViewBtree2, update_seqs=NewUpSeqs};
-                _ ->
-                    View#set_view{btree=ViewBtree2}
-            end,
+            NewView = View#set_view{btree = ViewBtree2},
             {NewView, Acc + CleanupCount}
         end,
         IdBtreePurgedKeyCount, lists:zip(Group#set_view_group.views, ViewKeyValuesToAdd)),
-    couch_file:flush(Fd),
+    Views3 = lists:map(
+        fun(View) ->
+            NewUpSeqs = update_seqs(PartIdSeqs, View#set_view.update_seqs),
+            View#set_view{update_seqs = NewUpSeqs}
+        end,
+        Views2),
     NewSeqs = update_seqs(PartIdSeqs, ?set_seqs(Group)),
     Header = Group#set_view_group.index_header,
     NewHeader = Header#set_view_index_header{seqs = NewSeqs, cbitmask = 0},
@@ -665,10 +664,11 @@ write_changes(Group, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs, InitialBui
             [SetName, GroupType, GroupName, CleanupKvCount, CleanupTime])
     end,
     NewGroup = Group#set_view_group{
-        views = Views2,
+        views = Views3,
         id_btree = IdBtree2,
         index_header = NewHeader
     },
+    couch_file:flush(Fd),
     {NewGroup, CleanupTime, CleanupKvCount}.
 
 
