@@ -107,17 +107,10 @@ open(DbName, Options) ->
         Else -> Else
     end.
 
-reopen(#db{main_pid = Pid, fd_ref_counter = OldRefCntr, user_ctx = UserCtx}) ->
-    {ok, #db{fd_ref_counter = NewRefCntr} = NewDb} =
-        gen_server:call(Pid, get_db, infinity),
-    case NewRefCntr =:= OldRefCntr of
-    true ->
-        ok;
-    false ->
-        couch_ref_counter:add(NewRefCntr),
-        catch couch_ref_counter:drop(OldRefCntr)
-    end,
-    {ok, NewDb#db{user_ctx = UserCtx}}.
+reopen(#db{name = DbName, user_ctx = UserCtx} = Db) ->
+    Result = open(DbName, [{user_ctx, UserCtx}]),
+    ok = close(Db),
+    Result.
 
 get_current_seq(#db{main_pid = Pid}) ->
     gen_server:call(Pid, get_current_seq, infinity).
