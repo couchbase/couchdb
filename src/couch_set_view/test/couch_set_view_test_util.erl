@@ -22,6 +22,7 @@
 -export([query_view/3, query_view/4]).
 -export([are_view_keys_sorted/2]).
 -export([get_db_ref_counters/2, compact_set_dbs/3]).
+-export([get_db_seqs/2]).
 
 -include("couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
@@ -277,3 +278,14 @@ doc_count(SetName, Partitions) ->
         0, Dbs),
     lists:foreach(fun couch_db:close/1, Dbs),
     Count.
+
+
+get_db_seqs(SetName, Partitions) ->
+    Dbs = open_set_dbs(SetName, Partitions),
+    {Seqs, []} = lists:foldl(
+        fun(Db, {SeqsAcc, [PartId | Rest]}) ->
+            { [{PartId, couch_db:get_update_seq(Db)} | SeqsAcc], Rest }
+        end,
+        {[], Partitions}, Dbs),
+    lists:foreach(fun couch_db:close/1, Dbs),
+    lists:reverse(Seqs).
