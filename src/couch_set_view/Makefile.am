@@ -42,6 +42,7 @@ test_files = \
     test/08-deletes-cleanup.t \
     test/09-deletes-cleanup-many-views.t \
     test/10-updates-cleanup.t \
+    test/11-updates-cleanup-many-views.t \
     test/12-errors.t
 
 compiled_files = \
