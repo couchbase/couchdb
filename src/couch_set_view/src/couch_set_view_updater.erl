@@ -54,6 +54,10 @@ update(Owner, Group, FileName) ->
         {[{P, Db} | A1], [{P, Del} | A2], [{P, NotDel} | A3], [{P, Seq} | A4]}
     end,
 
+    ok = couch_indexer_manager:enter(),
+    % TODO track the time we are blocked for our turn to index and record it
+    % in the view group stats
+
     {ActiveDbs0, ActiveDelCounts, ActiveNotDelCounts, ActiveSeqs} =
         lists:foldl(FoldFun, {[], [], [], []}, ActiveParts),
     {PassiveDbs0, PassiveDelCounts, PassiveNotDelCounts, PassiveSeqs} =
@@ -120,8 +124,6 @@ update(Owner, Group, FileName, ActiveDbs, PassiveDbs, MaxSeqs) ->
         [{max_size, ?QUEUE_MAX_SIZE}, {max_items, ?QUEUE_MAX_ITEMS}]),
     {ok, WriteQueue} = couch_work_queue:new(
         [{max_size, ?QUEUE_MAX_SIZE}, {max_items, ?QUEUE_MAX_ITEMS}]),
-
-    ok = couch_indexer_manager:enter(),
 
     Mapper = spawn_link(fun() ->
         try
