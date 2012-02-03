@@ -700,5 +700,5 @@ update_seqs(PartIdSeqs, Seqs) ->
 update_task(NumChanges) ->
     [Changes, Total] = couch_task_status:get([changes_done, total_changes]),
     Changes2 = Changes + NumChanges,
-    Progress = erlang:min((Changes2 * 100) div Total, 100),
+    Progress = (Changes2 * 100) div Total,
     couch_task_status:update([{progress, Progress}, {changes_done, Changes2}]).
