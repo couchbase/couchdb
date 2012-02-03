@@ -240,7 +240,13 @@ load_changes(Owner, Updater, Group, MapQueue, Writer, ActiveDbs, PassiveDbs) ->
         {ok, _, ok} = couch_db:fast_reads(Db, fun() ->
             couch_db:enum_docs_since(Db, Since, ChangesWrapper, ok, [])
         end),
-        ok = couch_db:close(Db),
+        % Note: make sure the parent (main updater process) doesn't use the
+        % database anymore. We close here each database to prevent delaying
+        % disk space freed by compactions that can happen while we're indexing.
+        % Also we haven't reopened here the databases to avoid extra delay
+        % and make sure we use the same snapshot that the parent (main updater
+        % process) got.
+        ok = couch_ref_counter:drop(Db#db.fd_ref_counter, Updater),
         PartType
     end,
 
