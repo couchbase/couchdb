@@ -91,6 +91,8 @@
     % hopefully closer to a clean state).
     cleanup_stops = 0,
     cleanups = 0,
+    updater_cleanups = 0,
+    current_updater_kv_cleanup_count = 0,
     update_history = [],
     compaction_history = [],
     cleanup_history = []

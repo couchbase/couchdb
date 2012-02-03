@@ -1162,6 +1162,7 @@ queue_debug_info(_QueryArgs, #set_view_group{} = Group, Queue) ->
         compactions = Compactions,
         cleanup_stops = CleanupStops,
         cleanups = Cleanups,
+        updater_cleanups = UpdaterCleanups,
         update_history = UpdateHist,
         compaction_history = CompactHist,
         cleanup_history = CleanupHist
@@ -1186,6 +1187,7 @@ queue_debug_info(_QueryArgs, #set_view_group{} = Group, Queue) ->
             {<<"compactions">>, Compactions},
             {<<"cleanup_stops">>, CleanupStops},
             {<<"cleanups">>, Cleanups},
+            {<<"updater_cleanups">>, UpdaterCleanups},
             {<<"update_history">>, UpdateHist},
             {<<"cleanup_history">>, CleanupHist},
             {<<"compaction_history">>, CompactHist}
@@ -1211,6 +1213,7 @@ replica_group_debug_info(#set_view_group{replica_group = RepGroup}) ->
         compactions = Compactions,
         cleanup_stops = CleanupStops,
         cleanups = Cleanups,
+        updater_cleanups = UpdaterCleanups,
         update_history = UpdateHist,
         compaction_history = CompactHist,
         cleanup_history = CleanupHist
@@ -1235,6 +1238,7 @@ replica_group_debug_info(#set_view_group{replica_group = RepGroup}) ->
             {<<"compactions">>, Compactions},
             {<<"cleanup_stops">>, CleanupStops},
             {<<"cleanups">>, Cleanups},
+            {<<"updater_cleanups">>, UpdaterCleanups},
             {<<"update_history">>, UpdateHist},
             {<<"cleanup_history">>, CleanupHist},
             {<<"compaction_history">>, CompactHist}

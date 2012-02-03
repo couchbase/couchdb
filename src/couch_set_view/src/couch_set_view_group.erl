@@ -625,7 +625,7 @@ handle_cast({partial_update, _, _}, State) ->
     {noreply, State, ?TIMEOUT};
 
 handle_cast({cleanup_done, CleanupTime, CleanupKVCount}, State) ->
-    NewStats = inc_cleanups(State#state.stats, CleanupTime, CleanupKVCount),
+    NewStats = inc_cleanups(State#state.stats, CleanupTime, CleanupKVCount, true),
     {noreply, State#state{stats = NewStats}};
 
 handle_cast(ddoc_updated, State) ->
@@ -971,6 +971,7 @@ get_group_info(State) ->
         {updates, Stats#set_view_group_stats.updates},
         {partial_updates, Stats#set_view_group_stats.partial_updates},
         {updater_interruptions, Stats#set_view_group_stats.updater_stops},
+        {updater_cleanups, Stats#set_view_group_stats.updater_cleanups},
         {compactions, Stats#set_view_group_stats.compactions},
         {cleanups, Stats#set_view_group_stats.cleanups},
         {waiting_clients, length(WaitersList)},
@@ -1680,7 +1681,7 @@ start_updater(#state{updater_pid = nil, updater_state = not_running} = State) ->
 
 
 do_start_updater(State) ->
-    #state{group = Group} = State2 = stop_cleaner(State),
+    #state{group = Group, stats = Stats} = State2 = stop_cleaner(State),
     ?LOG_INFO("Starting updater for set view `~s`, ~s group `~s`",
         [?set_name(State), ?type(State), ?group_id(State)]),
     Owner = self(),
@@ -1689,7 +1690,10 @@ do_start_updater(State) ->
     end),
     State2#state{
         updater_pid = Pid,
-        updater_state = starting
+        updater_state = starting,
+        stats = Stats#set_view_group_stats{
+            current_updater_kv_cleanup_count = 0
+        }
     }.
 
 
@@ -1831,23 +1835,38 @@ process_partial_update(#state{group = Group} = State, NewGroup) ->
     }.
 
 
-inc_updates(#set_view_group_stats{update_history = Hist} = Stats, Duration) ->
+inc_updates(Stats, Duration) ->
+    #set_view_group_stats{
+        update_history = Hist,
+        current_updater_kv_cleanup_count = CleanupKvCount
+    } = Stats,
     Entry = {[
-        {<<"duration">>, Duration}
+        {<<"duration">>, Duration},
+        {<<"cleanup_kv_count">>, CleanupKvCount}
     ]},
     Stats#set_view_group_stats{
         updates = Stats#set_view_group_stats.updates + 1,
         update_history = lists:sublist([Entry | Hist], ?MAX_HIST_SIZE)
     }.
 
-inc_cleanups(#set_view_group_stats{cleanup_history = Hist} = Stats, Duration, Count) ->
+
+inc_cleanups(Stats, Duration, Count) ->
+    inc_cleanups(Stats, Duration, Count, false).
+
+inc_cleanups(#set_view_group_stats{cleanup_history = Hist} = Stats, Duration, Count, ByUpdater) ->
     Entry = {[
         {<<"duration">>, Duration},
         {<<"kv_count">>, Count}
     ]},
     Stats#set_view_group_stats{
         cleanups = Stats#set_view_group_stats.cleanups + 1,
-        cleanup_history = lists:sublist([Entry | Hist], ?MAX_HIST_SIZE)
+        cleanup_history = lists:sublist([Entry | Hist], ?MAX_HIST_SIZE),
+        updater_cleanups = case ByUpdater of
+            true ->
+                Stats#set_view_group_stats.updater_cleanups + 1;
+            false ->
+                Stats#set_view_group_stats.updater_cleanups
+            end
     }.
 
 inc_compactions(#set_view_group_stats{compaction_history = Hist} = Stats, Duration, CleanupKVCount) ->
