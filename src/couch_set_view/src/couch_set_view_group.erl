@@ -530,7 +530,7 @@ handle_call({start_compact, _}, _From, State) ->
     %% compact already running, this is a no-op
     {reply, {ok, State#state.compactor_pid}, State};
 
-handle_call({compact_done, NewGroup0, Duration, CleanupKVCount}, {Pid, _}, #state{compactor_pid = Pid} = State) ->
+handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = State) ->
     #state{
         group = Group,
         updater_pid = UpdaterPid,
@@ -539,6 +539,11 @@ handle_call({compact_done, NewGroup0, Duration, CleanupKVCount}, {Pid, _}, #stat
     #set_view_group{
         fd = OldFd, sig = GroupSig, ref_counter = RefCounter
     } = Group,
+    #set_view_compactor_result{
+        group = NewGroup0,
+        compact_time = Duration,
+        cleanup_kv_count = CleanupKVCount
+    } = Result,
 
     case group_up_to_date(NewGroup0, State#state.group) of
     true ->
@@ -592,7 +597,7 @@ handle_call({compact_done, NewGroup0, Duration, CleanupKVCount}, {Pid, _}, #stat
                     replicas_on_transfer = ?set_replicas_on_transfer(Group)
                 }
             },
-            stats = inc_compactions(State#state.stats, Duration, CleanupKVCount)
+            stats = inc_compactions(State#state.stats, Result)
         },
         State3 = notify_cleanup_waiters(State2),
         {reply, ok, State3, ?TIMEOUT};
@@ -601,9 +606,8 @@ handle_call({compact_done, NewGroup0, Duration, CleanupKVCount}, {Pid, _}, #stat
             [?set_name(State), ?type(State), ?group_id(State)]),
         {reply, update, State}
     end;
-handle_call({compact_done, _NewGroup, _Duration, _CleanupKVCount}, {OldPid, _}, State) ->
+handle_call({compact_done, _Result}, _From, State) ->
     % From a previous compactor that was killed/stopped, ignore.
-    false = is_process_alive(OldPid),
     {noreply, State, ?TIMEOUT};
 
 handle_call(cancel_compact, _From, #state{compactor_pid = nil} = State) ->
@@ -623,10 +627,6 @@ handle_cast({partial_update, Pid, NewGroup}, #state{updater_pid = Pid} = State) 
 handle_cast({partial_update, _, _}, State) ->
     %% message from an old (probably pre-compaction) updater; ignore
     {noreply, State, ?TIMEOUT};
-
-handle_cast({cleanup_done, CleanupTime, CleanupKVCount}, State) ->
-    NewStats = inc_cleanups(State#state.stats, CleanupTime, CleanupKVCount, true),
-    {noreply, State#state{stats = NewStats}};
 
 handle_cast(ddoc_updated, State) ->
     #state{
@@ -742,11 +742,15 @@ handle_info({'EXIT', Pid, shutdown},
               "was shutdown", [?set_name(State), ?type(State), ?group_id(State)]),
     {stop, normal, State};
 
-handle_info({'EXIT', Pid, {updater_finished, NewGroup, _UpState, Duration}}, #state{updater_pid = Pid} = State) ->
+handle_info({'EXIT', Pid, {updater_finished, Result}}, #state{updater_pid = Pid} = State) ->
     #state{
         waiting_list = WaitList,
         shutdown = Shutdown
     } = State,
+    #set_view_updater_result{
+        indexing_time = Duration,
+        group = NewGroup
+    } = Result,
     ok = commit_header(NewGroup, false),
     reply_with_group(NewGroup, State#state.stats, WaitList),
     ?LOG_INFO("Set view `~s`, ~s group `~s`, updater finished, ran for ~.3f seconds",
@@ -762,7 +766,7 @@ handle_info({'EXIT', Pid, {updater_finished, NewGroup, _UpState, Duration}}, #st
             commit_ref = nil,
             waiting_list = [],
             group = NewGroup,
-            stats = inc_updates(State#state.stats, Duration)
+            stats = inc_updates(State#state.stats, Result)
         },
         State3 = maybe_start_cleaner(State2),
         {noreply, State3, ?TIMEOUT}
@@ -1589,7 +1593,6 @@ start_compactor(State, CompactFun) ->
 restart_compactor(#state{compactor_pid = nil} = State, _Reason) ->
     State;
 restart_compactor(#state{compactor_pid = Pid, compactor_file = CompactFd} = State, Reason) ->
-    true = is_process_alive(Pid),
     ?LOG_INFO("Restarting compaction for ~s group `~s`, set view `~s`. Reason: ~s",
         [?type(State), ?group_id(State), ?set_name(State), Reason]),
     couch_util:shutdown_sync(Pid),
@@ -1630,7 +1633,12 @@ stop_updater(#state{updater_pid = Pid} = State, When) ->
             [?set_name(State), ?type(State), ?group_id(State)])
     end,
     receive
-    {'EXIT', Pid, {updater_finished, NewGroup, UpdaterFinishState, Duration}} ->
+    {'EXIT', Pid, {updater_finished, Result}} ->
+        #set_view_updater_result{
+            group = NewGroup,
+            state = UpdaterFinishState,
+            indexing_time = Duration
+        } = Result,
         ?LOG_INFO("Set view `~s`, ~s group `~s`, updater stopped, ran for ~.3f seconds",
             [?set_name(State), ?type(State), ?group_id(State), Duration]),
         State2 = process_partial_update(State, NewGroup),
@@ -1641,7 +1649,7 @@ stop_updater(#state{updater_pid = Pid} = State, When) ->
         updating_passive ->
             NewStats = case ?set_pbitmask(NewGroup) of
             0 ->
-                inc_updates(State2#state.stats, Duration);
+                inc_updates(State2#state.stats, Result);
             _ ->
                 ?inc_partial_updates(State2#state.stats)
             end,
@@ -1681,7 +1689,7 @@ start_updater(#state{updater_pid = nil, updater_state = not_running} = State) ->
 
 
 do_start_updater(State) ->
-    #state{group = Group, stats = Stats} = State2 = stop_cleaner(State),
+    #state{group = Group} = State2 = stop_cleaner(State),
     ?LOG_INFO("Starting updater for set view `~s`, ~s group `~s`",
         [?set_name(State), ?type(State), ?group_id(State)]),
     Owner = self(),
@@ -1690,10 +1698,7 @@ do_start_updater(State) ->
     end),
     State2#state{
         updater_pid = Pid,
-        updater_state = starting,
-        stats = Stats#set_view_group_stats{
-            current_updater_kv_cleanup_count = 0
-        }
+        updater_state = starting
     }.
 
 
@@ -1835,19 +1840,28 @@ process_partial_update(#state{group = Group} = State, NewGroup) ->
     }.
 
 
-inc_updates(Stats, Duration) ->
-    #set_view_group_stats{
-        update_history = Hist,
-        current_updater_kv_cleanup_count = CleanupKvCount
-    } = Stats,
+inc_updates(#set_view_group_stats{update_history = Hist} = Stats, UpdaterResult) ->
+    #set_view_updater_result{
+        indexing_time = IndexingTime,
+        blocked_time = BlockedTime,
+        cleanup_kv_count = CleanupKvCount,
+        cleanup_time = CleanupTime
+    } = UpdaterResult,
     Entry = {[
-        {<<"duration">>, Duration},
+        {<<"indexing_time">>, IndexingTime},
+        {<<"blocked_time">>, BlockedTime},
         {<<"cleanup_kv_count">>, CleanupKvCount}
     ]},
-    Stats#set_view_group_stats{
+    Stats2 = Stats#set_view_group_stats{
         updates = Stats#set_view_group_stats.updates + 1,
         update_history = lists:sublist([Entry | Hist], ?MAX_HIST_SIZE)
-    }.
+    },
+    case CleanupKvCount > 0 of
+    true ->
+        inc_cleanups(Stats2, CleanupTime, CleanupKvCount, true);
+    false ->
+        Stats2
+    end.
 
 
 inc_cleanups(Stats, Duration, Count) ->
@@ -1869,7 +1883,11 @@ inc_cleanups(#set_view_group_stats{cleanup_history = Hist} = Stats, Duration, Co
             end
     }.
 
-inc_compactions(#set_view_group_stats{compaction_history = Hist} = Stats, Duration, CleanupKVCount) ->
+inc_compactions(#set_view_group_stats{compaction_history = Hist} = Stats, Result) ->
+    #set_view_compactor_result{
+        compact_time = Duration,
+        cleanup_kv_count = CleanupKVCount
+    } = Result,
     Entry = {[
         {<<"duration">>, Duration},
         {<<"cleanup_kv_count">>, CleanupKVCount}

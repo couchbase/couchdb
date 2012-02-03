@@ -92,7 +92,6 @@
     cleanup_stops = 0,
     cleanups = 0,
     updater_cleanups = 0,
-    current_updater_kv_cleanup_count = 0,
     update_history = [],
     compaction_history = [],
     cleanup_history = []
@@ -130,4 +129,19 @@
     btree = nil,
     reduce_funs = [],
     options = []
+}).
+
+-record(set_view_updater_result, {
+    group,
+    indexing_time,  % seconds (float)
+    blocked_time,   % seconds (float)
+    state,          % 'updating_active' | 'updating_passive'
+    cleanup_kv_count,
+    cleanup_time    % seconds (float)
+}).
+
+-record(set_view_compactor_result, {
+    group,
+    compact_time,     % seconds (float)
+    cleanup_kv_count
 }).

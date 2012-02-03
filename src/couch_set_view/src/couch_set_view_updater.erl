@@ -33,7 +33,9 @@
     state = updating_active,
     final_batch = false,
     max_seqs,
-    replicas_transferred = []
+    replicas_transferred = [],
+    cleanup_kv_count = 0,
+    cleanup_time = 0
 }).
 
 update(Owner, Group, FileName) ->
@@ -54,9 +56,9 @@ update(Owner, Group, FileName) ->
         {[{P, Db} | A1], [{P, Del} | A2], [{P, NotDel} | A3], [{P, Seq} | A4]}
     end,
 
+    BeforeEnterTs = now(),
     ok = couch_indexer_manager:enter(),
-    % TODO track the time we are blocked for our turn to index and record it
-    % in the view group stats
+    BlockedTime = timer:now_diff(now(), BeforeEnterTs) / 1000000,
 
     {ActiveDbs0, ActiveDelCounts, ActiveNotDelCounts, ActiveSeqs} =
         lists:foldl(FoldFun, {[], [], [], []}, ActiveParts),
@@ -100,10 +102,10 @@ update(Owner, Group, FileName) ->
         ok
     end,
 
-    update(Owner, Group, FileName, ActiveDbs, PassiveDbs, MaxSeqs).
+    update(Owner, Group, FileName, ActiveDbs, PassiveDbs, MaxSeqs, BlockedTime).
 
 
-update(Owner, Group, FileName, ActiveDbs, PassiveDbs, MaxSeqs) ->
+update(Owner, Group, FileName, ActiveDbs, PassiveDbs, MaxSeqs, BlockedTime) ->
     #set_view_group{
         set_name = SetName,
         type = Type,
@@ -183,8 +185,8 @@ update(Owner, Group, FileName, ActiveDbs, PassiveDbs, MaxSeqs) ->
             max_seqs = MaxSeqs
         },
         try
-            #writer_acc{group = NewGroup, state = UpState} = do_writes(WriterAcc),
-            Parent ! {new_group, NewGroup, UpState}
+            FinalWriterAcc = do_writes(WriterAcc),
+            Parent ! {writer_finished, FinalWriterAcc}
         catch _:Error ->
             exit(Error)
         after
@@ -196,22 +198,29 @@ update(Owner, Group, FileName, ActiveDbs, PassiveDbs, MaxSeqs) ->
         load_changes(Owner, Parent, Group, MapQueue, Writer, ActiveDbs, PassiveDbs)
     end),
 
-    Result = wait_result_loop(StartTime, DocLoader, Mapper, Writer),
+    Result = wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime),
     ok = couch_indexer_manager:leave(),
     exit(Result).
 
 
-wait_result_loop(StartTime, DocLoader, Mapper, Writer) ->
+wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime) ->
     receive
-    {new_group, NewGroup, UpState} ->
-        Duration = timer:now_diff(now(), StartTime) / 1000000,
-        {updater_finished, NewGroup, UpState, Duration};
+    {writer_finished, WriterAcc} ->
+        Result = #set_view_updater_result{
+            group = WriterAcc#writer_acc.group,
+            indexing_time = timer:now_diff(now(), StartTime) / 1000000,
+            blocked_time = BlockedTime,
+            state = WriterAcc#writer_acc.state,
+            cleanup_kv_count = WriterAcc#writer_acc.cleanup_kv_count,
+            cleanup_time = WriterAcc#writer_acc.cleanup_time
+        },
+        {updater_finished, Result};
     stop_after_active ->
         DocLoader ! stop_after_active,
-        wait_result_loop(StartTime, DocLoader, Mapper, Writer);
+        wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime);
     stop_immediately ->
         DocLoader ! stop_immediately,
-        wait_result_loop(StartTime, DocLoader, Mapper, Writer);
+        wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime);
     {'EXIT', _, Reason} when Reason =/= normal ->
         couch_util:shutdown_sync(DocLoader),
         couch_util:shutdown_sync(Mapper),
@@ -459,7 +468,6 @@ flush_writes(#writer_acc{kvs = [], owner = Owner, parent = Parent, group = Group
 flush_writes(Acc) ->
     #writer_acc{
         kvs = Queue,
-        initial_build = InitialBuild,
         view_empty_kvs = ViewEmptyKVs,
         group = Group,
         parent = Parent,
@@ -480,32 +488,24 @@ flush_writes(Acc) ->
             {NewViewKVs, [{DocId, {PartId, NewViewIdKeys}} | DocIdViewIdKeysAcc], PartIdSeqs2}
         end,
         {ViewEmptyKVs, [], orddict:new()}, Queue),
-    {Group2, CleanupTime, CleanupKVCount} = write_changes(
-        Group, ViewKVs, DocIdViewIdKeys, PartIdSeqs, InitialBuild),
-    #writer_acc{group = Group3} = Acc2 =
-        update_transferred_replicas(Acc#writer_acc{group = Group2}, PartIdSeqs),
+    Acc2 = write_changes(Acc, ViewKVs, DocIdViewIdKeys, PartIdSeqs),
+    #writer_acc{group = Group3} = Acc3 = update_transferred_replicas(Acc2, PartIdSeqs),
     case Owner of
     nil ->
         ok;
     _ ->
-        ok = gen_server:cast(Owner, {partial_update, Parent, Group3}),
-        case ?set_cbitmask(Group) of
-        0 ->
-            ok;
-        _ ->
-            ok = gen_server:cast(Owner, {cleanup_done, CleanupTime, CleanupKVCount})
-        end
+        ok = gen_server:cast(Owner, {partial_update, Parent, Group3})
     end,
     update_task(length(Queue)),
-    case (Acc2#writer_acc.state =:= updating_active) andalso
+    case (Acc3#writer_acc.state =:= updating_active) andalso
         lists:any(fun({PartId, _}) ->
             ((1 bsl PartId) band ?set_pbitmask(Group) =/= 0)
         end, PartIdSeqs) of
     true ->
         notify_owner(Owner, {state, updating_passive}, Parent),
-        Acc2#writer_acc{state = updating_passive};
+        Acc3#writer_acc{state = updating_passive};
     false ->
-        Acc2
+        Acc3
     end.
 
 
@@ -590,7 +590,13 @@ view_insert_doc_query_results(DocId, PartitionId, [ResultKVs | RestResults],
         DocId, PartitionId, RestResults, RestViewKVs, NewViewKVsAcc, NewViewIdKeysAcc).
 
 
-write_changes(Group, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs, InitialBuild) ->
+write_changes(WriterAcc, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs) ->
+    #writer_acc{
+        group = Group,
+        initial_build = InitialBuild,
+        cleanup_kv_count = CleanupKvCount0,
+        cleanup_time = CleanupTime0
+    } = WriterAcc,
     #set_view_group{
         id_btree = IdBtree,
         fd = Fd,
@@ -665,7 +671,7 @@ write_changes(Group, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs, InitialBui
     NewHeader = Header#set_view_index_header{seqs = NewSeqs, cbitmask = 0},
     case ?set_cbitmask(Group) of
     0 ->
-        CleanupTime = nil;
+        CleanupTime = 0;
     _ ->
         CleanupTime = timer:now_diff(now(), CleanupStart) / 1000000,
         ?LOG_INFO("Updater for set view `~s`, ~s group `~s`, performed cleanup "
@@ -678,7 +684,11 @@ write_changes(Group, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs, InitialBui
         index_header = NewHeader
     },
     couch_file:flush(Fd),
-    {NewGroup, CleanupTime, CleanupKvCount}.
+    WriterAcc#writer_acc{
+        group = NewGroup,
+        cleanup_kv_count = CleanupKvCount0 + CleanupKvCount,
+        cleanup_time = CleanupTime0 + CleanupTime
+    }.
 
 
 update_seqs(PartIdSeqs, Seqs) ->

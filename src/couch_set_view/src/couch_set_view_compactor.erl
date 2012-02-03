@@ -120,16 +120,24 @@ compact_group(Group, EmptyGroup, SetName, FileName, CompactFileName) ->
     },
     CleanupKVCount = TotalChanges - total_kv_count(NewGroup),
     ok = couch_file:flush(NewGroup#set_view_group.fd),
-    maybe_retry_compact(NewGroup, CleanupKVCount, SetName, StartTime, GroupFd, CompactFileName).
+    CompactResult = #set_view_compactor_result{
+        group = NewGroup,
+        compact_time = timer:now_diff(now(), StartTime) / 1000000,
+        cleanup_kv_count = CleanupKVCount
+    },
+    maybe_retry_compact(CompactResult, SetName, StartTime, GroupFd, CompactFileName).
 
-maybe_retry_compact(NewGroup, CleanupKVCount, SetName, StartTime, GroupFd, CompactFileName) ->
+maybe_retry_compact(CompactResult0, SetName, StartTime, GroupFd, CompactFileName) ->
+    NewGroup = CompactResult0#set_view_compactor_result.group,
     #set_view_group{
         name = DDocId,
         type = Type
     } = NewGroup,
-    Duration = timer:now_diff(now(), StartTime) / 1000000,
+    CompactResult = CompactResult0#set_view_compactor_result{
+        compact_time = timer:now_diff(now(), StartTime) / 1000000
+    },
     {ok, Pid} = get_group_pid(SetName, DDocId, Type),
-    case gen_server:call(Pid, {compact_done, NewGroup, Duration, CleanupKVCount}) of
+    case gen_server:call(Pid, {compact_done, CompactResult}) of
     ok ->
         RawReadFd = erlang:erase({GroupFd, fast_fd_read}),
         ok = file:close(RawReadFd);
@@ -138,9 +146,12 @@ maybe_retry_compact(NewGroup, CleanupKVCount, SetName, StartTime, GroupFd, Compa
             couch_set_view_updater:update(nil, NewGroup, CompactFileName)
         end),
         receive
-        {'DOWN', Ref, _, _, {updater_finished, NewGroup2, _, _}} ->
+        {'DOWN', Ref, _, _, {updater_finished, UpdaterResult}} ->
+            CompactResult2 = CompactResult0#set_view_compactor_result{
+                group = UpdaterResult#set_view_updater_result.group
+            },
             maybe_retry_compact(
-                NewGroup2, CleanupKVCount, SetName, StartTime, GroupFd, CompactFileName);
+                CompactResult2, SetName, StartTime, GroupFd, CompactFileName);
         {'DOWN', Ref, _, _, Reason} ->
             exit(Reason)
         end
