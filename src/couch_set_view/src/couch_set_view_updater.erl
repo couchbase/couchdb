@@ -221,6 +221,7 @@ wait_result_loop(StartTime, DocLoader, Mapper, Writer) ->
 load_changes(Owner, Updater, Group, MapQueue, Writer, ActiveDbs, PassiveDbs) ->
     #set_view_group{
         set_name = SetName,
+        name = DDocId,
         type = GroupType,
         index_header = #set_view_index_header{seqs = SinceSeqs}
     } = Group,
@@ -229,8 +230,8 @@ load_changes(Owner, Updater, Group, MapQueue, Writer, ActiveDbs, PassiveDbs) ->
         maybe_stop(PartType),
         Since = couch_util:get_value(PartId, SinceSeqs),
         ?LOG_INFO("Reading changes (since sequence ~p) from ~s partition ~s to"
-                  " update ~s set view group `~s`",
-                  [Since, PartType, couch_db:name(Db), GroupType, SetName]),
+                  " update ~s set view group `~s` from set `~s`",
+                  [Since, PartType, couch_db:name(Db), GroupType, DDocId, SetName]),
         ChangesWrapper = fun(DocInfo, _, ok) ->
             maybe_stop(PartType),
             load_doc(Db, PartId, DocInfo, MapQueue),
