@@ -92,6 +92,7 @@ request_group(Pid, StaleType, Retries) ->
             name = GroupName,
             set_name = SetName
         } = Group,
+        ?LOG_INFO("Got set view group `~s` snapshot for set `~s`", [GroupName, SetName]),
         case request_replica_group(RepPid, ActiveReplicasBitmask, StaleType) of
         {ok, RepGroup} ->
             {ok, Group#set_view_group{replica_group = RepGroup}};
@@ -842,9 +843,6 @@ code_change(_OldVsn, State, _Extra) ->
 reply_with_group(Group0, Stats, WaitList) ->
     #set_view_group{
         ref_counter = RefCnt,
-        set_name = SetName,
-        type = Type,
-        name = GroupId,
         debug_info = DebugInfo
     } = Group0,
     ActiveReplicasBitmask = couch_set_view_util:build_bitmask(
@@ -858,9 +856,7 @@ reply_with_group(Group0, Stats, WaitList) ->
     },
     lists:foreach(fun({Pid, _} = From) ->
         couch_ref_counter:add(RefCnt, Pid),
-        gen_server:reply(From, {ok, Group, ActiveReplicasBitmask}),
-        ?LOG_INFO("Set view `~s`, ~s group `~s`, replied to client ~w",
-                  [SetName, Type, GroupId, From])
+        gen_server:reply(From, {ok, Group, ActiveReplicasBitmask})
     end, WaitList).
 
 reply_all(#state{waiting_list=WaitList}=State, Reply) ->
