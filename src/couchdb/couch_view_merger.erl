@@ -1157,8 +1157,9 @@ queue_debug_info(_QueryArgs, #set_view_group{} = Group, Queue) ->
         stats = Stats
     } = Group#set_view_group.debug_info,
     #set_view_group_stats{
-        updates = Updates,
-        updater_stops = UpdaterStops,
+        full_updates = FullUpdates,
+        partial_updates = PartialUpdates,
+        stopped_updates = StoppedUpdates,
         compactions = Compactions,
         cleanup_stops = CleanupStops,
         cleanups = Cleanups,
@@ -1182,8 +1183,9 @@ queue_debug_info(_QueryArgs, #set_view_group{} = Group, Queue) ->
         {<<"cleanup_partitions">>, ordsets:from_list(MainCleanup)},
         {<<"indexed_seqs">>, {IndexedSeqs}},
         {<<"stats">>, {[
-            {<<"updates">>, Updates},
-            {<<"updater_stops">>, UpdaterStops},
+            {<<"full_updates">>, FullUpdates},
+            {<<"partial_updates">>, PartialUpdates},
+            {<<"stopped_updates">>, StoppedUpdates},
             {<<"compactions">>, Compactions},
             {<<"cleanup_stops">>, CleanupStops},
             {<<"cleanups">>, Cleanups},
@@ -1208,8 +1210,9 @@ replica_group_debug_info(#set_view_group{replica_group = RepGroup}) ->
         }
     } = RepGroup,
     #set_view_group_stats{
-        updates = Updates,
-        updater_stops = UpdaterStops,
+        full_updates = FullUpdates,
+        partial_updates = PartialUpdates,
+        stopped_updates = StoppedUpdates,
         compactions = Compactions,
         cleanup_stops = CleanupStops,
         cleanups = Cleanups,
@@ -1233,8 +1236,9 @@ replica_group_debug_info(#set_view_group{replica_group = RepGroup}) ->
         {<<"replica_cleanup_partitions">>, ordsets:from_list(RepCleanup)},
         {<<"replica_indexed_seqs">>, {IndexedSeqs}},
         {<<"replica_stats">>, {[
-            {<<"updates">>, Updates},
-            {<<"updater_stops">>, UpdaterStops},
+            {<<"full_updates">>, FullUpdates},
+            {<<"partial_updates">>, PartialUpdates},
+            {<<"stopped_updates">>, StoppedUpdates},
             {<<"compactions">>, Compactions},
             {<<"cleanup_stops">>, CleanupStops},
             {<<"cleanups">>, Cleanups},

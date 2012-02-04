@@ -149,8 +149,8 @@ class TestBurstStateUpdates(unittest.TestCase):
                 )
 
         group_stats = self.verify_final_index_state(state_transitions)
-        self.assertEqual(group_stats["updater_interruptions"], 0, "0 updater interruptions")
-        self.assertEqual(group_stats["updates"], 1, "Got 1 full update")
+        self.assertEqual(group_stats["stopped_updates"], 0, "0 updater interruptions")
+        self.assertEqual(group_stats["full_updates"], 1, "Got 1 full update")
 
 
 
@@ -187,8 +187,8 @@ class TestBurstStateUpdates(unittest.TestCase):
             common.query(self._params, "mapview", {"stale": "update_after", "limit": "100"})
 
         group_stats = self.verify_final_index_state(state_transitions)
-        self.assertTrue(group_stats["updater_interruptions"] > 0, "Got at least 1 updater interruption")
-        self.assertEqual(group_stats["updates"], 2, "Got 2 full updates")
+        self.assertTrue(group_stats["stopped_updates"] > 0, "Got at least 1 updater interruption")
+        self.assertEqual(group_stats["full_updates"], 2, "Got 2 full updates")
         self.assertEqual(group_stats["compactions"], 1, "Got 1 compaction")
         self.assertTrue(group_stats["cleanups"] >= 1, "Got at least 1 full cleanup")
 

@@ -305,7 +305,7 @@ verify_group_info_after_replicas_transfer(MainGroupInfo, RepGroupInfo) ->
 wait_for_replica_full_update(RepGroupInfo) ->
     etap:diag("Waiting for a full replica group update"),
     {Stats} = couch_util:get_value(stats, RepGroupInfo),
-    Updates = couch_util:get_value(updates, Stats),
+    Updates = couch_util:get_value(full_updates, Stats),
     Pid = spawn(fun() ->
         wait_replica_update_loop(Updates)
     end),
@@ -359,7 +359,7 @@ wait_replica_update_loop(Updates) ->
     MainGroupInfo = get_group_info(),
     {RepGroupInfo} = couch_util:get_value(replica_group_info, MainGroupInfo),
     {Stats} = couch_util:get_value(stats, RepGroupInfo),
-    case couch_util:get_value(updates, Stats) > Updates of
+    case couch_util:get_value(full_updates, Stats) > Updates of
     true ->
         ok;
     false ->
@@ -371,7 +371,7 @@ wait_replica_update_loop(Updates) ->
 wait_for_main_full_update(GroupInfo, ExpectedReduceValue) ->
     etap:diag("Waiting for a full main group update"),
     {Stats} = couch_util:get_value(stats, GroupInfo),
-    Updates = couch_util:get_value(updates, Stats),
+    Updates = couch_util:get_value(full_updates, Stats),
     Pid = spawn(fun() ->
         wait_main_update_loop(Updates, ExpectedReduceValue, lists:seq(0, 63))
     end),
@@ -389,7 +389,7 @@ wait_for_main_full_update(GroupInfo, ExpectedReduceValue) ->
 wait_main_update_loop(Updates, ExpectedReduceValue, ExpectedPartitions) ->
     MainGroupInfo = get_group_info(),
     {Stats} = couch_util:get_value(stats, MainGroupInfo),
-    case couch_util:get_value(updates, Stats) > Updates of
+    case couch_util:get_value(full_updates, Stats) > Updates of
     true ->
         ok;
     false ->

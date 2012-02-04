@@ -67,8 +67,8 @@ class TestUpdateCleanup(unittest.TestCase):
         self.assertEqual(info["active_partitions"], [0, 1, 2, 3], "right active partitions list")
         self.assertEqual(info["passive_partitions"], [], "right passive partitions list")
         self.assertEqual(info["cleanup_partitions"], [], "right cleanup partitions list")
-        self.assertEqual(stats["updates"], 1, "1 full update done so far")
-        self.assertEqual(stats["updater_interruptions"], 0, "no updater interruptions so far")
+        self.assertEqual(stats["full_updates"], 1, "1 full update done so far")
+        self.assertEqual(stats["stopped_updates"], 0, "no updater interruptions so far")
         self.assertEqual(stats["cleanups"], 0, "0 cleanups done")
         self.assertEqual(stats["cleanup_interruptions"], 0, "no cleanup interruptions so far")
 
@@ -116,8 +116,8 @@ class TestUpdateCleanup(unittest.TestCase):
         self.assertEqual(info["active_partitions"], [1, 2, 4, 5, 6, 7], "right active partitions list")
         self.assertEqual(info["passive_partitions"], [], "right passive partitions list")
         self.assertEqual(info["cleanup_partitions"], [], "right cleanup partitions list")
-        self.assertEqual(stats["updates"], 2, "2 full updates done so far")
-        self.assertEqual(stats["updater_interruptions"], 0, "no updater interruptions so far")
+        self.assertEqual(stats["full_updates"], 2, "2 full updates done so far")
+        self.assertEqual(stats["stopped_updates"], 0, "no updater interruptions so far")
         self.assertEqual(stats["cleanups"], 1, "1 full cleanup done")
         self.assertEqual(stats["cleanup_interruptions"], 1, "1 cleanup interruption done")
 

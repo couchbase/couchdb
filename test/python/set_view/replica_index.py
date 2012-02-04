@@ -98,7 +98,7 @@ class TestReplicaIndex(unittest.TestCase):
                           "replica group update_seqs is empty")
         self.assertEqual(info["replica_group_info"]["stats"]["partial_updates"], 0,
                           "replica group has 0 partial updates")
-        self.assertEqual(info["replica_group_info"]["stats"]["updates"], 0,
+        self.assertEqual(info["replica_group_info"]["stats"]["full_updates"], 0,
                           "replica group has 0 full updates")
 
         # print "defining partitions [4, 5, 6, 7] as replicas"
@@ -122,7 +122,7 @@ class TestReplicaIndex(unittest.TestCase):
 
         # print "waiting for replica index to update"
         seconds = 0
-        while info["replica_group_info"]["stats"]["updates"] < 1:
+        while info["replica_group_info"]["stats"]["full_updates"] < 1:
             time.sleep(5)
             seconds += 5
             if seconds > 900:
@@ -249,7 +249,7 @@ class TestReplicaIndex(unittest.TestCase):
         self.restart_compare_info(info, new_info)
 
         info = common.get_set_view_info(self._params)
-        updates_before = info["replica_group_info"]["stats"]["updates"]
+        updates_before = info["replica_group_info"]["stats"]["full_updates"]
 
         # print "defining partitions [5, 7] as replicas again"
         common.add_replica_partitions(self._params, [5, 7])
@@ -272,7 +272,7 @@ class TestReplicaIndex(unittest.TestCase):
 
         # print "waiting for replica index to index partitions 5 and 7"
         seconds = 0
-        while info["replica_group_info"]["stats"]["updates"] < (updates_before + 1):
+        while info["replica_group_info"]["stats"]["full_updates"] < (updates_before + 1):
             time.sleep(5)
             seconds += 5
             if seconds > 900:
@@ -359,7 +359,7 @@ class TestReplicaIndex(unittest.TestCase):
         # print "Querying map view with ?stale=update_after to trigger transferral of" + \
         #     " replica partitions [4, 5, 7] from replica index to main index"
 
-        updates_before = info["stats"]["updates"]
+        updates_before = info["stats"]["full_updates"]
 
         (resp, view_result) = common.query(self._params, "mapview", {"stale": "update_after"})
 
@@ -402,7 +402,7 @@ class TestReplicaIndex(unittest.TestCase):
         # print "Waiting for transferral of replica partitions [4, 5, 7] into main index"
         info = common.get_set_view_info(self._params)
         seconds = 0
-        while info["stats"]["updates"] < (updates_before + 1):
+        while info["stats"]["full_updates"] < (updates_before + 1):
             time.sleep(5)
             seconds += 5
             if seconds > 900:
@@ -672,7 +672,7 @@ class TestReplicaIndex(unittest.TestCase):
         # print "Querying view with ?stale=update_after to trigger transferral of" + \
         #    " replica partitions [4, 5, 7] from replica index to main index"
 
-        updates_before = info["stats"]["updates"]
+        updates_before = info["stats"]["full_updates"]
 
         (resp, view_result) = common.query(self._params, "mapview", {"stale": "update_after", "limit": "1"})
 
@@ -682,7 +682,7 @@ class TestReplicaIndex(unittest.TestCase):
         # print "Waiting for transferral of replica partitions [7] into main index"
         info = common.get_set_view_info(self._params)
         seconds = 0
-        while info["stats"]["updates"] < (updates_before + 1):
+        while info["stats"]["full_updates"] < (updates_before + 1):
             time.sleep(5)
             seconds += 5
             if seconds > 900:
@@ -971,7 +971,7 @@ class TestReplicaIndex(unittest.TestCase):
         # print "Querying view with ?stale=update_after to trigger transferral of" + \
         #     " replica partitions [4, 5, 7] from replica index to main index"
 
-        updates_before = info["stats"]["updates"]
+        updates_before = info["stats"]["full_updates"]
 
         (resp, view_result) = common.query(self._params, "mapview", {"stale": "update_after", "limit": "1"})
 
@@ -998,7 +998,7 @@ class TestReplicaIndex(unittest.TestCase):
         # print "Waiting for transferral of replica partitions [7] into main index"
         info = common.get_set_view_info(self._params)
         seconds = 0
-        while info["stats"]["updates"] < (updates_before + 1):
+        while info["stats"]["full_updates"] < (updates_before + 1):
             time.sleep(5)
             seconds += 5
             if seconds > 900:

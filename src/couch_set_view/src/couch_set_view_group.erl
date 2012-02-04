@@ -45,7 +45,7 @@
 -define(replicas_on_transfer(State),
         ((State#state.group)#set_view_group.index_header)#set_view_index_header.replicas_on_transfer).
 
--define(MAX_HIST_SIZE, 10).
+-define(MAX_HIST_SIZE, 20).
 
 -record(state, {
     init_args,
@@ -74,8 +74,6 @@
 }).
 
 -define(inc_stat(S, Stats), setelement(S, Stats, element(S, Stats) + 1)).
--define(inc_partial_updates(Stats), ?inc_stat(#set_view_group_stats.partial_updates, Stats)).
--define(inc_updater_stops(Stats), ?inc_stat(#set_view_group_stats.updater_stops, Stats)).
 -define(inc_cleanup_stops(Stats), ?inc_stat(#set_view_group_stats.cleanup_stops, Stats)).
 
 
@@ -749,13 +747,27 @@ handle_info({'EXIT', Pid, {updater_finished, Result}}, #state{updater_pid = Pid}
         shutdown = Shutdown
     } = State,
     #set_view_updater_result{
-        indexing_time = Duration,
-        group = NewGroup
+        indexing_time = IndexingTime,
+        blocked_time = BlockedTime,
+        group = NewGroup,
+        inserted_ids = InsertedIds,
+        deleted_ids = DeletedIds,
+        inserted_kvs = InsertedKVs,
+        deleted_kvs = DeletedKVs,
+        cleanup_kv_count = CleanupKVCount
     } = Result,
     ok = commit_header(NewGroup, false),
     reply_with_group(NewGroup, State#state.stats, WaitList),
-    ?LOG_INFO("Set view `~s`, ~s group `~s`, updater finished, ran for ~.3f seconds",
-        [?set_name(State), ?type(State), ?group_id(State), Duration]),
+    ?LOG_INFO("Set view `~s`, ~s group `~s`, updater finished~n"
+        "Indexing time: ~.3f seconds~n"
+        "Blocked time:  ~.3f seconds~n"
+        "Inserted IDs:  ~p~n"
+        "Deleted IDs:   ~p~n"
+        "Inserted KVs:  ~p~n"
+        "Deleted KVs:   ~p~n"
+        "Cleaned KVs:   ~p~n",
+        [?set_name(State), ?type(State), ?group_id(State), IndexingTime, BlockedTime,
+            InsertedIds, DeletedIds, InsertedKVs, DeletedKVs, CleanupKVCount]),
     case Shutdown of
     true ->
         {stop, normal, State};
@@ -968,9 +980,9 @@ get_group_info(State) ->
         views = Views
     } = Group,
     JsonStats = {[
-        {updates, Stats#set_view_group_stats.updates},
+        {full_updates, Stats#set_view_group_stats.full_updates},
         {partial_updates, Stats#set_view_group_stats.partial_updates},
-        {updater_interruptions, Stats#set_view_group_stats.updater_stops},
+        {stopped_updates, Stats#set_view_group_stats.stopped_updates},
         {updater_cleanups, Stats#set_view_group_stats.updater_cleanups},
         {compactions, Stats#set_view_group_stats.compactions},
         {cleanups, Stats#set_view_group_stats.cleanups},
@@ -1633,22 +1645,32 @@ stop_updater(#state{updater_pid = Pid} = State, When) ->
         #set_view_updater_result{
             group = NewGroup,
             state = UpdaterFinishState,
-            indexing_time = Duration
+            indexing_time = IndexingTime,
+            blocked_time = BlockedTime,
+            inserted_ids = InsertedIds,
+            deleted_ids = DeletedIds,
+            inserted_kvs = InsertedKVs,
+            deleted_kvs = DeletedKVs,
+            cleanup_kv_count = CleanupKVCount
         } = Result,
-        ?LOG_INFO("Set view `~s`, ~s group `~s`, updater stopped, ran for ~.3f seconds",
-            [?set_name(State), ?type(State), ?group_id(State), Duration]),
+        ?LOG_INFO("Set view `~s`, ~s group `~s`, updater stopped~n"
+            "Indexing time: ~.3f seconds~n"
+            "Blocked time:  ~.3f seconds~n"
+            "Inserted IDs:  ~p~n"
+            "Deleted IDs:   ~p~n"
+            "Inserted KVs:  ~p~n"
+            "Deleted KVs:   ~p~n"
+            "Cleaned KVs:   ~p~n",
+            [?set_name(State), ?type(State), ?group_id(State), IndexingTime, BlockedTime,
+                InsertedIds, DeletedIds, InsertedKVs, DeletedKVs, CleanupKVCount]),
         State2 = process_partial_update(State, NewGroup),
         case UpdaterFinishState of
         updating_active ->
-            NewStats = ?inc_updater_stops(State2#state.stats),
+            NewStats = inc_updates(State2#state.stats, Result, true, true),
             WaitingList2 = State2#state.waiting_list;
         updating_passive ->
-            NewStats = case ?set_pbitmask(NewGroup) of
-            0 ->
-                inc_updates(State2#state.stats, Result);
-            _ ->
-                ?inc_partial_updates(State2#state.stats)
-            end,
+            PartialUpdate = (?set_pbitmask(NewGroup) =/= 0),
+            NewStats = inc_updates(State2#state.stats, Result, PartialUpdate, false),
             reply_with_group(NewGroup, NewStats, State2#state.waiting_list),
             WaitingList2 = []
         end,
@@ -1836,21 +1858,55 @@ process_partial_update(#state{group = Group} = State, NewGroup) ->
     }.
 
 
-inc_updates(#set_view_group_stats{update_history = Hist} = Stats, UpdaterResult) ->
+inc_updates(Stats, UpdaterResult) ->
+    inc_updates(Stats, UpdaterResult, false, false).
+
+inc_updates(#set_view_group_stats{update_history = Hist} = Stats, UpdaterResult, PartialUpdate, ForcedStop) ->
     #set_view_updater_result{
         indexing_time = IndexingTime,
         blocked_time = BlockedTime,
         cleanup_kv_count = CleanupKvCount,
-        cleanup_time = CleanupTime
+        cleanup_time = CleanupTime,
+        inserted_ids = InsertedIds,
+        deleted_ids = DeletedIds,
+        inserted_kvs = InsertedKvs,
+        deleted_kvs = DeletedKvs
     } = UpdaterResult,
-    Entry = {[
+    Entry = {
+        case PartialUpdate of
+        true ->
+            [{<<"partial_update">>, true}];
+        false ->
+            []
+        end ++
+        case ForcedStop of
+        true ->
+            [{<<"forced_stop">>, true}];
+        false ->
+            []
+        end ++ [
         {<<"indexing_time">>, IndexingTime},
         {<<"blocked_time">>, BlockedTime},
-        {<<"cleanup_kv_count">>, CleanupKvCount}
+        {<<"cleanup_kv_count">>, CleanupKvCount},
+        {<<"inserted_ids">>, InsertedIds},
+        {<<"deleted_ids">>, DeletedIds},
+        {<<"inserted_kvs">>, InsertedKvs},
+        {<<"deleted_kvs">>, DeletedKvs}
     ]},
     Stats2 = Stats#set_view_group_stats{
-        updates = Stats#set_view_group_stats.updates + 1,
-        update_history = lists:sublist([Entry | Hist], ?MAX_HIST_SIZE)
+        update_history = lists:sublist([Entry | Hist], ?MAX_HIST_SIZE),
+        partial_updates = case PartialUpdate of
+            true  -> Stats#set_view_group_stats.partial_updates + 1;
+            false -> Stats#set_view_group_stats.partial_updates
+            end,
+        stopped_updates = case ForcedStop of
+            true  -> Stats#set_view_group_stats.stopped_updates + 1;
+            false -> Stats#set_view_group_stats.stopped_updates
+            end,
+        full_updates = case (not PartialUpdate) andalso (not ForcedStop) of
+            true  -> Stats#set_view_group_stats.full_updates + 1;
+            false -> Stats#set_view_group_stats.full_updates
+            end
     },
     case CleanupKvCount > 0 of
     true ->

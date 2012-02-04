@@ -35,7 +35,11 @@
     max_seqs,
     replicas_transferred = [],
     cleanup_kv_count = 0,
-    cleanup_time = 0
+    cleanup_time = 0,
+    inserted_kvs = 0,
+    deleted_kvs = 0,
+    inserted_ids = 0,
+    deleted_ids = 0
 }).
 
 update(Owner, Group, FileName) ->
@@ -212,7 +216,11 @@ wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime) ->
             blocked_time = BlockedTime,
             state = WriterAcc#writer_acc.state,
             cleanup_kv_count = WriterAcc#writer_acc.cleanup_kv_count,
-            cleanup_time = WriterAcc#writer_acc.cleanup_time
+            cleanup_time = WriterAcc#writer_acc.cleanup_time,
+            inserted_ids = WriterAcc#writer_acc.inserted_ids,
+            deleted_ids = WriterAcc#writer_acc.deleted_ids,
+            inserted_kvs = WriterAcc#writer_acc.inserted_kvs,
+            deleted_kvs = WriterAcc#writer_acc.deleted_kvs
         },
         {updater_finished, Result};
     stop_after_active ->
@@ -645,7 +653,8 @@ write_changes(WriterAcc, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs) ->
             end
         end,
         dict:new(), LookupResults),
-    {Views2, CleanupKvCount} = lists:mapfoldl(fun({View, {_View, AddKeyValues}}, Acc) ->
+    {Views2, {CleanupKvCount, InsertedKvCount, DeletedKvCount}} =
+        lists:mapfoldl(fun({View, {_View, AddKeyValues}}, {AccC, AccI, AccD}) ->
             KeysToRemove = couch_util:dict_find(View#set_view.id_num, KeysToRemoveByView, []),
             case ?set_cbitmask(Group) of
             0 ->
@@ -657,9 +666,9 @@ write_changes(WriterAcc, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs) ->
                     View#set_view.btree, AddKeyValues, KeysToRemove, CleanupFun, {go, 0})
             end,
             NewView = View#set_view{btree = ViewBtree2},
-            {NewView, Acc + CleanupCount}
+            {NewView, {AccC + CleanupCount, AccI + length(AddKeyValues), AccD + length(KeysToRemove)}}
         end,
-        IdBtreePurgedKeyCount, lists:zip(Group#set_view_group.views, ViewKeyValuesToAdd)),
+        {IdBtreePurgedKeyCount, 0, 0}, lists:zip(Group#set_view_group.views, ViewKeyValuesToAdd)),
     Views3 = lists:map(
         fun(View) ->
             NewUpSeqs = update_seqs(PartIdSeqs, View#set_view.update_seqs),
@@ -687,7 +696,11 @@ write_changes(WriterAcc, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs) ->
     WriterAcc#writer_acc{
         group = NewGroup,
         cleanup_kv_count = CleanupKvCount0 + CleanupKvCount,
-        cleanup_time = CleanupTime0 + CleanupTime
+        cleanup_time = CleanupTime0 + CleanupTime,
+        inserted_kvs = WriterAcc#writer_acc.inserted_kvs + InsertedKvCount,
+        deleted_kvs = WriterAcc#writer_acc.deleted_kvs + DeletedKvCount,
+        inserted_ids = WriterAcc#writer_acc.inserted_ids + length(AddDocIdViewIdKeys),
+        deleted_ids = WriterAcc#writer_acc.deleted_ids + length(RemoveDocIds)
     }.
 
 

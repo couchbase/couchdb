@@ -77,14 +77,14 @@
 }).
 
 -record(set_view_group_stats, {
-    updates = 0,
+    full_updates = 0,
     % # of updates that only finished updating the active partitions
     % (in the phase of updating passive partitions). Normally its value
     % is full_updates - 1.
     partial_updates = 0,
     % # of times the updater was forced to stop (because partition states
     % were updated) while it was still indexing the active partitions.
-    updater_stops = 0,
+    stopped_updates = 0,
     compactions = 0,
     % # of interrupted cleanups. Cleanups which were stopped (in order to do
     % higher priority tasks) and left the index in a not yet clean state (but
@@ -137,7 +137,11 @@
     blocked_time,   % seconds (float)
     state,          % 'updating_active' | 'updating_passive'
     cleanup_kv_count,
-    cleanup_time    % seconds (float)
+    cleanup_time,   % seconds (float)
+    inserted_ids,
+    deleted_ids,
+    inserted_kvs,
+    deleted_kvs
 }).
 
 -record(set_view_compactor_result, {

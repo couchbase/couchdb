@@ -190,7 +190,7 @@ get_replica_updates_count() ->
 
 get_replica_updates_count(RepGroupInfo) ->
     {Stats} = couch_util:get_value(stats, RepGroupInfo),
-    Updates = couch_util:get_value(updates, Stats),
+    Updates = couch_util:get_value(full_updates, Stats),
     true = is_integer(Updates),
     Updates.
 
