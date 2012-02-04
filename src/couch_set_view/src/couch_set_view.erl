@@ -333,13 +333,10 @@ do_fold_reduce(Group, View, Fun, Acc, Options0) ->
             case PartsBitmap band ExcludeBitmask of
             0 ->
                 all;
+            PartsBitmap ->
+                none;
             _ ->
-                case PartsBitmap bxor ExcludeBitmask of
-                0 ->
-                    none;
-                _ ->
-                    partial
-                end
+                partial
             end
         end,
         lists:keystore(filter_fun, 1, Options0, {filter_fun, FilterFun})
