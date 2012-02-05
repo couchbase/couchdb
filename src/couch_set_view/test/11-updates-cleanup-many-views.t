@@ -54,7 +54,7 @@ initial_num_docs() -> 115200.  % must be multiple of num_set_partitions()
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(272),
+    etap:plan(128),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -91,12 +91,9 @@ test() ->
         ExpectedView3Value1,
         "Reduce view 3 has value " ++ couch_util:to_list(ExpectedView3Value1)),
 
-    etap:diag("Verifying view group obtained after querying view 1"),
     verify_btrees_1(Group1),
-    etap:diag("Verifying view group obtained after querying view 2"),
-    verify_btrees_1(Group2),
-    etap:diag("Verifying view group obtained after querying view 3"),
-    verify_btrees_1(Group3),
+    compare_groups(Group1, Group2),
+    compare_groups(Group1, Group3),
 
     compact_view_group(),
 
@@ -116,12 +113,9 @@ test() ->
         ExpectedView3Value1,
         "Reduce view 3 has value " ++ couch_util:to_list(ExpectedView3Value1)),
 
-    etap:diag("Verifying view group obtained after querying view 1"),
     verify_btrees_1(Group4),
-    etap:diag("Verifying view group obtained after querying view 2"),
-    verify_btrees_1(Group5),
-    etap:diag("Verifying view group obtained after querying view 3"),
-    verify_btrees_1(Group6),
+    compare_groups(Group4, Group5),
+    compare_groups(Group4, Group6),
 
     etap:diag("Updating all documents"),
     update_docs(0, initial_num_docs(), 2),
@@ -162,12 +156,9 @@ test() ->
         ExpectedView3Value2,
         "Reduce view 3 has value " ++ couch_util:to_list(ExpectedView3Value2)),
 
-    etap:diag("Verifying view group obtained after querying view 1"),
     verify_btrees_2(Group7),
-    etap:diag("Verifying view group obtained after querying view 2"),
-    verify_btrees_2(Group8),
-    etap:diag("Verifying view group obtained after querying view 3"),
-    verify_btrees_2(Group9),
+    compare_groups(Group7, Group8),
+    compare_groups(Group7, Group9),
 
     compact_view_group(),
 
@@ -187,12 +178,9 @@ test() ->
         ExpectedView3Value2,
         "Reduce view 3 has value " ++ couch_util:to_list(ExpectedView3Value2)),
 
-    etap:diag("Verifying view group obtained after querying view 1"),
     verify_btrees_2(Group10),
-    etap:diag("Verifying view group obtained after querying view 2"),
-    verify_btrees_2(Group11),
-    etap:diag("Verifying view group obtained after querying view 3"),
-    verify_btrees_2(Group12),
+    compare_groups(Group10, Group11),
+    compare_groups(Group10, Group12),
 
     etap:diag("Marking partitions [ 32 .. 63 ] as active"),
     ok = lists:foreach(
@@ -221,12 +209,9 @@ test() ->
         ExpectedView3Value3,
         "Reduce view 3 has value " ++ couch_util:to_list(ExpectedView3Value3)),
 
-    etap:diag("Verifying view group obtained after querying view 1"),
     verify_btrees_3(Group13),
-    etap:diag("Verifying view group obtained after querying view 2"),
-    verify_btrees_3(Group14),
-    etap:diag("Verifying view group obtained after querying view 3"),
-    verify_btrees_3(Group15),
+    compare_groups(Group13, Group14),
+    compare_groups(Group13, Group15),
 
     compact_view_group(),
 
@@ -246,12 +231,9 @@ test() ->
         ExpectedView3Value3,
         "Reduce view 3 has value " ++ couch_util:to_list(ExpectedView3Value3)),
 
-    etap:diag("Verifying view group obtained after querying view 1"),
     verify_btrees_3(Group16),
-    etap:diag("Verifying view group obtained after querying view 2"),
-    verify_btrees_3(Group17),
-    etap:diag("Verifying view group obtained after querying view 3"),
-    verify_btrees_3(Group18),
+    compare_groups(Group16, Group17),
+    compare_groups(Group16, Group18),
 
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
     ok = timer:sleep(1000),
@@ -765,3 +747,14 @@ verify_btrees_3(Group) ->
         0, []),
     etap:is(View2BtreeFoldResult, initial_num_docs(),
         "View2 Btree has " ++ integer_to_list(initial_num_docs()) ++ " entries").
+
+
+compare_groups(Group1, Group2) ->
+    etap:is(
+        Group2#set_view_group.views,
+        Group1#set_view_group.views,
+        "View states are equal"),
+    etap:is(
+        Group2#set_view_group.index_header,
+        Group1#set_view_group.index_header,
+        "Index headers are equal").

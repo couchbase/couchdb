@@ -57,7 +57,7 @@ initial_num_docs() -> 115200.  % must be multiple of num_set_partitions()
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(362),
+    etap:plan(170),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -93,12 +93,9 @@ test() ->
         ExpectedView3Value1,
         "Reduce value of view 3 is " ++ couch_util:to_list(ExpectedView3Value1)),
 
-    etap:diag("Verifying view group obtained after querying view 1"),
     verify_btrees_1(Group1),
-    etap:diag("Verifying view group obtained after querying view 2"),
-    verify_btrees_1(Group2),
-    etap:diag("Verifying view group obtained after querying view 3"),
-    verify_btrees_1(Group3),
+    compare_groups(Group1, Group2),
+    compare_groups(Group1, Group3),
 
     compact_view_group(),
 
@@ -118,12 +115,9 @@ test() ->
         ExpectedView3Value1,
         "Reduce value of view 3 is " ++ couch_util:to_list(ExpectedView3Value1)),
 
-    etap:diag("Verifying view group obtained after querying view 1"),
     verify_btrees_1(Group4),
-    etap:diag("Verifying view group obtained after querying view 2"),
-    verify_btrees_1(Group5),
-    etap:diag("Verifying view group obtained after querying view 3"),
-    verify_btrees_1(Group6),
+    compare_groups(Group4, Group5),
+    compare_groups(Group4, Group6),
 
     etap:diag("Deleting all documents"),
     delete_docs(0, initial_num_docs()),
@@ -160,12 +154,9 @@ test() ->
         empty,
         "Reduce value of view 3 is empty"),
 
-    etap:diag("Verifying view group obtained after querying view 1"),
     verify_btrees_2(Group7),
-    etap:diag("Verifying view group obtained after querying view 2"),
-    verify_btrees_2(Group8),
-    etap:diag("Verifying view group obtained after querying view 3"),
-    verify_btrees_2(Group9),
+    compare_groups(Group7, Group8),
+    compare_groups(Group7, Group9),
 
     compact_view_group(),
 
@@ -185,12 +176,9 @@ test() ->
         empty,
         "Reduce value of view 3 is empty"),
 
-    etap:diag("Verifying view group obtained after querying view 1"),
     verify_btrees_2(Group10),
-    etap:diag("Verifying view group obtained after querying view 2"),
-    verify_btrees_2(Group11),
-    etap:diag("Verifying view group obtained after querying view 3"),
-    verify_btrees_2(Group12),
+    compare_groups(Group10, Group11),
+    compare_groups(Group10, Group12),
 
     etap:diag("Marking partitions [ 32 .. 63 ] as active"),
     ok = lists:foreach(
@@ -215,12 +203,9 @@ test() ->
         empty,
         "Reduce value of view 3 is empty"),
 
-    etap:diag("Verifying view group obtained after querying view 1"),
     verify_btrees_3(Group13),
-    etap:diag("Verifying view group obtained after querying view 2"),
-    verify_btrees_3(Group14),
-    etap:diag("Verifying view group obtained after querying view 3"),
-    verify_btrees_3(Group15),
+    compare_groups(Group13, Group14),
+    compare_groups(Group13, Group15),
 
     compact_view_group(),
 
@@ -240,12 +225,9 @@ test() ->
         empty,
         "Reduce value of view 3 is empty"),
 
-    etap:diag("Verifying view group obtained after querying view 1"),
     verify_btrees_3(Group16),
-    etap:diag("Verifying view group obtained after querying view 2"),
-    verify_btrees_3(Group17),
-    etap:diag("Verifying view group obtained after querying view 3"),
-    verify_btrees_3(Group18),
+    compare_groups(Group16, Group17),
+    compare_groups(Group16, Group18),
 
     etap:diag("Creating the same documents again"),
     add_documents(0, initial_num_docs()),
@@ -266,12 +248,9 @@ test() ->
         ExpectedView3Value1,
         "Reduce value of view 3 is " ++ couch_util:to_list(ExpectedView3Value1)),
 
-    etap:diag("Verifying view group obtained after querying view 1"),
     verify_btrees_1(Group19),
-    etap:diag("Verifying view group obtained after querying view 2"),
-    verify_btrees_1(Group20),
-    etap:diag("Verifying view group obtained after querying view 3"),
-    verify_btrees_1(Group21),
+    compare_groups(Group19, Group20),
+    compare_groups(Group19, Group21),
 
     compact_view_group(),
 
@@ -291,12 +270,9 @@ test() ->
         ExpectedView3Value1,
         "Reduce value of view 3 is " ++ couch_util:to_list(ExpectedView3Value1)),
 
-    etap:diag("Verifying view group obtained after querying view 1"),
     verify_btrees_1(Group22),
-    etap:diag("Verifying view group obtained after querying view 2"),
-    verify_btrees_1(Group23),
-    etap:diag("Verifying view group obtained after querying view 3"),
-    verify_btrees_1(Group24),
+    compare_groups(Group22, Group23),
+    compare_groups(Group22, Group24),
 
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
     ok = timer:sleep(1000),
@@ -733,3 +709,14 @@ verify_btrees_3(Group) ->
         end,
         0, []),
     etap:is(View2BtreeFoldResult, 0, "View2 Btree is empty").
+
+
+compare_groups(Group1, Group2) ->
+    etap:is(
+        Group2#set_view_group.views,
+        Group1#set_view_group.views,
+        "View states are equal"),
+    etap:is(
+        Group2#set_view_group.index_header,
+        Group1#set_view_group.index_header,
+        "Index headers are equal").
