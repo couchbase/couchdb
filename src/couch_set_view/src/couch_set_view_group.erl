@@ -366,13 +366,15 @@ handle_call(is_view_defined, _From, #state{group = Group} = State) ->
     {reply, is_integer(?set_num_partitions(Group)), State, ?TIMEOUT};
 
 handle_call({partition_deleted, master}, _From, State) ->
-    {stop, shutdown, shutdown, State};
+    Reason = {db_deleted, ?master_dbname((?set_name(State)))},
+    {stop, shutdown, shutdown, reply_all(State, {error, Reason})};
 handle_call({partition_deleted, PartId}, _From, #state{group = Group} = State) ->
     Mask = 1 bsl PartId,
     case ((?set_abitmask(Group) band Mask) =/= 0) orelse
         ((?set_pbitmask(Group) band Mask) =/= 0) of
     true ->
-        {stop, shutdown, shutdown, State};
+        Reason = {db_deleted, ?dbname((?set_name(State)), PartId)},
+        {stop, shutdown, shutdown, reply_all(State, {error, Reason})};
     false ->
         {reply, ignore, State, ?TIMEOUT}
     end;
@@ -871,9 +873,13 @@ reply_with_group(Group0, Stats, WaitList) ->
         gen_server:reply(From, {ok, Group, ActiveReplicasBitmask})
     end, WaitList).
 
-reply_all(#state{waiting_list=WaitList}=State, Reply) ->
-    [catch gen_server:reply(From, Reply) || From <- WaitList],
-    State#state{waiting_list=[]}.
+
+reply_all(#state{waiting_list = []} = State, _Reply) ->
+    State;
+reply_all(#state{waiting_list = WaitList} = State, Reply) ->
+    lists:foreach(fun(From) -> catch gen_server:reply(From, Reply) end, WaitList),
+    State#state{waiting_list = []}.
+
 
 prepare_group({RootDir, SetName, #set_view_group{sig = Sig, type = Type} = Group}, ForceReset)->
     case open_index_file(RootDir, SetName, Type, Sig) of
