@@ -105,9 +105,6 @@ full_reduce(#btree{root=Root}) ->
 
 size(#btree{root = nil}) ->
     0;
-size(#btree{root = {_P, _Red}}) ->
-    % pre 1.2 format
-    nil;
 size(#btree{root = {_P, _Red, Size}}) ->
     Size.
 
@@ -386,11 +383,6 @@ reduce_tree_size(kv_node, NodeSize, _KvList) ->
     NodeSize;
 reduce_tree_size(kp_node, NodeSize, []) ->
     NodeSize;
-reduce_tree_size(kp_node, _NodeSize, [{_K, {_P, _Red}} | _]) ->
-    % pre 1.2 format
-    nil;
-reduce_tree_size(kp_node, _NodeSize, [{_K, {_P, _Red, nil}} | _]) ->
-    nil;
 reduce_tree_size(kp_node, NodeSize, [{_K, {_P, _Red, Sz}} | NodeList]) ->
     reduce_tree_size(kp_node, NodeSize + Sz, NodeList).
 
