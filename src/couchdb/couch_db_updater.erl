@@ -60,7 +60,7 @@ handle_call(full_commit, _From,  Db) ->
     {reply, ok, commit_data(Db)}; % commit the data and return ok
 handle_call(increment_update_seq, _From, Db) ->
     Db2 = commit_data(Db#db{update_seq=Db#db.update_seq+1}),
-    ok = gen_server:call(Db2#db.main_pid, {db_updated, Db2}),
+    ok = notify_db_updated(Db2),
     couch_db_update_notifier:notify({updated, Db#db.name}),
     {reply, {ok, Db2#db.update_seq}, Db2};
 
@@ -69,7 +69,7 @@ handle_call({set_security, NewSec}, _From, #db{compression = Comp} = Db) ->
         Db#db.fd, NewSec, [{compression, Comp}]),
     Db2 = commit_data(Db#db{security=NewSec, security_ptr=Ptr,
             update_seq=Db#db.update_seq+1}),
-    ok = gen_server:call(Db2#db.main_pid, {db_updated, Db2}),
+    ok = notify_db_updated(Db2),
     {reply, ok, Db2};
 
 handle_call({purge_docs, _IdRevs}, _From,
@@ -122,7 +122,7 @@ handle_call({purge_docs, IdRevs}, _From, Db) ->
             update_seq = LastSeq + 1,
             header=Header#db_header{purge_seq=PurgeSeq+1, purged_docs=Pointer}}),
 
-    ok = gen_server:call(Db2#db.main_pid, {db_updated, Db2}),
+    ok = notify_db_updated(Db2),
     couch_db_update_notifier:notify({updated, Db#db.name}),
     {reply, {ok, (Db2#db.header)#db_header.purge_seq, IdRevsPurged}, Db2};
 handle_call(start_compact, _From, Db) ->
@@ -131,7 +131,7 @@ handle_call(start_compact, _From, Db) ->
         ?LOG_INFO("Starting compaction for db \"~s\"", [Db#db.name]),
         Pid = spawn_link(fun() -> start_copy_compact(Db) end),
         Db2 = Db#db{compactor_info=Pid},
-        ok = gen_server:call(Db#db.main_pid, {db_updated, Db2}),
+        ok = notify_db_updated(Db2),
         {reply, {ok, Pid}, Db2};
     _ ->
         % compact currently running, this is a no-op
@@ -174,7 +174,7 @@ handle_call({compact_done, CompactFilepath}, _From, Db) ->
         % it can't reopen
         ok = couch_file:set_close_after(OldFd, infinity),
         RootDir = couch_config:get("couchdb", "database_dir", "."),
-        ok = gen_server:call(Db#db.main_pid, {db_updated, NewDb2}, infinity),
+        ok = notify_db_updated(NewDb2),
         ok = couch_file:only_snapshot_reads(OldFd), % prevent writes to the fd
         close_db(Db),
         ok = couch_file:rename(NewFd, NewFilePath),
@@ -201,7 +201,7 @@ handle_cast(Msg, #db{name = Name} = Db) ->
 handle_info({update_docs, Client, Docs, NonRepDocs, FullCommit}, Db) ->
     try update_docs_int(Db, Docs, NonRepDocs, FullCommit) of
     {ok, Db2} ->
-        ok = gen_server:call(Db#db.main_pid, {db_updated, Db2}),
+        ok = notify_db_updated(Db2),
         if Db2#db.update_seq /= Db#db.update_seq ->
             couch_db_update_notifier:notify({updated, Db2#db.name});
         true -> ok
@@ -221,7 +221,7 @@ handle_info(delayed_commit, Db) ->
         Db ->
             {noreply, Db};
         Db2 ->
-            ok = gen_server:call(Db2#db.main_pid, {db_updated, Db2}),
+            ok = notify_db_updated(Db2),
             {noreply, Db2}
     end;
 handle_info({'EXIT', _Pid, normal}, Db) ->
@@ -683,3 +683,14 @@ update_compact_task(NumChanges) ->
         (Changes2 * 100) div Total
     end,
     couch_task_status:update([{changes_done, Changes2}, {progress, Progress}]).
+
+
+notify_db_updated(NewDb) ->
+    Ref = make_ref(),
+    NewDb#db.main_pid ! {db_updated, Ref, NewDb},
+    receive
+    {ok, Ref} ->
+        ok;
+    {'EXIT', _Pid, Reason} ->
+        exit(Reason)
+    end.

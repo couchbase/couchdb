@@ -152,9 +152,11 @@ init([]) ->
                 start_time=httpd_util:rfc1123_date()}}.
 
 terminate(_Reason, _Srv) ->
-    [couch_util:shutdown_sync(Pid) || {_, {Pid, _LruTime}} <-
-            ets:tab2list(couch_dbs_by_name)],
-    ok.
+    lists:foreach(
+        fun({_DbName, {_Status, Pid, _LruTime}}) ->
+            couch_util:shutdown_sync(Pid)
+        end,
+        ets:tab2list(couch_dbs_by_name)).
 
 all_databases() ->
     {ok, DbList} = all_databases(

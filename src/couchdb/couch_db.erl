@@ -608,15 +608,6 @@ handle_call(is_idle, _From, #db{fd_ref_counter=RefCntr, compactor_info=Compact,
     % Idle means no referrers. Unless in the middle of a compaction file switch,
     % there are always at least 2 referrers, couch_db_updater and us.
     {reply, (Delay == nil) andalso (Compact == nil) andalso (couch_ref_counter:count(RefCntr) == 2), Db};
-handle_call({db_updated, NewDb}, _From, #db{fd_ref_counter=OldRefCntr}) ->
-    #db{fd_ref_counter=NewRefCntr}=NewDb,
-    case NewRefCntr =:= OldRefCntr of
-    true -> ok;
-    false ->
-        couch_ref_counter:add(NewRefCntr),
-        couch_ref_counter:drop(OldRefCntr)
-    end,
-    {reply, ok, NewDb};
 handle_call(get_db, _From, Db) ->
     {reply, {ok, Db}, Db};
 handle_call(get_current_seq, _From, #db{update_seq = Seq} = Db) ->
@@ -631,6 +622,16 @@ code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 
+handle_info({db_updated, Ref, NewDb}, Db) ->
+    case NewDb#db.fd_ref_counter =:= Db#db.fd_ref_counter of
+    true ->
+        ok;
+    false ->
+        couch_ref_counter:add(NewDb#db.fd_ref_counter),
+        couch_ref_counter:drop(Db#db.fd_ref_counter)
+    end,
+    NewDb#db.update_pid ! {ok, Ref},
+    {noreply, NewDb};
 handle_info({'EXIT', _Pid, normal}, Db) ->
     {noreply, Db};
 handle_info({'EXIT', _Pid, Reason}, Server) ->
