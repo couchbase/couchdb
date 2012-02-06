@@ -180,7 +180,6 @@ fail:
 
 int mr_push_kv_range(char* buf, int pos, int bound, int end, couchfile_modify_result *dst)
 {
-    nodelist* n = make_nodelist();
     int current = 0;
     int term_begin_pos;
     int errcode = 0;
@@ -253,10 +252,10 @@ int mr_push_kp_range(char* buf, int pos, int bound, int end, couchfile_modify_re
         if(current >= bound)
         {
             DBG("   .... %d\r\n", current);
-            read = read_pointer(buf,pos), dst;
+            read = read_pointer(buf,pos);
             if(!read)
                 return ERROR_ALLOC_FAIL;
-            mr_push_pointerinfo(read_pointer(buf,pos), dst);
+            mr_push_pointerinfo(read, dst);
         }
         ei_skip_term(buf, &pos);
         current++;

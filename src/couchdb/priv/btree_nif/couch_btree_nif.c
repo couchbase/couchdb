@@ -117,7 +117,6 @@ void by_seq_rereduce (eterm_buf* dst, nodelist* leaflist, int count) {
     if(!dst->buf)
         return;
     i = leaflist;
-    dst->buf = malloc(12);
     while(i != NULL)
     {
         r_pos = 0;
@@ -141,7 +140,6 @@ void by_id_rereduce(eterm_buf *dst, nodelist* leaflist, int count)
     dst->buf = malloc(30);
     if(!dst->buf)
         return;
-    dst->buf = malloc(30);
     while(i != NULL)
     {
         long long src_deleted = 0;
@@ -176,7 +174,6 @@ void by_id_reduce(eterm_buf *dst, nodelist* leaflist, int count)
     dst->buf = malloc(30);
     if(!dst->buf)
         return;
-    dst->buf = malloc(30);
     while(i != NULL)
     {
         long src_deleted = 0;
