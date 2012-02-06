@@ -14,7 +14,7 @@
 -behaviour(gen_server).
 
 % public API
--export([start_link/0, enter/0, leave/0]).
+-export([start_link/0, enter/0, enter/1, leave/0, leave/1]).
 
 % gen_server API
 -export([init/1, handle_call/3, handle_info/2, handle_cast/2]).
@@ -39,10 +39,16 @@ start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
 enter() ->
-    ok = gen_server:call(?MODULE, {enter, self()}, infinity).
+    enter(self()).
+
+enter(Pid) ->
+    ok = gen_server:call(?MODULE, {enter, Pid}, infinity).
 
 leave() ->
-    ok = gen_server:cast(?MODULE, {leave, self()}).
+    leave(self()).
+
+leave(Pid) ->
+    ok = gen_server:cast(?MODULE, {leave, Pid}).
 
 
 init([]) ->

@@ -60,9 +60,35 @@ update(Owner, Group, FileName) ->
         {[{P, Db} | A1], [{P, Del} | A2], [{P, NotDel} | A3], [{P, Seq} | A4]}
     end,
 
+    process_flag(trap_exit, true),
+
     BeforeEnterTs = now(),
-    ok = couch_indexer_manager:enter(),
-    BlockedTime = timer:now_diff(now(), BeforeEnterTs) / 1000000,
+    Parent = self(),
+    Pid = spawn_link(fun() ->
+        ok = couch_indexer_manager:enter(Parent),
+        exit({done, (timer:now_diff(now(), BeforeEnterTs) / 1000000)})
+    end),
+
+    BlockedTime = receive
+    {'EXIT', Pid, {done, Duration}} ->
+        Duration;
+    {'EXIT', _, Reason} ->
+        exit({updater_error, Reason});
+    StopMsg when StopMsg =:= stop_after_active; StopMsg =:= stop_immediately ->
+        EmptyResult = #set_view_updater_result{
+            group = Group,
+            indexing_time = 0,
+            blocked_time = timer:now_diff(now(), BeforeEnterTs) / 1000000,
+            state = updating_active,
+            cleanup_kv_count = 0,
+            cleanup_time = 0,
+            inserted_ids = 0,
+            deleted_ids = 0,
+            inserted_kvs = 0,
+            deleted_kvs = 0
+        },
+        exit({updater_finished, EmptyResult})
+    end,
 
     {ActiveDbs0, ActiveDelCounts, ActiveNotDelCounts, ActiveSeqs} =
         lists:foldl(FoldFun, {[], [], [], []}, ActiveParts),
@@ -118,7 +144,6 @@ update(Owner, Group, FileName, ActiveDbs, PassiveDbs, MaxSeqs, BlockedTime) ->
         sig = GroupSig
     } = Group,
 
-    process_flag(trap_exit, true),
     StartTime = now(),
     NumChanges = lists:foldl(
         fun({{PartId, NewSeq}, {PartId, OldSeq}}, Acc) ->
