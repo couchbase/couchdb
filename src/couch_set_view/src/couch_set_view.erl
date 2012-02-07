@@ -618,7 +618,8 @@ handle_info({'EXIT', FromPid, Reason}, Server) ->
 
 handle_info({'DOWN', MonRef, _, Pid, {SetName, DDocId, Sig, Reply}}, Server) ->
     Worker = {MonRef, Pid},
-    [{_, WaitList}] = ets:lookup(couch_sig_to_setview_pid, {SetName, Sig}),
+    Key = {SetName, Sig},
+    [{_, WaitList}] = ets:lookup(couch_sig_to_setview_pid, Key),
     ?LOG_INFO("~s set view group `~s`, set `~s`, signature `~s`, opener worker ~w finished.~n"
         "Replying with ~p to waiting list: ~w",
         [?MODULE, DDocId, SetName, couch_util:to_hex(?b2l(Sig)), Worker, Reply, WaitList]),
@@ -628,7 +629,7 @@ handle_info({'DOWN', MonRef, _, Pid, {SetName, DDocId, Sig, Reply}}, Server) ->
         true = link(NewPid),
         add_to_ets(NewPid, SetName, DDocId, Sig);
     _ ->
-        ok
+        ets:delete(couch_sig_to_setview_pid, Key)
     end,
     {noreply, Server}.
 
