@@ -77,7 +77,7 @@ update(Owner, Group, FileName) ->
     StopMsg when StopMsg =:= stop_after_active; StopMsg =:= stop_immediately ->
         EmptyResult = #set_view_updater_result{
             group = Group,
-            indexing_time = 0,
+            indexing_time = 0.0,
             blocked_time = timer:now_diff(now(), BeforeEnterTs) / 1000000,
             state = updating_active,
             cleanup_kv_count = 0,

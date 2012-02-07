@@ -133,8 +133,8 @@
 
 -record(set_view_updater_result, {
     group,
-    indexing_time,  % seconds (float)
-    blocked_time,   % seconds (float)
+    indexing_time :: float(),  % seconds (float)
+    blocked_time :: float(),   % seconds (float)
     state,          % 'updating_active' | 'updating_passive'
     cleanup_kv_count,
     cleanup_time,   % seconds (float)
