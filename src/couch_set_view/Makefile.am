@@ -43,7 +43,8 @@ test_files = \
     test/09-deletes-cleanup-many-views.t \
     test/10-updates-cleanup.t \
     test/11-updates-cleanup-many-views.t \
-    test/12-errors.t
+    test/12-errors.t \
+    test/13-progressive-cleanup.t
 
 compiled_files = \
     ebin/couch_set_view.app \
