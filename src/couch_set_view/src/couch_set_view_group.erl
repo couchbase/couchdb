@@ -735,7 +735,7 @@ handle_info({'EXIT', Pid, {clean_group, NewGroup, Count, Time}}, #state{cleaner_
     {noreply, notify_cleanup_waiters(State2)};
 
 handle_info({'EXIT', Pid, Reason}, #state{cleaner_pid = Pid} = State) ->
-    {stop, {cleaner_died, Reason}, State};
+    {stop, {cleaner_died, Reason}, State#state{cleaner_pid = nil}};
 
 handle_info({'EXIT', Pid, shutdown},
     #state{group = #set_view_group{db_set = Pid}} = State) ->
