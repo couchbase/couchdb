@@ -32,8 +32,8 @@ detuple_kvs([KV | Rest], Acc) ->
 
 expand_dups([], Acc) ->
     lists:reverse(Acc);
-expand_dups([{Key, {dups, Vals}} | Rest], Acc) ->
-    Expanded = lists:map(fun({PartId, Val}) -> {Key, {PartId, Val}} end, Vals),
+expand_dups([{Key, {PartId, {dups, Vals}}} | Rest], Acc) ->
+    Expanded = lists:map(fun(Val) -> {Key, {PartId, Val}} end, Vals),
     expand_dups(Rest, Expanded ++ Acc);
 expand_dups([{_Key, {_PartId, _Val}} = Kv | Rest], Acc) ->
     expand_dups(Rest, [Kv | Acc]).
@@ -41,12 +41,12 @@ expand_dups([{_Key, {_PartId, _Val}} = Kv | Rest], Acc) ->
 
 expand_dups([], _Abitmask, Acc) ->
     lists:reverse(Acc);
-expand_dups([{Key, {dups, [{PartId, _} | _] = Vals}} | Rest], Abitmask, Acc) ->
+expand_dups([{Key, {PartId, {dups, Vals}}} | Rest], Abitmask, Acc) ->
     case (1 bsl PartId) band Abitmask of
     0 ->
         expand_dups(Rest, Abitmask, Acc);
     _ ->
-        Expanded = lists:map(fun({_PartId, _Val} = V) -> {Key, V} end, Vals),
+        Expanded = lists:map(fun(V) -> {Key, {PartId, V}} end, Vals),
         expand_dups(Rest, Abitmask, Expanded ++ Acc)
     end;
 expand_dups([{_Key, {PartId, _Val}} = Kv | Rest], Abitmask, Acc) ->
@@ -60,8 +60,6 @@ expand_dups([{_Key, {PartId, _Val}} = Kv | Rest], Abitmask, Acc) ->
 
 partitions_map([], BitMap) ->
     BitMap;
-partitions_map([{_Key, {dups, [{PartitionId, _Val} | _]}} | RestKvs], BitMap) ->
-    partitions_map(RestKvs, BitMap bor (1 bsl PartitionId));
 partitions_map([{_Key, {PartitionId, _Val}} | RestKvs], BitMap) ->
     partitions_map(RestKvs, BitMap bor (1 bsl PartitionId)).
 

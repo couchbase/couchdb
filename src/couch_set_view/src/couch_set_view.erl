@@ -325,9 +325,7 @@ do_fold_reduce(Group, View, Fun, Acc, Options0) ->
         Options0;
     _ ->
         ExcludeBitmask = ?set_pbitmask(Group) bor ?set_cbitmask(Group),
-        FilterFun = fun(value, {_K, {dups, [{PartId, _} | _]}}) ->
-            ((1 bsl PartId) band ?set_abitmask(Group)) =/= 0;
-        (value, {_K, {PartId, _}}) ->
+        FilterFun = fun(value, {_K, {PartId, _}}) ->
             ((1 bsl PartId) band ?set_abitmask(Group)) =/= 0;
         (branch, {_, _, PartsBitmap}) ->
             case PartsBitmap band ExcludeBitmask of
@@ -436,8 +434,8 @@ reduce_to_count(Reductions) ->
     couch_btree:final_reduce(
         fun(reduce, KVs) ->
             Count = lists:sum(
-                [case V of {dups, Vals} -> length(Vals); _ -> 1 end
-                || {_,V} <- KVs]),
+                [case V of {_PartId, {dups, Vals}} -> length(Vals); _ -> 1 end
+                || {_, V} <- KVs]),
             {Count, [], 0};
         (rereduce, Reds) ->
             Count = lists:foldl(fun({C, _, _}, Acc) -> Acc + C end, 0, Reds),

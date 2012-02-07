@@ -608,10 +608,10 @@ view_insert_doc_query_results(DocId, PartitionId, [ResultKVs | RestResults],
     {NewKVs, NewViewIdKeysAcc} = lists:foldl(
         fun({Key, Val}, {[{{Key, _DocId} = Kd, PrevVal} | AccRest], AccVid}) ->
             AccKv2 = case PrevVal of
-            {dups, Dups} ->
-                [{Kd, {dups, [{PartitionId, Val} | Dups]}} | AccRest];
-            _ ->
-                [{Kd, {dups, [{PartitionId, Val}, PrevVal]}} | AccRest]
+            {PartitionId, {dups, Dups}} ->
+                [{Kd, {PartitionId, {dups, [Val | Dups]}}} | AccRest];
+            {PartitionId, UserPrevVal} ->
+                [{Kd, {PartitionId, {dups, [Val, UserPrevVal]}}} | AccRest]
             end,
             {AccKv2, [{View#set_view.id_num, Key} | AccVid]};
         ({Key, Val}, {AccKv, AccVid}) ->
