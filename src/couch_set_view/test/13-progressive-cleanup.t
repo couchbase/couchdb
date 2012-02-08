@@ -47,19 +47,24 @@ test() ->
     _ = get_group_snapshot(),
 
     ActivePartitions1 = lists:seq(0, 63),
+    ExpectedReduceValue1 = 3 * lists:sum(lists:seq(0, num_docs() - 1)),
+    FoldFun = fun(PartId, {ActivePartsAcc, RedValueAcc}) ->
+        ActivePartsAcc2 = ordsets:del_element(PartId, ActivePartsAcc),
+        RedValueAcc2 = RedValueAcc - (3 * lists:sum(
+            lists:seq(PartId, num_docs() - 1, num_set_partitions())
+        )),
+        ok = couch_set_view:set_partition_states(
+            test_set_name(), ddoc_id(), [], [], [PartId]),
+        wait_for_cleanup(),
+        verify_btrees(ActivePartsAcc2, RedValueAcc2),
+        {ActivePartsAcc2, RedValueAcc2}
+    end,
 
     etap:diag("Starting phase 1 cleanup"),
 
-    ActivePartitions2 = lists:foldl(
-        fun(PartId, ActivePartsAcc) ->
-            ActivePartsAcc2 = ordsets:del_element(PartId, ActivePartsAcc),
-            ok = couch_set_view:set_partition_states(
-                test_set_name(), ddoc_id(), [], [], [PartId]),
-            wait_for_cleanup(),
-            verify_btrees(ActivePartsAcc2),
-            ActivePartsAcc2
-        end,
-        ActivePartitions1,
+    {ActivePartitions2, ExpectedReduceValue2} = lists:foldl(
+        FoldFun,
+        {ActivePartitions1, ExpectedReduceValue1},
         lists:seq(1, 63, 2)),
 
     etap:diag("Phase 1 cleanup finished"),
@@ -71,16 +76,9 @@ test() ->
 
     etap:diag("Starting phase 2 cleanup"),
 
-    ActivePartitions3 = lists:foldl(
-        fun(PartId, ActivePartsAcc) ->
-            ActivePartsAcc2 = ordsets:del_element(PartId, ActivePartsAcc),
-            ok = couch_set_view:set_partition_states(
-                test_set_name(), ddoc_id(), [], [], [PartId]),
-            wait_for_cleanup(),
-            verify_btrees(ActivePartsAcc2),
-            ActivePartsAcc2
-        end,
-        ActivePartitions2,
+    {ActivePartitions3, _} = lists:foldl(
+        FoldFun,
+        {ActivePartitions2, ExpectedReduceValue2},
         lists:reverse(lists:seq(0, 63, 2))),
 
     etap:diag("Phase 2 cleanup finished"),
@@ -124,7 +122,6 @@ wait_for_cleanup_loop(GroupInfo) ->
     [] ->
         ok;
     _ ->
-        ok = timer:sleep(100),
         wait_for_cleanup_loop(get_group_info())
     end.
 
@@ -197,7 +194,7 @@ get_view(ViewName, [#set_view{reduce_funs = RedFuns} = View | Rest]) ->
     end.
 
 
-verify_btrees([]) ->
+verify_btrees([], _ExpectedView2Reduction) ->
     Group = get_group_snapshot(),
     #set_view_group{
         id_btree = IdBtree,
@@ -269,7 +266,7 @@ verify_btrees([]) ->
         0, []),
     etap:is(View2BtreeFoldResult, 0, "View2 Btree is empty");
 
-verify_btrees(ActiveParts) ->
+verify_btrees(ActiveParts, ExpectedView2Reduction) ->
     Group = get_group_snapshot(),
     #set_view_group{
         id_btree = IdBtree,
@@ -305,10 +302,6 @@ verify_btrees(ActiveParts) ->
         couch_btree:full_reduce(View1Btree),
         {ok, {ExpectedKVCount, [ExpectedKVCount], ExpectedBitmask}},
         "View1 Btree has the right reduce value"),
-    ExpectedView2Reduction = lists:sum([
-        I * 3 || I <- lists:seq(0, num_docs() - 1),
-            ordsets:is_element((I rem num_set_partitions()), ActiveParts)
-    ]),
     etap:is(
         couch_btree:full_reduce(View2Btree),
         {ok, {ExpectedKVCount, [ExpectedView2Reduction], ExpectedBitmask}},
@@ -326,11 +319,12 @@ verify_btrees(ActiveParts) ->
         IdBtree,
         fun(Kv, _, {NextVal, I}) ->
             PartId = NextVal rem num_set_partitions(),
+            DocId = doc_id(NextVal),
             Value = [
-                {View2#set_view.id_num, doc_id(NextVal)},
-                {View1#set_view.id_num, doc_id(NextVal)}
+                {View2#set_view.id_num, DocId},
+                {View1#set_view.id_num, DocId}
             ],
-            ExpectedKv = {doc_id(NextVal), {PartId, Value}},
+            ExpectedKv = {DocId, {PartId, Value}},
             case ExpectedKv =:= Kv of
             true ->
                 ok;
@@ -348,7 +342,8 @@ verify_btrees(ActiveParts) ->
         View1Btree,
         fun(Kv, _, {NextVal, I}) ->
             PartId = NextVal rem num_set_partitions(),
-            ExpectedKv = {{doc_id(NextVal), doc_id(NextVal)}, {PartId, NextVal}},
+            DocId = doc_id(NextVal),
+            ExpectedKv = {{DocId, DocId}, {PartId, NextVal}},
             case ExpectedKv =:= Kv of
             true ->
                 ok;
@@ -366,7 +361,8 @@ verify_btrees(ActiveParts) ->
         View2Btree,
         fun(Kv, _, {NextVal, I}) ->
             PartId = NextVal rem num_set_partitions(),
-            ExpectedKv = {{doc_id(NextVal), doc_id(NextVal)}, {PartId, NextVal * 3}},
+            DocId = doc_id(NextVal),
+            ExpectedKv = {{DocId, DocId}, {PartId, NextVal * 3}},
             case ExpectedKv =:= Kv of
             true ->
                 ok;
