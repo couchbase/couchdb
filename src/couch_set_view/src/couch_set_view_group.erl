@@ -788,6 +788,7 @@ handle_info({'EXIT', Pid, {updater_finished, Result}}, #state{updater_pid = Pid}
     end;
 
 handle_info({'EXIT', Pid, {updater_error, Error}}, #state{updater_pid = Pid} = State) ->
+    % TODO: add an updater errors count to stats
     ?LOG_ERROR("Set view `~s`, ~s group `~s`, received error from updater: ~p",
         [?set_name(State), ?type(State), ?group_id(State), Error]),
     case State#state.shutdown of
@@ -1683,10 +1684,18 @@ stop_updater(#state{updater_pid = Pid} = State, When) ->
         },
         notify_cleanup_waiters(NewState);
     {'EXIT', Pid, Reason} ->
+        % TODO: add an updater errors count to stats
+        Reply = case Reason of
+        {updater_error, _} ->
+            {error, element(2, Reason)};
+        _ ->
+            {error, Reason}
+        end,
         ?LOG_ERROR("Updater, set view `~s`, ~s group `~s`, died with "
             "unexpected reason: ~p",
             [?set_name(State), ?type(State), ?group_id(State), Reason]),
-        State#state{updater_pid = nil, updater_state = not_running}
+        NewState = State#state{updater_pid = nil, updater_state = not_running},
+        reply_all(NewState, Reply)
     end.
 
 
