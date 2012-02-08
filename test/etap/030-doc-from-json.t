@@ -1,6 +1,6 @@
 #!/usr/bin/env escript
 %% -*- erlang -*-
-%%! -pa ./src/couchdb -pa ./src/mochiweb -sasl errlog_type false -noshell
+%%! -pa ./src/couchdb -pa ./src/mochiweb -sasl errlog_type false -noshell -smp enable
 
 % Licensed under the Apache License, Version 2.0 (the "License"); you may not
 % use this file except in compliance with the License. You may obtain a copy of

@@ -32,6 +32,7 @@ source_files = \
     test/couch_set_view_test_util.erl
 
 test_files = \
+    test/00-prepare.t \
     test/01-load.t \
     test/02-old-index-cleanup.t \
     test/03-db-compaction-file-leaks.t \
@@ -64,7 +65,8 @@ CLEANFILES = $(compiled_files) test/run
 noinst_SCRIPTS = test/run
 
 check:
-	$(abs_top_builddir)/src/couch_set_view/test/run $(abs_top_srcdir)/src/couch_set_view/test
+	$(abs_top_builddir)/src/couch_set_view/test/run $(abs_top_srcdir)/src/couch_set_view/test/00-prepare.t
+	$(abs_top_builddir)/src/couch_set_view/test/run -j4 $(abs_top_srcdir)/src/couch_set_view/test
 
 test/run: test/run.tpl
 	sed -e "s|%abs_top_srcdir%|@abs_top_srcdir@|g" \

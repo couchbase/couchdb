@@ -14,12 +14,10 @@
 % License for the specific language governing permissions and limitations under
 % the License.
 
-default_config() ->
-    test_util:build_file("etc/couchdb/default_dev.ini").
-
 main(_) ->
     test_util:init_code_path(),
-    etap:plan(3),
+
+    etap:plan(1),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -29,28 +27,19 @@ main(_) ->
     end,
     ok.
 
+
 test() ->
-    couch_config:start_link([]),
-
-    etap:fun_is(
-        fun(KVPairs) -> length(KVPairs) == 0 end,
-        couch_config:all(),
-        "No INI files specified returns 0 key/value pairs."
-    ),
-
-    ok = couch_config:set("httpd", "port", "80", false),
-
-    etap:is(
-        couch_config:get("httpd", "port"),
-        "80",
-        "Created a new non-persisted k/v pair."
-    ),
-
-    ok = couch_config:set("httpd", "bind_address", "127.0.0.1"),
-    etap:is(
-        couch_config:get("httpd", "bind_address"),
-        "127.0.0.1",
-        "Asking for a persistent key/value pair doesn't choke."
-    ),
-
+    % Purpose of this test is to create all system databases (_users, _replicator)
+    % before we start running all other tests in parallel. When the other tests start
+    % in parallel, if the system databases don't exist, they will all attempt to create
+    % them, and 1 succeeds while others will fail.
+    couch_set_view_test_util:start_server(),
+    {ok, RepDb} = couch_db:open_int(<<"_replicator">>, []),
+    {ok, UsersDb} = couch_db:open_int(<<"_users">>, []),
+    {ok, _} = couch_db:ensure_full_commit(RepDb),
+    {ok, _} = couch_db:ensure_full_commit(UsersDb),
+    ok = couch_db:close(RepDb),
+    ok = couch_db:close(UsersDb),
+    etap:is(true, true, "Preparation for parallel testing done"),
+    couch_set_view_test_util:stop_server(),
     ok.

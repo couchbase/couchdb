@@ -1,5 +1,6 @@
 #!/usr/bin/env escript
 %% -*- erlang -*-
+%%! -smp enable
 
 % Licensed under the Apache License, Version 2.0 (the "License"); you may not
 % use this file except in compliance with the License. You may obtain a copy of
@@ -48,7 +49,7 @@
 }).
 
 
-test_set_name() -> <<"couch_test_set_index_deletes_cleanup">>.
+test_set_name() -> <<"couch_test_set_index_deletes_cleanup_many">>.
 num_set_partitions() -> 64.
 ddoc_id() -> <<"_design/test">>.
 initial_num_docs() -> 115200.  % must be multiple of num_set_partitions()
