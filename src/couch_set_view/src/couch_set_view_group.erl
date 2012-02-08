@@ -839,12 +839,7 @@ terminate(Reason, #state{updater_pid=Update, compactor_pid=Compact}=S) ->
         [?set_name(S), ?type(S), ?group_id(S), Reason]),
     State2 = stop_cleaner(S),
     reply_all(State2, Reason),
-    case is_pid(?db_set(S)) andalso is_process_alive(?db_set(S)) of
-    true ->
-        couch_db_set:close(?db_set(S));
-    false ->
-        ok
-    end,
+    catch couch_db_set:close(?db_set(S)),
     couch_util:shutdown_sync(Update),
     couch_util:shutdown_sync(Compact),
     ok.
