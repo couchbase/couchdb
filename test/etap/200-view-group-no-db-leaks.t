@@ -40,8 +40,7 @@
     user_ctx = #user_ctx{},
     waiting_delayed_commit = nil,
     fsync_options = [],
-    options = [],
-    compression
+    options = []
 }).
 
 test_db_name() -> <<"couch_test_view_group_db_leaks">>.

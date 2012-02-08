@@ -1,1 +1,0 @@
-%msbuild_dir%/%msbuild_name% couch_btree_nif.vcxproj -p:configuration=release -p:platform=win32

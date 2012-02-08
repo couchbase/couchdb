@@ -53,6 +53,13 @@
 
 -define(LOG_ERROR(Format, Args), couch_log:error(Format, Args)).
 
+-define(CONTENT_META_JSON, 0).
+-define(CONTENT_META_INVALID_JSON, 1).
+-define(CONTENT_META_INVALID_JSON_KEY, 2).
+-define(CONTENT_META_NON_JSON_MODE, 3).
+
+-define(CONTENT_META_SNAPPY_COMPRESSED, (1 bsl 7)).
+
 -record(doc_info,
     {
     id = <<"">>,
@@ -60,6 +67,7 @@
     local_seq,
     rev = {0, <<>>},
     body_ptr,
+    content_meta = 0, % should be 0-255 only.
     size = 0
     }).
 
@@ -69,6 +77,7 @@
     deleted = false,
     rev,
     body_ptr,
+    content_meta = 0, % should be 0-255 only.
     size = 0,
     fd
     }).
@@ -95,11 +104,9 @@
     id = <<>>,
     rev = {0, <<>>},
 
-    % the json body object and metadata
-    json = <<"{}">>,
-
-    % the binary body, if not json
-    binary = nil,
+    % the binary body
+    body = <<"{}">>,
+    content_meta = 0, % should be 0-255 only.
 
     deleted = false,
 
@@ -126,7 +133,7 @@
 % if the disk revision is incremented, then new upgrade logic will need to be
 % added to couch_db_updater:init_db.
 
--define(LATEST_DISK_VERSION, 8).
+-define(LATEST_DISK_VERSION, 9).
 
 -record(db_header,
     {disk_version = ?LATEST_DISK_VERSION,
@@ -159,8 +166,7 @@
     user_ctx = #user_ctx{},
     waiting_delayed_commit = nil,
     fsync_options = [],
-    options = [],
-    compression
+    options = []
     }).
 
 
@@ -273,6 +279,5 @@
     assemble_kv = fun(Key, Value) -> {Key, Value} end,
     less = fun(A, B) -> A < B end,
     reduce = nil,
-    compression = ?DEFAULT_COMPRESSION,
     chunk_threshold = 16#4ff
 }).

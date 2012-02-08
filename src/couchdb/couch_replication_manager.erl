@@ -515,7 +515,7 @@ update_rep_doc(RepDocId, KVs) ->
         couch_db:close(RepDb)
     end.
 
-update_rep_doc(RepDb, #doc{json = {RepDocBody}} = RepDoc, KVs) ->
+update_rep_doc(RepDb, #doc{body = {RepDocBody}} = RepDoc, KVs) ->
     NewRepDocBody = lists:foldl(
         fun({<<"_replication_state">> = K, State} = KV, Body) ->
                 case get_value(K, Body) of
@@ -537,7 +537,7 @@ update_rep_doc(RepDb, #doc{json = {RepDocBody}} = RepDoc, KVs) ->
     _ ->
         % Might not succeed - when the replication doc is deleted right
         % before this update (not an error, ignore).
-        couch_db:update_doc(RepDb, RepDoc#doc{json = {NewRepDocBody}}, [])
+        couch_db:update_doc(RepDb, RepDoc#doc{body = {NewRepDocBody}}, [])
     end.
 
 

@@ -200,7 +200,7 @@ http_index_folder_req_details(#simple_index_spec{
 view_details(nil, <<"_all_docs">>) ->
     {<<"raw">>, map, nil};
 
-view_details(#doc{json = DDoc}, ViewName) ->
+view_details(#doc{body = DDoc}, ViewName) ->
     {Props} = DDoc,
     {ViewDef} = get_nested_json_value(DDoc, [<<"views">>, ViewName]),
     {ViewOptions} = get_value(<<"options">>, ViewDef, {[]}),
@@ -215,7 +215,7 @@ view_details(#doc{json = DDoc}, ViewName) ->
     {Collation, ViewType, Lang}.
 
 
-reduce_function(#doc{json = DDoc}, ViewName) ->
+reduce_function(#doc{body = DDoc}, ViewName) ->
     {ViewDef} = get_nested_json_value(DDoc, [<<"views">>, ViewName]),
     get_value(<<"reduce">>, ViewDef).
 

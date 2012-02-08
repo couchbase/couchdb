@@ -1099,8 +1099,7 @@ init_group(Fd, #set_view_group{def_lang = Lang, views = Views} = Group, IndexHea
             First, Rest)
     end,
     BtreeOptions = [
-        {chunk_threshold, ?BTREE_CHUNK_THRESHOLD},
-        {compression, snappy}
+        {chunk_threshold, ?BTREE_CHUNK_THRESHOLD}
     ],
     {ok, IdBtree} = couch_btree:open(
         IdBtreeState, Fd, [{reduce, IdTreeReduce} | BtreeOptions]),

@@ -330,7 +330,7 @@ terminate(_Reason, #qserver{pid_procs=PidProcs}) ->
     ok.
 
 handle_call({get_proc, DDoc1, DDocKey}, From, Server) ->
-    #doc{json = {Props}} = DDoc = couch_doc:with_ejson_body(DDoc1),
+    #doc{body = {Props}} = DDoc = couch_doc:with_ejson_body(DDoc1),
     Lang = couch_util:get_value(<<"language">>, Props, <<"javascript">>),
     case lang_proc(Lang, Server, fun(Procs) ->
             % find a proc in the set that has the DDoc
@@ -431,7 +431,7 @@ service_waitlist(#qserver{waitlist=Waitlist}=Server) ->
     end.
 
 % todo get rid of duplication
-service_waiting({{#doc{json={Props}}=DDoc, DDocKey}, From}, Server) ->
+service_waiting({{#doc{body={Props}}=DDoc, DDocKey}, From}, Server) ->
     Lang = couch_util:get_value(<<"language">>, Props, <<"javascript">>),
     case lang_proc(Lang, Server, fun(Procs) ->
             % find a proc in the set that has the DDoc

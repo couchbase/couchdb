@@ -64,9 +64,8 @@ handle_call(increment_update_seq, _From, Db) ->
     couch_db_update_notifier:notify({updated, Db#db.name}),
     {reply, {ok, Db2#db.update_seq}, Db2};
 
-handle_call({set_security, NewSec}, _From, #db{compression = Comp} = Db) ->
-    {ok, Ptr, _} = couch_file:append_term(
-        Db#db.fd, NewSec, [{compression, Comp}]),
+handle_call({set_security, NewSec}, _From, Db) ->
+    {ok, Ptr, _} = couch_file:append_term(Db#db.fd, NewSec),
     Db2 = commit_data(Db#db{security=NewSec, security_ptr=Ptr,
             update_seq=Db#db.update_seq+1}),
     ok = notify_db_updated(Db2),
@@ -81,8 +80,7 @@ handle_call({purge_docs, IdRevs}, _From, Db) ->
         docinfo_by_id_btree = DocInfoByIdBTree,
         docinfo_by_seq_btree = DocInfoBySeqBTree,
         update_seq = LastSeq,
-        header = Header = #db_header{purge_seq=PurgeSeq},
-        compression = Comp
+        header = Header = #db_header{purge_seq=PurgeSeq}
         } = Db,
     DocLookups = couch_btree:lookup(DocInfoByIdBTree,
             [Id || {Id, _Rev} <- IdRevs]),
@@ -112,8 +110,7 @@ handle_call({purge_docs, IdRevs}, _From, Db) ->
             [], SeqsToRemove),
     {ok, DocInfoByIdBTree2} = couch_btree:add_remove(DocInfoByIdBTree,
             [], IdsToRemove),
-    {ok, Pointer, _} = couch_file:append_term(
-            Fd, IdRevsPurged, [{compression, Comp}]),
+    {ok, Pointer, _} = couch_file:append_term(Fd, IdRevsPurged),
 
     Db2 = commit_data(
         Db#db{
@@ -239,29 +236,31 @@ increment_filepath(FilePath) ->
     string:join(lists:sublist(Tokens, length(Tokens) - 1) ++ [NumStr], ".").
 
 btree_by_seq_split(#doc_info{id=Id, local_seq=Seq, rev=Rev,
-        deleted=Deleted, body_ptr=Bp, size=Size}) ->
-    {Seq, {Id, Rev, Bp, if Deleted -> 1; true -> 0 end, Size}}.
+        deleted=Deleted, body_ptr=Bp, content_meta=Meta, size=Size}) ->
+    {Seq, {Id, Rev, Bp, if Deleted -> 1; true -> 0 end, Meta, Size}}.
 
-btree_by_seq_join(Seq, {Id, Rev, Bp, Deleted, Size}) ->
+btree_by_seq_join(Seq, {Id, Rev, Bp, Deleted, Meta, Size}) ->
     #doc_info{
         id = Id,
         local_seq = Seq,
         rev = Rev,
         deleted = (Deleted == 1),
+        content_meta = Meta,
         body_ptr = Bp,
         size = Size}.
 
 btree_by_id_split(#doc_info{id=Id, local_seq=Seq, rev=Rev,
-        deleted=Deleted, body_ptr=Bp, size=Size}) ->
-    {Id, {Seq, Rev, Bp, if Deleted -> 1; true -> 0 end, Size}}.
+        deleted=Deleted, body_ptr=Bp, content_meta=Meta, size=Size}) ->
+    {Id, {Seq, Rev, Bp, if Deleted -> 1; true -> 0 end, Meta, Size}}.
 
-btree_by_id_join(Id, {Seq, Rev, Bp, Deleted, Size}) ->
+btree_by_id_join(Id, {Seq, Rev, Bp, Deleted, Meta, Size}) ->
     #doc_info{
         id = Id,
         local_seq = Seq,
         rev = Rev,
         deleted = (Deleted == 1),
         body_ptr = Bp,
+        content_meta = Meta,
         size = Size}.
 
 btree_by_id_reduce(reduce, DocInfos) ->
@@ -296,9 +295,6 @@ simple_upgrade_record(Old, New) when tuple_size(Old) < tuple_size(New) ->
 simple_upgrade_record(Old, _New) ->
     Old.
 
--define(OLD_DISK_VERSION_ERROR,
-    "Database files from versions smaller than 0.10.0 are no longer supported").
-
 init_db(DbName, Filepath, Fd, Header0, Options) ->
     Header1 = simple_upgrade_record(Header0, #db_header{}),
     Header =
@@ -316,20 +312,16 @@ init_db(DbName, Filepath, Fd, Header0, Options) ->
     _ -> ok
     end,
 
-    Compression = couch_compress:get_compression_method(),
-
     {ok, IdBtree} = couch_btree:open(Header#db_header.docinfo_by_id_btree_state, Fd,
         [{split, fun(X) -> btree_by_id_split(X) end},
         {join, fun(X,Y) -> btree_by_id_join(X,Y) end},
-        {reduce, fun(X,Y) -> btree_by_id_reduce(X,Y) end},
-        {compression, Compression}]),
+        {reduce, fun(X,Y) -> btree_by_id_reduce(X,Y) end}]),
     {ok, SeqBtree} = couch_btree:open(Header#db_header.docinfo_by_seq_btree_state, Fd,
             [{split, fun(X) -> btree_by_seq_split(X) end},
             {join, fun(X,Y) -> btree_by_seq_join(X,Y) end},
-            {reduce, fun(X,Y) -> btree_by_seq_reduce(X,Y) end},
-            {compression, Compression}]),
+            {reduce, fun(X,Y) -> btree_by_seq_reduce(X,Y) end}]),
     {ok, LocalDocsBtree} = couch_btree:open(Header#db_header.local_docs_btree_state, Fd,
-        [{compression, Compression}]),
+        []),
     case Header#db_header.security_ptr of
     nil ->
         Security = [],
@@ -358,8 +350,7 @@ init_db(DbName, Filepath, Fd, Header0, Options) ->
         security_ptr = SecurityPtr,
         instance_start_time = StartTime,
         fsync_options = FsyncOptions,
-        options = Options,
-        compression = Compression
+        options = Options
         }.
 
 
@@ -385,6 +376,7 @@ update_docs_int(Db, DocsList, NonRepDocs, FullCommit) ->
                 body_ptr=Bp,
                 deleted=Deleted,
                 size=Size,
+                content_meta=Meta,
                 fd=DocFd
                 } = DocUpdate,
             if Fd /= DocFd ->
@@ -395,6 +387,7 @@ update_docs_int(Db, DocsList, NonRepDocs, FullCommit) ->
                 id=Id,
                 rev=Rev,
                 body_ptr=Bp,
+                content_meta=Meta,
                 deleted=Deleted,
                 local_seq=SeqAcc,
                 size=Size
@@ -405,7 +398,7 @@ update_docs_int(Db, DocsList, NonRepDocs, FullCommit) ->
             {K, V} = btree_by_id_split(DocInfo),
             [{fetch, K, nil}, {insert, K, V}]
         end, NewDocInfos),
-    {ok, OldInfos, DocInfoByIdBTree2} = couch_btree_nif:query_modify_raw(Db,
+    {ok, OldInfos, DocInfoByIdBTree2} = couch_btree:query_modify_raw(
             DocInfoByIdBTree, RawKeys),
 
     OldSeqs = [OldSeq || {ok, #doc_info{local_seq=OldSeq}} <- OldInfos],
@@ -414,7 +407,7 @@ update_docs_int(Db, DocsList, NonRepDocs, FullCommit) ->
             {K, V} = btree_by_seq_split(DocInfo),
             {insert, K, V}
         end, NewDocInfos),
-    {ok, [], DocInfoBySeqBTree2} = couch_btree_nif:query_modify_raw(Db, DocInfoBySeqBTree, RemoveBySeq ++ InsertBySeq),
+    {ok, [], DocInfoBySeqBTree2} = couch_btree:query_modify_raw(DocInfoBySeqBTree, RemoveBySeq ++ InsertBySeq),
 
     {ok, Db2} = update_local_docs(Db, NonRepDocs),
 
@@ -432,7 +425,7 @@ update_local_docs(Db, []) ->
     {ok, Db};
 update_local_docs(#db{local_docs_btree=Btree}=Db, Docs) ->
     KVsAdd = [{Id, if is_tuple(Body) -> ?JSON_ENCODE(Body); true -> Body end} ||
-            #doc{id=Id, deleted=false, json=Body} <- Docs],
+            #doc{id=Id, deleted=false, body=Body} <- Docs],
     IdsRemove = [Id || #doc{id=Id, deleted=true} <- Docs],
     {ok, Btree2} =
         couch_btree:add_remove(Btree, KVsAdd, IdsRemove),
@@ -582,9 +575,7 @@ copy_compact(Db, NewDb0, Retry) ->
 
     % copy misc header values
     if NewDb3#db.security /= Db#db.security ->
-        {ok, Ptr, _} = couch_file:append_term(
-            NewDb3#db.fd, Db#db.security,
-            [{compression, NewDb3#db.compression}]),
+        {ok, Ptr, _} = couch_file:append_term(NewDb3#db.fd, Db#db.security),
         NewDb4 = NewDb3#db{security=Db#db.security, security_ptr=Ptr};
     true ->
         NewDb4 = NewDb3
@@ -655,8 +646,7 @@ start_copy_compact(#db{name=Name,filepath=Filepath,header=#db_header{purge_seq=P
     NewDb = init_db(Name, CompactFile, Fd, Header, Db#db.options),
     NewDb2 = if PurgeSeq > 0 ->
         {ok, PurgedIdsRevs} = couch_db:get_last_purged(Db),
-        {ok, Pointer, _} = couch_file:append_term(
-            Fd, PurgedIdsRevs, [{compression, NewDb#db.compression}]),
+        {ok, Pointer, _} = couch_file:append_term(Fd, PurgedIdsRevs),
         NewDb#db{header=Header#db_header{purge_seq=PurgeSeq, purged_docs=Pointer}};
     true ->
         NewDb

@@ -36,12 +36,6 @@ EJSON_COMPARE_DIR = couch_ejson_compare/win32
 EJSON_COMPARE_MSBUILD = $(EJSON_COMPARE_DIR)/msbuild.bat
 EJSON_COMPARE_VCPROJ = $(EJSON_COMPARE_DIR)/couch_ejson_compare.vcxproj
 COUCH_EJSON_COMPARE = $(EJSON_COMPARE_DIR)/couch_ejson_compare.dll
-BTREE_NIF_DIR = btree_nif/win32
-BTREE_NIF_MSBUILD = $(BTREE_NIF_DIR)/msbuild.bat
-BTREE_NIF_VCPROJ = $(BTREE_NIF_DIR)/couch_btree_nif.vcxproj
-COUCH_BTREE_NIF = $(BTREE_NIF_DIR)/release/couch_btree_nif.dll
-WIN_ERL_INTERFACE_INCLUDE = $(BTREE_NIF_DIR)/win_erl_interface_include.tmp
-WIN_ERL_INTERFACE_LIB = $(BTREE_NIF_DIR)/win_erl_interface_lib.tmp
 
 else
 ICU_LOCAL_FLAGS = $(ICU_LOCAL_CFLAGS) $(ICU_LOCAL_LDFLAGS)
@@ -50,22 +44,11 @@ ICU_LOCAL_LIBS=-licuuc -licudata -licui18n
 couchprivlib_LTLIBRARIES = couch_icu_driver.la
 if USE_OTP_NIFS
 couchprivlib_LTLIBRARIES += couch_ejson_compare.la
-couchprivlib_LTLIBRARIES += couch_btree_nif.la
 
 couch_ejson_compare_la_SOURCES = couch_ejson_compare/couch_ejson_compare.c
 couch_ejson_compare_la_CFLAGS = -D_BSD_SOURCE $(ICU_LOCAL_FLAGS)
 couch_ejson_compare_la_LDFLAGS = -module -avoid-version $(ICU_LOCAL_FLAGS)
 couch_ejson_compare_la_LIBADD = $(ICU_LOCAL_LIBS)
-couch_btree_nif_la_SOURCES = btree_nif/couch_btree_nif.c \
-                             btree_nif/couch_btree.c \
-                             btree_nif/couch_file_read.c \
-                             btree_nif/couch_nif_write.c \
-                             $(SNAPPY_SRC)/snappy-c.cc \
-                             $(SNAPPY_SRC)/snappy.cc \
-                             $(SNAPPY_SRC)/snappy-sinksource.cc \
-                             $(SNAPPY_SRC)/snappy-stubs-internal.cc
-couch_btree_nif_la_CFLAGS = $(ERL_INTERFACE_DIR_INCLUDE)
-couch_btree_nif_la_LDFLAGS = -module -avoid-version $(erlinterfaceldflags)
 
 endif
 couch_icu_driver_la_SOURCES = icu_driver/couch_icu_driver.c
@@ -79,7 +62,7 @@ couchjs_msbuild = couch_js/win32/msbuild.bat
 couchjs_vcproj = couch_js/win32/couchjs.vcxproj
 WIN_JS_INCLUDE = couch_js/win32/win_js_include.tmp
 WIN_JS_LIB_DIR = couch_js/win32/win_js_dir.tmp
-couchpriv_DATA = stat_descriptions.cfg $(COUCH_ICU_DRIVER) $(COUCH_EJSON_COMPARE) $(COUCH_BTREE_NIF)
+couchpriv_DATA = stat_descriptions.cfg $(COUCH_ICU_DRIVER)
 endif
 
 COUCHJS_SRCS = \
@@ -143,18 +126,7 @@ $(WIN_ICU_LIB_DIR):$(ICU_LIB_DIR)
 $(WIN_ERL_INCLUDE):$(ERLANG_INCLUDE)
 	echo $< | sed -e "s|^/cygdrive/\([a-zA-Z]\)|\1:|" > $@
 
-$(COUCH_BTREE_NIF) : $(couch_btree_nif_la_SOURCES) $(BTREE_NIF_MSBUILD) $(BTREE_NIF_VCPROJ)
-	$(MKDIR_P) "$(couchprivlibdir)" || true
-	(cd $(BTREE_NIF_DIR) && ./msbuild.bat)
-	cp $(COUCH_BTREE_NIF) $(couchprivlibdir)
-
-$(BTREE_NIF_MSBUILD) : $(BTREE_NIF_MSBUILD).tpl
-	sed -e "s|%msbuild_dir%|$(msbuild_dir)|" \
-	    -e "s|%msbuild_name%|$(msbuild_name)|" \
-	    -e "s|^/cygdrive/\([a-zA-Z]\)|\1:|" \
-	< $< > $@
-
-$(BTREE_NIF_VCPROJ) : $(BTREE_NIF_VCPROJ).tpl $(WIN_ERL_INCLUDE) $(WIN_ERL_INTERFACE_INCLUDE) $(WIN_ERL_INTERFACE_LIB)
+ $(WIN_ERL_INTERFACE_INCLUDE) $(WIN_ERL_INTERFACE_LIB)
 	sed -e "s|%ERLANG_INCLUDE%|`cat $(WIN_ERL_INCLUDE)`|" \
 	    -e "s|%ERL_INTERFACE_DIR_INCLUDE%|`cat $(WIN_ERL_INTERFACE_INCLUDE)`|" \
 	    -e "s|%ERL_INTERFACE_DIR_LIB%|`cat $(WIN_ERL_INTERFACE_LIB)`|" \

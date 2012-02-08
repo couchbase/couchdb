@@ -585,7 +585,7 @@ sum_btree_sizes(Size1, Size2) ->
     Size1 + Size2.
 
 % maybe move to another module
-design_doc_to_view_group(#doc{id=Id,json={Fields}}) ->
+design_doc_to_view_group(#doc{id=Id,body={Fields}}) ->
     Language = couch_util:get_value(<<"language">>, Fields, <<"javascript">>),
     {DesignOptions} = couch_util:get_value(<<"options">>, Fields, {[]}),
     {RawViews} = couch_util:get_value(<<"views">>, Fields, {[]}),
@@ -638,7 +638,7 @@ init_group(Db, Fd, #group{views=Views}=Group, nil) ->
     init_group(Db, Fd, Group,
         #index_header{seq=0, purge_seq=couch_db:get_purge_seq(Db),
             id_btree_state=nil, view_states=[{nil, 0, 0} || _ <- Views]});
-init_group(Db, Fd, #group{def_lang=Lang,views=Views}=
+init_group(_Db, Fd, #group{def_lang=Lang,views=Views}=
             Group, IndexHeader) ->
      #index_header{seq=Seq, purge_seq=PurgeSeq,
             id_btree_state=IdBtreeState, view_states=ViewStates} = IndexHeader,
@@ -648,7 +648,7 @@ init_group(Db, Fd, #group{def_lang=Lang,views=Views}=
     end,
     ViewStates2 = lists:map(StateUpdate, ViewStates),
     {ok, IdBtree} = couch_btree:open(
-        IdBtreeState, Fd, [{compression, Db#db.compression}]),
+        IdBtreeState, Fd, []),
     Views2 = lists:zipwith(
         fun({BTState, USeq, PSeq}, #view{reduce_funs=RedFuns,options=Options}=View) ->
             FunSrcs = [FunSrc || {_Name, FunSrc} <- RedFuns],
@@ -674,8 +674,7 @@ init_group(Db, Fd, #group{def_lang=Lang,views=Views}=
                 Less = fun(A,B) -> A < B end
             end,
             {ok, Btree} = couch_btree:open(BTState, Fd,
-                    [{less, Less}, {reduce, ReduceFun},
-                        {compression, Db#db.compression}]
+                    [{less, Less}, {reduce, ReduceFun}]
             ),
             View#view{btree=Btree, update_seq=USeq, purge_seq=PSeq}
         end,

@@ -69,12 +69,13 @@ test() ->
     etap:is({ok, <<"fancy!">>}, couch_file:pread_binary(Fd, Size),
         "Reading back the binary returns what we wrote: <<\"fancy\">>."),
 
-    etap:is({ok, couch_compress:compress(foo, snappy)},
+    etap:is({ok, couch_compress:compress(term_to_binary(foo))},
         couch_file:pread_binary(Fd, 0),
         "Reading a binary at a term position returns the term as binary."
     ),
 
-    {ok, BinPos, _} = couch_file:append_binary(Fd, <<131,100,0,3,102,111,111>>),
+    {ok, BinPos, _} = couch_file:append_binary(Fd, couch_compress:compress(
+            term_to_binary(foo))),
     ok = couch_file:flush(Fd),
     etap:is({ok, foo}, couch_file:pread_term(Fd, BinPos),
         "Reading a term from a written binary term representation succeeds."),

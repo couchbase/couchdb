@@ -14,7 +14,7 @@
 
 -export([parse_rev/1,parse_revs/1,rev_to_str/1,revs_to_strs/1]).
 -export([from_json_obj/1,to_json_obj/2,from_binary/3]).
--export([validate_docid/1]).
+-export([validate_docid/1,with_uncompressed_body/1]).
 -export([with_ejson_body/1,with_json_body/1]).
 
 -include("couch_db.hrl").
@@ -26,15 +26,19 @@ to_json_rev(0, _) ->
 to_json_rev(Start, RevId) ->
     [{<<"_rev">>, ?l2b([integer_to_list(Start),"-",revid_to_str(RevId)])}].
 
-to_ejson_body(true, {Body}) ->
-    to_ejson_body(false, {Body}) ++ [{<<"_deleted">>, true}];
-to_ejson_body(false, {Body}) ->
+to_ejson_body(true = _IsDeleted, ContentMeta, Body) ->
+    to_ejson_body(false, ContentMeta, Body) ++ [{<<"_deleted">>, true}];
+to_ejson_body(false, _ContentMeta, {Body}) ->
     Body;
-to_ejson_body(false, <<"{}">>) ->
+to_ejson_body(false, ?CONTENT_META_JSON, <<"{}">>) ->
     [];
-to_ejson_body(false, Body) when is_binary(Body) ->
+to_ejson_body(false, ?CONTENT_META_JSON, Body) ->
     {R} = ?JSON_DECODE(Body),
-    R.
+    R;
+to_ejson_body(false, ContentMeta, _Body)
+        when ContentMeta /= ?CONTENT_META_JSON ->
+    [].
+
 
 revid_to_str(RevId) ->
     ?l2b(couch_util:to_hex(RevId)).
@@ -54,48 +58,69 @@ to_json_meta(Meta) ->
             {<<"_local_seq">>, Seq}
         end, Meta).
 
+revid_to_memcached_meta(<<_Cas:64, Expiration:32, Flags:32>>) ->
+    [{<<"$expiration">>, Expiration}, {<<"$flags">>, Flags}];
+revid_to_memcached_meta(_) ->
+    [].
 
-to_json_obj(Doc, Options) ->
-    doc_to_json_obj(with_ejson_body(Doc), Options).
+content_meta_to_memcached_meta(?CONTENT_META_JSON) ->
+    [];
+content_meta_to_memcached_meta(?CONTENT_META_INVALID_JSON) ->
+    [{<<"$att_reason">>, <<"invalid_json">>}];
+content_meta_to_memcached_meta(?CONTENT_META_INVALID_JSON_KEY) ->
+    [{<<"$att_reason">>, <<"invalid_key">>}];
+content_meta_to_memcached_meta(?CONTENT_META_NON_JSON_MODE) ->
+    [{<<"$att_reason">>, <<"non-JSON mode">>}].
 
-doc_to_json_obj(#doc{id=Id,deleted=Del,json=Json,rev={Start, RevId},
-        meta=Meta}, _Options)->
+to_memcached_meta(#doc{rev={_, RevId},content_meta=Meta}) ->
+    revid_to_memcached_meta(RevId) ++ content_meta_to_memcached_meta(Meta).
+
+to_json_obj(#doc{id=Id,deleted=Del,rev={Start, RevId},
+        meta=Meta}=Doc0, _Options)->
+    Doc = with_uncompressed_body(Doc0),
+    #doc{body=Body,content_meta=ContentMeta} = Doc,
     {[{<<"_id">>, Id}]
         ++ to_json_rev(Start, RevId)
         ++ to_json_meta(Meta)
-        ++ to_ejson_body(Del, Json)
+        ++ to_ejson_body(Del, ContentMeta, Body)
+        ++ to_memcached_meta(Doc)
     }.
 
-mk_att_doc_from_binary(Id, Value, Reason) ->
-    #doc{id=Id,
-               meta = [att_reason, Reason],
-               binary = Value}.
 
-
+mk_json_doc_from_binary(<<?LOCAL_DOC_PREFIX, _/binary>> = Id, Value) ->
+    case ejson:validate(Value, <<"_$">>) of
+    {ok, JsonBinary} ->
+        #doc{id=Id, body = JsonBinary};
+    Error ->
+        throw(Error)
+    end;
 mk_json_doc_from_binary(Id, Value) ->
     case ejson:validate(Value, <<"_$">>) of
-        {error, invalid_json} ->
-            mk_att_doc_from_binary(Id, Value, <<"invalid_json">>);
-        {error, private_field_set} ->
-            mk_att_doc_from_binary(Id, Value, <<"invalid_key">>);
-        {error, garbage_after_value} ->
-            mk_att_doc_from_binary(Id, Value, <<"invalid_json">>);
-        {ok, Json} ->
-            #doc{id=Id, % now add in new meta
-                       json=Json
-                      }
+    {error, invalid_json} ->
+        #doc{id=Id, body = Value,
+            content_meta = ?CONTENT_META_INVALID_JSON};
+    {error, private_field_set} ->
+        #doc{id=Id, body = Value,
+            content_meta = ?CONTENT_META_INVALID_JSON_KEY};
+    {error, garbage_after_value} ->
+        #doc{id=Id, body = Value,
+            content_meta = ?CONTENT_META_INVALID_JSON};
+    {ok, JsonBinary} ->
+        #doc{id=Id, body = couch_compress:compress(JsonBinary),
+            content_meta = ?CONTENT_META_JSON bor ?CONTENT_META_SNAPPY_COMPRESSED}
     end.
 
 from_binary(Id, Value, WantJson) ->
     case WantJson of
-        true ->
-            mk_json_doc_from_binary(Id, Value);
-        _ ->
-            mk_att_doc_from_binary(Id, Value, <<"non-JSON mode">>)
+    true ->
+        mk_json_doc_from_binary(Id, Value);
+    _ ->
+        #doc{id=Id, body = Value,
+                content_meta = ?CONTENT_META_NON_JSON_MODE}
     end.
 
 from_json_obj({Props}) ->
-    transfer_fields(Props, #doc{json=[]});
+    transfer_fields(Props, #doc{body=[]});
 
 from_json_obj(_Other) ->
     throw({bad_request, "Document must be a JSON object"}).
@@ -141,9 +166,9 @@ validate_docid(Id) ->
     ?LOG_DEBUG("Document id is not a string: ~p", [Id]),
     throw({bad_request, <<"Document id must be a string">>}).
 
-transfer_fields([], #doc{json=Fields}=Doc) ->
+transfer_fields([], #doc{body=Fields}=Doc) ->
     % convert fields back to json object
-    Doc#doc{json={lists:reverse(Fields)}};
+    Doc#doc{body=?JSON_ENCODE({lists:reverse(Fields)})};
 
 transfer_fields([{<<"_id">>, Id} | Rest], Doc) ->
     validate_docid(Id),
@@ -173,43 +198,43 @@ transfer_fields([{<<"_deleted_conflicts">>, _} | Rest], Doc) ->
 
 % special fields for replication documents
 transfer_fields([{<<"_replication_state">>, _} = Field | Rest],
-    #doc{json=Fields} = Doc) ->
-    transfer_fields(Rest, Doc#doc{json=[Field|Fields]});
+    #doc{body=Fields} = Doc) ->
+    transfer_fields(Rest, Doc#doc{body=[Field|Fields]});
 transfer_fields([{<<"_replication_state_time">>, _} = Field | Rest],
-    #doc{json=Fields} = Doc) ->
-    transfer_fields(Rest, Doc#doc{json=[Field|Fields]});
+    #doc{body=Fields} = Doc) ->
+    transfer_fields(Rest, Doc#doc{body=[Field|Fields]});
 transfer_fields([{<<"_replication_id">>, _} = Field | Rest],
-    #doc{json=Fields} = Doc) ->
-    transfer_fields(Rest, Doc#doc{json=[Field|Fields]});
+    #doc{body=Fields} = Doc) ->
+    transfer_fields(Rest, Doc#doc{body=[Field|Fields]});
 
 % unknown special field
 transfer_fields([{<<"_",Name/binary>>, _} | _], _) ->
     throw({doc_validation,
             ?l2b(io_lib:format("Bad special document member: _~s", [Name]))});
 
-transfer_fields([Field | Rest], #doc{json=Fields}=Doc) ->
-    transfer_fields(Rest, Doc#doc{json=[Field|Fields]}).
+transfer_fields([Field | Rest], #doc{body=Fields}=Doc) ->
+    transfer_fields(Rest, Doc#doc{body=[Field|Fields]}).
 
 
 with_ejson_body(Doc) ->
     Uncompressed = with_uncompressed_body(Doc),
-    #doc{json = Body} = Uncompressed,
-    Uncompressed#doc{json = {to_ejson_body(false, Body)}}.
+    #doc{body = Body, content_meta=Meta} = Uncompressed,
+    Uncompressed#doc{body = {to_ejson_body(false, Meta, Body)}}.
 
 with_json_body(Doc) ->
     case with_uncompressed_body(Doc) of
-    #doc{json = Body} = Doc2 when is_binary(Body) ->
-        Doc2;
-    #doc{json = Body} = Doc2 when is_tuple(Body)->
-        Doc2#doc{json = ?JSON_ENCODE(Body)}
+    #doc{body = Body} = Doc2 when is_tuple(Body)->
+        Doc2#doc{body = ?JSON_ENCODE(Body)};
+    #doc{} = Doc2 ->
+        Doc2
     end.
 
-with_uncompressed_body(#doc{json = Body} = Doc) when is_binary(Body) ->
-    case couch_compress:is_compressed(Body) of
-        true ->
-            Doc#doc{json = couch_compress:decompress(Body)};
-        false ->
-            Doc
-    end;
-with_uncompressed_body(#doc{json = {_}} = Doc) ->
+
+with_uncompressed_body(#doc{body = {_}} = Doc) ->
+    Doc;
+with_uncompressed_body(#doc{body = Body, content_meta = Meta} = Doc)
+        when (Meta band ?CONTENT_META_SNAPPY_COMPRESSED) > 0 ->
+    NewMeta = Meta band (bnot ?CONTENT_META_SNAPPY_COMPRESSED),
+    Doc#doc{body = couch_compress:decompress(Body), content_meta = NewMeta};
+with_uncompressed_body(Doc) ->
     Doc.

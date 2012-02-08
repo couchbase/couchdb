@@ -21,7 +21,6 @@
     fd,
     before_kv_write = {fun(Item, Acc) -> {Item, Acc} end, []},
     filter = fun(_) -> true end,
-    compression = ?DEFAULT_COMPRESSION,
     chunk_threshold,
     nodes = dict:from_list([{1, []}]),
     cur_level = 1,
@@ -80,8 +79,6 @@ apply_options([{filter, Fun} | Rest], Acc) ->
     apply_options(Rest, Acc#acc{filter = Fun});
 apply_options([override | Rest], Acc) ->
     apply_options(Rest, Acc);
-apply_options([{compression, Comp} | Rest], Acc) ->
-    apply_options(Rest, Acc#acc{compression = Comp});
 apply_options([{chunk_threshold, Threshold} | Rest], Acc) ->
     apply_options(Rest, Acc#acc{chunk_threshold = Threshold}).
 
@@ -106,12 +103,12 @@ before_leaf_write(#acc{before_kv_write = {Fun, UserAcc0}} = Acc, KVs) ->
     {NewKVs, Acc#acc{before_kv_write = {Fun, NewUserAcc}}}.
 
 
-write_leaf(#acc{fd = Fd, compression = Comp}, Node, Red) ->
-    {ok, Pos, Size} = couch_file:append_term(Fd, Node, [{compression, Comp}]),
+write_leaf(#acc{fd = Fd}, Node, Red) ->
+    {ok, Pos, Size} = couch_file:append_term(Fd, Node),
     {ok, {Pos, Red, Size}}.
 
 
-write_kp_node(#acc{fd = Fd, btree = Bt, compression = Comp}, NodeList) ->
+write_kp_node(#acc{fd = Fd, btree = Bt}, NodeList) ->
     {ChildrenReds, ChildrenSize} = lists:foldr(
         fun({_Key, {_P, Red, Sz}}, {AccR, AccSz}) ->
             {[Red | AccR], Sz + AccSz}
@@ -123,7 +120,7 @@ write_kp_node(#acc{fd = Fd, btree = Bt, compression = Comp}, NodeList) ->
         couch_btree:final_reduce(Bt, {[], ChildrenReds})
     end,
     {ok, Pos, Size} = couch_file:append_term(
-        Fd, {kp_node, NodeList}, [{compression, Comp}]),
+        Fd, {kp_node, NodeList}),
     {ok, {Pos, Red, ChildrenSize + Size}}.
 
 

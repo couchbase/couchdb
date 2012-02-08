@@ -15,8 +15,8 @@
 % the License.
 
 %% XXX: Figure out how to -include("couch_db.hrl")
--record(doc, {id= <<"">>, rev={0, <<>>}, json={[]},
-            binary=nil, deleted=false, meta=[]}).
+-record(doc, {id= <<"">>, rev={0, <<>>}, body= <<"{}">>,
+        content_meta=0, deleted=false, meta=[]}).
 
 main(_) ->
     test_util:init_code_path(),
@@ -66,7 +66,7 @@ test_from_json_success() ->
         },
         {
             {[{<<"soap">>, 35}]},
-            #doc{json={[{<<"soap">>, 35}]}},
+            #doc{body= <<"{\"soap\":35}">>},
             "Non underscore prefixed fields stored in body."
         },
         {

@@ -24,7 +24,6 @@ rows() -> 250.
     assemble_kv,
     less,
     reduce,
-    compression,
     chunk_threshold = 16#4ff
 }).
 
@@ -62,7 +61,7 @@ test_kvs(KeyValues) ->
     Keys = [K || {K, _} <- KeyValues],
 
     {ok, Fd} = couch_file:open(filename(), [create,overwrite]),
-    {ok, Btree} = couch_btree:open(nil, Fd, [{compression, none}]),
+    {ok, Btree} = couch_btree:open(nil, Fd, []),
     etap:ok(is_record(Btree, btree), "Created btree is really a btree record"),
     etap:is(Btree#btree.fd, Fd, "Btree#btree.fd is set correctly."),
     etap:is(Btree#btree.root, nil, "Btree#btree.root is set correctly."),

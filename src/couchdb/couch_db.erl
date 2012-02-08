@@ -172,7 +172,7 @@ apply_open_options2(Doc,[]) ->
 apply_open_options2(Doc, [ejson_body | Rest]) ->
     apply_open_options2(couch_doc:with_ejson_body(Doc), Rest);
 apply_open_options2(Doc, [json_bin_body | Rest]) ->
-apply_open_options2(couch_doc:with_json_body(Doc), Rest);
+    apply_open_options2(couch_doc:with_json_body(Doc), Rest);
 apply_open_options2(Doc,[_|Rest]) ->
     apply_open_options2(Doc,Rest).
 
@@ -499,8 +499,8 @@ write_doc_bodies_retry_closed(Db, Docs) ->
 
 write_doc_bodies(Db, Docs) ->
     lists:map(
-        fun(#doc{json = Body, binary = Binary} = Doc) ->
-            Prepped = prep_doc_body_binary(Body, Binary),
+        fun(#doc{body = Body, content_meta = ContentMeta0} = Doc) ->
+            {Prepped, ContentMeta} = prep_doc_body_binary(Body, ContentMeta0),
             case couch_file:append_binary_crc32(Db#db.fd, Prepped) of
             {ok, BodyPtr, Size} ->
                 #doc_update_info{
@@ -508,6 +508,7 @@ write_doc_bodies(Db, Docs) ->
                     rev=Doc#doc.rev,
                     deleted=Doc#doc.deleted,
                     body_ptr=BodyPtr,
+                    content_meta=ContentMeta,
                     fd=Db#db.fd,
                     size=Size
                 };
@@ -517,30 +518,14 @@ write_doc_bodies(Db, Docs) ->
         end,
         Docs).
 
-prep_doc_body_binary(EJson, Binary) when is_tuple(EJson)->
-    % convert ejson to json
-    prep_doc_body_binary(?JSON_ENCODE(EJson), Binary);
-prep_doc_body_binary(Body, Binary) ->
-    BodyCompressed = couch_compress:compress(Body, snappy),
-    Size = iolist_size(BodyCompressed),
-    case Binary of
-    nil ->
-        % we differentiate between a empty binary and no binary. Clients
-        % might set a empty binary as the primary value.
-        [<<0:1/integer, Size:31/integer>>, BodyCompressed];
-    _ ->
-        [<<1:1/integer, Size:31/integer>>, BodyCompressed, Binary]
-    end.
-
-read_doc_body_binary(Iolist) ->
-    {Len, Rest} = couch_util:split_iolist(Iolist, 4),
-    case iolist_to_binary(Len) of
-    <<0:1/integer, _Size:31/integer>> ->
-        {couch_compress:decompress(iolist_to_binary(Rest)), nil};
-    <<1:1/integer, Size:31/integer>> ->
-        {Json, Binary} = couch_util:split_iolist(Rest, Size),
-        {couch_compress:decompress(iolist_to_binary(Json)), Binary}
-    end.
+prep_doc_body_binary(EJson, _ContentMeta) when is_tuple(EJson)->
+    % convert ejson to json binary, clear out ContentMeta, set to
+    % compressed json.
+    {couch_compress:compress(?JSON_ENCODE(EJson)),
+        ?CONTENT_META_JSON bor ?CONTENT_META_SNAPPY_COMPRESSED};
+prep_doc_body_binary(Body, ContentMeta) ->
+    % assume body is binary or iolist, and preserve ContentMeta
+    {Body, ContentMeta}.
 
 enum_docs_since_reduce_to_count(Reds) ->
     couch_btree:final_reduce(
@@ -646,14 +631,21 @@ handle_info(Msg, Db) ->
 open_doc_int(Db, <<?LOCAL_DOC_PREFIX, _/binary>> = Id, Options) ->
     case couch_btree:lookup(Db#db.local_docs_btree, [Id]) of
     [{ok, {_, BodyData}}] ->
-        Doc = #doc{id=Id, json=BodyData},
+        Doc = #doc{id=Id, body=BodyData},
         apply_open_options({ok, Doc}, Options);
     [not_found] ->
         {not_found, missing}
     end;
-open_doc_int(Db, #doc_info{id=Id,deleted=IsDeleted,rev=RevInfo, body_ptr=Bp}=
-        DocInfo, Options) ->
-    Doc = make_doc(Db, Id, IsDeleted, Bp, RevInfo),
+open_doc_int(Db, #doc_info{id=Id,deleted=IsDeleted,rev=RevInfo, body_ptr=Bp,
+        content_meta=ContentMeta}=DocInfo, Options) ->
+    {ok, Body} = couch_file:pread_iolist(Db#db.fd, Bp),
+    Doc = #doc{
+        id = Id,
+        rev = RevInfo,
+        body = Body,
+        deleted = IsDeleted,
+        content_meta = ContentMeta
+        },
     apply_open_options(
        {ok, Doc#doc{meta=doc_meta_info(DocInfo, Options)}}, Options);
 open_doc_int(Db, Id, Options) ->
@@ -669,18 +661,6 @@ doc_meta_info(#doc_info{local_seq=Seq}, Options) ->
     false -> [];
     true -> [{local_seq, Seq}]
     end.
-
-
-make_doc(#db{fd = Fd}, Id, Deleted, Bp, Rev) ->
-    {ok, Body} = couch_file:pread_iolist(Fd, Bp),
-    {Json, Binary} = read_doc_body_binary(Body),
-    #doc{
-        id = Id,
-        rev = Rev,
-        json = Json,
-        binary = Binary,
-        deleted = Deleted
-        }.
 
 
 increment_stat(#db{options = Options}, Stat) ->

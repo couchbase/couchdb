@@ -535,7 +535,7 @@ init_state(Rep) ->
     {StartSeq0, History} = compare_replication_logs(SourceLog, TargetLog),
     StartSeq1 = get_value(since_seq, Options, StartSeq0),
     StartSeq = {0, StartSeq1},
-    #doc{json={CheckpointHistory}} = SourceLog,
+    #doc{body={CheckpointHistory}} = SourceLog,
     State = #rep_state{
         rep_details = Rep,
         source_name = couch_api_wrap:db_uri(Source),
@@ -580,12 +580,12 @@ fold_replication_logs([Db | Rest] = Dbs, Vsn, LogId, NewId, Rep, Acc) ->
             ?l2b(?LOCAL_DOC_PREFIX ++ OldRepId), NewId, Rep, Acc);
     {error, <<"not_found">>} ->
         fold_replication_logs(
-            Rest, ?REP_ID_VERSION, NewId, NewId, Rep, [#doc{id = NewId, json = {[]}} | Acc]);
+            Rest, ?REP_ID_VERSION, NewId, NewId, Rep, [#doc{id = NewId, body = {[]}} | Acc]);
     {ok, Doc} when LogId =:= NewId ->
         fold_replication_logs(
             Rest, ?REP_ID_VERSION, NewId, NewId, Rep, [Doc | Acc]);
     {ok, Doc} ->
-        MigratedLog = #doc{id = NewId, json = Doc#doc.json},
+        MigratedLog = #doc{id = NewId, body = Doc#doc.body},
         fold_replication_logs(
             Rest, ?REP_ID_VERSION, NewId, NewId, Rep, [MigratedLog | Acc])
     end.
@@ -745,9 +745,9 @@ do_checkpoint(State) ->
         RandBin = <<Rand:32/integer>>,
         try
             SrcRev = update_checkpoint(
-                Source, SourceLog#doc{json = NewRepHistory, rev={1, RandBin}}, source),
+                Source, SourceLog#doc{body = NewRepHistory, rev={1, RandBin}}, source),
             TgtRev = update_checkpoint(
-                Target, TargetLog#doc{json = NewRepHistory, rev={1, RandBin}}, target),
+                Target, TargetLog#doc{body = NewRepHistory, rev={1, RandBin}}, target),
             SourceCurSeq = source_cur_seq(State),
             NewState = State#rep_state{
                 source_seq = SourceCurSeq,
@@ -782,7 +782,7 @@ update_checkpoint(Db, Doc, DbType) ->
                 " checkpoint document: ", (to_binary(Reason))/binary>>})
     end.
 
-update_checkpoint(Db, #doc{id = LogId, json = LogBody, rev = Rev} = Doc) ->
+update_checkpoint(Db, #doc{id = LogId, body = LogBody, rev = Rev} = Doc) ->
     try
         case couch_api_wrap:update_doc(Db, Doc, [delay_commit]) of
         ok ->
@@ -792,7 +792,7 @@ update_checkpoint(Db, #doc{id = LogId, json = LogBody, rev = Rev} = Doc) ->
         end
     catch throw:conflict ->
         case (catch couch_api_wrap:open_doc(Db, LogId, [ejson_body])) of
-        {ok, #doc{json = LogBody, rev = Rev}} ->
+        {ok, #doc{body = LogBody, rev = Rev}} ->
             % This means that we were able to update successfully the
             % checkpoint doc in a previous attempt but we got a connection
             % error (timeout for e.g.) before receiving the success response.
@@ -841,8 +841,8 @@ commit_to_both(Source, Target) ->
 
 
 compare_replication_logs(SrcDoc, TgtDoc) ->
-    #doc{json={RepRecProps}} = SrcDoc,
-    #doc{json={RepRecPropsTgt}} = TgtDoc,
+    #doc{body={RepRecProps}} = SrcDoc,
+    #doc{body={RepRecPropsTgt}} = TgtDoc,
     case get_value(<<"session_id">>, RepRecProps) ==
             get_value(<<"session_id">>, RepRecPropsTgt) of
     true ->

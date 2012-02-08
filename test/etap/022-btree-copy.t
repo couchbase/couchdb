@@ -21,7 +21,6 @@
     assemble_kv,
     less,
     reduce,
-    compression,
     chunk_threshold = 16#4ff
 }).
 
@@ -90,7 +89,7 @@ test_copy(NumItems, ReduceFun) ->
         "couch_btree_copy returned the right final user acc"),
 
     {ok, BtreeCopy} = couch_btree:open(
-        RootCopy, FdCopy, [{compression, none}, {reduce, ReduceFun}]),
+        RootCopy, FdCopy, [{reduce, ReduceFun}]),
     check_btree_copy(BtreeCopy, Red, KVs),
 
     ok = couch_file:close(Fd),
@@ -112,7 +111,7 @@ check_btree_copy(Btree, Red, KVs) ->
 make_btree(Filename, KVs, ReduceFun) ->
     {ok, Fd} = couch_file:open(Filename, [create, overwrite]),
     {ok, Btree} = couch_btree:open(
-        nil, Fd, [{compression, none}, {reduce, ReduceFun}]),
+        nil, Fd, [{reduce, ReduceFun}]),
     {ok, Btree2} = couch_btree:add_remove(Btree, KVs, []),
     {_, Red, _} = couch_btree:get_state(Btree2),
     etap:is(length(KVs), Red,

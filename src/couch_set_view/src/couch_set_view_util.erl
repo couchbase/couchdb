@@ -138,7 +138,7 @@ get_ddoc_ids_with_sig(SetName, ViewGroupSig) ->
         [], DDocList).
 
 
-design_doc_to_set_view_group(SetName, #doc{id = Id, json = {Fields}}) ->
+design_doc_to_set_view_group(SetName, #doc{id = Id, body = {Fields}}) ->
     Language = couch_util:get_value(<<"language">>, Fields, <<"javascript">>),
     {DesignOptions} = couch_util:get_value(<<"options">>, Fields, {[]}),
     {RawViews} = couch_util:get_value(<<"views">>, Fields, {[]}),

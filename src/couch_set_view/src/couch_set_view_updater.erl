@@ -42,6 +42,8 @@
     deleted_ids = 0
 }).
 
+
+-spec update(pid()|nil, #set_view_group{}, list) -> no_return().
 update(Owner, Group, FileName) ->
     #set_view_group{
         set_name = SetName,

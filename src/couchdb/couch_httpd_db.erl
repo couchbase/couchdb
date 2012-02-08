@@ -218,7 +218,7 @@ db_req(#httpd{method='POST',
     true ->
         Doc = couch_doc:from_json_obj(couch_httpd:json_body(Req));
     false ->
-        Doc = #doc{binary=couch_httpd:body(Req)}
+        Doc = #doc{body=couch_httpd:body(Req)}
     end,
     Doc2 = case Doc#doc.id of
         <<"">> ->
@@ -563,10 +563,10 @@ db_doc_req(#httpd{method='DELETE',db_frontend=DbFrontend}=Req, Db, DocId) ->
     case couch_httpd:qs_value(Req, "rev") of
     undefined ->
         update_doc(Req, Db, DocId,
-                couch_doc_from_req(Req, DocId, {[{<<"_deleted">>,true}]}));
+                couch_doc_from_req(DocId, {[{<<"_deleted">>,true}]}));
     Rev ->
         update_doc(Req, Db, DocId,
-                couch_doc_from_req(Req, DocId,
+                couch_doc_from_req(DocId,
                     {[{<<"_rev">>, ?l2b(Rev)},{<<"_deleted">>,true}]}))
     end;
 
@@ -575,7 +575,7 @@ db_doc_req(#httpd{method = 'GET',
     #doc_query_args{
         options = Options
     } = parse_doc_query(Req),
-    Doc = DbFrontend:couch_doc_open(Db, DocId, Options),
+    Doc = DbFrontend:couch_doc_open(Db, DocId, [ejson_body | Options]),
     send_doc(Req, Doc, Options);
 
 
@@ -585,36 +585,31 @@ db_doc_req(#httpd{method='PUT'}=Req, Db, DocId) ->
     RespHeaders = [{"Location", Loc}],
     case couch_httpd:is_ctype(Req, "application/json") of
     true ->
-        Body = couch_httpd:json_body(Req);
+        Body = couch_httpd:json_body(Req),
+        Doc = couch_doc_from_req(DocId, Body);
     false ->
-        Body = couch_doc:from_binary(DocId, couch_httpd:body(Req), true)
+        Body = couch_httpd:body(Req),
+        Doc = couch_doc:from_binary(DocId, Body, false)
     end,
-    Doc = couch_doc_from_req(Req, DocId, Body),
     update_doc(Req, Db, DocId, Doc, RespHeaders);
 
 db_doc_req(Req, _Db, _DocId) ->
     send_method_not_allowed(Req, "DELETE,GET,HEAD,POST,PUT").
 
 
-send_doc(Req, Doc, Options) ->
-    case Doc#doc.meta of
-    [] ->
-        send_doc_efficiently(Req, Doc, [], Options);
+send_doc(Req, Doc0, Options) ->
+    Doc = couch_doc:with_uncompressed_body(Doc0),
+    case Doc#doc.content_meta == ?CONTENT_META_JSON of
+    true ->
+        send_json(Req, 200, [], couch_doc:to_json_obj(Doc, Options));
     _ ->
-        send_doc_efficiently(Req, Doc, [], Options)
+        Headers = [
+            {"Content-Type", "application/content-stream"},
+            {"Cache-Control", "must-revalidate"}
+        ],
+        send_response(Req, 200, Headers, Doc#doc.body)
     end.
 
-
-send_doc_efficiently(Req,
-        #doc{binary=nil} = Doc, Headers, Options) ->
-    send_json(Req, 200, Headers, couch_doc:to_json_obj(Doc, Options));
-send_doc_efficiently(Req,
-        #doc{binary=Binary}, Headers, _Options) ->
-    Headers2 = Headers ++ [
-        {"Content-Type", "application/content-stream"},
-        {"Cache-Control", "must-revalidate"}
-    ],
-    send_response(Req, 200, Headers2, Binary).
 
 update_doc_result_to_json({{Id, Rev}, Error}) ->
         {_Code, Err, Msg} = couch_httpd:error_info(Error),
@@ -649,10 +644,10 @@ update_doc(Req, Db, DocId, #doc{deleted=Deleted}=Doc, Headers) ->
             {ok, true},
             {id, DocId}]}).
 
-couch_doc_from_req(_Req, DocId, #doc{} = Doc) ->
+couch_doc_from_req(DocId, #doc{} = Doc) ->
     Doc#doc{id=DocId};
-couch_doc_from_req(Req, DocId, Json) ->
-    couch_doc_from_req(Req, DocId, couch_doc:from_json_obj(Json)).
+couch_doc_from_req(DocId, {_}=EJson) ->
+    couch_doc_from_req(DocId, couch_doc:from_json_obj(EJson)).
 
 
 parse_doc_query(Req) ->

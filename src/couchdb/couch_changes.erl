@@ -117,7 +117,7 @@ os_filter_fun(FilterName, Style, Req, Db) ->
         DesignId = <<"_design/", DName/binary>>,
         DDoc = couch_db_frontend:couch_doc_open(Db, DesignId, [ejson_body]),
         % validate that the ddoc has the filter fun
-        #doc{json={Props}} = DDoc,
+        #doc{body={Props}} = DDoc,
         couch_util:get_nested_json_value({Props}, [<<"filters">>, FName]),
         fun(Db2, DocInfo) ->
             {ok, Doc} =
@@ -184,7 +184,7 @@ filter_view(ViewName, _Style, Db) ->
             DesignId = <<"_design/", DName/binary>>,
             {ok, DDoc} = couch_db_frontend:open_doc(Db, DesignId, [ejson_body]),
             % validate that the ddoc has the filter fun
-            #doc{json={Props}} = DDoc,
+            #doc{body={Props}} = DDoc,
             couch_util:get_nested_json_value({Props}, [<<"views">>, VName]),
             fun(Db2, DocInfo) ->
                 {ok, Doc} =

@@ -34,7 +34,6 @@ source_files = \
     couch_app.erl \
     couch_auth_cache.erl \
     couch_btree.erl \
-    couch_btree_nif.erl \
     couch_btree_copy.erl \
     couch_changes.erl \
     couch_compaction_daemon.erl \
@@ -113,7 +112,6 @@ compiled_files = \
     couch_app.beam \
     couch_auth_cache.beam \
     couch_btree.beam \
-    couch_btree_nif.beam \
     couch_btree_copy.beam \
     couch_changes.beam \
     couch_compaction_daemon.beam \

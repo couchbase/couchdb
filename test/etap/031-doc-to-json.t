@@ -15,8 +15,8 @@
 % the License.
 
 %% XXX: Figure out how to -include("couch_db.hrl")
--record(doc, {id= <<"">>, rev={0, <<>>}, json={[]},
-            binary=nil, deleted=false, meta=[]}).
+-record(doc, {id= <<"">>, rev={0, <<>>}, body={[]},
+        content_meta=0, deleted=false, meta=[]}).
 
 main(_) ->
     test_util:init_code_path(),
@@ -54,12 +54,12 @@ test_to_json_success() ->
             "_rev is added."
         },
         {
-            #doc{json={[{<<"foo">>, <<"bar">>}]}},
+            #doc{body={[{<<"foo">>, <<"bar">>}]}},
             {[{<<"_id">>, <<>>}, {<<"foo">>, <<"bar">>}]},
             "Arbitrary fields are added."
         },
         {
-            #doc{deleted=true, json={[{<<"foo">>, <<"bar">>}]}},
+            #doc{deleted=true, body={[{<<"foo">>, <<"bar">>}]}},
             {[{<<"_id">>, <<>>}, {<<"foo">>, <<"bar">>}, {<<"_deleted">>, true}]},
             "Deleted docs no longer drop body members."
         },

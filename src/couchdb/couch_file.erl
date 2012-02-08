@@ -26,9 +26,9 @@
 % public API
 -export([open/1, open/2, close/1, bytes/1, flush/1, sync/1, truncate/2]).
 -export([pread_term/2, pread_iolist/2, pread_binary/2,rename/2]).
--export([append_binary/2, append_binary_crc32/2,set_close_after/2]).
+-export([append_binary/2, append_binary_crc32/2, set_close_after/2]).
 -export([append_raw_chunk/2, assemble_file_chunk/1, assemble_file_chunk/2]).
--export([append_term/2, append_term/3, append_term_crc32/2, append_term_crc32/3]).
+-export([append_term/2]).
 -export([write_header/2, read_header/1,only_snapshot_reads/1]).
 -export([delete/2, delete/3, init_delete_dir/1,get_delete_dir/1]).
 
@@ -67,18 +67,7 @@ open(Filepath, Options) ->
 %%----------------------------------------------------------------------
 
 append_term(Fd, Term) ->
-    append_term(Fd, Term, []).
-
-append_term(Fd, Term, Options) ->
-    Comp = couch_util:get_value(compression, Options, ?DEFAULT_COMPRESSION),
-    append_binary(Fd, couch_compress:compress(Term, Comp)).
-
-append_term_crc32(Fd, Term) ->
-    append_term_crc32(Fd, Term, []).
-
-append_term_crc32(Fd, Term, Options) ->
-    Comp = couch_util:get_value(compression, Options, ?DEFAULT_COMPRESSION),
-    append_binary_crc32(Fd, couch_compress:compress(Term, Comp)).
+    append_binary_crc32(Fd, couch_compress:compress(?term_to_bin(Term))).
 
 %%----------------------------------------------------------------------
 %% Purpose: To append an Erlang binary to the end of the file.
@@ -115,7 +104,7 @@ assemble_file_chunk(Bin, Crc32) ->
 pread_term(Fd, Pos) ->
     case pread_binary(Fd, Pos) of
     {ok, Bin} ->
-        {ok, couch_compress:decompress(Bin)};
+        {ok, binary_to_term(couch_compress:decompress(Bin))};
     Else ->
         Else
     end.
@@ -453,12 +442,6 @@ code_change(_OldVsn, State, _Extra) ->
 
 handle_info(heart, File) ->
     {noreply, File};
-handle_info({append_bin_btnif, Comp, Rsrc, TermBin}, #file{writer = W, eof = Pos} = File) ->
-    Bin = assemble_file_chunk(couch_compress:compress_bin(TermBin, Comp)),
-    Size = calculate_total_read_len(Pos rem ?SIZE_BLOCK, iolist_size(Bin)),
-    ok = couch_btree_nif:write_response(Rsrc, Pos, Size),
-    W ! {chunk, Bin},
-    {noreply, File#file{eof = Pos + Size}};
 handle_info({'EXIT', _, normal}, Fd) ->
     {noreply, Fd};
 handle_info({'EXIT', Pid, Reason}, #file{writer = Pid} = Fd) ->
