@@ -1530,8 +1530,7 @@ cleaner(#state{group = Group} = State) ->
         sig = Sig
     } = Group,
     FileName = index_file_name(?root_dir(State), ?set_name(State), ?type(State), Sig),
-    {ok, RawReadFd} = file:open(FileName, [binary, read, raw]),
-    erlang:put({Fd, fast_fd_read}, RawReadFd),
+    ok = couch_set_view_util:open_raw_read_fd(Fd, FileName),
     StartTime = now(),
     PurgeFun = couch_set_view_util:make_btree_purge_fun(Group),
     {ok, NewIdBtree, {Go, IdPurgedCount}} =
@@ -1542,7 +1541,7 @@ cleaner(#state{group = Group} = State) ->
     stop ->
         {IdPurgedCount, Views}
     end,
-    ok = file:close(RawReadFd),
+    ok = couch_set_view_util:close_raw_read_fd(Fd),
     erlang:erase({Fd, fast_fd_read}),
     {ok, {_, IdBitmap}} = couch_btree:full_reduce(NewIdBtree),
     CombinedBitmap = lists:foldl(

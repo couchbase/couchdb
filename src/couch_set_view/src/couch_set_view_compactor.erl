@@ -76,8 +76,7 @@ compact_group(Group, EmptyGroup, SetName, FileName, CompactFileName) ->
         {progress, case TotalChanges of 0 -> 100; _ -> 0 end}
     ]),
 
-    {ok, RawReadFd} = file:open(FileName, [binary, read, raw]),
-    erlang:put({GroupFd, fast_fd_read}, RawReadFd),
+    ok = couch_set_view_util:open_raw_read_fd(GroupFd, FileName),
 
     BeforeKVWriteFun = fun({DocId, _} = KV, #acc{last_id = LastDocId} = Acc) ->
         if DocId =:= LastDocId -> % COUCHDB-999
@@ -134,8 +133,7 @@ maybe_retry_compact(CompactResult0, SetName, StartTime, GroupFd, CompactFileName
     {ok, Pid} = get_group_pid(SetName, DDocId, Type),
     case gen_server:call(Pid, {compact_done, CompactResult}) of
     ok ->
-        RawReadFd = erlang:erase({GroupFd, fast_fd_read}),
-        ok = file:close(RawReadFd);
+        ok = couch_set_view_util:close_raw_read_fd(GroupFd);
     update ->
         {_, Ref} = erlang:spawn_monitor(fun() ->
             couch_set_view_updater:update(nil, NewGroup, CompactFileName)

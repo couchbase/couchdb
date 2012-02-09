@@ -172,8 +172,7 @@ update(Owner, Group, FileName, ActiveDbs, PassiveDbs, MaxSeqs, BlockedTime) ->
 
     Parent = self(),
     Writer = spawn_link(fun() ->
-        {ok, RawReadFd} = file:open(FileName, [read, raw, binary]),
-        erlang:put({GroupFd, fast_fd_read}, RawReadFd),
+        ok = couch_set_view_util:open_raw_read_fd(GroupFd, FileName),
 
         DDocIds = couch_set_view_util:get_ddoc_ids_with_sig(SetName, GroupSig),
         couch_task_status:add_task([
@@ -219,7 +218,7 @@ update(Owner, Group, FileName, ActiveDbs, PassiveDbs, MaxSeqs, BlockedTime) ->
         catch _:Error ->
             exit(Error)
         after
-            ok = file:close(RawReadFd)
+            ok = couch_set_view_util:close_raw_read_fd(GroupFd)
         end
     end),
 
