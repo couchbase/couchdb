@@ -366,15 +366,19 @@ handle_call(is_view_defined, _From, #state{group = Group} = State) ->
     {reply, is_integer(?set_num_partitions(Group)), State, ?TIMEOUT};
 
 handle_call({partition_deleted, master}, _From, State) ->
-    Reason = {db_deleted, ?master_dbname((?set_name(State)))},
-    {stop, shutdown, shutdown, reply_all(State, {error, Reason})};
+    Error = {error, {db_deleted, ?master_dbname((?set_name(State)))}},
+    State2 = reply_all(State, Error),
+    State3 = reply_all_cleanup_waiters(State2, Error),
+    {stop, shutdown, shutdown, State3};
 handle_call({partition_deleted, PartId}, _From, #state{group = Group} = State) ->
     Mask = 1 bsl PartId,
     case ((?set_abitmask(Group) band Mask) =/= 0) orelse
         ((?set_pbitmask(Group) band Mask) =/= 0) of
     true ->
-        Reason = {db_deleted, ?dbname((?set_name(State)), PartId)},
-        {stop, shutdown, shutdown, reply_all(State, {error, Reason})};
+        Error = {error, {db_deleted, ?dbname((?set_name(State)), PartId)}},
+        State2 = reply_all(State, Error),
+        State3 = reply_all_cleanup_waiters(State2, Error),
+        {stop, shutdown, shutdown, State3};
     false ->
         {reply, ignore, State, ?TIMEOUT}
     end;
@@ -839,7 +843,8 @@ terminate(Reason, #state{updater_pid=Update, compactor_pid=Compact}=S) ->
     ?LOG_INFO("Set view `~s`, ~s group `~s`, terminating with reason: ~p",
         [?set_name(S), ?type(S), ?group_id(S), Reason]),
     State2 = stop_cleaner(S),
-    reply_all(State2, Reason),
+    State3 = reply_all(State2, Reason),
+    reply_all_cleanup_waiters(State3, {shutdown, Reason}),
     catch couch_db_set:close(?db_set(S)),
     couch_util:shutdown_sync(Update),
     couch_util:shutdown_sync(Compact),
@@ -875,6 +880,17 @@ reply_all(#state{waiting_list = []} = State, _Reply) ->
 reply_all(#state{waiting_list = WaitList} = State, Reply) ->
     lists:foreach(fun(From) -> catch gen_server:reply(From, Reply) end, WaitList),
     State#state{waiting_list = []}.
+
+
+reply_all_cleanup_waiters(#state{cleanup_waiters = []} = State, _Reply) ->
+    State;
+reply_all_cleanup_waiters(#state{cleanup_waiters = Waiters} = State, Reply) ->
+    ?LOG_INFO("Set view `~s`, ~s group `~s`, replying to all cleanup waiters with: ~p",
+        [?set_name(State), ?type(State), ?group_id(State), Reply]),
+    lists:foreach(
+        fun(#cleanup_waiter{from = F}) -> catch gen_server:reply(F, Reply) end,
+        Waiters),
+    State#state{cleanup_waiters = []}.
 
 
 prepare_group({RootDir, SetName, #set_view_group{sig = Sig, type = Type} = Group}, ForceReset)->
