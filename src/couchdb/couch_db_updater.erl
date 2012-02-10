@@ -691,6 +691,6 @@ notify_db_updated(NewDb) ->
     receive
     {ok, Ref} ->
         ok;
-    {'EXIT', _Pid, Reason} ->
+    {'EXIT', Pid, Reason} when Pid =:= NewDb#db.main_pid ->
         exit(Reason)
     end.
