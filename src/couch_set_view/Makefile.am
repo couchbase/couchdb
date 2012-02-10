@@ -46,7 +46,8 @@ test_files = \
     test/11-updates-cleanup-many-views.t \
     test/12-errors.t \
     test/13-progressive-cleanup.t \
-    test/14-duplicated-keys-per-doc.t
+    test/14-duplicated-keys-per-doc.t \
+    test/15-passive-partitions.t
 
 compiled_files = \
     ebin/couch_set_view.app \
