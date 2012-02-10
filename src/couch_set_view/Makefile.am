@@ -64,9 +64,11 @@ CLEANFILES = $(compiled_files) test/run
 
 noinst_SCRIPTS = test/run
 
+maybe_jN = $(if $(shell prove --help | grep jobs), -j4)
+
 check:
 	$(abs_top_builddir)/src/couch_set_view/test/run $(abs_top_srcdir)/src/couch_set_view/test/00-prepare.t
-	$(abs_top_builddir)/src/couch_set_view/test/run -j4 $(abs_top_srcdir)/src/couch_set_view/test
+	$(abs_top_builddir)/src/couch_set_view/test/run $(maybe_jN) $(abs_top_srcdir)/src/couch_set_view/test
 
 test/run: test/run.tpl
 	sed -e "s|%abs_top_srcdir%|@abs_top_srcdir@|g" \
