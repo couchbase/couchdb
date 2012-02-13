@@ -27,7 +27,7 @@ num_docs() -> 25536.  % keep it a multiple of num_set_partitions()
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(101),
+    etap:plan(181),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -41,36 +41,45 @@ main(_) ->
 test() ->
     couch_set_view_test_util:start_server(),
 
-    create_set(),
+    test_same_key_by_same_doc_multiple_times(),
+    test_same_key_by_different_docs_multiple_times(),
+
+    ok = timer:sleep(1000),
+    couch_set_view_test_util:stop_server(),
+    ok.
+
+
+test_same_key_by_same_doc_multiple_times() ->
+    same_key_by_same_doc_multiple_times_create_set(),
     add_documents(0, num_docs()),
 
     Group1 = get_group_snapshot(),
-    verify_btrees_1(Group1),
+    same_key_by_same_doc_multiple_times_verify_btrees_1(Group1),
 
     compact_view_group(),
 
     Group2 = get_group_snapshot(),
-    verify_btrees_1(Group2),
+    same_key_by_same_doc_multiple_times_verify_btrees_1(Group2),
 
     update_documents(0, num_docs(), false),
 
     Group3 = get_group_snapshot(),
-    verify_btrees_2(Group3),
+    same_key_by_same_doc_multiple_times_verify_btrees_2(Group3),
 
     compact_view_group(),
 
     Group4 = get_group_snapshot(),
-    verify_btrees_2(Group4),
+    same_key_by_same_doc_multiple_times_verify_btrees_2(Group4),
 
     update_documents(0, num_docs(), true),
 
     Group5 = get_group_snapshot(),
-    verify_btrees_1(Group5),
+    same_key_by_same_doc_multiple_times_verify_btrees_1(Group5),
 
     compact_view_group(),
 
     Group6 = get_group_snapshot(),
-    verify_btrees_1(Group6),
+    same_key_by_same_doc_multiple_times_verify_btrees_1(Group6),
 
     etap:diag("Marking partitions lists:seq(1, 63, 2) for cleanup"),
     ok = lists:foreach(
@@ -82,26 +91,70 @@ test() ->
     wait_for_cleanup(),
 
     Group7 = get_group_snapshot(),
-    verify_btrees_3(Group7),
+    same_key_by_same_doc_multiple_times_verify_btrees_3(Group7),
 
     compact_view_group(),
 
     Group8 = get_group_snapshot(),
-    verify_btrees_3(Group8),
+    same_key_by_same_doc_multiple_times_verify_btrees_3(Group8),
 
     delete_documents(0, num_docs()),
 
     Group9 = get_group_snapshot(),
-    verify_btrees_4(Group9),
+    same_key_by_same_doc_multiple_times_verify_btrees_4(Group9),
 
     compact_view_group(),
 
     Group10 = get_group_snapshot(),
-    verify_btrees_4(Group10),
+    same_key_by_same_doc_multiple_times_verify_btrees_4(Group10),
 
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
-    ok = timer:sleep(1000),
-    couch_set_view_test_util:stop_server(),
+    ok.
+
+
+test_same_key_by_different_docs_multiple_times() ->
+    test_same_key_by_different_docs_multiple_times_create_set(),
+    add_documents(0, 64),
+
+    Group1 = get_group_snapshot(),
+    test_same_key_by_different_docs_multiple_times_verify_btrees_1(Group1),
+
+    compact_view_group(),
+
+    Group2 = get_group_snapshot(),
+    test_same_key_by_different_docs_multiple_times_verify_btrees_1(Group2),
+
+    update_documents(0, 64, false),
+
+    Group3 = get_group_snapshot(),
+    test_same_key_by_different_docs_multiple_times_verify_btrees_2(Group3),
+
+    compact_view_group(),
+
+    Group4 = get_group_snapshot(),
+    test_same_key_by_different_docs_multiple_times_verify_btrees_2(Group4),
+
+    update_documents(0, 64, true),
+
+    Group5 = get_group_snapshot(),
+    test_same_key_by_different_docs_multiple_times_verify_btrees_1(Group5),
+
+    compact_view_group(),
+
+    Group6 = get_group_snapshot(),
+    test_same_key_by_different_docs_multiple_times_verify_btrees_1(Group6),
+
+    delete_documents(0, 64),
+
+    Group7 = get_group_snapshot(),
+    test_same_key_by_different_docs_multiple_times_verify_btrees_3(Group7),
+
+    compact_view_group(),
+
+    Group8 = get_group_snapshot(),
+    test_same_key_by_different_docs_multiple_times_verify_btrees_3(Group8),
+
+    couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
     ok.
 
 
@@ -161,12 +214,7 @@ get_group_info() ->
     Info.
 
 
-create_set() ->
-    couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
-    couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
-    couch_set_view:cleanup_index_files(test_set_name()),
-    etap:diag("Creating the set databases (# of partitions: " ++
-        integer_to_list(num_set_partitions()) ++ ")"),
+same_key_by_same_doc_multiple_times_create_set() ->
     DDoc = {[
         {<<"_id">>, ddoc_id()},
         {<<"language">>, <<"javascript">>},
@@ -184,6 +232,34 @@ create_set() ->
             ]}}
         ]}}
     ]},
+    create_set(DDoc).
+
+
+test_same_key_by_different_docs_multiple_times_create_set() ->
+    DDoc = {[
+        {<<"_id">>, ddoc_id()},
+        {<<"language">>, <<"javascript">>},
+        {<<"views">>, {[
+            {<<"view_1">>, {[
+                {<<"map">>, <<"function(doc) { "
+                    "emit(doc.value, doc.value * 2);"
+                    "if (doc.emit2) { "
+                        "emit(doc.value + 1, doc.value * 3);"
+                    "}"
+                "}">>},
+                {<<"reduce">>, <<"_sum">>}
+            ]}}
+        ]}}
+    ]},
+    create_set(DDoc).
+
+
+create_set(DDoc) ->
+    couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
+    couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
+    couch_set_view:cleanup_index_files(test_set_name()),
+    etap:diag("Creating the set databases (# of partitions: " ++
+        integer_to_list(num_set_partitions()) ++ ")"),
     ok = couch_set_view_test_util:update_ddoc(test_set_name(), DDoc),
     etap:diag("Configuring set view with partitions [0 .. 63] as active"),
     Params = #set_view_params{
@@ -297,7 +373,7 @@ get_view(ViewName, [#set_view{reduce_funs = RedFuns} = View | Rest]) ->
     end.
 
 
-verify_btrees_1(Group) ->
+same_key_by_same_doc_multiple_times_verify_btrees_1(Group) ->
     #set_view_group{
         id_btree = IdBtree,
         views = Views,
@@ -372,7 +448,7 @@ verify_btrees_1(Group) ->
     ok.
 
 
-verify_btrees_2(Group) ->
+same_key_by_same_doc_multiple_times_verify_btrees_2(Group) ->
     #set_view_group{
         id_btree = IdBtree,
         views = Views,
@@ -447,7 +523,7 @@ verify_btrees_2(Group) ->
     ok.
 
 
-verify_btrees_3(Group) ->
+same_key_by_same_doc_multiple_times_verify_btrees_3(Group) ->
     #set_view_group{
         id_btree = IdBtree,
         views = Views,
@@ -522,7 +598,7 @@ verify_btrees_3(Group) ->
     ok.
 
 
-verify_btrees_4(Group) ->
+same_key_by_same_doc_multiple_times_verify_btrees_4(Group) ->
     #set_view_group{
         id_btree = IdBtree,
         views = Views,
@@ -540,6 +616,234 @@ verify_btrees_4(Group) ->
         update_seqs = View1UpdateSeqs
     } = View1,
     PartList = lists:seq(0, num_set_partitions() - 1, 2),
+    ExpectedBitmask = couch_set_view_util:build_bitmask(PartList),
+    DbSeqs = couch_set_view_test_util:get_db_seqs(test_set_name(), PartList),
+
+    etap:is(
+        couch_btree:full_reduce(IdBtree),
+        {ok, {0, 0}},
+        "Id Btree is empty"),
+    etap:is(
+        couch_btree:full_reduce(View1Btree),
+        {ok, {0, [0], 0}},
+        "View1 Btree is empty"),
+
+    etap:is(View1UpdateSeqs, DbSeqs, "View1 has right update seqs list"),
+    etap:is(HeaderUpdateSeqs, DbSeqs, "Header has right update seqs list"),
+    etap:is(Abitmask, ExpectedBitmask, "Header has right active bitmask"),
+    etap:is(Pbitmask, 0, "Header has right passive bitmask"),
+    etap:is(Cbitmask, 0, "Header has right cleanup bitmask"),
+
+    etap:diag("Verifying the Id Btree"),
+    {ok, _, IdBtreeFoldResult} = couch_btree:fold(
+        IdBtree,
+        fun(_Kv, _, I) ->
+            {ok, I + 1}
+        end,
+        0, []),
+    etap:is(IdBtreeFoldResult, 0, "Id Btree has 0 entries"),
+
+    etap:diag("Verifying the View1 Btree"),
+    {ok, _, View1BtreeFoldResult} = couch_btree:fold(
+        View1Btree,
+        fun(_Kv, _, I) ->
+            {ok, I + 1}
+        end,
+        0, []),
+    etap:is(View1BtreeFoldResult, 0, "View1 Btree has 0 entries"),
+    ok.
+
+
+test_same_key_by_different_docs_multiple_times_verify_btrees_1(Group) ->
+    #set_view_group{
+        id_btree = IdBtree,
+        views = Views,
+        index_header = #set_view_index_header{
+            seqs = HeaderUpdateSeqs,
+            abitmask = Abitmask,
+            pbitmask = Pbitmask,
+            cbitmask = Cbitmask
+        }
+    } = Group,
+    etap:is(1, length(Views), "1 view btree in the group"),
+    View1 = get_view(<<"view_1">>, Views),
+    #set_view{
+        btree = View1Btree,
+        update_seqs = View1UpdateSeqs
+    } = View1,
+    PartList = lists:seq(0, num_set_partitions() - 1),
+    ExpectedBitmask = couch_set_view_util:build_bitmask(PartList),
+    DbSeqs = couch_set_view_test_util:get_db_seqs(test_set_name(), PartList),
+
+    etap:is(
+        couch_btree:full_reduce(IdBtree),
+        {ok, {64, ExpectedBitmask}},
+        "Id Btree has the right reduce value"),
+    ExpectedViewReduction = lists:sum([I * 2 + I * 3 || I <- lists:seq(0, 63)]),
+    etap:is(
+        couch_btree:full_reduce(View1Btree),
+        {ok, {64 * 2, [ExpectedViewReduction], ExpectedBitmask}},
+        "View1 Btree has the right reduce value"),
+
+    etap:is(View1UpdateSeqs, DbSeqs, "View1 has right update seqs list"),
+    etap:is(HeaderUpdateSeqs, DbSeqs, "Header has right update seqs list"),
+    etap:is(Abitmask, ExpectedBitmask, "Header has right active bitmask"),
+    etap:is(Pbitmask, 0, "Header has right passive bitmask"),
+    etap:is(Cbitmask, 0, "Header has right cleanup bitmask"),
+
+    etap:diag("Verifying the Id Btree"),
+    {ok, _, IdBtreeFoldResult} = couch_btree:fold(
+        IdBtree,
+        fun(Kv, _, I) ->
+            PartId = I rem num_set_partitions(),
+            Value = [{View1#set_view.id_num, I}, {View1#set_view.id_num, I + 1}],
+            ExpectedKv = {doc_id(I), {PartId, Value}},
+            case ExpectedKv =:= Kv of
+            true ->
+                ok;
+            false ->
+                etap:bail("Id Btree has an unexpected KV at iteration " ++ integer_to_list(I))
+            end,
+            {ok, I + 1}
+        end,
+        0, []),
+    etap:is(IdBtreeFoldResult, 64, "Id Btree has 64 entries"),
+
+    etap:diag("Verifying the View1 Btree"),
+    {ok, _, {_, _, View1BtreeFoldResult}} = couch_btree:fold(
+        View1Btree,
+        fun(Kv, _, {DocIdBase, Key, I}) ->
+            PartId = DocIdBase rem num_set_partitions(),
+            DocId = doc_id(DocIdBase),
+            ExpectedKv = case (I + 1) rem 2 of
+            0 ->
+                {{Key, DocId}, {PartId, DocIdBase * 3}};
+            1 ->
+                {{Key, DocId}, {PartId, DocIdBase * 2}}
+            end,
+            case ExpectedKv =:= Kv of
+            true ->
+                ok;
+            false ->
+                etap:bail("View1 Btree has an unexpected KV at iteration " ++ integer_to_list(I))
+            end,
+            NextDocIdBase = case (I + 1) rem 2 of
+            0 ->
+                DocIdBase + 1;
+            1 ->
+                DocIdBase
+            end,
+            NextKey = case I of
+            0 ->
+                1;
+            _ ->
+                case I rem 2 of
+                0 ->
+                    Key + 1;
+                1 ->
+                    Key
+                end
+            end,
+            {ok, {NextDocIdBase, NextKey, I + 1}}
+        end,
+        {0, 0, 0}, []),
+    etap:is(View1BtreeFoldResult, 128, "View1 Btree has 128 entries"),
+    ok.
+
+
+test_same_key_by_different_docs_multiple_times_verify_btrees_2(Group) ->
+    #set_view_group{
+        id_btree = IdBtree,
+        views = Views,
+        index_header = #set_view_index_header{
+            seqs = HeaderUpdateSeqs,
+            abitmask = Abitmask,
+            pbitmask = Pbitmask,
+            cbitmask = Cbitmask
+        }
+    } = Group,
+    etap:is(1, length(Views), "1 view btree in the group"),
+    View1 = get_view(<<"view_1">>, Views),
+    #set_view{
+        btree = View1Btree,
+        update_seqs = View1UpdateSeqs
+    } = View1,
+    PartList = lists:seq(0, num_set_partitions() - 1),
+    ExpectedBitmask = couch_set_view_util:build_bitmask(PartList),
+    DbSeqs = couch_set_view_test_util:get_db_seqs(test_set_name(), PartList),
+
+    etap:is(
+        couch_btree:full_reduce(IdBtree),
+        {ok, {64, ExpectedBitmask}},
+        "Id Btree has the right reduce value"),
+    ExpectedViewReduction = lists:sum([I * 2 || I <- lists:seq(0, 63)]),
+    etap:is(
+        couch_btree:full_reduce(View1Btree),
+        {ok, {64, [ExpectedViewReduction], ExpectedBitmask}},
+        "View1 Btree has the right reduce value"),
+
+    etap:is(View1UpdateSeqs, DbSeqs, "View1 has right update seqs list"),
+    etap:is(HeaderUpdateSeqs, DbSeqs, "Header has right update seqs list"),
+    etap:is(Abitmask, ExpectedBitmask, "Header has right active bitmask"),
+    etap:is(Pbitmask, 0, "Header has right passive bitmask"),
+    etap:is(Cbitmask, 0, "Header has right cleanup bitmask"),
+
+    etap:diag("Verifying the Id Btree"),
+    {ok, _, IdBtreeFoldResult} = couch_btree:fold(
+        IdBtree,
+        fun(Kv, _, I) ->
+            PartId = I rem num_set_partitions(),
+            Value = [{View1#set_view.id_num, I}],
+            ExpectedKv = {doc_id(I), {PartId, Value}},
+            case ExpectedKv =:= Kv of
+            true ->
+                ok;
+            false ->
+                etap:bail("Id Btree has an unexpected KV at iteration " ++ integer_to_list(I))
+            end,
+            {ok, I + 1}
+        end,
+        0, []),
+    etap:is(IdBtreeFoldResult, 64, "Id Btree has 64 entries"),
+
+    etap:diag("Verifying the View1 Btree"),
+    {ok, _, View1BtreeFoldResult} = couch_btree:fold(
+        View1Btree,
+        fun(Kv, _, I) ->
+            PartId = I rem num_set_partitions(),
+            DocId = doc_id(I),
+            ExpectedKv = {{I, DocId}, {PartId, I * 2}},
+            case ExpectedKv =:= Kv of
+            true ->
+                ok;
+            false ->
+                etap:bail("View1 Btree has an unexpected KV at iteration " ++ integer_to_list(I))
+            end,
+            {ok, I + 1}
+        end,
+        0, []),
+    etap:is(View1BtreeFoldResult, 64, "View1 Btree has 64 entries"),
+    ok.
+
+
+test_same_key_by_different_docs_multiple_times_verify_btrees_3(Group) ->
+    #set_view_group{
+        id_btree = IdBtree,
+        views = Views,
+        index_header = #set_view_index_header{
+            seqs = HeaderUpdateSeqs,
+            abitmask = Abitmask,
+            pbitmask = Pbitmask,
+            cbitmask = Cbitmask
+        }
+    } = Group,
+    etap:is(1, length(Views), "1 view btree in the group"),
+    View1 = get_view(<<"view_1">>, Views),
+    #set_view{
+        btree = View1Btree,
+        update_seqs = View1UpdateSeqs
+    } = View1,
+    PartList = lists:seq(0, num_set_partitions() - 1),
     ExpectedBitmask = couch_set_view_util:build_bitmask(PartList),
     DbSeqs = couch_set_view_test_util:get_db_seqs(test_set_name(), PartList),
 
