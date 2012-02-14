@@ -218,6 +218,9 @@ class TestViewMerge(unittest.TestCase):
 
         self.assertEqual(result["total_rows"], local["ndocs"] + remote["ndocs"],
                          "Total rows differs from %d" % (local["ndocs"] + remote["ndocs"]))
+        self.assertEqual(len(result["rows"]), local["ndocs"] + remote["ndocs"],
+                         "length(rows) differs from %d" % (local["ndocs"] + remote["ndocs"]))
+        self.assertFalse("errors" in result, "query result has no errors")
         common.test_keys_sorted(result)
 
         for row in result["rows"]:
