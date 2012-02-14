@@ -982,10 +982,9 @@ make_map_set_fold_fun(false, _Conflicts, _SetName, _UserCtx, Queue) ->
 
 make_map_set_fold_fun(true, Conflicts, SetName, UserCtx, Queue) ->
     DocOpenOpts = if Conflicts -> [conflicts]; true -> [] end,
-    fun({{Key, DocId}, {PartId, Value}}, _, Acc) ->
-        Kv = {{Key, DocId}, Value},
+    fun({{Key, DocId}, {PartId, Value}} = Kv, _, Acc) ->
         JsonDoc = couch_set_view_http:get_row_doc(
-                Kv, SetName, PartId, true, UserCtx, DocOpenOpts),
+                Kv, SetName, true, UserCtx, DocOpenOpts),
         Row = {{Key, DocId}, {PartId, Value}, {doc, JsonDoc}},
         ok = couch_view_merger_queue:queue(Queue, Row),
         {ok, Acc}

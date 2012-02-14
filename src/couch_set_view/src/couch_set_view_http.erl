@@ -16,7 +16,7 @@
 
 -export([make_view_fold_fun/6, finish_view_fold/4, finish_view_fold/5]).
 -export([view_etag/2, view_etag/3, make_reduce_fold_funs/5]).
--export([design_doc_view/6, parse_bool_param/1]).
+-export([design_doc_view/6, parse_bool_param/1, get_row_doc/5]).
 
 -import(couch_httpd,
     [send_json/2,send_json/3,send_json/4,send_method_not_allowed/2,send_chunk/2,
