@@ -605,7 +605,7 @@ view_insert_doc_query_results(DocId, PartitionId, [ResultKVs | RestResults],
         [{View, KVs} | RestViewKVs], ViewKVsAcc, ViewIdKeysAcc) ->
     % Take any identical keys and combine the values
     {NewKVs, NewViewIdKeysAcc} = lists:foldl(
-        fun({Key, Val}, {[{{Key, _DocId} = Kd, PrevVal} | AccRest], AccVid}) ->
+        fun({Key, Val}, {[{{Key, PrevDocId} = Kd, PrevVal} | AccRest], AccVid}) when PrevDocId =:= DocId ->
             AccKv2 = case PrevVal of
             {PartitionId, {dups, Dups}} ->
                 [{Kd, {PartitionId, {dups, [Val | Dups]}}} | AccRest];
