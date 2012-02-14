@@ -29,7 +29,7 @@
 -export([append_binary/2, append_binary_crc32/2, set_close_after/2]).
 -export([append_raw_chunk/2, assemble_file_chunk/1, assemble_file_chunk/2]).
 -export([append_term/2]).
--export([write_header/2, read_header/1,only_snapshot_reads/1]).
+-export([write_header/2,read_header/1,read_header/2,only_snapshot_reads/1]).
 -export([delete/2, delete/3, init_delete_dir/1,get_delete_dir/1]).
 
 % gen_server callbacks
@@ -263,6 +263,14 @@ read_header(Fd) ->
         Else
     end.
 
+read_header(Fd, Pos) ->
+    case gen_server:call(Fd, {read_header, Pos}, infinity) of
+    {ok, Bin} ->
+        {ok, binary_to_term(Bin)};
+    Else ->
+        Else
+    end.
+
 write_header(Fd, Data) ->
     Bin = term_to_binary(Data),
     Md5 = couch_util:md5(Bin),
@@ -392,6 +400,10 @@ handle_call(flush, From, #file{writer =  W} = File) ->
 
 handle_call(find_header, From, #file{reader = Reader, eof = Eof} = File) ->
     Reader ! {find_header, Eof, From},
+    {noreply, File};
+
+handle_call({read_header, Pos}, From, #file{reader = Reader} = File) ->
+    Reader ! {read_header, Pos, From},
     {noreply, File};
 
 handle_call(snapshot_reads, _From, #file{reader = R, writer = W} = File) ->
@@ -715,6 +727,10 @@ handle_reader_message(Msg, Fd, FilePath, CloseTimeout) ->
         reader_loop(Fd, FilePath, CloseTimeout);
     {find_header, Eof, From} ->
         gen_server:reply(From, find_header(Fd, Eof div ?SIZE_BLOCK)),
+        reader_loop(Fd, FilePath, CloseTimeout);
+    {read_header, Pos, From} ->
+        Result = (catch load_header(Fd, Pos div ?SIZE_BLOCK)),
+        gen_server:reply(From, Result),
         reader_loop(Fd, FilePath, CloseTimeout);
     {set_close_after, NewCloseTimeout, From} ->
         From ! {ok, self()},

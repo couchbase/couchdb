@@ -185,6 +185,28 @@ handle_call({compact_done, CompactFilepath}, _From, Db) ->
             [Db#db.update_seq, NewSeq]),
         close_db(NewDb),
         {reply, {retry, Db}, Db}
+    end;
+
+handle_call({update_header_pos, FileVersion, NewPos}, _From, Db) ->
+    ExistingFileVersion = file_version(Db#db.filepath),
+    if FileVersion == ExistingFileVersion ->
+        case couch_file:read_header(Db#db.fd, NewPos) of
+        {ok, NewHeader} ->
+            if Db#db.update_seq > NewHeader#db_header.update_seq ->
+                {reply, update_behind_couchdb, Db};
+            true ->
+                NewDb = populate_db_from_header(Db, NewHeader),
+                ok = notify_db_updated(NewDb),
+                couch_db_update_notifier:notify({updated, Db#db.name}),
+                {reply, ok, NewDb}
+            end;
+        Error ->
+            {reply, Error, Db}
+        end;
+    FileVersion < ExistingFileVersion ->
+        {reply, retry_new_file_version, Db};
+    true ->
+        {reply, update_file_ahead_of_couchdb, Db}
     end.
 
 
@@ -227,6 +249,10 @@ handle_info({'EXIT', _Pid, Reason}, Db) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
+
+file_version(FilePath) ->
+    Tokens = string:tokens(FilePath, "."),
+    list_to_integer(lists:last(Tokens)).
 
 increment_filepath(FilePath) ->
     Tokens = string:tokens(FilePath, "."),
@@ -293,13 +319,7 @@ simple_upgrade_record(Old, New) when tuple_size(Old) < tuple_size(New) ->
 simple_upgrade_record(Old, _New) ->
     Old.
 
-init_db(DbName, Filepath, Fd, Header0, Options) ->
-    Header1 = simple_upgrade_record(Header0, #db_header{}),
-    Header =
-    case element(2, Header1) of
-    ?LATEST_DISK_VERSION -> Header1;
-    _ -> throw({database_disk_version_error, "Incorrect disk header version"})
-    end,
+init_db(DbName, Filepath, Fd, Header, Options) ->
 
     {ok, FsyncOptions} = couch_util:parse_term(
             couch_config:get("couchdb", "fsync_options",
@@ -309,54 +329,65 @@ init_db(DbName, Filepath, Fd, Header0, Options) ->
     true -> ok = couch_file:sync(Fd);
     _ -> ok
     end,
-
-    {ok, IdBtree} = couch_btree:open(Header#db_header.docinfo_by_id_btree_state, Fd,
-        [{split, fun(X) -> btree_by_id_split(X) end},
-        {join, fun(X,Y) -> btree_by_id_join(X,Y) end},
-        {reduce, fun(X,Y) -> btree_by_id_reduce(X,Y) end}]),
-    {ok, SeqBtree} = couch_btree:open(Header#db_header.docinfo_by_seq_btree_state, Fd,
-            [{split, fun(X) -> btree_by_seq_split(X) end},
-            {join, fun(X,Y) -> btree_by_seq_join(X,Y) end},
-            {reduce, fun(X,Y) -> btree_by_seq_reduce(X,Y) end}]),
-    {ok, LocalDocsBtree} = couch_btree:open(Header#db_header.local_docs_btree_state, Fd,
-        []),
-    case Header#db_header.security_ptr of
-    nil ->
-        Security = [],
-        SecurityPtr = nil;
-    SecurityPtr ->
-        {ok, Security} = couch_file:pread_term(Fd, SecurityPtr)
-    end,
     % convert start time tuple to microsecs and store as a binary string
     {MegaSecs, Secs, MicroSecs} = now(),
     StartTime = ?l2b(io_lib:format("~p",
             [(MegaSecs*1000000*1000000) + (Secs*1000000) + MicroSecs])),
     {ok, RefCntr} = couch_ref_counter:start([Fd]),
-    #db{
+    Db = #db{
         update_pid=self(),
         fd = Fd,
         fd_ref_counter = RefCntr,
-        header=Header,
-        docinfo_by_id_btree = IdBtree,
-        docinfo_by_seq_btree = SeqBtree,
-        local_docs_btree = LocalDocsBtree,
-        committed_update_seq = Header#db_header.update_seq,
-        update_seq = Header#db_header.update_seq,
         name = DbName,
         filepath = Filepath,
-        security = Security,
-        security_ptr = SecurityPtr,
         instance_start_time = StartTime,
         fsync_options = FsyncOptions,
         options = Options
-        }.
+        },
+    populate_db_from_header(Db, Header).
 
 
 close_db(#db{fd_ref_counter = RefCntr}) ->
     couch_ref_counter:drop(RefCntr).
 
 
-% rev tree functions
+populate_db_from_header(Db, NewHeader) ->
+    Header1 = simple_upgrade_record(NewHeader, #db_header{}),
+    Header =
+    case element(2, Header1) of
+    ?LATEST_DISK_VERSION -> Header1;
+    _ -> throw({database_disk_version_error, "Incorrect disk header version"})
+    end,
+
+    {ok, IdBtree} = couch_btree:open(Header#db_header.docinfo_by_id_btree_state,
+            Db#db.fd,
+            [{split, fun(X) -> btree_by_id_split(X) end},
+            {join, fun(X,Y) -> btree_by_id_join(X,Y) end},
+            {reduce, fun(X,Y) -> btree_by_id_reduce(X,Y) end}]),
+    {ok, SeqBtree} = couch_btree:open(Header#db_header.docinfo_by_seq_btree_state,
+            Db#db.fd,
+            [{split, fun(X) -> btree_by_seq_split(X) end},
+            {join, fun(X,Y) -> btree_by_seq_join(X,Y) end},
+            {reduce, fun(X,Y) -> btree_by_seq_reduce(X,Y) end}]),
+    {ok, LocalDocsBtree} = couch_btree:open(Header#db_header.local_docs_btree_state,
+        Db#db.fd, []),
+    case Header#db_header.security_ptr of
+    nil ->
+        Security = [],
+        SecurityPtr = nil;
+    SecurityPtr ->
+        {ok, Security} = couch_file:pread_term(Db#db.fd, SecurityPtr)
+    end,
+    Db#db{
+        header=Header,
+        docinfo_by_id_btree = IdBtree,
+        docinfo_by_seq_btree = SeqBtree,
+        local_docs_btree = LocalDocsBtree,
+        committed_update_seq = Header#db_header.update_seq,
+        update_seq = Header#db_header.update_seq,
+        security = Security,
+        security_ptr = SecurityPtr
+        }.
 
 update_docs_int(Db, DocsList, NonRepDocs, FullCommit) ->
     #db{

@@ -253,7 +253,7 @@ shutdown_idle_db(DbName, MainPid, LruTime) ->
     true = ets:delete(couch_sys_dbs, DbName),
     ok.
 
-open_async(Server, From, DbName, Filepath, Options) ->
+open_async(Server, Froms, DbName, Filepath, Options) ->
     Parent = self(),
     Opener = spawn_link(fun() ->
             Res = couch_db:start_link(DbName, Filepath, Options),
@@ -268,7 +268,7 @@ open_async(Server, From, DbName, Filepath, Options) ->
                 ok
             end
         end),
-    true = ets:insert(couch_dbs_by_name, {DbName, {opening, Opener, [From]}}),
+    true = ets:insert(couch_dbs_by_name, {DbName, {opening, Opener, Froms}}),
     true = ets:insert(couch_dbs_by_pid, {Opener, DbName}),
     DbsOpen = case lists:member(sys_db, Options) of
     true ->
@@ -305,9 +305,11 @@ handle_call({open_result, DbName, {ok, OpenedDbPid}, Options}, _From, Server) ->
     {reply, ok, Server};
 handle_call({open_result, DbName, Error, Options}, _From, Server) ->
     [{DbName, {opening,Opener,Froms}}] = ets:lookup(couch_dbs_by_name, DbName),
-    lists:foreach(fun(From) ->
-        gen_server:reply(From, Error)
-    end, Froms),
+    % only notify the first openner, retry for all others since it's possible
+    % that an external writer created the file after the first open request,
+    % but before the subsequent open requests
+    {FromsNext, [FirstOpen]} = lists:split(length(Froms)-1, Froms),
+    gen_server:reply(FirstOpen, Error),
     true = ets:delete(couch_dbs_by_name, DbName),
     true = ets:delete(couch_dbs_by_pid, Opener),
     DbsOpen = case lists:member(sys_db, Options) of
@@ -317,12 +319,21 @@ handle_call({open_result, DbName, Error, Options}, _From, Server) ->
     false ->
         Server#server.dbs_open - 1
     end,
-    {reply, ok, Server#server{dbs_open = DbsOpen}};
+    Server2 = Server#server{dbs_open = DbsOpen},
+    case FromsNext of
+    [] ->
+        Server3 = Server2;
+    _ ->
+        % Retry
+        Filepath = get_full_filename(Server, binary_to_list(DbName)),
+        Server3 = open_async(Server2, FromsNext, DbName, Filepath, Options)
+    end,
+    {reply, ok, Server3};
 handle_call({open, DbName, Options}, {FromPid,_}=From, Server) ->
     LruTime = now(),
     case ets:lookup(couch_dbs_by_name, DbName) of
     [] ->
-        open_db(DbName, Server, Options, From);
+        open_db(DbName, Server, Options, [From]);
     [{_, {opening, Opener, Froms}}] ->
         true = ets:insert(couch_dbs_by_name, {DbName, {opening, Opener, [From|Froms]}}),
         {noreply, Server};
@@ -335,7 +346,7 @@ handle_call({open, DbName, Options}, {FromPid,_}=From, Server) ->
 handle_call({create, DbName, Options}, From, Server) ->
     case ets:lookup(couch_dbs_by_name, DbName) of
     [] ->
-        open_db(DbName, Server, [create | Options], From);
+        open_db(DbName, Server, [create | Options], [From]);
     [_AlreadyRunningDb] ->
         {reply, file_exists, Server}
     end;
@@ -425,18 +436,18 @@ handle_info(Error, _Server) ->
     ?LOG_ERROR("Unexpected message, restarting couch_server: ~p", [Error]),
     exit(kill).
 
-open_db(DbName, Server, Options, From) ->
+open_db(DbName, Server, Options, Froms) ->
     DbNameList = binary_to_list(DbName),
     case check_dbname(Server, DbNameList) of
     ok ->
         Filepath = get_full_filename(Server, DbNameList),
         case lists:member(sys_db, Options) of
         true ->
-            {noreply, open_async(Server, From, DbName, Filepath, Options)};
+            {noreply, open_async(Server, Froms, DbName, Filepath, Options)};
         false ->
             case maybe_close_lru_db(Server) of
             {ok, Server2} ->
-                {noreply, open_async(Server2, From, DbName, Filepath, Options)};
+                {noreply, open_async(Server2, Froms, DbName, Filepath, Options)};
             CloseError ->
                 {reply, CloseError, Server}
             end
