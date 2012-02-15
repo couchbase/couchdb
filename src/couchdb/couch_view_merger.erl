@@ -483,13 +483,23 @@ prepare_set_view(ViewSpec, ViewArgs, Queue, GetSetViewFn) ->
         {not_found, missing_named_view} ->
             not_found
         end
-    catch
-    view_undefined ->
-        couch_view_merger_queue:queue(Queue,
-            {error, ?LOCAL, view_undefined_msg(SetName, DDocId)}),
+    catch _:Error ->
+        QueueError = queue_get_view_group_error(Error, SetName, DDocId),
+        couch_view_merger_queue:queue(Queue, QueueError),
         couch_view_merger_queue:done(Queue),
         error
     end.
+
+
+queue_get_view_group_error({error, {invalid_value, Msg}}, _SetName, _DDocId) ->
+    {error, ?LOCAL, Msg};
+queue_get_view_group_error({error, Reason}, _SetName, _DDocId) ->
+    {error, ?LOCAL, Reason};
+queue_get_view_group_error(view_undefined, SetName, DDocId) ->
+    {error, ?LOCAL, view_undefined_msg(SetName, DDocId)};
+queue_get_view_group_error(Error, _SetName, _DDocId) ->
+    {error, ?LOCAL, Error}.
+
 
 map_view_folder(Db, #simple_index_spec{index_name = <<"_all_docs">>},
         MergeParams, _UserCtx, _DDoc, Queue) ->
@@ -775,15 +785,8 @@ http_view_fold_debug_info(object_end, Queue, Acc) ->
 
 
 http_view_fold_queue_error({Props}, Queue) ->
-    From0 = get_value(<<"from">>, Props),
-    From = case From0 of
-    undefined ->
-        get(from_url);
-    _ ->
-        From0
-    end,
     Reason = get_value(<<"reason">>, Props, null),
-    ok = couch_view_merger_queue:queue(Queue, {error, From, Reason}).
+    ok = couch_view_merger_queue:queue(Queue, {error, get(from_url), Reason}).
 
 
 http_view_fold_queue_row({Props}, Queue) ->
@@ -1014,8 +1017,7 @@ make_map_fold_fun(true, Conflicts, Db, Queue) ->
 
 view_undefined_msg(SetName, DDocId) ->
     Msg = io_lib:format(
-        "Undefined set view `~s` for `~s` design document.",
-            [SetName, DDocId]),
+        "Undefined set view `~s` for `~s` design document.", [SetName, DDocId]),
     iolist_to_binary(Msg).
 
 view_qs(ViewArgs, MergeParams) ->
