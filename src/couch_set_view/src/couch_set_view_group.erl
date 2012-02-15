@@ -75,6 +75,7 @@
 
 -define(inc_stat(S, Stats), setelement(S, Stats, element(S, Stats) + 1)).
 -define(inc_cleanup_stops(Stats), ?inc_stat(#set_view_group_stats.cleanup_stops, Stats)).
+-define(inc_updater_errors(Stats), ?inc_stat(#set_view_group_stats.update_errors, Stats)).
 
 
 % api methods
@@ -792,7 +793,6 @@ handle_info({'EXIT', Pid, {updater_finished, Result}}, #state{updater_pid = Pid}
     end;
 
 handle_info({'EXIT', Pid, {updater_error, Error}}, #state{updater_pid = Pid} = State) ->
-    % TODO: add an updater errors count to stats
     ?LOG_ERROR("Set view `~s`, ~s group `~s`, received error from updater: ~p",
         [?set_name(State), ?type(State), ?group_id(State), Error]),
     case State#state.shutdown of
@@ -801,7 +801,8 @@ handle_info({'EXIT', Pid, {updater_error, Error}}, #state{updater_pid = Pid} = S
     false ->
         State2 = State#state{
             updater_pid = nil,
-            updater_state = not_running
+            updater_state = not_running,
+            stats = ?inc_updater_errors(State#state.stats)
         },
         State3 = reply_all(State2, {error, Error}),
         {noreply, maybe_start_cleaner(State3), ?TIMEOUT}
@@ -1698,7 +1699,6 @@ stop_updater(#state{updater_pid = Pid} = State, When) ->
         },
         notify_cleanup_waiters(NewState);
     {'EXIT', Pid, Reason} ->
-        % TODO: add an updater errors count to stats
         Reply = case Reason of
         {updater_error, _} ->
             {error, element(2, Reason)};
@@ -1708,7 +1708,11 @@ stop_updater(#state{updater_pid = Pid} = State, When) ->
         ?LOG_ERROR("Updater, set view `~s`, ~s group `~s`, died with "
             "unexpected reason: ~p",
             [?set_name(State), ?type(State), ?group_id(State), Reason]),
-        NewState = State#state{updater_pid = nil, updater_state = not_running},
+        NewState = State#state{
+            updater_pid = nil,
+            updater_state = not_running,
+            stats = ?inc_updater_errors(State#state.stats)
+        },
         reply_all(NewState, Reply)
     end.
 

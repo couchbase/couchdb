@@ -92,6 +92,7 @@
     cleanup_stops = 0,
     cleanups = 0,
     updater_cleanups = 0,
+    update_errors = 0,
     update_history = [],
     compaction_history = [],
     cleanup_history = []

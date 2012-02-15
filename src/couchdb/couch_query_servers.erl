@@ -214,6 +214,8 @@ sum_terms([X|Xs], [Y|Ys]) when is_number(X), is_number(Y) ->
 sum_terms(_, _) ->
     throw({invalid_value, <<"builtin _sum function requires map values to be numbers or lists of numbers">>}).
 
+builtin_stats(reduce, []) ->
+    {[]};
 builtin_stats(reduce, [[_,First]|Rest]) when is_number(First) ->
     Stats = lists:foldl(fun([_K,V], {S,C,Mi,Ma,Sq}) when is_number(V) ->
         {S+V, C+1, lists:min([Mi, V]), lists:max([Ma, V]), Sq+(V*V)};
@@ -223,6 +225,9 @@ builtin_stats(reduce, [[_,First]|Rest]) when is_number(First) ->
     end, {First,1,First,First,First*First}, Rest),
     {Sum, Cnt, Min, Max, Sqr} = Stats,
     {[{sum,Sum}, {count,Cnt}, {min,Min}, {max,Max}, {sumsqr,Sqr}]};
+builtin_stats(reduce, KVs) when is_list(KVs) ->
+    Msg = <<"builtin _stats function requires map values to be numbers">>,
+    throw({invalid_value, Msg});
 
 builtin_stats(rereduce, [[_,First]|Rest]) ->
     {[{sum,Sum0}, {count,Cnt0}, {min,Min0}, {max,Max0}, {sumsqr,Sqr0}]} = First,

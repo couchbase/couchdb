@@ -483,13 +483,23 @@ prepare_set_view(ViewSpec, ViewArgs, Queue, GetSetViewFn) ->
         {not_found, missing_named_view} ->
             not_found
         end
-    catch
-    view_undefined ->
-        couch_view_merger_queue:queue(Queue,
-            {error, ?LOCAL, view_undefined_msg(SetName, DDocId)}),
+    catch _:Error ->
+        QueueError = queue_get_view_group_error(Error, SetName, DDocId),
+        couch_view_merger_queue:queue(Queue, QueueError),
         couch_view_merger_queue:done(Queue),
         error
     end.
+
+
+queue_get_view_group_error({error, {invalid_value, Msg}}, _SetName, _DDocId) ->
+    {error, ?LOCAL, Msg};
+queue_get_view_group_error({error, Reason}, _SetName, _DDocId) ->
+    {error, ?LOCAL, Reason};
+queue_get_view_group_error(view_undefined, SetName, DDocId) ->
+    {error, ?LOCAL, view_undefined_msg(SetName, DDocId)};
+queue_get_view_group_error(Error, _SetName, _DDocId) ->
+    {error, ?LOCAL, Error}.
+
 
 map_view_folder(Db, #simple_index_spec{index_name = <<"_all_docs">>},
         MergeParams, _UserCtx, _DDoc, Queue) ->
@@ -775,15 +785,8 @@ http_view_fold_debug_info(object_end, Queue, Acc) ->
 
 
 http_view_fold_queue_error({Props}, Queue) ->
-    From0 = get_value(<<"from">>, Props),
-    From = case From0 of
-    undefined ->
-        get(from_url);
-    _ ->
-        From0
-    end,
     Reason = get_value(<<"reason">>, Props, null),
-    ok = couch_view_merger_queue:queue(Queue, {error, From, Reason}).
+    ok = couch_view_merger_queue:queue(Queue, {error, get(from_url), Reason}).
 
 
 http_view_fold_queue_row({Props}, Queue) ->
@@ -1014,8 +1017,7 @@ make_map_fold_fun(true, Conflicts, Db, Queue) ->
 
 view_undefined_msg(SetName, DDocId) ->
     Msg = io_lib:format(
-        "Undefined set view `~s` for `~s` design document.",
-            [SetName, DDocId]),
+        "Undefined set view `~s` for `~s` design document.", [SetName, DDocId]),
     iolist_to_binary(Msg).
 
 view_qs(ViewArgs, MergeParams) ->
@@ -1155,18 +1157,6 @@ queue_debug_info(_QueryArgs, #set_view_group{} = Group, Queue) ->
         original_pbitmask = OrigMainPbitmask,
         stats = Stats
     } = Group#set_view_group.debug_info,
-    #set_view_group_stats{
-        full_updates = FullUpdates,
-        partial_updates = PartialUpdates,
-        stopped_updates = StoppedUpdates,
-        compactions = Compactions,
-        cleanup_stops = CleanupStops,
-        cleanups = Cleanups,
-        updater_cleanups = UpdaterCleanups,
-        update_history = UpdateHist,
-        compaction_history = CompactHist,
-        cleanup_history = CleanupHist
-    } = Stats,
     OrigMainActive = couch_set_view_util:decode_bitmask(OrigMainAbitmask),
     ModMainActive = couch_set_view_util:decode_bitmask(?set_abitmask(Group)),
     OrigMainPassive = couch_set_view_util:decode_bitmask(OrigMainPbitmask),
@@ -1181,18 +1171,7 @@ queue_debug_info(_QueryArgs, #set_view_group{} = Group, Queue) ->
         {<<"original_passive_partitions">>, ordsets:from_list(OrigMainPassive)},
         {<<"cleanup_partitions">>, ordsets:from_list(MainCleanup)},
         {<<"indexed_seqs">>, {IndexedSeqs}},
-        {<<"stats">>, {[
-            {<<"full_updates">>, FullUpdates},
-            {<<"partial_updates">>, PartialUpdates},
-            {<<"stopped_updates">>, StoppedUpdates},
-            {<<"compactions">>, Compactions},
-            {<<"cleanup_stops">>, CleanupStops},
-            {<<"cleanups">>, Cleanups},
-            {<<"updater_cleanups">>, UpdaterCleanups},
-            {<<"update_history">>, UpdateHist},
-            {<<"cleanup_history">>, CleanupHist},
-            {<<"compaction_history">>, CompactHist}
-        ]}}
+        {<<"stats">>, set_view_group_stats_ejson(Stats)}
     ],
     RepInfo = replica_group_debug_info(Group),
     Info = {MainInfo ++ RepInfo},
@@ -1208,18 +1187,6 @@ replica_group_debug_info(#set_view_group{replica_group = RepGroup}) ->
             stats = Stats
         }
     } = RepGroup,
-    #set_view_group_stats{
-        full_updates = FullUpdates,
-        partial_updates = PartialUpdates,
-        stopped_updates = StoppedUpdates,
-        compactions = Compactions,
-        cleanup_stops = CleanupStops,
-        cleanups = Cleanups,
-        updater_cleanups = UpdaterCleanups,
-        update_history = UpdateHist,
-        compaction_history = CompactHist,
-        cleanup_history = CleanupHist
-    } = Stats,
     OrigRepActive = couch_set_view_util:decode_bitmask(OrigRepAbitmask),
     ModRepActive = couch_set_view_util:decode_bitmask(?set_abitmask(RepGroup)),
     OrigRepPassive = couch_set_view_util:decode_bitmask(OrigRepPbitmask),
@@ -1234,16 +1201,16 @@ replica_group_debug_info(#set_view_group{replica_group = RepGroup}) ->
         {<<"replica_original_passive_partitions">>, ordsets:from_list(OrigRepPassive)},
         {<<"replica_cleanup_partitions">>, ordsets:from_list(RepCleanup)},
         {<<"replica_indexed_seqs">>, {IndexedSeqs}},
-        {<<"replica_stats">>, {[
-            {<<"full_updates">>, FullUpdates},
-            {<<"partial_updates">>, PartialUpdates},
-            {<<"stopped_updates">>, StoppedUpdates},
-            {<<"compactions">>, Compactions},
-            {<<"cleanup_stops">>, CleanupStops},
-            {<<"cleanups">>, Cleanups},
-            {<<"updater_cleanups">>, UpdaterCleanups},
-            {<<"update_history">>, UpdateHist},
-            {<<"cleanup_history">>, CleanupHist},
-            {<<"compaction_history">>, CompactHist}
-        ]}}
+        {<<"replica_stats">>, set_view_group_stats_ejson(Stats)}
     ].
+
+
+set_view_group_stats_ejson(Stats) ->
+    StatNames = record_info(fields, set_view_group_stats),
+    StatPoses = lists:seq(2, record_info(size, set_view_group_stats)),
+    {lists:foldl(
+        fun({StatName, StatPos}, Acc) ->
+            [{StatName, element(StatPos, Stats)} | Acc]
+        end,
+        [],
+        lists:zip(StatNames, StatPoses))}.
