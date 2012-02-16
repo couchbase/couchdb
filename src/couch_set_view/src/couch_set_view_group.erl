@@ -224,16 +224,17 @@ start_link({RootDir, SetName, Group}) ->
 
 init({_, _, Group} = InitArgs) ->
     process_flag(trap_exit, true),
-    try
-        {ok, State} = do_init(InitArgs),
-        proc_lib:init_ack({ok, self()}),
-        gen_server:enter_loop(?MODULE, [], State, 1)
+    {ok, State} = try
+        do_init(InitArgs)
     catch
     _:Error ->
         ?LOG_ERROR("~s error opening set view group `~s` from set `~s`: ~p",
             [?MODULE, Group#set_view_group.name, Group#set_view_group.set_name, Error]),
         exit(Error)
-    end.
+    end,
+    proc_lib:init_ack({ok, self()}),
+    gen_server:enter_loop(?MODULE, [], State, 1).
+
 
 do_init({_, SetName, _} = InitArgs) ->
     case prepare_group(InitArgs, false) of
@@ -302,7 +303,7 @@ do_init({_, SetName, _} = InitArgs) ->
         },
         {ok, InitState};
     Error ->
-        Error
+        throw(Error)
     end.
 
 handle_call({define_view, NumPartitions, ActiveList, ActiveBitmask,
