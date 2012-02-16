@@ -239,7 +239,7 @@ init({_, _, Group} = InitArgs) ->
 do_init({_, SetName, _} = InitArgs) ->
     case prepare_group(InitArgs, false) of
     {ok, #set_view_group{fd = Fd, index_header = Header, type = Type} = Group} ->
-        {ok, RefCounter} = couch_ref_counter:start([Fd]),
+        RefCounter = new_fd_ref_counter(Fd),
         case Header#set_view_index_header.has_replica of
         false ->
             ReplicaPid = nil,
@@ -584,9 +584,8 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
         %% cleanup old group
         unlink(CompactorPid),
         receive {'EXIT', CompactorPid, normal} -> ok after 0 -> ok end,
-        unlink(OldFd),
-        couch_ref_counter:drop(RefCounter),
-        {ok, NewRefCounter} = couch_ref_counter:start([NewGroup#set_view_group.fd]),
+        drop_fd_ref_counter(RefCounter),
+        NewRefCounter = new_fd_ref_counter(NewGroup#set_view_group.fd),
 
         State2 = State#state{
             compactor_pid = nil,
@@ -840,16 +839,17 @@ handle_info({'EXIT', Pid, Reason}, State) ->
     {stop, Reason, State}.
 
 
-terminate(Reason, #state{updater_pid=Update, compactor_pid=Compact}=S) ->
+terminate(Reason, State) ->
     ?LOG_INFO("Set view `~s`, ~s group `~s`, terminating with reason: ~p",
-        [?set_name(S), ?type(S), ?group_id(S), Reason]),
-    State2 = stop_cleaner(S),
+        [?set_name(State), ?type(State), ?group_id(State), Reason]),
+    State2 = stop_cleaner(State),
     State3 = reply_all(State2, Reason),
     reply_all_cleanup_waiters(State3, {shutdown, Reason}),
-    catch couch_db_set:close(?db_set(S)),
-    couch_util:shutdown_sync(Update),
-    couch_util:shutdown_sync(Compact),
-    ok.
+    catch couch_db_set:close(?db_set(State3)),
+    couch_util:shutdown_sync(State#state.updater_pid),
+    couch_util:shutdown_sync(State#state.compactor_pid),
+    couch_util:shutdown_sync(State#state.compactor_file),
+    couch_util:shutdown_sync(State#state.replica_group).
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
@@ -947,6 +947,15 @@ index_file_name(compact, RootDir, SetName, replica, GroupSig) ->
 
 
 open_index_file(RootDir, SetName, Type, GroupSig) ->
+    case do_open_index_file(RootDir, SetName, Type, GroupSig) of
+    {ok, Fd} ->
+        unlink(Fd),
+        {ok, Fd};
+    Error ->
+        Error
+    end.
+
+do_open_index_file(RootDir, SetName, Type, GroupSig) ->
     FileName = index_file_name(RootDir, SetName, Type, GroupSig),
     case couch_file:open(FileName) of
     {ok, Fd}        -> {ok, Fd};
@@ -955,6 +964,15 @@ open_index_file(RootDir, SetName, Type, GroupSig) ->
     end.
 
 open_index_file(compact, RootDir, SetName, Type, GroupSig) ->
+    case do_open_index_file(compact, RootDir, SetName, Type, GroupSig) of
+    {ok, Fd} ->
+        unlink(Fd),
+        {ok, Fd};
+    Error ->
+        Error
+    end.
+
+do_open_index_file(compact, RootDir, SetName, Type, GroupSig) ->
     FileName = index_file_name(compact, RootDir, SetName, Type, GroupSig),
     case couch_file:open(FileName) of
     {ok, Fd}        -> {ok, Fd};
@@ -1601,13 +1619,10 @@ start_compactor(State, CompactFun) ->
     #set_view_group{
         fd = CompactFd
     } = NewGroup = compact_group(State2),
-    unlink(CompactFd),
     Pid = spawn_link(fun() ->
-        link(CompactFd),
         FileName = index_file_name(State2),
         CompactFileName = index_file_name(State2, compact),
-        CompactFun(Group, NewGroup, ?set_name(State2), FileName, CompactFileName),
-        unlink(CompactFd)
+        CompactFun(Group, NewGroup, ?set_name(State2), FileName, CompactFileName)
     end),
     State2#state{
         compactor_pid = Pid,
@@ -1983,3 +1998,24 @@ inc_compactions(#set_view_group_stats{compaction_history = Hist} = Stats, Result
                 Stats#set_view_group_stats.cleanups + 1
         end
     }.
+
+
+new_fd_ref_counter(Fd) ->
+    {ok, RefCounter} = couch_ref_counter:start([Fd]),
+    % MB-4808, for some odd reason, possibly a race condition, ref counters seem
+    % to die after compaction/updates happened. Monitoring them to help debug -
+    % let the view group crash and see in the stack trace dump the monitor's DOWN message.
+    % TODO: remove the monitors once issue is solved.
+    RefRefCounter = erlang:monitor(process, RefCounter),
+    FdRefCounter = erlang:monitor(process, Fd),
+    erlang:put(fd_ref_counter_monref, RefRefCounter),
+    erlang:put(fd_monref, FdRefCounter),
+    RefCounter.
+
+
+drop_fd_ref_counter(RefCounter) ->
+    RefRefCounter = erlang:erase(fd_ref_counter_monref),
+    FdRefCounter = erlang:erase(fd_monref),
+    erlang:demonitor(RefRefCounter),
+    erlang:demonitor(FdRefCounter),
+    couch_ref_counter:drop(RefCounter).
