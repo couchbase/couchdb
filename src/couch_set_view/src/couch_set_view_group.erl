@@ -583,7 +583,6 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
 
         %% cleanup old group
         unlink(CompactorPid),
-        receive {'EXIT', CompactorPid, normal} -> ok after 0 -> ok end,
         drop_fd_ref_counter(RefCounter),
         NewRefCounter = new_fd_ref_counter(NewGroup#set_view_group.fd),
 
