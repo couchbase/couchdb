@@ -182,9 +182,14 @@ do_query_index(Mod, IndexMergeParams, DDoc, IndexName) ->
         end
     after
         catch unlink(Queue),
+
         lists:foreach(
             fun (P) ->
-                catch unlink(P),
+                catch unlink(P)
+            end, Folders),
+
+        lists:foreach(
+            fun (P) ->
                 catch exit(P, kill)
             end, Folders),
         catch exit(Queue, kill),
