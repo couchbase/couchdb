@@ -459,14 +459,10 @@ handle_info({append_bin_btnif, Comp, Rsrc, TermBin}, #file{writer = W, eof = Pos
     ok = couch_btree_nif:write_response(Rsrc, Pos, Size),
     W ! {chunk, Bin},
     {noreply, File#file{eof = Pos + Size}};
-handle_info({'EXIT', _, normal}, Fd) ->
-    {noreply, Fd};
 handle_info({'EXIT', Pid, Reason}, #file{writer = Pid} = Fd) ->
     {stop, {write_loop_died, Reason}, Fd};
 handle_info({'EXIT', Pid, Reason}, #file{reader = Pid} = Fd) ->
     {stop, {read_loop_died, Reason}, Fd};
-handle_info({'EXIT', _, normal}, Fd) ->
-    {noreply, Fd};
 handle_info({'EXIT', _, Reason}, Fd) ->
     {stop, Reason, Fd}.
 
