@@ -544,7 +544,7 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
         compactor_pid = CompactorPid
     } = State,
     #set_view_group{
-        fd = OldFd, sig = GroupSig, ref_counter = RefCounter
+        fd = OldFd, ref_counter = RefCounter
     } = Group,
     #set_view_compactor_result{
         group = NewGroup0,
@@ -566,8 +566,7 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
         ?LOG_INFO("Set view `~s`, ~s group `~s`, compaction complete in ~.3f seconds,"
             " filtered ~p key-value pairs",
             [?set_name(State), ?type(State), ?group_id(State), Duration, CleanupKVCount]),
-        FileName = index_file_name(
-            ?root_dir(State), ?set_name(State), ?type(State), GroupSig),
+        FileName = index_file_name(State),
         ok = couch_file:only_snapshot_reads(OldFd),
         ok = couch_file:delete(?root_dir(State), FileName),
         ok = couch_file:rename(NewGroup#set_view_group.fd, FileName),
@@ -576,7 +575,7 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
         if is_pid(UpdaterPid) ->
             Owner = self(),
             spawn_link(fun() ->
-                couch_set_view_updater:update(Owner, NewGroup, index_file_name(State))
+                couch_set_view_updater:update(Owner, NewGroup, FileName)
             end);
         true ->
             nil
