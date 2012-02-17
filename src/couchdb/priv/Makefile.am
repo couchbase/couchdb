@@ -126,19 +126,6 @@ $(WIN_ICU_LIB_DIR):$(ICU_LIB_DIR)
 $(WIN_ERL_INCLUDE):$(ERLANG_INCLUDE)
 	echo $< | sed -e "s|^/cygdrive/\([a-zA-Z]\)|\1:|" > $@
 
- $(WIN_ERL_INTERFACE_INCLUDE) $(WIN_ERL_INTERFACE_LIB)
-	sed -e "s|%ERLANG_INCLUDE%|`cat $(WIN_ERL_INCLUDE)`|" \
-	    -e "s|%ERL_INTERFACE_DIR_INCLUDE%|`cat $(WIN_ERL_INTERFACE_INCLUDE)`|" \
-	    -e "s|%ERL_INTERFACE_DIR_LIB%|`cat $(WIN_ERL_INTERFACE_LIB)`|" \
-	    -e "s|%WIN_SNAPPY_SRC%|$(WIN_SNAPPY_SRC)|" \
-	< $< > $@
-
-$(WIN_ERL_INTERFACE_INCLUDE):
-	echo $(ERL_INTERFACE_DIR_INCLUDE) | sed -e "s|^-I\([a-zA-Z]\)|\1|" > $@
-
-$(WIN_ERL_INTERFACE_LIB):
-	echo $(ERL_INTERFACE_DIR_LIB) | sed -e "s|^-L\([a-zA-Z]\)|\1|" > $@
-
 $(COUCH_EJSON_COMPARE) : couch_ejson_compare/couch_ejson_compare.c $(EJSON_COMPARE_MSBUILD) $(EJSON_COMPARE_VCPROJ)
 	$(MKDIR_P) "$(couchprivlibdir)" || true
 	(cd couch_ejson_compare/win32 && ./msbuild.bat)
