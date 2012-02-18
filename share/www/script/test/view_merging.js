@@ -446,6 +446,18 @@ couchTests.view_merging = function(debug) {
   compareViewResults(resp, resp2);
 
   // test limit=N query parameter
+  resp = mergedQuery(dbs, "test/mapview1", {"limit": 0});
+  TEquals("object", typeof resp);
+  TEquals(50, resp.total_rows);
+  TEquals("object", typeof resp.rows);
+  TEquals(0, resp.rows.length);
+
+  // same, but with remote dbs
+  resp2 = mergedQuery([dbUri(dbA), dbB, dbUri(dbC), dbD, dbE], "test/mapview1",
+    {"limit": 0});
+
+  compareViewResults(resp, resp2);
+
   resp = mergedQuery(dbs, "test/mapview1", {"limit": 1});
   TEquals("object", typeof resp);
   TEquals(50, resp.total_rows);

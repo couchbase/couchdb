@@ -448,14 +448,7 @@ collect_rows(PreprocessFun, Callback, UserAcc, Item) ->
         {stop, UserAcc2}
     end.
 
-% When no limit is specified the merging is easy
-merge_indexes_no_limit(#merge_params{collector = Col}) ->
-    Col(stop).
-
-% Simple case when there are no (or we don't care about) accumulated rows
-% MinRowFun is a function that it called if the
-% couch_view_merger_queue returns a row that is neither an error, nor a count.
-merge_indexes_no_acc(Params, MinRowFun) ->
+merge_indexes_common(Params, RowFun) ->
     #merge_params{
         queue = Queue, collector = Col
     } = Params,
@@ -466,7 +459,7 @@ merge_indexes_no_acc(Params, MinRowFun) ->
     {ok, {debug_info, _From, _Info} = DebugInfo} ->
         ok = couch_view_merger_queue:flush(Queue),
         {ok, Col2} = Col(DebugInfo),
-        merge_indexes_no_acc(Params#merge_params{collector = Col2}, MinRowFun);
+        merge_indexes_common(Params#merge_params{collector = Col2}, RowFun);
     {ok, revision_mismatch} ->
         revision_mismatch;
     {ok, set_view_outdated} ->
@@ -475,19 +468,35 @@ merge_indexes_no_acc(Params, MinRowFun) ->
         ok = couch_view_merger_queue:flush(Queue),
         case Col(Error) of
         {ok, Col2} ->
-            merge_indexes_no_acc(
-                Params#merge_params{collector = Col2}, MinRowFun);
+            merge_indexes_common(Params#merge_params{collector = Col2}, RowFun);
         {stop, Resp} ->
             {stop, Resp}
         end;
     {ok, {row_count, _} = RowCount} ->
         {ok, Col2} = Col(RowCount),
         ok = couch_view_merger_queue:flush(Queue),
-        merge_indexes_no_acc(Params#merge_params{collector = Col2}, MinRowFun);
+        merge_indexes_common(Params#merge_params{collector = Col2}, RowFun);
     {ok, MinRow} ->
-        Params2 = MinRowFun(Params, MinRow),
-        {params, Params2}
+        RowFun(Params, MinRow)
     end.
+
+merge_indexes_no_limit(Params) ->
+    merge_indexes_common(
+      Params,
+      fun (#merge_params{collector=Col}, _MinRow) ->
+          Col(stop)
+      end).
+
+% Simple case when there are no (or we don't care about) accumulated rows
+% MinRowFun is a function that it called if the
+% couch_view_merger_queue returns a row that is neither an error, nor a count.
+merge_indexes_no_acc(Params, MinRowFun) ->
+    merge_indexes_common(
+      Params,
+      fun (AccParams, MinRow) ->
+          AccParams2 = MinRowFun(AccParams, MinRow),
+          {params, AccParams2}
+      end).
 
 handle_skip(Params) ->
     #merge_params{
