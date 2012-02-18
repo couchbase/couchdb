@@ -86,6 +86,7 @@ class TestViewMerge(unittest.TestCase):
         self.do_test_redview(self._params_local, self._params_remote)
         self.do_test_redview2(self._params_local, self._params_remote)
         self.do_test_include_docs(self._params_local, self._params_remote)
+        self.do_test_limit0(self._params_local, self._params_remote)
         self.do_test_limit(self._params_local, self._params_remote)
         self.do_test_skip(self._params_local, self._params_remote)
         self.do_test_filter(self._params_local, self._params_remote)
@@ -229,6 +230,18 @@ class TestViewMerge(unittest.TestCase):
             self.assertEqual(doc["integer"], key, "Invalid `doc` returned for %d key" % key)
             self.assertEqual(doc["string"], str(key), "Invalid `doc` returned for %d key" % key)
 
+    def do_test_limit0(self, local, remote):
+        local_spec = self.set_spec(local["setname"], "mapview", range(local["nparts"]))
+        remote_spec = self.set_spec(remote["setname"], "mapview", range(remote["nparts"]))
+        remote_merge = self.merge_spec(remote["host"], [], [remote_spec])
+
+        full_spec = self.views_spec([remote_merge], [local_spec])
+        _, result = self.query(local["host"], full_spec, params = {"limit" : 0})
+
+        self.assertEqual(result["total_rows"], local["ndocs"] + remote["ndocs"],
+                         "Total rows differs from %d" % (local["ndocs"] + remote["ndocs"]))
+
+        self.assertEqual(len(result["rows"]), 0, "Invalid row count")
 
     def do_test_limit(self, local, remote):
         local_spec = self.set_spec(local["setname"], "mapview", range(local["nparts"]))
