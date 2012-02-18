@@ -17,48 +17,7 @@
 -define(MAX_WAIT_TIME, 600 * 1000).
 -define(i2l(I), integer_to_list(I)).
 
-% from couch_set_view.hrl
--record(set_view_params, {
-    max_partitions = 0,
-    active_partitions = [],
-    passive_partitions = [],
-    use_replica_index = false
-}).
-
--record(set_view_index_header, {
-    version,
-    num_partitions = nil,
-    abitmask = 0,
-    pbitmask = 0,
-    cbitmask = 0,
-    seqs = [],
-    purge_seqs = [],
-    id_btree_state = nil,
-    view_states = nil,
-    has_replica = false,
-    replicas_on_transfer = []
-}).
-
--record(set_view_group, {
-    sig = nil,
-    fd = nil,
-    set_name,
-    name,
-    def_lang,
-    design_options = [],
-    views,
-    lib,
-    id_btree = nil,
-    query_server = nil,
-    waiting_delayed_commit = nil,
-    ref_counter = nil,
-    index_header = nil,
-    db_set = nil,
-    type = main,
-    replica_group = nil,
-    replica_pid = nil,
-    debug = false
-}).
+-include_lib("couch_set_view/include/couch_set_view.hrl").
 
 test_set_name() -> <<"couch_test_set_index_main_compact">>.
 num_set_partitions() -> 64.
@@ -69,7 +28,7 @@ num_docs() -> 123789.
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(58),
+    etap:plan(64),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -111,6 +70,13 @@ test() ->
     ok = couch_set_view:set_partition_states(test_set_name(), ddoc_id(), [], [], lists:seq(8, 63)),
     verify_group_info_after_cleanup_request(),
 
+    GroupBefore = get_group_snapshot(false),
+
+    etap:is(
+        couch_ref_counter:count(GroupBefore#set_view_group.ref_counter),
+        1,
+        "Main group's ref counter count is 1"),
+
     etap:diag("Triggering main group compaction"),
     {ok, CompactPid} = couch_set_view_compactor:start_compact(test_set_name(), ddoc_id(), main),
     etap:diag("Waiting for main group compaction to finish"),
@@ -123,6 +89,32 @@ test() ->
     after ?MAX_WAIT_TIME ->
         etap:bail("Timeout waiting for main group compaction to finish")
     end,
+
+    GroupAfter = get_group_snapshot(false),
+
+    etap:isnt(
+        GroupAfter#set_view_group.ref_counter,
+        GroupBefore#set_view_group.ref_counter,
+        "Different ref counter for main group after compaction"),
+    etap:isnt(
+        GroupAfter#set_view_group.fd,
+        GroupBefore#set_view_group.fd,
+        "Different fd for main group after compaction"),
+
+    etap:is(
+        couch_ref_counter:count(GroupAfter#set_view_group.ref_counter),
+        1,
+        "Main group's new ref counter count is 1 after compaction"),
+
+    etap:is(
+        is_process_alive(GroupBefore#set_view_group.ref_counter),
+        false,
+        "Old group ref counter is dead"),
+
+    etap:is(
+        is_process_alive(GroupBefore#set_view_group.fd),
+        false,
+        "Old group fd is dead"),
 
     GroupInfo = get_main_group_info(),
     {Stats} = couch_util:get_value(stats, GroupInfo),
@@ -163,6 +155,7 @@ test() ->
 
 get_group_snapshot(StaleType) ->
     {ok, Group} = couch_set_view:get_group(test_set_name(), ddoc_id(), StaleType),
+    couch_ref_counter:drop(Group#set_view_group.ref_counter),
     Group.
 
 

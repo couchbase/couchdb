@@ -16,13 +16,7 @@
 
 -define(MAX_WAIT_TIME, 600 * 1000).
 
-% from couch_set_view.hrl
--record(set_view_params, {
-    max_partitions = 0,
-    active_partitions = [],
-    passive_partitions = [],
-    use_replica_index = false
-}).
+-include_lib("couch_set_view/include/couch_set_view.hrl").
 
 test_set_name() -> <<"couch_test_set_index_replica_compact">>.
 num_set_partitions() -> 64.
@@ -33,7 +27,7 @@ num_docs() -> 123789.
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(16),
+    etap:plan(26),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -65,6 +59,8 @@ test() ->
 
     DiskSizeBefore = replica_index_disk_size(),
 
+    {MainGroupBefore, RepGroupBefore} = get_group_snapshots(),
+
     etap:diag("Trigerring replica group compaction"),
     {ok, CompactPid} = couch_set_view_compactor:start_compact(test_set_name(), ddoc_id(), replica),
     etap:diag("Waiting for replica group compaction to finish"),
@@ -77,6 +73,55 @@ test() ->
     after ?MAX_WAIT_TIME ->
         etap:bail("Timeout waiting for replica group compaction to finish")
     end,
+
+    {MainGroupAfter, RepGroupAfter} = get_group_snapshots(),
+
+    etap:is(
+        MainGroupAfter#set_view_group.ref_counter,
+        MainGroupBefore#set_view_group.ref_counter,
+        "Same ref counter for main group after replica compaction"),
+    etap:is(
+        MainGroupAfter#set_view_group.fd,
+        MainGroupBefore#set_view_group.fd,
+        "Same fd for main group after replica compaction"),
+
+    etap:is(
+        is_process_alive(MainGroupBefore#set_view_group.ref_counter),
+        true,
+        "Main group's ref counter still alive"),
+    etap:is(
+        is_process_alive(MainGroupBefore#set_view_group.fd),
+        true,
+        "Main group's fd still alive"),
+
+    etap:is(
+        couch_ref_counter:count(MainGroupAfter#set_view_group.ref_counter),
+        1,
+        "Main group's ref counter count is 1"),
+
+    etap:isnt(
+        RepGroupAfter#set_view_group.ref_counter,
+        RepGroupBefore#set_view_group.ref_counter,
+        "Different ref counter for replica group after replica compaction"),
+    etap:isnt(
+        RepGroupAfter#set_view_group.fd,
+        RepGroupBefore#set_view_group.fd,
+        "Different fd for replica group after replica compaction"),
+
+    etap:is(
+        is_process_alive(RepGroupBefore#set_view_group.ref_counter),
+        false,
+        "Old replica group ref counter is dead"),
+
+    etap:is(
+        is_process_alive(RepGroupBefore#set_view_group.fd),
+        false,
+        "Old replica group fd is dead"),
+
+    etap:is(
+        couch_ref_counter:count(RepGroupAfter#set_view_group.ref_counter),
+        1,
+        "Replica group's new ref counter count is 1"),
 
     RepGroupInfo = get_replica_group_info(),
     {Stats} = couch_util:get_value(stats, RepGroupInfo),
@@ -91,6 +136,16 @@ test() ->
     ok = timer:sleep(1000),
     couch_set_view_test_util:stop_server(),
     ok.
+
+
+get_group_snapshots() ->
+    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    {ok, MainGroup, 0} = gen_server:call(GroupPid, {request_group, false}, infinity),
+    {ok, RepGroup, 0} = gen_server:call(
+        MainGroup#set_view_group.replica_pid, {request_group, false}, infinity),
+    couch_ref_counter:drop(MainGroup#set_view_group.ref_counter),
+    couch_ref_counter:drop(RepGroup#set_view_group.ref_counter),
+    {MainGroup, RepGroup}.
 
 
 verify_group_info_before_replica_removal() ->

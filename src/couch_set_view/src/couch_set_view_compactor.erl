@@ -156,10 +156,10 @@ get_group_pid(SetName, DDocId, main) ->
     {ok, Pid};
 get_group_pid(SetName, DDocId, replica) ->
     Pid = couch_set_view:get_group_pid(SetName, DDocId),
-    {ok, #set_view_group{replica_pid = RepPid}} = couch_set_view_group:request_group(Pid, ok),
-    case is_pid(RepPid) of
+    {ok, Group} = gen_server:call(Pid, request_group, infinity),
+    case is_pid(Group#set_view_group.replica_pid) of
     true ->
-        {ok, RepPid};
+        {ok, Group#set_view_group.replica_pid};
     false ->
         no_replica_group_found
     end.
