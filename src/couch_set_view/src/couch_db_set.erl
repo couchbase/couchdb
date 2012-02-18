@@ -63,17 +63,17 @@ get_seqs(Pid) ->
 
 
 init({SetName, Active, Passive, _} = Args) ->
-    try
-        {ok, State} = do_init(Args),
-        proc_lib:init_ack({ok, self()}),
-        gen_server:enter_loop(?MODULE, [], State)
+    {ok, State} = try
+        do_init(Args)
     catch _:Error ->
         ?LOG_ERROR("Error opening database set `~s`: ~p~n"
             "initial active partitions:  ~w~n"
             "initial passive partitions: ~w~n",
             [SetName, Error, Active, Passive]),
         exit(Error)
-    end.
+    end,
+    proc_lib:init_ack({ok, self()}),
+    gen_server:enter_loop(?MODULE, [], State).
 
 do_init({SetName, Active0, Passive0, DbOpenOptions}) ->
     Active = lists:usort(Active0),
@@ -222,9 +222,10 @@ handle_cast({compacted, DbName}, State) ->
     end.
 
 
-handle_info({'DOWN', _Ref, _, _, Reason}, State) ->
-    ?LOG_INFO("Shutting down couch_db_set for set `~s` because a partition "
-              "died with reason: ~p", [State#state.set_name, Reason]),
+handle_info({'DOWN', _Ref, _, Pid, Reason}, State) ->
+    ?LOG_INFO("Shutting down couch_db_set for set `~s` because partition `~s` "
+        "died with reason: ~p",
+        [State#state.set_name, get_db_name(Pid, State), Reason]),
     {stop, Reason, State}.
 
 
@@ -260,3 +261,22 @@ switch_partitions_state(PartList, SetName, OpenOpts, SetA, SetB) ->
 raise_db_open_error(DbName, Error) ->
     Msg = io_lib:format("Couldn't open database `~s`, reason: ~w", [DbName, Error]),
     throw({db_open_error, DbName, Error, iolist_to_binary(Msg)}).
+
+
+get_db_name(Pid, #state{master_db = #db{main_pid = Pid} = MasterDb}) ->
+    MasterDb#db.name;
+get_db_name(Pid, #state{dbs_active = Active, dbs_passive = Passive}) ->
+    case find_db_name(Pid, dict:to_list(Active)) of
+    undefined ->
+        find_db_name(Pid, dict:to_list(Passive));
+    Name ->
+        Name
+    end.
+
+find_db_name(_Pid, []) ->
+    undefined;
+find_db_name(Pid, [{Name, {#db{main_pid = Pid}, _, _}} | _]) ->
+    Name;
+find_db_name(Pid, [_ | Rest]) ->
+    find_db_name(Pid, Rest).
+
