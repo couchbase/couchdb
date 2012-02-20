@@ -1050,13 +1050,13 @@ view_qs(ViewArgs, MergeParams) ->
     end ++
     case {Dir, StartDocId =:= DefViewArgs#view_query_args.start_docid} of
     {fwd, false} ->
-        ["startkey_docid=" ++ ?b2l(StartDocId)];
+        ["startkey_docid=" ++ qs_val(StartDocId)];
     _ ->
         []
     end ++
     case {Dir, EndDocId =:= DefViewArgs#view_query_args.end_docid} of
     {fwd, false} ->
-        ["endkey_docid=" ++ ?b2l(EndDocId)];
+        ["endkey_docid=" ++ qs_val(EndDocId)];
     _ ->
         []
     end ++
@@ -1071,13 +1071,13 @@ view_qs(ViewArgs, MergeParams) ->
         true ->
             [];
         false ->
-            ["startkey_docid=" ++ json_qs_val(StartDocId1)]
+            ["startkey_docid=" ++ qs_val(StartDocId1)]
         end ++
         case EndDocId1 =:= DefViewArgs#view_query_args.end_docid of
         true ->
             [];
         false ->
-            ["endkey_docid=" ++ json_qs_val(EndDocId1)]
+            ["endkey_docid=" ++ qs_val(EndDocId1)]
         end
     end ++
     case IncEnd =:= DefViewArgs#view_query_args.inclusive_end of
@@ -1143,6 +1143,9 @@ view_qs(ViewArgs, MergeParams) ->
 
 json_qs_val(Value) ->
     couch_httpd:quote(?b2l(iolist_to_binary(?JSON_ENCODE(Value)))).
+
+qs_val(Value) ->
+    couch_httpd:quote(couch_util:to_list(Value)).
 
 reverse_key_default(?MIN_STR) -> ?MAX_STR;
 reverse_key_default(?MAX_STR) -> ?MIN_STR;
