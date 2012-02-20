@@ -131,7 +131,7 @@ release_group(#set_view_group{ref_counter = RefCounter, replica_group = RepGroup
 
 
 request_group_info(Pid) ->
-    case gen_server:call(Pid, request_group_info) of
+    case gen_server:call(Pid, request_group_info, infinity) of
     {ok, GroupInfoList} ->
         {ok, GroupInfoList};
     Error ->
