@@ -131,7 +131,7 @@ release_group(#set_view_group{ref_counter = RefCounter, replica_group = RepGroup
 
 
 request_group_info(Pid) ->
-    case gen_server:call(Pid, request_group_info) of
+    case gen_server:call(Pid, request_group_info, infinity) of
     {ok, GroupInfoList} ->
         {ok, GroupInfoList};
     Error ->
@@ -525,6 +525,12 @@ handle_call({request_group, update_after}, From, #state{group = Group} = State) 
         State2 = start_updater(State),
         {noreply, State2, ?TIMEOUT}
     end;
+
+handle_call(request_group, _From, #state{group = Group} = State) ->
+    % Meant to be called only by this module and the compactor module.
+    % Callers aren't supposed to read from the group's fd, we don't
+    % increment here the ref counter on behalf of the caller.
+    {reply, {ok, Group}, State, ?TIMEOUT};
 
 handle_call(request_group_info, _From, State) ->
     GroupInfo = get_group_info(State),
@@ -1815,7 +1821,7 @@ open_replica_group({RootDir, SetName, Group} = _InitArgs) ->
 
 
 get_replica_partitions(ReplicaPid) ->
-    {ok, Group, 0} = gen_server:call(ReplicaPid, {request_group, ok}, infinity),
+    {ok, Group} = gen_server:call(ReplicaPid, request_group, infinity),
     ordsets:from_list(couch_set_view_util:decode_bitmask(
         ?set_abitmask(Group) bor ?set_pbitmask(Group))).
 
@@ -1839,7 +1845,7 @@ maybe_update_replica_index(#state{group = Group, updater_state = not_running} = 
 
 
 maybe_fix_replica_group(ReplicaPid, Group) ->
-    {ok, RepGroup, 0} = gen_server:call(ReplicaPid, {request_group, ok}, infinity),
+    {ok, RepGroup} = gen_server:call(ReplicaPid, request_group, infinity),
     RepGroupActive = couch_set_view_util:decode_bitmask(?set_abitmask(RepGroup)),
     RepGroupPassive = couch_set_view_util:decode_bitmask(?set_pbitmask(RepGroup)),
     CleanupList = lists:foldl(
