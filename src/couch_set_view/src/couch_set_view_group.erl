@@ -577,20 +577,26 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
         ok = couch_file:delete(?root_dir(State), FileName),
         ok = couch_file:rename(NewGroup#set_view_group.fd, FileName),
 
-        NewUpdaterPid =
-        if is_pid(UpdaterPid) ->
-            Owner = self(),
-            spawn_link(fun() ->
-                couch_set_view_updater:update(Owner, NewGroup, FileName)
-            end);
-        true ->
-            nil
-        end,
-
         %% cleanup old group
         unlink(CompactorPid),
         drop_fd_ref_counter(RefCounter),
         NewRefCounter = new_fd_ref_counter(NewGroup#set_view_group.fd),
+        NewGroup2 = NewGroup#set_view_group{
+            ref_counter = NewRefCounter,
+            index_header = (NewGroup#set_view_group.index_header)#set_view_index_header{
+                replicas_on_transfer = ?set_replicas_on_transfer(Group)
+            }
+        },
+
+        NewUpdaterPid =
+        if is_pid(UpdaterPid) ->
+            Owner = self(),
+            spawn_link(fun() ->
+                couch_set_view_updater:update(Owner, NewGroup2, FileName)
+            end);
+        true ->
+            nil
+        end,
 
         State2 = State#state{
             compactor_pid = nil,
@@ -601,12 +607,7 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
                 true -> starting;
                 false -> not_running
             end,
-            group = NewGroup#set_view_group{
-                ref_counter = NewRefCounter,
-                index_header = (NewGroup#set_view_group.index_header)#set_view_index_header{
-                    replicas_on_transfer = ?set_replicas_on_transfer(Group)
-                }
-            },
+            group = NewGroup2,
             stats = inc_compactions(State#state.stats, Result)
         },
         State3 = notify_cleanup_waiters(State2),
