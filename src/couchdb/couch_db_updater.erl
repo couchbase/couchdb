@@ -47,10 +47,8 @@ init({MainPid, DbName, Filepath, Fd, Options}) ->
 
 
 terminate(_Reason, Db) ->
-    couch_file:close(Db#db.fd),
     couch_util:shutdown_sync(Db#db.compactor_info),
-    couch_util:shutdown_sync(Db#db.fd_ref_counter),
-    ok.
+    ok = couch_file:only_snapshot_reads(Db#db.fd).
 
 handle_call(get_db, _From, Db) ->
     {reply, {ok, Db}, Db};
