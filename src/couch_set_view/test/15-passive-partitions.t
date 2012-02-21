@@ -151,7 +151,6 @@ test() ->
     fold_view(ActivePartitions5, fun(I) -> I end),
 
     wait_updater_finishes(),
-    io:format("~n~n~nAQUI~n~n~n", []),
     verify_btrees(ActivePartitions5, fun(I) -> I end),
     compact_view_group(),
     verify_btrees(ActivePartitions5, fun(I) -> I end),
