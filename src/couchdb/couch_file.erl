@@ -442,14 +442,10 @@ code_change(_OldVsn, State, _Extra) ->
 
 handle_info(heart, File) ->
     {noreply, File};
-handle_info({'EXIT', _, normal}, Fd) ->
-    {noreply, Fd};
 handle_info({'EXIT', Pid, Reason}, #file{writer = Pid} = Fd) ->
     {stop, {write_loop_died, Reason}, Fd};
 handle_info({'EXIT', Pid, Reason}, #file{reader = Pid} = Fd) ->
     {stop, {read_loop_died, Reason}, Fd};
-handle_info({'EXIT', _, normal}, Fd) ->
-    {noreply, Fd};
 handle_info({'EXIT', _, Reason}, Fd) ->
     {stop, Reason, Fd}.
 
