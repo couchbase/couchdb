@@ -59,22 +59,33 @@ to_json_meta(Meta) ->
             {<<"_local_seq">>, Seq}
         end, Meta).
 
-revid_to_memcached_meta(<<_Cas:64, Expiration:32, Flags:32>>) ->
-    [{<<"$expiration">>, Expiration}, {<<"$flags">>, Flags}];
+revid_to_memcached_meta(<<_Cas:64, Expiration:32, Flags:32>> = _RevId) ->
+    {Expiration, Flags};
 revid_to_memcached_meta(_) ->
-    [].
+    nil.
 
 content_meta_to_memcached_meta(?CONTENT_META_JSON) ->
-    [];
+    nil;
 content_meta_to_memcached_meta(?CONTENT_META_INVALID_JSON) ->
-    [{<<"$att_reason">>, <<"invalid_json">>}];
+    <<"invalid_json">>;
 content_meta_to_memcached_meta(?CONTENT_META_INVALID_JSON_KEY) ->
-    [{<<"$att_reason">>, <<"invalid_key">>}];
+    <<"invalid_key">>;
 content_meta_to_memcached_meta(?CONTENT_META_NON_JSON_MODE) ->
-    [{<<"$att_reason">>, <<"non-JSON mode">>}].
+    <<"non-JSON mode">>.
 
 to_memcached_meta(#doc{rev={_, RevId},content_meta=Meta}) ->
-    revid_to_memcached_meta(RevId) ++ content_meta_to_memcached_meta(Meta).
+    case content_meta_to_memcached_meta(Meta) of
+    nil ->
+        [];
+    AttReason ->
+        [{<<"$att_reason">>, AttReason}]
+    end ++
+    case revid_to_memcached_meta(RevId) of
+    nil ->
+        [];
+    {Exp, Flags} ->
+        [{<<"$expiration">>, Exp}, {<<"$flags">>, Flags}]
+    end.
 
 to_json_obj(#doc{id=Id,deleted=Del,rev={Start, RevId},
         meta=Meta}=Doc0, _Options)->
@@ -244,10 +255,11 @@ with_uncompressed_body(Doc) ->
 to_raw_json_binary(Doc) ->
     #doc{
         id = Id,
-        json = Json,
+        body = Json,
         rev = {Start, RevId},
-        meta = ContentMeta
+        content_meta = ContentMeta
     } = with_json_body(Doc),
+    % TODO: if needed later, include the meta fields (like _local_seq)
     iolist_to_binary([
         <<"{\"_id\":\"">>, Id, <<"\"">>,
         case Start of
@@ -257,11 +269,18 @@ to_raw_json_binary(Doc) ->
             [<<",\"_rev\":\"">>,
                 integer_to_list(Start), <<"-">>, revid_to_str(RevId), <<"\"">>]
         end,
-        case ContentMeta of
-        [att_reason, AttReason] ->
-             [<<",\"$att_reason\":\"">>, AttReason, <<"\"">>];
-        _ ->
-             <<>>
+        case revid_to_memcached_meta(RevId) of
+        nil ->
+            <<>>;
+        {Exp, Flags} ->
+            [<<",\"$expiration\":">>, integer_to_list(Exp),
+                <<",\"$flags\":">>, integer_to_list(Flags)]
+        end,
+        case content_meta_to_memcached_meta(ContentMeta) of
+        nil ->
+            <<>>;
+        AttReason ->
+            [<<",\"$att_reason\":\"">>, AttReason, <<"\"">>]
         end,
         case iolist_to_binary(Json) of
         <<"{}">> ->
