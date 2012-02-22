@@ -139,6 +139,7 @@ update(Owner, Group, FileName, ActiveDbs, PassiveDbs, MaxSeqs, BlockedTime) ->
     #set_view_group{
         set_name = SetName,
         type = Type,
+        name = DDocId,
         index_header = #set_view_index_header{seqs = SinceSeqs},
         fd = GroupFd,
         sig = GroupSig
@@ -166,6 +167,11 @@ update(Owner, Group, FileName, ActiveDbs, PassiveDbs, MaxSeqs, BlockedTime) ->
                 do_maps(QsGroup, MapQueue, WriteQueue)
             end
         catch _:Error ->
+            Stacktrace = erlang:get_stacktrace(),
+            ?LOG_ERROR("Set view `~s`, ~s group `~s`, mapper error~n"
+                "error:      ~p~n"
+                "stacktrace: ~p~n",
+                [SetName, Type, DDocId, Error, Stacktrace]),
             exit(Error)
         end
     end),
@@ -216,6 +222,11 @@ update(Owner, Group, FileName, ActiveDbs, PassiveDbs, MaxSeqs, BlockedTime) ->
             FinalWriterAcc = do_writes(WriterAcc),
             Parent ! {writer_finished, FinalWriterAcc}
         catch _:Error ->
+            Stacktrace = erlang:get_stacktrace(),
+            ?LOG_ERROR("Set view `~s`, ~s group `~s`, writer error~n"
+                "error:      ~p~n"
+                "stacktrace: ~p~n",
+                [SetName, Type, DDocId, Error, Stacktrace]),
             exit(Error)
         after
             ok = couch_set_view_util:close_raw_read_fd(GroupFd)
