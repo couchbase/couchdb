@@ -16,6 +16,7 @@
 -export([from_json_obj/1,to_json_obj/2,from_binary/3]).
 -export([validate_docid/1]).
 -export([with_ejson_body/1,with_json_body/1]).
+-export([to_raw_json_binary/1]).
 
 -include("couch_db.hrl").
 
@@ -213,3 +214,34 @@ with_uncompressed_body(#doc{json = Body} = Doc) when is_binary(Body) ->
     end;
 with_uncompressed_body(#doc{json = {_}} = Doc) ->
     Doc.
+
+
+to_raw_json_binary(Doc) ->
+    #doc{
+        id = Id,
+        json = Json,
+        rev = {Start, RevId},
+        meta = ContentMeta
+    } = with_json_body(Doc),
+    iolist_to_binary([
+        <<"{\"_id\":\"">>, Id, <<"\"">>,
+        case Start of
+        0 ->
+            <<>>;
+        _ ->
+            [<<",\"_rev\":\"">>,
+                integer_to_list(Start), <<"-">>, revid_to_str(RevId), <<"\"">>]
+        end,
+        case ContentMeta of
+        [att_reason, AttReason] ->
+             [<<",\"$att_reason\":\"">>, AttReason, <<"\"">>];
+        _ ->
+             <<>>
+        end,
+        case iolist_to_binary(Json) of
+        <<"{}">> ->
+            <<"}">>;
+        <<${, JsonRest/binary>> ->
+            <<",", JsonRest/binary>>
+        end
+    ]).

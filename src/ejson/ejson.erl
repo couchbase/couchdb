@@ -85,6 +85,8 @@ mochi_encode_handler(Bad) ->
 % everything in the list is the final output except for tuples with
 % {0, Strings} and {1, Floats}, which are to be converted to strings
 % inside the NIF.
+encode_rev({json, RawJson}) ->
+    RawJson;
 encode_rev(true) ->
     <<"true">>;
 encode_rev(false) ->
