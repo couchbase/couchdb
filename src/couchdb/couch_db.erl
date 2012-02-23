@@ -250,7 +250,8 @@ get_db_info(Db) ->
         local_docs_btree = LocalBtree
     } = Db,
     {ok, Size} = couch_file:bytes(Fd),
-    {ok, {DocCount, DocDelCount, DocAndAttsSize}} = couch_btree:full_reduce(IdBtree),
+    {ok, <<DocCount:40, DocDelCount:40, DocAndAttsSize:48>>} =
+            couch_btree:full_reduce(IdBtree),
     DataSize = couch_btree:size(SeqBtree) + couch_btree:size(IdBtree) +
         couch_btree:size(LocalBtree) + DocAndAttsSize,
     InfoList = [
@@ -537,13 +538,14 @@ prep_doc_body_binary(Body, ContentMeta) ->
     {Body, ContentMeta}.
 
 enum_docs_since_reduce_to_count(Reds) ->
-    couch_btree:final_reduce(
-            fun couch_db_updater:btree_by_seq_reduce/2, Reds).
+    <<Count:40>> = couch_btree:final_reduce(
+            fun couch_db_updater:btree_by_seq_reduce/2, Reds),
+    Count.
 
 enum_docs_reduce_to_count(Reds) ->
-    FinalRed = couch_btree:final_reduce(
+    <<Count:40, _DelCount:40, _Size:48>> = couch_btree:final_reduce(
             fun couch_db_updater:btree_by_id_reduce/2, Reds),
-    element(1, FinalRed).
+    Count.
 
 changes_since(Db, StartSeq, Fun, Acc) ->
     changes_since(Db, StartSeq, Fun, [], Acc).
@@ -556,7 +558,7 @@ changes_since(Db, StartSeq, Fun, Options, Acc) ->
 
 count_changes_since(Db, SinceSeq) ->
     BTree = Db#db.docinfo_by_seq_btree,
-    {ok, Changes} =
+    {ok, <<Changes:40>>} =
     couch_btree:fold_reduce(BTree,
         fun(_SeqStart, PartialReds, 0) ->
             {ok, couch_btree:final_reduce(BTree, PartialReds)}

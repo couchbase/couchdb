@@ -59,7 +59,8 @@ update(Owner, Group, FileName) ->
 
     FoldFun = fun(P, {A1, A2, A3, A4}) ->
         {ok, Db} = couch_db:open_int(?dbname(SetName, P), []),
-        {ok, {NotDel, Del, _}} = couch_btree:full_reduce(Db#db.docinfo_by_id_btree),
+        {ok, <<NotDel:40, Del:40, _Size:48>>} =
+                couch_btree:full_reduce(Db#db.docinfo_by_id_btree),
         Seq = couch_db:get_update_seq(Db),
         {[{P, Db} | A1], [{P, Del} | A2], [{P, NotDel} | A3], [{P, Seq} | A4]}
     end,

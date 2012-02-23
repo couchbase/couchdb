@@ -30,7 +30,9 @@
 -export([append_binary/2, append_binary_crc32/2, set_close_after/2]).
 -export([append_raw_chunk/2, assemble_file_chunk/1, assemble_file_chunk/2]).
 -export([append_term/2]).
--export([write_header/2,read_header/1,read_header/2,only_snapshot_reads/1]).
+-export([write_header/2,write_header_bin/2, read_header/1,read_header/2]).
+-export([read_header_bin/1,read_header_bin/2]).
+-export([only_snapshot_reads/1]).
 -export([delete/2, delete/3, init_delete_dir/1,get_delete_dir/1]).
 
 % gen_server callbacks
@@ -252,31 +254,37 @@ read_header(Fd) ->
     case gen_server:call(Fd, find_header, infinity) of
     {ok, Bin} ->
         {ok, binary_to_term(Bin)};
-    no_valid_header ->
-        flush(Fd),
-        case gen_server:call(Fd, find_header, infinity) of
-        {ok, Bin} ->
-            {ok, binary_to_term(Bin)};
-        Else ->
-            Else
-        end;
     Else ->
         Else
     end.
 
+
+read_header_bin(Fd) ->
+    gen_server:call(Fd, find_header, infinity).
+
+
 read_header(Fd, Pos) ->
-    case gen_server:call(Fd, {read_header, Pos}, infinity) of
+    case read_header_bin(Fd, Pos) of
     {ok, Bin} ->
         {ok, binary_to_term(Bin)};
     Else ->
         Else
     end.
 
+
+read_header_bin(Fd, Pos) ->
+    gen_server:call(Fd, {read_header, Pos}, infinity).
+
+
 write_header(Fd, Data) ->
     Bin = term_to_binary(Data),
-    Md5 = couch_util:md5(Bin),
+    write_header_bin(Fd, Bin).
+
+
+write_header_bin(Fd, Bin) ->
+    Crc32 = erlang:crc32(Bin),
     % now we assemble the final header binary and write to disk
-    FinalBin = <<Md5/binary, Bin/binary>>,
+    FinalBin = <<Crc32:32, Bin/binary>>,
     ok = gen_server:call(Fd, {write_header, FinalBin}, infinity).
 
 
@@ -509,9 +517,9 @@ load_header(Fd, Block) ->
             TotalBytes - byte_size(RestBlock)),
         RawBin = <<RestBlock/binary, Missing/binary>>
     end,
-    <<Md5Sig:16/binary, HeaderBin/binary>> =
+    <<Crc32:32, HeaderBin/binary>> =
         iolist_to_binary(remove_block_prefixes(5, RawBin)),
-    Md5Sig = couch_util:md5(HeaderBin),
+    Crc32 = erlang:crc32(HeaderBin),
     {ok, HeaderBin}.
 
 maybe_read_more_iolist(Buffer, DataSize, NextPos, Fd) ->

@@ -21,7 +21,8 @@
     assemble_kv,
     less,
     reduce,
-    chunk_threshold = 16#4ff
+    chunk_threshold = 16#4ff,
+    binary_mode = false
 }).
 
 path(FileName) ->

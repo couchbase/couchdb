@@ -272,8 +272,9 @@ doc_count(SetName, Partitions) ->
     Dbs = open_set_dbs(SetName, Partitions),
     Count = lists:foldl(
         fun(#db{docinfo_by_id_btree = IdBtree}, Acc) ->
-            {ok, DbReduction} = couch_btree:full_reduce(IdBtree),
-            Acc + element(1, DbReduction)
+            {ok, <<Count:40, _DelCount:40, _Size:48>>} =
+                    couch_btree:full_reduce(IdBtree),
+            Acc + Count
         end,
         0, Dbs),
     lists:foreach(fun couch_db:close/1, Dbs),

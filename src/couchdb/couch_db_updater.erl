@@ -16,6 +16,9 @@
 -export([btree_by_id_reduce/2,btree_by_seq_reduce/2]).
 -export([init/1,terminate/2,handle_call/3,handle_cast/2,code_change/3,handle_info/2]).
 
+%-export for testing
+-export([db_header_to_header_bin/1]).
+
 -include("couch_db.hrl").
 
 
@@ -25,18 +28,20 @@ init({MainPid, DbName, Filepath, Fd, Options}) ->
     true ->
         % create a new header and writes it to the file
         Header =  #db_header{},
-        ok = couch_file:write_header(Fd, Header),
+        ok = couch_file:write_header_bin(Fd, db_header_to_header_bin(Header)),
         % delete any old compaction files that might be hanging around
         RootDir = couch_config:get("couchdb", "database_dir", "."),
         couch_file:delete(RootDir, Filepath ++ ".compact");
     false ->
-        case couch_file:read_header(Fd) of
-        {ok, Header} ->
+        case couch_file:read_header_bin(Fd) of
+        {ok, BinHeader} ->
+            Header = header_bin_to_db_header(BinHeader),
             ok;
         no_valid_header ->
             % create a new header and writes it to the file
             Header =  #db_header{},
-            ok = couch_file:write_header(Fd, Header),
+            ok = couch_file:write_header_bin(Fd,
+                    db_header_to_header_bin(Header)),
             % delete any old compaction files that might be hanging around
             file:delete(Filepath ++ ".compact")
         end
@@ -45,6 +50,50 @@ init({MainPid, DbName, Filepath, Fd, Options}) ->
     Db = init_db(DbName, Filepath, Fd, Header, Options),
     {ok, Db#db{main_pid = MainPid}}.
 
+null_to_nil(<<>>) -> nil;
+null_to_nil(V) -> V.
+
+nil_to_null(nil) -> <<>>;
+nil_to_null(V) -> V.
+
+nil_to_zero(nil) -> 0;
+nil_to_zero(V) -> V.
+
+zero_to_nil(0) -> nil;
+zero_to_nil(V) -> V.
+
+header_bin_to_db_header(BinHeader) ->
+    <<DiskVersion:8,UpdateSeq:48, PurgeSeq:48, PurgedDocsPtr:48,
+        BySeqRootSize:16, ByIdRootSize:16, LocalRootSize:16,
+        BySeqRoot:BySeqRootSize/binary,
+        ByIdRoot:ByIdRootSize/binary,
+        LocalDocRoot:LocalRootSize/binary>> = BinHeader,
+    #db_header{
+        disk_version = DiskVersion,
+        update_seq = UpdateSeq,
+        docinfo_by_seq_btree_state = null_to_nil(BySeqRoot),
+        docinfo_by_id_btree_state = null_to_nil(ByIdRoot),
+        local_docs_btree_state = null_to_nil(LocalDocRoot),
+        purge_seq = PurgeSeq,
+        purged_docs = zero_to_nil(PurgedDocsPtr)}.
+
+db_header_to_header_bin(DbHeader) ->
+    #db_header{
+        disk_version = DiskVersion,
+        update_seq = UpdateSeq,
+        docinfo_by_seq_btree_state = BySeqRoot,
+        docinfo_by_id_btree_state = ByIdRoot,
+        local_docs_btree_state = LocalDocRoot,
+        purge_seq = PurgeSeq,
+        purged_docs = PurgedDocsPtr} = DbHeader,
+    BySeqRootSize = size(nil_to_null(BySeqRoot)),
+    ByIdRootSize = size(nil_to_null(ByIdRoot)),
+    LocalDocRootSize = size(nil_to_null(LocalDocRoot)),
+    <<DiskVersion:8,UpdateSeq:48, PurgeSeq:48, (nil_to_zero(PurgedDocsPtr)):48,
+        BySeqRootSize:16, ByIdRootSize:16, LocalDocRootSize:16,
+        (nil_to_null(BySeqRoot)):BySeqRootSize/binary,
+        (nil_to_null(ByIdRoot)):ByIdRootSize/binary,
+        (nil_to_null(LocalDocRoot)):LocalDocRootSize/binary>>.
 
 terminate(_Reason, Db) ->
     couch_util:shutdown_sync(Db#db.compactor_info),
@@ -150,7 +199,8 @@ handle_call(cancel_compact, _From, #db{compactor_info = Pid} = Db) ->
 handle_call({compact_done, CompactFilepath}, _From, Db) ->
     #db{filepath = Filepath, fd = OldFd} = Db,
     {ok, NewFd} = couch_file:open(CompactFilepath),
-    {ok, NewHeader} = couch_file:read_header(NewFd),
+    {ok, NewHeaderBin} = couch_file:read_header_bin(NewFd),
+    NewHeader = header_bin_to_db_header(NewHeaderBin),
     #db{update_seq=NewSeq} = NewDb =
         init_db(Db#db.name, Filepath, NewFd, NewHeader, Db#db.options),
     unlink(NewFd),
@@ -193,14 +243,15 @@ handle_call({compact_done, CompactFilepath}, _From, Db) ->
     end;
 
 handle_call({update_header_pos, FileVersion, NewPos}, _From, Db) ->
+    % disable any more writes, as we are being updated externally!
+    ok = couch_file:only_snapshot_reads(Db#db.fd),
+    % previous call sets close after timeout to infinity.
+    ok = couch_file:set_close_after(Db#db.fd, ?FD_CLOSE_TIMEOUT_MS),
     ExistingFileVersion = file_version(Db#db.filepath),
     if FileVersion == ExistingFileVersion ->
-        case couch_file:read_header(Db#db.fd, NewPos) of
-        {ok, NewHeader} ->
-            % disable any more writes, as we are being updated externally!
-            ok = couch_file:only_snapshot_reads(Db#db.fd),
-            % previous call sets close after timeout to infinity.
-            ok = couch_file:set_close_after(Db#db.fd, ?FD_CLOSE_TIMEOUT_MS),
+        case couch_file:read_header_bin(Db#db.fd, NewPos) of
+        {ok, NewHeaderBin} ->
+            NewHeader = header_bin_to_db_header(NewHeaderBin),
             if Db#db.update_seq > NewHeader#db_header.update_seq ->
                 {reply, update_behind_couchdb, Db};
             true ->
@@ -268,36 +319,44 @@ increment_filepath(FilePath) ->
     NumStr = integer_to_list(list_to_integer(lists:last(Tokens)) + 1),
     string:join(lists:sublist(Tokens, length(Tokens) - 1) ++ [NumStr], ".").
 
-btree_by_seq_split(#doc_info{id=Id, local_seq=Seq, rev=Rev,
+btree_by_seq_split(#doc_info{id=Id, local_seq=Seq, rev={RevPos, RevId},
         deleted=Deleted, body_ptr=Bp, content_meta=Meta, size=Size}) ->
-    {Seq, {Id, Rev, Bp, if Deleted -> 1; true -> 0 end, Meta, Size}}.
+    DeletedBit = if Deleted -> 1; true -> 0 end,
+    Val = <<(size(Id)):12,Size:28,DeletedBit:1,Bp:47,Meta:8,RevPos:32,
+                Id/binary,RevId/binary>>,
+    {<<Seq:48>>, Val}.
 
-btree_by_seq_join(Seq, {Id, Rev, Bp, Deleted, Meta, Size}) ->
+btree_by_seq_join(<<Seq:48>>, Val) ->
+    <<SizeId:12,SizeBody:28,Deleted:1,Bp:47,Meta:8,RevPos:32,
+        Id:SizeId/binary,RevId/binary>> = Val,
     #doc_info{
         id = Id,
         local_seq = Seq,
-        rev = Rev,
+        rev = {RevPos, RevId},
         deleted = (Deleted == 1),
         content_meta = Meta,
         body_ptr = Bp,
-        size = Size}.
+        size = SizeBody}.
 
-btree_by_id_split(#doc_info{id=Id, local_seq=Seq, rev=Rev,
+btree_by_id_split(#doc_info{id=Id, local_seq=Seq, rev={RevPos,RevId},
         deleted=Deleted, body_ptr=Bp, content_meta=Meta, size=Size}) ->
-    {Id, {Seq, Rev, Bp, if Deleted -> 1; true -> 0 end, Meta, Size}}.
+    DeletedBit = if Deleted -> 1; true -> 0 end,
+    Val = <<Seq:48,0:4,Size:28,DeletedBit:1,Bp:47,Meta:8,RevPos:32,RevId/binary>>,
+    {Id, Val}.
 
-btree_by_id_join(Id, {Seq, Rev, Bp, Deleted, Meta, Size}) ->
+btree_by_id_join(Id, Bin) ->
+    <<Seq:48,Size:32,DeletedBit:1,Bp:47,Meta:8,RevPos:32,RevId/binary>> = Bin,
     #doc_info{
         id = Id,
         local_seq = Seq,
-        rev = Rev,
-        deleted = (Deleted == 1),
+        rev = {RevPos, RevId},
+        deleted = (DeletedBit == 1),
         body_ptr = Bp,
         content_meta = Meta,
         size = Size}.
 
 btree_by_id_reduce(reduce, DocInfos) ->
-    lists:foldl(
+    {NotDeleted1, Deleted1, Size1} = lists:foldl(
         fun(Info, {NotDeleted, Deleted, Size}) ->
             case Info#doc_info.deleted of
             true ->
@@ -306,19 +365,22 @@ btree_by_id_reduce(reduce, DocInfos) ->
                 {NotDeleted + 1, Deleted, Size + Info#doc_info.size}
             end
         end,
-        {0, 0, 0}, DocInfos);
+        {0, 0, 0}, DocInfos),
+        <<NotDeleted1:40, Deleted1:40, Size1:48>>;
 btree_by_id_reduce(rereduce, Reds) ->
-    lists:foldl(
-        fun({NotDeleted, Deleted, Size}, {AccNotDeleted, AccDeleted, AccSize}) ->
+    {NotDeleted1, Deleted1, Size1} = lists:foldl(
+        fun(<<NotDeleted:40, Deleted:40, Size:48>>,
+                {AccNotDeleted, AccDeleted, AccSize}) ->
             {AccNotDeleted + NotDeleted, AccDeleted + Deleted, AccSize + Size}
         end,
-        {0, 0, 0}, Reds).
+        {0, 0, 0}, Reds),
+    <<NotDeleted1:40, Deleted1:40, Size1:48>>.
 
 btree_by_seq_reduce(reduce, DocInfos) ->
     % count the number of documents
-    length(DocInfos);
+    <<(length(DocInfos)):40>>;
 btree_by_seq_reduce(rereduce, Reds) ->
-    lists:sum(Reds).
+    <<(lists:sum([Count || <<Count:40>> <- Reds])):40>>.
 
 simple_upgrade_record(Old, New) when tuple_size(Old) < tuple_size(New) ->
     OldSz = tuple_size(Old),
@@ -367,19 +429,31 @@ populate_db_from_header(Db, NewHeader) ->
     ?LATEST_DISK_VERSION -> Header1;
     _ -> throw({database_disk_version_error, "Incorrect disk header version"})
     end,
-
+    Less = fun
+        (<<A:48>>,<<B:48>>) ->
+            A < B;
+        (<<A:48>>,B) ->
+            A < B;
+        (A,<<B:48>>) ->
+            A < B;
+        (A,B) ->
+            A < B
+        end,
     {ok, IdBtree} = couch_btree:open(Header#db_header.docinfo_by_id_btree_state,
             Db#db.fd,
             [{split, fun(X) -> btree_by_id_split(X) end},
             {join, fun(X,Y) -> btree_by_id_join(X,Y) end},
-            {reduce, fun(X,Y) -> btree_by_id_reduce(X,Y) end}]),
+            {reduce, fun(X,Y) -> btree_by_id_reduce(X,Y) end},
+            {binary_mode, true}]),
     {ok, SeqBtree} = couch_btree:open(Header#db_header.docinfo_by_seq_btree_state,
             Db#db.fd,
             [{split, fun(X) -> btree_by_seq_split(X) end},
             {join, fun(X,Y) -> btree_by_seq_join(X,Y) end},
-            {reduce, fun(X,Y) -> btree_by_seq_reduce(X,Y) end}]),
+            {reduce, fun(X,Y) -> btree_by_seq_reduce(X,Y) end},
+            {less, Less},
+            {binary_mode, true}]),
     {ok, LocalDocsBtree} = couch_btree:open(Header#db_header.local_docs_btree_state,
-        Db#db.fd, []),
+        Db#db.fd, [{binary_mode, true}]),
     case Header#db_header.security_ptr of
     nil ->
         Security = [],
@@ -503,7 +577,7 @@ commit_data(Db, _) ->
         _    -> ok
         end,
 
-        ok = couch_file:write_header(Fd, Header),
+        ok = couch_file:write_header_bin(Fd, db_header_to_header_bin(Header)),
         ok = couch_file:flush(Fd),
 
         case lists:member(after_header, FsyncOptions) of
@@ -670,16 +744,21 @@ start_copy_compact(#db{name=Name,filepath=Filepath,header=#db_header{purge_seq=P
     case couch_file:open(CompactFile) of
     {ok, Fd} ->
         Retry = true,
-        case couch_file:read_header(Fd) of
-        {ok, Header} ->
+        case couch_file:read_header_bin(Fd) of
+        {ok, NewHeaderBin} ->
+            Header = header_bin_to_db_header(NewHeaderBin),
             ok;
         no_valid_header ->
-            ok = couch_file:write_header(Fd, Header=#db_header{})
+            Header=#db_header{},
+            HeaderBin = db_header_to_header_bin(Header),
+            ok = couch_file:write_header_bin(Fd, HeaderBin)
         end;
     {error, enoent} ->
         {ok, Fd} = couch_file:open(CompactFile, [create]),
         Retry = false,
-        ok = couch_file:write_header(Fd, Header=#db_header{})
+        Header=#db_header{},
+        HeaderBin = db_header_to_header_bin(Header),
+        ok = couch_file:write_header_bin(Fd, HeaderBin)
     end,
     NewDb = init_db(Name, CompactFile, Fd, Header, Db#db.options),
     NewDb2 = if PurgeSeq > 0 ->

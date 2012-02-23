@@ -18,6 +18,8 @@
 -export([add_remove/5, query_modify/6]).
 -export([guided_purge/3]).
 
+-export([encode_node/2]).
+
 -include("couch_db.hrl").
 
 extract(#btree{extract_kv=Extract}, Value) ->
@@ -44,12 +46,18 @@ set_options(Bt, [{less, Less}|Rest]) ->
 set_options(Bt, [{reduce, Reduce}|Rest]) ->
     set_options(Bt#btree{reduce=Reduce}, Rest);
 set_options(Bt, [{chunk_threshold, Threshold}|Rest]) ->
-    set_options(Bt#btree{chunk_threshold = Threshold}, Rest).
+    set_options(Bt#btree{chunk_threshold = Threshold}, Rest);
+set_options(#btree{root = <<Pointer:48, Size:48, Red/binary>>} = Bt, [{binary_mode, true}|Rest]) ->
+    set_options(Bt#btree{root = {Pointer, Red, Size}, binary_mode = true}, Rest);
+set_options(Bt, [{binary_mode, Bool}|Rest]) ->
+    set_options(Bt#btree{binary_mode = Bool}, Rest).
 
 
 open(State, Fd, Options) ->
     {ok, set_options(#btree{root=State, fd=Fd}, Options)}.
 
+get_state(#btree{root={Pointer, Reduction, Size}, binary_mode=true}) ->
+    <<Pointer:48, Size:48, Reduction/binary>>;
 get_state(#btree{root=Root}) ->
     Root.
 
@@ -362,8 +370,8 @@ modify_node(Bt, RootPointerInfo, Actions, QueryOutput, Acc, PurgeFun, PurgeFunAc
     end.
 
 
-reduce_node(#btree{reduce=nil}, _NodeType, _NodeList) ->
-    [];
+reduce_node(#btree{reduce=nil, binary_mode = BinMode}, _NodeType, _NodeList) ->
+    if BinMode -> <<>>; true -> [] end;
 reduce_node(#btree{reduce=R}, kp_node, NodeList) ->
     R(rereduce, [element(2, Node) || {_K, Node} <- NodeList]);
 reduce_node(#btree{reduce=R}=Bt, kv_node, NodeList) ->
@@ -376,18 +384,71 @@ reduce_tree_size(kp_node, NodeSize, []) ->
 reduce_tree_size(kp_node, NodeSize, [{_K, {_P, _Red, Sz}} | NodeList]) ->
     reduce_tree_size(kp_node, NodeSize + Sz, NodeList).
 
-get_node(#btree{fd = Fd}, NodePos) ->
-    {ok, {NodeType, NodeList}} = couch_file:pread_term(Fd, NodePos),
-    {NodeType, NodeList}.
+get_node(#btree{fd = Fd,binary_mode=false}, NodePos) ->
+    {ok, Term} = couch_file:pread_term(Fd, NodePos),
+    Term;
+get_node(#btree{fd = Fd,binary_mode=true}, NodePos) ->
+    {ok, CompressedBin} = couch_file:pread_binary(Fd, NodePos),
+    <<TypeInt, NodeBin/binary>> = couch_compress:decompress(CompressedBin),
+    Type = if TypeInt == 1 -> kv_node; true -> kp_node end,
+    decode_node(Type, NodeBin, []).
 
-write_node(#btree{fd = Fd} = Bt, NodeType, NodeList) ->
+decode_node(Type, <<>>, Acc) ->
+    {Type, lists:reverse(Acc)};
+decode_node(Type, Binary, Acc) ->
+    <<SizeK:12,SizeV:28,K:SizeK/binary,V:SizeV/binary,Rest/binary>> = Binary,
+    case Type of
+    kv_node ->
+        Val = V;
+    kp_node ->
+        <<Pointer:48,
+            SubtreeSize:48,
+            RedSize:16,
+            Reduction:RedSize/binary>> = V,
+        Val = {Pointer, Reduction, SubtreeSize}
+    end,
+    decode_node(Type, Rest, [{K,Val}|Acc]).
+
+encode_node(kv_node, Kvs) ->
+    couch_compress:compress(encode_node_iolist(Kvs, [1]));
+encode_node(kp_node, Kvs) ->
+    % convert the value to binary
+    Kvs2 = lists:map(fun({K,{Pointer, Reduction, SubtreeSize}}) ->
+        RedSize = iolist_size(Reduction),
+        {K, [<<Pointer:48, SubtreeSize:48, RedSize:16>>, Reduction]}
+    end, Kvs),
+    couch_compress:compress(encode_node_iolist(Kvs2, [0])).
+
+encode_node_iolist([], Acc) ->
+    lists:reverse(Acc);
+encode_node_iolist([{K, V}|RestKvs], Acc) ->
+    SizeK = erlang:iolist_size(K),
+    SizeV = erlang:iolist_size(V),
+    case SizeK < 4096 of
+    true -> ok;
+    false -> throw({error, key_too_long})
+    end,
+    case SizeV < 268435456 of
+    true -> ok;
+    false -> throw({error, value_too_long})
+    end,
+    Bin = [<<SizeK:12, SizeV:28>>, K, V],
+    encode_node_iolist(RestKvs, [Bin|Acc]).
+
+
+write_node(#btree{fd = Fd, binary_mode = BinMode} = Bt, NodeType, NodeList) ->
     % split up nodes into smaller sizes
     NodeListList = chunkify(Bt, NodeList),
     % now write out each chunk and return the KeyPointer pairs for those nodes
     ResultList = [
         begin
-            {ok, Pointer, Size} = couch_file:append_term(
-                Fd, {NodeType, ANodeList}),
+            if BinMode ->
+                Bin = encode_node(NodeType, ANodeList),
+                {ok, Pointer, Size} = couch_file:append_binary_crc32(Fd, Bin);
+            true ->
+                {ok, Pointer, Size} = couch_file:append_term(Fd,
+                        {NodeType, ANodeList})
+            end,
             {LastKey, _} = lists:last(ANodeList),
             SubTreeSize = reduce_tree_size(NodeType, Size, ANodeList),
             {LastKey, {Pointer, reduce_node(Bt, NodeType, ANodeList), SubTreeSize}}

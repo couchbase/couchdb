@@ -126,14 +126,10 @@
 % This should be updated anytime a header change happens that requires more
 % than filling in new defaults.
 %
-% As long the changes are limited to new header fields (with inline
-% defaults) added to the end of the record, then there is no need to increment
-% the disk revision number.
-%
 % if the disk revision is incremented, then new upgrade logic will need to be
 % added to couch_db_updater:init_db.
 
--define(LATEST_DISK_VERSION, 9).
+-define(LATEST_DISK_VERSION, 10).
 
 -record(db_header,
     {disk_version = ?LATEST_DISK_VERSION,
@@ -279,5 +275,6 @@
     assemble_kv = fun(Key, Value) -> {Key, Value} end,
     less = fun(A, B) -> A < B end,
     reduce = nil,
-    chunk_threshold = 16#4ff
+    chunk_threshold = 16#4ff,
+    binary_mode = false
 }).

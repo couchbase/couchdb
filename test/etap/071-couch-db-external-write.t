@@ -119,8 +119,8 @@ test() ->
 
     Header = Db2#db.header,
     Header2 = Header#db_header{update_seq = 0},
-
-    etap:is(couch_file:write_header(Fd, Header2), ok,
+    HeaderBin = couch_db_updater:db_header_to_header_bin(Header2),
+    etap:is(couch_file:write_header_bin(Fd, HeaderBin), ok,
             "Should write new header outside of couchdb"),
     couch_file:flush(Fd),
     % calculate where new header goes
@@ -130,11 +130,13 @@ test() ->
     BlockOffset ->
         NewHeaderPos = FileLen + (?SIZE_BLOCK - BlockOffset)
     end,
+    {ok, FileLen2} = couch_file:bytes(Fd),
     etap:is(couch_db:update_header_pos(Db2, 1, NewHeaderPos), update_behind_couchdb,
             "Should be ahead couchdb"),
 
     Header3 = Header#db_header{update_seq = Header#db_header.update_seq + 1},
-    etap:is(couch_file:write_header(Fd, Header3), ok,
+    HeaderBin3 = couch_db_updater:db_header_to_header_bin(Header3),
+    etap:is(couch_file:write_header_bin(Fd, HeaderBin3), ok,
             "Should write new header outside of couchdb"),
     couch_file:flush(Fd),
     NewHeaderPos2 = NewHeaderPos + ?SIZE_BLOCK,

@@ -68,7 +68,7 @@ compact_group(Group, EmptyGroup, DbName) ->
     DbName1 = docs_db_name(DbName),
     {ok, Db} = couch_db:open_int(DbName1, []),
     {ok, DbReduce} = couch_btree:full_reduce(Db#db.docinfo_by_id_btree),
-    Count = element(1, DbReduce),
+    <<Count:40, _Deleted1:40, _Size1:48>> = DbReduce,
 
     TotalChanges = lists:foldl(
         fun(View, Acc) ->

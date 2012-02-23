@@ -41,7 +41,7 @@ test() ->
 
     etap:is(ok, couch_file:write_header(Fd, {<<"some_data">>, 32}),
         "Writing a header succeeds."),
-
+    ok = couch_file:flush(Fd),
     {ok, Size1} = couch_file:bytes(Fd),
     etap:is_greater(Size1, 0,
         "Writing a header allocates space in the file."),
