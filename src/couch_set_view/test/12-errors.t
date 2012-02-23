@@ -14,14 +14,7 @@
 % License for the specific language governing permissions and limitations under
 % the License.
 
-
-% from couch_set_view.hrl
--record(set_view_params, {
-    max_partitions = 0,
-    active_partitions = [],
-    passive_partitions = [],
-    use_replica_index = false
-}).
+-include_lib("couch_set_view/include/couch_set_view.hrl").
 
 % from couch_db.hrl
 -define(MIN_STR, <<>>).
@@ -401,7 +394,7 @@ query_map_view(DDocId, ViewName, Stale) ->
     etap:diag("Querying map view " ++ binary_to_list(DDocId) ++ "/" ++
         binary_to_list(ViewName)),
     {ok, View, Group} = couch_set_view:get_map_view(
-        test_set_name(), DDocId, ViewName, Stale),
+        test_set_name(), DDocId, ViewName, #set_view_group_req{stale = Stale}),
     FoldFun = fun({{Key, DocId}, {_PartId, Value}}, _, Acc) ->
         {ok, [{{Key, DocId}, Value} | Acc]}
     end,
@@ -418,7 +411,7 @@ query_reduce_view(DDocId, ViewName, Stale) ->
     etap:diag("Querying reduce view " ++ binary_to_list(DDocId) ++ "/" ++
         binary_to_list(ViewName) ++ "with ?group=true"),
     {ok, View, Group} = couch_set_view:get_reduce_view(
-        test_set_name(), DDocId, ViewName, Stale),
+        test_set_name(), DDocId, ViewName, #set_view_group_req{stale = Stale}),
     KeyGroupFun = fun({_Key1, _}, {_Key2, _}) -> true end,
     FoldFun = fun(Key, Red, Acc) -> {ok, [{Key, Red} | Acc]} end,
     ViewArgs = #view_query_args{

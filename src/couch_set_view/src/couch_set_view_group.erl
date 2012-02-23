@@ -61,7 +61,6 @@
     waiting_list = [],
     cleaner_pid = nil,
     cleanup_waiters = [],
-    stats = #set_view_group_stats{},
     shutdown = false,
     replica_partitions = []
 }).
@@ -73,17 +72,22 @@
     cleanup_list
 }).
 
--define(inc_stat(S, Stats), setelement(S, Stats, element(S, Stats) + 1)).
--define(inc_cleanup_stops(Stats), ?inc_stat(#set_view_group_stats.cleanup_stops, Stats)).
--define(inc_updater_errors(Stats), ?inc_stat(#set_view_group_stats.update_errors, Stats)).
+-define(inc_stat(Group, S),
+    ets:update_counter(
+        ?SET_VIEW_STATS_ETS,
+        ?set_view_group_stats_key(Group),
+        {S, 1})).
+-define(inc_cleanup_stops(Group), ?inc_stat(Group, #set_view_group_stats.cleanup_stops)).
+-define(inc_updater_errors(Group), ?inc_stat(Group, #set_view_group_stats.update_errors)).
+-define(inc_accesses(Group), ?inc_stat(Group, #set_view_group_stats.accesses)).
 
 
 % api methods
-request_group(Pid, StaleType) ->
-    request_group(Pid, StaleType, 1).
+request_group(Pid, Req) ->
+    request_group(Pid, Req, 1).
 
-request_group(Pid, StaleType, Retries) ->
-    case gen_server:call(Pid, {request_group, StaleType}, infinity) of
+request_group(Pid, Req, Retries) ->
+    case gen_server:call(Pid, Req, infinity) of
     {ok, Group, ActiveReplicasBitmask} ->
         #set_view_group{
             ref_counter = RefCounter,
@@ -92,25 +96,25 @@ request_group(Pid, StaleType, Retries) ->
             set_name = SetName
         } = Group,
         ?LOG_INFO("Got set view group `~s` snapshot for set `~s`", [GroupName, SetName]),
-        case request_replica_group(RepPid, ActiveReplicasBitmask, StaleType) of
+        case request_replica_group(RepPid, ActiveReplicasBitmask, Req) of
         {ok, RepGroup} ->
             {ok, Group#set_view_group{replica_group = RepGroup}};
         retry ->
             ?LOG_INFO("Retrying group `~s` request, stale=~s,"
                   " set `~s`, retry attempt #~p",
-                  [GroupName, StaleType, SetName, Retries]),
+                  [GroupName, Req#set_view_group_req.stale, SetName, Retries]),
             couch_ref_counter:drop(RefCounter),
-            request_group(Pid, StaleType, Retries + 1)
+            request_group(Pid, Req, Retries + 1)
         end;
     Error ->
         Error
     end.
 
 
-request_replica_group(_RepPid, 0, _Staleness) ->
+request_replica_group(_RepPid, 0, _Req) ->
     {ok, nil};
-request_replica_group(RepPid, ActiveReplicasBitmask, Staleness) ->
-    {ok, RepGroup, 0} = gen_server:call(RepPid, {request_group, Staleness}, infinity),
+request_replica_group(RepPid, ActiveReplicasBitmask, Req) ->
+    {ok, RepGroup, 0} = gen_server:call(RepPid, Req, infinity),
     case ?set_abitmask(RepGroup) =:= ActiveReplicasBitmask of
     true ->
         {ok, RepGroup};
@@ -301,6 +305,9 @@ do_init({_, SetName, _} = InitArgs) ->
                 replica_pid = ReplicaPid
             }
         },
+        true = ets:insert(
+             ?SET_VIEW_STATS_ETS,
+             #set_view_group_stats{ets_key = ?set_view_group_stats_key(Group)}),
         {ok, InitState};
     Error ->
         throw(Error)
@@ -488,14 +495,15 @@ handle_call({remove_replicas, Partitions}, _From, #state{replica_group = Replica
               [?set_name(State), ?type(State), ?group_id(State), Partitions]),
     {reply, ok, NewState, ?TIMEOUT};
 
-% {request_group, StaleType}
-handle_call({request_group, false}, From,
+
+handle_call(#set_view_group_req{stale = false} = Req, From,
         #state{
             group = Group,
             updater_pid = UpPid,
             updater_state = UpState,
             waiting_list = WaitList
         } = State) ->
+    inc_view_group_access_stats(Req, Group),
     case UpPid of
     nil ->
         ?LOG_INFO("Set view `~s`, ~s group `~s`, blocking client ~w on group request~n",
@@ -503,7 +511,7 @@ handle_call({request_group, false}, From,
         State2 = start_updater(State#state{waiting_list = [From | WaitList]}),
         {noreply, State2, ?TIMEOUT};
     _ when is_pid(UpPid), UpState =:= updating_passive ->
-        reply_with_group(Group, State#state.stats, [From]),
+        reply_with_group(Group, [From]),
         {noreply, State, ?TIMEOUT};
     _ when is_pid(UpPid) ->
         ?LOG_INFO("Set view `~s`, ~s group `~s`, blocking client ~w on group request~n",
@@ -512,12 +520,14 @@ handle_call({request_group, false}, From,
         {noreply, State2, ?TIMEOUT}
     end;
 
-handle_call({request_group, ok}, From, #state{group = Group} = State) ->
-    reply_with_group(Group, State#state.stats, [From]),
+handle_call(#set_view_group_req{stale = ok} = Req, From, #state{group = Group} = State) ->
+    inc_view_group_access_stats(Req, Group),
+    reply_with_group(Group, [From]),
     {noreply, State, ?TIMEOUT};
 
-handle_call({request_group, update_after}, From, #state{group = Group} = State) ->
-    reply_with_group(Group, State#state.stats, [From]),
+handle_call(#set_view_group_req{stale = update_after} = Req, From, #state{group = Group} = State) ->
+    inc_view_group_access_stats(Req, Group),
+    reply_with_group(Group, [From]),
     case State#state.updater_pid of
     Pid when is_pid(Pid) ->
         {noreply, State};
@@ -607,10 +617,10 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
                 true -> starting;
                 false -> not_running
             end,
-            group = NewGroup2,
-            stats = inc_compactions(State#state.stats, Result)
+            group = NewGroup2
         },
         State3 = notify_cleanup_waiters(State2),
+        inc_compactions(State3#state.group, Result),
         {reply, ok, State3, ?TIMEOUT};
     false ->
         ?LOG_INFO("Set view `~s`, ~s group `~s`, compaction still behind, retrying",
@@ -691,7 +701,7 @@ handle_info({updater_info, Pid, {state, UpdaterState}}, #state{updater_pid = Pid
             {noreply, start_updater(State3)}
         end;
     updating_passive when WaitList =/= [] ->
-        reply_with_group(State2#state.group, State#state.stats, WaitList),
+        reply_with_group(State2#state.group, WaitList),
         {noreply, State2#state{waiting_list = []}};
     _ ->
         {noreply, State2}
@@ -708,7 +718,7 @@ handle_info(delayed_commit, #state{group = Group} = State) ->
     {noreply, State#state{commit_ref = nil}, ?TIMEOUT};
 
 handle_info({'EXIT', Pid, {clean_group, NewGroup, Count, Time}}, #state{cleaner_pid = Pid} = State) ->
-    #state{group = OldGroup, stats = Stats} = State,
+    #state{group = OldGroup} = State,
     ?LOG_INFO("Cleanup finished for set view `~s`, ~s group `~s`~n"
               "Removed ~p values from the index in ~.3f seconds~n"
               "active partitions before:  ~w~n"
@@ -739,9 +749,9 @@ handle_info({'EXIT', Pid, {clean_group, NewGroup, Count, Time}}, #state{cleaner_
               end),
     State2 = State#state{
         cleaner_pid = nil,
-        group = NewGroup,
-        stats = inc_cleanups(Stats, Time, Count)
+        group = NewGroup
     },
+    inc_cleanups(State2#state.group, Time, Count),
     {noreply, notify_cleanup_waiters(State2)};
 
 handle_info({'EXIT', Pid, Reason}, #state{cleaner_pid = Pid} = State) ->
@@ -769,7 +779,8 @@ handle_info({'EXIT', Pid, {updater_finished, Result}}, #state{updater_pid = Pid}
         cleanup_kv_count = CleanupKVCount
     } = Result,
     ok = commit_header(NewGroup, false),
-    reply_with_group(NewGroup, State#state.stats, WaitList),
+    reply_with_group(NewGroup, WaitList),
+    inc_updates(NewGroup, Result),
     ?LOG_INFO("Set view `~s`, ~s group `~s`, updater finished~n"
         "Indexing time: ~.3f seconds~n"
         "Blocked time:  ~.3f seconds~n"
@@ -790,8 +801,7 @@ handle_info({'EXIT', Pid, {updater_finished, Result}}, #state{updater_pid = Pid}
             updater_state = not_running,
             commit_ref = nil,
             waiting_list = [],
-            group = NewGroup,
-            stats = inc_updates(State#state.stats, Result)
+            group = NewGroup
         },
         State3 = maybe_start_cleaner(State2),
         {noreply, State3, ?TIMEOUT}
@@ -806,9 +816,9 @@ handle_info({'EXIT', Pid, {updater_error, Error}}, #state{updater_pid = Pid} = S
     false ->
         State2 = State#state{
             updater_pid = nil,
-            updater_state = not_running,
-            stats = ?inc_updater_errors(State#state.stats)
+            updater_state = not_running
         },
+        ?inc_updater_errors(State#state.group),
         State3 = reply_all(State2, {error, Error}),
         {noreply, maybe_start_cleaner(State3), ?TIMEOUT}
     end;
@@ -862,13 +872,14 @@ code_change(_OldVsn, State, _Extra) ->
 
 %% Local Functions
 
-reply_with_group(Group0, Stats, WaitList) ->
+reply_with_group(Group0, WaitList) ->
     #set_view_group{
         ref_counter = RefCnt,
         debug_info = DebugInfo
     } = Group0,
     ActiveReplicasBitmask = couch_set_view_util:build_bitmask(
         ?set_replicas_on_transfer(Group0)),
+    [Stats] = ets:lookup(?SET_VIEW_STATS_ETS, ?set_view_group_stats_key(Group0)),
     Group = Group0#set_view_group{
         debug_info = DebugInfo#set_view_debug_info{
             stats = Stats,
@@ -1012,8 +1023,7 @@ get_group_info(State) ->
         commit_ref = CommitRef,
         waiting_list = WaitersList,
         cleaner_pid = CleanerPid,
-        replica_partitions = ReplicaParts,
-        stats = Stats
+        replica_partitions = ReplicaParts
     } = State,
     #set_view_group{
         fd = Fd,
@@ -1022,6 +1032,7 @@ get_group_info(State) ->
         def_lang = Lang,
         views = Views
     } = Group,
+    [Stats] = ets:lookup(?SET_VIEW_STATS_ETS, ?set_view_group_stats_key(Group)),
     JsonStats = {[
         {full_updates, Stats#set_view_group_stats.full_updates},
         {partial_updates, Stats#set_view_group_stats.partial_updates},
@@ -1529,14 +1540,13 @@ stop_cleaner(#state{cleaner_pid = Pid, group = OldGroup} = State) when is_pid(Pi
                  couch_set_view_util:decode_bitmask(?set_cbitmask(OldGroup))]),
         case ?set_cbitmask(NewGroup) of
         0 ->
-            NewStats = inc_cleanups(State#state.stats, Time, Count);
+            inc_cleanups(State#state.group, Time, Count);
         _ ->
-            NewStats = ?inc_cleanup_stops(State#state.stats)
+            ?inc_cleanup_stops(State#state.group)
         end,
         State2 = State#state{
             group = NewGroup,
             cleaner_pid = nil,
-            stats = NewStats,
             commit_ref = schedule_commit(State)
         },
         notify_cleanup_waiters(State2);
@@ -1643,13 +1653,13 @@ restart_compactor(#state{compactor_pid = Pid, compactor_file = CompactFd} = Stat
         [?type(State), ?group_id(State), ?set_name(State), Reason]),
     couch_util:shutdown_sync(Pid),
     couch_util:shutdown_sync(CompactFd),
-    State2 = case ?set_cbitmask(State#state.group) of
+    case ?set_cbitmask(State#state.group) of
     0 ->
-        State;
+        ok;
     _ ->
-        State#state{stats = ?inc_cleanup_stops(State#state.stats)}
+        ?inc_cleanup_stops(State#state.group)
     end,
-    start_compactor(State2, State2#state.compactor_fun).
+    start_compactor(State, State#state.compactor_fun).
 
 
 compact_group(State) ->
@@ -1704,19 +1714,18 @@ stop_updater(#state{updater_pid = Pid} = State, When) ->
         State2 = process_partial_update(State, NewGroup),
         case UpdaterFinishState of
         updating_active ->
-            NewStats = inc_updates(State2#state.stats, Result, true, true),
+            inc_updates(State2#state.group, Result, true, true),
             WaitingList2 = State2#state.waiting_list;
         updating_passive ->
             PartialUpdate = (?set_pbitmask(NewGroup) =/= 0),
-            NewStats = inc_updates(State2#state.stats, Result, PartialUpdate, false),
-            reply_with_group(NewGroup, NewStats, State2#state.waiting_list),
+            inc_updates(State2#state.group, Result, PartialUpdate, false),
+            reply_with_group(NewGroup, State2#state.waiting_list),
             WaitingList2 = []
         end,
         NewState = State2#state{
             updater_pid = nil,
             updater_state = not_running,
-            waiting_list = WaitingList2,
-            stats = NewStats
+            waiting_list = WaitingList2
         },
         notify_cleanup_waiters(NewState);
     {'EXIT', Pid, Reason} ->
@@ -1731,9 +1740,9 @@ stop_updater(#state{updater_pid = Pid} = State, When) ->
             [?set_name(State), ?type(State), ?group_id(State), Reason]),
         NewState = State#state{
             updater_pid = nil,
-            updater_state = not_running,
-            stats = ?inc_updater_errors(State#state.stats)
+            updater_state = not_running
         },
+        ?inc_updater_errors(NewState#state.group),
         reply_all(NewState, Reply)
     end.
 
@@ -1749,7 +1758,7 @@ start_updater(#state{updater_pid = nil, updater_state = not_running} = State) ->
         [] ->
             State;
         _ ->
-            reply_with_group(State#state.group, State#state.stats, State#state.waiting_list),
+            reply_with_group(State#state.group, State#state.waiting_list),
             State#state{waiting_list = []}
         end
     end.
@@ -1907,10 +1916,12 @@ process_partial_update(#state{group = Group} = State, NewGroup) ->
     }.
 
 
-inc_updates(Stats, UpdaterResult) ->
-    inc_updates(Stats, UpdaterResult, false, false).
+inc_updates(Group, UpdaterResult) ->
+    inc_updates(Group, UpdaterResult, false, false).
 
-inc_updates(#set_view_group_stats{update_history = Hist} = Stats, UpdaterResult, PartialUpdate, ForcedStop) ->
+inc_updates(Group, UpdaterResult, PartialUpdate, ForcedStop) ->
+    [Stats] = ets:lookup(?SET_VIEW_STATS_ETS, ?set_view_group_stats_key(Group)),
+    #set_view_group_stats{update_history = Hist} = Stats,
     #set_view_updater_result{
         indexing_time = IndexingTime,
         blocked_time = BlockedTime,
@@ -1961,9 +1972,13 @@ inc_updates(#set_view_group_stats{update_history = Hist} = Stats, UpdaterResult,
     true ->
         inc_cleanups(Stats2, CleanupTime, CleanupKvCount, true);
     false ->
-        Stats2
+        true = ets:insert(?SET_VIEW_STATS_ETS, Stats2)
     end.
 
+
+inc_cleanups(Group, Duration, Count) when is_record(Group, set_view_group) ->
+    [Stats] = ets:lookup(?SET_VIEW_STATS_ETS, ?set_view_group_stats_key(Group)),
+    inc_cleanups(Stats, Duration, Count, false);
 
 inc_cleanups(Stats, Duration, Count) ->
     inc_cleanups(Stats, Duration, Count, false).
@@ -1973,7 +1988,7 @@ inc_cleanups(#set_view_group_stats{cleanup_history = Hist} = Stats, Duration, Co
         {<<"duration">>, Duration},
         {<<"kv_count">>, Count}
     ]},
-    Stats#set_view_group_stats{
+    Stats2 = Stats#set_view_group_stats{
         cleanups = Stats#set_view_group_stats.cleanups + 1,
         cleanup_history = lists:sublist([Entry | Hist], ?MAX_HIST_SIZE),
         updater_cleanups = case ByUpdater of
@@ -1982,9 +1997,13 @@ inc_cleanups(#set_view_group_stats{cleanup_history = Hist} = Stats, Duration, Co
             false ->
                 Stats#set_view_group_stats.updater_cleanups
             end
-    }.
+    },
+    true = ets:insert(?SET_VIEW_STATS_ETS, Stats2).
 
-inc_compactions(#set_view_group_stats{compaction_history = Hist} = Stats, Result) ->
+
+inc_compactions(Group, Result) ->
+    [Stats] = ets:lookup(?SET_VIEW_STATS_ETS, ?set_view_group_stats_key(Group)),
+    #set_view_group_stats{compaction_history = Hist} = Stats,
     #set_view_compactor_result{
         compact_time = Duration,
         cleanup_kv_count = CleanupKVCount
@@ -1993,7 +2012,7 @@ inc_compactions(#set_view_group_stats{compaction_history = Hist} = Stats, Result
         {<<"duration">>, Duration},
         {<<"cleanup_kv_count">>, CleanupKVCount}
     ]},
-    Stats#set_view_group_stats{
+    Stats2 = Stats#set_view_group_stats{
         compactions = Stats#set_view_group_stats.compactions + 1,
         compaction_history = lists:sublist([Entry | Hist], ?MAX_HIST_SIZE),
         cleanups = case CleanupKVCount of
@@ -2002,7 +2021,8 @@ inc_compactions(#set_view_group_stats{compaction_history = Hist} = Stats, Result
             _ ->
                 Stats#set_view_group_stats.cleanups + 1
         end
-    }.
+    },
+    true = ets:insert(?SET_VIEW_STATS_ETS, Stats2).
 
 
 new_fd_ref_counter(Fd) ->
@@ -2012,3 +2032,9 @@ new_fd_ref_counter(Fd) ->
 
 drop_fd_ref_counter(RefCounter) ->
     couch_ref_counter:drop(RefCounter).
+
+
+inc_view_group_access_stats(#set_view_group_req{update_stats = true}, Group) ->
+    ?inc_accesses(Group);
+inc_view_group_access_stats(_Req, _Group) ->
+    ok.

@@ -444,33 +444,36 @@ rereduce(Rows, #merge_params{extra = Extra}) ->
     {ok, [Value]} = couch_query_servers:rereduce(Lang, [RedFun], Reds),
     Value.
 
-get_set_view(GetSetViewFn, SetName, DDocId, ViewName, Stale, Partitions) ->
-    case GetSetViewFn(SetName, DDocId, ViewName, ok, Partitions) of
+get_set_view(GetSetViewFn, SetName, DDocId, ViewName, ViewGroupReq, Partitions) ->
+    ViewGroupReq1 = ViewGroupReq#set_view_group_req{
+        stale = ok
+    },
+    case GetSetViewFn(SetName, DDocId, ViewName, ViewGroupReq1, Partitions) of
     {ok, StaleView, StaleGroup, []} ->
-        case Stale of
+        case ViewGroupReq#set_view_group_req.stale of
         ok ->
             {ok, StaleView, StaleGroup, []};
         _Other ->
             couch_set_view:release_group(StaleGroup),
-            GetSetViewFn(SetName, DDocId, ViewName, Stale, Partitions)
+            ViewGroupReq2 = ViewGroupReq#set_view_group_req{
+                update_stats = false
+            },
+            GetSetViewFn(SetName, DDocId, ViewName, ViewGroupReq2, Partitions)
         end;
     Other ->
         Other
     end.
 
-prepare_set_view(ViewSpec, ViewArgs, Queue, GetSetViewFn) ->
+prepare_set_view(ViewSpec, ViewGroupReq, Queue, GetSetViewFn) ->
     #set_view_spec{
         name = SetName,
         ddoc_id = DDocId, view_name = ViewName,
         partitions = Partitions
     } = ViewSpec,
-    #view_query_args{
-        stale = Stale
-    } = ViewArgs,
 
     try
         case get_set_view(GetSetViewFn, SetName, DDocId,
-                          ViewName, Stale, Partitions) of
+                          ViewName, ViewGroupReq, Partitions) of
         {ok, View, Group, []} ->
             {View, Group};
         {ok, _, Group, MissingPartitions} ->
@@ -569,9 +572,9 @@ map_set_view_folder(ViewSpec, MergeParams, UserCtx, DDoc, Queue) ->
     } = MergeParams,
     #view_query_args{
         include_docs = IncludeDocs,
-        conflicts = Conflicts
+        conflicts = Conflicts,
+        stale = Stale
     } = ViewArgs,
-
     DDocDbName = ?master_dbname(SetName),
 
     PrepareResult = case (ViewSpec#set_view_spec.view =/= nil) andalso
@@ -579,11 +582,18 @@ map_set_view_folder(ViewSpec, MergeParams, UserCtx, DDoc, Queue) ->
     true ->
         {ViewSpec#set_view_spec.view, ViewSpec#set_view_spec.group};
     false ->
+        ViewGroupReq1 = #set_view_group_req{
+            stale = Stale,
+            update_stats = true
+        },
         case prepare_set_view(
-            ViewSpec, ViewArgs, Queue, fun couch_set_view:get_map_view/5) of
+            ViewSpec, ViewGroupReq1, Queue, fun couch_set_view:get_map_view/5) of
         not_found ->
+            ViewGroupReq2 = ViewGroupReq1#set_view_group_req{
+                update_stats = false
+            },
             case prepare_set_view(
-                ViewSpec, ViewArgs, Queue, fun couch_set_view:get_reduce_view/5) of
+                ViewSpec, ViewGroupReq2, Queue, fun couch_set_view:get_reduce_view/5) of
             {RedView, Group0} ->
                 {couch_set_view:extract_map_view(RedView), Group0};
             Else ->
@@ -879,7 +889,11 @@ reduce_set_view_folder(ViewSpec, MergeParams, DDoc, Queue) ->
     true ->
         {ViewSpec#set_view_spec.view, ViewSpec#set_view_spec.group};
     false ->
-        prepare_set_view(ViewSpec, ViewArgs, Queue, fun couch_set_view:get_reduce_view/5)
+        ViewGroupReq = #set_view_group_req{
+            stale = ViewArgs#view_query_args.stale,
+            update_stats = true
+        },
+        prepare_set_view(ViewSpec, ViewGroupReq, Queue, fun couch_set_view:get_reduce_view/5)
     end,
 
     case PrepareResult of
@@ -1212,7 +1226,9 @@ set_view_group_stats_ejson(Stats) ->
     StatNames = record_info(fields, set_view_group_stats),
     StatPoses = lists:seq(2, record_info(size, set_view_group_stats)),
     {lists:foldl(
-        fun({StatName, StatPos}, Acc) ->
+        fun({ets_key, _}, Acc) ->
+            Acc;
+        ({StatName, StatPos}, Acc) ->
             [{StatName, element(StatPos, Stats)} | Acc]
         end,
         [],

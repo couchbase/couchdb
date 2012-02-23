@@ -160,7 +160,8 @@ test_same_key_by_different_docs_multiple_times() ->
 
 get_group_snapshot() ->
     GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
-    {ok, Group, 0} = gen_server:call(GroupPid, {request_group, false}, infinity),
+    {ok, Group, 0} = gen_server:call(
+        GroupPid, #set_view_group_req{stale = false}, infinity),
     Group.
 
 

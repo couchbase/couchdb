@@ -280,7 +280,7 @@ query_reduce_view(ViewName, Stale) ->
 query_reduce_view(ViewName, Stale, Partitions) ->
     etap:diag("Querying reduce view " ++ binary_to_list(ViewName) ++ " with ?group=true"),
     {ok, View, Group, []} = couch_set_view:get_reduce_view(
-        test_set_name(), ddoc_id(), ViewName, Stale, Partitions),
+        test_set_name(), ddoc_id(), ViewName, #set_view_group_req{stale = Stale}, Partitions),
     KeyGroupFun = fun({_Key1, _}, {_Key2, _}) -> true end,
     FoldFun = fun(Key, Red, Acc) -> {ok, [{Key, Red} | Acc]} end,
     ViewArgs = #view_query_args{
@@ -719,7 +719,7 @@ verify_replica_group_btrees_1(MainGroup) ->
         nil,
         "Main group points to a nil replica group"),
     {ok, RepGroup, 0} = gen_server:call(
-        MainGroup#set_view_group.replica_pid, {request_group, ok}),
+        MainGroup#set_view_group.replica_pid, #set_view_group_req{stale = ok}),
     #set_view_group{
         id_btree = IdBtree,
         views = Views,
@@ -802,7 +802,7 @@ verify_replica_group_btrees_2(MainGroup) ->
         nil,
         "Main group points to a nil replica group"),
     {ok, RepGroup, 0} = gen_server:call(
-        MainGroup#set_view_group.replica_pid, {request_group, ok}),
+        MainGroup#set_view_group.replica_pid, #set_view_group_req{stale = ok}),
     #set_view_group{
         id_btree = IdBtree,
         views = Views,

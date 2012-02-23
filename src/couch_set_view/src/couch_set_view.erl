@@ -72,9 +72,9 @@
 %    the view key/values that originated from any of these
 %    partitions will eventually be removed from the index
 %
-get_group(SetName, DDocId, StaleType) ->
+get_group(SetName, DDocId, Req) ->
     GroupPid = get_group_pid(SetName, DDocId),
-    case couch_set_view_group:request_group(GroupPid, StaleType) of
+    case couch_set_view_group:request_group(GroupPid, Req) of
     {ok, Group} ->
         {ok, Group};
     view_undefined ->
@@ -372,16 +372,16 @@ get_key_pos(Key, [_|Rest], N) ->
     get_key_pos(Key, Rest, N+1).
 
 
-get_map_view(SetName, DDocId, ViewName, StaleType) ->
-    case get_map_view(SetName, DDocId, ViewName, StaleType, []) of
+get_map_view(SetName, DDocId, ViewName, Req) ->
+    case get_map_view(SetName, DDocId, ViewName, Req, []) of
     {ok, View, Group, _} ->
         {ok, View, Group};
     Else ->
         Else
     end.
 
-get_map_view(SetName, DDocId, ViewName, StaleType, FilterPartitions) ->
-    {ok, Group0} = get_group(SetName, DDocId, StaleType),
+get_map_view(SetName, DDocId, ViewName, Req, FilterPartitions) ->
+    {ok, Group0} = get_group(SetName, DDocId, Req),
     {Group, Unindexed} = modify_bitmasks(Group0, FilterPartitions),
     case get_map_view0(ViewName, Group#set_view_group.views) of
     {ok, View} ->
@@ -398,16 +398,16 @@ get_map_view0(Name, [#set_view{map_names=MapNames}=View|Rest]) ->
         false -> get_map_view0(Name, Rest)
     end.
 
-get_reduce_view(SetName, DDocId, ViewName, StaleType) ->
-    case get_reduce_view(SetName, DDocId, ViewName, StaleType, []) of
+get_reduce_view(SetName, DDocId, ViewName, Req) ->
+    case get_reduce_view(SetName, DDocId, ViewName, Req, []) of
     {ok, View, Group, _} ->
         {ok, View, Group};
     Else ->
         Else
     end.
 
-get_reduce_view(SetName, DDocId, ViewName, StaleType, FilterPartitions) ->
-    {ok, Group0} = get_group(SetName, DDocId, StaleType),
+get_reduce_view(SetName, DDocId, ViewName, Req, FilterPartitions) ->
+    {ok, Group0} = get_group(SetName, DDocId, Req),
     {Group, Unindexed} = modify_bitmasks(Group0, FilterPartitions),
     #set_view_group{
         views = Views,
@@ -537,6 +537,10 @@ init([]) ->
     % {Pid, {SetName, Sig}}
     ets:new(couch_pid_to_setview_sig, [set, private, named_table]),
 
+    ets:new(
+        ?SET_VIEW_STATS_ETS,
+        [set, public, named_table, {keypos, #set_view_group_stats.ets_key}]),
+
     {ok, Notifier} = couch_db_update_notifier:start_link(fun ?MODULE:handle_db_event/1),
 
     process_flag(trap_exit, true),
@@ -610,9 +614,10 @@ handle_info({'EXIT', FromPid, Reason}, Server) ->
         true -> ok
         end;
     [{_, {SetName, Sig}}] ->
-        [{SetName, {DDocId, Sig}}] = ets:match_object(
-            couch_setview_name_to_sig, {SetName, {'$1', Sig}}),
-        delete_from_ets(FromPid, SetName, DDocId, Sig)
+        Entries = ets:match_object(couch_setview_name_to_sig, {SetName, {'$1', Sig}}),
+        lists:foreach(fun({_SetName, {DDocId, _Sig}}) ->
+            delete_from_ets(FromPid, SetName, DDocId, Sig)
+        end, Entries)
     end,
     {noreply, Server};
 
@@ -641,7 +646,9 @@ add_to_ets(Pid, SetName, DDocId, Sig) ->
 delete_from_ets(Pid, SetName, DDocId, Sig) ->
     true = ets:delete(couch_pid_to_setview_sig, Pid),
     true = ets:delete(couch_sig_to_setview_pid, {SetName, Sig}),
-    true = ets:delete_object(couch_setview_name_to_sig, {SetName, {DDocId, Sig}}).
+    true = ets:delete_object(couch_setview_name_to_sig, {SetName, {DDocId, Sig}}),
+    true = ets:delete(?SET_VIEW_STATS_ETS, {SetName, DDocId, Sig, main}),
+    true = ets:delete(?SET_VIEW_STATS_ETS, {SetName, DDocId, Sig, replica}).
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
