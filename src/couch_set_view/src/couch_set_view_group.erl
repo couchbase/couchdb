@@ -2007,20 +2007,8 @@ inc_compactions(#set_view_group_stats{compaction_history = Hist} = Stats, Result
 
 new_fd_ref_counter(Fd) ->
     {ok, RefCounter} = couch_ref_counter:start([Fd]),
-    % MB-4808, for some odd reason, possibly a race condition, ref counters seem
-    % to die after compaction/updates happened. Monitoring them to help debug -
-    % let the view group crash and see in the stack trace dump the monitor's DOWN message.
-    % TODO: remove the monitors once issue is solved.
-    RefRefCounter = erlang:monitor(process, RefCounter),
-    FdRefCounter = erlang:monitor(process, Fd),
-    erlang:put(fd_ref_counter_monref, RefRefCounter),
-    erlang:put(fd_monref, FdRefCounter),
     RefCounter.
 
 
 drop_fd_ref_counter(RefCounter) ->
-    RefRefCounter = erlang:erase(fd_ref_counter_monref),
-    FdRefCounter = erlang:erase(fd_monref),
-    erlang:demonitor(RefRefCounter),
-    erlang:demonitor(FdRefCounter),
     couch_ref_counter:drop(RefCounter).
