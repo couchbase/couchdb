@@ -154,7 +154,7 @@ run(#evstate{funs=Funs}=State, [<<"add_fun">> , BinFunc]) ->
 run(State, [<<"map_doc">> , Doc]) ->
     Resp = lists:map(fun({Sig, Fun}) ->
         erlang:put(Sig, []),
-        Fun(Doc),
+        Fun(json_to_ejson(Doc)),
         lists:reverse(erlang:get(Sig))
     end, State#evstate.funs),
     {State, Resp};
@@ -416,3 +416,9 @@ to_binary(Data) when is_atom(Data) ->
     list_to_binary(atom_to_list(Data));
 to_binary(Data) ->
     Data.
+
+
+json_to_ejson({json, DocJson}) ->
+    ?JSON_DECODE(DocJson);
+json_to_ejson({_} = DocEjson) ->
+    DocEjson.
