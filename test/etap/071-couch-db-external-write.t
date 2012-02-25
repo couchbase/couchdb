@@ -122,7 +122,7 @@ test() ->
 
     etap:is(couch_file:write_header(Fd, Header2), ok,
             "Should write new header outside of couchdb"),
-
+    couch_file:flush(Fd),
     % calculate where new header goes
     case FileLen rem ?SIZE_BLOCK of
     0 ->
@@ -136,8 +136,8 @@ test() ->
     Header3 = Header#db_header{update_seq = Header#db_header.update_seq + 1},
     etap:is(couch_file:write_header(Fd, Header3), ok,
             "Should write new header outside of couchdb"),
+    couch_file:flush(Fd),
     NewHeaderPos2 = NewHeaderPos + ?SIZE_BLOCK,
-
     etap:is(couch_db:update_header_pos(Db2, 1, NewHeaderPos2), ok,
             "Should accept new header"),
     couch_db:close(Db2),
