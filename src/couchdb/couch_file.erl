@@ -394,6 +394,9 @@ handle_call({write_header, Bin}, From, #file{writer = W, eof = Pos} = File) ->
     },
     {noreply, File2};
 
+handle_call(flush, _From, #file{writer =  nil} = File) ->
+    % if the writer is shutdown, nothing to flush.
+    {reply, ok, File};
 handle_call(flush, From, #file{writer =  W} = File) ->
     W ! {flush, From},
     {noreply, File};
@@ -426,16 +429,20 @@ handle_call(snapshot_reads, _From, #file{reader = R, writer = W} = File) ->
 
 handle_call({set_close_after, Ms}, _From, #file{reader = R, writer = W} = File) ->
     R ! {set_close_after, Ms, self()},
-    W ! {set_close_after, Ms, self()},
+    case W of
+    nil -> ok;
+    _ ->
+        W ! {set_close_after, Ms, self()},
+        receive
+            {ok, W} -> ok;
+            {'EXIT', W, Reason2} ->
+                exit({write_loop_died, Reason2})
+        end
+    end,
     receive
         {ok, R} -> ok;
         {'EXIT', R, Reason} ->
             exit({read_loop_died, Reason})
-    end,
-    receive
-        {ok, W} -> ok;
-        {'EXIT', W, Reason2} ->
-            exit({write_loop_died, Reason2})
     end,
     {reply, ok, File};
 

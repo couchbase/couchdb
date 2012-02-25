@@ -76,7 +76,7 @@
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(10),
+    etap:plan(11),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -147,6 +147,16 @@ test() ->
     etap:is(Db3#db.header, Header3,
             "Db header should be what we just wrote"),
 
+    {ok, CompactPid} = couch_db:start_compact(Db3),
+    monitor(process, CompactPid),
+    receive
+    {'DOWN', _MonitorRef, _Type, CompactPid, normal} ->
+        Finished = true
+    after 3000 ->
+        Finished = false
+    end,
+    etap:is(Finished, true,
+              "Db should still be compactable."),
     couch_db:close(Db3),
     couch_server:delete(<<"etap-test-db">>, []),
     ok.
