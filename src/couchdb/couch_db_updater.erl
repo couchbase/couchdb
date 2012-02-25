@@ -192,6 +192,8 @@ handle_call({update_header_pos, FileVersion, NewPos}, _From, Db) ->
     if FileVersion == ExistingFileVersion ->
         case couch_file:read_header(Db#db.fd, NewPos) of
         {ok, NewHeader} ->
+            % disable any more writes, as we are being updated externally!
+            ok = couch_file:only_snapshot_reads(Db#db.fd),
             if Db#db.update_seq > NewHeader#db_header.update_seq ->
                 {reply, update_behind_couchdb, Db};
             true ->

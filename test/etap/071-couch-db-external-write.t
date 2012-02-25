@@ -88,6 +88,7 @@ main(_) ->
 
 test() ->
     couch_server_sup:start_link(test_util:config_files()),
+    couch_file_write_guard:disable_for_testing(),
     couch_server:delete(<<"etap-test-db">>, []),
     {ok, Db} = couch_db:create(<<"etap-test-db">>, []),
     ok = couch_db:update_doc(Db, #doc{id = <<"1">>,body = <<"{foo:1}">>},
@@ -110,12 +111,16 @@ test() ->
     etap:is(couch_db:update_header_pos(Db2, 2, 0), update_file_ahead_of_couchdb,
             "Should be ahead couchdb"),
 
-    {ok, FileLen} = couch_file:bytes(Db2#db.fd),
+
+    DbRootDir = couch_config:get("couchdb", "database_dir", "."),
+    Filename = filename:join(DbRootDir, "etap-test-db.couch.1"),
+    {ok, Fd} = couch_file:open(Filename),
+    {ok, FileLen} = couch_file:bytes(Fd),
 
     Header = Db2#db.header,
     Header2 = Header#db_header{update_seq = 0},
 
-    etap:is(couch_file:write_header(Db2#db.fd, Header2), ok,
+    etap:is(couch_file:write_header(Fd, Header2), ok,
             "Should write new header outside of couchdb"),
 
     % calculate where new header goes
@@ -129,7 +134,7 @@ test() ->
             "Should be ahead couchdb"),
 
     Header3 = Header#db_header{update_seq = Header#db_header.update_seq + 1},
-    etap:is(couch_file:write_header(Db2#db.fd, Header3), ok,
+    etap:is(couch_file:write_header(Fd, Header3), ok,
             "Should write new header outside of couchdb"),
     NewHeaderPos2 = NewHeaderPos + ?SIZE_BLOCK,
 

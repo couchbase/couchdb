@@ -402,13 +402,21 @@ handle_call(find_header, From, #file{reader = Reader, eof = Eof} = File) ->
     Reader ! {find_header, Eof, From},
     {noreply, File};
 
-handle_call({read_header, Pos}, From, #file{reader = Reader} = File) ->
-    Reader ! {read_header, Pos, From},
-    {noreply, File};
+handle_call({read_header, Pos}, From, #file{reader = R} = File) ->
+    R ! {read_header, Pos, From},
+    % update the eof since file must have been updated externally
+    R ! {get_eof, self()},
+    receive
+        {eof, Eof, R} -> ok;
+        {'EXIT', R, Reason} ->
+            Eof = ok, % appease compiler
+            exit({read_loop_died, Reason})
+    end,
+    {noreply, File#file{eof=Eof}};
 
 handle_call(snapshot_reads, _From, #file{reader = R, writer = W} = File) ->
     R ! {set_close_after, infinity, self()},
-    couch_util:shutdown_sync(W),
+    couch_util:shutdown_sync(W), % no-op if nil
     receive
         {ok, R} -> ok;
         {'EXIT', R, Reason} ->
@@ -731,6 +739,10 @@ handle_reader_message(Msg, Fd, FilePath, CloseTimeout) ->
     {read_header, Pos, From} ->
         Result = (catch load_header(Fd, Pos div ?SIZE_BLOCK)),
         gen_server:reply(From, Result),
+        reader_loop(Fd, FilePath, CloseTimeout);
+    {get_eof, From} ->
+        {ok, Pos} = file:position(Fd, eof),
+        From ! {eof, Pos, self()},
         reader_loop(Fd, FilePath, CloseTimeout);
     {set_close_after, NewCloseTimeout, From} ->
         From ! {ok, self()},
