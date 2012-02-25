@@ -194,6 +194,8 @@ handle_call({update_header_pos, FileVersion, NewPos}, _From, Db) ->
         {ok, NewHeader} ->
             % disable any more writes, as we are being updated externally!
             ok = couch_file:only_snapshot_reads(Db#db.fd),
+            % previous call sets close after timeout to infinity.
+            ok = couch_file:set_close_after(Db#db.fd, ?FD_CLOSE_TIMEOUT_MS),
             if Db#db.update_seq > NewHeader#db_header.update_seq ->
                 {reply, update_behind_couchdb, Db};
             true ->
