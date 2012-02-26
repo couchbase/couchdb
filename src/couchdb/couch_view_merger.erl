@@ -1172,7 +1172,8 @@ queue_debug_info(_QueryArgs, #set_view_group{} = Group, Queue) ->
     #set_view_debug_info{
         original_abitmask = OrigMainAbitmask,
         original_pbitmask = OrigMainPbitmask,
-        stats = Stats
+        stats = Stats,
+        replica_partitions = ReplicaPartitions
     } = Group#set_view_group.debug_info,
     OrigMainActive = couch_set_view_util:decode_bitmask(OrigMainAbitmask),
     ModMainActive = couch_set_view_util:decode_bitmask(?set_abitmask(Group)),
@@ -1187,11 +1188,18 @@ queue_debug_info(_QueryArgs, #set_view_group{} = Group, Queue) ->
         {<<"passive_partitions">>, ordsets:from_list(ModMainPassive)},
         {<<"original_passive_partitions">>, ordsets:from_list(OrigMainPassive)},
         {<<"cleanup_partitions">>, ordsets:from_list(MainCleanup)},
+        {<<"replica_partitions">>, ordsets:from_list(ReplicaPartitions)},
+        {<<"replicas_on_transfer">>, ?set_replicas_on_transfer(Group)},
         {<<"indexed_seqs">>, {IndexedSeqs}},
         {<<"stats">>, set_view_group_stats_ejson(Stats)}
     ],
     RepInfo = replica_group_debug_info(Group),
-    Info = {MainInfo ++ RepInfo},
+    Info = case RepInfo of
+    [] ->
+        { [{<<"main_group">>, {MainInfo}}] };
+    _ ->
+        { [{<<"main_group">>, {MainInfo}}, {<<"replica_group">>, {RepInfo}}] }
+    end,
     ok = couch_view_merger_queue:queue(Queue, {debug_info, ?LOCAL, Info}).
 
 replica_group_debug_info(#set_view_group{replica_group = nil}) ->

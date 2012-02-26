@@ -88,7 +88,8 @@
 -record(set_view_debug_info, {
     original_abitmask,
     original_pbitmask,
-    stats
+    stats,
+    replica_partitions
 }).
 
 % Keep all stats values as valid EJSON (except ets key).

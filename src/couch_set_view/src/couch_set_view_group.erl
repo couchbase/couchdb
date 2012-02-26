@@ -501,7 +501,8 @@ handle_call(#set_view_group_req{stale = false} = Req, From,
             group = Group,
             updater_pid = UpPid,
             updater_state = UpState,
-            waiting_list = WaitList
+            waiting_list = WaitList,
+            replica_partitions = ReplicaParts
         } = State) ->
     inc_view_group_access_stats(Req, Group),
     case UpPid of
@@ -511,7 +512,7 @@ handle_call(#set_view_group_req{stale = false} = Req, From,
         State2 = start_updater(State#state{waiting_list = [From | WaitList]}),
         {noreply, State2, ?TIMEOUT};
     _ when is_pid(UpPid), UpState =:= updating_passive ->
-        reply_with_group(Group, [From]),
+        reply_with_group(Group, ReplicaParts, [From]),
         {noreply, State, ?TIMEOUT};
     _ when is_pid(UpPid) ->
         ?LOG_INFO("Set view `~s`, ~s group `~s`, blocking client ~w on group request~n",
@@ -522,12 +523,12 @@ handle_call(#set_view_group_req{stale = false} = Req, From,
 
 handle_call(#set_view_group_req{stale = ok} = Req, From, #state{group = Group} = State) ->
     inc_view_group_access_stats(Req, Group),
-    reply_with_group(Group, [From]),
+    reply_with_group(Group, State#state.replica_partitions, [From]),
     {noreply, State, ?TIMEOUT};
 
 handle_call(#set_view_group_req{stale = update_after} = Req, From, #state{group = Group} = State) ->
     inc_view_group_access_stats(Req, Group),
-    reply_with_group(Group, [From]),
+    reply_with_group(Group, State#state.replica_partitions, [From]),
     case State#state.updater_pid of
     Pid when is_pid(Pid) ->
         {noreply, State};
@@ -701,7 +702,8 @@ handle_info({updater_info, Pid, {state, UpdaterState}}, #state{updater_pid = Pid
             {noreply, start_updater(State3)}
         end;
     updating_passive when WaitList =/= [] ->
-        reply_with_group(State2#state.group, WaitList),
+        reply_with_group(
+            State2#state.group, State2#state.replica_partitions, WaitList),
         {noreply, State2#state{waiting_list = []}};
     _ ->
         {noreply, State2}
@@ -766,7 +768,8 @@ handle_info({'EXIT', Pid, shutdown},
 handle_info({'EXIT', Pid, {updater_finished, Result}}, #state{updater_pid = Pid} = State) ->
     #state{
         waiting_list = WaitList,
-        shutdown = Shutdown
+        shutdown = Shutdown,
+        replica_partitions = ReplicaParts
     } = State,
     #set_view_updater_result{
         indexing_time = IndexingTime,
@@ -779,7 +782,7 @@ handle_info({'EXIT', Pid, {updater_finished, Result}}, #state{updater_pid = Pid}
         cleanup_kv_count = CleanupKVCount
     } = Result,
     ok = commit_header(NewGroup, false),
-    reply_with_group(NewGroup, WaitList),
+    reply_with_group(NewGroup, ReplicaParts, WaitList),
     inc_updates(NewGroup, Result),
     ?LOG_INFO("Set view `~s`, ~s group `~s`, updater finished~n"
         "Indexing time: ~.3f seconds~n"
@@ -872,7 +875,7 @@ code_change(_OldVsn, State, _Extra) ->
 
 %% Local Functions
 
-reply_with_group(Group0, WaitList) ->
+reply_with_group(Group0, ReplicaPartitions,WaitList) ->
     #set_view_group{
         ref_counter = RefCnt,
         debug_info = DebugInfo
@@ -884,7 +887,8 @@ reply_with_group(Group0, WaitList) ->
         debug_info = DebugInfo#set_view_debug_info{
             stats = Stats,
             original_abitmask = ?set_abitmask(Group0),
-            original_pbitmask = ?set_pbitmask(Group0)
+            original_pbitmask = ?set_pbitmask(Group0),
+            replica_partitions = ReplicaPartitions
         }
     },
     lists:foreach(fun({Pid, _} = From) ->
@@ -1719,7 +1723,8 @@ stop_updater(#state{updater_pid = Pid} = State, When) ->
         updating_passive ->
             PartialUpdate = (?set_pbitmask(NewGroup) =/= 0),
             inc_updates(State2#state.group, Result, PartialUpdate, false),
-            reply_with_group(NewGroup, State2#state.waiting_list),
+            reply_with_group(
+                NewGroup, State2#state.replica_partitions, State2#state.waiting_list),
             WaitingList2 = []
         end,
         NewState = State2#state{
@@ -1750,6 +1755,11 @@ stop_updater(#state{updater_pid = Pid} = State, When) ->
 start_updater(#state{updater_pid = Pid} = State) when is_pid(Pid) ->
     State;
 start_updater(#state{updater_pid = nil, updater_state = not_running} = State) ->
+    #state{
+        group = Group,
+        replica_partitions = ReplicaParts,
+        waiting_list = WaitList
+    } = State,
     case index_needs_update(State) of
     true ->
         do_start_updater(State);
@@ -1758,7 +1768,7 @@ start_updater(#state{updater_pid = nil, updater_state = not_running} = State) ->
         [] ->
             State;
         _ ->
-            reply_with_group(State#state.group, State#state.waiting_list),
+            reply_with_group(Group, ReplicaParts, WaitList),
             State#state{waiting_list = []}
         end
     end.
