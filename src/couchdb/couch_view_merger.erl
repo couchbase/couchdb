@@ -166,7 +166,7 @@ http_index_folder_req_details(#merged_index_spec{
     end,
 
     Body = {EJson2},
-    put(from_url, Url),
+    put(from_url, ?l2b(Url)),
     {MergeUrl, post, Headers, ?JSON_ENCODE(Body), Options};
 
 http_index_folder_req_details(#simple_index_spec{
@@ -246,7 +246,9 @@ view_row_obj_map({{Key, error}, Value}, _DebugMode) ->
 
 % set view
 view_row_obj_map({{Key, DocId}, {PartId, Value}}, true) ->
-    {[{id, DocId}, {key, Key}, {partition, PartId}, {value, Value}]};
+    {[{id, DocId}, {key, Key}, {partition, PartId}, {node, ?LOCAL}, {value, Value}]};
+view_row_obj_map({{Key, DocId}, {PartId, Node, Value}}, true) ->
+    {[{id, DocId}, {key, Key}, {partition, PartId}, {node, Node}, {value, Value}]};
 view_row_obj_map({{Key, DocId}, {_PartId, Value}}, false) ->
     {[{id, DocId}, {key, Key}, {value, Value}]};
 
@@ -255,7 +257,9 @@ view_row_obj_map({{Key, DocId}, Value}, _DebugMode) ->
 
 % set view
 view_row_obj_map({{Key, DocId}, {PartId, Value}, Doc}, true) ->
-    {[{id, DocId}, {key, Key}, {partition, PartId}, {value, Value}, Doc]};
+    {[{id, DocId}, {key, Key}, {partition, PartId}, {node, ?LOCAL}, {value, Value}, Doc]};
+view_row_obj_map({{Key, DocId}, {PartId, Node, Value}, Doc}, true) ->
+    {[{id, DocId}, {key, Key}, {partition, PartId}, {node, Node}, {value, Value}, Doc]};
 view_row_obj_map({{Key, DocId}, {_PartId, Value}, Doc}, false) ->
     {[{id, DocId}, {key, Key}, {value, Value}, Doc]};
 
@@ -790,7 +794,7 @@ http_view_fold_debug_info(object_end, Queue, Acc) ->
     _ ->
         Info = {lists:reverse(Acc)}
     end,
-    ok = couch_view_merger_queue:queue(Queue, {debug_info, ?l2b(get(from_url)), Info}),
+    ok = couch_view_merger_queue:queue(Queue, {debug_info, get(from_url), Info}),
     fun(Ev2) -> http_view_fold_extra(Ev2, Queue) end.
 
 
@@ -807,7 +811,8 @@ http_view_fold_queue_row({Props}, Queue) ->
     nil ->
         Val;
     PartId ->
-        {PartId, Val}
+        % we're in debug mode, add node info
+        {PartId, get(from_url), Val}
     end,
     Row = case get_value(<<"error">>, Props, nil) of
     nil ->
