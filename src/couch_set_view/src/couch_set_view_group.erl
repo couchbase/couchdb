@@ -95,7 +95,6 @@ request_group(Pid, Req, Retries) ->
             name = GroupName,
             set_name = SetName
         } = Group,
-        ?LOG_INFO("Got set view group `~s` snapshot for set `~s`", [GroupName, SetName]),
         case request_replica_group(RepPid, ActiveReplicasBitmask, Req) of
         {ok, RepGroup} ->
             {ok, Group#set_view_group{replica_group = RepGroup}};
@@ -507,16 +506,12 @@ handle_call(#set_view_group_req{stale = false} = Req, From,
     inc_view_group_access_stats(Req, Group),
     case UpPid of
     nil ->
-        ?LOG_INFO("Set view `~s`, ~s group `~s`, blocking client ~w on group request~n",
-                  [?set_name(State), ?type(State), ?group_id(State), From]),
         State2 = start_updater(State#state{waiting_list = [From | WaitList]}),
         {noreply, State2, ?TIMEOUT};
     _ when is_pid(UpPid), UpState =:= updating_passive ->
         reply_with_group(Group, ReplicaParts, [From]),
         {noreply, State, ?TIMEOUT};
     _ when is_pid(UpPid) ->
-        ?LOG_INFO("Set view `~s`, ~s group `~s`, blocking client ~w on group request~n",
-                  [?set_name(State), ?type(State), ?group_id(State), From]),
         State2 = State#state{waiting_list = [From | WaitList]},
         {noreply, State2, ?TIMEOUT}
     end;
