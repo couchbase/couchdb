@@ -425,21 +425,21 @@ do_maps(#set_view_group{query_server = Qs} = Group, MapQueue, WriteQueue) ->
         couch_work_queue:close(WriteQueue),
         couch_query_servers:stop_doc_map(Group#set_view_group.query_server);
     {ok, Queue, _QueueSize} ->
-        lists:foreach(
-            fun({Seq, #doc{id = Id, deleted = true}, PartitionId}) ->
+        Items = lists:foldr(
+            fun({Seq, #doc{id = Id, deleted = true}, PartitionId}, Acc) ->
                 Item = {Seq, Id, PartitionId, []},
-                ok = couch_work_queue:queue(WriteQueue, Item);
-            ({Seq, #doc{id = Id, deleted = false} = Doc, PartitionId}) ->
+                [Item | Acc];
+            ({Seq, #doc{id = Id, deleted = false} = Doc, PartitionId}, Acc) ->
                 {ok, Result} = couch_query_servers:map_doc_raw(Qs, Doc),
                 Item = {Seq, Id, PartitionId, Result},
-                ok = couch_work_queue:queue(WriteQueue, Item)
+                [Item | Acc]
             end,
-            Queue),
+            [], Queue),
+        ok = couch_work_queue:queue(WriteQueue, Items),
         do_maps(Group, MapQueue, WriteQueue)
     end.
 
 
-% TODO: batch by byte size as well, not just changes #
 do_batched_maps(#set_view_group{query_server = Qs} = Group, MapQueue, WriteQueue, Acc, AccSize) ->
     case couch_work_queue:dequeue(MapQueue) of
     closed ->
@@ -447,7 +447,7 @@ do_batched_maps(#set_view_group{query_server = Qs} = Group, MapQueue, WriteQueue
         couch_work_queue:close(WriteQueue),
         couch_query_servers:stop_doc_map(Qs);
     {ok, Queue, QueueSize} ->
-        Acc2 = Acc ++ Queue,
+        Acc2 = Acc ++ lists:flatten(Queue),
         AccSize2 = AccSize + QueueSize,
         case (AccSize2 >= ?QUEUE_MAX_SIZE) orelse (length(Acc2) >= ?QUEUE_MAX_ITEMS) of
         true ->
@@ -467,18 +467,19 @@ compute_map_results(#set_view_group{query_server = Qs}, WriteQueue, Queue) ->
         Queue),
     NotDeletedDocs = [Doc || {_Seq, Doc, _PartId} <- NotDeleted],
     {ok, MapResultList} = couch_query_servers:map_docs_raw(Qs, NotDeletedDocs),
-    lists:foreach(
-        fun({MapResults, {Seq, Doc, PartId}}) ->
+    Items1 = lists:foldr(
+        fun({MapResults, {Seq, Doc, PartId}}, Acc) ->
             Item = {Seq, Doc#doc.id, PartId, MapResults},
-            ok = couch_work_queue:queue(WriteQueue, Item)
+            [Item | Acc]
         end,
-        lists:zip(MapResultList, NotDeleted)),
-    lists:foreach(
-        fun({Seq, #doc{id = Id, deleted = true}, PartId}) ->
+        [], lists:zip(MapResultList, NotDeleted)),
+    Items2 = lists:foldr(
+        fun({Seq, #doc{id = Id, deleted = true}, PartId}, Acc) ->
             Item = {Seq, Id, PartId, []},
-            ok = couch_work_queue:queue(WriteQueue, Item)
+            [Item | Acc]
         end,
-        Deleted).
+        Items1, Deleted),
+    ok = couch_work_queue:queue(WriteQueue, Items2).
 
 
 do_writes(#writer_acc{kvs = Kvs, kvs_size = KvsSize, write_queue = WriteQueue} = Acc) ->
@@ -486,7 +487,7 @@ do_writes(#writer_acc{kvs = Kvs, kvs_size = KvsSize, write_queue = WriteQueue} =
     closed ->
         flush_writes(Acc#writer_acc{final_batch = true});
     {ok, Queue, QueueSize} ->
-        Kvs2 = Kvs ++ Queue,
+        Kvs2 = Kvs ++ lists:flatten(Queue),
         KvsSize2 = KvsSize + QueueSize,
         case (KvsSize2 >= ?QUEUE_MAX_SIZE) orelse (length(Kvs2) >= ?QUEUE_MAX_ITEMS) of
         true ->
