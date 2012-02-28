@@ -377,6 +377,8 @@ do_init({_, SetName, _} = InitArgs) ->
         true = ets:insert(
              ?SET_VIEW_STATS_ETS,
              #set_view_group_stats{ets_key = ?set_view_group_stats_key(Group)}),
+        TmpDir = updater_tmp_dir(State),
+        ok = couch_set_view_util:delete_sort_files(TmpDir),
         {ok, maybe_apply_pending_transition(State4)};
     Error ->
         throw(Error)
@@ -615,6 +617,9 @@ handle_call(get_data_size, _From, State) ->
     DataSizeInfo = get_data_size_info(State),
     {reply, {ok, DataSizeInfo}, State, ?TIMEOUT};
 
+handle_call({start_compact, _CompactFun}, _From,
+            #state{updater_pid = UpPid, initial_build = true} = State) when is_pid(UpPid) ->
+    {reply, {error, initial_build}, State};
 handle_call({start_compact, CompactFun}, _From, #state{compactor_pid = nil} = State) ->
     #state{compactor_pid = Pid} = State2 = start_compactor(State, CompactFun),
     {reply, {ok, Pid}, State2};
@@ -692,7 +697,9 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
         NewUpdaterPid =
         if is_pid(UpdaterPid) ->
             CurSeqs = partition_seqs(State),
-            spawn_link(couch_set_view_updater, update, [self(), NewGroup2, CurSeqs, nil]);
+            spawn_link(couch_set_view_updater,
+                       update,
+                       [self(), NewGroup2, CurSeqs, nil, updater_tmp_dir(State)]);
         true ->
             nil
         end,
@@ -1158,7 +1165,8 @@ terminate(Reason, State) ->
     couch_util:shutdown_sync(State3#state.compactor_file),
     couch_util:shutdown_sync(State3#state.replica_group),
     catch couch_file:only_snapshot_reads((State3#state.group)#set_view_group.fd),
-    ok.
+    ok = couch_set_view_util:delete_sort_files(updater_tmp_dir(State)).
+
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
@@ -2374,6 +2382,18 @@ compact_group(#state{group = Group} = State) ->
 -spec stop_updater(#state{}) -> #state{}.
 stop_updater(#state{updater_pid = nil} = State) ->
     State;
+stop_updater(#state{updater_pid = Pid, initial_build = true} = State) when is_pid(Pid) ->
+    #state{group = #set_view_group{fd = Fd}} = State,
+    ?LOG_INFO("Stopping updater for set view `~s`, ~s group `~s` (doing initial index build)",
+        [?set_name(State), ?type(State), ?group_id(State)]),
+    couch_util:shutdown_sync(Pid),
+    ok = couch_file:truncate(Fd, 0),
+    ok = couch_set_view_util:delete_sort_files(updater_tmp_dir(State)),
+    State#state{
+        updater_pid = nil,
+        initial_build = false,
+        updater_state = not_running
+    };
 stop_updater(#state{updater_pid = Pid} = State) when is_pid(Pid) ->
     MRef = erlang:monitor(process, Pid),
     exit(Pid, shutdown),
@@ -2476,8 +2496,9 @@ do_start_updater(State, CurSeqs) ->
     false ->
         nil
     end,
+    TmpDir = updater_tmp_dir(State),
     Pid = spawn_link(couch_set_view_updater, update,
-                     [self(), Group, CurSeqs, IndexLogFilePath]),
+                     [self(), Group, CurSeqs, IndexLogFilePath, TmpDir]),
     State2#state{
         updater_pid = Pid,
         initial_build = couch_set_view_util:is_group_empty(Group),
@@ -3011,3 +3032,10 @@ demonitor_partitions([PartId | Rest], SetName, Dict) ->
         erlang:demonitor(Ref, [flush]),
         demonitor_partitions(Rest, SetName, dict:erase(PartId, Dict))
     end.
+
+
+updater_tmp_dir(#state{group = Group} = State) ->
+    #set_view_group{sig = Sig, type = Type} = Group,
+    Base = couch_set_view:set_index_dir(?root_dir(State), ?set_name(State)),
+    filename:join(
+        [Base, "tmp_" ++ couch_util:to_hex(Sig) ++ "_" ++ atom_to_list(Type)]).

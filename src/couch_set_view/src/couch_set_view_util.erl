@@ -22,6 +22,7 @@
 -export([compute_indexed_bitmap/1, cleanup_group/1]).
 -export([missing_changes_count/2]).
 -export([is_group_empty/1]).
+-export([new_sort_file_path/1, delete_sort_files/1]).
 
 -include("couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
@@ -324,3 +325,19 @@ is_group_empty(Group) ->
     Predicate = fun({_PartId, Seq}) -> Seq == 0 end,
     lists:all(Predicate, ?set_seqs(Group)) andalso
         lists:all(Predicate, ?set_unindexable_seqs(Group)).
+
+
+-spec new_sort_file_path(string()) -> string().
+new_sort_file_path(RootDir) ->
+    Base = ?b2l(couch_uuids:new()) ++ ".sort",
+    Path = filename:join([RootDir, Base]),
+    ok = filelib:ensure_dir(Path),
+    Path.
+
+
+-spec delete_sort_files(string()) -> 'ok'.
+delete_sort_files(RootDir) ->
+    WildCard = filename:join([RootDir, "*"]),
+    lists:foreach(
+        fun(F) -> _ = file:delete(F) end,
+        filelib:wildcard(WildCard)).
