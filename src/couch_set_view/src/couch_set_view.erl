@@ -822,7 +822,11 @@ map_view_merge_callback({row, Row}, #merge_acc{fold_fun = Fun, acc = Acc} = Macc
         {ok, Macc#merge_acc{acc = Acc2}};
     {stop, Acc2} ->
         {stop, Macc#merge_acc{acc = Acc2}}
-    end.
+    end;
+
+map_view_merge_callback({debug_info, _From, _Info}, Acc) ->
+    {ok, Acc}.
+
 
 
 reduce_view_merge_callback(start, Acc) ->
@@ -840,4 +844,7 @@ reduce_view_merge_callback({row, {Key, Red}}, #merge_acc{fold_fun = Fun, acc = A
         {ok, Macc#merge_acc{acc = Acc2}};
     {stop, Acc2} ->
         {stop, Macc#merge_acc{acc = Acc2}}
-    end.
+    end;
+
+reduce_view_merge_callback({debug_info, _From, _Info}, Acc) ->
+    {ok, Acc}.
