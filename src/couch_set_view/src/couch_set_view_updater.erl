@@ -447,7 +447,7 @@ do_batched_maps(#set_view_group{query_server = Qs} = Group, MapQueue, WriteQueue
         couch_work_queue:close(WriteQueue),
         couch_query_servers:stop_doc_map(Qs);
     {ok, Queue, QueueSize} ->
-        Acc2 = Acc ++ lists:flatten(Queue),
+        Acc2 = Acc ++ Queue,
         AccSize2 = AccSize + QueueSize,
         case (AccSize2 >= ?QUEUE_MAX_SIZE) orelse (length(Acc2) >= ?QUEUE_MAX_ITEMS) of
         true ->
