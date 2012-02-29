@@ -12,6 +12,7 @@ import unittest
 
 import operator
 import random
+import time
 
 HOST = "localhost:5984"
 SET_NAME_LOCAL = "test_suite_set_view_view_merge_local"
@@ -97,6 +98,7 @@ class TestViewMerge(unittest.TestCase):
         self.do_test_set_view_outdated_local(self._params_local, self._params_remote)
         self.do_test_query_args(self._params_local, self._params_remote)
         self.do_test_debug_info(self._params_local, self._params_remote)
+        self.do_test_replica_support()
 
 
     def set_spec(self, name, view, partitions):
@@ -471,3 +473,106 @@ class TestViewMerge(unittest.TestCase):
             self.assertTrue(type(info) == dict, "debug_info field is an object")
 
         self.assertFalse("partition" in result["rows"][0], "reduce row has no partition field")
+
+
+    def do_test_replica_support(self):
+        server = couchdb.Server(url = "http://" + HOST)
+        local_params = {
+            "host": HOST,
+            "ddoc": deepcopy(DDOC),
+            "nparts": NUM_PARTS,
+            "ndocs": 50000,
+            "setname": SET_NAME_LOCAL + "_2",
+            "server": server
+            }
+        remote_params = {
+            "host": HOST,
+            "ddoc": deepcopy(DDOC),
+            "nparts": NUM_PARTS,
+            "start_id": 50000,
+            "ndocs": 50000,
+            "setname": SET_NAME_REMOTE + "_2",
+            "server": server
+            }
+        # print "Creating databases"
+        common.create_dbs(local_params)
+        common.create_dbs(remote_params)
+        common.populate(local_params)
+        common.populate(remote_params)
+        # print "Databases created"
+
+        common.define_set_view(local_params, [0, 1], [], True)
+        common.define_set_view(remote_params, [2, 3], [], True)
+        common.add_replica_partitions(local_params, [2, 3])
+        common.add_replica_partitions(remote_params, [0, 1])
+
+        local_spec = self.set_spec(local_params["setname"], "mapview", [0, 1])
+        remote_spec = self.set_spec(remote_params["setname"], "mapview", [2, 3])
+        remote_merge = self.merge_spec(remote_params["host"], [], [remote_spec])
+
+        # print "Triggering view update"
+        full_spec = self.views_spec([remote_merge], [local_spec])
+        _, result = self.query(local_params["host"], full_spec, {"limit": "1", "stale": "false"})
+
+        info = common.get_set_view_info(local_params)
+        seconds = 0
+        while info["replica_group_info"]["stats"]["full_updates"] < 1:
+            time.sleep(3)
+            seconds += 3
+            if seconds > 900:
+                raise(Exception("timeout waiting for replica group full update"))
+            info = common.get_set_view_info(local_params)
+
+        info = common.get_set_view_info(remote_params)
+        seconds = 0
+        while info["replica_group_info"]["stats"]["full_updates"] < 1:
+            time.sleep(3)
+            seconds += 3
+            if seconds > 900:
+                raise(Exception("timeout waiting for replica group full update"))
+            info = common.get_set_view_info(remote_params)
+
+        local_spec = self.set_spec(local_params["setname"], "mapview", [0, 1])
+        remote_spec = self.set_spec(remote_params["setname"], "mapview", [2, 3])
+        remote_merge = self.merge_spec(remote_params["host"], [], [remote_spec])
+        full_spec = self.views_spec([remote_merge], [local_spec])
+        _, result = self.query(local_params["host"], full_spec, {"stale": "false"})
+        self.assertEqual(len(result["rows"]), 50000, "response has 50000 rows")
+
+        # print "Activating replica partitions"
+        common.set_partition_states(local_params, active = [2, 3])
+        common.set_partition_states(remote_params, active = [0, 1])
+
+        # print "Querying with ?debug=true"
+        local_spec = self.set_spec(local_params["setname"], "mapview", [0, 1, 2, 3])
+        remote_spec = self.set_spec(remote_params["setname"], "mapview", [0, 1, 2, 3])
+        remote_merge = self.merge_spec(remote_params["host"], [], [remote_spec])
+        full_spec = self.views_spec([remote_merge], [local_spec])
+        _, result = self.query(local_params["host"], full_spec, {"stale": "ok", "debug": "true"})
+
+        self.assertEqual(len(result["rows"]), 100000, "response has 100000 rows")
+        self.assertTrue("debug_info" in result, "result has debug info")
+        self.assertTrue("local" in result["debug_info"], "result have debug info for local node")
+        remote_node = "http://%s/_view_merge/" % remote_params["host"]
+        self.assertTrue(remote_node in result["debug_info"], "result have debug info for remote node")
+
+        next_key = 1
+        next_part = 0
+        i = 0
+        while next_key < 100000:
+            row = result["rows"][i]
+            self.assertEqual(row["key"], next_key, "correct row key at iteration %d" % (i + 1))
+            self.assertEqual(row["value"], str(next_key), "correct row value at iteration %d" % (i + 1))
+            self.assertEqual(row["partition"], next_part, "correct row partition at iteration %d" % (i + 1))
+            node = "local"
+            if next_key > 50000:
+                node = "http://%s/_view_merge/" % remote_params["host"]
+            self.assertEqual(row["node"], node, "correct row node at iteration %d" % (i + 1))
+            i += 1
+            next_key += 1
+            next_part = (next_part + 1) % 4
+
+        # print "Deleting databases"
+        common.create_dbs(local_params, True)
+        common.create_dbs(remote_params, True)
+
