@@ -239,7 +239,16 @@ update(Owner, Group, FileName, ActiveDbs, PassiveDbs, MaxSeqs, BlockedTime) ->
     end),
 
     DocLoader = spawn_link(fun() ->
-        load_changes(Owner, Parent, Group, MapQueue, Writer, ActiveDbs, PassiveDbs)
+        try
+            load_changes(Owner, Parent, Group, MapQueue, Writer, ActiveDbs, PassiveDbs)
+        catch _:Error ->
+            Stacktrace = erlang:get_stacktrace(),
+            ?LOG_ERROR("Set view `~s`, ~s group `~s`, doc loader error~n"
+                "error:      ~p~n"
+                "stacktrace: ~p~n",
+                [SetName, Type, DDocId, Error, Stacktrace]),
+            exit(Error)
+        end
     end),
 
     Result = wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime),
