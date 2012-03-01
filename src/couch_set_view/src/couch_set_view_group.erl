@@ -793,8 +793,9 @@ handle_info({'EXIT', Pid, {updater_finished, Result}}, #state{updater_pid = Pid}
             group = NewGroup,
             stats = inc_updates(State#state.stats, Result)
         },
-        State3 = maybe_start_cleaner(State2),
-        {noreply, State3, ?TIMEOUT}
+        State3 = notify_cleanup_waiters(State2),
+        State4 = maybe_start_cleaner(State3),
+        {noreply, State4, ?TIMEOUT}
     end;
 
 handle_info({'EXIT', Pid, {updater_error, Error}}, #state{updater_pid = Pid} = State) ->
@@ -1791,8 +1792,6 @@ partitions_still_in_cleanup([PartId | Rest], Group, AccStill, AccNot) ->
 % to mark partitions as active/passive when they're still in cleanup.
 notify_cleanup_waiters(#state{cleanup_waiters = []} = State) ->
     State;
-notify_cleanup_waiters(#state{group = Group} = State) when ?set_cbitmask(Group) =/= 0 ->
-    State;
 notify_cleanup_waiters(State) ->
     #state{group = Group, cleanup_waiters = [Waiter | RestWaiters]} = State,
     #cleanup_waiter{
@@ -1810,7 +1809,7 @@ notify_cleanup_waiters(State) ->
         ?LOG_INFO("Set view `~s`, ~s group `~s`, unblocking cleanup waiter ~p",
             [?set_name(State2), ?type(State), ?group_id(State2), element(1, From)]),
         gen_server:reply(From, ok),
-        State2#state{cleanup_waiters = RestWaiters};
+        notify_cleanup_waiters(State2#state{cleanup_waiters = RestWaiters});
     _ ->
         State
     end.
