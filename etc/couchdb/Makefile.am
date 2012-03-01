@@ -68,6 +68,7 @@ default_dev.ini: default.ini.tpl
 	    -e "s|%couchjs_command_name%|$(couchjs_dev_command_name)|g" \
 	    -e "s|%package_author_name%|$(package_author_name)|g" \
 	    -e "s|%version%|$(version)|g" \
+	    -e "s|%btreeimplementation%|erlang|g" \
 	< $< > $@
 
 # Noah said to not specify local.ini but it borks
