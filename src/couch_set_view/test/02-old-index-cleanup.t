@@ -181,8 +181,8 @@ get_group_sig() ->
 
 
 all_index_files() ->
-    IndexDir = couch_config:get("couchdb", "view_index_dir") ++
-        "/set_view_" ++ binary_to_list(test_set_name()) ++ "_design",
+    IndexDir = couch_set_view:set_index_dir(
+        couch_config:get("couchdb", "view_index_dir"), test_set_name()),
     filelib:fold_files(
         IndexDir, ".*\\.view$", false,
         fun(N, A) -> [filename:basename(N) | A] end, []).

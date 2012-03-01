@@ -945,7 +945,7 @@ hex_sig(GroupSig) ->
     couch_util:to_hex(?b2l(GroupSig)).
 
 design_root(RootDir, SetName) ->
-    RootDir ++ "/set_view_" ++ ?b2l(SetName) ++ "_design/".
+    couch_set_view:set_index_dir(RootDir, SetName).
 
 index_file_name(State) ->
     index_file_name(?root_dir(State), ?set_name(State), ?type(State), ?group_sig(State)).
@@ -953,14 +953,14 @@ index_file_name(State, compact) ->
     index_file_name(compact, ?root_dir(State), ?set_name(State), ?type(State), ?group_sig(State)).
 
 index_file_name(RootDir, SetName, main, GroupSig) ->
-    design_root(RootDir, SetName) ++ "main_" ++ hex_sig(GroupSig) ++".view";
+    filename:join([design_root(RootDir, SetName), "main_" ++ hex_sig(GroupSig) ++".view"]);
 index_file_name(RootDir, SetName, replica, GroupSig) ->
-    design_root(RootDir, SetName) ++ "replica_" ++ hex_sig(GroupSig) ++".view".
+    filename:join([design_root(RootDir, SetName), "replica_" ++ hex_sig(GroupSig) ++".view"]).
 
 index_file_name(compact, RootDir, SetName, main, GroupSig) ->
-    design_root(RootDir, SetName) ++ "main_" ++ hex_sig(GroupSig) ++".compact.view";
+    filename:join([design_root(RootDir, SetName), "main_" ++ hex_sig(GroupSig) ++".compact.view"]);
 index_file_name(compact, RootDir, SetName, replica, GroupSig) ->
-    design_root(RootDir, SetName) ++ "replica_" ++ hex_sig(GroupSig) ++".compact.view".
+    filename:join([design_root(RootDir, SetName), "replica_" ++ hex_sig(GroupSig) ++".compact.view"]).
 
 
 open_index_file(RootDir, SetName, Type, GroupSig) ->

@@ -18,7 +18,7 @@
 
 -export([get_map_view/4, get_map_view/5, get_reduce_view/4, get_reduce_view/5]).
 -export([get_group/3, get_group_pid/2, release_group/1, define_group/3]).
--export([get_group_info/2, cleanup_index_files/1]).
+-export([get_group_info/2, cleanup_index_files/1, set_index_dir/2]).
 
 -export([is_view_defined/2]).
 -export([set_partition_states/5, add_replica_partitions/3, remove_replica_partitions/3]).
@@ -256,7 +256,7 @@ cleanup_index_files(SetName) ->
 list_index_files(SetName) ->
     % call server to fetch the index files
     RootDir = couch_config:get("couchdb", "view_index_dir"),
-    filelib:wildcard(RootDir ++ "/set_view_" ++ ?b2l(SetName) ++ "_design/*").
+    filelib:wildcard(filename:join([set_index_dir(RootDir, SetName), "*"])).
 
 
 get_row_count(#set_view{btree=Bt}) ->
@@ -659,7 +659,7 @@ delete_index_dir(RootDir, SetName) ->
     nuke_dir(RootDir, DirName).
 
 set_index_dir(RootDir, SetName) ->
-    RootDir ++ "/set_view_" ++ ?b2l(SetName) ++ "_design/".
+    filename:join([RootDir, "@indexes", ?b2l(SetName)]).
 
 nuke_dir(RootDelDir, Dir) ->
     case file:list_dir(Dir) of
