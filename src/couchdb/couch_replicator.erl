@@ -564,20 +564,37 @@ init_state(Rep) ->
     State#rep_state{timer = start_timer(State)}.
 
 
+get_checkpoint_db_doc_pair(#db{name = DbName0} = Db0, LogId0) ->
+    {DbName, LogId} = get_checkpoint_db_doc_pair(DbName0, LogId0),
+    {Db0#db{name = DbName}, LogId};
+
+get_checkpoint_db_doc_pair(#httpdb{url = DbUrl0} = Db0, LogId0) ->
+    [Scheme, Host, DbName0] = [couch_httpd:unquote(Token) ||
+                                Token <- string:tokens(DbUrl0, "/")],
+    {DbName, LogId} = get_checkpoint_db_doc_pair(?l2b(DbName0), LogId0),
+    DbUrl = Scheme ++ "//" ++ Host ++ "/" ++ couch_httpd:quote(DbName) ++ "/",
+    {Db0#httpdb{url = DbUrl}, LogId};
+
+get_checkpoint_db_doc_pair(DbName0, LogId0) ->
+    {Bucket, VBucket} = couch_replicator_utils:split_dbname(DbName0),
+    DbName = iolist_to_binary([Bucket, $/, <<"master">>]),
+    LogId = ?l2b([?LOCAL_DOC_PREFIX, integer_to_list(VBucket), "-", LogId0]),
+    {DbName, LogId}.
+
 find_replication_logs(DbList, #rep{id = {BaseId, _}} = Rep) ->
-    LogId = ?l2b(?LOCAL_DOC_PREFIX ++ BaseId),
-    fold_replication_logs(DbList, ?REP_ID_VERSION, LogId, LogId, Rep, []).
+    fold_replication_logs(DbList, ?REP_ID_VERSION, BaseId, BaseId, Rep, []).
 
 
 fold_replication_logs([], _Vsn, _LogId, _NewId, _Rep, Acc) ->
     lists:reverse(Acc);
 
-fold_replication_logs([Db | Rest] = Dbs, Vsn, LogId, NewId, Rep, Acc) ->
+fold_replication_logs([Db0 | Rest] = Dbs, Vsn, LogId0, NewId, Rep, Acc) ->
+    {Db, LogId} = get_checkpoint_db_doc_pair(Db0, LogId0),
     case couch_api_wrap:open_doc(Db, LogId, [ejson_body]) of
     {error, <<"not_found">>} when Vsn > 1 ->
         OldRepId = couch_replicator_utils:replication_id(Rep, Vsn - 1),
         fold_replication_logs(Dbs, Vsn - 1,
-            ?l2b(?LOCAL_DOC_PREFIX ++ OldRepId), NewId, Rep, Acc);
+            ?l2b(OldRepId), NewId, Rep, Acc);
     {error, <<"not_found">>} ->
         fold_replication_logs(
             Rest, ?REP_ID_VERSION, NewId, NewId, Rep, [#doc{id = NewId, body = {[]}} | Acc]);
@@ -666,7 +683,7 @@ changes_manager_loop_open(Parent, ChangesQueue, BatchSize, Ts) ->
 
 
 checkpoint_interval(_State) ->
-    5000.
+    60000.
 
 do_checkpoint(#rep_state{current_through_seq=Seq, committed_seq=Seq} = State) ->
     SourceCurSeq = source_cur_seq(State),
@@ -782,9 +799,15 @@ update_checkpoint(Db, Doc, DbType) ->
                 " checkpoint document: ", (to_binary(Reason))/binary>>})
     end.
 
-update_checkpoint(Db, #doc{id = LogId, body = LogBody, rev = Rev} = Doc) ->
+update_checkpoint(Db0, #doc{id = LogId0, body = LogBody, rev = Rev} = Doc) ->
+    {Db, LogId} = get_checkpoint_db_doc_pair(Db0, LogId0),
     try
-        ok = couch_api_wrap:update_doc(Db, Doc, [delay_commit])
+        case couch_api_wrap:update_doc(Db, Doc#doc{id = LogId}, [delay_commit]) of
+        ok ->
+            Rev;
+        {error, Reason} ->
+            throw({checkpoint_commit_failure, Reason})
+        end
     catch throw:conflict ->
         case (catch couch_api_wrap:open_doc(Db, LogId, [ejson_body])) of
         {ok, #doc{body = LogBody, rev = Rev}} ->

@@ -158,8 +158,21 @@ open_doc(Db, Id, Options, Fun, Acc) ->
     Fun(Result, Acc).
 
 
-open_doc(#httpdb{}, _Id, _Options) ->
-    {error, <<"not_found">>};
+open_doc(#httpdb{} = Db, Id, Options) ->
+    send_req(
+        Db,
+        [{path, encode_doc_id(Id)}],
+        fun(200, _, Body) ->
+            BinDoc = couch_doc:from_json_obj(Body),
+            case lists:member(ejson_body, Options) of
+            true ->
+                {ok, couch_doc:with_ejson_body(BinDoc)};
+            false ->
+                {ok, BinDoc}
+            end;
+        (_, _, {Props}) ->
+            {error, get_value(<<"error">>, Props)}
+        end);
 open_doc(Db, Id, Options) ->
     case couch_db:open_doc(Db, Id, Options) of
     {ok, _} = Ok ->
@@ -177,8 +190,8 @@ couch_doc_open(Db, DocId, Options) ->
         throw(Error)
     end.
 
-update_doc(_Db, #doc{id = <<"_local/", _/binary>>}, _Options) ->
-    ok;
+update_doc(#httpdb{} = Db, #doc{id = <<"_local/", _/binary>>} = Doc, Options) ->
+    update_docs(Db, [Doc], Options, interactive_edit);
 update_doc(Db, Doc, Options) ->
     couch_db:update_doc(Db, Doc, Options).
 

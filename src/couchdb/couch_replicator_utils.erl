@@ -17,6 +17,7 @@
 -export([start_db_compaction_notifier/2, stop_db_compaction_notifier/1]).
 -export([replication_id/2]).
 -export([sum_stats/2]).
+-export([split_dbname/1]).
 
 -include("couch_db.hrl").
 -include("couch_api_wrap.hrl").
@@ -364,3 +365,13 @@ sum_stats(#rep_stats{} = S1, #rep_stats{} = S2) ->
         doc_write_failures =
             S1#rep_stats.doc_write_failures + S2#rep_stats.doc_write_failures
     }.
+
+split_dbname(DbName) ->
+    DbNameStr = binary_to_list(DbName),
+    Tokens = string:tokens(DbNameStr, [$/]),
+    build_info(Tokens, []).
+
+build_info([VBucketStr], R) ->
+    {lists:append(lists:reverse(R)), list_to_integer(VBucketStr)};
+build_info([H|T], R)->
+    build_info(T, [H|R]).
