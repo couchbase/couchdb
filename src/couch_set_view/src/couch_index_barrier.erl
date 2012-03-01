@@ -10,11 +10,11 @@
 % License for the specific language governing permissions and limitations under
 % the License.
 
--module(couch_indexer_manager).
+-module(couch_index_barrier).
 -behaviour(gen_server).
 
 % public API
--export([start_link/0, enter/0, enter/1, leave/0, leave/1]).
+-export([start_link/2, enter/1, enter/2, leave/1, leave/2]).
 
 % gen_server API
 -export([init/1, handle_call/3, handle_info/2, handle_cast/2]).
@@ -35,30 +35,31 @@
 }).
 
 
-start_link() ->
-    gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
+start_link(Name, LimitParamName) ->
+    gen_server:start_link({local, Name}, ?MODULE, LimitParamName, []).
 
-enter() ->
-    enter(self()).
+enter(Barrier) ->
+    enter(Barrier, self()).
 
-enter(Pid) ->
-    ok = gen_server:call(?MODULE, {enter, Pid}, infinity).
+enter(Barrier, Pid) ->
+    ok = gen_server:call(Barrier, {enter, Pid}, infinity).
 
-leave() ->
-    leave(self()).
+leave(Barrier) ->
+    leave(Barrier, self()).
 
-leave(Pid) ->
-    ok = gen_server:cast(?MODULE, {leave, Pid}).
+leave(Barrier, Pid) ->
+    ok = gen_server:cast(Barrier, {leave, Pid}).
 
 
-init([]) ->
+init(LimitParamName) ->
     State = #state{
         limit = list_to_integer(
-            couch_config:get("couchdb", "max_parallel_indexers", "4"))
+            couch_config:get("couchdb", LimitParamName, "4"))
     },
+    Server = self(),
     ok = couch_config:register(
-        fun("couchdb", "max_parallel_indexers", Limit) ->
-            ok = gen_server:cast(?MODULE, {limit, list_to_integer(Limit)})
+        fun("couchdb", ParamName, Limit) when ParamName =:= LimitParamName ->
+            ok = gen_server:cast(Server, {limit, list_to_integer(Limit)})
         end),
     {ok, State}.
 

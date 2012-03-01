@@ -65,7 +65,12 @@ update(Owner, Group, FileName) ->
     BeforeEnterTs = now(),
     Parent = self(),
     Pid = spawn_link(fun() ->
-        ok = couch_indexer_manager:enter(Parent),
+        case Type of
+        main ->
+            ok = couch_index_barrier:enter(couch_main_index_barrier, Parent);
+        replica ->
+            ok = couch_index_barrier:enter(couch_replica_index_barrier, Parent)
+        end,
         exit({done, (timer:now_diff(now(), BeforeEnterTs) / 1000000)})
     end),
 
@@ -238,7 +243,12 @@ update(Owner, Group, FileName, ActiveDbs, PassiveDbs, MaxSeqs, BlockedTime) ->
     end),
 
     Result = wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime),
-    ok = couch_indexer_manager:leave(),
+    case Type of
+    main ->
+        ok = couch_index_barrier:leave(couch_main_index_barrier);
+    replica ->
+        ok = couch_index_barrier:leave(couch_replica_index_barrier)
+    end,
     exit(Result).
 
 

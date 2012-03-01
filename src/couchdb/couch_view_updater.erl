@@ -31,7 +31,7 @@ update(Owner, Group, DbName) when is_binary(DbName) ->
     end;
 
 update(Owner, Group, #db{name = DbName} = Db) ->
-    ok = couch_indexer_manager:enter(),
+    ok = couch_index_barrier:enter(couch_main_index_barrier),
     #group{
         name = GroupName,
         current_seq = Seq,
@@ -95,7 +95,7 @@ update(Owner, Group, #db{name = DbName} = Db) ->
             ok, []),
     couch_work_queue:close(MapQueue),
     receive {new_group, NewGroup} ->
-        ok = couch_indexer_manager:leave(),
+        ok = couch_index_barrier:leave(couch_main_index_barrier),
         exit({new_group,
                 NewGroup#group{current_seq=couch_db:get_update_seq(Db)}})
     end.
