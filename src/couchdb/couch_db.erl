@@ -70,7 +70,13 @@ open_db_file(Filepath, Options) ->
         case MatchingFiles2 of
         [] ->
             [file:delete(F) || F <- CompactFiles],
-            {not_found, no_db_file};
+            case lists:member(create, Options) of
+            true ->
+                % we had some compaction files hanging around, now retry
+                open_db_file(Filepath, Options);
+            false ->
+                {not_found, no_db_file}
+            end;
         [ _ | _ ] ->
             % parse out the trailing #s and sort highest to lowest
             [NewestFile | RestOld] = lists:sort(fun(A,B) ->
