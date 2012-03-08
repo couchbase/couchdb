@@ -71,6 +71,10 @@ src/ejson/ejson.app
 src/ejson/.deps/
 src/ejson/.libs/
 src/ejson/priv
+src/mapreduce/mapreduce.app
+src/mapreduce/.deps/
+src/mapreduce/.libs/
+src/mapreduce/priv
 src/mochiweb/mochiweb.app
 src/snappy/.deps/
 src/snappy/.libs/
@@ -81,6 +85,7 @@ src/snappy/*/stamp-h2
 src/snappy/*/.deps/
 src/couch_set_view/ebin/
 src/couch_set_view/test/run
+src/mapreduce/test/run
 test/local.ini
 test/etap/.deps/
 test/etap/run

@@ -16,6 +16,7 @@ SUBDIRS = \
     erlang-oauth \
     etap \
     ibrowse \
+    mapreduce \
     mochiweb \
     snappy \
     couch_set_view

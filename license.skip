@@ -88,6 +88,7 @@
 ^src/ejson/*
 ^src/etap/*
 ^src/ibrowse/*
+^src/mapreduce/*
 ^src/mochiweb/*
 ^src/snappy/*
 ^src/couch_set_view/Makefile
