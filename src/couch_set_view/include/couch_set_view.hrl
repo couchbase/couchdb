@@ -127,7 +127,6 @@
     views,
     lib,
     id_btree = nil,
-    query_server = nil,
     waiting_delayed_commit = nil,
     ref_counter = nil,
     index_header = nil,
@@ -148,7 +147,8 @@
     def,
     btree = nil,
     reduce_funs = [],
-    options = []
+    options = [],
+    ref
 }).
 
 -record(set_view_updater_result, {

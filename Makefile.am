@@ -153,7 +153,7 @@ COUCHDB_PLT ?= couchdb.plt
 
 $(COUCHDB_PLT):
 	$(MAKE) all
-	dialyzer --output_plt $(COUCHDB_PLT) --build_plt -pa src/couchdb -pa src/couch_set_view --apps compiler crypto erts inets kernel os_mon sasl ssl stdlib xmerl syntax_tools public_key snmp tools hipe runtime_tools mnesia -c src/erlang-oauth src/etap src/ibrowse src/mochiweb src/snappy
+	dialyzer --output_plt $(COUCHDB_PLT) --build_plt -pa src/couchdb -pa src/couch_set_view -pa src/mapreduce --apps compiler crypto erts inets kernel os_mon sasl ssl stdlib xmerl syntax_tools public_key snmp tools hipe runtime_tools mnesia -c src/erlang-oauth src/etap src/ibrowse src/mochiweb src/snappy
 
 .PHONY: rebuild_plt
 rebuild_plt:
@@ -161,4 +161,4 @@ rebuild_plt:
 	$(MAKE) $(COUCHDB_PLT)
 
 dialyzer: all $(COUCHDB_PLT)
-	dialyzer --plt $(COUCHDB_PLT)  -pa src/couchdb -pa src/couch_set_view/ebin -c src/couchdb -c src/couch_set_view/ebin
+	dialyzer --plt $(COUCHDB_PLT)  -pa src/couchdb -pa src/couch_set_view/ebin -pa src/mapreduce -c src/couchdb -c src/couch_set_view/ebin

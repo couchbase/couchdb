@@ -18,6 +18,7 @@
 
 % Test motivated by MB-4518.
 
+-define(JSON_ENCODE(V), ejson:encode(V)). % couch_db.hrl
 -define(MAX_WAIT_TIME, 900 * 1000).
 
 % from couch_db.hrl
@@ -380,7 +381,7 @@ verify_btrees_1(Group) ->
     {ok, _, View0BtreeFoldResult} = couch_btree:fold(
         View0Btree,
         fun(Kv, _, Acc) ->
-            ExpectedKv = {{doc_id(Acc), doc_id(Acc)}, {Acc rem 64, Acc}},
+            ExpectedKv = {{doc_id(Acc), doc_id(Acc)}, {Acc rem 64, {json, ?JSON_ENCODE(Acc)}}},
             case ExpectedKv =:= Kv of
             true ->
                 ok;

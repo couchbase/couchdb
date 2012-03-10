@@ -19,6 +19,7 @@
 % Like 08-deletes-cleanup.t but with several views in the design document.
 % This triggers a different codepath in the indexer.
 
+-define(JSON_ENCODE(V), ejson:encode(V)). % couch_db.hrl
 -define(MAX_WAIT_TIME, 900 * 1000).
 
 % from couch_db.hrl
@@ -495,15 +496,19 @@ verify_btrees_1(Group) ->
         {ok, {initial_num_docs(), ExpectedBitmask}},
         "Id Btree has the right reduce value"),
     ExpectedView0Reds = [lists:sum(lists:seq(0, initial_num_docs() - 1)), initial_num_docs()],
+    couch_set_view_mapreduce:start_reduce_context(View0),
     etap:is(
         couch_btree:full_reduce(View0Btree),
         {ok, {initial_num_docs(), ExpectedView0Reds, ExpectedBitmask}},
         "View0 Btree has the right reduce value"),
+    couch_set_view_mapreduce:end_reduce_context(View0),
     ExpectedView2Reds = [lists:sum(lists:seq(0, initial_num_docs() - 1)) * 4],
+    couch_set_view_mapreduce:start_reduce_context(View2),
     etap:is(
         couch_btree:full_reduce(View2Btree),
         {ok, {initial_num_docs(), ExpectedView2Reds, ExpectedBitmask}},
         "View2 Btree has the right reduce value"),
+    couch_set_view_mapreduce:end_reduce_context(View2),
 
     etap:is(View0UpdateSeqs, DbSeqs, "View0 has right update seqs list"),
     etap:is(View2UpdateSeqs, DbSeqs, "View2 has right update seqs list"),
@@ -534,7 +539,7 @@ verify_btrees_1(Group) ->
     {ok, _, View0BtreeFoldResult} = couch_btree:fold(
         View0Btree,
         fun(Kv, _, Acc) ->
-            ExpectedKv = {{doc_id(Acc), doc_id(Acc)}, {Acc rem 64, Acc}},
+            ExpectedKv = {{doc_id(Acc), doc_id(Acc)}, {Acc rem 64, {json, ?JSON_ENCODE(Acc)}}},
             case ExpectedKv =:= Kv of
             true ->
                 ok;
@@ -550,7 +555,7 @@ verify_btrees_1(Group) ->
     {ok, _, View2BtreeFoldResult} = couch_btree:fold(
         View2Btree,
         fun(Kv, _, Acc) ->
-            ExpectedKv = {{doc_id(Acc), doc_id(Acc)}, {Acc rem 64, Acc * 2}},
+            ExpectedKv = {{doc_id(Acc), doc_id(Acc)}, {Acc rem 64, {json, ?JSON_ENCODE(Acc * 2)}}},
             case ExpectedKv =:= Kv of
             true ->
                 ok;
@@ -596,14 +601,18 @@ verify_btrees_2(Group) ->
         couch_btree:full_reduce(IdBtree),
         {ok, {0, 0}},
         "Id Btree has the right reduce value"),
+    couch_set_view_mapreduce:start_reduce_context(View0),
     etap:is(
         couch_btree:full_reduce(View0Btree),
         {ok, {0, [0, 0], 0}},
         "View0 Btree has the right reduce value"),
+    couch_set_view_mapreduce:end_reduce_context(View0),
+    couch_set_view_mapreduce:start_reduce_context(View2),
     etap:is(
         couch_btree:full_reduce(View2Btree),
         {ok, {0, [0], 0}},
         "View2 Btree has the right reduce value"),
+    couch_set_view_mapreduce:end_reduce_context(View2),
 
     etap:is(View0UpdateSeqs, DbSeqs, "View0 has right update seqs list"),
     etap:is(View2UpdateSeqs, DbSeqs, "View2 has right update seqs list"),
@@ -670,14 +679,18 @@ verify_btrees_3(Group) ->
         couch_btree:full_reduce(IdBtree),
         {ok, {0, 0}},
         "Id Btree has the right reduce value"),
+    couch_set_view_mapreduce:start_reduce_context(View0),
     etap:is(
         couch_btree:full_reduce(View0Btree),
         {ok, {0, [0, 0], 0}},
         "View0 Btree has the right reduce value"),
+    couch_set_view_mapreduce:end_reduce_context(View0),
+    couch_set_view_mapreduce:start_reduce_context(View2),
     etap:is(
         couch_btree:full_reduce(View2Btree),
         {ok, {0, [0], 0}},
         "View2 Btree has the right reduce value"),
+    couch_set_view_mapreduce:end_reduce_context(View2),
 
     etap:is(View0UpdateSeqs, DbSeqs, "View0 has right update seqs list"),
     etap:is(View2UpdateSeqs, DbSeqs, "View2 has right update seqs list"),

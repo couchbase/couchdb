@@ -54,7 +54,9 @@ def main():
     suite.addTest(unittest.makeSuite(TestFilterPartitions))
     suite.addTest(unittest.makeSuite(TestViewMerge))
     suite.addTest(unittest.makeSuite(TestBurstStateUpdates))
-    suite.addTest(unittest.makeSuite(TestErlangViews))
+    # Only JavaScript is supported at the moment (and actually faster
+    # than erlang views).
+    # suite.addTest(unittest.makeSuite(TestErlangViews))
     suite.addTest(unittest.makeSuite(TestReplicaIndex))
 
     start_couch()

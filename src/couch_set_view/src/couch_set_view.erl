@@ -318,8 +318,9 @@ fold_reduce(Group, View, FoldFun, FoldAcc, KeyGroupFun, #view_query_args{keys = 
     {ok, FinalAcc}.
 
 
-do_fold_reduce(Group, View, Fun, Acc, Options0) ->
-    {reduce, NthRed, Lang, #set_view{btree = Bt, reduce_funs = RedFuns}} = View,
+do_fold_reduce(Group, ViewInfo, Fun, Acc, Options0) ->
+    {reduce, NthRed, _Lang, View} = ViewInfo,
+    #set_view{btree = Bt, reduce_funs = RedFuns} = View,
     Options = case (?set_pbitmask(Group) bor ?set_cbitmask(Group)) of
     0 ->
         Options0;
@@ -341,27 +342,28 @@ do_fold_reduce(Group, View, Fun, Acc, Options0) ->
     end,
     PreResultPadding = lists:duplicate(NthRed - 1, []),
     PostResultPadding = lists:duplicate(length(RedFuns) - NthRed, []),
-    {_Name, FunSrc} = lists:nth(NthRed,RedFuns),
+    couch_set_view_mapreduce:start_reduce_context(View),
     ReduceFun =
         fun(reduce, KVs) ->
-            ExpandedKVs = couch_set_view_util:expand_dups(KVs, []),
-            {ok, Reduced} = couch_query_servers:reduce(
-                Lang,
-                [FunSrc],
-                couch_set_view_util:detuple_kvs(ExpandedKVs, [])),
+            KVs2 = couch_set_view_util:expand_dups(KVs, []),
+            {ok, Reduced} = couch_set_view_mapreduce:reduce(View, NthRed, KVs2),
             {0, PreResultPadding ++ Reduced ++ PostResultPadding, 0};
         (rereduce, Reds) ->
             UserReds = lists:map(
                 fun({_, UserRedsList, _}) -> [lists:nth(NthRed, UserRedsList)] end,
                 Reds),
-            {ok, Reduced} = couch_query_servers:rereduce(Lang, [FunSrc], UserReds),
+            {ok, Reduced} = couch_set_view_mapreduce:rereduce(View, NthRed, UserReds),
             {0, PreResultPadding ++ Reduced ++ PostResultPadding, 0}
         end,
     WrapperFun = fun({GroupedKey, _}, PartialReds, Acc0) ->
             {_, Reds, _} = couch_btree:final_reduce(ReduceFun, PartialReds),
             Fun(GroupedKey, lists:nth(NthRed, Reds), Acc0)
         end,
-    couch_btree:fold_reduce(Bt, WrapperFun, Acc, Options).
+    try
+        couch_btree:fold_reduce(Bt, WrapperFun, Acc, Options)
+    after
+        couch_set_view_mapreduce:end_reduce_context(View)
+    end.
 
 
 get_key_pos(_Key, [], _N) ->

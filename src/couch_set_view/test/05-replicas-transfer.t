@@ -14,6 +14,7 @@
 % License for the specific language governing permissions and limitations under
 % the License.
 
+-define(JSON_ENCODE(V), ejson:encode(V)). % couch_db.hrl
 -define(MAX_WAIT_TIME, 600 * 1000).
 
 -include_lib("couch_set_view/include/couch_set_view.hrl").
@@ -670,7 +671,10 @@ verify_main_group_btrees_1(Group) ->
         View1Btree,
         fun(Kv, _, {NextId, I}) ->
             PartId = NextId rem 64,
-            ExpectedKv = {{doc_id(NextId), doc_id(NextId)}, {PartId, NextId}},
+            ExpectedKv = {
+                {doc_id(NextId), doc_id(NextId)},
+                {PartId, {json, ?JSON_ENCODE(NextId)}}
+            },
             case ExpectedKv =:= Kv of
             true ->
                 ok;
@@ -693,7 +697,10 @@ verify_main_group_btrees_1(Group) ->
         View2Btree,
         fun(Kv, _, {NextId, I}) ->
             PartId = NextId rem 64,
-            ExpectedKv = {{doc_id(NextId), doc_id(NextId)}, {PartId, NextId * 2}},
+            ExpectedKv = {
+                {doc_id(NextId), doc_id(NextId)},
+                {PartId, {json, ?JSON_ENCODE(NextId * 2)}}
+            },
             case ExpectedKv =:= Kv of
             true ->
                 ok;
@@ -882,7 +889,10 @@ verify_replica_group_btrees_2(MainGroup) ->
         View1Btree,
         fun(Kv, _, {NextId, I}) ->
             PartId = NextId rem 64,
-            ExpectedKv = {{doc_id(NextId), doc_id(NextId)}, {PartId, NextId}},
+            ExpectedKv = {
+                {doc_id(NextId), doc_id(NextId)},
+                {PartId, {json, ?JSON_ENCODE(NextId)}}
+            },
             case ExpectedKv =:= Kv of
             true ->
                 ok;
@@ -905,7 +915,10 @@ verify_replica_group_btrees_2(MainGroup) ->
         View2Btree,
         fun(Kv, _, {NextId, I}) ->
             PartId = NextId rem 64,
-            ExpectedKv = {{doc_id(NextId), doc_id(NextId)}, {PartId, NextId * 2}},
+            ExpectedKv = {
+                {doc_id(NextId), doc_id(NextId)},
+                {PartId, {json, ?JSON_ENCODE(NextId * 2)}}
+            },
             case ExpectedKv =:= Kv of
             true ->
                 ok;
@@ -999,7 +1012,7 @@ verify_main_group_btrees_3(Group) ->
         View1Btree,
         fun(Kv, _, I) ->
             PartId = I rem 64,
-            ExpectedKv = {{doc_id(I), doc_id(I)}, {PartId, I}},
+            ExpectedKv = {{doc_id(I), doc_id(I)}, {PartId, {json, ?JSON_ENCODE(I)}}},
             case ExpectedKv =:= Kv of
             true ->
                 ok;
@@ -1017,7 +1030,7 @@ verify_main_group_btrees_3(Group) ->
         View2Btree,
         fun(Kv, _, I) ->
             PartId = I rem 64,
-            ExpectedKv = {{doc_id(I), doc_id(I)}, {PartId, I * 2}},
+            ExpectedKv = {{doc_id(I), doc_id(I)}, {PartId, {json, ?JSON_ENCODE(I * 2)}}},
             case ExpectedKv =:= Kv of
             true ->
                 ok;

@@ -171,10 +171,12 @@ compact_view(Fd, View, #set_view{btree = ViewBtree} = EmptyView, FilterFun, Acc0
         {Item, update_task(Acc, 1)}
     end,
 
-    % Copy each view btree.
+    couch_set_view_mapreduce:start_reduce_context(View),
     {ok, NewBtreeRoot, Acc2} = couch_btree_copy:copy(
         View#set_view.btree, Fd,
         [{before_kv_write, {BeforeKVWriteFun, Acc0}}, {filter, FilterFun}]),
+    couch_set_view_mapreduce:end_reduce_context(View),
+
     ViewBtree2 = ViewBtree#btree{root = NewBtreeRoot},
     NewView = EmptyView#set_view{
         btree = ViewBtree2,
@@ -198,8 +200,10 @@ update_task(#acc{changes = Changes, total_changes = Total} = Acc, ChangesInc) ->
 total_kv_count(#set_view_group{id_btree = IdBtree, views = Views}) ->
     {ok, {IdCount, _}} = couch_btree:full_reduce(IdBtree),
     lists:foldl(
-        fun(#set_view{btree = Bt}, Acc) ->
+        fun(#set_view{btree = Bt} = View, Acc) ->
+            couch_set_view_mapreduce:start_reduce_context(View),
             {ok, {Count, _, _}} = couch_btree:full_reduce(Bt),
+            couch_set_view_mapreduce:end_reduce_context(View),
             Acc + Count
         end,
         IdCount, Views).

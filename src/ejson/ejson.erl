@@ -66,6 +66,8 @@ erl_decode(IoList) ->
     end.
 
 
+nif_encode({json, RawJson}) ->
+    RawJson;
 nif_encode(EJson) ->
     RevList = encode_rev(EJson),
     final_encode(lists:reverse(lists:flatten([RevList]))).

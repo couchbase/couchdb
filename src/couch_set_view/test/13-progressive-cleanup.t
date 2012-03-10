@@ -16,6 +16,7 @@
 
 -include_lib("couch_set_view/include/couch_set_view.hrl").
 
+-define(JSON_ENCODE(V), ejson:encode(V)). % couch_db.hrl
 -define(MAX_WAIT_TIME, 900 * 1000).
 
 test_set_name() -> <<"couch_test_set_index_cleanups">>.
@@ -345,7 +346,7 @@ verify_btrees(ActiveParts, ExpectedView2Reduction) ->
         fun(Kv, _, {NextVal, I}) ->
             PartId = NextVal rem num_set_partitions(),
             DocId = doc_id(NextVal),
-            ExpectedKv = {{DocId, DocId}, {PartId, NextVal}},
+            ExpectedKv = {{DocId, DocId}, {PartId, {json, ?JSON_ENCODE(NextVal)}}},
             case ExpectedKv =:= Kv of
             true ->
                 ok;
@@ -364,7 +365,7 @@ verify_btrees(ActiveParts, ExpectedView2Reduction) ->
         fun(Kv, _, {NextVal, I}) ->
             PartId = NextVal rem num_set_partitions(),
             DocId = doc_id(NextVal),
-            ExpectedKv = {{DocId, DocId}, {PartId, NextVal * 3}},
+            ExpectedKv = {{DocId, DocId}, {PartId, {json, ?JSON_ENCODE(NextVal * 3)}}},
             case ExpectedKv =:= Kv of
             true ->
                 ok;

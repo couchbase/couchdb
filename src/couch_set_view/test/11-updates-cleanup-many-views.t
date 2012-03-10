@@ -494,7 +494,7 @@ verify_btrees_1(Group) ->
         View0Btree,
         fun(Kv, _, Acc) ->
             PartId = Acc rem 64,
-            ExpectedKv = {{doc_id(Acc), doc_id(Acc)}, {PartId, 1}},
+            ExpectedKv = {{doc_id(Acc), doc_id(Acc)}, {PartId, {json, <<"1">>}}},
             case ExpectedKv =:= Kv of
             true ->
                 ok;
@@ -511,7 +511,7 @@ verify_btrees_1(Group) ->
         View2Btree,
         fun(Kv, _, Acc) ->
             PartId = Acc rem 64,
-            ExpectedKv = {{doc_id(Acc), doc_id(Acc)}, {PartId, 2}},
+            ExpectedKv = {{doc_id(Acc), doc_id(Acc)}, {PartId, {json, <<"2">>}}},
             case ExpectedKv =:= Kv of
             true ->
                 ok;
@@ -604,7 +604,7 @@ verify_btrees_2(Group) ->
         View0Btree,
         fun(Kv, _, {NextId, I}) ->
             PartId = NextId rem 64,
-            ExpectedKv = {{doc_id(NextId), doc_id(NextId)}, {PartId, 2}},
+            ExpectedKv = {{doc_id(NextId), doc_id(NextId)}, {PartId, {json, <<"2">>}}},
             case ExpectedKv =:= Kv of
             true ->
                 ok;
@@ -626,7 +626,7 @@ verify_btrees_2(Group) ->
         View2Btree,
         fun(Kv, _, {NextId, I}) ->
             PartId = NextId rem 64,
-            ExpectedKv = {{doc_id(NextId), doc_id(NextId)}, {PartId, 4}},
+            ExpectedKv = {{doc_id(NextId), doc_id(NextId)}, {PartId, {json, <<"4">>}}},
             case ExpectedKv =:= Kv of
             true ->
                 ok;
@@ -719,7 +719,7 @@ verify_btrees_3(Group) ->
         View0Btree,
         fun(Kv, _, Acc) ->
             PartId = Acc rem 64,
-            ExpectedKv = {{doc_id(Acc), doc_id(Acc)}, {PartId, 2}},
+            ExpectedKv = {{doc_id(Acc), doc_id(Acc)}, {PartId, {json, <<"2">>}}},
             case ExpectedKv =:= Kv of
             true ->
                 ok;
@@ -736,7 +736,7 @@ verify_btrees_3(Group) ->
         View2Btree,
         fun(Kv, _, Acc) ->
             PartId = Acc rem 64,
-            ExpectedKv = {{doc_id(Acc), doc_id(Acc)}, {PartId, 4}},
+            ExpectedKv = {{doc_id(Acc), doc_id(Acc)}, {PartId, {json, <<"4">>}}},
             case ExpectedKv =:= Kv of
             true ->
                 ok;

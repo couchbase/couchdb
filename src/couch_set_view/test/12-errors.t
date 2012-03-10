@@ -341,8 +341,12 @@ test_reduce_runtime_error() ->
     GroupPid = couch_set_view:get_group_pid(test_set_name(), DDocId),
     MonRef = erlang:monitor(process, GroupPid),
 
-    QueryResult = query_reduce_view(DDocId, <<"test">>, false),
-    etap:is(QueryResult, {ok, null}, "Received null reduce value"),
+    QueryResult = try
+        query_reduce_view(DDocId, <<"test">>, false)
+	catch _:Error ->
+        Error
+    end,
+    ?etap_match(QueryResult, {error, _}, "Received error response"),
 
     receive
     {'DOWN', MonRef, _, _, _} ->

@@ -166,12 +166,11 @@ update(Owner, Group, FileName, ActiveDbs, PassiveDbs, MaxSeqs, BlockedTime) ->
 
     Mapper = spawn_link(fun() ->
         try
-            QsGroup = add_query_server(Group),
-            case can_do_batched_maps(Group) of
-            true ->
-                do_batched_maps(QsGroup, MapQueue, WriteQueue, [], 0);
-            false->
-                do_maps(QsGroup, MapQueue, WriteQueue)
+            couch_set_view_mapreduce:start_map_context(Group),
+            try
+                do_maps(Group, MapQueue, WriteQueue, [], 0)
+            after
+                couch_set_view_mapreduce:end_map_context()
             end
         catch _:Error ->
             Stacktrace = erlang:get_stacktrace(),
@@ -201,7 +200,7 @@ update(Owner, Group, FileName, ActiveDbs, PassiveDbs, MaxSeqs, BlockedTime) ->
 
         Group2 = lists:foldl(
             fun({PartId, PurgeSeq}, GroupAcc) ->
-                {ok, Db} = couch_db:open_int(?dbname(SetName, PartId), [sys_db]),
+                {ok, Db} = couch_db:open_int(?dbname(SetName, PartId), []),
                 DbPurgeSeq = couch_db:get_purge_seq(Db),
                 GroupAcc2 =
                 if DbPurgeSeq == PurgeSeq + 1 ->
@@ -226,8 +225,13 @@ update(Owner, Group, FileName, ActiveDbs, PassiveDbs, MaxSeqs, BlockedTime) ->
             max_seqs = MaxSeqs
         },
         try
-            FinalWriterAcc = do_writes(WriterAcc),
-            Parent ! {writer_finished, FinalWriterAcc}
+            couch_set_view_mapreduce:start_reduce_context(Group2),
+            try
+                FinalWriterAcc = do_writes(WriterAcc),
+                Parent ! {writer_finished, FinalWriterAcc}
+            after
+                couch_set_view_mapreduce:end_reduce_context(Group2)
+            end
         catch _:Error ->
             Stacktrace = erlang:get_stacktrace(),
             ?LOG_ERROR("Set view `~s`, ~s group `~s`, writer error~n"
@@ -359,16 +363,6 @@ notify_owner(Owner, Msg, UpdaterPid) when is_pid(Owner) ->
     Owner ! {updater_info, UpdaterPid, Msg}.
 
 
-add_query_server(#set_view_group{query_server = nil} = Group) ->
-    {ok, Qs} = couch_query_servers:start_doc_map(
-        Group#set_view_group.def_lang,
-        [View#set_view.def || View <- Group#set_view_group.views],
-        Group#set_view_group.lib),
-    Group#set_view_group{query_server = Qs};
-add_query_server(Group) ->
-    Group.
-
-
 purge_index(#set_view_group{fd=Fd, views=Views, id_btree=IdBtree}=Group, Db, PartitionId) ->
     {ok, PurgedIdsRevs} = couch_db:get_last_purged(Db),
     Ids = [Id || {Id, _Revs} <- PurgedIdsRevs],
@@ -429,78 +423,50 @@ load_doc(Db, PartitionId, DocInfo, MapQueue) ->
     end.
 
 
-can_do_batched_maps(#set_view_group{def_lang = <<"erlang">>}) ->
-    true;
-can_do_batched_maps(_Group) ->
-    case os:type() of
-    {win32, _} ->
-        false;
-    _ ->
-        true
-    end.
-
-
-do_maps(#set_view_group{query_server = Qs} = Group, MapQueue, WriteQueue) ->
+do_maps(Group, MapQueue, WriteQueue, AccItems, AccItemsSize) ->
     case couch_work_queue:dequeue(MapQueue) of
     closed ->
-        couch_work_queue:close(WriteQueue),
-        couch_query_servers:stop_doc_map(Group#set_view_group.query_server);
-    {ok, Queue, _QueueSize} ->
+        case AccItems of
+        [] ->
+            ok;
+        _ ->
+            ok = couch_work_queue:queue(WriteQueue, AccItems)
+        end,
+        couch_work_queue:close(WriteQueue);
+    {ok, Queue, QueueSize} ->
         Items = lists:foldr(
             fun({Seq, #doc{id = Id, deleted = true}, PartitionId}, Acc) ->
                 Item = {Seq, Id, PartitionId, []},
                 [Item | Acc];
             ({Seq, #doc{id = Id, deleted = false} = Doc, PartitionId}, Acc) ->
-                {ok, Result} = couch_query_servers:map_doc_raw(Qs, Doc),
-                Item = {Seq, Id, PartitionId, Result},
-                [Item | Acc]
+                try
+                    {ok, Result} = couch_set_view_mapreduce:map(Doc),
+                    Item = {Seq, Id, PartitionId, Result},
+                    [Item | Acc]
+                catch _:{error, Reason} ->
+                    #set_view_group{
+                        set_name = SetName,
+                        name = DDocId,
+                        type = Type
+                    } = Group,
+                    ?LOG_ERROR("Set view `~s`, ~s group `~s`, error mapping "
+                        "document `~s`: ~s~n",
+                        [SetName, Type, DDocId, Id, couch_util:to_binary(Reason)]),
+                    Acc
+                end
             end,
             [], Queue),
-        ok = couch_work_queue:queue(WriteQueue, Items),
-        do_maps(Group, MapQueue, WriteQueue)
-    end.
-
-
-do_batched_maps(#set_view_group{query_server = Qs} = Group, MapQueue, WriteQueue, Acc, AccSize) ->
-    case couch_work_queue:dequeue(MapQueue) of
-    closed ->
-        compute_map_results(Group, WriteQueue, Acc),
-        couch_work_queue:close(WriteQueue),
-        couch_query_servers:stop_doc_map(Qs);
-    {ok, Queue, QueueSize} ->
-        Acc2 = Acc ++ Queue,
-        AccSize2 = AccSize + QueueSize,
-        case (AccSize2 >= ?QUEUE_MAX_SIZE) orelse (length(Acc2) >= ?QUEUE_MAX_ITEMS) of
+        AccItems2 = AccItems ++ Items,
+        AccItemsSize2 = AccItemsSize + QueueSize,
+        case (AccItemsSize2 >= ?QUEUE_MAX_SIZE) orelse
+            (length(AccItems2) >= ?QUEUE_MAX_ITEMS) of
         true ->
-            compute_map_results(Group, WriteQueue, Acc2),
-            do_batched_maps(Group, MapQueue, WriteQueue, [], 0);
+            ok = couch_work_queue:queue(WriteQueue, AccItems2),
+            do_maps(Group, MapQueue, WriteQueue, [], 0);
         false ->
-            do_batched_maps(Group, MapQueue, WriteQueue, Acc2, AccSize2)
+            do_maps(Group, MapQueue, WriteQueue, AccItems2, AccItemsSize2)
         end
     end.
-
-
-compute_map_results(_Group, _WriteQueue, []) ->
-    ok;
-compute_map_results(#set_view_group{query_server = Qs}, WriteQueue, Queue) ->
-    {Deleted, NotDeleted} = lists:partition(
-        fun({_Seq, Doc, _PartId}) -> Doc#doc.deleted end,
-        Queue),
-    NotDeletedDocs = [Doc || {_Seq, Doc, _PartId} <- NotDeleted],
-    {ok, MapResultList} = couch_query_servers:map_docs_raw(Qs, NotDeletedDocs),
-    Items1 = lists:foldr(
-        fun({MapResults, {Seq, Doc, PartId}}, Acc) ->
-            Item = {Seq, Doc#doc.id, PartId, MapResults},
-            [Item | Acc]
-        end,
-        [], lists:zip(MapResultList, NotDeleted)),
-    Items2 = lists:foldr(
-        fun({Seq, #doc{id = Id, deleted = true}, PartId}, Acc) ->
-            Item = {Seq, Id, PartId, []},
-            [Item | Acc]
-        end,
-        Items1, Deleted),
-    ok = couch_work_queue:queue(WriteQueue, Items2).
 
 
 do_writes(#writer_acc{kvs = Kvs, kvs_size = KvsSize, write_queue = WriteQueue} = Acc) ->
@@ -542,11 +508,7 @@ flush_writes(Acc) ->
         fun({Seq, DocId, PartId, []}, {ViewKVsAcc, DocIdViewIdKeysAcc, PartIdSeqs}) ->
             PartIdSeqs2 = update_part_seq(Seq, PartId, PartIdSeqs),
             {ViewKVsAcc, [{DocId, {PartId, []}} | DocIdViewIdKeysAcc], PartIdSeqs2};
-        ({Seq, DocId, PartId, RawQueryResults}, {ViewKVsAcc, DocIdViewIdKeysAcc, PartIdSeqs}) ->
-            QueryResults = [
-                [list_to_tuple(FunResult) || FunResult <- FunRs] || FunRs <-
-                    couch_query_servers:raw_to_ejson(RawQueryResults)
-            ],
+        ({Seq, DocId, PartId, QueryResults}, {ViewKVsAcc, DocIdViewIdKeysAcc, PartIdSeqs}) ->
             {NewViewKVs, NewViewIdKeys} = view_insert_doc_query_results(
                     DocId, PartId, QueryResults, ViewKVsAcc, [], []),
             PartIdSeqs2 = update_part_seq(Seq, PartId, PartIdSeqs),

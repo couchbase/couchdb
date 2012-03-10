@@ -13,6 +13,6 @@
 # the License.
 
 BUILDDIR="%abs_top_builddir%"
-export ERL_FLAGS="$ERL_FLAGS -pa $BUILDDIR/src/couch_set_view/test/"
+export ERL_FLAGS="$ERL_FLAGS -pa $BUILDDIR/src/couch_set_view/test/ -pa $BUILDDIR/src/mapreduce/"
 
 $BUILDDIR/test/etap/run $@

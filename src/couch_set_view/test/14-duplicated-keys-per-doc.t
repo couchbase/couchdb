@@ -16,6 +16,7 @@
 
 -include_lib("couch_set_view/include/couch_set_view.hrl").
 
+-define(JSON_ENCODE(V), ejson:encode(V)). % couch_db.hrl
 -define(MAX_WAIT_TIME, 900 * 1000).
 
 test_set_name() -> <<"couch_test_set_index_dup_keys">>.
@@ -434,11 +435,17 @@ same_key_by_same_doc_multiple_times_verify_btrees_1(Group) ->
         View1Btree,
         fun(Kv, _, I) ->
             PartId = I rem num_set_partitions(),
-            ExpectedKv = {{doc_id(I), doc_id(I)}, {PartId, {dups, [I + 1, I]}}},
-            case ExpectedKv =:= Kv of
+            ExpectedDups = [{json, ?JSON_ENCODE(I + 1)}, {json, ?JSON_ENCODE(I)}],
+            ExpectedKv = {
+                {doc_id(I), doc_id(I)},
+                {PartId, {dups, lists:sort(ExpectedDups)}}
+            },
+            {OrigKey, {OrigPartId, {dups, OrigDups}}} = Kv,
+            case ExpectedKv =:= {OrigKey, {OrigPartId, {dups, lists:sort(OrigDups)}}} of
             true ->
                 ok;
             false ->
+                io:format("Got: ~p~nExpected: ~p~n", [Kv, ExpectedKv]),
                 etap:bail("View1 Btree has an unexpected KV at iteration " ++ integer_to_list(I))
             end,
             {ok, I + 1}
@@ -509,7 +516,7 @@ same_key_by_same_doc_multiple_times_verify_btrees_2(Group) ->
         View1Btree,
         fun(Kv, _, I) ->
             PartId = I rem num_set_partitions(),
-            ExpectedKv = {{doc_id(I), doc_id(I)}, {PartId, null}},
+            ExpectedKv = {{doc_id(I), doc_id(I)}, {PartId, {json, <<"null">>}}},
             case ExpectedKv =:= Kv of
             true ->
                 ok;
@@ -584,7 +591,10 @@ same_key_by_same_doc_multiple_times_verify_btrees_3(Group) ->
         View1Btree,
         fun(Kv, _, I) ->
             PartId = I rem num_set_partitions(),
-            ExpectedKv = {{doc_id(I), doc_id(I)}, {PartId, {dups, [I + 1, I]}}},
+            ExpectedKv = {
+                {doc_id(I), doc_id(I)},
+                {PartId, {dups, [{json, ?JSON_ENCODE(I + 1)}, {json, ?JSON_ENCODE(I)}]}}
+            },
             case ExpectedKv =:= Kv of
             true ->
                 ok;
@@ -718,9 +728,9 @@ test_same_key_by_different_docs_multiple_times_verify_btrees_1(Group) ->
             DocId = doc_id(DocIdBase),
             ExpectedKv = case (I + 1) rem 2 of
             0 ->
-                {{Key, DocId}, {PartId, DocIdBase * 3}};
+                {{Key, DocId}, {PartId, {json, ?JSON_ENCODE(DocIdBase * 3)}}};
             1 ->
-                {{Key, DocId}, {PartId, DocIdBase * 2}}
+                {{Key, DocId}, {PartId, {json, ?JSON_ENCODE(DocIdBase * 2)}}}
             end,
             case ExpectedKv =:= Kv of
             true ->
@@ -813,7 +823,7 @@ test_same_key_by_different_docs_multiple_times_verify_btrees_2(Group) ->
         fun(Kv, _, I) ->
             PartId = I rem num_set_partitions(),
             DocId = doc_id(I),
-            ExpectedKv = {{I, DocId}, {PartId, I * 2}},
+            ExpectedKv = {{I, DocId}, {PartId, {json, ?JSON_ENCODE(I * 2)}}},
             case ExpectedKv =:= Kv of
             true ->
                 ok;

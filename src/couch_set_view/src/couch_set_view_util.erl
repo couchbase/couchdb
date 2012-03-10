@@ -12,7 +12,7 @@
 
 -module(couch_set_view_util).
 
--export([detuple_kvs/2, expand_dups/2, expand_dups/3, partitions_map/2]).
+-export([expand_dups/2, expand_dups/3, partitions_map/2]).
 -export([build_bitmask/1, decode_bitmask/1]).
 -export([make_btree_purge_fun/1]).
 -export([make_key_options/1]).
@@ -21,14 +21,6 @@
 
 -include("couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
-
-
-detuple_kvs([], Acc) ->
-    lists:reverse(Acc);
-detuple_kvs([KV | Rest], Acc) ->
-    {{Key,Id}, {_PartId, Value}} = KV,
-    NKV = [[Key, Id], Value],
-    detuple_kvs(Rest, [NKV | Acc]).
 
 
 expand_dups([], Acc) ->

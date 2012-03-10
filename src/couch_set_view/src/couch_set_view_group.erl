@@ -1102,7 +1102,6 @@ reset_group(#set_view_group{views = Views} = Group) ->
     Group#set_view_group{
         fd = nil,
         index_header = nil,
-        query_server = nil,
         id_btree = nil,
         views = Views2
     }.
@@ -1123,7 +1122,8 @@ init_group(Fd, #set_view_group{views = Views}=Group, nil) ->
         view_states = [{nil, [], []} || _ <- Views]
     },
     init_group(Fd, Group, EmptyHeader);
-init_group(Fd, #set_view_group{def_lang = Lang, views = Views} = Group, IndexHeader) ->
+init_group(Fd, #set_view_group{views = Views0} = Group, IndexHeader) ->
+    Views = [V#set_view{ref = make_ref()} || V <- Views0],
     #set_view_index_header{
         id_btree_state = IdBtreeState,
         view_states = ViewStates
@@ -1146,16 +1146,13 @@ init_group(Fd, #set_view_group{def_lang = Lang, views = Views} = Group, IndexHea
     {ok, IdBtree} = couch_btree:open(
         IdBtreeState, Fd, [{reduce, IdTreeReduce} | BtreeOptions]),
     Views2 = lists:zipwith(
-        fun({BTState, USeqs, PSeqs}, #set_view{reduce_funs=RedFuns,options=Options}=View) ->
-            FunSrcs = [FunSrc || {_Name, FunSrc} <- RedFuns],
+        fun({BTState, USeqs, PSeqs}, #set_view{options = Options} = View) ->
             ReduceFun =
                 fun(reduce, KVs) ->
                     AllPartitionsBitMap = couch_set_view_util:partitions_map(KVs, 0),
                     KVs2 = couch_set_view_util:expand_dups(KVs, []),
-                    KVs3 = couch_set_view_util:detuple_kvs(KVs2, []),
-                    {ok, Reduced} = couch_query_servers:reduce(Lang, FunSrcs,
-                        KVs3),
-                    {length(KVs3), Reduced, AllPartitionsBitMap};
+                    {ok, Reduced} = couch_set_view_mapreduce:reduce(View, KVs2),
+                    {length(KVs2), Reduced, AllPartitionsBitMap};
                 (rereduce, [{Count0, Red0, AllPartitionsBitMap0} | Reds]) ->
                     {Count, UserReds, AllPartitionsBitMap} = lists:foldl(
                         fun({C, R, Apbm}, {CountAcc, RedAcc, ApbmAcc}) ->
@@ -1163,8 +1160,7 @@ init_group(Fd, #set_view_group{def_lang = Lang, views = Views} = Group, IndexHea
                         end,
                         {Count0, [Red0], AllPartitionsBitMap0},
                         Reds),
-                    {ok, Reduced} = couch_query_servers:rereduce(
-                        Lang, FunSrcs, UserReds),
+                    {ok, Reduced} = couch_set_view_mapreduce:rereduce(View, UserReds),
                     {Count, Reduced, AllPartitionsBitMap}
                 end,
             
@@ -1606,8 +1602,10 @@ clean_views(_, _, [], Count, Acc) ->
 clean_views(stop, _, Rest, Count, Acc) ->
     {Count, lists:reverse(Acc, Rest)};
 clean_views(go, PurgeFun, [#set_view{btree = Btree} = View | Rest], Count, Acc) ->
+    couch_set_view_mapreduce:start_reduce_context(View),
     {ok, NewBtree, {Go, PurgedCount}} =
         couch_btree:guided_purge(Btree, PurgeFun, {go, Count}),
+    couch_set_view_mapreduce:end_reduce_context(View),
     NewAcc = [View#set_view{btree = NewBtree} | Acc],
     clean_views(Go, PurgeFun, Rest, PurgedCount, NewAcc).
 
