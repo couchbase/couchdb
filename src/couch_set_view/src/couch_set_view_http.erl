@@ -294,7 +294,7 @@ open_row_doc(SetName, PartId, Id, UserCtx, DocOptions) ->
         ?dbname(SetName, PartId), [{user_ctx, UserCtx}]),
     JsonDoc = case (catch couch_db_frontend:open_doc(Db, Id, DocOptions)) of
     {ok, #doc{} = Doc} ->
-        couch_doc:to_json_obj(Doc, []);
+        {json, couch_doc:to_raw_json_binary(Doc)};
     _ ->
         null
     end,
