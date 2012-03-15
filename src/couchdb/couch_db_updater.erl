@@ -166,7 +166,7 @@ handle_call({compact_done, CompactFilepath}, _From, Db) ->
             instance_start_time = Db#db.instance_start_time
         }),
 
-        ?LOG_DEBUG("CouchDB swapping files ~s and ~s.",
+        ?LOG_INFO("CouchDB swapping files ~s and ~s.",
                 [NewFilePath, CompactFilepath]),
         % ensure the fd won't close, because after we delete and close,
         % it can't reopen
