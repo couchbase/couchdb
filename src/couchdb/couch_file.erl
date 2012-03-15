@@ -645,9 +645,12 @@ writer_loop(Fd, FilePath, Eof, CloseTimeout) ->
             ok = couch_file_write_guard:remove(self()),
             exit(Reason);
         Msg ->
-            {ok, Fd2} = try_open_fd(FilePath, [binary, append, raw],
-                    CloseTimeout),
-            handle_write_message(Msg, Fd2, FilePath, Eof, CloseTimeout)
+            case try_open_fd(FilePath, [binary, append, raw], CloseTimeout) of
+            {ok, Fd2} ->
+                handle_write_message(Msg, Fd2, FilePath, Eof, CloseTimeout);
+            Other ->
+                erlang:exit({problem_reopening_file, Other, Msg, self(), FilePath, Eof, CloseTimeout})
+            end
         end
     end.
 
@@ -729,9 +732,12 @@ reader_loop(Fd, FilePath, CloseTimeout) ->
         {'EXIT', _From, Reason} ->
             exit(Reason);
         Msg ->
-            {ok, Fd2} = try_open_fd(FilePath, [binary, read, raw],
-                    CloseTimeout),
-            handle_reader_message(Msg, Fd2, FilePath, CloseTimeout)
+            case try_open_fd(FilePath, [binary, read, raw], CloseTimeout) of
+            {ok, Fd2} ->
+                handle_reader_message(Msg, Fd2, FilePath, CloseTimeout);
+            Other ->
+                erlang:exit({problem_reopening_file, Other, Msg, self(), FilePath, CloseTimeout})
+            end
         end
     end.
 
