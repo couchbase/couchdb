@@ -198,7 +198,16 @@ esac
 
 AM_CONDITIONAL([WINDOWS], [test x$IS_WINDOWS = xTRUE])
 
-AC_CHECK_LIB([mozjs], [JS_NewContext], [JS_LIB_BASE=mozjs], [
+AC_ARG_ENABLE([spidermonkey],
+    [AS_HELP_STRING([--disable-spidermonkey],
+            [Allow to build without spidermonkey (things may not work as you expect) @<:@default=off@:>@])],
+    [ac_enable_spidermonkey="$enableval"],
+    [ac_enable_spidermonkey="yes"])
+
+AM_CONDITIONAL([BUILD_COUCHJS], [ test "x${ac_enable_spidermonkey}" = "xyes" ])
+
+AS_IF([ test "x${ac_enable_spidermonkey}" = "xyes" ], [
+  AC_CHECK_LIB([mozjs], [JS_NewContext], [JS_LIB_BASE=mozjs], [
     AC_CHECK_LIB([js], [JS_NewContext], [JS_LIB_BASE=js], [
         AC_CHECK_LIB([js3250], [JS_NewContext], [JS_LIB_BASE=js3250], [
             AC_CHECK_LIB([js32], [JS_NewContext], [JS_LIB_BASE=js32], [
@@ -305,6 +314,9 @@ AC_COMPILE_IFELSE(
 )
 CFLAGS="$OLD_CFLAGS"
 AC_LANG_POP(C)
+
+# END allow building without spidermonkey
+])
 
 AC_ARG_WITH([win32-icu-binaries], [AC_HELP_STRING([--with-win32-icu-binaries=PATH],
     [set PATH to the Win32 native ICU binaries directory])], [
@@ -583,6 +595,15 @@ if test x${IS_WINDOWS} = xTRUE; then
     mv libtool.tmp libtool
     # probably would chmod +x if we weren't on windows...
 fi
+
+AS_IF([ test "x${ac_enable_spidermonkey}" != "xyes" ], [
+echo
+echo You have chosen to build CouchDB _without_ spidermonkey. This means
+echo that a lot of things won't work for you, and you may encounter tons
+echo of trouble. You have been warned, so you're on your own if you choose
+echo to continue building.
+echo
+])
 
 echo
 echo "You have configured Apache CouchDB, time to relax."

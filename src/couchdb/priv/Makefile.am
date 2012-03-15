@@ -72,7 +72,12 @@ COUCHJS_SRCS = \
 	couch_js/utf8.c \
 	couch_js/utf8.h
 
-locallibbin_PROGRAMS = couchjs
+locallibbin_PROGRAMS =
+
+if BUILD_COUCHJS
+locallibbin_PROGRAMS += couchjs
+endif
+
 couchjs_SOURCES = $(COUCHJS_SRCS)
 couchjs_CFLAGS = -D_BSD_SOURCE $(CURL_CFLAGS)
 couchjs_LDADD = $(CURL_LIBS) @JSLIB@
