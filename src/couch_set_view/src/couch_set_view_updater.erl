@@ -692,9 +692,15 @@ write_changes(WriterAcc, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs) ->
             couch_btree:query_modify(IdBtree, LookupDocIds, AddDocIdViewIdKeys, RemoveDocIds);
     _ ->
         CleanupStart = now(),
-        {ok, LookupResults, {_, IdBtreePurgedKeyCount}, IdBtree2} =
+        {ok, LookupResults, {Go, IdBtreePurgedKeyCount}, IdBtree2} =
             couch_btree:query_modify(
-                IdBtree, LookupDocIds, AddDocIdViewIdKeys, RemoveDocIds, CleanupFun, {go, 0})
+                IdBtree, LookupDocIds, AddDocIdViewIdKeys, RemoveDocIds, CleanupFun, {go, 0}),
+        case Go of
+        stop ->
+            self() ! stop;
+        go ->
+            ok
+        end
     end,
     KeysToRemoveByView = lists:foldl(
         fun(LookupResult, KeysToRemoveByViewAcc) ->
@@ -719,8 +725,14 @@ write_changes(WriterAcc, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs) ->
                 {ok, ViewBtree2} = couch_btree:add_remove(
                     View#set_view.btree, AddKeyValues, KeysToRemove);
             _ ->
-                {ok, {_, CleanupCount}, ViewBtree2} = couch_btree:add_remove(
-                    View#set_view.btree, AddKeyValues, KeysToRemove, CleanupFun, {go, 0})
+                {ok, {Go2, CleanupCount}, ViewBtree2} = couch_btree:add_remove(
+                    View#set_view.btree, AddKeyValues, KeysToRemove, CleanupFun, {go, 0}),
+                case Go2 of
+                stop ->
+                    self() ! stop;
+                go ->
+                    ok
+                end
             end,
             NewView = View#set_view{btree = ViewBtree2},
             {NewView, {AccC + CleanupCount, AccI + length(AddKeyValues), AccD + length(KeysToRemove)}}
@@ -732,18 +744,27 @@ write_changes(WriterAcc, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs) ->
             View#set_view{update_seqs = NewUpSeqs}
         end,
         Views2),
-    NewSeqs = update_seqs(PartIdSeqs, ?set_seqs(Group)),
-    Header = Group#set_view_group.index_header,
-    NewHeader = Header#set_view_index_header{seqs = NewSeqs, cbitmask = 0},
     case ?set_cbitmask(Group) of
     0 ->
+        NewCbitmask = 0,
         CleanupTime = 0;
     _ ->
+        {ok, {_, IdBitmap}} = couch_btree:full_reduce(IdBtree2),
+        CombinedBitmap = lists:foldl(
+            fun(#set_view{btree = Bt}, AccMap) ->
+                {ok, {_, _, Bm}} = couch_btree:full_reduce(Bt),
+                AccMap bor Bm
+            end,
+            IdBitmap, Views3),
+        NewCbitmask = ?set_cbitmask(Group) band CombinedBitmap,
         CleanupTime = timer:now_diff(now(), CleanupStart) / 1000000,
         ?LOG_INFO("Updater for set view `~s`, ~s group `~s`, performed cleanup "
             "of ~p key/value pairs in ~.3f seconds",
             [SetName, GroupType, GroupName, CleanupKvCount, CleanupTime])
     end,
+    NewSeqs = update_seqs(PartIdSeqs, ?set_seqs(Group)),
+    Header = Group#set_view_group.index_header,
+    NewHeader = Header#set_view_index_header{seqs = NewSeqs, cbitmask = NewCbitmask},
     NewGroup = Group#set_view_group{
         views = Views3,
         id_btree = IdBtree2,
