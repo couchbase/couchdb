@@ -48,7 +48,12 @@ init({MainPid, DbName, Filepath, Fd, Options}) ->
 
 terminate(_Reason, Db) ->
     couch_util:shutdown_sync(Db#db.compactor_info),
-    ok = couch_file:only_snapshot_reads(Db#db.fd).
+    case (catch couch_file:only_snapshot_reads(Db#db.fd)) of
+    ok -> ok;
+    Error ->
+        ?LOG_ERROR("Got error trying to silence couch_file: ~p~n~p", [Error, Db])
+    end,
+    ok.
 
 handle_call(get_db, _From, Db) ->
     {reply, {ok, Db}, Db};
