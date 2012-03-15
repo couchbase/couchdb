@@ -861,10 +861,12 @@ terminate(Reason, State) ->
     State3 = reply_all(State2, Reason),
     reply_all_cleanup_waiters(State3, {shutdown, Reason}),
     catch couch_db_set:close(?db_set(State3)),
-    couch_util:shutdown_sync(State#state.updater_pid),
-    couch_util:shutdown_sync(State#state.compactor_pid),
-    couch_util:shutdown_sync(State#state.compactor_file),
-    couch_util:shutdown_sync(State#state.replica_group).
+    couch_util:shutdown_sync(State3#state.updater_pid),
+    couch_util:shutdown_sync(State3#state.compactor_pid),
+    couch_util:shutdown_sync(State3#state.compactor_file),
+    couch_util:shutdown_sync(State3#state.replica_group),
+    catch couch_file:only_snapshot_reads((State3#state.group)#set_view_group.fd),
+    ok.
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
