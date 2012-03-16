@@ -39,6 +39,9 @@ typedef struct {
     v8::Isolate                                  *isolate;
     std::vector< v8::Persistent<v8::Function> >  *functions;
     std::list< map_result_t >                    *mapFunResults;
+    std::string                                  *key;
+    volatile int                                 taskId;
+    volatile long                                taskStartTime;
 } map_reduce_ctx_t;
 
 
@@ -48,6 +51,7 @@ std::list< std::list< map_result_t > > mapDoc(map_reduce_ctx_t *ctx, const json_
 std::list<json_bin_t> runReduce(map_reduce_ctx_t *ctx, const std::list<json_bin_t> &keys, const std::list<json_bin_t> &values);
 json_bin_t runReduce(map_reduce_ctx_t *ctx, int reduceFunNum, const std::list<json_bin_t> &keys, const std::list<json_bin_t> &values);
 json_bin_t runRereduce(map_reduce_ctx_t *ctx, int reduceFunNum, const std::list<json_bin_t> &reductions);
+void terminateTask(map_reduce_ctx_t *ctx);
 
 
 class MapReduceError {

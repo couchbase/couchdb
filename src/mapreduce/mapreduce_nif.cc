@@ -19,14 +19,31 @@
 #include <iostream>
 #include <cstring>
 #include <sstream>
+#include <map>
+#include <time.h>
+
+#if defined(WIN32) || defined(_WIN32)
+#include <windows.h>
+#define doSleep Sleep
+#else
+#include <unistd.h>
+#define doSleep usleep
+#endif
 
 #include "erl_nif_compat.h"
 #include "mapreduce.h"
 
+// NOTE: keep this file clean (without knowledge) of any V8 APIs
+
 static ERL_NIF_TERM ATOM_OK;
 static ERL_NIF_TERM ATOM_ERROR;
 
-static ErlNifResourceType *MAP_REDUCE_CTX_RES;
+static volatile int                                maxTaskDuration = 5000;
+static ErlNifResourceType                          *MAP_REDUCE_CTX_RES;
+static ErlNifTid                                   terminatorThreadId;
+static ErlNifMutex                                 *terminatorMutex;
+static volatile int                                shutdownTerminator = 0;
+static std::map< std::string, map_reduce_ctx_t* >  contexts;
 
 
 // NIF API functions
@@ -35,9 +52,11 @@ static ERL_NIF_TERM doMapDoc(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]
 static ERL_NIF_TERM startReduceContext(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
 static ERL_NIF_TERM doReduce(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
 static ERL_NIF_TERM doRereduce(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
+static ERL_NIF_TERM setTimeout(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
 
 // NIF API callbacks
 static int onLoad(ErlNifEnv* env, void** priv, ERL_NIF_TERM info);
+static void onUnload(ErlNifEnv *env, void *priv_data);
 
 // Utilities
 static inline ERL_NIF_TERM makeError(ErlNifEnv *env, const std::string &msg);
@@ -46,6 +65,10 @@ static inline std::string binToFunctionString(const ErlNifBinary &bin);
 
 // NIF resource functions
 static void free_map_reduce_context(ErlNifEnv *env, void *res);
+
+static inline void registerContext(map_reduce_ctx_t *ctx, ErlNifEnv *env, const ERL_NIF_TERM &refTerm);
+static inline void unregisterContext(map_reduce_ctx_t *ctx);
+static void *terminatorLoop(void *);
 
 
 
@@ -65,6 +88,8 @@ ERL_NIF_TERM startMapContext(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]
 
         ERL_NIF_TERM res = enif_make_resource(env, ctx);
         enif_release_resource(ctx);
+
+        registerContext(ctx, env, argv[1]);
 
         return enif_make_tuple2(env, ATOM_OK, res);
 
@@ -173,6 +198,8 @@ ERL_NIF_TERM startReduceContext(ErlNifEnv *env, int argc, const ERL_NIF_TERM arg
 
         ERL_NIF_TERM res = enif_make_resource(env, ctx);
         enif_release_resource(ctx);
+
+        registerContext(ctx, env, argv[1]);
 
         return enif_make_tuple2(env, ATOM_OK, res);
 
@@ -346,6 +373,20 @@ ERL_NIF_TERM doRereduce(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 }
 
 
+ERL_NIF_TERM setTimeout(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    int timeout;
+
+    if (!enif_get_int(env, argv[0], &timeout)) {
+        return enif_make_badarg(env);
+    }
+
+    maxTaskDuration = timeout;
+
+    return ATOM_OK;
+}
+
+
 int onLoad(ErlNifEnv *env, void **priv, ERL_NIF_TERM info)
 {
     ATOM_OK = enif_make_atom(env, "ok");
@@ -363,7 +404,31 @@ int onLoad(ErlNifEnv *env, void **priv, ERL_NIF_TERM info)
         return -1;
     }
 
+    terminatorMutex = enif_mutex_create(const_cast<char *>("terminator mutex"));
+    if (terminatorMutex == NULL) {
+        return -2;
+    }
+
+    if (enif_thread_create(const_cast<char *>("terminator thread"),
+                           &terminatorThreadId,
+                           terminatorLoop,
+                           NULL,
+                           NULL) != 0) {
+        enif_mutex_destroy(terminatorMutex);
+        return -4;
+    }
+
     return 0;
+}
+
+
+void onUnload(ErlNifEnv *env, void *priv_data)
+{
+    void *result = NULL;
+
+    shutdownTerminator = 1;
+    enif_thread_join(terminatorThreadId, &result);
+    enif_mutex_destroy(terminatorMutex);
 }
 
 
@@ -417,22 +482,74 @@ ERL_NIF_TERM makeError(ErlNifEnv *env, const std::string &msg)
 void free_map_reduce_context(ErlNifEnv *env, void *res) {
     map_reduce_ctx_t *ctx = static_cast<map_reduce_ctx_t *>(res);
 
+    unregisterContext(ctx);
     destroyContext(ctx);
 }
 
 
+void *terminatorLoop(void *args)
+{
+    std::map< std::string, map_reduce_ctx_t* >::iterator it;
+    long now;
+
+    while (!shutdownTerminator) {
+        now = static_cast<long>((clock() / CLOCKS_PER_SEC) * 1000);
+        enif_mutex_lock(terminatorMutex);
+
+        for (it = contexts.begin(); it != contexts.end(); ++it) {
+            map_reduce_ctx_t *ctx = (*it).second;
+
+            if (ctx->taskStartTime > 0) {
+                if ((now - ctx->taskStartTime) >= maxTaskDuration) {
+                    terminateTask(ctx);
+                }
+            }
+        }
+
+        enif_mutex_unlock(terminatorMutex);
+        doSleep(maxTaskDuration);
+    }
+
+    return NULL;
+}
+
+
+void registerContext(map_reduce_ctx_t *ctx, ErlNifEnv *env, const ERL_NIF_TERM &refTerm)
+{
+    ErlNifBinary ref;
+
+    if (!enif_inspect_iolist_as_binary(env, refTerm, &ref)) {
+        throw MapReduceError("invalid context reference");
+    }
+
+    ctx->key = new std::string(reinterpret_cast<char *>(ref.data), static_cast<size_t>(ref.size));
+    enif_mutex_lock(terminatorMutex);
+    contexts[*ctx->key] = ctx;
+    enif_mutex_unlock(terminatorMutex);
+}
+
+
+void unregisterContext(map_reduce_ctx_t *ctx)
+{
+    enif_mutex_lock(terminatorMutex);
+    contexts.erase(*ctx->key);
+    enif_mutex_unlock(terminatorMutex);
+    delete ctx->key;
+}
+
 
 static ErlNifFunc nif_functions[] = {
-    {"start_map_context", 1, startMapContext},
+    {"start_map_context", 2, startMapContext},
     {"map_doc", 2, doMapDoc},
-    {"start_reduce_context", 1, startReduceContext},
+    {"start_reduce_context", 2, startReduceContext},
     {"reduce", 2, doReduce},
     {"reduce", 3, doReduce},
-    {"rereduce", 3, doRereduce}
+    {"rereduce", 3, doRereduce},
+    {"set_timeout", 1, setTimeout}
 };
 
 
 
 extern "C" {
-    ERL_NIF_INIT(mapreduce, nif_functions, &onLoad, NULL, NULL, NULL);
+    ERL_NIF_INIT(mapreduce, nif_functions, &onLoad, NULL, NULL, &onUnload);
 }

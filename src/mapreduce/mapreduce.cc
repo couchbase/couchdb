@@ -22,8 +22,11 @@
 #include <string>
 #include <string.h>
 #include <v8.h>
+#include <time.h>
 
 #include "mapreduce.h"
+
+// NOTE: keep this file clean (without knowledge) of any Erlang NIF APIs
 
 using namespace v8;
 
@@ -55,6 +58,8 @@ static inline json_bin_t jsonStringify(const Handle<Value> &obj);
 static inline Handle<Value> jsonParse(const json_bin_t &thing);
 static inline Handle<Array> jsonListToJsArray(const std::list<json_bin_t> &list);
 static inline isolate_data_t *getIsolateData();
+static inline void taskStarted(map_reduce_ctx_t *ctx);
+static inline void taskFinished(map_reduce_ctx_t *ctx);
 
 
 
@@ -63,6 +68,7 @@ void initContext(map_reduce_ctx_t *ctx, const std::list<std::string> &funs)
     ctx->isolate = Isolate::New();
     Locker locker(ctx->isolate);
     Isolate::Scope isolateScope(ctx->isolate);
+    Locker::StartPreemption(20);
     HandleScope handleScope;
 
     ctx->jsContext = createJsContext(ctx);
@@ -79,6 +85,8 @@ void initContext(map_reduce_ctx_t *ctx, const std::list<std::string> &funs)
     isoData->ctx = ctx;
 
     ctx->isolate->SetData(isoData);
+    ctx->taskStartTime = -1;
+    ctx->taskId = -1;
 
     loadFunctions(ctx, funs);
 }
@@ -99,19 +107,13 @@ std::list< std::list< map_result_t > > mapDoc(map_reduce_ctx_t *ctx, const json_
     std::list< std::list< map_result_t > > results;
     Handle<Value> funArgs[] = { docObject };
 
+    taskStarted(ctx);
+
     for (int i = 0; i < ctx->functions->size(); ++i) {
         std::list< map_result_t > funResults;
         Handle<Function> fun = (*ctx->functions)[i];
         TryCatch trycatch;
 
-        // TODO: Add protection mechanism to deal with functions that take too long
-        // or fall into an infinite loop (both map and reduce functions).
-        // Apparently Locker::SetPreemption() will server the purpose, but there's
-        // barely documentation and examples about it. Study its unit test at:
-        //
-        // http://code.google.com/p/v8/source/browse/branches/bleeding_edge/test/cctest/test-thread-termination.cc
-        //
-        // Or read Chrome/Chromium's source code to see how it's used.
         ctx->mapFunResults = &funResults;
         Handle<Value> result = fun->Call(fun, 1, funArgs);
 
@@ -122,6 +124,10 @@ std::list< std::list< map_result_t > > mapDoc(map_reduce_ctx_t *ctx, const json_
             }
             deleteJsonData(funResults);
 
+            if (!trycatch.CanContinue()) {
+                throw MapReduceError("timeout");
+            }
+
             Handle<Value> exception = trycatch.Exception();
             String::AsciiValue exceptionStr(exception);
 
@@ -130,6 +136,8 @@ std::list< std::list< map_result_t > > mapDoc(map_reduce_ctx_t *ctx, const json_
 
         results.push_back(funResults);
     }
+
+    taskFinished(ctx);
 
     return results;
 }
@@ -147,6 +155,8 @@ std::list<json_bin_t> runReduce(map_reduce_ctx_t *ctx, const std::list<json_bin_
 
     Handle<Value> args[] = { keysArray, valuesArray, Boolean::New(false) };
 
+    taskStarted(ctx);
+
     for (int i = 0; i < ctx->functions->size(); ++i) {
         Handle<Function> fun = (*ctx->functions)[i];
         TryCatch trycatch;
@@ -154,6 +164,10 @@ std::list<json_bin_t> runReduce(map_reduce_ctx_t *ctx, const std::list<json_bin_
 
         if (result.IsEmpty()) {
             deleteJsonData(results);
+
+            if (!trycatch.CanContinue()) {
+                throw MapReduceError("timeout");
+            }
 
             Handle<Value> exception = trycatch.Exception();
             String::AsciiValue exceptionStr(exception);
@@ -163,6 +177,8 @@ std::list<json_bin_t> runReduce(map_reduce_ctx_t *ctx, const std::list<json_bin_
 
         results.push_back(jsonStringify(result));
     }
+
+    taskFinished(ctx);
 
     return results;
 }
@@ -185,10 +201,18 @@ json_bin_t runReduce(map_reduce_ctx_t *ctx, int reduceFunNum, const std::list<js
     Handle<Array> valuesArray = jsonListToJsArray(values);
     Handle<Value> args[] = { keysArray, valuesArray, Boolean::New(false) };
 
+    taskStarted(ctx);
+
     TryCatch trycatch;
     Handle<Value> result = fun->Call(fun, 3, args);
 
+    taskFinished(ctx);
+
     if (result.IsEmpty()) {
+        if (!trycatch.CanContinue()) {
+            throw MapReduceError("timeout");
+        }
+
         Handle<Value> exception = trycatch.Exception();
         String::AsciiValue exceptionStr(exception);
 
@@ -215,10 +239,18 @@ json_bin_t runRereduce(map_reduce_ctx_t *ctx, int reduceFunNum, const std::list<
     Handle<Array> valuesArray = jsonListToJsArray(reductions);
     Handle<Value> args[] = { Null(), valuesArray, Boolean::New(true) };
 
+    taskStarted(ctx);
+
     TryCatch trycatch;
     Handle<Value> result = fun->Call(fun, 3, args);
 
+    taskFinished(ctx);
+
     if (result.IsEmpty()) {
+        if (!trycatch.CanContinue()) {
+            throw MapReduceError("timeout");
+        }
+
         Handle<Value> exception = trycatch.Exception();
         String::AsciiValue exceptionStr(exception);
 
@@ -255,6 +287,7 @@ void destroyContext(map_reduce_ctx_t *ctx)
     {
         Locker locker(ctx->isolate);
         Isolate::Scope isolateScope(ctx->isolate);
+        Locker::StopPreemption();
         HandleScope handleScope;
         Context::Scope contextScope(ctx->jsContext);
 
@@ -427,4 +460,30 @@ isolate_data_t *getIsolateData()
 {
     Isolate *isolate = Isolate::GetCurrent();
     return reinterpret_cast<isolate_data_t*>(isolate->GetData());
+}
+
+
+void taskStarted(map_reduce_ctx_t *ctx)
+{
+    ctx->taskId = V8::GetCurrentThreadId();
+    ctx->taskStartTime = static_cast<long>((clock() / CLOCKS_PER_SEC) * 1000);
+}
+
+
+void taskFinished(map_reduce_ctx_t *ctx)
+{
+    ctx->taskStartTime = -1;
+    ctx->taskId = -1;
+}
+
+
+void terminateTask(map_reduce_ctx_t *ctx)
+{
+    Locker locker(ctx->isolate);
+    Isolate::Scope isolateScope(ctx->isolate);
+
+    if (ctx->taskId != -1) {
+        V8::TerminateExecution(ctx->taskId);
+        taskFinished(ctx);
+    }
 }

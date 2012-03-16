@@ -21,7 +21,7 @@
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(104),
+    etap:plan(126),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -51,8 +51,11 @@ test() ->
     test_parallel_burst(rereduce, 7500, 5),
     test_parallel_burst(rereduce, 7500, 10),
     test_parallel_burst(rereduce, 7500, 20),
-    % TODO: test reduce functions that take too long or go into an infinite loop
-    % (protection mechanism not yet implemented).
+    ok = mapreduce:set_timeout(1000),
+    test_many_timeouts(reduce, 1),
+    test_many_timeouts(reduce, 10),
+    test_many_timeouts(rereduce, 1),
+    test_many_timeouts(rereduce, 10),
     ok.
 
 
@@ -275,6 +278,37 @@ test_parallel_burst(Fun, N, NumWorkers) ->
             {'DOWN', Ref, process, Pid, _Reason} ->
                 etap:bail("Worker died unexpectedly")
             after 90000 ->
+                etap:bail("Timeout waiting for worker result")
+            end
+        end,
+        Pids).
+
+
+test_many_timeouts(Fun, NumProcesses) ->
+    Pids = lists:map(
+        fun(_) ->
+            spawn_monitor(fun() ->
+                {ok, Ctx} = mapreduce:start_reduce_context([
+                    <<"function(keys, values, rereduce) { while (true) { }; }">>
+                ]),
+                case Fun of
+                reduce ->
+                    exit({ok, mapreduce:reduce(Ctx, [{<<"\"a\"">>, <<"1">>}])});
+                rereduce ->
+                    exit({ok, mapreduce:rereduce(Ctx, 1, [<<"1">>, <<"2">>])})
+                end
+            end)
+        end,
+        lists:seq(1, NumProcesses)),
+    lists:foreach(
+        fun({Pid, Ref}) ->
+            receive
+            {'DOWN', Ref, process, Pid, {ok, Value}} ->
+                etap:is(Value, {error, <<"timeout">>},
+                    "Worker got timeout error for " ++ atom_to_list(Fun));
+            {'DOWN', Ref, process, Pid, _Reason} ->
+                etap:bail("Worker died unexpectedly")
+            after 120000 ->
                 etap:bail("Timeout waiting for worker result")
             end
         end,

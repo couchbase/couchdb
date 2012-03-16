@@ -23,6 +23,8 @@
 -export([reduce/2, reduce/3]).
 -export([rereduce/3]).
 
+-export([set_timeout/1]).
+
 -on_load(init/0).
 
 
@@ -45,7 +47,11 @@ init() ->
     end.
 
 
-start_map_context(_MapFunSources) ->
+start_map_context(MapFunSources) ->
+    Ref = erlang:md5(term_to_binary(make_ref())),
+    start_map_context(MapFunSources, Ref).
+
+start_map_context(_MapFunSources, _Ref) ->
     erlang:nif_error(mapreduce_nif_not_loaded).
 
 
@@ -53,7 +59,11 @@ map_doc(_Context, _Doc) ->
     erlang:nif_error(mapreduce_nif_not_loaded).
 
 
-start_reduce_context(_ReduceFunSources) ->
+start_reduce_context(ReduceFunSources) ->
+    Ref = erlang:md5(term_to_binary(make_ref())),
+    start_reduce_context(ReduceFunSources, Ref).
+
+start_reduce_context(_ReduceFunSources, _Ref) ->
     erlang:nif_error(mapreduce_nif_not_loaded).
 
 
@@ -66,4 +76,8 @@ reduce(_Context, _ReduceFunNumber, _KvList) ->
 
 
 rereduce(_Context, _ReduceFunNumber, _ReductionsList) ->
+    erlang:nif_error(mapreduce_nif_not_loaded).
+
+
+set_timeout(_TimeoutMs) ->
     erlang:nif_error(mapreduce_nif_not_loaded).

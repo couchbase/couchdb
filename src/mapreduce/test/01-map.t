@@ -21,7 +21,7 @@
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(56),
+    etap:plan(82),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -50,8 +50,11 @@ test() ->
     test_parallel_burst_maps(25000, 5),
     test_parallel_burst_maps(25000, 10),
     test_parallel_burst_maps(25000, 20),
-    % TODO: test map functions that take too long or go into an infinite loop
-    % (protection mechanism not yet implemented).
+    ok = mapreduce:set_timeout(1000),
+    test_many_timeouts(1),
+    test_many_timeouts(5),
+    test_many_timeouts(10),
+    test_half_timeouts(10),
     ok.
 
 
@@ -225,3 +228,64 @@ test_utf8() ->
     etap:is(Results3, ExpectedResults3, "Right map value with Z with acute"),
     etap:is(Results4, ExpectedResults4, "Right map value with Z with acute"),
     ok.
+
+
+test_many_timeouts(NumProcesses) ->
+    Pids = lists:map(
+        fun(_) ->
+            spawn_monitor(fun() ->
+                {ok, Ctx} = mapreduce:start_map_context([
+                    <<"function(doc) { while (true) { }; }">>
+                ]),
+                Doc = <<"{\"_id\": \"doc1\", \"value\": 1}">>,
+                exit({ok, mapreduce:map_doc(Ctx, Doc)})
+            end)
+        end,
+        lists:seq(1, NumProcesses)),
+    lists:foreach(
+        fun({Pid, Ref}) ->
+            receive
+            {'DOWN', Ref, process, Pid, {ok, Value}} ->
+                etap:is(Value, {error, <<"timeout">>}, "Worker got timeout error");
+            {'DOWN', Ref, process, Pid, _Reason} ->
+                etap:bail("Worker died unexpectedly")
+            after 120000 ->
+                etap:bail("Timeout waiting for worker result")
+            end
+        end,
+        Pids).
+
+
+test_half_timeouts(NumProcesses) ->
+    Pids = lists:map(
+        fun(I) ->
+            spawn_monitor(fun() ->
+                FunSrc = case I rem 2 of
+                0 ->
+                    <<"function(doc) { while (true) { }; }">>;
+                1 ->
+                    <<"function(doc) { emit(doc._id, doc.value); }">>
+                end,
+                {ok, Ctx} = mapreduce:start_map_context([FunSrc]),
+                Doc = <<"{\"_id\": \"doc1\", \"value\": 1}">>,
+                exit({ok, mapreduce:map_doc(Ctx, Doc)})
+            end)
+        end,
+        lists:seq(1, NumProcesses)),
+    lists:foreach(
+        fun({I, {Pid, Ref}}) ->
+            receive
+            {'DOWN', Ref, process, Pid, {ok, Value}} ->
+                case I rem 2 of
+                0 ->
+                    etap:is(Value, {error, <<"timeout">>}, "Worker " ++ integer_to_list(I) ++ " got timeout error");
+                1 ->
+                    etap:is(Value, {ok, [[{<<"\"doc1\"">>, <<"1">>}]]}, "Worker " ++ integer_to_list(I) ++ " got correct result")
+                end;
+            {'DOWN', Ref, process, Pid, _Reason} ->
+                etap:bail("Worker died unexpectedly")
+            after 120000 ->
+                etap:bail("Timeout waiting for worker result")
+            end
+        end,
+        lists:zip(lists:seq(1, NumProcesses), Pids)).
