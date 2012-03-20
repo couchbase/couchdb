@@ -622,8 +622,7 @@ design_doc_to_view_group(#doc{id=Id,body={Fields}}) ->
 
 reset_group(#group{views=Views}=Group) ->
     Views2 = [View#view{btree=nil} || View <- Views],
-    Group#group{fd=nil,query_server=nil,current_seq=0,
-            id_btree=nil,views=Views2}.
+    Group#group{fd=nil, current_seq=0, id_btree=nil, views=Views2}.
 
 reset_file(Db, Fd, DbName, #group{sig=Sig,name=Name} = Group) ->
     ?LOG_DEBUG("Resetting group index \"~s\" in db ~s", [Name, DbName]),
@@ -638,8 +637,8 @@ init_group(Db, Fd, #group{views=Views}=Group, nil) ->
     init_group(Db, Fd, Group,
         #index_header{seq=0, purge_seq=couch_db:get_purge_seq(Db),
             id_btree_state=nil, view_states=[{nil, 0, 0} || _ <- Views]});
-init_group(_Db, Fd, #group{def_lang=Lang,views=Views}=
-            Group, IndexHeader) ->
+init_group(_Db, Fd, #group{views=Views0} = Group, IndexHeader) ->
+    Views = [V#view{ref = make_ref()} || V <- Views0],
      #index_header{seq=Seq, purge_seq=PurgeSeq,
             id_btree_state=IdBtreeState, view_states=ViewStates} = IndexHeader,
     StateUpdate = fun
@@ -650,20 +649,16 @@ init_group(_Db, Fd, #group{def_lang=Lang,views=Views}=
     {ok, IdBtree} = couch_btree:open(
         IdBtreeState, Fd, []),
     Views2 = lists:zipwith(
-        fun({BTState, USeq, PSeq}, #view{reduce_funs=RedFuns,options=Options}=View) ->
-            FunSrcs = [FunSrc || {_Name, FunSrc} <- RedFuns],
+        fun({BTState, USeq, PSeq}, #view{options=Options} = View) ->
             ReduceFun =
                 fun(reduce, KVs) ->
                     KVs2 = couch_view:expand_dups(KVs,[]),
-                    KVs3 = couch_view:detuple_kvs(KVs2,[]),
-                    {ok, Reduced} = couch_query_servers:reduce(Lang, FunSrcs,
-                        KVs3),
-                    {length(KVs3), Reduced};
+                    {ok, Reduced} = couch_view_mapreduce:reduce(View, KVs2),
+                    {length(KVs2), Reduced};
                 (rereduce, Reds) ->
                     Count = lists:sum([Count0 || {Count0, _} <- Reds]),
                     UserReds = [UserRedsList || {_, UserRedsList} <- Reds],
-                    {ok, Reduced} = couch_query_servers:rereduce(Lang, FunSrcs,
-                        UserReds),
+                    {ok, Reduced} = couch_view_mapreduce:rereduce(View, UserReds),
                     {Count, Reduced}
                 end,
             

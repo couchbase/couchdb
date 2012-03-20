@@ -245,22 +245,22 @@ view_row_obj_map({{Key, error}, Value}, _DebugMode) ->
     {[{key, Key}, {error, Value}]};
 
 % set view
-view_row_obj_map({{Key, DocId}, {PartId, Value}}, true) ->
+view_row_obj_map({{Key, DocId}, {PartId, Value}}, true) when is_integer(PartId) ->
     {[{id, DocId}, {key, Key}, {partition, PartId}, {node, ?LOCAL}, {value, Value}]};
-view_row_obj_map({{Key, DocId}, {PartId, Node, Value}}, true) ->
+view_row_obj_map({{Key, DocId}, {PartId, Node, Value}}, true) when is_integer(PartId) ->
     {[{id, DocId}, {key, Key}, {partition, PartId}, {node, Node}, {value, Value}]};
-view_row_obj_map({{Key, DocId}, {_PartId, Value}}, false) ->
+view_row_obj_map({{Key, DocId}, {PartId, Value}}, false) when is_integer(PartId) ->
     {[{id, DocId}, {key, Key}, {value, Value}]};
 
 view_row_obj_map({{Key, DocId}, Value}, _DebugMode) ->
     {[{id, DocId}, {key, Key}, {value, Value}]};
 
 % set view
-view_row_obj_map({{Key, DocId}, {PartId, Value}, Doc}, true) ->
+view_row_obj_map({{Key, DocId}, {PartId, Value}, Doc}, true) when is_integer(PartId) ->
     {[{id, DocId}, {key, Key}, {partition, PartId}, {node, ?LOCAL}, {value, Value}, Doc]};
-view_row_obj_map({{Key, DocId}, {PartId, Node, Value}, Doc}, true) ->
+view_row_obj_map({{Key, DocId}, {PartId, Node, Value}, Doc}, true) when is_integer(PartId) ->
     {[{id, DocId}, {key, Key}, {partition, PartId}, {node, Node}, {value, Value}, Doc]};
-view_row_obj_map({{Key, DocId}, {_PartId, Value}, Doc}, false) ->
+view_row_obj_map({{Key, DocId}, {PartId, Value}, Doc}, false) when is_integer(PartId) ->
     {[{id, DocId}, {key, Key}, {value, Value}, Doc]};
 
 view_row_obj_map({{Key, DocId}, Value, Doc}, _DebugMode) ->
@@ -398,8 +398,7 @@ merge_reduce_min_row(Params, MinRow) ->
                 {row, _} ->
                     {ok, Col3} = Col2(Row);
                 _ ->
-                    Col3 = Col2,
-                    ok
+                    Col3 = Col2
                 end,
                 Limit2 = couch_index_merger:dec_counter(Limit)
             end,
@@ -439,14 +438,26 @@ group_keys_for_rereduce(Queue, [{K, _} | _] = Acc) ->
     end.
 
 
-rereduce(Rows, #merge_params{extra = Extra}) ->
-    #view_merge{
-        rereduce_fun = RedFun,
-        rereduce_fun_lang = Lang
-    } = Extra,
-    Reds = [[Val] || {_Key, Val} <- Rows],
-    {ok, [Value]} = couch_query_servers:rereduce(Lang, [RedFun], Reds),
-    Value.
+rereduce(Reds, #merge_params{extra = #view_merge{rereduce_fun = <<"_", _/binary>> = FunSrc}}) ->
+    {ok, [Value]} = couch_set_view_mapreduce:builtin_reduce(rereduce, [FunSrc], Reds),
+    Value;
+
+rereduce(Rows, #merge_params{extra = #view_merge{rereduce_fun = FunSrc}}) ->
+    Reds = [?JSON_ENCODE(Val) || {_Key, Val} <- Rows],
+    case get(reduce_context) of
+    undefined ->
+        {ok, Ctx} = mapreduce:start_reduce_context([FunSrc]),
+        erlang:put(reduce_context, Ctx);
+    Ctx ->
+        ok
+    end,
+    case mapreduce:rereduce(Ctx, 1, Reds) of
+    {ok, Value} ->
+        ?JSON_DECODE(Value);
+    Error ->
+        throw(Error)
+    end.
+
 
 get_set_view(GetSetViewFn, SetName, DDocId, ViewName, ViewGroupReq, Partitions) ->
     ViewGroupReq1 = ViewGroupReq#set_view_group_req{

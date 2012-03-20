@@ -296,7 +296,8 @@ get_ddoc(#httpdb{url = BaseUrl, headers = Headers} = HttpDb, Id) ->
     case ibrowse:send_req(
         Url, Headers, get, [], HttpDb#httpdb.ibrowse_options) of
     {ok, "200", _RespHeaders, Body} ->
-        {ok, couch_doc:from_json_obj(?JSON_DECODE(Body))};
+        Doc = couch_doc:from_json_obj(?JSON_DECODE(Body)),
+        {ok, couch_doc:with_ejson_body(Doc)};
     {ok, _Code, _RespHeaders, Body} ->
         {Props} = ?JSON_DECODE(Body),
         case {get_value(<<"error">>, Props), get_value(<<"reason">>, Props)} of

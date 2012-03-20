@@ -15,7 +15,7 @@
 SRCDIR="%abs_top_srcdir%"
 BUILDDIR="%abs_top_builddir%"
 export ERL_LIBS="$BUILDDIR/src/:$ERL_LIBS"
-export ERL_FLAGS="$ERL_FLAGS -pa $BUILDDIR/test/etap/"
+export ERL_FLAGS="$ERL_FLAGS -pa $BUILDDIR/test/etap/ -pa $BUILDDIR/src/mapreduce/"
 
 if test $# -eq 1; then
     if test "x${ETAP_VERBOSE}" != "x"; then

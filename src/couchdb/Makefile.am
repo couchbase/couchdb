@@ -91,6 +91,7 @@ source_files = \
     couch_view_compactor.erl \
     couch_view_updater.erl \
     couch_view_group.erl \
+    couch_view_mapreduce.erl \
     couch_db_updater.erl \
     couch_work_queue.erl \
     json_stream_parse.erl \
@@ -170,6 +171,7 @@ compiled_files = \
     couch_view_compactor.beam \
     couch_view_updater.beam \
     couch_view_group.beam \
+    couch_view_mapreduce.beam \
     couch_db_updater.beam \
     couch_work_queue.beam \
     json_stream_parse.beam \

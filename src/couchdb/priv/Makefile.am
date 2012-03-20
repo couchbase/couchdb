@@ -16,7 +16,6 @@ couchprivlibdir = $(couchlibdir)/priv/lib
 erlinterfaceldflags = $(ERL_INTERFACE_DIR_LIB) -lerl_interface -lei
 
 EXTRA_DIST = \
-	spawnkillable/couchspawnkillable.sh \
 	stat_descriptions.cfg.in \
 	couch_ejson_compare/erl_nif_compat.h
 
@@ -58,47 +57,18 @@ couch_icu_driver_la_LIBADD = $(ICU_LOCAL_LIBS)
 endif
 
 if WINDOWS
-couchjs_msbuild = couch_js/win32/msbuild.bat
-couchjs_vcproj = couch_js/win32/couchjs.vcxproj
-WIN_JS_INCLUDE = couch_js/win32/win_js_include.tmp
-WIN_JS_LIB_DIR = couch_js/win32/win_js_dir.tmp
 couchpriv_DATA = stat_descriptions.cfg $(COUCH_ICU_DRIVER)
 endif
 
-COUCHJS_SRCS = \
-	couch_js/http.c \
-	couch_js/http.h \
-	couch_js/main.c \
-	couch_js/utf8.c \
-	couch_js/utf8.h
-
 locallibbin_PROGRAMS =
-
-if BUILD_COUCHJS
-locallibbin_PROGRAMS += couchjs
-endif
-
-couchjs_SOURCES = $(COUCHJS_SRCS)
-couchjs_CFLAGS = -D_BSD_SOURCE $(CURL_CFLAGS)
-couchjs_LDADD = $(CURL_LIBS) @JSLIB@
 
 if !WINDOWS
 couchpriv_DATA = stat_descriptions.cfg
 endif
-couchpriv_PROGRAMS = couchspawnkillable
+couchpriv_PROGRAMS =
 
 %.cfg: %.cfg.in
 	cp $< $@
-
-if WINDOWS
-couchspawnkillable_SOURCES = spawnkillable/couchspawnkillable_win.c
-endif
-
-if !WINDOWS
-couchspawnkillable: spawnkillable/couchspawnkillable.sh
-	cp $< $@
-	chmod +x $@
-endif
 
 if WINDOWS
 
@@ -149,26 +119,6 @@ $(EJSON_COMPARE_VCPROJ): $(EJSON_COMPARE_VCPROJ).tpl $(WIN_ICU_INCLUDE) $(WIN_IC
 	    -e "s|%ICU_LIB_DIR%|`cat $(WIN_ICU_LIB_DIR)`|" \
 	< $< > $@
 
-couchjs$(EXEEXT): $(COUCHJS_SRCS) $(couchjs_msbuild) $(couchjs_vcproj)
-	@rm -f couchjs$(EXEEXT)
-	(cd couch_js/win32 && ./msbuild.bat)
-
-$(couchjs_msbuild): $(couchjs_msbuild).tpl
-	sed -e "s|%msbuild_dir%|$(msbuild_dir)|" \
-	    -e "s|%msbuild_name%|$(msbuild_name)|" \
-	    -e "s|^/cygdrive/\([a-zA-Z]\)|\1:|" \
-	< $< > $@
-
-$(couchjs_vcproj): $(couchjs_vcproj).tpl $(WIN_JS_INCLUDE) $(WIN_JS_LIB_DIR)
-	sed -e "s|%JS_INCLUDE%|`cat $(WIN_JS_INCLUDE)`|" \
-	    -e "s|%JS_LIB_DIR%|`cat $(WIN_JS_LIB_DIR)`|" \
-	< $< > $@
-
-$(WIN_JS_INCLUDE):$(JS_INCLUDE)
-	echo $< | sed -e "s|^/cygdrive/\([a-zA-Z]\)|\1:|" > $@
-
-$(WIN_JS_LIB_DIR):$(JS_LIB_DIR)
-	echo $< | sed -e "s|^/cygdrive/\([a-zA-Z]\)|\1:|" > $@
 endif
 
 # libtool and automake have defeated markh.  For each of our executables
@@ -193,8 +143,6 @@ if WINDOWS
 	$(INSTALL) $(ICU_LOCAL_BIN)/icudt44.dll $(bindir)
 	$(INSTALL) $(ICU_LOCAL_BIN)/icuin44.dll $(bindir)
 	$(INSTALL) $(JS_LIB_BINARY) $(bindir)
-	$(INSTALL) .libs/couchspawnkillable.exe \
-		"$(DESTDIR)$(couchprivdir)/couchspawnkillable.exe"
 endif
 
 uninstall-local:

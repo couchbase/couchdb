@@ -52,7 +52,12 @@ update(Owner, Group, #db{name = DbName} = Db) ->
         [{max_size, ?QUEUE_MAX_SIZE}, {max_items, ?QUEUE_MAX_ITEMS}]),
     Self = self(),
     spawn_link(fun() ->
-        do_maps(add_query_server(Group), MapQueue, WriteQueue)
+        couch_view_mapreduce:start_map_context(Group),
+        try
+            do_maps(Group, MapQueue, WriteQueue, [], 0)
+        after
+            couch_view_mapreduce:end_map_context()
+        end
     end),
     TotalChanges = couch_db:count_changes_since(Db, Seq),
     spawn_link(fun() ->
@@ -72,7 +77,12 @@ update(Owner, Group, #db{name = DbName} = Db) ->
             Group
         end,
         ViewEmptyKVs = [{View, []} || View <- Group2#group.views],
-        do_writes(Self, Owner, Group2, WriteQueue, Seq == 0, ViewEmptyKVs, [])
+        couch_view_mapreduce:start_reduce_context(Group2),
+        try
+            do_writes(Self, Owner, Group2, WriteQueue, Seq == 0, ViewEmptyKVs, [])
+        after
+            couch_view_mapreduce:end_reduce_context(Group2)
+        end
     end),
     % compute on all docs modified since we last computed.
     #group{ design_options = DesignOptions } = Group,
@@ -99,16 +109,6 @@ update(Owner, Group, #db{name = DbName} = Db) ->
         exit({new_group,
                 NewGroup#group{current_seq=couch_db:get_update_seq(Db)}})
     end.
-
-
-add_query_server(#group{query_server = nil} = Group) ->
-    {ok, Qs} = couch_query_servers:start_doc_map(
-        Group#group.def_lang,
-        [View#view.def || View <- Group#group.views],
-        Group#group.lib),
-    Group#group{query_server = Qs};
-add_query_server(Group) ->
-    Group.
 
 
 purge_index(#group{fd=Fd, views=Views, id_btree=IdBtree}=Group, Db) ->
@@ -164,23 +164,43 @@ load_doc(Db, DocInfo, MapQueue, DocOpts, IncludeDesign) ->
         end
     end.
 
-do_maps(#group{query_server = Qs} = Group, MapQueue, WriteQueue) ->
+do_maps(Group, MapQueue, WriteQueue, AccItems, AccItemsSize) ->
     case couch_work_queue:dequeue(MapQueue) of
     closed ->
-        couch_work_queue:close(WriteQueue),
-        couch_query_servers:stop_doc_map(Group#group.query_server);
-    {ok, Queue, _QueueSize} ->
-        lists:foreach(
-            fun({Seq, #doc{id = Id, deleted = true}}) ->
+        case AccItems of
+        [] ->
+            ok;
+        _ ->
+            ok = couch_work_queue:queue(WriteQueue, AccItems)
+        end,
+        couch_work_queue:close(WriteQueue);
+    {ok, Queue, QueueSize} ->
+        Items = lists:foldr(
+            fun({Seq, #doc{id = Id, deleted = true}}, Acc) ->
                 Item = {Seq, Id, []},
-                ok = couch_work_queue:queue(WriteQueue, Item);
-            ({Seq, #doc{id = Id, deleted = false} = Doc}) ->
-                {ok, Result} = couch_query_servers:map_doc_raw(Qs, Doc),
-                Item = {Seq, Id, Result},
-                ok = couch_work_queue:queue(WriteQueue, Item)
+                [Item | Acc];
+            ({Seq, #doc{id = Id, deleted = false} = Doc}, Acc) ->
+                try
+                    {ok, Result} = couch_view_mapreduce:map(Doc),
+                    Item = {Seq, Id, Result},
+                    [Item | Acc]
+                catch _:{error, Reason} ->
+                    ?LOG_ERROR("View group `~s`, error mapping document `~s`: ~s~n",
+                        [Group#group.name, Id, couch_util:to_binary(Reason)]),
+                    Acc
+                end
             end,
-            Queue),
-        do_maps(Group, MapQueue, WriteQueue)
+            [], Queue),
+        AccItems2 = AccItems ++ Items,
+        AccItemsSize2 = AccItemsSize + QueueSize,
+        case (AccItemsSize2 >= ?QUEUE_MAX_SIZE) orelse
+            (length(AccItems2) >= ?QUEUE_MAX_ITEMS) of
+        true ->
+            ok = couch_work_queue:queue(WriteQueue, AccItems2),
+            do_maps(Group, MapQueue, WriteQueue, [], 0);
+        false ->
+            do_maps(Group, MapQueue, WriteQueue, AccItems2, AccItemsSize2)
+        end
     end.
 
 
@@ -191,7 +211,7 @@ do_writes(Parent, Owner, Group, WriteQueue, InitialBuild, ViewEmptyKVs, Acc) ->
              Parent, Owner, Group, InitialBuild, ViewEmptyKVs, Acc),
          Parent ! {new_group, Group2};
     {ok, Queue, _QueueSize} ->
-        Acc2 = Acc ++ Queue,
+        Acc2 = Acc ++ lists:flatten(Queue),
         case length(Acc2) >= ?MIN_FLUSH_BATCH_SIZE of
         true ->
             Group2 = flush_writes(Parent, Owner, Group, InitialBuild, ViewEmptyKVs, Acc2),
@@ -208,11 +228,7 @@ flush_writes(Parent, Owner, Group, InitialBuild, ViewEmptyKVs, Queue) ->
     {ViewKVs, DocIdViewIdKeys} = lists:foldr(
         fun({_Seq, Id, []}, {ViewKVsAcc, DocIdViewIdKeysAcc}) ->
             {ViewKVsAcc, [{Id, []} | DocIdViewIdKeysAcc]};
-        ({_Seq, Id, RawQueryResults}, {ViewKVsAcc, DocIdViewIdKeysAcc}) ->
-            QueryResults = [
-                [list_to_tuple(FunResult) || FunResult <- FunRs] || FunRs <-
-                    couch_query_servers:raw_to_ejson(RawQueryResults)
-            ],
+        ({_Seq, Id, QueryResults}, {ViewKVsAcc, DocIdViewIdKeysAcc}) ->
             {NewViewKVs, NewViewIdKeys} = view_insert_doc_query_results(
                 Id, QueryResults, ViewKVsAcc, [], []),
             {NewViewKVs, [{Id, NewViewIdKeys} | DocIdViewIdKeysAcc]}

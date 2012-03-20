@@ -1,2 +1,0 @@
-%msbuild_dir%/%msbuild_name% couchjs.vcxproj -p:configuration=release -p:platform=win32
-cp release/couchjs.exe ../..

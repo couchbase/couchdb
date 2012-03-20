@@ -131,9 +131,11 @@ compact_view(Fd, View, #view{btree=ViewBtree}=EmptyView, Acc0) ->
         {Item, update_task(Acc, 1)}
     end,
 
-    % Copy each view btree.
+    couch_view_mapreduce:start_reduce_context(View),
     {ok, NewBtreeRoot, Acc2} = couch_btree_copy:copy(View#view.btree, Fd,
         [{before_kv_write, {BeforeKVWriteFun, Acc0}}]),
+    couch_view_mapreduce:end_reduce_context(View),
+
     ViewBtree2 = ViewBtree#btree{root = NewBtreeRoot},
     {EmptyView#view{btree = ViewBtree2}, Acc2}.
 

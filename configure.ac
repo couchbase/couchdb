@@ -140,31 +140,6 @@ AC_SUBST(ERL_INTERFACE_DIR_INCLUDE)
 ERL_INTERFACE_DIR_LIB="-L`${ERL} -eval 'io:put_chars(code:lib_dir(erl_interface) ++ "/lib"), timer:sleep(10), erlang:halt().' -noshell -noinput`"
 AC_SUBST(ERL_INTERFACE_DIR_LIB)
 
-AC_ARG_WITH([js-include], [AC_HELP_STRING([--with-js-include=PATH],
-    [set PATH to the SpiderMonkey include directory])], [
-    JS_INCLUDE="$withval"
-    JS_FLAGS="-I$JS_INCLUDE"
-], [
-    JS_FLAGS="-I/usr/include"
-    JS_FLAGS="$JS_FLAGS -I/usr/include/js"
-    JS_FLAGS="$JS_FLAGS -I/usr/include/mozjs"
-    JS_FLAGS="$JS_FLAGS -I/usr/local/include"
-    JS_FLAGS="$JS_FLAGS -I/opt/local/include"
-    JS_FLAGS="$JS_FLAGS -I/usr/local/include/js"
-    JS_FLAGS="$JS_FLAGS -I/opt/local/include/js"
-])
-AC_SUBST(JS_INCLUDE)
-
-AC_ARG_WITH([js-lib], [AC_HELP_STRING([--with-js-lib=PATH],
-    [set PATH to the SpiderMonkey library directory])],
-    [
-    JS_LIB_DIR=$withval
-    JS_LIB_FLAGS="-L$withval"
-], [
-    JS_LIB_DIR=
-])
-AC_SUBST(JS_LIB_DIR)
-
 AC_ARG_VAR([ERLC_FLAGS], [general flags to prepend to ERLC_FLAGS])
 AC_ARG_VAR([FLAGS], [general flags to prepend to LDFLAGS and CPPFLAGS])
 
@@ -173,12 +148,12 @@ if test "$ac_test_ERLCFLAGS" != set; then
   ERLC_FLAGS=+debug_info
 fi
 
-LIB_FLAGS="$JS_LIB_FLAGS -L/usr/local/lib -L/opt/local/lib"
+LIB_FLAGS="-L/usr/local/lib -L/opt/local/lib"
 LIBS="$LIB_FLAGS $LIBS"
 
 case "$(uname -s)" in
   CYGWIN*|MINGW*)
-    FLAGS="$LIB_FLAGS $ERLANG_FLAGS $JS_FLAGS -DXP_WIN $FLAGS"
+    FLAGS="$LIB_FLAGS $ERLANG_FLAGS -DXP_WIN $FLAGS"
     CPPFLAGS="$FLAGS $CPPFLAGS"
     LDFLAGS="$FLAGS $LDFLAGS"
     IS_WINDOWS="TRUE"
@@ -189,7 +164,7 @@ case "$(uname -s)" in
     ;;
   *)
     # XP_UNIX required for jsapi.h and has been tested to work on Linux and Darwin.
-    FLAGS="$LIB_FLAGS $ERLANG_FLAGS $JS_FLAGS -DXP_UNIX $FLAGS"
+    FLAGS="$LIB_FLAGS $ERLANG_FLAGS -DXP_UNIX $FLAGS"
     CPPFLAGS="$FLAGS $CPPFLAGS"
     # manually linking libm is requred for FreeBSD 7.0
     LDFLAGS="$FLAGS -lm $LDFLAGS"
@@ -197,25 +172,6 @@ case "$(uname -s)" in
 esac
 
 AM_CONDITIONAL([WINDOWS], [test x$IS_WINDOWS = xTRUE])
-
-AC_ARG_ENABLE([spidermonkey],
-    [AS_HELP_STRING([--disable-spidermonkey],
-            [Allow to build without spidermonkey (things may not work as you expect) @<:@default=off@:>@])],
-    [ac_enable_spidermonkey="$enableval"],
-    [ac_enable_spidermonkey="yes"])
-
-AM_CONDITIONAL([BUILD_COUCHJS], [ test "x${ac_enable_spidermonkey}" = "xyes" ])
-
-AS_IF([ test "x${ac_enable_spidermonkey}" = "xyes" ], [
-  AC_CHECK_LIB([mozjs], [JS_NewContext], [JS_LIB_BASE=mozjs], [
-    AC_CHECK_LIB([js], [JS_NewContext], [JS_LIB_BASE=js], [
-        AC_CHECK_LIB([js3250], [JS_NewContext], [JS_LIB_BASE=js3250], [
-            AC_CHECK_LIB([js32], [JS_NewContext], [JS_LIB_BASE=js32], [
-                AC_MSG_ERROR([Could not find the js library.
-
-Is the Mozilla SpiderMonkey library installed?])])])])])
-
-AC_SUBST(JS_LIB_BASE)
 
 AC_ARG_WITH([v8-lib], [AC_HELP_STRING([--with-v8-lib=PATH],
     [set PATH to the V8 library directory])],
@@ -248,19 +204,6 @@ AC_CHECK_HEADER([v8.h], [], [AC_MSG_ERROR([Could not find the V8 JavaScript engi
 #     [AC_MSG_ERROR([Could not find the V8 JavaScript engine library.])])
 
 if test x${IS_WINDOWS} = xTRUE; then
-    if test -f "$JS_LIB_DIR/$JS_LIB_BASE.dll"; then
-        # seamonkey 1.7- build layout on Windows
-        JS_LIB_BINARY="$JS_LIB_DIR/$JS_LIB_BASE.dll"
-    else
-        # seamonkey 1.8+ build layout on Windows
-        if test -f "$JS_LIB_DIR/../bin/$JS_LIB_BASE.dll"; then
-            JS_LIB_BINARY="$JS_LIB_DIR/../bin/$JS_LIB_BASE.dll"
-        else
-        AC_MSG_ERROR([Could not find $JS_LIB_BASE.dll.])
-        fi
-    fi
-    AC_SUBST(JS_LIB_BINARY)
-
         # On windows we need to know the path to the openssl binaries.
         AC_ARG_WITH([openssl-bin-dir], [AC_HELP_STRING([--with-openssl-bin-dir=PATH],
             [path to the open ssl binaries for distribution on Windows])], [
@@ -316,37 +259,6 @@ if test x${IS_WINDOWS} = xTRUE; then
             AC_MSG_WARN([The .NET Framework 4.0 seems to be missing; expect the couchjs module to fail.])
         fi
 fi
-
-JSLIB=-l$JS_LIB_BASE
-
-AC_CHECK_HEADER([jsapi.h], [], [
-    AC_CHECK_HEADER([js/jsapi.h],
-        [
-        CPPFLAGS="$CPPFLAGS -I$JS_INCLUDE/js"
-        ],
-        [
-            AC_MSG_ERROR([Could not find the jsapi header.
-
-Are the Mozilla SpiderMonkey headers installed?])
-        ])])
-
-AC_SUBST(JSLIB)
-
-AC_LANG_PUSH(C)
-OLD_CFLAGS="$CFLAGS"
-CFLAGS="-Werror-implicit-function-declaration"
-AC_COMPILE_IFELSE(
-    [AC_LANG_PROGRAM(
-        [[#include <jsapi.h>]],
-        [[JS_SetOperationCallback(0, 0);]]
-    )],
-    AC_DEFINE([USE_JS_SETOPCB], [], [Use new JS_SetOperationCallback])
-)
-CFLAGS="$OLD_CFLAGS"
-AC_LANG_POP(C)
-
-# END allow building without spidermonkey
-])
 
 AC_ARG_WITH([win32-icu-binaries], [AC_HELP_STRING([--with-win32-icu-binaries=PATH],
     [set PATH to the Win32 native ICU binaries directory])], [
@@ -507,7 +419,7 @@ AC_ARG_VAR([HELP2MAN_EXECUTABLE], [path to the `help2man' program])
 if test -n "$HELP2MAN_EXECUTABLE"; then
     help2man_enabled=true
 else
-    if test -f "$srcdir/bin/couchdb.1" -a -f "$srcdir/bin/couchjs.1"; then
+    if test -f "$srcdir/bin/couchdb.1"; then
         help2man_enabled=true
     else
         help2man_enabled=false
@@ -601,8 +513,6 @@ AC_CONFIG_FILES([test/python/set_view/Makefile])
 AC_CONFIG_FILES([utils/Makefile])
 AC_CONFIG_FILES([var/Makefile])
 if test x${IS_WINDOWS} = xTRUE; then
-    AC_CONFIG_FILES([src/couchdb/priv/couch_js/win32/msbuild.bat.tpl])
-    AC_CONFIG_FILES([src/couchdb/priv/couch_js/win32/couchjs.vcxproj.tpl])
     AC_CONFIG_FILES([src/couchdb/priv/icu_driver/win32/msbuild.bat.tpl])
     AC_CONFIG_FILES([src/couchdb/priv/icu_driver/win32/couch_icu_driver.vcxproj.tpl])
     AC_CONFIG_FILES([src/couchdb/priv/couch_ejson_compare/win32/msbuild.bat.tpl])
@@ -630,15 +540,6 @@ if test x${IS_WINDOWS} = xTRUE; then
     mv libtool.tmp libtool
     # probably would chmod +x if we weren't on windows...
 fi
-
-AS_IF([ test "x${ac_enable_spidermonkey}" != "xyes" ], [
-echo
-echo You have chosen to build CouchDB _without_ spidermonkey. This means
-echo that a lot of things won't work for you, and you may encounter tons
-echo of trouble. You have been warned, so you're on your own if you choose
-echo to continue building.
-echo
-])
 
 echo
 echo "You have configured Apache CouchDB, time to relax."

@@ -10,19 +10,17 @@
 % License for the specific language governing permissions and limitations under
 % the License.
 
--module(couch_set_view_mapreduce).
+-module(couch_view_mapreduce).
 
 -include("couch_db.hrl").
--include_lib("couch_set_view/include/couch_set_view.hrl").
 
 -export([start_map_context/1, start_reduce_context/1]).
 -export([end_map_context/0, end_reduce_context/1]).
 -export([map/1, reduce/2, reduce/3, rereduce/2, rereduce/3]).
--export([builtin_reduce/3]).
 
 
-start_map_context(#set_view_group{views = Views}) ->
-    {ok, Ctx} = mapreduce:start_map_context([View#set_view.def || View <- Views]),
+start_map_context(#group{views = Views}) ->
+    {ok, Ctx} = mapreduce:start_map_context([View#view.def || View <- Views]),
     erlang:put(map_context, Ctx),
     ok.
 
@@ -32,10 +30,10 @@ end_map_context() ->
     ok.
 
 
-start_reduce_context(#set_view_group{views = Views}) ->
+start_reduce_context(#group{views = Views}) ->
     lists:foreach(fun start_reduce_context/1, Views);
 
-start_reduce_context(#set_view{ref = Ref, reduce_funs = RedFuns}) ->
+start_reduce_context(#view{ref = Ref, reduce_funs = RedFuns}) ->
     FunSrcs = lists:foldr(
         fun({_Name, <<"_", _/binary>>}, Acc) ->
             Acc;
@@ -53,10 +51,10 @@ start_reduce_context(#set_view{ref = Ref, reduce_funs = RedFuns}) ->
     end.
 
 
-end_reduce_context(#set_view_group{views = Views}) ->
+end_reduce_context(#group{views = Views}) ->
     lists:foreach(fun end_reduce_context/1, Views);
 
-end_reduce_context(#set_view{ref = Ref}) ->
+end_reduce_context(#view{ref = Ref}) ->
     erlang:erase({reduce_context, Ref}),
     ok.
 
@@ -66,14 +64,8 @@ map(Doc) ->
     DocBin = couch_doc:to_raw_json_binary(Doc),
     case mapreduce:map_doc(Ctx, DocBin) of
     {ok, Results} ->
-        % Keep map values as raw json to avoid encoding them before passing
-        % them to JavaScript reduce functions or builtin _count reduce function,
-        % and when serving map queries.
-        % For the builtins _sum and stats, we decode the map values before
-        % supplying them to those functions - they're just numbers, so the
-        % decoding is fast (faster then encoding map values).
         {ok, [
-            [{?JSON_DECODE(K), {json, V}} || {K, V} <- FunResult]
+            [{?JSON_DECODE(K), ?JSON_DECODE(V)} || {K, V} <- FunResult]
                 || FunResult <- Results
         ]};
     Error ->
@@ -81,9 +73,9 @@ map(Doc) ->
     end.
 
 
-reduce(#set_view{reduce_funs = []}, _KVs) ->
+reduce(#view{reduce_funs = []}, _KVs) ->
     {ok, []};
-reduce(#set_view{ref = Ref, reduce_funs = RedFuns}, KVs0) ->
+reduce(#view{ref = Ref, reduce_funs = RedFuns}, KVs0) ->
     RedFunSources = [FunSource || {_Name, FunSource} <- RedFuns],
     {NativeFuns, JsFuns} = lists:partition(
         fun(<<"_", _/binary>>) -> true; (_) -> false end,
@@ -105,9 +97,9 @@ reduce(#set_view{ref = Ref, reduce_funs = RedFuns}, KVs0) ->
     end.
 
 
-reduce(#set_view{reduce_funs = []}, _NthRed, _KVs) ->
+reduce(#view{reduce_funs = []}, _NthRed, _KVs) ->
     {ok, []};
-reduce(#set_view{ref = Ref, reduce_funs = RedFuns}, NthRed, KVs0) ->
+reduce(#view{ref = Ref, reduce_funs = RedFuns}, NthRed, KVs0) ->
     {Before, [{_Name, FunSrc} | _]} = lists:split(NthRed - 1, RedFuns),
     case FunSrc of
     <<"_", _/binary>> ->
@@ -132,9 +124,9 @@ reduce(#set_view{ref = Ref, reduce_funs = RedFuns}, NthRed, KVs0) ->
     end.
 
 
-rereduce(#set_view{reduce_funs = []}, _ReducedValues) ->
+rereduce(#view{reduce_funs = []}, _ReducedValues) ->
     {ok, []};
-rereduce(#set_view{ref = Ref, reduce_funs = RedFuns}, ReducedValues) ->
+rereduce(#view{ref = Ref, reduce_funs = RedFuns}, ReducedValues) ->
     Grouped = group_reductions_results(ReducedValues),
     Ctx = erlang:get({reduce_context, Ref}),
     Results = lists:zipwith(
@@ -152,9 +144,9 @@ rereduce(#set_view{ref = Ref, reduce_funs = RedFuns}, ReducedValues) ->
     {ok, Results}.
 
 
-rereduce(#set_view{reduce_funs = []}, _NthRed, _ReducedValues) ->
+rereduce(#view{reduce_funs = []}, _NthRed, _ReducedValues) ->
     {ok, []};
-rereduce(#set_view{ref = Ref, reduce_funs = RedFuns}, NthRed, ReducedValues) ->
+rereduce(#view{ref = Ref, reduce_funs = RedFuns}, NthRed, ReducedValues) ->
     {Before, [{_Name, FunSrc} | _]} = lists:split(NthRed - 1, RedFuns),
     [Values] = group_reductions_results(ReducedValues),
     case FunSrc of
@@ -213,9 +205,6 @@ group_reductions_results(List) ->
         [Heads | group_reductions_results(Tails)]
     end.
 
-
-builtin_reduce(ReduceType, FunSrcs, Values) ->
-    builtin_reduce(ReduceType, FunSrcs, Values, []).
 
 builtin_reduce(_Re, [], _KVs, Acc) ->
     {ok, lists:reverse(Acc)};
@@ -300,13 +289,13 @@ builtin_stats(rereduce, [{_, First} | Rest]) ->
 contract_kvs([], Acc) ->
     lists:reverse(Acc);
 contract_kvs([KV | Rest], Acc) ->
-    {{Key, Id}, {_PartId, {json, Value}}} = KV,
-    NKV = {[Key, Id], ?JSON_DECODE(Value)},
+    {{Key, Id}, Value} = KV,
+    NKV = {[Key, Id], Value},
     contract_kvs(Rest, [NKV | Acc]).
 
 encode_kvs([], Acc) ->
     lists:reverse(Acc);
 encode_kvs([KV | Rest], Acc) ->
-    {{Key,Id}, {_PartId, Value}} = KV,
+    {{Key, Id}, Value} = KV,
     NKV = {?JSON_ENCODE([Key, Id]), ?JSON_ENCODE(Value)},
     encode_kvs(Rest, [NKV | Acc]).

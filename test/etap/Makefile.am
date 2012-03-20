@@ -64,21 +64,10 @@ EXTRA_DIST = \
     121-stats-aggregates.ini \
     121-stats-aggregates.t \
     150-invalid-view-seq.t \
-    170-os-daemons.es \
-    170-os-daemons.t \
-    171-os-daemons-config.es \
-    171-os-daemons-config.t \
-    172-os-daemon-errors.1.sh \
-    172-os-daemon-errors.2.sh \
-    172-os-daemon-errors.3.sh \
-    172-os-daemon-errors.4.sh \
-    172-os-daemon-errors.t \
-    173-os-daemon-cfg-register.t \
     180-http-proxy.ini \
     180-http-proxy.t \
     190-json-stream-parse.t \
     200-view-group-no-db-leaks.t \
     201-view-group-shutdown.t \
-    210-os-proc-pool.t \
     220-compaction-daemon.t \
     230-httpc-pool.t

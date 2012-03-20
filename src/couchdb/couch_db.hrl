@@ -231,7 +231,6 @@
     id_btree=nil,
     current_seq=0,
     purge_seq=0,
-    query_server=nil,
     waiting_delayed_commit=nil
     }).
 
@@ -243,7 +242,8 @@
     def,
     btree=nil,
     reduce_funs=[],
-    options=[]
+    options=[],
+    ref
     }).
 
 -record(index_header,
