@@ -173,35 +173,45 @@ esac
 
 AM_CONDITIONAL([WINDOWS], [test x$IS_WINDOWS = xTRUE])
 
-AC_ARG_WITH([v8-lib], [AC_HELP_STRING([--with-v8-lib=PATH],
-    [set PATH to the V8 library directory])],
-    [
-    V8_LIB_DIR=$withval
-    V8_LIB_FLAGS="-L$withval -lv8"
-], [
-    V8_LIB_FLAGS="-lv8"
-])
-AC_SUBST(V8_LIB_DIR)
-LDFLAGS="$V8_LIB_FLAGS $LDFLAGS"
+AC_ARG_ENABLE([v8],
+    [AS_HELP_STRING([--disable-v8],
+            [Allow to build without the V8 library @<:@default=off@:>@])],
+    [ac_enable_v8="$enableval"],
+    [ac_enable_v8="yes"])
 
-AC_ARG_WITH([v8-include], [AC_HELP_STRING([--with-v8-include=PATH],
-    [set PATH to the V8 include directory])], [
-    V8_INCLUDE="$withval"
-    V8_FLAGS="-I$V8_INCLUDE"
-], [
-    V8_FLAGS="-I/usr/include/v8"
-    V8_FLAGS="$V8_FLAGS -I/opt/local/include"
-    V8_FLAGS="$V8_FLAGS -I/usr/local/include/v8"
-    V8_FLAGS="$V8_FLAGS -I/opt/local/include/v8"
-])
-AC_SUBST(V8_INCLUDE)
-CPPFLAGS="$V8_FLAGS $CPPFLAGS"
+AM_CONDITIONAL([BUILD_MAPREDUCE], [ test "x${ac_enable_v8}" = "xyes" ])
 
-AC_CHECK_HEADER([v8.h], [], [AC_MSG_ERROR([Could not find the V8 JavaScript engine library.])])
-# V8 library has no exported C functions, so we can't use AC_CHECK_LIB
-# TODO: find an alternative
-# AC_CHECK_LIB([v8], [exported-C-function], [V8_LIB_BASE=v8],
-#     [AC_MSG_ERROR([Could not find the V8 JavaScript engine library.])])
+AS_IF([ test "x${ac_enable_v8}" = "xyes" ], [
+    AC_ARG_WITH([v8-lib], [AC_HELP_STRING([--with-v8-lib=PATH],
+        [set PATH to the V8 library directory])],
+        [
+            V8_LIB_DIR=$withval
+            V8_LIB_FLAGS="-L$withval -lv8"
+        ], [
+            V8_LIB_FLAGS="-lv8"
+    ])
+    AC_SUBST(V8_LIB_DIR)
+    LDFLAGS="$V8_LIB_FLAGS $LDFLAGS"
+
+    AC_ARG_WITH([v8-include], [AC_HELP_STRING([--with-v8-include=PATH],
+        [set PATH to the V8 include directory])], [
+            V8_INCLUDE="$withval"
+            V8_FLAGS="-I$V8_INCLUDE"
+        ], [
+            V8_FLAGS="-I/usr/include/v8"
+            V8_FLAGS="$V8_FLAGS -I/opt/local/include"
+            V8_FLAGS="$V8_FLAGS -I/usr/local/include/v8"
+            V8_FLAGS="$V8_FLAGS -I/opt/local/include/v8"
+    ])
+    AC_SUBST(V8_INCLUDE)
+    CPPFLAGS="$V8_FLAGS $CPPFLAGS"
+
+    AC_CHECK_HEADER([v8.h], [], [AC_MSG_ERROR([Could not find the V8 JavaScript engine library.])])
+    # V8 library has no exported C functions, so we can't use AC_CHECK_LIB
+    # TODO: find an alternative
+    # AC_CHECK_LIB([v8], [exported-C-function], [V8_LIB_BASE=v8],
+    #     [AC_MSG_ERROR([Could not find the V8 JavaScript engine library.])])
+])
 
 if test x${IS_WINDOWS} = xTRUE; then
         # On windows we need to know the path to the openssl binaries.
@@ -501,7 +511,9 @@ AC_CONFIG_FILES([src/snappy/Makefile])
 AC_CONFIG_FILES([src/snappy/snappy-$SNAPPY_MAJOR.$SNAPPY_MINOR.$SNAPPY_PATCHLEVEL/snappy-stubs-public.h])
 AC_CONFIG_FILES([src/ejson/Makefile])
 AC_CONFIG_FILES([src/couch_set_view/Makefile])
-AC_CONFIG_FILES([src/mapreduce/Makefile])
+AS_IF([ test "x${ac_enable_v8}" = "xyes" ], [
+    AC_CONFIG_FILES([src/mapreduce/Makefile])
+])
 AC_CONFIG_FILES([test/Makefile])
 AC_CONFIG_FILES([test/bench/Makefile])
 AC_CONFIG_FILES([test/etap/Makefile])
@@ -519,8 +531,10 @@ if test x${IS_WINDOWS} = xTRUE; then
     AC_CONFIG_FILES([src/couchdb/priv/couch_ejson_compare/win32/couch_ejson_compare.vcxproj.tpl])
     AC_CONFIG_FILES([src/ejson/win32/msbuild.bat.tpl])
     AC_CONFIG_FILES([src/ejson/win32/ejson.vcxproj.tpl])
-    AC_CONFIG_FILES([src/mapreduce/win32/msbuild.bat.tpl])
-    AC_CONFIG_FILES([src/mapreduce/win32/mapreduce.vcxproj.tpl])
+    AS_IF([ test "x${ac_enable_v8}" = "xyes" ], [
+        AC_CONFIG_FILES([src/mapreduce/win32/msbuild.bat.tpl])
+        AC_CONFIG_FILES([src/mapreduce/win32/mapreduce.vcxproj.tpl])
+    ])
     AC_CONFIG_FILES([src/snappy/win32/msbuild.bat.tpl])
     AC_CONFIG_FILES([src/snappy/win32/snappy.vcxproj.tpl])
 fi

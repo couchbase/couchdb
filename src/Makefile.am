@@ -10,13 +10,19 @@
 ## License for the specific language governing permissions and limitations under
 ## the License.
 
+if BUILD_MAPREDUCE
 SUBDIRS = \
+    mapreduce
+else
+SUBDIRS =
+endif
+
+SUBDIRS += \
     couchdb \
     ejson \
     erlang-oauth \
     etap \
     ibrowse \
-    mapreduce \
     mochiweb \
     snappy \
     couch_set_view
