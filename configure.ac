@@ -470,6 +470,8 @@ fi
 
 AC_ARG_VAR([ERL], [path to the `erl' executable])
 AC_ARG_VAR([ERLC], [path to the `erlc' executable])
+AC_ARG_VAR([ICU_CONFIG], [path to the `icu-config' executable])
+AC_ARG_VAR([CURL_CONFIG], [path to the `curl-config' executable])
 AC_ARG_VAR([HELP2MAN_EXECUTABLE], [path to the `help2man' program])
 
 if test -n "$HELP2MAN_EXECUTABLE"; then
