@@ -17,8 +17,10 @@
 -include("couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
 
--define(QUEUE_MAX_ITEMS, 1000).
--define(QUEUE_MAX_SIZE, 100 * 1024).
+-define(QUEUE_MAX_ITEMS, 5000).
+-define(QUEUE_MAX_SIZE, 500 * 1024).
+-define(MIN_WRITER_NUM_ITEMS, 1000).
+-define(MIN_WRITER_BATCH_SIZE, 100 * 1024).
 -define(replace(L, K, V), lists:keystore(K, 1, L, {K, V})).
 
 -record(writer_acc, {
@@ -168,7 +170,7 @@ update(Owner, Group, FileName, ActiveDbs, PassiveDbs, MaxSeqs, BlockedTime) ->
         try
             couch_set_view_mapreduce:start_map_context(Group),
             try
-                do_maps(Group, MapQueue, WriteQueue, [], 0)
+                do_maps(Group, MapQueue, WriteQueue)
             after
                 couch_set_view_mapreduce:end_map_context()
             end
@@ -423,17 +425,11 @@ load_doc(Db, PartitionId, DocInfo, MapQueue) ->
     end.
 
 
-do_maps(Group, MapQueue, WriteQueue, AccItems, AccItemsSize) ->
+do_maps(Group, MapQueue, WriteQueue) ->
     case couch_work_queue:dequeue(MapQueue) of
     closed ->
-        case AccItems of
-        [] ->
-            ok;
-        _ ->
-            ok = couch_work_queue:queue(WriteQueue, AccItems)
-        end,
         couch_work_queue:close(WriteQueue);
-    {ok, Queue, QueueSize} ->
+    {ok, Queue, _QueueSize} ->
         Items = lists:foldr(
             fun({Seq, #doc{id = Id, deleted = true}, PartitionId}, Acc) ->
                 Item = {Seq, Id, PartitionId, []},
@@ -456,16 +452,8 @@ do_maps(Group, MapQueue, WriteQueue, AccItems, AccItemsSize) ->
                 end
             end,
             [], Queue),
-        AccItems2 = AccItems ++ Items,
-        AccItemsSize2 = AccItemsSize + QueueSize,
-        case (AccItemsSize2 >= ?QUEUE_MAX_SIZE) orelse
-            (length(AccItems2) >= ?QUEUE_MAX_ITEMS) of
-        true ->
-            ok = couch_work_queue:queue(WriteQueue, AccItems2),
-            do_maps(Group, MapQueue, WriteQueue, [], 0);
-        false ->
-            do_maps(Group, MapQueue, WriteQueue, AccItems2, AccItemsSize2)
-        end
+        ok = couch_work_queue:queue(WriteQueue, Items),
+        do_maps(Group, MapQueue, WriteQueue)
     end.
 
 
@@ -476,7 +464,7 @@ do_writes(#writer_acc{kvs = Kvs, kvs_size = KvsSize, write_queue = WriteQueue} =
     {ok, Queue, QueueSize} ->
         Kvs2 = Kvs ++ lists:flatten(Queue),
         KvsSize2 = KvsSize + QueueSize,
-        case (KvsSize2 >= ?QUEUE_MAX_SIZE) orelse (length(Kvs2) >= ?QUEUE_MAX_ITEMS) of
+        case (KvsSize2 >= ?MIN_WRITER_BATCH_SIZE) orelse (length(Kvs2) >= ?MIN_WRITER_NUM_ITEMS) of
         true ->
             Acc1 = flush_writes(Acc#writer_acc{kvs = Kvs2, kvs_size = KvsSize2}),
             Acc2 = Acc1#writer_acc{kvs = [], kvs_size = 0};
