@@ -929,6 +929,10 @@ prepare_group({RootDir, SetName, #set_view_group{sig = Sig, type = Type} = Group
                 {ok, reset_file(Fd, SetName, Group)}
             end
         end;
+    {error, emfile} = Error ->
+        ?LOG_ERROR("Can't open set view `~s`, ~s group `~s`: too many files open",
+            [SetName, Type, Group#set_view_group.name]),
+        Error;
     Error ->
         catch delete_index_file(RootDir, SetName, Type, Sig),
         Error
