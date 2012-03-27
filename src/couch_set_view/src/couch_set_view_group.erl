@@ -827,6 +827,8 @@ handle_info({'EXIT', _Pid, {updater_error, _Error}}, State) ->
     {noreply, State, ?TIMEOUT};
 
 handle_info({'EXIT', UpPid, reset}, #state{updater_pid = UpPid} = State) ->
+    % TODO: once purge support is properly added, this needs to take into
+    % account the replica index.
     State2 = stop_cleaner(State),
     case prepare_group(State#state.init_args, true) of
     {ok, ResetGroup} ->
@@ -926,6 +928,13 @@ prepare_group({RootDir, SetName, #set_view_group{sig = Sig, type = Type} = Group
                 {ok, init_group(Fd, Group, HeaderInfo)};
             _ ->
                 % this happens on a new file
+                case (not ForceReset) andalso (Type =:= main) of
+                true ->
+                    % initializing main view group
+                    catch delete_index_file(RootDir, SetName, replica, Sig);
+                false ->
+                    ok
+                end,
                 {ok, reset_file(Fd, SetName, Group)}
             end
         end;
@@ -935,6 +944,13 @@ prepare_group({RootDir, SetName, #set_view_group{sig = Sig, type = Type} = Group
         Error;
     Error ->
         catch delete_index_file(RootDir, SetName, Type, Sig),
+        case (not ForceReset) andalso (Type =:= main) of
+        true ->
+            % initializing main view group
+            catch delete_index_file(RootDir, SetName, replica, Sig);
+        false ->
+            ok
+        end,
         Error
     end.
 
