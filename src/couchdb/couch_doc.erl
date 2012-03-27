@@ -302,13 +302,27 @@ to_raw_json_binary(Doc, IncludeMemcachedMeta) ->
 
         case ContentMeta of
         ?CONTENT_META_JSON ->
-            case iolist_to_binary(Json) of
-            <<"{}">> ->
+            JsonRest = strip_leading_bracket(iolist_to_binary(Json)),
+            case first_non_ws_byte(JsonRest) of
+            $} ->
                 <<"}">>;
-            <<${, JsonRest/binary>> ->
+            _ ->
                 <<",", JsonRest/binary>>
             end;
         _ ->
             [<<",\"_bin\":\"">>, base64:encode(iolist_to_binary(Json)), <<"\"}">>]
         end
     ]).
+
+
+-define(IS_JSON_WS(X), (X == $\  orelse X == $\t orelse X == $\n orelse X == $\r)).
+
+strip_leading_bracket(<<"{", Rest/binary>>) ->
+    Rest;
+strip_leading_bracket(<<S, Rest/binary>>) when ?IS_JSON_WS(S) ->
+    strip_leading_bracket(Rest).
+
+first_non_ws_byte(<<S, Rest/binary>>) when ?IS_JSON_WS(S) ->
+    first_non_ws_byte(Rest);
+first_non_ws_byte(<<B, _/binary>>) ->
+    B.
