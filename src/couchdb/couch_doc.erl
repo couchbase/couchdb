@@ -265,6 +265,7 @@ to_raw_json_binary(Doc, IncludeMemcachedMeta) ->
         id = Id,
         body = Json,
         rev = {Start, RevId},
+        deleted = Deleted,
         content_meta = ContentMeta
     } = with_json_body(Doc),
     % TODO: if needed later, include the meta fields (like _local_seq)
@@ -296,6 +297,13 @@ to_raw_json_binary(Doc, IncludeMemcachedMeta) ->
                     [<<",\"$att_reason\":\"">>, AttReason, <<"\"">>]
                 end
             ];
+        false ->
+            <<>>
+        end,
+
+        case Deleted of
+        true ->
+            <<",\"_deleted\":true">>;
         false ->
             <<>>
         end,
