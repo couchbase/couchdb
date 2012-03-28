@@ -131,7 +131,7 @@ maybe_retry_compact(CompactResult0, SetName, StartTime, GroupFd, CompactFileName
         compact_time = timer:now_diff(now(), StartTime) / 1000000
     },
     {ok, Pid} = get_group_pid(SetName, DDocId, Type),
-    case gen_server:call(Pid, {compact_done, CompactResult}) of
+    case gen_server:call(Pid, {compact_done, CompactResult}, infinity) of
     ok ->
         ok = couch_set_view_util:close_raw_read_fd(GroupFd);
     update ->
