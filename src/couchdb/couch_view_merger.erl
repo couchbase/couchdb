@@ -200,9 +200,9 @@ http_index_folder_req_details(#simple_index_spec{
 view_details(nil, <<"_all_docs">>) ->
     {<<"raw">>, map, nil};
 
-view_details(#doc{body = DDoc}, ViewName) ->
-    {Props} = DDoc,
-    {ViewDef} = get_nested_json_value(DDoc, [<<"views">>, ViewName]),
+view_details(DDoc, ViewName) ->
+    {Props} = DDoc#doc.body,
+    {ViewDef} = get_view_def(DDoc, ViewName),
     {ViewOptions} = get_value(<<"options">>, ViewDef, {[]}),
     Collation = get_value(<<"collation">>, ViewOptions, <<"default">>),
     ViewType = case get_value(<<"reduce">>, ViewDef) of
@@ -215,9 +215,27 @@ view_details(#doc{body = DDoc}, ViewName) ->
     {Collation, ViewType, Lang}.
 
 
-reduce_function(#doc{body = DDoc}, ViewName) ->
-    {ViewDef} = get_nested_json_value(DDoc, [<<"views">>, ViewName]),
-    get_value(<<"reduce">>, ViewDef).
+reduce_function(#doc{id = DDocId} = DDoc, ViewName) ->
+    {ViewDef} = get_view_def(DDoc, ViewName),
+    case get_value(<<"reduce">>, ViewDef) of
+    FunString when is_binary(FunString) ->
+        FunString;
+    _ ->
+        NotFoundMsg = io_lib:format("Reduce field for view `~s`, local "
+            "design document `~s`, is missing or is not a string.",
+            [ViewName, DDocId]),
+        throw({error, iolist_to_binary(NotFoundMsg)})
+    end.
+
+
+get_view_def(#doc{body = DDoc, id = DDocId}, ViewName) ->
+    try
+        get_nested_json_value(DDoc, [<<"views">>, ViewName])
+    catch throw:{not_found, _} ->
+        NotFoundMsg = io_lib:format("View `~s` not defined in local "
+            "design document `~s`.", [ViewName, DDocId]),
+        throw({error, iolist_to_binary(NotFoundMsg)})
+    end.
 
 
 view_less_fun(Collation, Dir, ViewType) ->
