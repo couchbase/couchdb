@@ -175,7 +175,13 @@ std::list<json_bin_t> runReduce(map_reduce_ctx_t *ctx, const std::list<json_bin_
             throw MapReduceError(*exceptionStr);
         }
 
-        results.push_back(jsonStringify(result));
+        try {
+            json_bin_t jsonResult = jsonStringify(result);
+            results.push_back(jsonResult);
+        } catch(...) {
+            deleteJsonData(results);
+            throw;
+        }
     }
 
     taskFinished(ctx);
