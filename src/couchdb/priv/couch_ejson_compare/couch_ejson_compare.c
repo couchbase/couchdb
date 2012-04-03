@@ -180,9 +180,15 @@ atom_sort_order(ErlNifEnv* env, ERL_NIF_TERM a)
 int
 term_is_number(ErlNifEnv* env, ERL_NIF_TERM t)
 {
+#if (ERL_NIF_MAJOR_VERSION > 2) || \
+    (ERL_NIF_MAJOR_VERSION == 2 && ERL_NIF_MINOR_VERSION >= 3)
+    /* OTP R15B or higher */
+    return enif_is_number(env, t);
+#else
     /* Determination by exclusion of parts. To be used only inside less_json! */
     return !enif_is_binary(env, t) && !enif_is_list(env, t) &&
         !enif_is_tuple(env, t);
+#endif
 }
 
 
