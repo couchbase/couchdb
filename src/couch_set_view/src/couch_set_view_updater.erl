@@ -57,12 +57,13 @@ update(Owner, Group, FileName) ->
     PassiveParts = ordsets:from_list(
         couch_set_view_util:decode_bitmask(?set_pbitmask(Group))),
 
-    FoldFun = fun(P, {A1, A2, A3, A4}) ->
+    FoldFun = fun(P, {A1, A2, A3}) ->
         {ok, Db} = couch_db:open_int(?dbname(SetName, P), []),
         {ok, <<NotDel:40, Del:40, _Size:48>>} =
                 couch_btree:full_reduce(Db#db.docinfo_by_id_btree),
         Seq = couch_db:get_update_seq(Db),
-        {[{P, Db} | A1], [{P, Del} | A2], [{P, NotDel} | A3], [{P, Seq} | A4]}
+        ok = couch_db:close(Db),
+        {[{P, Del} | A1], [{P, NotDel} | A2], [{P, Seq} | A3]}
     end,
 
     process_flag(trap_exit, true),
@@ -100,13 +101,11 @@ update(Owner, Group, FileName) ->
         exit({updater_finished, EmptyResult})
     end,
 
-    {ActiveDbs0, ActiveDelCounts, ActiveNotDelCounts, ActiveSeqs} =
-        lists:foldl(FoldFun, {[], [], [], []}, ActiveParts),
-    {PassiveDbs0, PassiveDelCounts, PassiveNotDelCounts, PassiveSeqs} =
-        lists:foldl(FoldFun, {[], [], [], []}, PassiveParts),
+    {ActiveDelCounts, ActiveNotDelCounts, ActiveSeqs} =
+        lists:foldl(FoldFun, {[], [], []}, ActiveParts),
+    {PassiveDelCounts, PassiveNotDelCounts, PassiveSeqs} =
+        lists:foldl(FoldFun, {[], [], []}, PassiveParts),
 
-    ActiveDbs = lists:reverse(ActiveDbs0),
-    PassiveDbs = lists:reverse(PassiveDbs0),
     MaxSeqs = dict:from_list(ActiveSeqs ++ PassiveSeqs),
     IndexedActiveSeqs =  [{P, S} || {P, S} <- ?set_seqs(Group), ordsets:is_element(P, ActiveParts)],
     IndexedPassiveSeqs = [{P, S} || {P, S} <- ?set_seqs(Group), ordsets:is_element(P, PassiveParts)],
@@ -142,10 +141,10 @@ update(Owner, Group, FileName) ->
         ok
     end,
 
-    update(Owner, Group, FileName, ActiveDbs, PassiveDbs, MaxSeqs, BlockedTime).
+    update(Owner, Group, FileName, ActiveParts, PassiveParts, MaxSeqs, BlockedTime).
 
 
-update(Owner, Group, FileName, ActiveDbs, PassiveDbs, MaxSeqs, BlockedTime) ->
+update(Owner, Group, FileName, ActiveParts, PassiveParts, MaxSeqs, BlockedTime) ->
     #set_view_group{
         set_name = SetName,
         type = Type,
@@ -249,7 +248,7 @@ update(Owner, Group, FileName, ActiveDbs, PassiveDbs, MaxSeqs, BlockedTime) ->
 
     DocLoader = spawn_link(fun() ->
         try
-            load_changes(Owner, Parent, Group, MapQueue, Writer, ActiveDbs, PassiveDbs)
+            load_changes(Owner, Parent, Group, MapQueue, Writer, ActiveParts, PassiveParts)
         catch _:Error ->
             Stacktrace = erlang:get_stacktrace(),
             ?LOG_ERROR("Set view `~s`, ~s group `~s`, doc loader error~n"
@@ -300,7 +299,7 @@ wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime) ->
     end.
 
 
-load_changes(Owner, Updater, Group, MapQueue, Writer, ActiveDbs, PassiveDbs) ->
+load_changes(Owner, Updater, Group, MapQueue, Writer, ActiveParts, PassiveParts) ->
     #set_view_group{
         set_name = SetName,
         name = DDocId,
@@ -308,7 +307,8 @@ load_changes(Owner, Updater, Group, MapQueue, Writer, ActiveDbs, PassiveDbs) ->
         index_header = #set_view_index_header{seqs = SinceSeqs}
     } = Group,
 
-    FoldFun = fun({PartId, Db}, PartType) ->
+    FoldFun = fun(PartId, PartType) ->
+        {ok, Db} = couch_db:open_int(?dbname(SetName, PartId), []),
         maybe_stop(PartType),
         Since = couch_util:get_value(PartId, SinceSeqs),
         ?LOG_INFO("Reading changes (since sequence ~p) from ~s partition ~s to"
@@ -323,20 +323,14 @@ load_changes(Owner, Updater, Group, MapQueue, Writer, ActiveDbs, PassiveDbs) ->
         {ok, _, ok} = couch_db:fast_reads(Db, fun() ->
             couch_db:enum_docs_since(Db, Since, ChangesWrapper, ok, [])
         end),
-        % Note: make sure the parent (main updater process) doesn't use the
-        % database anymore. We close here each database to prevent delaying
-        % disk space freed by compactions that can happen while we're indexing.
-        % Also we haven't reopened here the databases to avoid extra delay
-        % and make sure we use the same snapshot that the parent (main updater
-        % process) got.
-        ok = couch_ref_counter:drop(Db#db.fd_ref_counter, Updater),
+        ok = couch_db:close(Db),
         PartType
     end,
 
     notify_owner(Owner, {state, updating_active}, Updater),
     try
-        active = lists:foldl(FoldFun, active, ActiveDbs),
-        passive = lists:foldl(FoldFun, passive, PassiveDbs)
+        active = lists:foldl(FoldFun, active, ActiveParts),
+        passive = lists:foldl(FoldFun, passive, PassiveParts)
     catch throw:stop ->
         Writer ! stop
     end,
