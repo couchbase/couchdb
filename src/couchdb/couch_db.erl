@@ -560,10 +560,10 @@ count_changes_since(Db, SinceSeq) ->
     BTree = Db#db.docinfo_by_seq_btree,
     {ok, <<Changes:40>>} =
     couch_btree:fold_reduce(BTree,
-        fun(_SeqStart, PartialReds, 0) ->
+        fun(_SeqStart, PartialReds, <<0:40>>) ->
             {ok, couch_btree:final_reduce(BTree, PartialReds)}
         end,
-        0, [{start_key, SinceSeq + 1}]),
+        <<0:40>>, [{start_key, SinceSeq + 1}]),
     Changes.
 
 enum_docs_since(Db, SinceSeq, InFun, Acc, Options) ->
