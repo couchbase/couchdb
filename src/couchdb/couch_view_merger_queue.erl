@@ -45,9 +45,11 @@ pop(Pid) ->
     try
         gen_server:call(Pid, pop, infinity)
     catch
-    exit:{noproc, _} ->
+    exit:{shutdown, {gen_server, call, [Pid | _]}} ->
         closed;
-    exit:{normal, {gen_server, call, [Pid, pop, infinity]}} ->
+    exit:{noproc, {gen_server, call, [Pid | _]}} ->
+        closed;
+    exit:{normal, {gen_server, call, [Pid | _]}} ->
         closed
     end.
 
@@ -58,7 +60,14 @@ peek(Pid) ->
     gen_server:call(Pid, peek).
 
 queue(Pid, Row) ->
-    ok = gen_server:call(Pid, {queue, Row}, infinity).
+    try
+        ok = gen_server:call(Pid, {queue, Row}, infinity)
+    catch
+    exit:{shutdown, {gen_server, call, [Pid | _]}} ->
+        throw(queue_shutdown);
+    exit:{noproc, {gen_server, call, [Pid | _]}} ->
+        throw(queue_shutdown)
+    end.
 
 flush(Pid) ->
     ok = gen_server:cast(Pid, flush).

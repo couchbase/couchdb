@@ -181,18 +181,14 @@ do_query_index(Mod, IndexMergeParams, DDoc, IndexName) ->
             Resp
         end
     after
-        catch unlink(Queue),
-
-        lists:foreach(
-            fun (P) ->
-                catch unlink(P)
-            end, Folders),
-
-        lists:foreach(
-            fun (P) ->
-                catch exit(P, kill)
-            end, Folders),
-        catch exit(Queue, kill),
+        unlink(Queue),
+        lists:foreach(fun erlang:unlink/1, Folders),
+        % Important, shutdown the queue first. This ensures any blocked
+        % HTTP folders (bloked by queue calls) will get an error/exit and
+        % then stream all the remaining data from the socket, otherwise
+        % the socket can't be reused for future requests.
+        couch_util:shutdown_sync(Queue),
+        lists:foreach(fun couch_util:shutdown_sync/1, Folders),
         Reason = clean_exit_messages(normal),
         process_flag(trap_exit, TrapExitBefore),
         case Reason of
@@ -580,6 +576,28 @@ parse_error(Error) ->
 
 % Fold function for remote indexes
 http_index_folder(Mod, IndexSpec, MergeParams, DDoc, Queue) ->
+    % Trap exits, so that when we receive a shutdown message from the parent,
+    % or an error/exit when queing an item/error, we get all the remaining data
+    % from the socket - this is required in order to ensure the connection can
+    % be reused for other requests and for lhttpc to handle the socket back to
+    % connection pool.
+    process_flag(trap_exit, true),
+    try
+        run_http_index_folder(Mod, IndexSpec, MergeParams, DDoc, Queue)
+    catch
+    throw:queue_shutdown ->
+        ok
+    after
+        Streamer = get(streamer_pid),
+        case is_pid(Streamer) andalso is_process_alive(Streamer) of
+        true ->
+            catch stream_all(Streamer, MergeParams#index_merge.conn_timeout, []);
+        false ->
+            ok
+        end
+    end.
+
+run_http_index_folder(Mod, IndexSpec, MergeParams, DDoc, Queue) ->
     EventFun = Mod:make_event_fun(MergeParams#index_merge.http_params, Queue),
     {Url, Method, Headers, Body, BaseOptions} =
         Mod:http_index_folder_req_details(IndexSpec, MergeParams, DDoc),
@@ -590,6 +608,7 @@ http_index_folder(Mod, IndexSpec, MergeParams, DDoc, Queue) ->
 
     case lhttpc:request(Url, Method, Headers, Body, Timeout, LhttpcOptions) of
     {ok, {{200, _}, _RespHeaders, Pid}} when is_pid(Pid) ->
+        put(streamer_pid, Pid),
         DataFun = fun() -> stream_data(Pid, Timeout) end,
         try
             json_stream_parse:events(DataFun, EventFun)
@@ -599,6 +618,7 @@ http_index_folder(Mod, IndexSpec, MergeParams, DDoc, Queue) ->
             ok = couch_view_merger_queue:done(Queue)
         end;
     {ok, {{Code, _}, _RespHeaders, Pid}} when is_pid(Pid) ->
+        put(streamer_pid, Pid),
         Error = try
             stream_all(Pid, Timeout, [])
         catch throw:{error, _Error} ->

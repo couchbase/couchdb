@@ -1094,6 +1094,7 @@ view_qs(ViewArgs, MergeParams) ->
         include_docs = IncDocs,
         conflicts = Conflicts,
         stale = Stale,
+        limit = Limit,
         debug = Debug
     } = ViewArgs,
     #index_merge{on_error = OnError} = MergeParams,
@@ -1189,6 +1190,12 @@ view_qs(ViewArgs, MergeParams) ->
         [];
     false ->
         ["on_error=" ++ atom_to_list(OnError)]
+    end ++
+    case Limit =:= DefViewArgs#view_query_args.limit of
+    true ->
+        [];
+    false ->
+        ["limit=" ++ integer_to_list(Limit)]
     end ++
     case Debug =:= DefViewArgs#view_query_args.debug of
     true ->
