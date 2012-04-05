@@ -87,6 +87,7 @@ test() ->
         "Reading a large term from a written representation succeeds."),
     
     ok = couch_file:write_header(Fd, hello),
+    ok = couch_file:flush(Fd),
     etap:is({ok, hello}, couch_file:read_header(Fd),
         "Reading a header succeeds."),
         
