@@ -29,6 +29,7 @@ run: ../bin/couchdb.tpl
 			-pa $(abs_top_builddir)\/src\/ejson \
 			-pa $(abs_top_builddir)\/src\/erlang-oauth \
 			-pa $(abs_top_builddir)\/src\/ibrowse \
+			-pa $(abs_top_builddir)\/src\/lhttpc \
 			-pa $(abs_top_builddir)\/src\/mochiweb \
 			-pa $(abs_top_builddir)\/src\/mapreduce \
 			-pa $(abs_top_builddir)\/src\/snappy \

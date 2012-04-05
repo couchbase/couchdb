@@ -88,6 +88,7 @@
 ^src/ejson/*
 ^src/etap/*
 ^src/ibrowse/*
+^src/lhttpc/*
 ^src/mapreduce/*
 ^src/mochiweb/*
 ^src/snappy/*

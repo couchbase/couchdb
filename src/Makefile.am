@@ -23,6 +23,7 @@ SUBDIRS += \
     erlang-oauth \
     etap \
     ibrowse \
+    lhttpc \
     mochiweb \
     snappy \
     couch_set_view

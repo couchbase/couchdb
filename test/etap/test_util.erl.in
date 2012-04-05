@@ -30,6 +30,7 @@ init_code_path() ->
         "ejson",
         "erlang-oauth",
         "ibrowse",
+        "lhttpc",
         "mochiweb",
         "snappy"
     ],
