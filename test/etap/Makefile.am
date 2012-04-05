@@ -69,5 +69,4 @@ EXTRA_DIST = \
     190-json-stream-parse.t \
     200-view-group-no-db-leaks.t \
     201-view-group-shutdown.t \
-    220-compaction-daemon.t \
-    230-httpc-pool.t
+    220-compaction-daemon.t

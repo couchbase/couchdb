@@ -53,7 +53,6 @@ source_files = \
     couch_external_server.erl \
     couch_file.erl \
     couch_db_frontend.erl \
-    couch_httpc_pool.erl \
     couch_httpd.erl \
     couch_httpd_db.erl \
     couch_httpd_auth.erl \
@@ -133,7 +132,6 @@ compiled_files = \
     couch_file.beam \
     couch_file_write_guard.beam \
     couch_db_frontend.beam \
-    couch_httpc_pool.beam \
     couch_httpd.beam \
     couch_httpd_db.beam \
     couch_httpd_auth.beam \

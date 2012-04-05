@@ -14,9 +14,9 @@
 
 -include("couch_db.hrl").
 -include("couch_api_wrap.hrl").
--include("../ibrowse/ibrowse.hrl").
+-include("../lhttpc/lhttpc.hrl").
 
--export([setup/1]).
+-export([setup/1, tear_down/1]).
 -export([send_req/3]).
 -export([full_url/2]).
 
@@ -27,145 +27,122 @@
 
 -define(replace(L, K, V), lists:keystore(K, 1, L, {K, V})).
 -define(MAX_WAIT, 5 * 60 * 1000).
+-define(NOT_HTTP_ERROR(Code),
+    (Code =:= 200 orelse Code =:= 201 orelse
+        (Code >= 400 andalso Code < 500))).
+-define(IS_HTTP_REDIRECT(Code),
+    (Code =:= 301 orelse Code =:= 302 orelse Code =:= 303)).
 
 
-setup(#httpdb{httpc_pool = nil, url = Url, http_connections = MaxConns} = Db) ->
-    {ok, Pid} = couch_httpc_pool:start_link(Url, [{max_connections, MaxConns}]),
+setup(#httpdb{httpc_pool = nil} = Db) ->
+    #httpdb{timeout = Timeout, http_connections = MaxConns} = Db,
+    {ok, Pid} = lhttpc_manager:start_link(
+        [{connection_timeout, Timeout}, {pool_size, MaxConns}]),
     {ok, Db#httpdb{httpc_pool = Pid}}.
 
 
-send_req(HttpDb, Params1, Callback) ->
-    Params2 = ?replace(Params1, qs,
-        [{K, ?b2l(iolist_to_binary(V))} || {K, V} <- get_value(qs, Params1, [])]),
-    Params = ?replace(Params2, ibrowse_options,
-        lists:keysort(1, get_value(ibrowse_options, Params2, []))),
-    {Worker, Response} = send_ibrowse_req(HttpDb, Params),
-    process_response(Response, Worker, HttpDb, Params, Callback).
+tear_down(#httpdb{httpc_pool = Pool}) ->
+    couch_util:shutdown_sync(Pool).
 
 
-send_ibrowse_req(#httpdb{headers = BaseHeaders} = HttpDb, Params) ->
-    Method = get_value(method, Params, get),
+send_req(HttpDb, Params, Callback) ->
+    Qs1 = get_value(qs, Params, []),
+    Qs2 = [{K, ?b2l(iolist_to_binary(V))} || {K, V} <- Qs1],
+    Params2 = ?replace(Params, qs, Qs2),
+    Response = send_lhttpc_req(HttpDb, Params2),
+    process_response(Response, HttpDb, Params2, Callback).
+
+
+send_lhttpc_req(#httpdb{headers = BaseHeaders} = HttpDb, Params) ->
+    Method = get_value(method, Params, "GET"),
     UserHeaders = lists:keysort(1, get_value(headers, Params, [])),
     Headers1 = lists:ukeymerge(1, UserHeaders, BaseHeaders),
     Headers2 = oauth_header(HttpDb, Params) ++ Headers1,
     Url = full_url(HttpDb, Params),
     Body = get_value(body, Params, []),
-    case get_value(path, Params) of
-    "_changes" ->
-        {ok, Worker} = ibrowse:spawn_link_worker_process(Url);
-    _ ->
-        {ok, Worker} = couch_httpc_pool:get_worker(HttpDb#httpdb.httpc_pool)
-    end,
-    IbrowseOptions = [
-        {response_format, binary}, {inactivity_timeout, HttpDb#httpdb.timeout} |
-        lists:ukeymerge(1, get_value(ibrowse_options, Params, []),
-            HttpDb#httpdb.ibrowse_options)
+    Timeout = HttpDb#httpdb.timeout,
+    CallerLhttpcOptions = lists:keysort(1, get_value(lhttpc_options, Params, [])),
+    LhttpcOptions = [
+        {pool, HttpDb#httpdb.httpc_pool},
+        {connect_timeout, Timeout} |
+        lists:ukeymerge(1, CallerLhttpcOptions, HttpDb#httpdb.lhttpc_options)
     ],
-    Response = ibrowse:send_req_direct(
-        Worker, Url, Headers2, Method, Body, IbrowseOptions, infinity),
-    {Worker, Response}.
+    try
+        lhttpc:request(Url, Method, Headers2, Body, Timeout, LhttpcOptions)
+    catch exit:ExitReason ->
+        {error, ExitReason}
+    end.
 
 
-process_response({error, sel_conn_closed}, _Worker, HttpDb, Params, Callback) ->
-    send_req(HttpDb, Params, Callback);
+process_response({ok, {{Code, _}, Headers, _Body}}, HttpDb, Params, Callback) when
+        ?IS_HTTP_REDIRECT(Code) ->
+    do_redirect(Code, Headers, HttpDb, Params, Callback);
 
-process_response({error, {'EXIT', {normal, _}}}, _Worker, HttpDb, Params, Cb) ->
-    % ibrowse worker terminated because remote peer closed the socket
-    % -> not an error
-    send_req(HttpDb, Params, Cb);
+process_response({ok, {{Code, _}, Headers, Pid}}, HttpDb, Params, Callback) when
+        is_pid(Pid) ->
+    process_stream_response(Code, Headers, Pid, HttpDb, Params, Callback);
 
-process_response({ibrowse_req_id, ReqId}, Worker, HttpDb, Params, Callback) ->
-    process_stream_response(ReqId, Worker, HttpDb, Params, Callback);
-
-process_response({ok, Code, Headers, Body}, Worker, HttpDb, Params, Callback) ->
-    release_worker(Worker, HttpDb),
-    case list_to_integer(Code) of
-    Ok when Ok =:= 200 ; Ok =:= 201 ; (Ok >= 400 andalso Ok < 500) ->
-        EJson = case Body of
-        <<>> ->
-            null;
-        Json ->
-            ?JSON_DECODE(Json)
-        end,
-        Callback(Ok, Headers, EJson);
-    R when R =:= 301 ; R =:= 302 ; R =:= 303 ->
-        do_redirect(Worker, R, Headers, HttpDb, Params, Callback);
-    Error ->
-        maybe_retry({code, Error}, Worker, HttpDb, Params, Callback)
+process_response({ok, {{Code, _}, Headers, Body}}, HttpDb, Params, Callback) ->
+    case ?NOT_HTTP_ERROR(Code) of
+    true ->
+        Callback(Code, Headers, decode_body(Body));
+    false ->
+        maybe_retry({code, Code}, HttpDb, Params, Callback)
     end;
 
-process_response(Error, Worker, HttpDb, Params, Callback) ->
-    maybe_retry(Error, Worker, HttpDb, Params, Callback).
+process_response({ok, UploadState0}, HttpDb, Params, Callback) ->
+    UploadFun = make_upload_fun(UploadState0, HttpDb),
+    try
+        Callback(UploadFun)
+    catch
+    throw:{redirect_req, Code, Headers} ->
+        do_redirect(Code, Headers, HttpDb, Params, Callback);
+    throw:{maybe_retry_req, Error} ->
+        maybe_retry(Error, HttpDb, Params, Callback)
+    end;
+
+process_response(Error, HttpDb, Params, Callback) ->
+    maybe_retry(Error, HttpDb, Params, Callback).
 
 
-process_stream_response(ReqId, Worker, HttpDb, Params, Callback) ->
-    receive
-    {ibrowse_async_headers, ReqId, Code, Headers} ->
-        case list_to_integer(Code) of
-        Ok when Ok =:= 200 ; Ok =:= 201 ; (Ok >= 400 andalso Ok < 500) ->
-            StreamDataFun = fun() ->
-                stream_data_self(HttpDb, Params, Worker, ReqId, Callback)
-            end,
-            ibrowse:stream_next(ReqId),
-            try
-                Ret = Callback(Ok, Headers, StreamDataFun),
-                release_worker(Worker, HttpDb),
-                clean_mailbox_req(ReqId),
-                Ret
-            catch throw:{maybe_retry_req, Err} ->
-                clean_mailbox_req(ReqId),
-                maybe_retry(Err, Worker, HttpDb, Params, Callback)
-            end;
-        R when R =:= 301 ; R =:= 302 ; R =:= 303 ->
-            do_redirect(Worker, R, Headers, HttpDb, Params, Callback);
-        Error ->
-            report_error(Worker, HttpDb, Params, {code, Error})
+process_stream_response(Code, Headers, Pid, HttpDb, Params, Callback) ->
+    case ?NOT_HTTP_ERROR(Code) of
+    true ->
+        StreamDataFun = fun() ->
+            stream_data_self(HttpDb, Params, Pid, Callback)
+        end,
+        try
+            RetValue = Callback(Code, Headers, StreamDataFun),
+            receive {http_eob, Pid, _Trailers} -> ok end,
+            RetValue
+        catch throw:{maybe_retry_req, Err} ->
+            maybe_retry(Err, HttpDb, Params, Callback)
         end;
-    {ibrowse_async_response, ReqId, {error, _} = Error} ->
-        maybe_retry(Error, Worker, HttpDb, Params, Callback)
-    after HttpDb#httpdb.timeout + 500 ->
-        % Note: ibrowse should always reply with timeouts, but this doesn't
-        % seem to be always true when there's a very high rate of requests
-        % and many open connections.
-        maybe_retry(timeout, Worker, HttpDb, Params, Callback)
+    false ->
+        report_error(HttpDb, Params, {code, Code})
     end.
 
 
-clean_mailbox_req(ReqId) ->
-    receive
-    {ibrowse_async_response, ReqId, _} ->
-        clean_mailbox_req(ReqId);
-    {ibrowse_async_response_end, ReqId} ->
-        clean_mailbox_req(ReqId)
-    after 0 ->
-        ok
-    end.
+maybe_retry(Error, #httpdb{retries = 0} = HttpDb, Params, _Callback) ->
+    report_error(HttpDb, Params, {error, Error});
 
-
-release_worker(Worker, #httpdb{httpc_pool = Pool}) ->
-    ok = couch_httpc_pool:release_worker(Pool, Worker).
-
-
-maybe_retry(Error, Worker, #httpdb{retries = 0} = HttpDb, Params, _Cb) ->
-    report_error(Worker, HttpDb, Params, {error, Error});
-
-maybe_retry(Error, Worker, #httpdb{retries = Retries, wait = Wait} = HttpDb,
-    Params, Cb) ->
-    release_worker(Worker, HttpDb),
-    Method = string:to_upper(atom_to_list(get_value(method, Params, get))),
+maybe_retry(Error, #httpdb{retries = Retries} = HttpDb, Params, Callback) ->
+    Method = get_value(method, Params, "GET"),
     Url = couch_util:url_strip_password(full_url(HttpDb, Params)),
     ?LOG_INFO("Retrying ~s request to ~s in ~p seconds due to error ~s",
-        [Method, Url, Wait / 1000, error_cause(Error)]),
-    ok = timer:sleep(Wait),
-    Wait2 = erlang:min(Wait * 2, ?MAX_WAIT),
-    send_req(HttpDb#httpdb{retries = Retries - 1, wait = Wait2}, Params, Cb).
+        [Method, Url, HttpDb#httpdb.wait / 1000, error_cause(Error)]),
+    ok = timer:sleep(HttpDb#httpdb.wait),
+    HttpDb2 = HttpDb#httpdb{
+        retries = Retries - 1,
+        wait = erlang:min(HttpDb#httpdb.wait * 2, ?MAX_WAIT)
+    },
+    send_req(HttpDb2, Params, Callback).
 
 
-report_error(Worker, HttpDb, Params, Error) ->
-    Method = string:to_upper(atom_to_list(get_value(method, Params, get))),
+report_error(HttpDb, Params, Error) ->
+    Method = get_value(method, Params, "GET"),
     Url = couch_util:url_strip_password(full_url(HttpDb, Params)),
     do_report_error(Url, Method, Error),
-    release_worker(Worker, HttpDb),
     exit({http_request_failed, Method, Url, Error}).
 
 
@@ -184,23 +161,48 @@ error_cause(Cause) ->
     lists:flatten(io_lib:format("~p", [Cause])).
 
 
-stream_data_self(#httpdb{timeout = T} = HttpDb, Params, Worker, ReqId, Cb) ->
-    receive
-    {ibrowse_async_response, ReqId, {error, Error}} ->
-        throw({maybe_retry_req, Error});
-    {ibrowse_async_response, ReqId, <<>>} ->
-        ibrowse:stream_next(ReqId),
-        stream_data_self(HttpDb, Params, Worker, ReqId, Cb);
-    {ibrowse_async_response, ReqId, Data} ->
-        ibrowse:stream_next(ReqId),
-        {Data, fun() -> stream_data_self(HttpDb, Params, Worker, ReqId, Cb) end};
-    {ibrowse_async_response_end, ReqId} ->
-        {<<>>, fun() -> throw({maybe_retry_req, more_data_expected}) end}
-    after T + 500 ->
-        % Note: ibrowse should always reply with timeouts, but this doesn't
-        % seem to be always true when there's a very high rate of requests
-        % and many open connections.
-        throw({maybe_retry_req, timeout})
+stream_data_self(#httpdb{timeout = T} = HttpDb, Params, Pid, Callback) ->
+    try
+        case lhttpc:get_body_part(Pid, T) of
+        {ok, {http_eob, _Trailers}} ->
+            {<<>>, fun() -> throw({maybe_retry_req, more_data_expected}) end};
+        {ok, Data} ->
+            {Data, fun() -> stream_data_self(HttpDb, Params, Pid, Callback) end};
+        Error ->
+            throw({maybe_retry_req, Error})
+        end
+    catch exit:ExitReason ->
+        throw({maybe_retry_req, ExitReason})
+    end.
+
+
+make_upload_fun(UploadState, #httpdb{timeout = Timeout} = HttpDb) ->
+    fun(eof) ->
+        try
+            case lhttpc:send_body_part(UploadState, http_eob, Timeout) of
+            {ok, {{Code, _}, Headers, Body}} when ?NOT_HTTP_ERROR(Code) ->
+                {ok, Code, Headers, decode_body(Body)};
+            {ok, {{Code, _}, Headers, _Body}} when ?IS_HTTP_REDIRECT(Code) ->
+                throw({redirect_req, Code, Headers});
+            {ok, {{Code, _}, _Headers, _Body}} ->
+                throw({maybe_retry_req, {code, Code}});
+            Error ->
+                throw({maybe_retry_req, Error})
+            end
+        catch exit:ExitReason ->
+            throw({maybe_retry_req, ExitReason})
+        end;
+    (BodyPart) ->
+        try
+            case lhttpc:send_body_part(UploadState, BodyPart, Timeout) of
+            {ok, UploadState2} ->
+                {ok, make_upload_fun(UploadState2, HttpDb)};
+            Error ->
+                throw({maybe_retry_req, Error})
+            end
+        catch exit:ExitReason ->
+            throw({maybe_retry_req, ExitReason})
+        end
     end.
 
 
@@ -226,12 +228,7 @@ oauth_header(#httpdb{url = BaseUrl, oauth = OAuth}, ConnParams) ->
         OAuth#oauth.consumer_secret,
         OAuth#oauth.signature_method
     },
-    Method = case get_value(method, ConnParams, get) of
-    get -> "GET";
-    post -> "POST";
-    put -> "PUT";
-    head -> "HEAD"
-    end,
+    Method = get_value(method, ConnParams, "GET"),
     QSL = get_value(qs, ConnParams, []),
     OAuthParams = oauth:signed_params(Method,
         BaseUrl ++ get_value(path, ConnParams, []),
@@ -240,8 +237,7 @@ oauth_header(#httpdb{url = BaseUrl, oauth = OAuth}, ConnParams) ->
         "OAuth " ++ oauth_uri:params_to_header_string(OAuthParams)}].
 
 
-do_redirect(Worker, Code, Headers, #httpdb{url = Url} = HttpDb, Params, Cb) ->
-    release_worker(Worker, HttpDb),
+do_redirect(Code, Headers, #httpdb{url = Url} = HttpDb, Params, Cb) ->
     RedirectUrl = redirect_url(Headers, Url),
     {HttpDb2, Params2} = after_redirect(RedirectUrl, Code, HttpDb, Params),
     send_req(HttpDb2, Params2, Cb).
@@ -250,37 +246,62 @@ do_redirect(Worker, Code, Headers, #httpdb{url = Url} = HttpDb, Params, Cb) ->
 redirect_url(RespHeaders, OrigUrl) ->
     MochiHeaders = mochiweb_headers:make(RespHeaders),
     RedUrl = mochiweb_headers:get_value("Location", MochiHeaders),
-    #url{
+    #lhttpc_url{
         host = Host,
-        host_type = HostType,
         port = Port,
         path = Path,  % includes query string
-        protocol = Proto
-    } = ibrowse_lib:parse_url(RedUrl),
-    #url{
-        username = User,
+        is_ssl = IsSsl
+    } = lhttpc_lib:parse_url(RedUrl),
+    #lhttpc_url{
+        user = User,
         password = Passwd
-    } = ibrowse_lib:parse_url(OrigUrl),
-    Creds = case is_list(User) andalso is_list(Passwd) of
-    true ->
+    } = lhttpc_lib:parse_url(OrigUrl),
+    Creds = case User of
+    [] ->
+        [];
+    _ when Passwd =/= [] ->
         User ++ ":" ++ Passwd ++ "@";
-    false ->
-        []
-    end,
-    HostPart = case HostType of
-    ipv6_address ->
-        "[" ++ Host ++ "]";
     _ ->
+        User ++ "@"
+    end,
+    HostPart = case is_ipv6_literal(Host) of
+    true ->
+        % IPv6 address literals are enclosed by square brackets (RFC2732)
+        "[" ++ Host ++ "]";
+    false ->
         Host
     end,
-    atom_to_list(Proto) ++ "://" ++ Creds ++ HostPart ++ ":" ++
-        integer_to_list(Port) ++ Path.
+    Proto = case IsSsl of
+    true ->
+        "https://";
+    false ->
+        "http://"
+    end,
+    Proto ++ Creds ++ HostPart ++ ":" ++ integer_to_list(Port) ++ Path.
+
+is_ipv6_literal(Host) ->
+    case inet_parse:address(Host) of
+    {ok, {_, _, _, _, _, _, _, _}} ->
+        true;
+    _ ->
+        false
+    end.
+
 
 after_redirect(RedirectUrl, 303, HttpDb, Params) ->
-    after_redirect(RedirectUrl, HttpDb, ?replace(Params, method, get));
+    after_redirect(RedirectUrl, HttpDb, ?replace(Params, method, "GET"));
 after_redirect(RedirectUrl, _Code, HttpDb, Params) ->
     after_redirect(RedirectUrl, HttpDb, Params).
 
 after_redirect(RedirectUrl, HttpDb, Params) ->
     Params2 = lists:keydelete(path, 1, lists:keydelete(qs, 1, Params)),
     {HttpDb#httpdb{url = RedirectUrl}, Params2}.
+
+
+decode_body(<<>>) ->
+    null;
+decode_body(undefined) ->
+    % HEAD request response body
+    null;
+decode_body(Body) ->
+    ?JSON_DECODE(Body).

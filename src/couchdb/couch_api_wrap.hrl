@@ -20,7 +20,7 @@
         {"User-Agent", "CouchDB/" ++ couch_server:get_version()}
     ],
     timeout,            % milliseconds
-    ibrowse_options = [],
+    lhttpc_options = [],
     retries = 10,
     wait = 250,         % milliseconds
     httpc_pool = nil,

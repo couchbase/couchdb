@@ -22,7 +22,7 @@
 -include("couch_db.hrl").
 -include("couch_api_wrap.hrl").
 -include("couch_replicator.hrl").
--include("../ibrowse/ibrowse.hrl").
+-include("../lhttpc/lhttpc.hrl").
 
 -import(couch_util, [
     get_value/2,
@@ -186,14 +186,28 @@ parse_rep_db({Props}, ProxyParams, Options) ->
                 end
         }
     end,
+    SslParams = ssl_params(Url),
+    ProxyParams2 = case SslParams of
+    [] ->
+        ProxyParams;
+    _ when ProxyParams =/= [] ->
+        [{proxy_ssl_options, SslParams} | ProxyParams];
+   _ ->
+        ProxyParams
+    end,
+    ConnectOpts = get_value(socket_options, Options) ++ ProxyParams2 ++ SslParams,
+    Timeout = get_value(connection_timeout, Options),
+    LhttpcOpts = lists:keysort(1, [
+        {connect_options, ConnectOpts},
+        {connect_timeout, Timeout},
+        {send_retry, 0}
+    ]),
     #httpdb{
         url = Url,
         oauth = OAuth,
         headers = lists:ukeymerge(1, Headers, DefaultHeaders),
-        ibrowse_options = lists:keysort(1,
-            [{socket_options, get_value(socket_options, Options)} |
-                ProxyParams ++ ssl_params(Url)]),
-        timeout = get_value(connection_timeout, Options),
+        lhttpc_options = LhttpcOpts,
+        timeout = Timeout,
         http_connections = get_value(http_connections, Options),
         retries = get_value(retries, Options)
     };
@@ -281,31 +295,19 @@ parse_proxy_params(ProxyUrl) when is_binary(ProxyUrl) ->
 parse_proxy_params([]) ->
     [];
 parse_proxy_params(ProxyUrl) ->
-    #url{
-        host = Host,
-        port = Port,
-        username = User,
-        password = Passwd
-    } = ibrowse_lib:parse_url(ProxyUrl),
-    [{proxy_host, Host}, {proxy_port, Port}] ++
-        case is_list(User) andalso is_list(Passwd) of
-        false ->
-            [];
-        true ->
-            [{proxy_user, User}, {proxy_password, Passwd}]
-        end.
+    [{proxy, ProxyUrl}].
 
 
 ssl_params(Url) ->
-    case ibrowse_lib:parse_url(Url) of
-    #url{protocol = https} ->
+    case lhttpc_lib:parse_url(Url) of
+    #lhttpc_url{is_ssl = true} ->
         Depth = list_to_integer(
             couch_config:get("replicator", "ssl_certificate_max_depth", "3")
         ),
         VerifyCerts = couch_config:get("replicator", "verify_ssl_certificates"),
         SslOpts = [{depth, Depth} | ssl_verify_options(VerifyCerts =:= "true")],
-        [{is_ssl, true}, {ssl_options, SslOpts}];
-    #url{protocol = http} ->
+        [{is_ssl, true}, {ssl_options, SslOpts}, {proxy_ssl_options, SslOpts}];
+    _ ->
         []
     end.
 
