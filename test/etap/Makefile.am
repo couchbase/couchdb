@@ -64,8 +64,6 @@ EXTRA_DIST = \
     121-stats-aggregates.ini \
     121-stats-aggregates.t \
     150-invalid-view-seq.t \
-    180-http-proxy.ini \
-    180-http-proxy.t \
     190-json-stream-parse.t \
     200-view-group-no-db-leaks.t \
     201-view-group-shutdown.t \
