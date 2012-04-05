@@ -17,6 +17,8 @@
 -export([run/2]).
 -export([request/3, request/4]).
 
+-define(REQ_TIMEOUT, 30000).
+
 srcdir() ->
     "@abs_top_srcdir@".
 
@@ -29,7 +31,6 @@ init_code_path() ->
         "couchdb",
         "ejson",
         "erlang-oauth",
-        "ibrowse",
         "lhttpc",
         "mochiweb",
         "snappy"
@@ -75,18 +76,17 @@ request(Url, Headers, Method, Body) ->
 request(_Url, _Headers, _Method, _Body, 0) ->
     {error, request_failed};
 request(Url, Headers, Method, Body, N) ->
-    case code:is_loaded(ibrowse) of
+    case code:is_loaded(lhttpc) of
     false ->
-        {ok, _} = ibrowse:start();
+        _ = ssl:start(),
+        ok = lhttpc:start();
     _ ->
         ok
     end,
-    case ibrowse:send_req(Url, Headers, Method, Body) of
-    {ok, Code0, RespHeaders, RespBody0} ->
-        Code = list_to_integer(Code0),
-        RespBody = iolist_to_binary(RespBody0),
+    case lhttpc:request(Url, Method, Headers, Body, ?REQ_TIMEOUT) of
+    {ok, {{Code, _}, RespHeaders, RespBody}} ->
         {ok, Code, RespHeaders, RespBody};
-    {error, {'EXIT', {normal, _}}} ->
+    {error, connection_closed} ->
         % Connection closed right after a successful request that
         % used the same connection.
         request(Url, Headers, Method, Body, N - 1);

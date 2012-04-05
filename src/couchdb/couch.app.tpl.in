@@ -27,5 +27,5 @@
         "%localconfdir%/@localini@"
     ]}},
     {applications, [kernel, stdlib]},
-    {included_applications, [crypto, sasl, inets, oauth, ibrowse, mochiweb, os_mon]}
+    {included_applications, [crypto, sasl, inets, oauth, lhttpc, mochiweb, os_mon]}
 ]}.
