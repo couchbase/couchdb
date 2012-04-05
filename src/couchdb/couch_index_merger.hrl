@@ -54,5 +54,5 @@
    url,
    timeout,
    headers = [{"Accept", "application/json"}],
-   ibrowse_options = []
+   lhttpc_options = []
 }).

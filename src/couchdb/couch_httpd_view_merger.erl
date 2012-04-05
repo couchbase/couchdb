@@ -17,7 +17,7 @@
 -include("couch_db.hrl").
 -include("couch_index_merger.hrl").
 -include("couch_view_merger.hrl").
--include("../ibrowse/ibrowse.hrl").
+-include("../lhttpc/lhttpc.hrl").
 
 -import(couch_util, [
     get_value/2,
@@ -263,8 +263,8 @@ validate_views_param({[_ | _] = Views}) ->
                     }
                 end, ViewNames);
         ({MergeUrl, {[_ | _] = Props} = EJson}) ->
-            case (catch ibrowse_lib:parse_url(?b2l(MergeUrl))) of
-            #url{} ->
+            case (catch lhttpc_lib:parse_url(?b2l(MergeUrl))) of
+            #lhttpc_url{} ->
                 ok;
             _ ->
                 throw({bad_request, "Invalid view merge definition object."})

@@ -92,6 +92,8 @@ start_server(IniFiles) ->
     % ensure these applications are running
     application:start(ibrowse),
     application:start(crypto),
+    ssl:start(),
+    application:start(lhttpc),
 
     {ok, Pid} = supervisor:start_link(
         {local, couch_server_sup}, couch_server_sup, BaseChildSpecs),

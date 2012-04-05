@@ -259,13 +259,13 @@ open_db(<<"http://", _/binary>> = DbName, _UserCtx, Timeout) ->
         url = maybe_add_trailing_slash(DbName),
         timeout = Timeout
     },
-    {ok, HttpDb#httpdb{ibrowse_options = ibrowse_options(HttpDb)}};
+    {ok, HttpDb#httpdb{lhttpc_options = lhttpc_options(HttpDb)}};
 open_db(<<"https://", _/binary>> = DbName, _UserCtx, Timeout) ->
     HttpDb = #httpdb{
         url = maybe_add_trailing_slash(DbName),
         timeout = Timeout
     },
-    {ok, HttpDb#httpdb{ibrowse_options = ibrowse_options(HttpDb)}};
+    {ok, HttpDb#httpdb{lhttpc_options = lhttpc_options(HttpDb)}};
 open_db(DbName, UserCtx, _Timeout) ->
     case couch_db:open(DbName, [{user_ctx, UserCtx}]) of
     {ok, _} = Ok ->
@@ -291,14 +291,19 @@ close_db(#httpdb{}) ->
 close_db(Db) ->
     couch_db:close(Db).
 
-get_ddoc(#httpdb{url = BaseUrl, headers = Headers} = HttpDb, Id) ->
-    Url = BaseUrl ++ ?b2l(Id) ++ "?revs=true",
-    case ibrowse:send_req(
-        Url, Headers, get, [], HttpDb#httpdb.ibrowse_options) of
-    {ok, "200", _RespHeaders, Body} ->
+get_ddoc(#httpdb{} = HttpDb, Id) ->
+    #httpdb{
+        url = BaseUrl,
+        headers = Headers,
+        timeout = Timeout,
+        lhttpc_options = Options
+    } = HttpDb,
+    Url = BaseUrl ++ ?b2l(Id),
+    case lhttpc:request(Url, "GET", Headers, [], Timeout, Options) of
+    {ok, {{200, _}, _RespHeaders, Body}} ->
         Doc = couch_doc:from_json_obj(?JSON_DECODE(Body)),
         {ok, couch_doc:with_ejson_body(Doc)};
-    {ok, _Code, _RespHeaders, Body} ->
+    {ok, {{_Code, _}, _RespHeaders, Body}} ->
         {Props} = ?JSON_DECODE(Body),
         case {get_value(<<"error">>, Props), get_value(<<"reason">>, Props)} of
         {not_found, _} ->
@@ -308,9 +313,9 @@ get_ddoc(#httpdb{url = BaseUrl, headers = Headers} = HttpDb, Id) ->
                 "database `~s`: ~s", [Id, db_uri(HttpDb), Error]),
             throw({error, iolist_to_binary(Msg)})
         end;
-    {error, Error} ->
+    Error ->
         Msg = io_lib:format("Error getting design document `~s` from database "
-            "`~s`: ~s", [Id, db_uri(HttpDb), Error]),
+            "`~s`: ~s", [Id, db_uri(HttpDb), lhttpc_error_msg(Error)]),
         throw({error, iolist_to_binary(Msg)})
     end;
 get_ddoc(Db, Id) ->
@@ -353,21 +358,19 @@ ddoc_not_found_msg(DbName, DDocId) ->
         [DDocId, db_uri(DbName)]),
     iolist_to_binary(Msg).
 
-ibrowse_error_msg(Reason) when is_atom(Reason) ->
+lhttpc_error_msg({error, Reason}) ->
     to_binary(Reason);
-ibrowse_error_msg(Reason) when is_tuple(Reason) ->
-    to_binary(element(1, Reason)).
+lhttpc_error_msg(Reason) ->
+    to_binary(Reason).
 
-ibrowse_options(#httpdb{timeout = T, url = Url}) ->
-    [{inactivity_timeout, T}, {connect_timeout, infinity},
-        {response_format, binary}, {socket_options, [{keepalive, true}]}] ++
-    case Url of
-    "https://" ++ _ ->
-        % TODO: add SSL options like verify and cacertfile
-        [{is_ssl, true}];
-    _ ->
-        []
-    end.
+lhttpc_options(#httpdb{timeout = T}) ->
+    % TODO: add SSL options like verify and cacertfile, which should
+    % configurable somewhere.
+    [
+        {connect_timeout, T},
+        {connect_options, [{keepalive, true}]},
+        {pool, whereis(couch_index_merger_connection_pool)}
+    ].
 
 
 collect_row_count(RecvCount, AccCount, PreprocessFun, Callback, UserAcc, Item) ->
@@ -567,113 +570,85 @@ index_folder(_Mod, IndexSpec, MergeParams, UserCtx, DDoc, Queue, FoldFun) ->
         ok = couch_view_merger_queue:done(Queue)
     end.
 
+
 % `invalid_value` only happens on reduces
 parse_error({invalid_value, Reason}) ->
     {error, ?LOCAL, to_binary(Reason)};
 parse_error(Error) ->
     {error, ?LOCAL, to_binary(Error)}.
 
+
 % Fold function for remote indexes
 http_index_folder(Mod, IndexSpec, MergeParams, DDoc, Queue) ->
     EventFun = Mod:make_event_fun(MergeParams#index_merge.http_params, Queue),
-    {Url, Method, Headers, Body, Options} = Mod:http_index_folder_req_details(
-        IndexSpec, MergeParams, DDoc),
-    {ok, Conn} = ibrowse:spawn_link_worker_process(Url),
-
+    {Url, Method, Headers, Body, BaseOptions} =
+        Mod:http_index_folder_req_details(IndexSpec, MergeParams, DDoc),
     #index_merge{
         conn_timeout = Timeout
     } = MergeParams,
+    LhttpcOptions = [{partial_download, [{window_size, 3}]} | BaseOptions],
 
-    R = ibrowse:send_req_direct(
-            Conn, Url, Headers, Method, Body,
-            [{stream_to, {self(), once}} | Options], Timeout),
-
-    case R of
-    {error, Reason} ->
-        ok = couch_view_merger_queue:queue(Queue,
-            {error, Url, ibrowse_error_msg(Reason)}),
-        ok = couch_view_merger_queue:done(Queue);
-    {ibrowse_req_id, ReqId} ->
-        receive
-        {ibrowse_async_headers, ReqId, "200", _RespHeaders} ->
-            ibrowse:stream_next(ReqId),
-            DataFun = fun() -> stream_data(ReqId) end,
-            try
-                json_stream_parse:events(DataFun, EventFun)
-            catch throw:{error, Error} ->
-                ok = couch_view_merger_queue:queue(Queue, {error, Url, Error})
-            after
-                stop_conn(Conn),
-                ok = couch_view_merger_queue:done(Queue)
-            end;
-        {ibrowse_async_headers, ReqId, Code, _RespHeaders} ->
-            Error = try
-                stream_all(ReqId, [])
-            catch throw:{error, _Error} ->
-                <<"Error code ", (?l2b(Code))/binary>>
-            end,
-            case (catch ?JSON_DECODE(Error)) of
-            {Props} when is_list(Props) ->
-                case {get_value(<<"error">>, Props),
-                    get_value(<<"reason">>, Props)} of
-                {<<"not_found">>, Reason} when
-                        Reason =/= <<"missing">>, Reason =/= <<"deleted">> ->
-                    ok = couch_view_merger_queue:queue(
-                        Queue, {error, Url, Reason});
-                {<<"not_found">>, _} ->
-                    ok = couch_view_merger_queue:queue(
-                        Queue, {error, Url, <<"not_found">>});
-                {<<"error">>, <<"revision_mismatch">>} ->
-                    ok = couch_view_merger_queue:queue(Queue, revision_mismatch);
-                {<<"error">>, <<"set_view_outdated">>} ->
-                    ?LOG_DEBUG("Got `set_view_outdated` from ~s", [Url]),
-                    ok = couch_view_merger_queue:queue(Queue, set_view_outdated);
-                JsonError ->
-                    ok = couch_view_merger_queue:queue(
-                        Queue, {error, Url, to_binary(JsonError)})
-                end;
-            _ ->
-                ok = couch_view_merger_queue:queue(
-                    Queue, {error, Url, to_binary(Error)})
-            end,
-            ok = couch_view_merger_queue:done(Queue),
-            stop_conn(Conn);
-        {ibrowse_async_response, ReqId, {error, Error}} ->
-            stop_conn(Conn),
-            ok = couch_view_merger_queue:queue(Queue, {error, Url, Error}),
+    case lhttpc:request(Url, Method, Headers, Body, Timeout, LhttpcOptions) of
+    {ok, {{200, _}, _RespHeaders, Pid}} when is_pid(Pid) ->
+        DataFun = fun() -> stream_data(Pid, Timeout) end,
+        try
+            json_stream_parse:events(DataFun, EventFun)
+        catch throw:{error, Error} ->
+            ok = couch_view_merger_queue:queue(Queue, {error, Url, Error})
+        after
             ok = couch_view_merger_queue:done(Queue)
-        end
+        end;
+    {ok, {{Code, _}, _RespHeaders, Pid}} when is_pid(Pid) ->
+        Error = try
+            stream_all(Pid, Timeout, [])
+        catch throw:{error, _Error} ->
+            <<"Error code ", (?l2b(integer_to_list(Code)))/binary>>
+        end,
+        case (catch ?JSON_DECODE(Error)) of
+        {Props} when is_list(Props) ->
+            case {get_value(<<"error">>, Props), get_value(<<"reason">>, Props)} of
+            {<<"not_found">>, Reason} when Reason =/= <<"missing">>, Reason =/= <<"deleted">> ->
+                ok = couch_view_merger_queue:queue(Queue, {error, Url, Reason});
+            {<<"not_found">>, _} ->
+                ok = couch_view_merger_queue:queue(Queue, {error, Url, <<"not_found">>});
+            {<<"error">>, <<"revision_mismatch">>} ->
+                ok = couch_view_merger_queue:queue(Queue, revision_mismatch);
+            {<<"error">>, <<"set_view_outdated">>} ->
+                ok = couch_view_merger_queue:queue(Queue, set_view_outdated);
+            ErrorTuple ->
+                ok = couch_view_merger_queue:queue(Queue, {error, Url, to_binary(ErrorTuple)})
+            end;
+        _ ->
+            ok = couch_view_merger_queue:queue(Queue, {error, Url, to_binary(Error)})
+        end,
+        ok = couch_view_merger_queue:done(Queue);
+    {error, Error} ->
+        ok = couch_view_merger_queue:queue(Queue, {error, Url, Error}),
+        ok = couch_view_merger_queue:done(Queue)
     end.
 
 
-stop_conn(Conn) ->
-    unlink(Conn),
-    receive {'EXIT', Conn, _} -> ok after 0 -> ok end,
-    catch ibrowse:stop_worker_process(Conn).
-
-
-stream_data(ReqId) ->
-    receive
-    {ibrowse_async_response, ReqId, {error, _} = Error} ->
-        throw(Error);
-    {ibrowse_async_response, ReqId, <<>>} ->
-        ibrowse:stream_next(ReqId),
-        stream_data(ReqId);
-    {ibrowse_async_response, ReqId, Data} ->
-        ibrowse:stream_next(ReqId),
-        {Data, fun() -> stream_data(ReqId) end};
-    {ibrowse_async_response_end, ReqId} ->
-        {<<>>, fun() -> throw({error, <<"more view data expected">>}) end}
+stream_data(Pid, Timeout) ->
+    case lhttpc:get_body_part(Pid, Timeout) of
+    {ok, {http_eob, _Trailers}} ->
+         {<<>>, fun() -> throw({error, <<"more view data expected">>}) end};
+    {ok, Data} ->
+         {Data, fun() -> stream_data(Pid, Timeout) end};
+    {error, _} = Error ->
+         throw(Error);
+    Error ->
+         throw({error, Error})
     end.
 
 
-stream_all(ReqId, Acc) ->
-    case stream_data(ReqId) of
+stream_all(Pid, Timeout, Acc) ->
+    case stream_data(Pid, Timeout) of
     {<<>>, _} ->
         iolist_to_binary(lists:reverse(Acc));
     {Data, _} ->
-        stream_all(ReqId, [Data | Acc])
+        stream_all(Pid, Timeout, [Data | Acc])
     end.
+
 
 void_event(_Ev) ->
     fun void_event/1.

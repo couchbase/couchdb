@@ -93,6 +93,7 @@ os_process_limit = 50
 [daemons]
 view_manager={couch_view, start_link, []}
 set_view_manager={couch_set_view, start_link, []}
+index_merger_pool={lhttpc_manager, start_link, [[{connection_timeout, 90000}, {pool_size, 10000}, {name, couch_index_merger_connection_pool}]]}
 external_manager={couch_external_manager, start_link, []}
 query_servers={couch_query_servers, start_link, []}
 vhosts={couch_httpd_vhost, start_link, []}

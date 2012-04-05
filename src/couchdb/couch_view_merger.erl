@@ -135,8 +135,11 @@ make_event_fun(ViewArgs, Queue) ->
     end.
 
 % callback!
-http_index_folder_req_details(#merged_index_spec{
-        url = MergeUrl0, ejson_spec = {EJson}}, MergeParams, DDoc) ->
+http_index_folder_req_details(#merged_index_spec{} = IndexSpec, MergeParams, DDoc) ->
+    #merged_index_spec{
+        url = MergeUrl0,
+        ejson_spec = {EJson}
+    } = IndexSpec,
     #index_merge{
         conn_timeout = Timeout,
         http_params = ViewArgs,
@@ -144,10 +147,14 @@ http_index_folder_req_details(#merged_index_spec{
             keys = Keys
         }
     } = MergeParams,
-    {ok, #httpdb{url = Url, ibrowse_options = Options} = Db} =
-        couch_index_merger:open_db(MergeUrl0, nil, Timeout),
+    {ok, HttpDb} = couch_index_merger:open_db(MergeUrl0, nil, Timeout),
+    #httpdb{
+        url = Url,
+        lhttpc_options = Options,
+        headers = BaseHeaders
+    } = HttpDb,
     MergeUrl = Url ++ view_qs(ViewArgs, MergeParams),
-    Headers = [{"Content-Type", "application/json"} | Db#httpdb.headers],
+    Headers = [{"Content-Type", "application/json"} | BaseHeaders],
 
     EJson1 = case Keys of
     nil ->
@@ -167,11 +174,14 @@ http_index_folder_req_details(#merged_index_spec{
 
     Body = {EJson2},
     put(from_url, ?l2b(Url)),
-    {MergeUrl, post, Headers, ?JSON_ENCODE(Body), Options};
+    {MergeUrl, "POST", Headers, ?JSON_ENCODE(Body), Options};
 
-http_index_folder_req_details(#simple_index_spec{
-        database = DbUrl, ddoc_id = DDocId, index_name = ViewName},
-        MergeParams, _DDoc) ->
+http_index_folder_req_details(#simple_index_spec{} = IndexSpec, MergeParams, _DDoc) ->
+    #simple_index_spec{
+        database = DbUrl,
+        ddoc_id = DDocId,
+        index_name = ViewName
+    } = IndexSpec,
     #index_merge{
         conn_timeout = Timeout,
         http_params = ViewArgs,
@@ -179,15 +189,19 @@ http_index_folder_req_details(#simple_index_spec{
             keys = Keys
         }
     } = MergeParams,
-    {ok, #httpdb{url = Url, ibrowse_options = Options} = Db} =
-        couch_index_merger:open_db(DbUrl, nil, Timeout),
+    {ok, HttpDb} = couch_index_merger:open_db(DbUrl, nil, Timeout),
+    #httpdb{
+        url = Url,
+        lhttpc_options = Options,
+        headers = BaseHeaders
+    } = HttpDb,
     ViewUrl = Url ++ case ViewName of
     <<"_all_docs">> ->
         "_all_docs";
     _ ->
         ?b2l(DDocId) ++ "/_view/" ++ ?b2l(ViewName)
     end ++ view_qs(ViewArgs, MergeParams),
-    Headers = [{"Content-Type", "application/json"} | Db#httpdb.headers],
+    Headers = [{"Content-Type", "application/json"} | BaseHeaders],
     put(from_url, DbUrl),
     case Keys of
     nil ->
