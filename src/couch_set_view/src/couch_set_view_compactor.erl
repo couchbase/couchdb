@@ -54,7 +54,7 @@ compact_group(Group, EmptyGroup, SetName, FileName, CompactFileName) ->
         fd = GroupFd,
         sig = GroupSig
     } = Group,
-    StartTime = now(),
+    StartTime = os:timestamp(),
 
     #set_view_group{
         id_btree = EmptyIdBtree,
@@ -116,7 +116,7 @@ compact_group(Group, EmptyGroup, SetName, FileName, CompactFileName) ->
     ok = couch_file:flush(NewGroup#set_view_group.fd),
     CompactResult = #set_view_compactor_result{
         group = NewGroup,
-        compact_time = timer:now_diff(now(), StartTime) / 1000000,
+        compact_time = timer:now_diff(os:timestamp(), StartTime) / 1000000,
         cleanup_kv_count = CleanupKVCount
     },
     maybe_retry_compact(CompactResult, SetName, StartTime, GroupFd, CompactFileName).
@@ -128,7 +128,7 @@ maybe_retry_compact(CompactResult0, SetName, StartTime, GroupFd, CompactFileName
         type = Type
     } = NewGroup,
     CompactResult = CompactResult0#set_view_compactor_result{
-        compact_time = timer:now_diff(now(), StartTime) / 1000000
+        compact_time = timer:now_diff(os:timestamp(), StartTime) / 1000000
     },
     {ok, Pid} = get_group_pid(SetName, DDocId, Type),
     case gen_server:call(Pid, {compact_done, CompactResult}, infinity) of

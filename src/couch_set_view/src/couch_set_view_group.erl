@@ -1583,7 +1583,7 @@ cleaner(#state{group = Group} = State) ->
     } = Group,
     FileName = index_file_name(?root_dir(State), ?set_name(State), ?type(State), Sig),
     ok = couch_set_view_util:open_raw_read_fd(Fd, FileName),
-    StartTime = now(),
+    StartTime = os:timestamp(),
     PurgeFun = couch_set_view_util:make_btree_purge_fun(Group),
     {ok, NewIdBtree, {Go, IdPurgedCount}} =
         couch_btree:guided_purge(IdBtree, PurgeFun, {go, 0}),
@@ -1608,7 +1608,7 @@ cleaner(#state{group = Group} = State) ->
         views = NewViews,
         index_header = Header#set_view_index_header{cbitmask = NewCbitmask}
     },
-    Duration = timer:now_diff(now(), StartTime) / 1000000,
+    Duration = timer:now_diff(os:timestamp(), StartTime) / 1000000,
     commit_header(NewGroup, true),
     exit({clean_group, NewGroup, TotalPurgedCount, Duration}).
 

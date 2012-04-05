@@ -68,7 +68,7 @@ update(Owner, Group, FileName) ->
 
     process_flag(trap_exit, true),
 
-    BeforeEnterTs = now(),
+    BeforeEnterTs = os:timestamp(),
     Parent = self(),
     Pid = spawn_link(fun() ->
         case Type of
@@ -77,7 +77,7 @@ update(Owner, Group, FileName) ->
         replica ->
             ok = couch_index_barrier:enter(couch_replica_index_barrier, Parent)
         end,
-        exit({done, (timer:now_diff(now(), BeforeEnterTs) / 1000000)})
+        exit({done, (timer:now_diff(os:timestamp(), BeforeEnterTs) / 1000000)})
     end),
 
     BlockedTime = receive
@@ -89,7 +89,7 @@ update(Owner, Group, FileName) ->
         EmptyResult = #set_view_updater_result{
             group = Group,
             indexing_time = 0.0,
-            blocked_time = timer:now_diff(now(), BeforeEnterTs) / 1000000,
+            blocked_time = timer:now_diff(os:timestamp(), BeforeEnterTs) / 1000000,
             state = updating_active,
             cleanup_kv_count = 0,
             cleanup_time = 0,
@@ -154,7 +154,7 @@ update(Owner, Group, FileName, ActiveParts, PassiveParts, MaxSeqs, BlockedTime) 
         sig = GroupSig
     } = Group,
 
-    StartTime = now(),
+    StartTime = os:timestamp(),
     NumChanges = lists:foldl(
         fun({{PartId, NewSeq}, {PartId, OldSeq}}, Acc) ->
              Acc + (NewSeq - OldSeq)
@@ -274,7 +274,7 @@ wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime) ->
     {writer_finished, WriterAcc} ->
         Result = #set_view_updater_result{
             group = WriterAcc#writer_acc.group,
-            indexing_time = timer:now_diff(now(), StartTime) / 1000000,
+            indexing_time = timer:now_diff(os:timestamp(), StartTime) / 1000000,
             blocked_time = BlockedTime,
             state = WriterAcc#writer_acc.state,
             cleanup_kv_count = WriterAcc#writer_acc.cleanup_kv_count,
@@ -636,7 +636,7 @@ write_changes(WriterAcc, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs) ->
         {ok, LookupResults, IdBtree2} =
             couch_btree:query_modify(IdBtree, LookupDocIds, AddDocIdViewIdKeys, RemoveDocIds);
     _ ->
-        CleanupStart = now(),
+        CleanupStart = os:timestamp(),
         {ok, LookupResults, {Go, IdBtreePurgedKeyCount}, IdBtree2} =
             couch_btree:query_modify(
                 IdBtree, LookupDocIds, AddDocIdViewIdKeys, RemoveDocIds, CleanupFun, {go, 0}),
@@ -702,7 +702,7 @@ write_changes(WriterAcc, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs) ->
             end,
             IdBitmap, Views3),
         NewCbitmask = ?set_cbitmask(Group) band CombinedBitmap,
-        CleanupTime = timer:now_diff(now(), CleanupStart) / 1000000,
+        CleanupTime = timer:now_diff(os:timestamp(), CleanupStart) / 1000000,
         ?LOG_INFO("Updater for set view `~s`, ~s group `~s`, performed cleanup "
             "of ~p key/value pairs in ~.3f seconds",
             [SetName, GroupType, GroupName, CleanupKvCount, CleanupTime])
