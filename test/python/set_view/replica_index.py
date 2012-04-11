@@ -570,6 +570,7 @@ class TestReplicaIndex(unittest.TestCase):
 
         # print "defining partitions [4, 5, 7] as replicas again"
         common.add_replica_partitions(self._params, [4, 5, 7])
+        self.wait_for_pending_transition_applied()
 
         info = common.get_set_view_info(self._params)
         self.assertEqual(info["replica_partitions"], [4, 5, 6, 7],
@@ -1096,7 +1097,6 @@ class TestReplicaIndex(unittest.TestCase):
             self.assertTrue(key in all_keys, "Key from partition 7 in view result")
 
 
-
     def restart_compare_info(self, info_before, info_after):
         # print "Restarting server"
         time.sleep(1)
@@ -1108,3 +1108,17 @@ class TestReplicaIndex(unittest.TestCase):
         del info_after["replica_group_info"]["stats"]
         self.assertEqual(info_after, info_before, "same index state after server restart")
 
+
+    def wait_for_pending_transition_applied(self):
+        # print "Waiting for pending transition to be applied"
+        iterations = 0
+        while True:
+            if iterations > 600:
+                raise(Exception("timeout waiting for pending transition to be applied"))
+            info = common.get_set_view_info(self._params)
+            if (info["pending_transition"] is None) and \
+                (info["replica_group_info"]["pending_transition"] is None):
+                break
+            else:
+                time.sleep(1)
+                iterations += 1

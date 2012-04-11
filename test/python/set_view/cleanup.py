@@ -306,6 +306,30 @@ class TestCleanup(unittest.TestCase):
         # print "Marking partitions 1 and 2 as active while cleanup is ongoing"
         common.set_partition_states(self._params, active = [0, 1])
 
+        info = common.get_set_view_info(self._params)
+        self.assertEqual(type(info["pending_transition"]), dict, "pending_transition is an object")
+        self.assertEqual(sorted(info["pending_transition"]["active"]),
+                         [0, 1],
+                         "pending_transition active list is [0, 1]")
+        self.assertEqual(info["pending_transition"]["passive"],
+                         [],
+                         "pending_transition passive list is []")
+        self.assertEqual(info["pending_transition"]["cleanup"],
+                         [],
+                         "pending_transition cleanup list is []")
+
+        # print "Waiting for pending transition to be applied"
+        iterations = 0
+        while True:
+            if iterations > 600:
+                raise(Exception("timeout waiting for pending transition to be applied"))
+            info = common.get_set_view_info(self._params)
+            if info["pending_transition"] is None:
+                break
+            else:
+                time.sleep(1)
+                iterations += 1
+
         # print "Querying view"
         (resp, view_result) = common.query(self._params, "mapview1")
         doc_count = common.set_doc_count(self._params, [0, 1, 2, 3])

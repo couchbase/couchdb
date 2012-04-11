@@ -82,7 +82,15 @@
     id_btree_state = nil,
     view_states = nil,
     has_replica = false,
-    replicas_on_transfer = []
+    replicas_on_transfer = [],
+    % Pending partition states transition.
+    pending_transition = nil  % 'nil' | #set_view_transition{}
+}).
+
+-record(set_view_transition, {
+    active,
+    passive,
+    cleanup
 }).
 
 -record(set_view_debug_info, {
