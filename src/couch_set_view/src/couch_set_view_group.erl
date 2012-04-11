@@ -1203,7 +1203,6 @@ commit_header(Group, Sync) ->
     ok = couch_file:write_header(Group#set_view_group.fd, Header),
     case Sync of
     true ->
-        ok = couch_file:flush(Group#set_view_group.fd),
         ok = couch_file:sync(Group#set_view_group.fd);
     false ->
         ok
