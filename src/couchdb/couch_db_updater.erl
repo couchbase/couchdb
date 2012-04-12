@@ -702,9 +702,13 @@ initial_copy_compact(#db{docinfo_by_seq_btree=SrcBySeq,
         docinfo_by_id_btree=DestById, fd=DestFd} = NewDb) ->
     CopyBodyFun = fun(#doc_info{body_ptr=Bp}=Info, ok) ->
         {ok, Body} = couch_file:pread_iolist(SrcFd, Bp),
-        {ok, BpNew, _} = couch_file:append_binary_crc32(DestFd, Body),
+        {ok, BpNew, WrittenSize} = couch_file:append_binary_crc32(DestFd, Body),
         update_compact_task(1),
-        {Info#doc_info{body_ptr = BpNew}, ok}
+        NewInfo = Info#doc_info{
+            body_ptr = BpNew,
+            size = WrittenSize
+        },
+        {NewInfo, ok}
     end,
     % first copy the by_seq index and the values.
     {ok, NewBySeqRoot, ok} = couch_btree_copy:copy(
