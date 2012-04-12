@@ -140,7 +140,7 @@ init([]) ->
             % spawn here so couch_config doesn't try to call itself
             spawn(fun() -> hash_admin_passwords(Persist) end)
         end, false),
-    {ok, RegExp} = re:compile("^[a-z][a-z0-9\\_\\$()\\+\\-\\/]*$"),
+    {ok, RegExp} = re:compile("^[A-Za-z0-9\\_\\.\\%\\-\\/]*$"),
     ets:new(couch_dbs_by_name, [set, private, named_table]),
     ets:new(couch_dbs_by_pid, [set, private, named_table]),
     ets:new(couch_dbs_by_lru, [ordered_set, private, named_table]),
