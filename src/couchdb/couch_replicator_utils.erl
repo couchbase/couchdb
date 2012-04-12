@@ -18,6 +18,7 @@
 -export([replication_id/2]).
 -export([sum_stats/2]).
 -export([split_dbname/1]).
+-export([get_master_db/1, get_checkpoint_log_id/2]).
 
 -include("couch_db.hrl").
 -include("couch_api_wrap.hrl").
@@ -377,3 +378,25 @@ build_info([VBucketStr], R) ->
     {lists:append(lists:reverse(R)), list_to_integer(VBucketStr)};
 build_info([H|T], R)->
     build_info(T, [H|R]).
+
+get_master_db(#db{name = DbName0}) ->
+    get_master_db(DbName0);
+get_master_db(#httpdb{url=DbUrl0}) ->
+    [Scheme, Host, DbName0] = [couch_httpd:unquote(Token) ||
+                                Token <- string:tokens(DbUrl0, "/")],
+    DbName = get_master_db(?l2b(DbName0)),
+    DbUrl = Scheme ++ "//" ++ Host ++ "/" ++ couch_httpd:quote(DbName) ++ "/",
+    #httpdb{url = DbUrl, timeout = 300000};
+get_master_db(DbName0) ->
+    {Bucket, _} = split_dbname(DbName0),
+    iolist_to_binary([Bucket, $/, <<"master">>]).
+
+get_checkpoint_log_id(#db{name = DbName0}, LogId0) ->
+    get_checkpoint_log_id(DbName0, LogId0);
+get_checkpoint_log_id(#httpdb{url = DbUrl0}, LogId0) ->
+    [_, _, DbName0] = [couch_httpd:unquote(Token) ||
+                        Token <- string:tokens(DbUrl0, "/")],
+    get_checkpoint_log_id(?l2b(DbName0), LogId0);
+get_checkpoint_log_id(DbName0, LogId0) ->
+    {_, VBucket} = split_dbname(DbName0),
+    ?l2b([?LOCAL_DOC_PREFIX, integer_to_list(VBucket), "-", LogId0]).

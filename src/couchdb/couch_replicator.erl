@@ -45,6 +45,8 @@
     target_name,
     source,
     target,
+    src_master_db,
+    tgt_master_db,
     history,
     checkpoint_history,
     start_seq,
@@ -68,6 +70,8 @@
     target_db_compaction_notifier = nil,
     source_monitor = nil,
     target_monitor = nil,
+    src_master_db_monitor = nil,
+    tgt_master_db_monitor = nil,
     source_seq = nil
 }).
 
@@ -340,6 +344,14 @@ handle_info({'DOWN', Ref, _, _, Why}, #rep_state{target_monitor = Ref} = St) ->
     ?LOG_ERROR("Target database is down. Reason: ~p", [Why]),
     {stop, target_db_down, St};
 
+handle_info({'DOWN', Ref, _, _, Why}, #rep_state{src_master_db_monitor = Ref} = St) ->
+    ?LOG_ERROR("Source master database is down. Reason: ~p", [Why]),
+    {stop, src_master_db_down, St};
+
+handle_info({'DOWN', Ref, _, _, Why}, #rep_state{tgt_master_db_monitor = Ref} = St) ->
+    ?LOG_ERROR("Target master database is down. Reason: ~p", [Why]),
+    {stop, tgt_master_db_down, St};
+
 handle_info({'EXIT', Pid, normal}, #rep_state{changes_reader=Pid} = State) ->
     {noreply, State};
 
@@ -437,6 +449,11 @@ handle_cast({db_compacted, DbName},
     {ok, NewTarget} = couch_db:reopen(Target),
     {noreply, State#rep_state{target = NewTarget}};
 
+handle_cast({db_compacted, DbName},
+    #rep_state{src_master_db = #db{name = DbName} = SrcMasterDb} = State) ->
+    {ok, NewSrcMasterDb} = couch_db:reopen(SrcMasterDb),
+    {noreply, State#rep_state{src_master_db = NewSrcMasterDb}};
+
 handle_cast(checkpoint, State) ->
     case do_checkpoint(State) of
     {ok, NewState} ->
@@ -484,7 +501,9 @@ terminate_cleanup(State) ->
     stop_db_compaction_notifier(State#rep_state.source_db_compaction_notifier),
     stop_db_compaction_notifier(State#rep_state.target_db_compaction_notifier),
     couch_api_wrap:db_close(State#rep_state.source),
-    couch_api_wrap:db_close(State#rep_state.target).
+    couch_api_wrap:db_close(State#rep_state.target),
+    couch_api_wrap:db_close(State#rep_state.src_master_db),
+    couch_api_wrap:db_close(State#rep_state.tgt_master_db).
 
 
 do_last_checkpoint(#rep_state{seqs_in_progress = [],
@@ -530,7 +549,19 @@ init_state(Rep) ->
     {ok, SourceInfo} = couch_api_wrap:get_db_info(Source),
     {ok, TargetInfo} = couch_api_wrap:get_db_info(Target),
 
-    [SourceLog, TargetLog] = find_replication_logs([Source, Target], Rep),
+    {ok, SrcMasterDb} = couch_api_wrap:db_open(
+                            couch_replicator_utils:get_master_db(Source),
+                            [{user_ctx, UserCtx}]),
+    {ok, TgtMasterDb} = couch_api_wrap:db_open(
+                            couch_replicator_utils:get_master_db(Target),
+                            [{user_ctx, UserCtx}]),
+
+    % We have to pass the vbucket database along with the master database
+    % because the replication log id needs to be prefixed with the vbucket id
+    % at both the source and the destination.
+    [SourceLog, TargetLog] = find_replication_logs(
+                                [{Source, SrcMasterDb}, {Target, TgtMasterDb}],
+                                Rep),
 
     {StartSeq0, History} = compare_replication_logs(SourceLog, TargetLog),
     StartSeq1 = get_value(since_seq, Options, StartSeq0),
@@ -542,6 +573,8 @@ init_state(Rep) ->
         target_name = couch_api_wrap:db_uri(Target),
         source = Source,
         target = Target,
+        src_master_db = SrcMasterDb,
+        tgt_master_db = TgtMasterDb,
         history = History,
         checkpoint_history = {[{<<"no_changes">>, true}| CheckpointHistory]},
         start_seq = StartSeq,
@@ -559,27 +592,12 @@ init_state(Rep) ->
             start_db_compaction_notifier(Target, self()),
         source_monitor = db_monitor(Source),
         target_monitor = db_monitor(Target),
+        src_master_db_monitor = db_monitor(SrcMasterDb),
+        tgt_master_db_monitor = db_monitor(TgtMasterDb),
         source_seq = get_value(<<"update_seq">>, SourceInfo, ?LOWEST_SEQ)
     },
     State#rep_state{timer = start_timer(State)}.
 
-
-get_checkpoint_db_doc_pair(#db{name = DbName0} = Db0, LogId0) ->
-    {DbName, LogId} = get_checkpoint_db_doc_pair(DbName0, LogId0),
-    {Db0#db{name = DbName}, LogId};
-
-get_checkpoint_db_doc_pair(#httpdb{url = DbUrl0} = Db0, LogId0) ->
-    [Scheme, Host, DbName0] = [couch_httpd:unquote(Token) ||
-                                Token <- string:tokens(DbUrl0, "/")],
-    {DbName, LogId} = get_checkpoint_db_doc_pair(?l2b(DbName0), LogId0),
-    DbUrl = Scheme ++ "//" ++ Host ++ "/" ++ couch_httpd:quote(DbName) ++ "/",
-    {Db0#httpdb{url = DbUrl}, LogId};
-
-get_checkpoint_db_doc_pair(DbName0, LogId0) ->
-    {Bucket, VBucket} = couch_replicator_utils:split_dbname(DbName0),
-    DbName = iolist_to_binary([Bucket, $/, <<"master">>]),
-    LogId = ?l2b([?LOCAL_DOC_PREFIX, integer_to_list(VBucket), "-", LogId0]),
-    {DbName, LogId}.
 
 find_replication_logs(DbList, #rep{id = {BaseId, _}} = Rep) ->
     fold_replication_logs(DbList, ?REP_ID_VERSION, BaseId, BaseId, Rep, []).
@@ -588,23 +606,24 @@ find_replication_logs(DbList, #rep{id = {BaseId, _}} = Rep) ->
 fold_replication_logs([], _Vsn, _LogId, _NewId, _Rep, Acc) ->
     lists:reverse(Acc);
 
-fold_replication_logs([Db0 | Rest] = Dbs, Vsn, LogId0, NewId, Rep, Acc) ->
-    {Db, LogId} = get_checkpoint_db_doc_pair(Db0, LogId0),
-    case couch_api_wrap:open_doc(Db, LogId, [ejson_body]) of
+fold_replication_logs([{Db, MasterDb} | Rest] = Dbs, Vsn, LogId0, NewId0, Rep, Acc) ->
+    LogId = couch_replicator_utils:get_checkpoint_log_id(Db, LogId0),
+    NewId = couch_replicator_utils:get_checkpoint_log_id(Db, NewId0),
+    case couch_api_wrap:open_doc(MasterDb, LogId, [ejson_body]) of
     {error, <<"not_found">>} when Vsn > 1 ->
         OldRepId = couch_replicator_utils:replication_id(Rep, Vsn - 1),
         fold_replication_logs(Dbs, Vsn - 1,
-            ?l2b(OldRepId), NewId, Rep, Acc);
+            ?l2b(OldRepId), NewId0, Rep, Acc);
     {error, <<"not_found">>} ->
         fold_replication_logs(
-            Rest, ?REP_ID_VERSION, NewId, NewId, Rep, [#doc{id = NewId, body = {[]}} | Acc]);
+            Rest, ?REP_ID_VERSION, NewId0, NewId0, Rep, [#doc{id = NewId, body = {[]}} | Acc]);
     {ok, Doc} when LogId =:= NewId ->
         fold_replication_logs(
-            Rest, ?REP_ID_VERSION, NewId, NewId, Rep, [Doc | Acc]);
+            Rest, ?REP_ID_VERSION, NewId0, NewId0, Rep, [Doc | Acc]);
     {ok, Doc} ->
         MigratedLog = #doc{id = NewId, body = Doc#doc.body},
         fold_replication_logs(
-            Rest, ?REP_ID_VERSION, NewId, NewId, Rep, [MigratedLog | Acc])
+            Rest, ?REP_ID_VERSION, NewId0, NewId0, Rep, [MigratedLog | Acc])
     end.
 
 
@@ -696,6 +715,8 @@ do_checkpoint(State) ->
         target_name=TargetName,
         source = Source,
         target = Target,
+        src_master_db = SrcMasterDb,
+        tgt_master_db = TgtMasterDb,
         history = OldHistory,
         start_seq = {_, StartSeq},
         current_through_seq = {_Ts, NewSeq} = NewTsSeq,
@@ -762,9 +783,9 @@ do_checkpoint(State) ->
         RandBin = <<Rand:32/integer>>,
         try
             SrcRev = update_checkpoint(
-                Source, SourceLog#doc{body = NewRepHistory, rev={1, RandBin}}, source),
+                SrcMasterDb, SourceLog#doc{body = NewRepHistory, rev={1, RandBin}}, source),
             TgtRev = update_checkpoint(
-                Target, TargetLog#doc{body = NewRepHistory, rev={1, RandBin}}, target),
+                TgtMasterDb, TargetLog#doc{body = NewRepHistory, rev={1, RandBin}}, target),
             SourceCurSeq = source_cur_seq(State),
             NewState = State#rep_state{
                 source_seq = SourceCurSeq,
@@ -799,8 +820,7 @@ update_checkpoint(Db, Doc, DbType) ->
                 " checkpoint document: ", (to_binary(Reason))/binary>>})
     end.
 
-update_checkpoint(Db0, #doc{id = LogId0, body = LogBody, rev = Rev} = Doc) ->
-    {Db, LogId} = get_checkpoint_db_doc_pair(Db0, LogId0),
+update_checkpoint(Db, #doc{id = LogId, body = LogBody, rev = Rev} = Doc) ->
     try
         case couch_api_wrap:update_doc(Db, Doc#doc{id = LogId}, [delay_commit]) of
         ok ->
