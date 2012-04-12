@@ -606,7 +606,7 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
             group = NewGroup2
         },
         inc_compactions(State2#state.group, Result),
-        {reply, ok, State2, ?TIMEOUT};
+        {reply, ok, maybe_apply_pending_transition(State2), ?TIMEOUT};
     false ->
         ?LOG_INFO("Set view `~s`, ~s group `~s`, compaction still behind, retrying",
             [?set_name(State), ?type(State), ?group_id(State)]),
