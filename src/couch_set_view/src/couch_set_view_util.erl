@@ -81,13 +81,15 @@ decode_bitmask(Bitmask, PartId) ->
 
 
 make_btree_purge_fun(Group) when ?set_cbitmask(Group) =/= 0 ->
-    fun(Type, Value, {go, Acc}) ->
-        receive
-        stop ->
-            {stop, {stop, Acc}}
-        after 0 ->
-            btree_purge_fun(Type, Value, {go, Acc}, ?set_cbitmask(Group))
-        end
+    fun(branch, Value, {go, Acc}) ->
+            receive
+            stop ->
+                {stop, {stop, Acc}}
+            after 0 ->
+                btree_purge_fun(branch, Value, {go, Acc}, ?set_cbitmask(Group))
+            end;
+        (value, Value, {go, Acc}) ->
+            btree_purge_fun(value, Value, {go, Acc}, ?set_cbitmask(Group))
     end.
 
 btree_purge_fun(value, {_K, {PartId, _}}, {go, Acc}, Cbitmask) ->
