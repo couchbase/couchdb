@@ -79,10 +79,12 @@ test() ->
 
     etap:diag("Triggering main group compaction"),
     {ok, CompactPid} = couch_set_view_compactor:start_compact(test_set_name(), ddoc_id(), main),
-    etap:diag("Waiting for main group compaction to finish"),
     Ref = erlang:monitor(process, CompactPid),
+    etap:diag("Waiting for main group compaction to finish"),
     receive
     {'DOWN', Ref, process, CompactPid, normal} ->
+        ok;
+    {'DOWN', Ref, process, CompactPid, noproc} ->
         ok;
     {'DOWN', Ref, process, CompactPid, Reason} ->
         etap:bail("Failure compacting main group: " ++ couch_util:to_list(Reason))

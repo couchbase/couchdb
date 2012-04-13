@@ -271,6 +271,8 @@ wait_for_cleanup(GroupInfo) ->
     receive
     {'DOWN', Ref, process, Pid, normal} ->
         ok;
+    {'DOWN', Ref, process, Pid, noproc} ->
+        ok;
     {'DOWN', Ref, process, Pid, Reason} ->
         etap:bail("Failure waiting for main index cleanup: " ++ couch_util:to_list(Reason))
     after ?MAX_WAIT_TIME ->
