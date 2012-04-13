@@ -628,7 +628,16 @@ handle_call(cancel_compact, _From, #state{compactor_pid = Pid, compactor_file = 
 
 
 handle_cast({partial_update, Pid, NewGroup}, #state{updater_pid = Pid} = State) ->
-    NewState = process_partial_update(State, NewGroup),
+    case ?have_pending_transition(State) andalso
+        (?set_cbitmask(NewGroup) =:= 0) andalso
+        (?set_cbitmask(State#state.group) =/= 0) andalso
+        (State#state.waiting_list =:= []) of
+    true ->
+        State2 = stop_updater(State, immediately),
+        NewState = maybe_apply_pending_transition(State2);
+    false ->
+        NewState = process_partial_update(State, NewGroup)
+    end,
     {noreply, NewState};
 handle_cast({partial_update, _, _}, State) ->
     %% message from an old (probably pre-compaction) updater; ignore
