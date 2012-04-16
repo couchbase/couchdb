@@ -28,7 +28,7 @@ start_compact(SetName, DDocId) ->
 
 start_compact(SetName, DDocId, Type) ->
     {ok, Pid} = get_group_pid(SetName, DDocId, Type),
-    gen_server:call(Pid, {start_compact, fun compact_group/5}).
+    gen_server:call(Pid, {start_compact, fun compact_group/2}).
 
 
 cancel_compact(SetName, DDocId) ->
@@ -43,16 +43,17 @@ cancel_compact(SetName, DDocId, Type) ->
 %% internal functions
 %%=============================================================================
 
-%% @spec compact_group(Group, NewGroup, SetName, FileName) -> ok
-compact_group(Group, EmptyGroup, SetName, FileName, CompactFileName) ->
+compact_group(Group, EmptyGroup) ->
     #set_view_group{
+        set_name = SetName,
         id_btree = IdBtree,
         views = Views,
         name = GroupId,
         type = Type,
         index_header = Header,
         fd = GroupFd,
-        sig = GroupSig
+        sig = GroupSig,
+        filepath = FileName
     } = Group,
     StartTime = os:timestamp(),
 
@@ -119,11 +120,12 @@ compact_group(Group, EmptyGroup, SetName, FileName, CompactFileName) ->
         compact_time = timer:now_diff(os:timestamp(), StartTime) / 1000000,
         cleanup_kv_count = CleanupKVCount
     },
-    maybe_retry_compact(CompactResult, SetName, StartTime, GroupFd, CompactFileName).
+    maybe_retry_compact(CompactResult, StartTime, GroupFd).
 
-maybe_retry_compact(CompactResult0, SetName, StartTime, GroupFd, CompactFileName) ->
+maybe_retry_compact(CompactResult0, StartTime, GroupFd) ->
     NewGroup = CompactResult0#set_view_compactor_result.group,
     #set_view_group{
+        set_name = SetName,
         name = DDocId,
         type = Type
     } = NewGroup,
@@ -136,15 +138,14 @@ maybe_retry_compact(CompactResult0, SetName, StartTime, GroupFd, CompactFileName
         ok = couch_set_view_util:close_raw_read_fd(GroupFd);
     update ->
         {_, Ref} = erlang:spawn_monitor(fun() ->
-            couch_set_view_updater:update(nil, NewGroup, CompactFileName)
+            couch_set_view_updater:update(nil, NewGroup)
         end),
         receive
         {'DOWN', Ref, _, _, {updater_finished, UpdaterResult}} ->
             CompactResult2 = CompactResult0#set_view_compactor_result{
                 group = UpdaterResult#set_view_updater_result.group
             },
-            maybe_retry_compact(
-                CompactResult2, SetName, StartTime, GroupFd, CompactFileName);
+            maybe_retry_compact(CompactResult2, StartTime, GroupFd);
         {'DOWN', Ref, _, _, Reason} ->
             exit(Reason)
         end

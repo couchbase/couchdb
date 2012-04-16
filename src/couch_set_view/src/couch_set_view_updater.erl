@@ -12,7 +12,7 @@
 
 -module(couch_set_view_updater).
 
--export([update/3]).
+-export([update/2]).
 
 -include("couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
@@ -45,8 +45,7 @@
 }).
 
 
--spec update(pid()|nil, #set_view_group{}, list) -> no_return().
-update(Owner, Group, FileName) ->
+update(Owner, Group) ->
     #set_view_group{
         set_name = SetName,
         type = Type,
@@ -141,17 +140,18 @@ update(Owner, Group, FileName) ->
         ok
     end,
 
-    update(Owner, Group, FileName, ActiveParts, PassiveParts, MaxSeqs, BlockedTime).
+    update(Owner, Group, ActiveParts, PassiveParts, MaxSeqs, BlockedTime).
 
 
-update(Owner, Group, FileName, ActiveParts, PassiveParts, MaxSeqs, BlockedTime) ->
+update(Owner, Group, ActiveParts, PassiveParts, MaxSeqs, BlockedTime) ->
     #set_view_group{
         set_name = SetName,
         type = Type,
         name = DDocId,
         index_header = #set_view_index_header{seqs = SinceSeqs},
         fd = GroupFd,
-        sig = GroupSig
+        sig = GroupSig,
+        filepath = FileName
     } = Group,
 
     StartTime = os:timestamp(),

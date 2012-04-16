@@ -184,5 +184,5 @@ group_index_file() ->
                 couch_set_view:set_index_dir(couch_config:get("couchdb", "view_index_dir"), test_set_name()),
                 "main_" ++ binary_to_list(couch_util:get_value(signature, Info))
             ]),
-            ".view"
+            ".view.1"
         ])).

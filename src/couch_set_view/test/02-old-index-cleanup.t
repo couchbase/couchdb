@@ -47,7 +47,7 @@ test() ->
     query_view(num_docs(), []),
     etap:is(is_process_alive(GroupPid), true, "Group alive after query"),
     GroupSig = get_group_sig(),
-    IndexFile = "main_" ++ binary_to_list(GroupSig) ++ ".view",
+    IndexFile = "main_" ++ binary_to_list(GroupSig) ++ ".view.1",
 
     etap:is(all_index_files(), [IndexFile], "Index file found"),
 
@@ -68,7 +68,7 @@ test() ->
     NewGroupSig = get_group_sig(),
     etap:isnt(NewGroupSig, GroupSig, "New group has a different signature"),
 
-    NewIndexFile = "main_" ++ binary_to_list(NewGroupSig) ++ ".view",
+    NewIndexFile = "main_" ++ binary_to_list(NewGroupSig) ++ ".view.1",
     AllIndexFiles = all_index_files(),
     etap:is(lists:member(NewIndexFile, AllIndexFiles), true,
         "New index file found"),
@@ -184,5 +184,5 @@ all_index_files() ->
     IndexDir = couch_set_view:set_index_dir(
         couch_config:get("couchdb", "view_index_dir"), test_set_name()),
     filelib:fold_files(
-        IndexDir, ".*\\.view$", false,
+        IndexDir, ".*\\.view\\.[0-9]+$", false,
         fun(N, A) -> [filename:basename(N) | A] end, []).

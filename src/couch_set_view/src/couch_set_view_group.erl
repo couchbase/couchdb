@@ -546,7 +546,9 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
         compactor_pid = CompactorPid
     } = State,
     #set_view_group{
-        fd = OldFd, ref_counter = RefCounter
+        fd = OldFd,
+        ref_counter = RefCounter,
+        filepath = OldFilepath
     } = Group,
     #set_view_compactor_result{
         group = NewGroup0,
@@ -568,10 +570,10 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
         ?LOG_INFO("Set view `~s`, ~s group `~s`, compaction complete in ~.3f seconds,"
             " filtered ~p key-value pairs",
             [?set_name(State), ?type(State), ?group_id(State), Duration, CleanupKVCount]),
-        FileName = index_file_name(State),
+        NewFilepath = increment_filepath(Group),
         ok = couch_file:only_snapshot_reads(OldFd),
-        ok = couch_file:delete(?root_dir(State), FileName),
-        ok = couch_file:rename(NewGroup#set_view_group.fd, FileName),
+        ok = couch_file:delete(?root_dir(State), OldFilepath),
+        ok = couch_file:rename(NewGroup#set_view_group.fd, NewFilepath),
 
         %% cleanup old group
         unlink(CompactorPid),
@@ -579,6 +581,7 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
         NewRefCounter = new_fd_ref_counter(NewGroup#set_view_group.fd),
         NewGroup2 = NewGroup#set_view_group{
             ref_counter = NewRefCounter,
+            filepath = NewFilepath,
             index_header = (NewGroup#set_view_group.index_header)#set_view_index_header{
                 replicas_on_transfer = ?set_replicas_on_transfer(Group)
             }
@@ -588,7 +591,7 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
         if is_pid(UpdaterPid) ->
             Owner = self(),
             spawn_link(fun() ->
-                couch_set_view_updater:update(Owner, NewGroup2, FileName)
+                couch_set_view_updater:update(Owner, NewGroup2)
             end);
         true ->
             nil
@@ -621,7 +624,7 @@ handle_call(cancel_compact, _From, #state{compactor_pid = nil} = State) ->
 handle_call(cancel_compact, _From, #state{compactor_pid = Pid, compactor_file = CompactFd} = State) ->
     couch_util:shutdown_sync(Pid),
     couch_util:shutdown_sync(CompactFd),
-    CompactFile = index_file_name(State, compact),
+    CompactFile = compact_file_name(State),
     ok = couch_file:delete(?root_dir(State), CompactFile),
     State2 = maybe_start_cleaner(State#state{compactor_pid = nil, compactor_file = nil}),
     {reply, ok, State2, ?TIMEOUT}.
@@ -903,8 +906,10 @@ reply_all(#state{waiting_list = WaitList} = State, Reply) ->
     State#state{waiting_list = []}.
 
 
-prepare_group({RootDir, SetName, #set_view_group{sig = Sig, type = Type} = Group}, ForceReset)->
-    case open_index_file(RootDir, SetName, Type, Sig) of
+prepare_group({RootDir, SetName, #set_view_group{sig = Sig, type = Type} = Group0}, ForceReset)->
+    Filepath = find_index_file(RootDir, Group0),
+    Group = Group0#set_view_group{filepath = Filepath},
+    case open_index_file(Filepath) of
     {ok, Fd} ->
         if ForceReset ->
             % this can happen if we missed a purge
@@ -919,7 +924,7 @@ prepare_group({RootDir, SetName, #set_view_group{sig = Sig, type = Type} = Group
                 case (not ForceReset) andalso (Type =:= main) of
                 true ->
                     % initializing main view group
-                    catch delete_index_file(RootDir, SetName, replica, Sig);
+                    catch delete_index_file(RootDir, Group, replica);
                 false ->
                     ok
                 end,
@@ -931,11 +936,11 @@ prepare_group({RootDir, SetName, #set_view_group{sig = Sig, type = Type} = Group
             [SetName, Type, Group#set_view_group.name]),
         Error;
     Error ->
-        catch delete_index_file(RootDir, SetName, Type, Sig),
+        catch delete_index_file(RootDir, Group, Type),
         case (not ForceReset) andalso (Type =:= main) of
         true ->
             % initializing main view group
-            catch delete_index_file(RootDir, SetName, replica, Sig);
+            catch delete_index_file(RootDir, Group, replica);
         false ->
             ok
         end,
@@ -963,27 +968,70 @@ get_index_header_data(Group) ->
 hex_sig(GroupSig) ->
     couch_util:to_hex(?b2l(GroupSig)).
 
-design_root(RootDir, SetName) ->
-    couch_set_view:set_index_dir(RootDir, SetName).
 
-index_file_name(State) ->
-    index_file_name(?root_dir(State), ?set_name(State), ?type(State), ?group_sig(State)).
-index_file_name(State, compact) ->
-    index_file_name(compact, ?root_dir(State), ?set_name(State), ?type(State), ?group_sig(State)).
-
-index_file_name(RootDir, SetName, main, GroupSig) ->
-    filename:join([design_root(RootDir, SetName), "main_" ++ hex_sig(GroupSig) ++".view"]);
-index_file_name(RootDir, SetName, replica, GroupSig) ->
-    filename:join([design_root(RootDir, SetName), "replica_" ++ hex_sig(GroupSig) ++".view"]).
-
-index_file_name(compact, RootDir, SetName, main, GroupSig) ->
-    filename:join([design_root(RootDir, SetName), "main_" ++ hex_sig(GroupSig) ++".compact.view"]);
-index_file_name(compact, RootDir, SetName, replica, GroupSig) ->
-    filename:join([design_root(RootDir, SetName), "replica_" ++ hex_sig(GroupSig) ++".compact.view"]).
+base_index_file_name(Group, Type) when Type =:= main; Type =:= replica ->
+    atom_to_list(Type) ++ "_" ++ hex_sig(Group#set_view_group.sig) ++ ".view".
 
 
-open_index_file(RootDir, SetName, Type, GroupSig) ->
-    case do_open_index_file(RootDir, SetName, Type, GroupSig) of
+find_index_file(RootDir, Group) ->
+    find_index_file(RootDir, Group, Group#set_view_group.type).
+
+find_index_file(RootDir, Group, Type) ->
+    DesignRoot = couch_set_view:set_index_dir(RootDir, Group#set_view_group.set_name),
+    BaseName = base_index_file_name(Group, Type),
+    FullPath = filename:join([DesignRoot, BaseName]),
+    case filelib:wildcard(FullPath ++ ".[0-9]*") of
+    [] ->
+        FullPath ++ ".1";
+    Matching ->
+        BaseNameSplitted = string:tokens(BaseName, "."),
+        Matching2 = lists:filter(
+            fun(Match) ->
+                MatchBase = filename:basename(Match),
+                [Suffix | Rest] = lists:reverse(string:tokens(MatchBase, ".")),
+                (lists:reverse(Rest) =:= BaseNameSplitted) andalso
+                    is_integer((catch list_to_integer(Suffix)))
+            end,
+            Matching),
+        case Matching2 of
+        [] ->
+            FullPath ++ ".1";
+        _ ->
+            GetSuffix = fun(FileName) ->
+                list_to_integer(lists:last(string:tokens(FileName, ".")))
+            end,
+            Matching3 = lists:sort(
+                fun(A, B) -> GetSuffix(A) > GetSuffix(B) end,
+                Matching2),
+            hd(Matching3)
+        end
+    end.
+
+
+delete_index_file(RootDir, Group, Type) ->
+    BaseName = base_index_file_name(Group, Type),
+    lists:foreach(
+        fun(F) -> couch_file:delete(RootDir, F) end,
+        filelib:wildcard(BaseName ++ ".[0-9]*")).
+
+
+compact_file_name(#state{group = Group}) ->
+    compact_file_name(Group);
+compact_file_name(#set_view_group{filepath = CurFilepath}) ->
+    CurFilepath ++ ".compact".
+
+
+increment_filepath(#state{group = Group}) ->
+    increment_filepath(Group);
+increment_filepath(#set_view_group{filepath = CurFilepath}) ->
+    [Suffix | Rest] = lists:reverse(string:tokens(CurFilepath, ".")),
+    NewSuffix = integer_to_list(list_to_integer(Suffix) + 1),
+    string:join(lists:reverse(Rest), ".") ++ "." ++ NewSuffix.
+
+
+
+open_index_file(Filepath) ->
+    case do_open_index_file(Filepath) of
     {ok, Fd} ->
         unlink(Fd),
         {ok, Fd};
@@ -991,28 +1039,10 @@ open_index_file(RootDir, SetName, Type, GroupSig) ->
         Error
     end.
 
-do_open_index_file(RootDir, SetName, Type, GroupSig) ->
-    FileName = index_file_name(RootDir, SetName, Type, GroupSig),
-    case couch_file:open(FileName) of
+do_open_index_file(Filepath) ->
+    case couch_file:open(Filepath) of
     {ok, Fd}        -> {ok, Fd};
-    {error, enoent} -> couch_file:open(FileName, [create]);
-    Error           -> Error
-    end.
-
-open_index_file(compact, RootDir, SetName, Type, GroupSig) ->
-    case do_open_index_file(compact, RootDir, SetName, Type, GroupSig) of
-    {ok, Fd} ->
-        unlink(Fd),
-        {ok, Fd};
-    Error ->
-        Error
-    end.
-
-do_open_index_file(compact, RootDir, SetName, Type, GroupSig) ->
-    FileName = index_file_name(compact, RootDir, SetName, Type, GroupSig),
-    case couch_file:open(FileName) of
-    {ok, Fd}        -> {ok, Fd};
-    {error, enoent} -> couch_file:open(FileName, [create]);
+    {error, enoent} -> couch_file:open(Filepath, [create]);
     Error           -> Error
     end.
 
@@ -1136,10 +1166,6 @@ reset_file(Fd, SetName, #set_view_group{
     ok = couch_file:truncate(Fd, 0),
     ok = couch_file:write_header(Fd, {Sig, nil}),
     init_group(Fd, reset_group(Group), Header).
-
-delete_index_file(RootDir, SetName, Type, GroupSig) ->
-    couch_file:delete(
-        RootDir, index_file_name(RootDir, SetName, Type, GroupSig)).
 
 init_group(Fd, #set_view_group{views = Views}=Group, nil) ->
     EmptyHeader = #set_view_index_header{
@@ -1687,16 +1713,15 @@ stop_cleaner(#state{cleaner_pid = Pid, group = OldGroup} = State) when is_pid(Pi
     end.
 
 
-cleaner(#state{group = Group} = State) ->
+cleaner(#state{group = Group}) ->
     #set_view_group{
         index_header = Header,
         views = Views,
         id_btree = IdBtree,
         fd = Fd,
-        sig = Sig
+        filepath = Filepath
     } = Group,
-    FileName = index_file_name(?root_dir(State), ?set_name(State), ?type(State), Sig),
-    ok = couch_set_view_util:open_raw_read_fd(Fd, FileName),
+    ok = couch_set_view_util:open_raw_read_fd(Fd, Filepath),
     StartTime = os:timestamp(),
     PurgeFun = couch_set_view_util:make_btree_purge_fun(Group),
     {ok, NewIdBtree, {Go, IdPurgedCount}} =
@@ -1769,9 +1794,7 @@ start_compactor(State, CompactFun) ->
         fd = CompactFd
     } = NewGroup = compact_group(State2),
     Pid = spawn_link(fun() ->
-        FileName = index_file_name(State2),
-        CompactFileName = index_file_name(State2, compact),
-        CompactFun(Group, NewGroup, ?set_name(State2), FileName, CompactFileName)
+        CompactFun(Group, NewGroup)
     end),
     State2#state{
         compactor_pid = Pid,
@@ -1796,13 +1819,10 @@ restart_compactor(#state{compactor_pid = Pid, compactor_file = CompactFd} = Stat
     start_compactor(State, State#state.compactor_fun).
 
 
-compact_group(State) ->
-    #state{
-        group = #set_view_group{sig = GroupSig} = Group
-    } = State,
-    {ok, Fd} = open_index_file(
-        compact, ?root_dir(State), ?set_name(State), ?type(State), GroupSig),
-    reset_file(Fd, ?set_name(State), Group).
+compact_group(#state{group = Group} = State) ->
+    CompactFilepath = compact_file_name(State),
+    {ok, Fd} = open_index_file(CompactFilepath),
+    reset_file(Fd, ?set_name(State), Group#set_view_group{filepath = CompactFilepath}).
 
 
 stop_updater(State) ->
@@ -1909,7 +1929,7 @@ do_start_updater(State) ->
         [?set_name(State), ?type(State), ?group_id(State)]),
     Owner = self(),
     Pid = spawn_link(fun() ->
-        couch_set_view_updater:update(Owner, Group, index_file_name(State))
+        couch_set_view_updater:update(Owner, Group)
     end),
     State2#state{
         updater_pid = Pid,

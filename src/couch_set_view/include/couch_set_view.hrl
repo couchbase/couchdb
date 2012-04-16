@@ -142,7 +142,8 @@
     type,     % 'main' | 'replica'
     replica_group = nil,
     replica_pid = nil,
-    debug_info = #set_view_debug_info{}
+    debug_info = #set_view_debug_info{},
+    filepath = nil
 }).
 
 -record(set_view, {
