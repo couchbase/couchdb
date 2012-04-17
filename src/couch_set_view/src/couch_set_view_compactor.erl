@@ -51,9 +51,7 @@ compact_group(Group, EmptyGroup) ->
         name = GroupId,
         type = Type,
         index_header = Header,
-        fd = GroupFd,
-        sig = GroupSig,
-        filepath = FileName
+        sig = GroupSig
     } = Group,
     StartTime = os:timestamp(),
 
@@ -77,7 +75,7 @@ compact_group(Group, EmptyGroup) ->
         {progress, case TotalChanges of 0 -> 100; _ -> 0 end}
     ]),
 
-    ok = couch_set_view_util:open_raw_read_fd(GroupFd, FileName),
+    ok = couch_set_view_util:open_raw_read_fd(Group),
 
     BeforeKVWriteFun = fun({DocId, _} = KV, #acc{last_id = LastDocId} = Acc) ->
         if DocId =:= LastDocId -> % COUCHDB-999
@@ -120,9 +118,9 @@ compact_group(Group, EmptyGroup) ->
         compact_time = timer:now_diff(os:timestamp(), StartTime) / 1000000,
         cleanup_kv_count = CleanupKVCount
     },
-    maybe_retry_compact(CompactResult, StartTime, GroupFd).
+    maybe_retry_compact(CompactResult, StartTime, Group).
 
-maybe_retry_compact(CompactResult0, StartTime, GroupFd) ->
+maybe_retry_compact(CompactResult0, StartTime, Group) ->
     NewGroup = CompactResult0#set_view_compactor_result.group,
     #set_view_group{
         set_name = SetName,
@@ -135,7 +133,7 @@ maybe_retry_compact(CompactResult0, StartTime, GroupFd) ->
     {ok, Pid} = get_group_pid(SetName, DDocId, Type),
     case gen_server:call(Pid, {compact_done, CompactResult}, infinity) of
     ok ->
-        ok = couch_set_view_util:close_raw_read_fd(GroupFd);
+        ok = couch_set_view_util:close_raw_read_fd(Group);
     update ->
         {_, Ref} = erlang:spawn_monitor(fun() ->
             couch_set_view_updater:update(nil, NewGroup)
@@ -145,7 +143,7 @@ maybe_retry_compact(CompactResult0, StartTime, GroupFd) ->
             CompactResult2 = CompactResult0#set_view_compactor_result{
                 group = UpdaterResult#set_view_updater_result.group
             },
-            maybe_retry_compact(CompactResult2, StartTime, GroupFd);
+            maybe_retry_compact(CompactResult2, StartTime, Group);
         {'DOWN', Ref, _, _, Reason} ->
             exit(Reason)
         end

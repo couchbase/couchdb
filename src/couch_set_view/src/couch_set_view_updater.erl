@@ -149,9 +149,7 @@ update(Owner, Group, ActiveParts, PassiveParts, MaxSeqs, BlockedTime) ->
         type = Type,
         name = DDocId,
         index_header = #set_view_index_header{seqs = SinceSeqs},
-        fd = GroupFd,
-        sig = GroupSig,
-        filepath = FileName
+        sig = GroupSig
     } = Group,
 
     StartTime = os:timestamp(),
@@ -186,7 +184,7 @@ update(Owner, Group, ActiveParts, PassiveParts, MaxSeqs, BlockedTime) ->
 
     Parent = self(),
     Writer = spawn_link(fun() ->
-        ok = couch_set_view_util:open_raw_read_fd(GroupFd, FileName),
+        ok = couch_set_view_util:open_raw_read_fd(Group),
 
         DDocIds = couch_set_view_util:get_ddoc_ids_with_sig(SetName, GroupSig),
         couch_task_status:add_task([
@@ -242,7 +240,7 @@ update(Owner, Group, ActiveParts, PassiveParts, MaxSeqs, BlockedTime) ->
                 [SetName, Type, DDocId, Error, Stacktrace]),
             exit(Error)
         after
-            ok = couch_set_view_util:close_raw_read_fd(GroupFd)
+            ok = couch_set_view_util:close_raw_read_fd(Group)
         end
     end),
 

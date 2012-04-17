@@ -1717,11 +1717,9 @@ cleaner(#state{group = Group}) ->
     #set_view_group{
         index_header = Header,
         views = Views,
-        id_btree = IdBtree,
-        fd = Fd,
-        filepath = Filepath
+        id_btree = IdBtree
     } = Group,
-    ok = couch_set_view_util:open_raw_read_fd(Fd, Filepath),
+    ok = couch_set_view_util:open_raw_read_fd(Group),
     StartTime = os:timestamp(),
     PurgeFun = couch_set_view_util:make_btree_purge_fun(Group),
     {ok, NewIdBtree, {Go, IdPurgedCount}} =
@@ -1732,8 +1730,7 @@ cleaner(#state{group = Group}) ->
     stop ->
         {IdPurgedCount, Views}
     end,
-    ok = couch_set_view_util:close_raw_read_fd(Fd),
-    erlang:erase({Fd, fast_fd_read}),
+    ok = couch_set_view_util:close_raw_read_fd(Group),
     {ok, {_, IdBitmap}} = couch_btree:full_reduce(NewIdBtree),
     CombinedBitmap = lists:foldl(
         fun(#set_view{btree = Bt}, AccMap) ->

@@ -17,7 +17,7 @@
 -export([make_btree_purge_fun/1]).
 -export([make_key_options/1]).
 -export([design_doc_to_set_view_group/2, get_ddoc_ids_with_sig/2]).
--export([open_raw_read_fd/2, close_raw_read_fd/1]).
+-export([open_raw_read_fd/1, close_raw_read_fd/1]).
 
 -include("couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
@@ -197,18 +197,28 @@ sort_lib([{LName, LCode}|Rest], LAcc) ->
     sort_lib(Rest, [{LName, LCode}|LAcc]).
 
 
-open_raw_read_fd(CouchFilePid, FileName) ->
+open_raw_read_fd(Group) ->
+    #set_view_group{
+        fd = FilePid,
+        filepath = FileName,
+        set_name = SetName,
+        type = Type,
+        name = DDocId
+    } = Group,
     case file:open(FileName, [read, raw, binary]) of
     {ok, RawReadFd} ->
-        erlang:put({CouchFilePid, fast_fd_read}, RawReadFd),
+        erlang:put({FilePid, fast_fd_read}, RawReadFd),
         ok;
-    _ ->
+    {error, Reason} ->
+        ?LOG_INFO("Warning, could not open raw fd for fast reads for "
+            "~s view group `~s`, set `~s`: ~s",
+            [Type, DDocId, SetName, file:format_error(Reason)]),
         ok
     end.
 
 
-close_raw_read_fd(CouchFilePid) ->
-    case erlang:erase({CouchFilePid, fast_fd_read}) of
+close_raw_read_fd(#set_view_group{fd = FilePid}) ->
+    case erlang:erase({FilePid, fast_fd_read}) of
     undefined ->
         ok;
     Fd ->

@@ -359,9 +359,11 @@ do_fold_reduce(Group, ViewInfo, Fun, Acc, Options0) ->
             {_, Reds, _} = couch_btree:final_reduce(ReduceFun, PartialReds),
             Fun(GroupedKey, lists:nth(NthRed, Reds), Acc0)
         end,
+    couch_set_view_util:open_raw_read_fd(Group),
     try
         couch_btree:fold_reduce(Bt, WrapperFun, Acc, Options)
     after
+        couch_set_view_util:close_raw_read_fd(Group),
         couch_set_view_mapreduce:end_reduce_context(View)
     end.
 
@@ -509,7 +511,13 @@ do_fold(Group, #set_view{btree=Btree}, Fun, Acc, Options) ->
             fold_fun(Fun, ExpandedKVs, Reds, Acc2)
         end
     end,
-    {ok, _LastReduce, _AccResult} = couch_btree:fold(Btree, WrapperFun, Acc, Options).
+    couch_set_view_util:open_raw_read_fd(Group),
+    try
+        {ok, _LastReduce, _AccResult} =
+            couch_btree:fold(Btree, WrapperFun, Acc, Options)
+    after
+        couch_set_view_util:close_raw_read_fd(Group)
+    end.
 
 
 fold_fun(_Fun, [], _, Acc) ->
