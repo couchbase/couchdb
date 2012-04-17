@@ -19,6 +19,7 @@
 -export([get_map_view/4, get_map_view/5, get_reduce_view/4, get_reduce_view/5]).
 -export([get_group/3, get_group_pid/2, release_group/1, define_group/3]).
 -export([get_group_info/2, cleanup_index_files/1, set_index_dir/2]).
+-export([get_group_data_size/2]).
 
 -export([is_view_defined/2]).
 -export([set_partition_states/5, add_replica_partitions/3, remove_replica_partitions/3]).
@@ -212,6 +213,11 @@ start_link() ->
 get_group_info(SetName, DDocId) ->
     GroupPid = get_group_pid(SetName, DDocId),
     {ok, _Info} = couch_set_view_group:request_group_info(GroupPid).
+
+
+get_group_data_size(SetName, DDocId) ->
+    GroupPid = get_group_pid(SetName, DDocId),
+    {ok, _Info} = couch_set_view_group:get_data_size(GroupPid).
 
 
 cleanup_index_files(SetName) ->

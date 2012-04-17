@@ -14,7 +14,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/1, request_group_info/1]).
+-export([start_link/1, request_group_info/1, get_data_size/1]).
 -export([open_set_group/2]).
 -export([request_group/2, release_group/1]).
 -export([is_view_defined/1, define_view/2]).
@@ -132,6 +132,15 @@ request_group_info(Pid) ->
     case gen_server:call(Pid, request_group_info, infinity) of
     {ok, GroupInfoList} ->
         {ok, GroupInfoList};
+    Error ->
+        throw(Error)
+    end.
+
+
+get_data_size(Pid) ->
+    case gen_server:call(Pid, get_data_size, infinity) of
+    {ok, _Info} = Ok ->
+        Ok;
     Error ->
         throw(Error)
     end.
@@ -530,6 +539,10 @@ handle_call(request_group, _From, #state{group = Group} = State) ->
 handle_call(request_group_info, _From, State) ->
     GroupInfo = get_group_info(State),
     {reply, {ok, GroupInfo}, State, ?TIMEOUT};
+
+handle_call(get_data_size, _From, State) ->
+    DataSizeInfo = get_data_size_info(State),
+    {reply, {ok, DataSizeInfo}, State, ?TIMEOUT};
 
 handle_call({start_compact, CompactFun}, _From, #state{compactor_pid = nil} = State) ->
     #state{compactor_pid = Pid} = State2 = start_compactor(State, CompactFun),
@@ -1139,6 +1152,33 @@ get_replica_group_info(ReplicaPid) when is_pid(ReplicaPid) ->
     [{replica_group_info, {RepGroupInfo}}];
 get_replica_group_info(_) ->
     [].
+
+
+get_data_size_info(State) ->
+    #state{
+        group = Group,
+        replica_group = ReplicaPid,
+        updater_pid = UpdaterPid
+    } = State,
+    #set_view_group{
+        fd = Fd,
+        id_btree = Btree,
+        views = Views
+    } = Group,
+    {ok, FileSize} = couch_file:bytes(Fd),
+    DataSize = view_group_data_size(Btree, Views),
+    Info = [
+        {disk_size, FileSize},
+        {data_size, DataSize},
+        {updater_running, is_pid(UpdaterPid)}
+    ],
+    case is_pid(ReplicaPid) of
+    false ->
+        Info;
+    true ->
+        {ok, RepInfo} = gen_server:call(ReplicaPid, get_data_size, infinity),
+        [{replica_group_info, RepInfo} | Info]
+    end.
 
 
 view_group_data_size(IdBtree, Views) ->
