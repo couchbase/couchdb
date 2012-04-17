@@ -493,27 +493,26 @@ handle_call(#set_view_group_req{stale = false} = Req, From,
             waiting_list = WaitList,
             replica_partitions = ReplicaParts
         } = State) ->
-    inc_view_group_access_stats(Req, Group),
-    case UpPid of
+    NewState = case UpPid of
     nil ->
-        State2 = start_updater(State#state{waiting_list = [From | WaitList]}),
-        {noreply, State2, ?TIMEOUT};
+        start_updater(State#state{waiting_list = [From | WaitList]});
     _ when is_pid(UpPid), UpState =:= updating_passive ->
         reply_with_group(Group, ReplicaParts, [From]),
-        {noreply, State, ?TIMEOUT};
+        State;
     _ when is_pid(UpPid) ->
-        State2 = State#state{waiting_list = [From | WaitList]},
-        {noreply, State2, ?TIMEOUT}
-    end;
+        State#state{waiting_list = [From | WaitList]}
+    end,
+    inc_view_group_access_stats(Req, Group),
+    {noreply, NewState, ?TIMEOUT};
 
 handle_call(#set_view_group_req{stale = ok} = Req, From, #state{group = Group} = State) ->
-    inc_view_group_access_stats(Req, Group),
     reply_with_group(Group, State#state.replica_partitions, [From]),
+    inc_view_group_access_stats(Req, Group),
     {noreply, State, ?TIMEOUT};
 
 handle_call(#set_view_group_req{stale = update_after} = Req, From, #state{group = Group} = State) ->
-    inc_view_group_access_stats(Req, Group),
     reply_with_group(Group, State#state.replica_partitions, [From]),
+    inc_view_group_access_stats(Req, Group),
     case State#state.updater_pid of
     Pid when is_pid(Pid) ->
         {noreply, State};
