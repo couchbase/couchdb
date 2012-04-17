@@ -492,18 +492,25 @@ rereduce(Rows, #merge_params{extra = #view_merge{rereduce_fun = FunSrc}}) ->
 
 
 get_set_view(GetSetViewFn, SetName, DDocId, ViewName, ViewGroupReq, Partitions) ->
-    ViewGroupReq1 = ViewGroupReq#set_view_group_req{
-        stale = ok
-    },
+    ViewGroupReq1 = case ViewGroupReq#set_view_group_req.stale of
+    ok ->
+        ViewGroupReq;
+    update_after ->
+        ViewGroupReq;
+    false ->
+        ViewGroupReq#set_view_group_req{update_stats = false}
+    end,
     case GetSetViewFn(SetName, DDocId, ViewName, ViewGroupReq1, Partitions) of
     {ok, StaleView, StaleGroup, []} ->
         case ViewGroupReq#set_view_group_req.stale of
         ok ->
             {ok, StaleView, StaleGroup, []};
-        _Other ->
+        update_after ->
+            {ok, StaleView, StaleGroup, []};
+        false ->
             couch_set_view:release_group(StaleGroup),
             ViewGroupReq2 = ViewGroupReq#set_view_group_req{
-                update_stats = false
+                update_stats = true
             },
             GetSetViewFn(SetName, DDocId, ViewName, ViewGroupReq2, Partitions)
         end;
