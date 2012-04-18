@@ -191,12 +191,17 @@ remove_replica_partitions(SetName, DDocId, Partitions) ->
     end.
 
 
-get_group_server(SetName, Group) ->
-    case gen_server:call(?MODULE, {get_group_server, SetName, Group}, infinity) of
-    {ok, Pid} ->
+get_group_server(SetName, #set_view_group{sig = Sig} = Group) ->
+    case ets:lookup(couch_sig_to_setview_pid, {SetName, Sig}) of
+    [{_, Pid}] when is_pid(Pid) ->
         Pid;
-    Error ->
-        throw(Error)
+    _ ->
+        case gen_server:call(?MODULE, {get_group_server, SetName, Group}, infinity) of
+        {ok, Pid} ->
+            Pid;
+        Error ->
+            throw(Error)
+        end
     end.
 
 
@@ -552,7 +557,7 @@ init([]) ->
     % {SetName, {DDocId, Signature}}
     ets:new(couch_setview_name_to_sig, [bag, protected, named_table]),
     % {{SetName, Signature}, Pid | WaitListPids}
-    ets:new(couch_sig_to_setview_pid, [set, protected, named_table]),
+    ets:new(couch_sig_to_setview_pid, [set, protected, named_table, {read_concurrency, true}]),
     % {Pid, {SetName, Sig}}
     ets:new(couch_pid_to_setview_sig, [set, private, named_table]),
 
