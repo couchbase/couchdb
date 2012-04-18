@@ -73,8 +73,8 @@
 %    the view key/values that originated from any of these
 %    partitions will eventually be removed from the index
 %
-get_group(SetName, DDocId, Req) ->
-    GroupPid = get_group_pid(SetName, DDocId),
+get_group(SetName, DDoc, Req) ->
+    GroupPid = get_group_pid(SetName, DDoc),
     case couch_set_view_group:request_group(GroupPid, Req) of
     {ok, Group} ->
         {ok, Group};
@@ -86,7 +86,10 @@ get_group(SetName, DDocId, Req) ->
     end.
 
 
-get_group_pid(SetName, DDocId) ->
+get_group_pid(SetName, #doc{} = DDoc) ->
+    Group = couch_set_view_util:design_doc_to_set_view_group(SetName, DDoc),
+    get_group_server(SetName, Group);
+get_group_pid(SetName, DDocId) when is_binary(DDocId) ->
     get_group_server(SetName, open_set_group(SetName, DDocId)).
 
 
@@ -382,16 +385,16 @@ get_key_pos(Key, [_|Rest], N) ->
     get_key_pos(Key, Rest, N+1).
 
 
-get_map_view(SetName, DDocId, ViewName, Req) ->
-    case get_map_view(SetName, DDocId, ViewName, Req, []) of
+get_map_view(SetName, DDoc, ViewName, Req) ->
+    case get_map_view(SetName, DDoc, ViewName, Req, []) of
     {ok, View, Group, _} ->
         {ok, View, Group};
     Else ->
         Else
     end.
 
-get_map_view(SetName, DDocId, ViewName, Req, FilterPartitions) ->
-    {ok, Group0} = get_group(SetName, DDocId, Req),
+get_map_view(SetName, DDoc, ViewName, Req, FilterPartitions) ->
+    {ok, Group0} = get_group(SetName, DDoc, Req),
     {Group, Unindexed} = modify_bitmasks(Group0, FilterPartitions),
     case get_map_view0(ViewName, Group#set_view_group.views) of
     {ok, View} ->
@@ -408,16 +411,16 @@ get_map_view0(Name, [#set_view{map_names=MapNames}=View|Rest]) ->
         false -> get_map_view0(Name, Rest)
     end.
 
-get_reduce_view(SetName, DDocId, ViewName, Req) ->
-    case get_reduce_view(SetName, DDocId, ViewName, Req, []) of
+get_reduce_view(SetName, DDoc, ViewName, Req) ->
+    case get_reduce_view(SetName, DDoc, ViewName, Req, []) of
     {ok, View, Group, _} ->
         {ok, View, Group};
     Else ->
         Else
     end.
 
-get_reduce_view(SetName, DDocId, ViewName, Req, FilterPartitions) ->
-    {ok, Group0} = get_group(SetName, DDocId, Req),
+get_reduce_view(SetName, DDoc, ViewName, Req, FilterPartitions) ->
+    {ok, Group0} = get_group(SetName, DDoc, Req),
     {Group, Unindexed} = modify_bitmasks(Group0, FilterPartitions),
     #set_view_group{
         views = Views,

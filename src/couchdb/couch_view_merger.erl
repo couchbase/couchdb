@@ -491,7 +491,7 @@ rereduce(Rows, #merge_params{extra = #view_merge{rereduce_fun = FunSrc}}) ->
     end.
 
 
-get_set_view(GetSetViewFn, SetName, DDocId, ViewName, ViewGroupReq, Partitions) ->
+get_set_view(GetSetViewFn, SetName, DDoc, ViewName, ViewGroupReq, Partitions) ->
     ViewGroupReq1 = case ViewGroupReq#set_view_group_req.stale of
     ok ->
         ViewGroupReq;
@@ -500,7 +500,7 @@ get_set_view(GetSetViewFn, SetName, DDocId, ViewName, ViewGroupReq, Partitions) 
     false ->
         ViewGroupReq#set_view_group_req{update_stats = false}
     end,
-    case GetSetViewFn(SetName, DDocId, ViewName, ViewGroupReq1, Partitions) of
+    case GetSetViewFn(SetName, DDoc, ViewName, ViewGroupReq1, Partitions) of
     {ok, StaleView, StaleGroup, []} ->
         case ViewGroupReq#set_view_group_req.stale of
         ok ->
@@ -512,13 +512,13 @@ get_set_view(GetSetViewFn, SetName, DDocId, ViewName, ViewGroupReq, Partitions) 
             ViewGroupReq2 = ViewGroupReq#set_view_group_req{
                 update_stats = true
             },
-            GetSetViewFn(SetName, DDocId, ViewName, ViewGroupReq2, Partitions)
+            GetSetViewFn(SetName, DDoc, ViewName, ViewGroupReq2, Partitions)
         end;
     Other ->
         Other
     end.
 
-prepare_set_view(ViewSpec, ViewGroupReq, Queue, GetSetViewFn) ->
+prepare_set_view(ViewSpec, ViewGroupReq, DDoc, Queue, GetSetViewFn) ->
     #set_view_spec{
         name = SetName,
         ddoc_id = DDocId, view_name = ViewName,
@@ -526,7 +526,7 @@ prepare_set_view(ViewSpec, ViewGroupReq, Queue, GetSetViewFn) ->
     } = ViewSpec,
 
     try
-        case get_set_view(GetSetViewFn, SetName, DDocId,
+        case get_set_view(GetSetViewFn, SetName, DDoc,
                           ViewName, ViewGroupReq, Partitions) of
         {ok, View, Group, []} ->
             {View, Group};
@@ -641,13 +641,13 @@ map_set_view_folder(ViewSpec, MergeParams, UserCtx, DDoc, Queue) ->
             update_stats = true
         },
         case prepare_set_view(
-            ViewSpec, ViewGroupReq1, Queue, fun couch_set_view:get_map_view/5) of
+            ViewSpec, ViewGroupReq1, DDoc, Queue, fun couch_set_view:get_map_view/5) of
         not_found ->
             ViewGroupReq2 = ViewGroupReq1#set_view_group_req{
                 update_stats = false
             },
             case prepare_set_view(
-                ViewSpec, ViewGroupReq2, Queue, fun couch_set_view:get_reduce_view/5) of
+                ViewSpec, ViewGroupReq2, DDoc, Queue, fun couch_set_view:get_reduce_view/5) of
             {RedView, Group0} ->
                 {couch_set_view:extract_map_view(RedView), Group0};
             Else ->
@@ -948,7 +948,7 @@ reduce_set_view_folder(ViewSpec, MergeParams, DDoc, Queue) ->
             stale = ViewArgs#view_query_args.stale,
             update_stats = true
         },
-        prepare_set_view(ViewSpec, ViewGroupReq, Queue, fun couch_set_view:get_reduce_view/5)
+        prepare_set_view(ViewSpec, ViewGroupReq, DDoc, Queue, fun couch_set_view:get_reduce_view/5)
     end,
 
     case PrepareResult of
