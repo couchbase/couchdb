@@ -46,8 +46,15 @@
 -include("lhttpc_types.hrl").
 -include("lhttpc.hrl").
 
--type result() :: {ok, {{pos_integer(), string()}, headers(), binary()}} |
-    {error, atom()}.
+-type upload_state() :: {pid(), window_size()}.
+-type body()         :: binary()    |
+                        'undefined' | % HEAD request.
+                        pid().        % When partial_download option is used.
+
+-type result() ::
+        {ok, {{pos_integer(), string()}, headers(), body()}} |
+        {ok, upload_state()} |
+        {error, atom()}.
 
 %% @hidden
 -spec start(normal | {takeover, node()} | {failover, node()}, any()) ->
@@ -346,22 +353,17 @@ request(URL, Method, Hdrs, Body, Timeout, Options) ->
 -spec request(string(), 1..65535, true | false, string(), atom() | string(),
     headers(), iolist(), pos_integer(), [option()]) -> result().
 request(Host, Port, Ssl, Path, Method, Hdrs, Body, Timeout, Options) ->
-    verify_options(Options, []),
+    verify_options(Options),
     Args = [self(), Host, Port, Ssl, Path, Method, Hdrs, Body, Options],
     Pid = spawn_link(lhttpc_client, request, Args),
     receive
         {response, Pid, R} ->
             R;
-        {exit, Pid, Reason} ->
-            % We would rather want to exit here, instead of letting the
-            % linked client send us an exit signal, since this can be
-            % caught by the caller.
-            exit(Reason);
         {'EXIT', Pid, Reason} ->
-            % This could happen if the process we're running in taps exits
+            % This could happen if the process we're running in traps exits
             % and the client process exits due to some exit signal being
             % sent to it. Very unlikely though
-            exit(Reason)
+            {error, Reason}
     after Timeout ->
             kill_client(Pid)
     end.
@@ -378,8 +380,7 @@ request(Host, Port, Ssl, Path, Method, Hdrs, Body, Timeout, Options) ->
 %% Would be the same as calling
 %% `send_body_part(UploadState, BodyPart, infinity)'.
 %% @end
--spec send_body_part({pid(), window_size()}, iolist()) -> 
-        {pid(), window_size()} | result().
+-spec send_body_part(upload_state(), iolist() | 'http_eob') -> result().
 send_body_part({Pid, Window}, IoList) ->
     send_body_part({Pid, Window}, IoList, infinity).
 
@@ -404,8 +405,7 @@ send_body_part({Pid, Window}, IoList) ->
 %% there is no response within `Timeout' milliseconds, the request is
 %% canceled and `{error, timeout}' is returned.
 %% @end
--spec send_body_part({pid(), window_size()}, iolist(), timeout()) -> 
-        {ok, {pid(), window_size()}} | result().
+-spec send_body_part(upload_state(), iolist() | 'http_eob', timeout()) -> result().
 send_body_part({Pid, _Window}, http_eob, Timeout) when is_pid(Pid) ->
     Pid ! {body_part, self(), http_eob},
     read_response(Pid, Timeout);
@@ -415,10 +415,8 @@ send_body_part({Pid, 0}, IoList, Timeout) when is_pid(Pid) ->
             send_body_part({Pid, 1}, IoList, Timeout);
         {response, Pid, R} ->
             R;
-        {exit, Pid, Reason} ->
-            exit(Reason);
         {'EXIT', Pid, Reason} ->
-            exit(Reason)
+            {error, Reason}
     after Timeout ->
         kill_client(Pid)
     end;
@@ -430,10 +428,8 @@ send_body_part({Pid, Window}, IoList, _Timeout) when Window > 0, is_pid(Pid) ->
             {ok, {Pid, Window}};
         {response, Pid, R} ->
             R;
-        {exit, Pid, Reason} ->
-            exit(Reason);
         {'EXIT', Pid, Reason} ->
-            exit(Reason)
+            {error, Reason}
     after 0 ->
         {ok, {Pid, lhttpc_lib:dec(Window)}}
     end.
@@ -494,7 +490,9 @@ send_trailers({Pid, _Window}, Trailers, Timeout)
 %% Would be the same as calling
 %% `get_body_part(HTTPClient, infinity)'.
 %% @end
--spec get_body_part(pid()) -> {ok, binary()} | {ok, {http_eob, headers()}}.
+-spec get_body_part(pid()) -> {ok, binary()} |
+                              {ok, {http_eob, headers()}} |
+                              {error, term()}.
 get_body_part(Pid) ->
     get_body_part(Pid, infinity).
 
@@ -512,7 +510,9 @@ get_body_part(Pid) ->
 %% response those are returned with `http_eob' as well. 
 %% @end
 -spec get_body_part(pid(), timeout()) -> 
-        {ok, binary()} | {ok, {http_eob, headers()}}.
+                           {ok, binary()} |
+                           {ok, {http_eob, headers()}} |
+                           {error, term()}.
 get_body_part(Pid, Timeout) ->
     receive
         {body_part, Pid, Bin} ->
@@ -533,10 +533,8 @@ read_response(Pid, Timeout) ->
             read_response(Pid, Timeout);
         {response, Pid, R} ->
             R;
-        {exit, Pid, Reason} ->
-            exit(Reason);
         {'EXIT', Pid, Reason} ->
-            exit(Reason)
+            {error, Reason}
     after Timeout ->
         kill_client(Pid)
     end.
@@ -549,70 +547,53 @@ kill_client(Pid) ->
         {response, Pid, R} ->
             erlang:demonitor(Monitor, [flush]),
             R;
-        {'DOWN', _, process, Pid, timeout} ->
-            {error, timeout};
         {'DOWN', _, process, Pid, Reason}  ->
-            erlang:error(Reason)
+            {error, Reason}
     end.
 
--spec verify_options(options(), options()) -> ok.
-verify_options([{send_retry, N} | Options], Errors)
-        when is_integer(N), N >= 0 ->
-    verify_options(Options, Errors);
-verify_options([{connect_timeout, infinity} | Options], Errors) ->
-    verify_options(Options, Errors);
-verify_options([{connect_timeout, MS} | Options], Errors)
+-spec verify_options(options()) -> ok.
+verify_options([{send_retry, N} | Options]) when is_integer(N), N >= 0 ->
+    verify_options(Options);
+verify_options([{connect_timeout, infinity} | Options]) ->
+    verify_options(Options);
+verify_options([{connect_timeout, MS} | Options])
         when is_integer(MS), MS >= 0 ->
-    verify_options(Options, Errors);
-verify_options([{partial_upload, WindowSize} | Options], Errors)
+    verify_options(Options);
+verify_options([{partial_upload, WindowSize} | Options])
         when is_integer(WindowSize), WindowSize >= 0 ->
-    verify_options(Options, Errors);
-verify_options([{partial_upload, infinity} | Options], Errors)  ->
-    verify_options(Options, Errors);
-verify_options([{partial_download, DownloadOptions} | Options], Errors)
+    verify_options(Options);
+verify_options([{partial_upload, infinity} | Options])  ->
+    verify_options(Options);
+verify_options([{partial_download, DownloadOptions} | Options])
         when is_list(DownloadOptions) ->
-    case verify_partial_download(DownloadOptions, []) of
-        [] ->
-            verify_options(Options, Errors);
-        OptionErrors ->
-            NewErrors = [{partial_download, OptionErrors} | Errors],
-            verify_options(Options, NewErrors)
-    end;
-verify_options([{connect_options, List} | Options], Errors)
-        when is_list(List) ->
-    verify_options(Options, Errors);
-verify_options([{proxy, List} | Options], Errors)
-        when is_list(List) ->
-    verify_options(Options, Errors);
-verify_options([{proxy_ssl_options, List} | Options], Errors)
-        when is_list(List) ->
-    verify_options(Options, Errors);
-verify_options([{pool, PidOrName} | Options], Errors)
+    verify_partial_download(DownloadOptions),
+    verify_options(Options);
+verify_options([{connect_options, List} | Options]) when is_list(List) ->
+    verify_options(Options);
+verify_options([{proxy, List} | Options]) when is_list(List) ->
+    verify_options(Options);
+verify_options([{proxy_ssl_options, List} | Options]) when is_list(List) ->
+    verify_options(Options);
+verify_options([{pool, PidOrName} | Options])
         when is_pid(PidOrName); is_atom(PidOrName) ->
-    verify_options(Options, Errors);
-verify_options([Option | Options], Errors) ->
-    verify_options(Options, [Option | Errors]);
-verify_options([], []) ->
-    ok;
-verify_options([], Errors) ->
-    bad_options(Errors).
+    verify_options(Options);
+verify_options([Option | _Rest]) ->
+    erlang:error({bad_option, Option});
+verify_options([]) ->
+    ok.
 
--spec bad_options(options()) -> no_return().
-bad_options(Errors) ->
-    erlang:error({bad_options, Errors}).
-
--spec verify_partial_download(options(), options()) -> options().
-verify_partial_download([{window_size, infinity} | Options], Errors)->
-    verify_partial_download(Options, Errors);
-verify_partial_download([{window_size, Size} | Options], Errors) when
+-spec verify_partial_download(options()) -> ok.
+verify_partial_download([{window_size, infinity} | Options])->
+    verify_partial_download(Options);
+verify_partial_download([{window_size, Size} | Options]) when
         is_integer(Size), Size >= 0 ->
-    verify_partial_download(Options, Errors);
-verify_partial_download([{part_size, Size} | Options], Errors) when
+    verify_partial_download(Options);
+verify_partial_download([{part_size, Size} | Options]) when
         is_integer(Size), Size >= 0 ->
-    verify_partial_download(Options, Errors);
-verify_partial_download([{part_size, infinity} | Options], Errors) ->
-    verify_partial_download(Options, Errors);
-verify_partial_download([Option | Options], Errors) ->
-    verify_partial_download(Options, [Option | Errors]);
-verify_partial_download([], Errors) ->
-    Errors.
+    verify_partial_download(Options);
+verify_partial_download([{part_size, infinity} | Options]) ->
+    verify_partial_download(Options);
+verify_partial_download([Option | _Options]) ->
+    erlang:error({bad_option, {partial_download, Option}});
+verify_partial_download([]) ->
+    ok.

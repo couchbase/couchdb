@@ -162,46 +162,34 @@ error_cause(Cause) ->
 
 
 stream_data_self(#httpdb{timeout = T} = HttpDb, Params, Pid, Callback) ->
-    try
-        case lhttpc:get_body_part(Pid, T) of
-        {ok, {http_eob, _Trailers}} ->
-            {<<>>, fun() -> throw({maybe_retry_req, more_data_expected}) end};
-        {ok, Data} ->
-            {Data, fun() -> stream_data_self(HttpDb, Params, Pid, Callback) end};
-        Error ->
-            throw({maybe_retry_req, Error})
-        end
-    catch exit:ExitReason ->
-        throw({maybe_retry_req, ExitReason})
+    case lhttpc:get_body_part(Pid, T) of
+    {ok, {http_eob, _Trailers}} ->
+        {<<>>, fun() -> throw({maybe_retry_req, more_data_expected}) end};
+    {ok, Data} ->
+        {Data, fun() -> stream_data_self(HttpDb, Params, Pid, Callback) end};
+    Error ->
+        throw({maybe_retry_req, Error})
     end.
 
 
 make_upload_fun(UploadState, #httpdb{timeout = Timeout} = HttpDb) ->
     fun(eof) ->
-        try
-            case lhttpc:send_body_part(UploadState, http_eob, Timeout) of
-            {ok, {{Code, _}, Headers, Body}} when ?NOT_HTTP_ERROR(Code) ->
-                {ok, Code, Headers, decode_body(Body)};
-            {ok, {{Code, _}, Headers, _Body}} when ?IS_HTTP_REDIRECT(Code) ->
-                throw({redirect_req, Code, Headers});
-            {ok, {{Code, _}, _Headers, _Body}} ->
-                throw({maybe_retry_req, {code, Code}});
-            Error ->
-                throw({maybe_retry_req, Error})
-            end
-        catch exit:ExitReason ->
-            throw({maybe_retry_req, ExitReason})
+        case lhttpc:send_body_part(UploadState, http_eob, Timeout) of
+        {ok, {{Code, _}, Headers, Body}} when ?NOT_HTTP_ERROR(Code) ->
+            {ok, Code, Headers, decode_body(Body)};
+        {ok, {{Code, _}, Headers, _Body}} when ?IS_HTTP_REDIRECT(Code) ->
+            throw({redirect_req, Code, Headers});
+        {ok, {{Code, _}, _Headers, _Body}} ->
+            throw({maybe_retry_req, {code, Code}});
+        Error ->
+             throw({maybe_retry_req, Error})
         end;
     (BodyPart) ->
-        try
-            case lhttpc:send_body_part(UploadState, BodyPart, Timeout) of
-            {ok, UploadState2} ->
-                {ok, make_upload_fun(UploadState2, HttpDb)};
-            Error ->
-                throw({maybe_retry_req, Error})
-            end
-        catch exit:ExitReason ->
-            throw({maybe_retry_req, ExitReason})
+        case lhttpc:send_body_part(UploadState, BodyPart, Timeout) of
+        {ok, UploadState2} ->
+            {ok, make_upload_fun(UploadState2, HttpDb)};
+        Error ->
+            throw({maybe_retry_req, Error})
         end
     end.
 

@@ -161,4 +161,4 @@ rebuild_plt:
 	$(MAKE) $(COUCHDB_PLT)
 
 dialyzer: all $(COUCHDB_PLT)
-	dialyzer --plt $(COUCHDB_PLT)  -pa src/couchdb -pa src/couch_set_view/ebin -pa src/mapreduce -c src/couchdb -c src/couch_set_view/ebin
+	dialyzer --plt $(COUCHDB_PLT)  -pa src/couchdb -pa src/couch_set_view/ebin -pa src/mapreduce -c src/couchdb -c src/couch_set_view/ebin -c src/lhttpc

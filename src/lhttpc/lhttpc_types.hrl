@@ -29,11 +29,23 @@
 
 -type socket() :: _.
 
+-type invalid_option() :: any().
+
+-type partial_download_option() ::
+        {window_size, window_size()} |
+        {part_size, non_neg_integer() | infinity} |
+        invalid_option().
+
 -type option() ::
         {connect_timeout, timeout()} |
         {send_retry, non_neg_integer()} |
         {partial_upload, non_neg_integer() | infinity} |
-        {partial_download, pid(), non_neg_integer() | infinity}.
+        {partial_download, [partial_download_option()]} |
+        {connect_options, socket_options()} |
+        {proxy, string()} |
+        {proxy_ssl_options, socket_options()} |
+        {pool, pid() | atom()} |
+        invalid_option().
 
 -type options() :: [option()].
 

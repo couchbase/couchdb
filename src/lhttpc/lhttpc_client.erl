@@ -86,8 +86,9 @@ request(From, Host, Port, Ssl, Path, Method, Hdrs, Body, Options) ->
             {response, self(), {error, Reason}};
         error:closed ->
             {response, self(), {error, connection_closed}};
-        error:Error ->
-            {exit, self(), {Error, erlang:get_stacktrace()}}
+        error:Reason ->
+            Stack = erlang:get_stacktrace(),
+            {response, self(), {error, {Reason, Stack}}}
     end,
     case Result of
         {response, _, {ok, {no_return, _}}} -> ok;

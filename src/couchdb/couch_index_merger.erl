@@ -309,9 +309,9 @@ get_ddoc(#httpdb{} = HttpDb, Id) ->
                 "database `~s`: ~s", [Id, db_uri(HttpDb), Error]),
             throw({error, iolist_to_binary(Msg)})
         end;
-    Error ->
+    {error, Error} ->
         Msg = io_lib:format("Error getting design document `~s` from database "
-            "`~s`: ~s", [Id, db_uri(HttpDb), lhttpc_error_msg(Error)]),
+            "`~s`: ~s", [Id, db_uri(HttpDb), to_binary(Error)]),
         throw({error, iolist_to_binary(Msg)})
     end;
 get_ddoc(Db, Id) ->
@@ -354,10 +354,6 @@ ddoc_not_found_msg(DbName, DDocId) ->
         [DDocId, db_uri(DbName)]),
     iolist_to_binary(Msg).
 
-lhttpc_error_msg({error, Reason}) ->
-    to_binary(Reason);
-lhttpc_error_msg(Reason) ->
-    to_binary(Reason).
 
 lhttpc_options(#httpdb{timeout = T}) ->
     % TODO: add SSL options like verify and cacertfile, which should
@@ -655,9 +651,7 @@ stream_data(Pid, Timeout) ->
     {ok, Data} ->
          {Data, fun() -> stream_data(Pid, Timeout) end};
     {error, _} = Error ->
-         throw(Error);
-    Error ->
-         throw({error, Error})
+         throw(Error)
     end.
 
 

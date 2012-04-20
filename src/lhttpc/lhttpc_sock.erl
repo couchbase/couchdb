@@ -115,16 +115,18 @@ send(Socket, Request, true) ->
 send(Socket, Request, false) ->
     gen_tcp:send(Socket, Request).
 
-%% @spec (Socket, Pid, SslFlag) -> ok | {error, Reason}
+%% @spec (Socket, Process, SslFlag) -> ok | {error, Reason}
 %%   Socket = socket()
-%%   Pid = pid()
+%%   Process = pid() | atom()
 %%   SslFlag = boolean()
 %%   Reason = atom()
 %% @doc
 %% Sets the controlling proces for the `Socket'.
 %% @end
--spec controlling_process(socket(), pid(), boolean()) ->
+-spec controlling_process(socket(), pid() | atom(), boolean()) ->
     ok | {error, atom()}.
+controlling_process(Socket, Controller, IsSsl) when is_atom(Controller) ->
+    controlling_process(Socket, whereis(Controller), IsSsl);
 controlling_process(Socket, Pid, true) ->
     ssl:controlling_process(Socket, Pid);
 controlling_process(Socket, Pid, false) ->
