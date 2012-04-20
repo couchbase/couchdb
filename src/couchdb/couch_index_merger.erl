@@ -364,7 +364,7 @@ lhttpc_options(#httpdb{timeout = T}) ->
     % configurable somewhere.
     [
         {connect_timeout, T},
-        {connect_options, [{keepalive, true}]},
+        {connect_options, [{keepalive, true}, {nodelay, true}]},
         {pool, whereis(couch_index_merger_connection_pool)}
     ].
 

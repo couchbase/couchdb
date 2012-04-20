@@ -126,11 +126,15 @@ http_sender({debug_info, From, Info}, SAcc) ->
     {ok, SAcc#sender_acc{debug_info_acc = DebugInfoAcc2}};
 
 http_sender(start, #sender_acc{req = Req} = SAcc) ->
+    #httpd{mochi_req = MReq} = Req,
+    ok = mochiweb_socket:setopts(MReq:get(socket), [{nodelay, true}]),
     {ok, Resp} = couch_httpd:start_json_response(Req, 200, []),
     couch_httpd:send_chunk(Resp, <<"{\"rows\":[">>),
     {ok, SAcc#sender_acc{resp = Resp, acc = <<"\r\n">>}};
 
 http_sender({start, RowCount}, #sender_acc{req = Req} = SAcc) ->
+    #httpd{mochi_req = MReq} = Req,
+    ok = mochiweb_socket:setopts(MReq:get(socket), [{nodelay, true}]),
     Start = io_lib:format(
         "{\"total_rows\":~w,\"rows\":[", [RowCount]),
     {ok, Resp} = couch_httpd:start_json_response(Req, 200, []),
