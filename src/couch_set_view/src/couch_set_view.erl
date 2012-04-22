@@ -584,7 +584,7 @@ handle_call({get_group_server, SetName, Group}, From, Server) ->
     [] ->
         WaitList = [From],
         Worker = spawn_monitor(fun() ->
-            new_group(Server#server.root_dir, SetName, Group)
+            exit(new_group(Server#server.root_dir, SetName, Group))
         end),
         ?LOG_INFO("~s spawned worker ~w to open set view group `~s`, "
             "set `~s`, signature `~s`, new waiting list: ~w",
@@ -622,7 +622,7 @@ new_group(Root, SetName, #set_view_group{name = DDocId, sig = Sig} = Group) ->
     ?LOG_INFO("~s opener worker ~w for set view group `~s`, set `~s`, signature `~s`,"
         " finishing with reply ~p",
         [?MODULE, self(), DDocId, SetName, couch_util:to_hex(?b2l(Sig)), Reply]),
-    exit({SetName, DDocId, Sig, Reply}).
+    {SetName, DDocId, Sig, Reply}.
 
 handle_info({'EXIT', Pid, Reason}, #server{db_notifier = Pid} = Server) ->
     ?LOG_ERROR("Database update notifer died with reason: ~p", [Reason]),

@@ -135,9 +135,8 @@ maybe_retry_compact(CompactResult0, StartTime, Group) ->
     ok ->
         ok = couch_set_view_util:close_raw_read_fd(Group);
     update ->
-        {_, Ref} = erlang:spawn_monitor(fun() ->
-            couch_set_view_updater:update(nil, NewGroup)
-        end),
+        {_, Ref} = erlang:spawn_monitor(
+            couch_set_view_updater, update, [nil, NewGroup]),
         receive
         {'DOWN', Ref, _, _, {updater_finished, UpdaterResult}} ->
             CompactResult2 = CompactResult0#set_view_compactor_result{

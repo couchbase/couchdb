@@ -601,10 +601,7 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
 
         NewUpdaterPid =
         if is_pid(UpdaterPid) ->
-            Owner = self(),
-            spawn_link(fun() ->
-                couch_set_view_updater:update(Owner, NewGroup2)
-            end);
+            spawn_link(couch_set_view_updater, update, [self(), NewGroup2]);
         true ->
             nil
         end,
@@ -1712,7 +1709,7 @@ maybe_start_cleaner(#state{group = Group} = State) ->
     true ->
         State;
     false ->
-        Cleaner = spawn_link(fun() -> cleaner(State) end),
+        Cleaner = spawn_link(fun() -> exit(cleaner(State)) end),
         ?LOG_INFO("Started cleanup process ~p for set view `~s`, ~s group `~s`",
                   [Cleaner, ?set_name(State), ?type(State), ?group_id(State)]),
         State#state{cleaner_pid = Cleaner}
@@ -1783,7 +1780,7 @@ cleaner(#state{group = Group}) ->
     },
     Duration = timer:now_diff(os:timestamp(), StartTime) / 1000000,
     commit_header(NewGroup, true),
-    exit({clean_group, NewGroup, TotalPurgedCount, Duration}).
+    {clean_group, NewGroup, TotalPurgedCount, Duration}.
 
 
 clean_views(_, _, [], Count, Acc) ->
@@ -1961,10 +1958,7 @@ do_start_updater(State) ->
     #state{group = Group} = State2 = stop_cleaner(State),
     ?LOG_INFO("Starting updater for set view `~s`, ~s group `~s`",
         [?set_name(State), ?type(State), ?group_id(State)]),
-    Owner = self(),
-    Pid = spawn_link(fun() ->
-        couch_set_view_updater:update(Owner, Group)
-    end),
+    Pid = spawn_link(couch_set_view_updater, update, [self(), Group]),
     State2#state{
         updater_pid = Pid,
         updater_state = starting

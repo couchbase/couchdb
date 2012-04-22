@@ -45,6 +45,7 @@
 }).
 
 
+-spec update(pid() | 'nil', #set_view_group{}) -> no_return().
 update(Owner, Group) ->
     #set_view_group{
         set_name = SetName,
