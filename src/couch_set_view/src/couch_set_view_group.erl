@@ -1033,8 +1033,6 @@ compact_file_name(#set_view_group{filepath = CurFilepath}) ->
     CurFilepath ++ ".compact".
 
 
-increment_filepath(#state{group = Group}) ->
-    increment_filepath(Group);
 increment_filepath(#set_view_group{filepath = CurFilepath}) ->
     [Suffix | Rest] = lists:reverse(string:tokens(CurFilepath, ".")),
     NewSuffix = integer_to_list(list_to_integer(Suffix) + 1),
