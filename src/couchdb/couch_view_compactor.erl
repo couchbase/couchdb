@@ -116,9 +116,8 @@ maybe_retry_compact(#db{name = DbName} = Db, GroupId, NewGroup) ->
         couch_db:close(Db);
     update ->
         {ok, Db2} = couch_db:reopen(Db),
-        {_, Ref} = erlang:spawn_monitor(fun() ->
-            couch_view_updater:update(nil, NewGroup, Db2)
-        end),
+        {_, Ref} = erlang:spawn_monitor(
+            couch_view_updater, update, [nil, NewGroup, Db2]),
         receive
         {'DOWN', Ref, _, _, {new_group, NewGroup2}} ->
             maybe_retry_compact(Db2, GroupId, NewGroup2)

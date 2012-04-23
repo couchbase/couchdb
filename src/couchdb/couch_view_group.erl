@@ -126,7 +126,7 @@ handle_call({request_group, RequestSeq}, From,
             waiting_list=WaitList
             }=State) when RequestSeq > Seq ->
     Owner = self(),
-    Pid = spawn_link(fun()-> couch_view_updater:update(Owner, Group, DbName) end),
+    Pid = spawn_link(couch_view_updater, update, [Owner, Group, DbName]),
 
     {noreply, State#group_state{
         updater_pid=Pid,
@@ -193,8 +193,7 @@ handle_call({compact_done, #group{current_seq=NewSeq} = NewGroup}, _From,
     if is_pid(UpdaterPid) ->
         unlink(UpdaterPid),
         exit(UpdaterPid, view_compaction_complete),
-        Owner = self(),
-        spawn_link(fun()-> couch_view_updater:update(Owner, NewGroup, DbName) end);
+        spawn_link(couch_view_updater, update, [self(), NewGroup, DbName]);
     true ->
         nil
     end,
@@ -327,8 +326,7 @@ handle_info({'EXIT', FromPid, {new_group, Group}},
         end;
     StillWaiting ->
         % we still have some waiters, reopen the database and reupdate the index
-        Owner = self(),
-        Pid = spawn_link(fun() -> couch_view_updater:update(Owner, Group, DbName) end),
+        Pid = spawn_link(couch_view_updater, update, [self(), Group, DbName]),
         {noreply, State#group_state{waiting_commit=true,
                 waiting_list=StillWaiting, updater_pid=Pid}}
     end;
@@ -340,11 +338,9 @@ handle_info({'EXIT', UpPid, reset},
         #group_state{init_args=InitArgs, updater_pid=UpPid} = State) ->
     case prepare_group(InitArgs, true) of
     {ok, Db, ResetGroup} ->
-        Owner = self(),
         couch_db:close(Db),
-        Pid = spawn_link(fun() ->
-            couch_view_updater:update(Owner, ResetGroup, Db#db.name)
-        end),
+        Pid = spawn_link(
+            couch_view_updater, update, [self(), ResetGroup, Db#db.name]),
         {noreply, State#group_state{
                 updater_pid=Pid,
                 group=ResetGroup}};
