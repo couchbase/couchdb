@@ -17,14 +17,14 @@
 init() ->
     SoName = case code:priv_dir(ejson) of
     {error, bad_name} ->
-        case filelib:is_dir(filename:join(["..", priv])) of
+        case filelib:is_dir(filename:join(["..", "priv"])) of
         true ->
-            filename:join(["..", priv, ejson]);
+            filename:join(["..", "priv", "ejson"]);
         false ->
-            filename:join([priv, ejson])
+            filename:join(["priv", "ejson"])
         end;
     Dir ->
-        filename:join(Dir, ejson)
+        filename:join(Dir, "ejson")
     end,
     (catch erlang:load_nif(SoName, 0)),
     case erlang:system_info(otp_release) of
@@ -164,10 +164,10 @@ make_ejson([Value | RevEvs], [Vals | RestStack] = _Stack) ->
 
 
 reverse_tokens(_) ->
-    exit(ejson_nif_not_loaded).
+    erlang:nif_error(ejson_nif_not_loaded).
 
 final_encode(_) ->
-    exit(ejson_nif_not_loaded).
+    erlang:nif_error(ejson_nif_not_loaded).
 
 validate(_, _) ->
-    exit(ejson_nif_not_loaded).
+    erlang:nif_error(ejson_nif_not_loaded).
