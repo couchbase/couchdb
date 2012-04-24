@@ -176,7 +176,7 @@ output_map_view(Req, View, Group, QueryArgs) ->
     } = QueryArgs,
     CurrentEtag = view_etag(Group, View, QueryArgs#view_query_args.keys),
     couch_httpd:etag_respond(Req, CurrentEtag, fun() ->
-        RowCount = get_row_count(Group, View),
+        RowCount = couch_set_view:get_row_count(Group, View),
         RedCountFun = get_reduce_count_fun(Group),
         FoldHelpers = #view_fold_helper_funs{reduce_count = RedCountFun},
         FoldlFun = make_view_fold_fun(Req, QueryArgs, CurrentEtag, Group, RowCount, FoldHelpers),
@@ -200,16 +200,6 @@ output_reduce_view(Req, View, Group, QueryArgs) ->
             Group, View, FoldFun, FoldAccInit, KeyGroupFun, QueryArgs),
         finish_reduce_fold(Req, Resp)
     end).
-
-
-get_row_count(#set_view_group{replica_group = nil}, View) ->
-    {ok, RowCount} = couch_set_view:get_row_count(View),
-    RowCount;
-get_row_count(#set_view_group{replica_group = RepGroup}, View) ->
-    RepView = lists:nth(View#set_view.id_num + 1, RepGroup#set_view_group.views),
-    {ok, RowCount1} = couch_set_view:get_row_count(View),
-    {ok, RowCount2} = couch_set_view:get_row_count(RepView),
-    RowCount1 + RowCount2.
 
 
 get_reduce_count_fun(#set_view_group{replica_group = nil}) ->

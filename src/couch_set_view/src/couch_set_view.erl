@@ -25,7 +25,7 @@
 -export([set_partition_states/5, add_replica_partitions/3, remove_replica_partitions/3]).
 
 -export([fold/5, fold_reduce/6]).
--export([get_row_count/1, reduce_to_count/1, extract_map_view/1]).
+-export([get_row_count/2, reduce_to_count/1, extract_map_view/1]).
 
 -export([less_json/2, less_json_ids/2]).
 
@@ -273,9 +273,15 @@ list_index_files(SetName) ->
     filelib:wildcard(filename:join([set_index_dir(RootDir, SetName), "*"])).
 
 
-get_row_count(#set_view{btree=Bt}) ->
+get_row_count(#set_view_group{replica_group = nil}, #set_view{btree = Bt}) ->
     {ok, {Count, _Reds, _AllPartitionsBitMaps}} = couch_btree:full_reduce(Bt),
-    {ok, Count}.
+    Count;
+get_row_count(#set_view_group{replica_group = RepGroup}, View) ->
+    RepView = lists:nth(View#set_view.id_num + 1, RepGroup#set_view_group.views),
+    {ok, {CountMain, _, _}} = couch_btree:full_reduce(View#set_view.btree),
+    {ok, {CountRep, _, _}} = couch_btree:full_reduce(RepView#set_view.btree),
+    CountMain + CountRep.
+
 
 extract_map_view({reduce, _N, _Lang, View}) ->
     View.

@@ -13,8 +13,10 @@
 -module(couch_view_merger).
 
 % export callbacks
--export([parse_http_params/4, make_funs/3, get_skip_and_limit/1,
-    http_index_folder_req_details/3, make_event_fun/2]).
+-export([parse_http_params/4, make_funs/3, get_skip_and_limit/1]).
+-export([http_index_folder_req_details/3, make_event_fun/2]).
+-export([simple_set_view_query/3]).
+
 
 -include("couch_db.hrl").
 -include("couch_index_merger.hrl").
@@ -671,7 +673,7 @@ map_set_view_folder(ViewSpec, MergeParams, UserCtx, DDoc, Queue) ->
             case not(couch_index_merger:should_check_rev(MergeParams, DDoc)) orelse
                 couch_index_merger:ddoc_unchanged(DDocDbName, DDoc) of
             true ->
-                {ok, RowCount} = couch_set_view:get_row_count(View),
+                RowCount = couch_set_view:get_row_count(Group, View),
                 ok = couch_view_merger_queue:queue(Queue, {row_count, RowCount}),
                 {ok, _, _} = couch_set_view:fold(Group, View, FoldFun, [], ViewArgs);
             false ->
@@ -1228,9 +1230,17 @@ reverse_key_default(?MAX_STR) -> ?MIN_STR;
 reverse_key_default(Key) -> Key.
 
 
-queue_debug_info(#view_query_args{debug = false}, _Group, _Queue) ->
-    ok;
-queue_debug_info(_QueryArgs, #set_view_group{} = Group, Queue) ->
+queue_debug_info(ViewArgs, Group, Queue) ->
+    case debug_info(ViewArgs, Group) of
+    nil ->
+        ok;
+    DebugInfo ->
+        ok = couch_view_merger_queue:queue(Queue, DebugInfo)
+    end.
+
+debug_info(#view_query_args{debug = false}, _Group) ->
+    nil;
+debug_info(_QueryArgs, #set_view_group{} = Group) ->
     #set_view_debug_info{
         original_abitmask = OrigMainAbitmask,
         original_pbitmask = OrigMainPbitmask,
@@ -1262,7 +1272,7 @@ queue_debug_info(_QueryArgs, #set_view_group{} = Group, Queue) ->
     _ ->
         { [{<<"main_group">>, {MainInfo}}, {<<"replica_group">>, {RepInfo}}] }
     end,
-    ok = couch_view_merger_queue:queue(Queue, {debug_info, ?LOCAL, Info}).
+    {debug_info, ?LOCAL, Info}.
 
 replica_group_debug_info(#set_view_group{replica_group = nil}) ->
     [];
@@ -1303,3 +1313,171 @@ set_view_group_stats_ejson(Stats) ->
         end,
         [],
         lists:zip(StatNames, StatPoses))}.
+
+
+% Query with a single view to merge, trigger a simpler code path
+% (no queue, no child processes, etc).
+simple_set_view_query(Params, DDoc, Req) ->
+    #index_merge{
+        callback = Callback,
+        user_acc = UserAcc,
+        indexes = [SetViewSpec],
+        extra = #view_merge{keys = Keys}
+    } = Params,
+    #set_view_spec{
+        name = SetName,
+        partitions = Partitions,
+        ddoc_id = DDocId,
+        view_name = ViewName
+    } = SetViewSpec,
+
+    Stale = list_to_existing_atom(string:to_lower(
+        couch_httpd:qs_value(Req, "stale", "update_after"))),
+    GroupReq = #set_view_group_req{
+        stale = Stale,
+        update_stats = true
+    },
+
+    case get_set_view(
+        fun couch_set_view:get_map_view/5, SetName, DDoc,
+        ViewName, GroupReq, Partitions) of
+    {ok, View, Group, MissingPartitions} ->
+        ViewType = map;
+    {not_found, _} ->
+        GroupReq2 = GroupReq#set_view_group_req{
+            update_stats = false
+        },
+        case get_set_view(
+            fun couch_set_view:get_reduce_view/5, SetName, DDoc,
+            ViewName, GroupReq2, Partitions) of
+        {ok, ReduceView, Group, MissingPartitions} ->
+            Reduce = list_to_existing_atom(
+                string:to_lower(couch_httpd:qs_value(Req, "reduce", "true"))),
+            case Reduce of
+            false ->
+                ViewType = red_map,
+                View = couch_set_view:extract_map_view(ReduceView);
+            true ->
+                ViewType = reduce,
+                View = ReduceView
+            end;
+        Error ->
+            MissingPartitions = Group = View = ViewType = nil,
+            ErrorMsg = io_lib:format("Error opening view `~s`, from set `~s`, "
+                "design document `~s`: ~p", [ViewName, SetName, DDocId, Error]),
+            throw({error, iolist_to_binary(ErrorMsg)})
+        end
+    end,
+
+    case MissingPartitions of
+    [] ->
+        ok;
+    _ ->
+        couch_set_view:release_group(Group),
+        ?LOG_INFO("Set view `~s`, group `~s`, missing partitions: ~w",
+                  [SetName, DDocId, MissingPartitions]),
+        throw({error, set_view_outdated})
+    end,
+
+    QueryArgs = couch_httpd_view:parse_view_params(Req, Keys, ViewType),
+    QueryArgs2 = QueryArgs#view_query_args{
+        view_name = ViewName,
+        stale = Stale
+     },
+
+    case debug_info(QueryArgs2, Group) of
+    nil ->
+        Params2 = Params#index_merge{user_ctx = Req#httpd.user_ctx};
+    DebugInfo ->
+        {ok, UserAcc2} = Callback(DebugInfo, UserAcc),
+        Params2 = Params#index_merge{
+            user_ctx = Req#httpd.user_ctx,
+            user_acc = UserAcc2
+        }
+    end,
+
+    case ViewType of
+    reduce ->
+        simple_set_view_reduce_query(Params2, Group, View, QueryArgs2);
+    _ ->
+        simple_set_view_map_query(Params2, Group, View, QueryArgs2)
+    end.
+
+
+simple_set_view_map_query(Params, Group, View, ViewArgs) ->
+    #index_merge{
+        indexes = [#set_view_spec{name = SetName}],
+        callback = Callback,
+        user_acc = UserAcc,
+        user_ctx = UserCtx
+    } = Params,
+    #view_query_args{
+        include_docs = IncludeDocs,
+        limit = Limit,
+        skip = Skip,
+        debug = DebugMode
+    } = ViewArgs,
+
+    FoldFun = fun(_Kv, _, {0, _, _} = Acc) ->
+            {stop, Acc};
+        (_Kv, _, {AccLim, AccSkip, UAcc}) when AccSkip > 0 ->
+            {ok, {AccLim, AccSkip - 1, UAcc}};
+        ({{Key, DocId}, {PartId, Value}} = Kv, _, {AccLim, 0, UAcc}) ->
+            case couch_set_view_http:get_row_doc(
+                Kv, SetName, IncludeDocs, UserCtx, []) of
+            nil ->
+                RowDetails = Kv;
+            JsonDoc ->
+                RowDetails = {{Key, DocId}, {PartId, Value}, {doc, JsonDoc}}
+            end,
+            Row = view_row_obj_map(RowDetails, DebugMode),
+            {ok, UAcc2} = Callback({row, Row}, UAcc),
+            {ok, {AccLim - 1, 0, UAcc2}}
+    end,
+
+    RowCount = couch_set_view:get_row_count(Group, View),
+    {ok, UserAcc2} = Callback({start, RowCount}, UserAcc),
+
+    {ok, _, {_, _, UserAcc3}} = couch_set_view:fold(
+        Group, View, FoldFun, {Limit, Skip, UserAcc2}, ViewArgs),
+    Callback(stop, UserAcc3).
+
+
+simple_set_view_reduce_query(Params, Group, View, ViewArgs) ->
+    #index_merge{
+        callback = Callback,
+        user_acc = UserAcc
+    } = Params,
+    #view_query_args{
+        limit = Limit,
+        skip = Skip,
+        debug = DebugMode,
+        group_level = GroupLevel
+    } = ViewArgs,
+
+    FoldFun = fun(_Key, _Red, {0, _, _} = Acc) ->
+            {stop, Acc};
+        (_Key, _Red, {AccLim, AccSkip, UAcc}) when AccSkip > 0 ->
+            {ok, {AccLim, AccSkip - 1, UAcc}};
+
+        (_Key, Red, {AccLim, 0, UAcc}) when GroupLevel == 0 ->
+            Row = view_row_obj_reduce({null, Red}, DebugMode),
+            {ok, UAcc2} = Callback({row, Row}, UAcc),
+            {ok, {AccLim - 1, 0, UAcc2}};
+
+        (Key, Red, {AccLim, 0, UAcc}) when is_integer(GroupLevel), is_list(Key) ->
+            Row = view_row_obj_reduce({lists:sublist(Key, GroupLevel), Red}, DebugMode),
+            {ok, UAcc2} = Callback({row, Row}, UAcc),
+            {ok, {AccLim - 1, 0, UAcc2}};
+
+        (Key, Red, {AccLim, 0, UAcc}) ->
+            Row = view_row_obj_reduce({Key, Red}, DebugMode),
+            {ok, UAcc2} = Callback({row, Row}, UAcc),
+            {ok, {AccLim - 1, 0, UAcc2}}
+    end,
+
+    {ok, UserAcc2} = Callback(start, UserAcc),
+    KeyGroupFun = make_group_rows_fun(ViewArgs),
+    {ok, {_, _, UserAcc3}} = couch_set_view:fold_reduce(
+        Group, View, FoldFun, {Limit, Skip, UserAcc2}, KeyGroupFun, ViewArgs),
+    Callback(stop, UserAcc3).

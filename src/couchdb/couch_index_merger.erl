@@ -49,6 +49,15 @@ query_index(Mod, #index_merge{http_params = HttpParams, user_ctx = UserCtx} = In
     {ok, DDoc, IndexName} = get_first_ddoc(Indexes, UserCtx, Timeout),
     query_index_loop(Mod, IndexMergeParams, DDoc, IndexName, ?MAX_RETRIES).
 
+% Special and simpler case, trigger a lighter and faster code path.
+query_index(Mod, #index_merge{indexes = [#set_view_spec{}]} = Params, Req) ->
+    #index_merge{
+        indexes = Indexes,
+        conn_timeout = Timeout
+    } = Params,
+    {ok, DDoc, _} = get_first_ddoc(Indexes, Req#httpd.user_ctx, Timeout),
+    Mod:simple_set_view_query(Params, DDoc, Req);
+
 query_index(Mod, IndexMergeParams0, #httpd{user_ctx = UserCtx} = Req) ->
     #index_merge{
         indexes = Indexes,
