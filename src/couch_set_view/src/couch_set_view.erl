@@ -16,7 +16,7 @@
 % public API
 -export([start_link/0]).
 
--export([get_map_view/4, get_map_view/5, get_reduce_view/4, get_reduce_view/5]).
+-export([get_map_view/4, get_reduce_view/4]).
 -export([get_group/3, get_group_pid/2, release_group/1, define_group/3]).
 -export([get_group_info/2, cleanup_index_files/1, set_index_dir/2]).
 -export([get_group_data_size/2]).
@@ -397,16 +397,9 @@ get_key_pos(Key, [_|Rest], N) ->
 
 
 get_map_view(SetName, DDoc, ViewName, Req) ->
-    case get_map_view(SetName, DDoc, ViewName, Req, []) of
-    {ok, View, Group, _} ->
-        {ok, View, Group};
-    Else ->
-        Else
-    end.
-
-get_map_view(SetName, DDoc, ViewName, Req, FilterPartitions) ->
+    #set_view_group_req{wanted_partitions = WantedPartitions} = Req,
     {ok, Group0} = get_group(SetName, DDoc, Req),
-    {Group, Unindexed} = modify_bitmasks(Group0, FilterPartitions),
+    {Group, Unindexed} = modify_bitmasks(Group0, WantedPartitions),
     case get_map_view0(ViewName, Group#set_view_group.views) of
     {ok, View} ->
         {ok, View, Group, Unindexed};
@@ -422,17 +415,11 @@ get_map_view0(Name, [#set_view{map_names=MapNames}=View|Rest]) ->
         false -> get_map_view0(Name, Rest)
     end.
 
-get_reduce_view(SetName, DDoc, ViewName, Req) ->
-    case get_reduce_view(SetName, DDoc, ViewName, Req, []) of
-    {ok, View, Group, _} ->
-        {ok, View, Group};
-    Else ->
-        Else
-    end.
 
-get_reduce_view(SetName, DDoc, ViewName, Req, FilterPartitions) ->
+get_reduce_view(SetName, DDoc, ViewName, Req) ->
+    #set_view_group_req{wanted_partitions = WantedPartitions} = Req,
     {ok, Group0} = get_group(SetName, DDoc, Req),
-    {Group, Unindexed} = modify_bitmasks(Group0, FilterPartitions),
+    {Group, Unindexed} = modify_bitmasks(Group0, WantedPartitions),
     #set_view_group{
         views = Views,
         def_lang = Lang

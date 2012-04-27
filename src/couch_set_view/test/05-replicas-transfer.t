@@ -280,8 +280,12 @@ query_reduce_view(ViewName, Stale) ->
 
 query_reduce_view(ViewName, Stale, Partitions) ->
     etap:diag("Querying reduce view " ++ binary_to_list(ViewName) ++ " with ?group=true"),
+    GroupReq = #set_view_group_req{
+        stale = Stale,
+        wanted_partitions = Partitions
+    },
     {ok, View, Group, []} = couch_set_view:get_reduce_view(
-        test_set_name(), ddoc_id(), ViewName, #set_view_group_req{stale = Stale}, Partitions),
+        test_set_name(), ddoc_id(), ViewName, GroupReq),
     KeyGroupFun = fun({_Key1, _}, {_Key2, _}) -> true end,
     FoldFun = fun(Key, Red, Acc) -> {ok, [{Key, Red} | Acc]} end,
     ViewArgs = #view_query_args{

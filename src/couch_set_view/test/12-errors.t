@@ -397,7 +397,7 @@ test_reduce_syntax_error() ->
 query_map_view(DDocId, ViewName, Stale) ->
     etap:diag("Querying map view " ++ binary_to_list(DDocId) ++ "/" ++
         binary_to_list(ViewName)),
-    {ok, View, Group} = couch_set_view:get_map_view(
+    {ok, View, Group, _} = couch_set_view:get_map_view(
         test_set_name(), DDocId, ViewName, #set_view_group_req{stale = Stale}),
     FoldFun = fun({{Key, DocId}, {_PartId, Value}}, _, Acc) ->
         {ok, [{{Key, DocId}, Value} | Acc]}
@@ -414,7 +414,7 @@ query_map_view(DDocId, ViewName, Stale) ->
 query_reduce_view(DDocId, ViewName, Stale) ->
     etap:diag("Querying reduce view " ++ binary_to_list(DDocId) ++ "/" ++
         binary_to_list(ViewName) ++ "with ?group=true"),
-    {ok, View, Group} = couch_set_view:get_reduce_view(
+    {ok, View, Group, _} = couch_set_view:get_reduce_view(
         test_set_name(), DDocId, ViewName, #set_view_group_req{stale = Stale}),
     KeyGroupFun = fun({_Key1, _}, {_Key2, _}) -> true end,
     FoldFun = fun(Key, Red, Acc) -> {ok, [{Key, Red} | Acc]} end,

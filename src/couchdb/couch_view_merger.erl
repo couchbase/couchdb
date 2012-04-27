@@ -493,7 +493,7 @@ rereduce(Rows, #merge_params{extra = #view_merge{rereduce_fun = FunSrc}}) ->
     end.
 
 
-get_set_view(GetSetViewFn, SetName, DDoc, ViewName, ViewGroupReq, Partitions) ->
+get_set_view(GetSetViewFn, SetName, DDoc, ViewName, ViewGroupReq) ->
     ViewGroupReq1 = case ViewGroupReq#set_view_group_req.stale of
     ok ->
         ViewGroupReq;
@@ -502,7 +502,7 @@ get_set_view(GetSetViewFn, SetName, DDoc, ViewName, ViewGroupReq, Partitions) ->
     false ->
         ViewGroupReq#set_view_group_req{update_stats = false}
     end,
-    case GetSetViewFn(SetName, DDoc, ViewName, ViewGroupReq1, Partitions) of
+    case GetSetViewFn(SetName, DDoc, ViewName, ViewGroupReq1) of
     {ok, StaleView, StaleGroup, []} ->
         case ViewGroupReq#set_view_group_req.stale of
         ok ->
@@ -514,7 +514,7 @@ get_set_view(GetSetViewFn, SetName, DDoc, ViewName, ViewGroupReq, Partitions) ->
             ViewGroupReq2 = ViewGroupReq#set_view_group_req{
                 update_stats = true
             },
-            GetSetViewFn(SetName, DDoc, ViewName, ViewGroupReq2, Partitions)
+            GetSetViewFn(SetName, DDoc, ViewName, ViewGroupReq2)
         end;
     Other ->
         Other
@@ -523,13 +523,11 @@ get_set_view(GetSetViewFn, SetName, DDoc, ViewName, ViewGroupReq, Partitions) ->
 prepare_set_view(ViewSpec, ViewGroupReq, DDoc, Queue, GetSetViewFn) ->
     #set_view_spec{
         name = SetName,
-        ddoc_id = DDocId, view_name = ViewName,
-        partitions = Partitions
+        ddoc_id = DDocId,
+        view_name = ViewName
     } = ViewSpec,
-
     try
-        case get_set_view(GetSetViewFn, SetName, DDoc,
-                          ViewName, ViewGroupReq, Partitions) of
+        case get_set_view(GetSetViewFn, SetName, DDoc, ViewName, ViewGroupReq) of
         {ok, View, Group, []} ->
             {View, Group};
         {ok, _, Group, MissingPartitions} ->
@@ -621,7 +619,9 @@ map_view_folder(Db, ViewSpec, MergeParams, _UserCtx, DDoc, Queue) ->
 
 map_set_view_folder(ViewSpec, MergeParams, UserCtx, DDoc, Queue) ->
     #set_view_spec{
-        name = SetName, ddoc_id = DDocId
+        name = SetName,
+        ddoc_id = DDocId,
+        partitions = WantedPartitions
     } = ViewSpec,
     #index_merge{
         http_params = ViewArgs
@@ -640,16 +640,17 @@ map_set_view_folder(ViewSpec, MergeParams, UserCtx, DDoc, Queue) ->
     false ->
         ViewGroupReq1 = #set_view_group_req{
             stale = Stale,
-            update_stats = true
+            update_stats = true,
+            wanted_partitions = WantedPartitions
         },
         case prepare_set_view(
-            ViewSpec, ViewGroupReq1, DDoc, Queue, fun couch_set_view:get_map_view/5) of
+            ViewSpec, ViewGroupReq1, DDoc, Queue, fun couch_set_view:get_map_view/4) of
         not_found ->
             ViewGroupReq2 = ViewGroupReq1#set_view_group_req{
                 update_stats = false
             },
             case prepare_set_view(
-                ViewSpec, ViewGroupReq2, DDoc, Queue, fun couch_set_view:get_reduce_view/5) of
+                ViewSpec, ViewGroupReq2, DDoc, Queue, fun couch_set_view:get_reduce_view/4) of
             {RedView, Group0} ->
                 {couch_set_view:extract_map_view(RedView), Group0};
             Else ->
@@ -934,7 +935,9 @@ reduce_view_folder(Db, ViewSpec, MergeParams, _UserCtx, DDoc, Queue) ->
 
 reduce_set_view_folder(ViewSpec, MergeParams, DDoc, Queue) ->
     #set_view_spec{
-        name = SetName, ddoc_id = DDocId
+        name = SetName,
+        ddoc_id = DDocId,
+        partitions = WantedPartitions
     } = ViewSpec,
     #index_merge{
         http_params = ViewArgs
@@ -948,9 +951,10 @@ reduce_set_view_folder(ViewSpec, MergeParams, DDoc, Queue) ->
     false ->
         ViewGroupReq = #set_view_group_req{
             stale = ViewArgs#view_query_args.stale,
-            update_stats = true
+            update_stats = true,
+            wanted_partitions = WantedPartitions
         },
-        prepare_set_view(ViewSpec, ViewGroupReq, DDoc, Queue, fun couch_set_view:get_reduce_view/5)
+        prepare_set_view(ViewSpec, ViewGroupReq, DDoc, Queue, fun couch_set_view:get_reduce_view/4)
     end,
 
     case PrepareResult of
@@ -1263,6 +1267,7 @@ debug_info(_QueryArgs, #set_view_group{} = Group) ->
         {<<"replica_partitions">>, ordsets:from_list(ReplicaPartitions)},
         {<<"replicas_on_transfer">>, ?set_replicas_on_transfer(Group)},
         {<<"indexed_seqs">>, {IndexedSeqs}},
+        pending_transition_debug_info(Group),
         {<<"stats">>, set_view_group_stats_ejson(Stats)}
     ],
     RepInfo = replica_group_debug_info(Group),
@@ -1298,8 +1303,25 @@ replica_group_debug_info(#set_view_group{replica_group = RepGroup}) ->
         {<<"replica_original_passive_partitions">>, ordsets:from_list(OrigRepPassive)},
         {<<"replica_cleanup_partitions">>, ordsets:from_list(RepCleanup)},
         {<<"replica_indexed_seqs">>, {IndexedSeqs}},
+        pending_transition_debug_info(RepGroup),
         {<<"replica_stats">>, set_view_group_stats_ejson(Stats)}
     ].
+
+
+pending_transition_debug_info(#set_view_group{index_header = Header}) ->
+    Pt = Header#set_view_index_header.pending_transition,
+    case Pt of
+    nil ->
+        {<<"pending_transition">>, null};
+    #set_view_transition{} ->
+        {<<"pending_transition">>,
+            {[
+                {<<"active">>, Pt#set_view_transition.active},
+                {<<"passive">>, Pt#set_view_transition.passive},
+                {<<"cleanup">>, Pt#set_view_transition.cleanup}
+            ]}
+        }
+    end.
 
 
 set_view_group_stats_ejson(Stats) ->
@@ -1335,12 +1357,12 @@ simple_set_view_query(Params, DDoc, Req) ->
         couch_httpd:qs_value(Req, "stale", "update_after"))),
     GroupReq = #set_view_group_req{
         stale = Stale,
-        update_stats = true
+        update_stats = true,
+        wanted_partitions = Partitions
     },
 
     case get_set_view(
-        fun couch_set_view:get_map_view/5, SetName, DDoc,
-        ViewName, GroupReq, Partitions) of
+        fun couch_set_view:get_map_view/4, SetName, DDoc, ViewName, GroupReq) of
     {ok, View, Group, MissingPartitions} ->
         ViewType = map;
     {not_found, _} ->
@@ -1348,8 +1370,7 @@ simple_set_view_query(Params, DDoc, Req) ->
             update_stats = false
         },
         case get_set_view(
-            fun couch_set_view:get_reduce_view/5, SetName, DDoc,
-            ViewName, GroupReq2, Partitions) of
+            fun couch_set_view:get_reduce_view/4, SetName, DDoc, ViewName, GroupReq2) of
         {ok, ReduceView, Group, MissingPartitions} ->
             Reduce = list_to_existing_atom(
                 string:to_lower(couch_httpd:qs_value(Req, "reduce", "true"))),

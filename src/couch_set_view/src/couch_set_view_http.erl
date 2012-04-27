@@ -137,9 +137,10 @@ design_doc_view(Req, SetName, DDocId, ViewName, FilteredPartitions, Keys) ->
     Reduce = get_reduce_type(Req),
     GroupReq = #set_view_group_req{
         stale = Stale,
-        update_stats = true
+        update_stats = true,
+        wanted_partitions = FilteredPartitions
     },
-    case couch_set_view:get_map_view(SetName, DDocId, ViewName, GroupReq, FilteredPartitions) of
+    case couch_set_view:get_map_view(SetName, DDocId, ViewName, GroupReq) of
     {ok, View, Group, _} ->
         QueryArgs = parse_view_params(Req, Keys, ViewName, map),
         Result = output_map_view(Req, View, Group, QueryArgs),
@@ -148,7 +149,7 @@ design_doc_view(Req, SetName, DDocId, ViewName, FilteredPartitions, Keys) ->
         GroupReq2 = GroupReq#set_view_group_req{
             update_stats = false
         },
-        case couch_set_view:get_reduce_view(SetName, DDocId, ViewName, GroupReq2, FilteredPartitions) of
+        case couch_set_view:get_reduce_view(SetName, DDocId, ViewName, GroupReq2) of
         {ok, ReduceView, Group, _} ->
             case Reduce of
             false ->

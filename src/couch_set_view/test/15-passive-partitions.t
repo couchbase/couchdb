@@ -280,7 +280,7 @@ doc_id(I) ->
 
 
 fold_view(ActiveParts, ValueGenFun) ->
-    {ok, FoldView, Group} = couch_set_view:get_reduce_view(
+    {ok, FoldView, Group, _} = couch_set_view:get_reduce_view(
         test_set_name(), ddoc_id(), <<"view_1">>, #set_view_group_req{stale = false}),
 
     etap:diag("Verifying some btree metadata"),

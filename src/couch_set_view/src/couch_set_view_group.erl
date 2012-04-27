@@ -44,9 +44,9 @@
     is_integer(((State#state.group)#set_view_group.index_header)#set_view_index_header.num_partitions)).
 -define(replicas_on_transfer(State),
         ((State#state.group)#set_view_group.index_header)#set_view_index_header.replicas_on_transfer).
--define(get_pending_transition(State),
-        ((State#state.group)#set_view_group.index_header)#set_view_index_header.pending_transition).
--define(have_pending_transition(State), ((?get_pending_transition(State)) /= nil)).
+-define(have_pending_transition(State),
+        ((((State#state.group)#set_view_group.index_header)
+          #set_view_index_header.pending_transition) /= nil)).
 
 -define(MAX_HIST_SIZE, 20).
 
@@ -64,7 +64,8 @@
     waiting_list = [],
     cleaner_pid = nil,
     shutdown = false,
-    replica_partitions = []
+    replica_partitions = [],
+    pending_transition_waiters = []
 }).
 
 -define(inc_stat(Group, S),
@@ -79,7 +80,12 @@
 
 % api methods
 request_group(Pid, Req) ->
-    request_group(Pid, Req, 1).
+    #set_view_group_req{wanted_partitions = WantedPartitions} = Req,
+    Req2 = Req#set_view_group_req{
+        wanted_partitions = ordsets:from_list(WantedPartitions)
+    },
+    request_group(Pid, Req2, 1).
+
 
 request_group(Pid, Req, Retries) ->
     case gen_server:call(Pid, Req, infinity) of
@@ -94,10 +100,10 @@ request_group(Pid, Req, Retries) ->
         {ok, RepGroup} ->
             {ok, Group#set_view_group{replica_group = RepGroup}};
         retry ->
+            couch_ref_counter:drop(RefCounter),
             ?LOG_INFO("Retrying group `~s` request, stale=~s,"
                   " set `~s`, retry attempt #~p",
                   [GroupName, Req#set_view_group_req.stale, SetName, Retries]),
-            couch_ref_counter:drop(RefCounter),
             request_group(Pid, Req, Retries + 1)
         end;
     Error ->
@@ -493,42 +499,19 @@ handle_call({remove_replicas, Partitions}, _From, #state{replica_group = Replica
               [?set_name(State), ?type(State), ?group_id(State), Partitions]),
     {reply, ok, NewState, ?TIMEOUT};
 
-
-handle_call(#set_view_group_req{stale = false} = Req, From,
-        #state{
-            group = Group,
-            updater_pid = UpPid,
-            updater_state = UpState,
-            waiting_list = WaitList,
-            replica_partitions = ReplicaParts
-        } = State) ->
-    NewState = case UpPid of
-    nil ->
-        start_updater(State#state{waiting_list = [From | WaitList]});
-    _ when is_pid(UpPid), UpState =:= updating_passive ->
-        reply_with_group(Group, ReplicaParts, [From]),
-        State;
-    _ when is_pid(UpPid) ->
-        State#state{waiting_list = [From | WaitList]}
+handle_call(#set_view_group_req{} = Req, From, State) ->
+    #state{
+        group = Group,
+        pending_transition_waiters = Waiters
+    } = State,
+    State2 = case is_any_partition_pending(Req, Group) of
+    false ->
+        process_view_group_request(Req, From, State);
+    true ->
+        State#state{pending_transition_waiters = [{From, Req} | Waiters]}
     end,
-    inc_view_group_access_stats(Req, Group),
-    {noreply, NewState, ?TIMEOUT};
-
-handle_call(#set_view_group_req{stale = ok} = Req, From, #state{group = Group} = State) ->
-    reply_with_group(Group, State#state.replica_partitions, [From]),
-    inc_view_group_access_stats(Req, Group),
-    {noreply, State, ?TIMEOUT};
-
-handle_call(#set_view_group_req{stale = update_after} = Req, From, #state{group = Group} = State) ->
-    reply_with_group(Group, State#state.replica_partitions, [From]),
-    inc_view_group_access_stats(Req, Group),
-    case State#state.updater_pid of
-    Pid when is_pid(Pid) ->
-        {noreply, State};
-    nil ->
-        State2 = start_updater(State),
-        {noreply, State2, ?TIMEOUT}
-    end;
+    inc_view_group_access_stats(Req, State2#state.group),
+    {noreply, State2, ?TIMEOUT};
 
 handle_call(request_group, _From, #state{group = Group} = State) ->
     % Meant to be called only by this module and the compactor module.
@@ -873,20 +856,22 @@ terminate(Reason, State) ->
         [?set_name(State), ?type(State), ?group_id(State), Reason]),
     State2 = stop_cleaner(State),
     State3 = reply_all(State2, Reason),
-    catch couch_db_set:close(?db_set(State3)),
-    couch_util:shutdown_sync(State3#state.updater_pid),
-    couch_util:shutdown_sync(State3#state.compactor_pid),
-    couch_util:shutdown_sync(State3#state.compactor_file),
-    couch_util:shutdown_sync(State3#state.replica_group),
-    catch couch_file:only_snapshot_reads((State3#state.group)#set_view_group.fd),
+    State4 = notify_pending_transition_waiters(State3, {shutdown, Reason}),
+    catch couch_db_set:close(?db_set(State4)),
+    couch_util:shutdown_sync(State4#state.updater_pid),
+    couch_util:shutdown_sync(State4#state.compactor_pid),
+    couch_util:shutdown_sync(State4#state.compactor_file),
+    couch_util:shutdown_sync(State4#state.replica_group),
+    catch couch_file:only_snapshot_reads((State4#state.group)#set_view_group.fd),
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-%% Local Functions
 
-reply_with_group(Group0, ReplicaPartitions,WaitList) ->
+reply_with_group(_Group0, _ReplicaPartitions, []) ->
+    ok;
+reply_with_group(Group0, ReplicaPartitions, WaitList) ->
     #set_view_group{
         ref_counter = RefCnt,
         debug_info = DebugInfo
@@ -1088,7 +1073,7 @@ get_group_info(State) ->
         def_lang = Lang,
         views = Views
     } = Group,
-    PendingTrans = ?get_pending_transition(State),
+    PendingTrans = get_pending_transition(State),
     [Stats] = ets:lookup(?SET_VIEW_STATS_ETS, ?set_view_group_stats_key(Group)),
     JsonStats = {[
         {full_updates, Stats#set_view_group_stats.full_updates},
@@ -1338,7 +1323,7 @@ update_partition_states(ActiveList, PassiveList, CleanupList, State) ->
 merge_into_pending_transition(ActiveList, PassiveList, CleanupList, State) ->
     % Note: checking if there's an intersection between active, passive and
     % cleanup lists must have been done already.
-    Pending = ?get_pending_transition(State),
+    Pending = get_pending_transition(State),
     Pending2 = merge_pending_active(Pending, ActiveList),
     Pending3 = merge_pending_passive(Pending2, PassiveList),
     Pending4 = merge_pending_cleanup(Pending3, CleanupList),
@@ -1356,7 +1341,8 @@ merge_into_pending_transition(ActiveList, PassiveList, CleanupList, State) ->
         "    Cleanup partitions: ~w~n",
         [?set_name(State), ?type(State), ?group_id(State),
              ActivePending4, PassivePending4, CleanupPending4]),
-    maybe_apply_pending_transition(State2).
+    State3 = notify_pending_transition_waiters(State2),
+    maybe_apply_pending_transition(State3).
 
 
 merge_pending_active(Pending, ActiveList) ->
@@ -1378,7 +1364,7 @@ merge_pending_passive(Pending, PassiveList) ->
         passive = PassivePending,
         cleanup = CleanupPending
     } = Pending,
-    #set_view_transition{
+    Pending#set_view_transition{
         active = ordsets:subtract(ActivePending, PassiveList),
         passive = ordsets:union(PassivePending, PassiveList),
         cleanup = ordsets:subtract(CleanupPending, PassiveList)
@@ -1391,7 +1377,7 @@ merge_pending_cleanup(Pending, CleanupList) ->
         passive = PassivePending,
         cleanup = CleanupPending
     } = Pending,
-    #set_view_transition{
+    Pending#set_view_transition{
         active = ordsets:subtract(ActivePending, CleanupList),
         passive = ordsets:subtract(PassivePending, CleanupList),
         cleanup = ordsets:union(CleanupPending, CleanupList)
@@ -1532,7 +1518,7 @@ maybe_apply_pending_transition(State) ->
         active = ActivePending,
         passive = PassivePending,
         cleanup = CleanupPending
-    } = ?get_pending_transition(State),
+    } = get_pending_transition(State),
     InCleanup = partitions_still_in_cleanup(
         ActivePending ++ PassivePending, State#state.group),
     case InCleanup of
@@ -1550,10 +1536,57 @@ maybe_apply_pending_transition(State) ->
         State4 = set_pending_transition(State3, nil),
         State5 = persist_partition_states(
             State4, ActivePending, PassivePending, CleanupPending),
-        after_partition_states_updated(State5, UpdaterRunning);
+        State6 = notify_pending_transition_waiters(State5),
+        after_partition_states_updated(State6, UpdaterRunning);
     _ ->
         State
     end.
+
+
+notify_pending_transition_waiters(#state{pending_transition_waiters = []} = State) ->
+    State;
+notify_pending_transition_waiters(State) ->
+    #state{
+        pending_transition_waiters = TransWaiters,
+        group = Group,
+        replica_partitions = RepParts,
+        waiting_list = WaitList
+    } = State,
+    {TransWaiters2, WaitList2, GroupReplyList, TriggerGroupUpdate} =
+        lists:foldr(
+            fun({From, Req} = TransWaiter, {AccTrans, AccWait, ReplyAcc, AccTriggerUp}) ->
+                #set_view_group_req{stale = Stale} = Req,
+                case is_any_partition_pending(Req, Group) of
+                true ->
+                    {[TransWaiter | AccTrans], AccWait, ReplyAcc, AccTriggerUp};
+                false when Stale == ok ->
+                    {AccTrans, AccWait, [From | ReplyAcc], AccTriggerUp};
+                false when Stale == update_after ->
+                    {AccTrans, AccWait, [From | ReplyAcc], true};
+                false when Stale == false ->
+                    {AccTrans, [From | AccWait], ReplyAcc, true}
+                end
+            end,
+            {[], WaitList, [], false},
+            TransWaiters),
+    reply_with_group(Group, RepParts, GroupReplyList),
+    State2 = State#state{
+        pending_transition_waiters = TransWaiters2,
+        waiting_list = WaitList2
+    },
+    case TriggerGroupUpdate of
+    true ->
+        start_updater(State2);
+    false ->
+        State2
+    end.
+
+
+notify_pending_transition_waiters(#state{pending_transition_waiters = []} = State, _Reply) ->
+    State;
+notify_pending_transition_waiters(#state{pending_transition_waiters = Waiters} = State, Reply) ->
+    lists:foreach(fun(F) -> catch gen_server:reply(F, Reply) end, Waiters),
+    State#state{pending_transition_waiters = []}.
 
 
 set_passive_partitions([], Abitmask, Pbitmask, Seqs, PurgeSeqs) ->
@@ -2196,6 +2229,12 @@ inc_view_group_access_stats(_Req, _Group) ->
     ok.
 
 
+get_pending_transition(#state{group = Group}) ->
+    get_pending_transition(Group);
+get_pending_transition(#set_view_group{index_header = Header}) ->
+    Header#set_view_index_header.pending_transition.
+
+
 set_pending_transition(#state{group = Group} = State, Transition) ->
     #set_view_group{index_header = IndexHeader} = Group,
     IndexHeader2 = IndexHeader#set_view_index_header{
@@ -2203,3 +2242,58 @@ set_pending_transition(#state{group = Group} = State, Transition) ->
     },
     Group2 = Group#set_view_group{index_header = IndexHeader2},
     State#state{group = Group2}.
+
+
+is_any_partition_pending(Req, Group) ->
+    #set_view_group_req{wanted_partitions = WantedPartitions} = Req,
+    case get_pending_transition(Group) of
+    nil ->
+        false;
+    Trans ->
+        #set_view_transition{
+            active = ActivePending,
+            passive = PassivePending
+        } = Trans,
+        (not ordsets:is_disjoint(WantedPartitions, ActivePending)) orelse
+        (not ordsets:is_disjoint(WantedPartitions, PassivePending))
+    end.
+
+
+process_view_group_request(#set_view_group_req{stale = false}, From, State) ->
+    #state{
+        group = Group,
+        updater_pid = UpPid,
+        updater_state = UpState,
+        waiting_list = WaitList,
+        replica_partitions = ReplicaParts
+    } = State,
+    case UpPid of
+    nil ->
+        start_updater(State#state{waiting_list = [From | WaitList]});
+    _ when is_pid(UpPid), UpState =:= updating_passive ->
+        reply_with_group(Group, ReplicaParts, [From]),
+        State;
+    _ when is_pid(UpPid) ->
+        State#state{waiting_list = [From | WaitList]}
+    end;
+
+process_view_group_request(#set_view_group_req{stale = ok}, From, State) ->
+    #state{
+        group = Group,
+        replica_partitions = ReplicaParts
+    } = State,
+    reply_with_group(Group, ReplicaParts, [From]),
+    State;
+
+process_view_group_request(#set_view_group_req{stale = update_after}, From, State) ->
+    #state{
+        group = Group,
+        replica_partitions = ReplicaParts
+    } = State,
+    reply_with_group(Group, ReplicaParts, [From]),
+    case State#state.updater_pid of
+    Pid when is_pid(Pid) ->
+        State;
+    nil ->
+        start_updater(State)
+    end.

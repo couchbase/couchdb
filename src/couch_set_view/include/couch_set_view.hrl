@@ -60,7 +60,8 @@
 
 -record(set_view_group_req, {
     stale = updater_after,   % 'ok' | 'false' | 'update_after'
-    update_stats = false
+    update_stats = false,
+    wanted_partitions = []
 }).
 
 -define(LATEST_COUCH_SET_VIEW_HEADER_VERSION, 1).
