@@ -153,22 +153,51 @@ COUCHDB_PLT ?= couchdb.plt
 
 $(COUCHDB_PLT):
 	$(MAKE) all
-	dialyzer --output_plt $(COUCHDB_PLT) --build_plt -pa src/couchdb -pa src/couch_set_view -pa src/mapreduce --apps compiler crypto erts inets kernel os_mon sasl ssl stdlib xmerl syntax_tools public_key snmp tools hipe runtime_tools mnesia -c src/erlang-oauth src/etap src/mochiweb src/snappy
+	dialyzer --output_plt $(COUCHDB_PLT) --build_plt \
+		-pa src/lhttpc \
+		-pa src/couchdb \
+		-pa src/couch_set_view \
+		-pa src/mapreduce \
+		--apps \
+			compiler \
+			crypto \
+			erts \
+			inets \
+			kernel \
+			os_mon \
+			sasl \
+			ssl \
+			stdlib \
+			xmerl \
+			syntax_tools \
+			public_key \
+			snmp \
+			tools \
+			hipe \
+			runtime_tools \
+			mnesia \
+		-r \
+			src/erlang-oauth \
+			src/etap \
+			src/mochiweb \
+			src/snappy
 
 .PHONY: rebuild_plt
 rebuild_plt:
-	rm $(COUCHDB_PLT)
+	rm -f $(COUCHDB_PLT)
 	$(MAKE) $(COUCHDB_PLT)
 
 dialyzer: all $(COUCHDB_PLT)
 	dialyzer --plt $(COUCHDB_PLT) \
+		-Wrace_conditions \
 		-pa src/couchdb \
-		-pa src/couch_set_view/ebin \
+		-pa src/couch_set_view \
 		-pa src/mapreduce \
 		-pa src/lhttpc \
 		-pa src/snappy \
-		-c src/couchdb \
-		-c src/couch_set_view/ebin \
-		-c src/snappy \
-		-c src/lhttpc \
-		-c src/mapreduce
+		-r \
+			src/couchdb \
+			src/couch_set_view/ebin \
+			src/snappy \
+			src/lhttpc \
+			src/mapreduce
