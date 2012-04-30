@@ -43,6 +43,7 @@ source_files = \
     couch_config_writer.erl \
     couch_db.erl \
     couch_db_update_notifier.erl \
+    couch_db_consistency_check.erl \
     couch_db_update_notifier_sup.erl \
     couch_doc.erl \
     couch_drv.erl \
@@ -110,6 +111,7 @@ compiled_files = \
     couch_config.beam \
     couch_config_writer.beam \
     couch_db.beam \
+    couch_db_consistency_check.beam \
     couch_db_update_notifier.beam \
     couch_db_update_notifier_sup.beam \
     couch_doc.beam \

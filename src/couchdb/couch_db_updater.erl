@@ -16,8 +16,8 @@
 -export([btree_by_id_reduce/2,btree_by_seq_reduce/2]).
 -export([init/1,terminate/2,handle_call/3,handle_cast/2,code_change/3,handle_info/2]).
 
-%-export for testing
--export([db_header_to_header_bin/1]).
+
+-export([db_header_to_header_bin/1,header_bin_to_db_header/1,init_db/5]).
 
 -include("couch_db.hrl").
 
@@ -753,6 +753,12 @@ initial_copy_compact(#db{docinfo_by_seq_btree=SrcBySeq,
 start_copy_compact(#db{name=Name,filepath=Filepath,header=#db_header{purge_seq=PurgeSeq}}=Db) ->
     CompactFile = Filepath ++ ".compact",
     ?LOG_DEBUG("Compaction process spawned for db \"~s\"", [Name]),
+    case couch_config:get("couchdb", "consistency_check_precompacted", "false") of
+    "true" ->
+        couch_db_consistency_check:check_db_file(Db);
+    _ ->
+        ok
+    end,
     case couch_file:open(CompactFile) of
     {ok, Fd} ->
         Retry = true,
@@ -784,6 +790,12 @@ start_copy_compact(#db{name=Name,filepath=Filepath,header=#db_header{purge_seq=P
 
     NewDb3 = copy_compact(Db, NewDb2, Retry),
     close_db(NewDb3),
+    case couch_config:get("couchdb", "consistency_check_compacted", "false") of
+    "true" ->
+        couch_db_consistency_check:check_db_file(CompactFile);
+    _ ->
+        ok
+    end,
     case gen_server:call(
         Db#db.update_pid, {compact_done, CompactFile}, infinity) of
     ok ->
