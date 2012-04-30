@@ -85,14 +85,14 @@ update(Owner, Group) ->
         Duration;
     {'EXIT', _, Reason} ->
         exit({updater_error, Reason});
-    StopMsg when StopMsg =:= stop_after_active; StopMsg =:= stop_immediately ->
+    stop_immediately ->
         EmptyResult = #set_view_updater_result{
             group = Group,
             indexing_time = 0.0,
             blocked_time = timer:now_diff(os:timestamp(), BeforeEnterTs) / 1000000,
             state = updating_active,
             cleanup_kv_count = 0,
-            cleanup_time = 0,
+            cleanup_time = 0.0,
             inserted_ids = 0,
             deleted_ids = 0,
             inserted_kvs = 0,
@@ -284,9 +284,6 @@ wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime) ->
             deleted_kvs = WriterAcc#writer_acc.deleted_kvs
         },
         {updater_finished, Result};
-    stop_after_active ->
-        DocLoader ! stop_after_active,
-        wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime);
     stop_immediately ->
         DocLoader ! stop_immediately,
         wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime);
@@ -308,15 +305,15 @@ load_changes(Owner, Updater, Group, MapQueue, Writer, ActiveParts, PassiveParts)
 
     FoldFun = fun(PartId, PartType) ->
         {ok, Db} = couch_db:open_int(?dbname(SetName, PartId), []),
-        maybe_stop(PartType),
+        maybe_stop(),
         Since = couch_util:get_value(PartId, SinceSeqs),
         ?LOG_INFO("Reading changes (since sequence ~p) from ~s partition ~s to"
                   " update ~s set view group `~s` from set `~s`",
                   [Since, PartType, couch_db:name(Db), GroupType, DDocId, SetName]),
         ChangesWrapper = fun(DocInfo, _, ok) ->
-            maybe_stop(PartType),
+            maybe_stop(),
             load_doc(Db, PartId, DocInfo, MapQueue),
-            maybe_stop(PartType),
+            maybe_stop(),
             {ok, ok}
         end,
         {ok, _, ok} = couch_db:fast_reads(Db, fun() ->
@@ -336,18 +333,9 @@ load_changes(Owner, Updater, Group, MapQueue, Writer, ActiveParts, PassiveParts)
     couch_work_queue:close(MapQueue).
 
 
-maybe_stop(active) ->
+maybe_stop() ->
     receive
     stop_immediately ->
-        throw(stop)
-    after 0 ->
-        ok
-    end;
-maybe_stop(passive) ->
-    receive
-    stop_immediately ->
-        throw(stop);
-    stop_after_active ->
         throw(stop)
     after 0 ->
         ok

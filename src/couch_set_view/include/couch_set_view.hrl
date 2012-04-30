@@ -48,134 +48,161 @@
         (SetViewGroup#set_view_group.index_header)#set_view_index_header.replicas_on_transfer).
 
 
+-type partition_id()             :: non_neg_integer().
+-type staleness()                :: 'update_after' | 'ok' | 'false'.
+-type bitmask()                  :: non_neg_integer().
+-type update_seq()               :: non_neg_integer().
+-type btree_state()              :: 'nil' | tuple().
+-type partition_seq()            :: {partition_id(), update_seq()}.
+-type partition_seqs()           :: ordsets:ordset(partition_seq()).
+-type view_state()               :: {btree_state(), partition_seqs(), partition_seqs()}.
+-type set_view_group_type()      :: 'main' | 'replica'.
+-type set_view_ets_stats_key()   :: {binary(), binary(), binary(), set_view_group_type()}.
+-type ejson_object()             :: {[{binary() | atom(), term()}]}.
+-type set_view_updater_state()   :: 'updating_active' | 'updating_passive'.
+
+-type set_view_key()             :: {Key::term(), DocId::binary()}.
+-type set_view_value()           :: {partition_id(), Value::term()}.
+-type set_view_key_value()       :: {set_view_key(), set_view_value()}.
+-type set_view_reduction()       :: {Count::non_neg_integer(), bitmask()} |
+                                    {Count::non_neg_integer(), UserReductions::[term()], bitmask()}.
+
+-type set_view_btree_purge_fun() :: fun(('branch' | 'value',
+                                         set_view_reduction() | set_view_key_value(),
+                                         Acc::{'go', term()}) ->
+                                    {'purge', FinalAcc::{'go' | 'stop', term()}} |
+                                    {'keep', FinalAcc::{'go' | 'stop', term()}} |
+                                    {'partial_purge', FinalAcc::{'go' | 'stop', term()}} |
+                                    {'stop', FinalAcc::{'stop', term()}}).
+
+-type set_view_fold_fun()        :: fun((set_view_key_value(), Offset::term(), Acc::term()) ->
+                                    {'ok' | 'stop', FinalAcc::term()}).
+-type set_view_fold_reduce_fun() :: fun((set_view_key(), Reduction::term(), Acc::term()) ->
+                                    {'ok' | 'stop', FinalAcc::term()}).
+-type set_view_key_group_fun()   :: fun((set_view_key(), set_view_key()) -> boolean()).
+
+
 % Used to configure a new set view.
 -record(set_view_params, {
-    max_partitions = 0,
-    % list of initial active partitions (list of integers in the range 0 .. N - 1)
-    active_partitions = [],
-    % list of initial passive partitions (list of integers in the range 0 .. N - 1)
-    passive_partitions = [],
-    use_replica_index = false
+    max_partitions = 0         :: non_neg_integer(),
+    active_partitions = []     :: [partition_id()],
+    passive_partitions = []    :: [partition_id()],
+    use_replica_index = false  :: boolean()
 }).
 
 -record(set_view_group_req, {
-    stale = updater_after,   % 'ok' | 'false' | 'update_after'
-    update_stats = false,
-    wanted_partitions = []
+    stale = updater_after   :: staleness(),
+    update_stats = false    :: boolean(),
+    wanted_partitions = []  :: [partition_id()]
+}).
+
+-record(set_view_transition, {
+    active = []  :: ordsets:ordset(partition_id()),
+    passive = [] :: ordsets:ordset(partition_id()),
+    cleanup = [] :: ordsets:ordset(partition_id())
 }).
 
 -define(LATEST_COUCH_SET_VIEW_HEADER_VERSION, 1).
 
 -record(set_view_index_header, {
-    version = ?LATEST_COUCH_SET_VIEW_HEADER_VERSION,
-    % maximum number of partitions this set view supports
-    num_partitions = nil,  % nil means not yet defined
+    version = ?LATEST_COUCH_SET_VIEW_HEADER_VERSION :: non_neg_integer(),
+    % Maximum number of partitions this set view supports, nil means not yet defined.
+    num_partitions = nil                            :: 'nil' | non_neg_integer(),
     % active partitions bitmap
-    abitmask = 0,
+    abitmask = 0                                    :: bitmask(),
     % passive partitions bitmap
-    pbitmask = 0,
+    pbitmask = 0                                    :: bitmask(),
     % cleanup partitions bitmap
-    cbitmask = 0,
-    % update seq numbers from each partition, format: [ {PartitionId, Seq} ]
-    seqs = [],
-    % purge seq numbers from each partition, format: [ {PartitionId, Seq} ]
-    purge_seqs = [],
-    id_btree_state = nil,
-    view_states = nil,
-    has_replica = false,
-    replicas_on_transfer = [],
+    cbitmask = 0                                    :: bitmask(),
+    seqs = []                                       :: partition_seqs(),
+    purge_seqs = []                                 :: partition_seqs(),
+    id_btree_state = nil                            :: btree_state(),
+    view_states = nil                               :: 'nil' | [view_state()],
+    has_replica = false                             :: boolean(),
+    replicas_on_transfer = []                       :: ordsets:ordset(partition_id()),
     % Pending partition states transition.
-    pending_transition = nil  % 'nil' | #set_view_transition{}
-}).
-
--record(set_view_transition, {
-    active,
-    passive,
-    cleanup
-}).
-
--record(set_view_debug_info, {
-    original_abitmask,
-    original_pbitmask,
-    stats,
-    replica_partitions
+    pending_transition = nil                        :: 'nil' | #set_view_transition{}
 }).
 
 % Keep all stats values as valid EJSON (except ets key).
 -record(set_view_group_stats, {
-    ets_key,  % as generated by ?set_view_group_stats_key(#set_view_group{})
-    accesses = 0,  % # accesses for view streaming
-    full_updates = 0,
+    % as generated by ?set_view_group_stats_key(#set_view_group{})
+    ets_key                 :: set_view_ets_stats_key(),
+    % # accesses for view streaming
+    accesses = 0            :: non_neg_integer(),
+    full_updates = 0        :: non_neg_integer(),
     % # of updates that only finished updating the active partitions
     % (in the phase of updating passive partitions). Normally its value
     % is full_updates - 1.
-    partial_updates = 0,
+    partial_updates = 0     :: non_neg_integer(),
     % # of times the updater was forced to stop (because partition states
     % were updated) while it was still indexing the active partitions.
-    stopped_updates = 0,
-    compactions = 0,
+    stopped_updates = 0     :: non_neg_integer(),
+    compactions = 0         :: non_neg_integer(),
     % # of interrupted cleanups. Cleanups which were stopped (in order to do
     % higher priority tasks) and left the index in a not yet clean state (but
     % hopefully closer to a clean state).
-    cleanup_stops = 0,
-    cleanups = 0,
-    updater_cleanups = 0,
-    update_errors = 0,
-    update_history = [],
-    compaction_history = [],
-    cleanup_history = []
+    cleanup_stops = 0       :: non_neg_integer(),
+    cleanups = 0            :: non_neg_integer(),
+    updater_cleanups = 0    :: non_neg_integer(),
+    update_errors = 0       :: non_neg_integer(),
+    update_history = []     :: [ejson_object()],
+    compaction_history = [] :: [ejson_object()],
+    cleanup_history = []    :: [ejson_object()]
 }).
 
--record(set_view_group, {
-    sig = nil,
-    fd = nil,
-    set_name,
-    name,
-    def_lang,
-    design_options = [],
-    views,
-    lib,
-    id_btree = nil,
-    waiting_delayed_commit = nil,
-    ref_counter = nil,
-    index_header = nil,
-    db_set = nil,
-    type,     % 'main' | 'replica'
-    replica_group = nil,
-    replica_pid = nil,
-    debug_info = #set_view_debug_info{},
-    filepath = nil
+-record(set_view_debug_info, {
+    original_abitmask = 0             :: bitmask(),
+    original_pbitmask = 0             :: bitmask(),
+    stats = #set_view_group_stats{}   :: #set_view_group_stats{},
+    replica_partitions = []           :: ordsets:ordset(partition_id())
 }).
 
 -record(set_view, {
-    id_num,
-    % update seq numbers from each partition, format: [ {PartitionId, Seq} ]
-    update_seqs = [],
-    % purge seq numbers from each partition, format: [ {PartitionId, Seq} ]
-    purge_seqs = [],
-    map_names = [],
-    def,
-    btree = nil,
-    reduce_funs = [],
-    options = [],
-    ref
+    id_num = 0        :: non_neg_integer(),
+    update_seqs = []  :: partition_seqs(),
+    purge_seqs = []   :: partition_seqs(),
+    map_names = []    :: [binary()],
+    def = <<>>        :: binary(),
+    btree = nil       :: 'nil' | #btree{},
+    reduce_funs = []  :: [{binary(), binary()}],
+    options = []      :: [term()],
+    ref               :: reference()
+}).
+
+-record(set_view_group, {
+    sig = nil                           :: 'nil' | binary(),
+    fd = nil                            :: 'nil' | pid(),
+    set_name = <<>>                     :: binary(),
+    name = <<>>                         :: binary(),
+    design_options = []                 :: [any()],
+    views = []                          :: [#set_view{}],
+    id_btree = nil                      :: 'nil' | #btree{},
+    ref_counter = nil                   :: 'nil' | pid(),
+    index_header = nil                  :: 'nil' | #set_view_index_header{},
+    db_set = nil                        :: 'nil' | pid(),
+    type = main                         :: set_view_group_type(),
+    replica_group = nil                 :: 'nil' | #set_view_group{},
+    replica_pid = nil                   :: 'nil' | pid(),
+    debug_info = #set_view_debug_info{} :: #set_view_debug_info{},
+    filepath = ""                       :: string()
 }).
 
 -record(set_view_updater_result, {
-    group,
-    indexing_time :: float(),  % seconds (float)
-    blocked_time :: float(),   % seconds (float)
-    state,          % 'updating_active' | 'updating_passive'
-    cleanup_kv_count,
-    cleanup_time,   % seconds (float)
-    inserted_ids,
-    deleted_ids,
-    inserted_kvs,
-    deleted_kvs
+    group = #set_view_group{}  :: #set_view_group{},
+    indexing_time = 0.0        :: float(),  % seconds
+    blocked_time = 0.0         :: float(),  % seconds
+    state = updating_active    :: set_view_updater_state(),
+    cleanup_kv_count = 0       :: non_neg_integer(),
+    cleanup_time = 0.0         :: float(),  % seconds
+    inserted_ids = 0           :: non_neg_integer(),
+    deleted_ids = 0            :: non_neg_integer(),
+    inserted_kvs = 0           :: non_neg_integer(),
+    deleted_kvs = 0            :: non_neg_integer()
 }).
 
 -record(set_view_compactor_result, {
-    group,
-    compact_time,     % seconds (float)
-    cleanup_kv_count
+    group = #set_view_group{}  :: #set_view_group{},
+    compact_time = 0.0         :: float(), % seconds
+    cleanup_kv_count = 0       :: non_neg_integer()
 }).

@@ -29,6 +29,9 @@
 -include("couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
 
+-type init_args()   :: {string(), binary(), #set_view_group{}}.
+-type compact_fun() :: fun((#set_view_group{}, #set_view_group{}) -> no_return()).
+
 -define(TIMEOUT, 3000).
 -define(DELAYED_COMMIT_PERIOD, 5000).
 -define(MIN_CHANGES_AUTO_UPDATE, 20000).
@@ -51,21 +54,20 @@
 -define(MAX_HIST_SIZE, 20).
 
 -record(state, {
-    init_args,
-    replica_group = nil,
-    group,
-    updater_pid = nil,
-    % 'not_running' | 'starting' | 'updating_active' | 'updating_passive'
-    updater_state = not_running,
-    compactor_pid = nil,
-    compactor_file = nil,
-    compactor_fun = nil,
-    commit_ref = nil,
-    waiting_list = [],
-    cleaner_pid = nil,
-    shutdown = false,
-    replica_partitions = [],
-    pending_transition_waiters = []
+    init_args                          :: init_args(),
+    replica_group = nil                :: 'nil' | pid(),
+    group = #set_view_group{}          :: #set_view_group{},
+    updater_pid = nil                  :: 'nil' | pid(),
+    updater_state = not_running        :: set_view_updater_state() | 'not_running' | 'starting',
+    compactor_pid = nil                :: 'nil' | pid(),
+    compactor_file = nil               :: 'nil' | pid(),
+    compactor_fun = nil                :: 'nil' | compact_fun(),
+    commit_ref = nil                   :: 'nil' | reference(),
+    waiting_list = []                  :: [term()],
+    cleaner_pid = nil                  :: 'nil' | pid(),
+    shutdown = false                   :: boolean(),
+    replica_partitions = []            :: ordsets:ordset(partition_id()),
+    pending_transition_waiters = []    :: [{term(), #set_view_group_req{}}]
 }).
 
 -define(inc_stat(Group, S),
@@ -79,6 +81,8 @@
 
 
 % api methods
+-spec request_group(pid(), #set_view_group_req{}) ->
+                   {'ok', #set_view_group{}} | {'error', term()}.
 request_group(Pid, Req) ->
     #set_view_group_req{wanted_partitions = WantedPartitions} = Req,
     Req2 = Req#set_view_group_req{
@@ -86,7 +90,8 @@ request_group(Pid, Req) ->
     },
     request_group(Pid, Req2, 1).
 
-
+-spec request_group(pid(), #set_view_group_req{}, non_neg_integer()) ->
+                   {'ok', #set_view_group{}} | {'error', term()}.
 request_group(Pid, Req, Retries) ->
     case gen_server:call(Pid, Req, infinity) of
     {ok, Group, ActiveReplicasBitmask} ->
@@ -111,6 +116,8 @@ request_group(Pid, Req, Retries) ->
     end.
 
 
+-spec request_replica_group(pid(), bitmask(), #set_view_group_req{}) ->
+                           {'ok', #set_view_group{} | 'nil'} | 'retry'.
 request_replica_group(_RepPid, 0, _Req) ->
     {ok, nil};
 request_replica_group(RepPid, ActiveReplicasBitmask, Req) ->
@@ -124,6 +131,7 @@ request_replica_group(RepPid, ActiveReplicasBitmask, Req) ->
     end.
 
 
+-spec release_group(#set_view_group{}) -> no_return().
 release_group(#set_view_group{ref_counter = RefCounter, replica_group = RepGroup}) ->
     couch_ref_counter:drop(RefCounter),
     case RepGroup of
@@ -134,6 +142,7 @@ release_group(#set_view_group{ref_counter = RefCounter, replica_group = RepGroup
     end.
 
 
+-spec request_group_info(pid()) -> {'ok', [{term(), term()}]}.
 request_group_info(Pid) ->
     case gen_server:call(Pid, request_group_info, infinity) of
     {ok, GroupInfoList} ->
@@ -143,6 +152,7 @@ request_group_info(Pid) ->
     end.
 
 
+-spec get_data_size(pid()) -> {'ok', [{term(), term()}]}.
 get_data_size(Pid) ->
     case gen_server:call(Pid, get_data_size, infinity) of
     {ok, _Info} = Ok ->
@@ -152,7 +162,7 @@ get_data_size(Pid) ->
     end.
 
 
-% Returns 'ignore' or 'shutdown'.
+-spec partition_deleted(pid(), partition_id()) -> 'shutdown' | 'ignore'.
 partition_deleted(Pid, PartId) ->
     try
         gen_server:call(Pid, {partition_deleted, PartId}, infinity)
@@ -164,6 +174,7 @@ partition_deleted(Pid, PartId) ->
     end.
 
 
+-spec define_view(pid(), #set_view_params{}) -> 'ok' | {'error', term()}.
 define_view(Pid, Params) ->
     #set_view_params{
         max_partitions = NumPartitions,
@@ -187,10 +198,15 @@ define_view(Pid, Params) ->
             PassiveList, PassiveBitmask, UseReplicaIndex}, infinity).
 
 
+-spec is_view_defined(pid()) -> boolean().
 is_view_defined(Pid) ->
     gen_server:call(Pid, is_view_defined, infinity).
 
 
+-spec set_state(pid(),
+                [partition_id()],
+                [partition_id()],
+                [partition_id()]) -> 'ok' | {'error', term()}.
 set_state(_Pid, [], [], []) ->
     ok;
 set_state(Pid, ActivePartitions, PassivePartitions, CleanupPartitions) ->
@@ -217,6 +233,7 @@ set_state(Pid, ActivePartitions, PassivePartitions, CleanupPartitions) ->
     end.
 
 
+-spec add_replica_partitions(pid(), [partition_id()]) -> 'ok' | {'error', term()}.
 add_replica_partitions(_Pid, []) ->
     ok;
 add_replica_partitions(Pid, Partitions) ->
@@ -224,6 +241,7 @@ add_replica_partitions(Pid, Partitions) ->
     gen_server:call(Pid, {add_replicas, BitMask}, infinity).
 
 
+-spec remove_replica_partitions(pid(), [partition_id()]) -> 'ok' | {'error', term()}.
 remove_replica_partitions(_Pid, []) ->
     ok;
 remove_replica_partitions(Pid, Partitions) ->
@@ -400,7 +418,7 @@ handle_call({partition_deleted, PartId}, _From, #state{group = Group} = State) -
     end;
 
 handle_call(_Msg, _From, State) when not ?is_defined(State) ->
-    {reply, view_undefined, State};
+    {reply, {error, view_undefined}, State};
 
 handle_call({set_state, ActiveList, PassiveList, CleanupList}, _From, State) ->
     try
@@ -459,7 +477,7 @@ handle_call({remove_replicas, Partitions}, _From, #state{replica_group = Replica
     Common ->
         UpdaterWasRunning = is_pid(State#state.updater_pid),
         State2 = stop_cleaner(State),
-        #state{group = Group3} = State3 = stop_updater(State2, immediately),
+        #state{group = Group3} = State3 = stop_updater(State2),
         {ok, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs, NewPurgeSeqs} =
             set_cleanup_partitions(
                 Common,
@@ -551,7 +569,7 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
         cleanup_kv_count = CleanupKVCount
     } = Result,
 
-    case group_up_to_date(NewGroup0, State#state.group) of
+    case seqs_up_to_date(?set_seqs(NewGroup0), ?set_seqs(Group)) of
     true ->
         NewGroup = NewGroup0#set_view_group{
             index_header = get_index_header_data(NewGroup0)
@@ -572,7 +590,7 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
 
         %% cleanup old group
         unlink(CompactorPid),
-        drop_fd_ref_counter(RefCounter),
+        couch_ref_counter:drop(RefCounter),
         NewRefCounter = new_fd_ref_counter(NewGroup#set_view_group.fd),
         NewGroup2 = NewGroup#set_view_group{
             ref_counter = NewRefCounter,
@@ -600,7 +618,7 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
             end,
             group = NewGroup2
         },
-        inc_compactions(State2#state.group, Result),
+        inc_compactions(Result),
         {reply, ok, maybe_apply_pending_transition(State2), ?TIMEOUT};
     false ->
         ?LOG_INFO("Set view `~s`, ~s group `~s`, compaction still behind, retrying",
@@ -628,7 +646,7 @@ handle_cast({partial_update, Pid, NewGroup}, #state{updater_pid = Pid} = State) 
         (?set_cbitmask(State#state.group) =/= 0) andalso
         (State#state.waiting_list =:= []) of
     true ->
-        State2 = stop_updater(State, immediately),
+        State2 = stop_updater(State),
         NewState = maybe_apply_pending_transition(State2);
     false ->
         NewState = process_partial_update(State, NewGroup)
@@ -773,7 +791,7 @@ handle_info({'EXIT', Pid, {updater_finished, Result}}, #state{updater_pid = Pid}
     } = Result,
     ok = commit_header(NewGroup, false),
     reply_with_group(NewGroup, ReplicaParts, WaitList),
-    inc_updates(NewGroup, Result),
+    inc_updates(NewGroup, Result, false, false),
     ?LOG_INFO("Set view `~s`, ~s group `~s`, updater finished~n"
         "Indexing time: ~.3f seconds~n"
         "Blocked time:  ~.3f seconds~n"
@@ -869,6 +887,9 @@ code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 
+-spec reply_with_group(#set_view_group{},
+                       ordsets:ordset(partition_id()),
+                       [term()]) -> no_return().
 reply_with_group(_Group0, _ReplicaPartitions, []) ->
     ok;
 reply_with_group(Group0, ReplicaPartitions, WaitList) ->
@@ -893,6 +914,7 @@ reply_with_group(Group0, ReplicaPartitions, WaitList) ->
     end, WaitList).
 
 
+-spec reply_all(#state{}, term()) -> #state{}.
 reply_all(#state{waiting_list = []} = State, _Reply) ->
     State;
 reply_all(#state{waiting_list = WaitList} = State, Reply) ->
@@ -900,6 +922,8 @@ reply_all(#state{waiting_list = WaitList} = State, Reply) ->
     State#state{waiting_list = []}.
 
 
+-spec prepare_group(init_args(), boolean()) -> {'ok', #set_view_group{}} |
+                                               {'error', atom()}.
 prepare_group({RootDir, SetName, #set_view_group{sig = Sig, type = Type} = Group0}, ForceReset)->
     Filepath = find_index_file(RootDir, Group0),
     Group = Group0#set_view_group{filepath = Filepath},
@@ -941,6 +965,8 @@ prepare_group({RootDir, SetName, #set_view_group{sig = Sig, type = Type} = Group
         Error
     end.
 
+
+-spec get_index_header_data(#set_view_group{}) -> #set_view_index_header{}.
 get_index_header_data(Group) ->
     #set_view_group{
         id_btree = IdBtree,
@@ -959,17 +985,22 @@ get_index_header_data(Group) ->
         view_states = ViewStates
     }.
 
+
+-spec hex_sig(binary()) -> string().
 hex_sig(GroupSig) ->
     couch_util:to_hex(?b2l(GroupSig)).
 
 
-base_index_file_name(Group, Type) when Type =:= main; Type =:= replica ->
+-spec base_index_file_name(#set_view_group{}, set_view_group_type()) -> string().
+base_index_file_name(Group, Type) ->
     atom_to_list(Type) ++ "_" ++ hex_sig(Group#set_view_group.sig) ++ ".view".
 
 
+-spec find_index_file(string(), #set_view_group{}) -> string().
 find_index_file(RootDir, Group) ->
     find_index_file(RootDir, Group, Group#set_view_group.type).
 
+-spec find_index_file(string(), #set_view_group{}, set_view_group_type()) -> string().
 find_index_file(RootDir, Group, Type) ->
     DesignRoot = couch_set_view:set_index_dir(RootDir, Group#set_view_group.set_name),
     BaseName = base_index_file_name(Group, Type),
@@ -1002,6 +1033,7 @@ find_index_file(RootDir, Group, Type) ->
     end.
 
 
+-spec delete_index_file(string(), #set_view_group{}, set_view_group_type()) -> no_return().
 delete_index_file(RootDir, Group, Type) ->
     BaseName = base_index_file_name(Group, Type),
     lists:foreach(
@@ -1009,19 +1041,21 @@ delete_index_file(RootDir, Group, Type) ->
         filelib:wildcard(BaseName ++ ".[0-9]*")).
 
 
+-spec compact_file_name(#state{} | #set_view_group{}) -> string().
 compact_file_name(#state{group = Group}) ->
     compact_file_name(Group);
 compact_file_name(#set_view_group{filepath = CurFilepath}) ->
     CurFilepath ++ ".compact".
 
 
+-spec increment_filepath(#set_view_group{}) -> string().
 increment_filepath(#set_view_group{filepath = CurFilepath}) ->
     [Suffix | Rest] = lists:reverse(string:tokens(CurFilepath, ".")),
     NewSuffix = integer_to_list(list_to_integer(Suffix) + 1),
     string:join(lists:reverse(Rest), ".") ++ "." ++ NewSuffix.
 
 
-
+-spec open_index_file(string()) -> {'ok', pid()} | {'error', atom()}.
 open_index_file(Filepath) ->
     case do_open_index_file(Filepath) of
     {ok, Fd} ->
@@ -1070,7 +1104,6 @@ get_group_info(State) ->
         fd = Fd,
         sig = GroupSig,
         id_btree = Btree,
-        def_lang = Lang,
         views = Views
     } = Group,
     PendingTrans = get_pending_transition(State),
@@ -1091,7 +1124,6 @@ get_group_info(State) ->
     {ok, Size} = couch_file:bytes(Fd),
     [
         {signature, ?l2b(hex_sig(GroupSig))},
-        {language, Lang},
         {disk_size, Size},
         {data_size, view_group_data_size(Btree, Views)},
         {updater_running, UpdaterPid /= nil},
@@ -1161,6 +1193,7 @@ get_data_size_info(State) ->
     end.
 
 
+-spec view_group_data_size(#btree{}, [#set_view{}]) -> non_neg_integer().
 view_group_data_size(IdBtree, Views) ->
     lists:foldl(
         fun(#set_view{btree = Btree}, Acc) ->
@@ -1170,6 +1203,7 @@ view_group_data_size(IdBtree, Views) ->
         Views).
 
 
+-spec reset_group(#set_view_group{}) -> #set_view_group{}.
 reset_group(#set_view_group{views = Views} = Group) ->
     Views2 = [View#set_view{btree = nil} || View <- Views],
     Group#set_view_group{
@@ -1179,6 +1213,8 @@ reset_group(#set_view_group{views = Views} = Group) ->
         views = Views2
     }.
 
+
+-spec reset_file(pid(), binary(), #set_view_group{}) -> #set_view_group{}.
 reset_file(Fd, SetName, #set_view_group{
         sig = Sig, name = Name, index_header = Header} = Group) ->
     ?LOG_DEBUG("Resetting group index `~s` in set `~s`", [Name, SetName]),
@@ -1186,7 +1222,11 @@ reset_file(Fd, SetName, #set_view_group{
     ok = couch_file:write_header(Fd, {Sig, nil}),
     init_group(Fd, reset_group(Group), Header).
 
-init_group(Fd, #set_view_group{views = Views}=Group, nil) ->
+
+-spec init_group(pid(),
+                 #set_view_group{},
+                 'nil' | #set_view_index_header{}) -> #set_view_group{}.
+init_group(Fd, #set_view_group{views = Views} = Group, nil) ->
     EmptyHeader = #set_view_index_header{
         view_states = [{nil, [], []} || _ <- Views]
     },
@@ -1252,6 +1292,7 @@ init_group(Fd, #set_view_group{views = Views0} = Group, IndexHeader) ->
     }.
 
 
+-spec commit_header(#set_view_group{}, boolean()) -> 'ok'.
 commit_header(Group, Sync) ->
     Header = {Group#set_view_group.sig, get_index_header_data(Group)},
     ok = couch_file:write_header(Group#set_view_group.fd, Header),
@@ -1263,21 +1304,22 @@ commit_header(Group, Sync) ->
     end.
 
 
-group_up_to_date(#set_view_group{} = NewGroup, #set_view_group{} = CurGroup) ->
-    compare_seqs(?set_seqs(NewGroup), ?set_seqs(CurGroup)).
-
-
-compare_seqs([], []) ->
+-spec seqs_up_to_date(partition_seqs(), partition_seqs()) -> boolean().
+seqs_up_to_date([], []) ->
     true;
-compare_seqs([{PartId, SeqA} | RestA], [{PartId, SeqB} | RestB]) ->
+seqs_up_to_date([{PartId, SeqA} | RestA], [{PartId, SeqB} | RestB]) ->
     case SeqA - SeqB of
     Greater when Greater >= 0 ->
-        compare_seqs(RestA, RestB);
+        seqs_up_to_date(RestA, RestB);
     _Smaller ->
         false
     end.
 
 
+-spec maybe_update_partition_states(ordsets:ordset(partition_id()),
+                                    ordsets:ordset(partition_id()),
+                                    ordsets:ordset(partition_id()),
+                                    #state{}) -> #state{}.
 maybe_update_partition_states(ActiveList, PassiveList, CleanupList, State) ->
     #state{group = Group} = State,
     ActiveMask = couch_set_view_util:build_bitmask(ActiveList),
@@ -1311,6 +1353,10 @@ maybe_update_partition_states(ActiveList, PassiveList, CleanupList, State) ->
     end.
 
 
+-spec update_partition_states(ordsets:ordset(partition_id()),
+                              ordsets:ordset(partition_id()),
+                              ordsets:ordset(partition_id()),
+                              #state{}) -> #state{}.
 update_partition_states(ActiveList, PassiveList, CleanupList, State) ->
     case ?have_pending_transition(State) of
     true ->
@@ -1320,6 +1366,10 @@ update_partition_states(ActiveList, PassiveList, CleanupList, State) ->
     end.
 
 
+-spec merge_into_pending_transition(ordsets:ordset(partition_id()),
+                                    ordsets:ordset(partition_id()),
+                                    ordsets:ordset(partition_id()),
+                                    #state{}) -> #state{}.
 merge_into_pending_transition(ActiveList, PassiveList, CleanupList, State) ->
     % Note: checking if there's an intersection between active, passive and
     % cleanup lists must have been done already.
@@ -1345,6 +1395,9 @@ merge_into_pending_transition(ActiveList, PassiveList, CleanupList, State) ->
     maybe_apply_pending_transition(State3).
 
 
+-spec merge_pending_active(#set_view_transition{},
+                           ordsets:ordset(partition_id())) ->
+                                  #set_view_transition{}.
 merge_pending_active(Pending, ActiveList) ->
     #set_view_transition{
         active = ActivePending,
@@ -1358,6 +1411,9 @@ merge_pending_active(Pending, ActiveList) ->
     }.
 
 
+-spec merge_pending_passive(#set_view_transition{},
+                            ordsets:ordset(partition_id())) ->
+                                   #set_view_transition{}.
 merge_pending_passive(Pending, PassiveList) ->
     #set_view_transition{
         active = ActivePending,
@@ -1371,6 +1427,9 @@ merge_pending_passive(Pending, PassiveList) ->
     }.
 
 
+-spec merge_pending_cleanup(#set_view_transition{},
+                            ordsets:ordset(partition_id())) ->
+                                   #set_view_transition{}.
 merge_pending_cleanup(Pending, CleanupList) ->
     #set_view_transition{
         active = ActivePending,
@@ -1384,10 +1443,14 @@ merge_pending_cleanup(Pending, CleanupList) ->
     }.
 
 
+-spec do_update_partition_states(ordsets:ordset(partition_id()),
+                                 ordsets:ordset(partition_id()),
+                                 ordsets:ordset(partition_id()),
+                                 #state{}) -> #state{}.
 do_update_partition_states(ActiveList, PassiveList, CleanupList, State) ->
     UpdaterRunning = is_pid(State#state.updater_pid),
     State2 = stop_cleaner(State),
-    #state{group = Group3} = State3 = stop_updater(State2, immediately),
+    #state{group = Group3} = State3 = stop_updater(State2),
     InCleanup = partitions_still_in_cleanup(ActiveList ++ PassiveList, Group3),
     case InCleanup of
     [] ->
@@ -1412,6 +1475,7 @@ do_update_partition_states(ActiveList, PassiveList, CleanupList, State) ->
     after_partition_states_updated(State4, UpdaterRunning).
 
 
+-spec after_partition_states_updated(#state{}, boolean()) -> #state{}.
 after_partition_states_updated(State, UpdaterWasRunning) ->
     case ?type(State) of
     main ->
@@ -1437,6 +1501,10 @@ after_partition_states_updated(State, UpdaterWasRunning) ->
     end.
 
 
+-spec persist_partition_states(#state{},
+                               ordsets:ordset(partition_id()),
+                               ordsets:ordset(partition_id()),
+                               ordsets:ordset(partition_id())) -> #state{}.
 persist_partition_states(State, ActiveList, PassiveList, CleanupList) ->
     #state{
         group = Group,
@@ -1511,6 +1579,7 @@ persist_partition_states(State, ActiveList, PassiveList, CleanupList) ->
     State2.
 
 
+-spec maybe_apply_pending_transition(#state{}) -> #state{}.
 maybe_apply_pending_transition(State) when not ?have_pending_transition(State) ->
     State;
 maybe_apply_pending_transition(State) ->
@@ -1532,7 +1601,7 @@ maybe_apply_pending_transition(State) ->
                 ActivePending, PassivePending, CleanupPending]),
         UpdaterRunning = is_pid(State#state.updater_pid),
         State2 = stop_cleaner(State),
-        State3 = stop_updater(State2, immediately),
+        State3 = stop_updater(State2),
         State4 = set_pending_transition(State3, nil),
         State5 = persist_partition_states(
             State4, ActivePending, PassivePending, CleanupPending),
@@ -1543,6 +1612,7 @@ maybe_apply_pending_transition(State) ->
     end.
 
 
+-spec notify_pending_transition_waiters(#state{}) -> #state{}.
 notify_pending_transition_waiters(#state{pending_transition_waiters = []} = State) ->
     State;
 notify_pending_transition_waiters(State) ->
@@ -1582,6 +1652,7 @@ notify_pending_transition_waiters(State) ->
     end.
 
 
+-spec notify_pending_transition_waiters(#state{}, term()) -> #state{}.
 notify_pending_transition_waiters(#state{pending_transition_waiters = []} = State, _Reply) ->
     State;
 notify_pending_transition_waiters(#state{pending_transition_waiters = Waiters} = State, Reply) ->
@@ -1589,6 +1660,13 @@ notify_pending_transition_waiters(#state{pending_transition_waiters = Waiters} =
     State#state{pending_transition_waiters = []}.
 
 
+-spec set_passive_partitions(ordsets:ordset(partition_id()),
+                             bitmask(),
+                             bitmask(),
+                             partition_seqs(),
+                             partition_seqs()) ->
+                                    {'ok', bitmask(), bitmask(),
+                                     partition_seqs(), partition_seqs()}.
 set_passive_partitions([], Abitmask, Pbitmask, Seqs, PurgeSeqs) ->
     {ok, Abitmask, Pbitmask, Seqs, PurgeSeqs};
 
@@ -1611,6 +1689,13 @@ set_passive_partitions([PartId | Rest], Abitmask, Pbitmask, Seqs, PurgeSeqs) ->
     end.
 
 
+-spec set_active_partitions(ordsets:ordset(partition_id()),
+                            bitmask(),
+                            bitmask(),
+                            partition_seqs(),
+                            partition_seqs()) ->
+                                   {'ok', bitmask(), bitmask(),
+                                    partition_seqs(), partition_seqs()}.
 set_active_partitions([], Abitmask, Pbitmask, Seqs, PurgeSeqs) ->
     {ok, Abitmask, Pbitmask, Seqs, PurgeSeqs};
 
@@ -1633,6 +1718,14 @@ set_active_partitions([PartId | Rest], Abitmask, Pbitmask, Seqs, PurgeSeqs) ->
     end.
 
 
+-spec set_cleanup_partitions(ordsets:ordset(partition_id()),
+                             bitmask(),
+                             bitmask(),
+                             bitmask(),
+                             partition_seqs(),
+                             partition_seqs()) ->
+                                    {'ok', bitmask(), bitmask(), bitmask(),
+                                     partition_seqs(), partition_seqs()}.
 set_cleanup_partitions([], Abitmask, Pbitmask, Cbitmask, Seqs, PurgeSeqs) ->
     {ok, Abitmask, Pbitmask, Cbitmask, Seqs, PurgeSeqs};
 
@@ -1662,7 +1755,16 @@ set_cleanup_partitions([PartId | Rest], Abitmask, Pbitmask, Cbitmask, Seqs, Purg
     end.
 
 
-update_header(State, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs, NewPurgeSeqs, NewRelicasOnTransfer, NewReplicaParts) ->
+-spec update_header(#state{},
+                    bitmask(),
+                    bitmask(),
+                    bitmask(),
+                    partition_seqs(),
+                    partition_seqs(),
+                    ordsets:ordset(partition_id()),
+                    ordsets:ordset(partition_id())) -> #state{}.
+update_header(State, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs, NewPurgeSeqs,
+              NewRelicasOnTransfer, NewReplicaParts) ->
     #state{
         group = #set_view_group{
             index_header =
@@ -1734,6 +1836,7 @@ update_header(State, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs, NewPurgeSeq
     NewState.
 
 
+-spec maybe_start_cleaner(#state{}) -> #state{}.
 maybe_start_cleaner(#state{cleaner_pid = Pid} = State) when is_pid(Pid) ->
     State;
 maybe_start_cleaner(#state{group = Group} = State) ->
@@ -1749,6 +1852,7 @@ maybe_start_cleaner(#state{group = Group} = State) ->
     end.
 
 
+-spec stop_cleaner(#state{}) -> #state{}.
 stop_cleaner(#state{cleaner_pid = nil} = State) ->
     State;
 stop_cleaner(#state{cleaner_pid = Pid, group = OldGroup} = State) when is_pid(Pid) ->
@@ -1780,6 +1884,7 @@ stop_cleaner(#state{cleaner_pid = Pid, group = OldGroup} = State) when is_pid(Pi
     end.
 
 
+-spec cleaner(#state{}) -> {'clean_group', #set_view_group{}, non_neg_integer(), float()}.
 cleaner(#state{group = Group}) ->
     #set_view_group{
         index_header = Header,
@@ -1816,6 +1921,11 @@ cleaner(#state{group = Group}) ->
     {clean_group, NewGroup, TotalPurgedCount, Duration}.
 
 
+-spec clean_views('stop' | 'go',
+                  set_view_btree_purge_fun(),
+                  [#set_view{}],
+                  non_neg_integer(),
+                  [#set_view{}]) -> {non_neg_integer(), [#set_view{}]}.
 clean_views(_, _, [], Count, Acc) ->
     {Count, lists:reverse(Acc)};
 clean_views(stop, _, Rest, Count, Acc) ->
@@ -1829,11 +1939,13 @@ clean_views(go, PurgeFun, [#set_view{btree = Btree} = View | Rest], Count, Acc) 
     clean_views(Go, PurgeFun, Rest, PurgedCount, NewAcc).
 
 
+-spec index_needs_update(#state{}) -> boolean().
 index_needs_update(#state{group = Group} = State) ->
     {ok, CurSeqs} = couch_db_set:get_seqs(?db_set(State)),
     CurSeqs > ?set_seqs(Group).
 
 
+-spec make_partition_lists(#set_view_group{}) -> {[partition_id()], [partition_id()]}.
 make_partition_lists(Group) ->
     make_partition_lists(?set_seqs(Group), ?set_abitmask(Group), ?set_pbitmask(Group), [], []).
 
@@ -1850,6 +1962,7 @@ make_partition_lists([{PartId, _} | Rest], Abitmask, Pbitmask, Active, Passive) 
     end.
 
 
+-spec start_compactor(#state{}, compact_fun()) -> #state{}.
 start_compactor(State, CompactFun) ->
     #state{group = Group} = State2 = stop_cleaner(State),
     ?LOG_INFO("Set view `~s`, ~s group `~s`, compaction starting",
@@ -1867,6 +1980,7 @@ start_compactor(State, CompactFun) ->
     }.
 
 
+-spec restart_compactor(#state{}, string()) -> #state{}.
 restart_compactor(#state{compactor_pid = nil} = State, _Reason) ->
     State;
 restart_compactor(#state{compactor_pid = Pid, compactor_file = CompactFd} = State, Reason) ->
@@ -1883,29 +1997,20 @@ restart_compactor(#state{compactor_pid = Pid, compactor_file = CompactFd} = Stat
     start_compactor(State, State#state.compactor_fun).
 
 
+-spec compact_group(#state{}) -> #set_view_group{}.
 compact_group(#state{group = Group} = State) ->
     CompactFilepath = compact_file_name(State),
     {ok, Fd} = open_index_file(CompactFilepath),
     reset_file(Fd, ?set_name(State), Group#set_view_group{filepath = CompactFilepath}).
 
 
-stop_updater(State) ->
-    stop_updater(State, after_active_indexed).
-
-stop_updater(#state{updater_pid = nil} = State, _When) ->
+-spec stop_updater(#state{}) -> #state{}.
+stop_updater(#state{updater_pid = nil} = State) ->
     State;
-stop_updater(#state{updater_pid = Pid} = State, When) ->
-    case When of
-    after_active_indexed ->
-        Pid ! stop_after_active,
-        ?LOG_INFO("Stopping updater for set view `~s`, ~s group `~s`, as soon "
-            "as all active partitions are processed",
-            [?set_name(State), ?type(State), ?group_id(State)]);
-    immediately ->
-        Pid ! stop_immediately,
-        ?LOG_INFO("Stopping updater for set view `~s`, ~s group `~s`, immediately",
-            [?set_name(State), ?type(State), ?group_id(State)])
-    end,
+stop_updater(#state{updater_pid = Pid} = State) when is_pid(Pid) ->
+    Pid ! stop_immediately,
+    ?LOG_INFO("Stopping updater for set view `~s`, ~s group `~s`",
+        [?set_name(State), ?type(State), ?group_id(State)]),
     receive
     {'EXIT', Pid, {updater_finished, Result}} ->
         #set_view_updater_result{
@@ -1965,6 +2070,7 @@ stop_updater(#state{updater_pid = Pid} = State, When) ->
     end.
 
 
+-spec start_updater(#state{}) -> #state{}.
 start_updater(#state{updater_pid = Pid} = State) when is_pid(Pid) ->
     State;
 start_updater(#state{updater_pid = nil, updater_state = not_running} = State) ->
@@ -1987,6 +2093,7 @@ start_updater(#state{updater_pid = nil, updater_state = not_running} = State) ->
     end.
 
 
+-spec do_start_updater(#state{}) -> #state{}.
 do_start_updater(State) ->
     #state{group = Group} = State2 = stop_cleaner(State),
     ?LOG_INFO("Starting updater for set view `~s`, ~s group `~s`",
@@ -1998,9 +2105,14 @@ do_start_updater(State) ->
     }.
 
 
+-spec partitions_still_in_cleanup([partition_id()],
+                                  #set_view_group{}) -> [partition_id()].
 partitions_still_in_cleanup(Parts, Group) ->
     partitions_still_in_cleanup(Parts, Group, []).
 
+-spec partitions_still_in_cleanup([partition_id()],
+                                  #set_view_group{},
+                                  [partition_id()]) -> [partition_id()].
 partitions_still_in_cleanup([], _Group, Acc) ->
     lists:reverse(Acc);
 partitions_still_in_cleanup([PartId | Rest], Group, Acc) ->
@@ -2013,18 +2125,21 @@ partitions_still_in_cleanup([PartId | Rest], Group, Acc) ->
     end.
 
 
+-spec open_replica_group(init_args()) -> pid().
 open_replica_group({RootDir, SetName, Group} = _InitArgs) ->
     ReplicaArgs = {RootDir, SetName, Group#set_view_group{type = replica}},
     {ok, Pid} = proc_lib:start_link(?MODULE, init, [ReplicaArgs]),
     Pid.
 
 
+-spec get_replica_partitions(pid()) -> ordsets:ordset(partition_id()).
 get_replica_partitions(ReplicaPid) ->
     {ok, Group} = gen_server:call(ReplicaPid, request_group, infinity),
     ordsets:from_list(couch_set_view_util:decode_bitmask(
         ?set_abitmask(Group) bor ?set_pbitmask(Group))).
 
 
+-spec maybe_update_replica_index(#state{}) -> #state{}.
 maybe_update_replica_index(#state{updater_pid = Pid} = State) when is_pid(Pid) ->
     State;
 maybe_update_replica_index(#state{group = Group, updater_state = not_running} = State) ->
@@ -2043,6 +2158,7 @@ maybe_update_replica_index(#state{group = Group, updater_state = not_running} = 
     end.
 
 
+-spec maybe_fix_replica_group(pid(), #set_view_group{}) -> 'ok'.
 maybe_fix_replica_group(ReplicaPid, Group) ->
     {ok, RepGroup} = gen_server:call(ReplicaPid, request_group, infinity),
     RepGroupActive = couch_set_view_util:decode_bitmask(?set_abitmask(RepGroup)),
@@ -2070,18 +2186,21 @@ maybe_fix_replica_group(ReplicaPid, Group) ->
     ok = set_state(ReplicaPid, ActiveList, [], CleanupList).
 
 
+-spec schedule_commit(#state{}) -> reference().
 schedule_commit(#state{commit_ref = Ref}) when is_reference(Ref) ->
     Ref;
 schedule_commit(_State) ->
     erlang:send_after(?DELAYED_COMMIT_PERIOD, self(), delayed_commit).
 
 
+-spec cancel_commit(#state{}) -> no_return().
 cancel_commit(#state{commit_ref = Ref}) when is_reference(Ref) ->
     erlang:cancel_timer(Ref);
 cancel_commit(_State) ->
     ok.
 
 
+-spec process_partial_update(#state{}, #set_view_group{}) -> #state{}.
 process_partial_update(#state{group = Group} = State, NewGroup) ->
     ReplicasTransferred = ordsets:subtract(
         ?set_replicas_on_transfer(Group), ?set_replicas_on_transfer(NewGroup)),
@@ -2105,9 +2224,10 @@ process_partial_update(#state{group = Group} = State, NewGroup) ->
     }.
 
 
-inc_updates(Group, UpdaterResult) ->
-    inc_updates(Group, UpdaterResult, false, false).
-
+-spec inc_updates(#set_view_group{},
+                  #set_view_updater_result{},
+                  boolean(),
+                  boolean()) -> no_return().
 inc_updates(Group, UpdaterResult, PartialUpdate, ForcedStop) ->
     [Stats] = ets:lookup(?SET_VIEW_STATS_ETS, ?set_view_group_stats_key(Group)),
     #set_view_group_stats{update_history = Hist} = Stats,
@@ -2165,13 +2285,17 @@ inc_updates(Group, UpdaterResult, PartialUpdate, ForcedStop) ->
     end.
 
 
+-spec inc_cleanups(#set_view_group{},
+                   float(),
+                   non_neg_integer()) -> no_return().
 inc_cleanups(Group, Duration, Count) when is_record(Group, set_view_group) ->
     [Stats] = ets:lookup(?SET_VIEW_STATS_ETS, ?set_view_group_stats_key(Group)),
-    inc_cleanups(Stats, Duration, Count, false);
-
-inc_cleanups(Stats, Duration, Count) ->
     inc_cleanups(Stats, Duration, Count, false).
 
+-spec inc_cleanups(#set_view_group_stats{},
+                   float(),
+                   non_neg_integer(),
+                   boolean()) -> no_return().
 inc_cleanups(#set_view_group_stats{cleanup_history = Hist} = Stats, Duration, Count, ByUpdater) ->
     Entry = {[
         {<<"duration">>, Duration},
@@ -2190,13 +2314,15 @@ inc_cleanups(#set_view_group_stats{cleanup_history = Hist} = Stats, Duration, Co
     true = ets:insert(?SET_VIEW_STATS_ETS, Stats2).
 
 
-inc_compactions(Group, Result) ->
-    [Stats] = ets:lookup(?SET_VIEW_STATS_ETS, ?set_view_group_stats_key(Group)),
-    #set_view_group_stats{compaction_history = Hist} = Stats,
+-spec inc_compactions(#set_view_compactor_result{}) -> no_return().
+inc_compactions(Result) ->
     #set_view_compactor_result{
+        group = Group,
         compact_time = Duration,
         cleanup_kv_count = CleanupKVCount
     } = Result,
+    [Stats] = ets:lookup(?SET_VIEW_STATS_ETS, ?set_view_group_stats_key(Group)),
+    #set_view_group_stats{compaction_history = Hist} = Stats,
     Entry = {[
         {<<"duration">>, Duration},
         {<<"cleanup_kv_count">>, CleanupKVCount}
@@ -2214,27 +2340,29 @@ inc_compactions(Group, Result) ->
     true = ets:insert(?SET_VIEW_STATS_ETS, Stats2).
 
 
+-spec new_fd_ref_counter(pid()) -> pid().
 new_fd_ref_counter(Fd) ->
     {ok, RefCounter} = couch_ref_counter:start([Fd]),
     RefCounter.
 
 
-drop_fd_ref_counter(RefCounter) ->
-    couch_ref_counter:drop(RefCounter).
-
-
+-spec inc_view_group_access_stats(#set_view_group_req{},
+                                  #set_view_group{}) -> no_return().
 inc_view_group_access_stats(#set_view_group_req{update_stats = true}, Group) ->
     ?inc_accesses(Group);
 inc_view_group_access_stats(_Req, _Group) ->
     ok.
 
 
+-spec get_pending_transition(#state{} | #set_view_group{}) ->
+                                    #set_view_transition{} | 'nil'.
 get_pending_transition(#state{group = Group}) ->
     get_pending_transition(Group);
 get_pending_transition(#set_view_group{index_header = Header}) ->
     Header#set_view_index_header.pending_transition.
 
 
+-spec set_pending_transition(#state{}, #set_view_transition{} | 'nil') -> #state{}.
 set_pending_transition(#state{group = Group} = State, Transition) ->
     #set_view_group{index_header = IndexHeader} = Group,
     IndexHeader2 = IndexHeader#set_view_index_header{
@@ -2244,6 +2372,7 @@ set_pending_transition(#state{group = Group} = State, Transition) ->
     State#state{group = Group2}.
 
 
+-spec is_any_partition_pending(#set_view_group_req{}, #set_view_group{}) -> boolean().
 is_any_partition_pending(Req, Group) ->
     #set_view_group_req{wanted_partitions = WantedPartitions} = Req,
     case get_pending_transition(Group) of
@@ -2259,6 +2388,7 @@ is_any_partition_pending(Req, Group) ->
     end.
 
 
+-spec process_view_group_request(#set_view_group_req{}, term(), #state{}) -> #state{}.
 process_view_group_request(#set_view_group_req{stale = false}, From, State) ->
     #state{
         group = Group,

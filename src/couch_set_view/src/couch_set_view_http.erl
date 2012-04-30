@@ -186,6 +186,11 @@ output_map_view(Req, View, Group, QueryArgs) ->
         finish_view_fold(Req, RowCount, RedCountFun(LastReduce), FoldResult)
     end).
 
+-spec output_reduce_view(term(),
+                         {'reduce', non_neg_integer(), #set_view{}} | #set_view{},
+                         #set_view_group{},
+                         #view_query_args{})
+                        -> no_return().
 output_reduce_view(Req, View, Group, QueryArgs) ->
     #view_query_args{
         limit = Limit,
@@ -423,7 +428,7 @@ send_json_reduce_row(Resp, {Key, Value}, RowFront) ->
 view_etag(Group, View) ->
     view_etag(Group, View, nil).
 
-view_etag(Group, {reduce, _, _, View}, Extra) ->
+view_etag(Group, {reduce, _, View}, Extra) ->
     view_etag(Group, View, Extra);
 view_etag(#set_view_group{sig = Sig, index_header = Header},
         #set_view{update_seqs = UpdateSeqs, purge_seqs = PurgeSeqs},

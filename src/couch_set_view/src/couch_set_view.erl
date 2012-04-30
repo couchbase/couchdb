@@ -73,12 +73,15 @@
 %    the view key/values that originated from any of these
 %    partitions will eventually be removed from the index
 %
+-spec get_group(binary(),
+                binary() | #doc{},
+                #set_view_group_req{}) -> {'ok', #set_view_group{}}.
 get_group(SetName, DDoc, Req) ->
     GroupPid = get_group_pid(SetName, DDoc),
     case couch_set_view_group:request_group(GroupPid, Req) of
     {ok, Group} ->
         {ok, Group};
-    view_undefined ->
+    {error, view_undefined} ->
         % caller must call ?MODULE:define_group/3
         throw(view_undefined);
     Error ->
@@ -86,6 +89,7 @@ get_group(SetName, DDoc, Req) ->
     end.
 
 
+-spec get_group_pid(binary(), binary() | #doc{}) -> pid().
 get_group_pid(SetName, #doc{} = DDoc) ->
     Group = couch_set_view_util:design_doc_to_set_view_group(SetName, DDoc),
     get_group_server(SetName, Group);
@@ -93,10 +97,12 @@ get_group_pid(SetName, DDocId) when is_binary(DDocId) ->
     get_group_server(SetName, open_set_group(SetName, DDocId)).
 
 
+-spec release_group(#set_view_group{}) -> no_return().
 release_group(Group) ->
     couch_set_view_group:release_group(Group).
 
 
+-spec define_group(binary(), binary(), #set_view_params{}) -> 'ok'.
 define_group(SetName, DDocId, #set_view_params{} = Params) ->
     GroupPid = get_group_pid(SetName, DDocId),
     case couch_set_view_group:define_view(GroupPid, Params) of
@@ -107,6 +113,7 @@ define_group(SetName, DDocId, #set_view_params{} = Params) ->
     end.
 
 
+-spec is_view_defined(binary(), binary()) -> boolean().
 is_view_defined(SetName, DDocId) ->
     GroupPid = get_group_pid(SetName, DDocId),
     couch_set_view_group:is_view_defined(GroupPid).
@@ -145,6 +152,11 @@ is_view_defined(SetName, DDocId) ->
 % replica partition, data from that partition will start to be transfered from
 % the replica index into the main index.
 %
+-spec set_partition_states(binary(),
+                           binary(),
+                           [partition_id()],
+                           [partition_id()],
+                           [partition_id()]) -> 'ok'.
 set_partition_states(SetName, DDocId, ActivePartitions, PassivePartitions, CleanupPartitions) ->
     GroupPid = get_group_pid(SetName, DDocId),
     case couch_set_view_group:set_state(
@@ -162,6 +174,7 @@ set_partition_states(SetName, DDocId, ActivePartitions, PassivePartitions, Clean
 % All the given partitions must not be in the active nor passive state.
 % Like set_partition_states, this is an incremental operation.
 %
+-spec add_replica_partitions(binary(), binary(), [partition_id()]) -> 'ok'.
 add_replica_partitions(SetName, DDocId, Partitions) ->
     GroupPid = get_group_pid(SetName, DDocId),
     case couch_set_view_group:add_replica_partitions(
@@ -180,6 +193,7 @@ add_replica_partitions(SetName, DDocId, Partitions) ->
 % This is a no-op for partitions not currently marked as replicas.
 % Like set_partition_states, this is an incremental operation.
 %
+-spec remove_replica_partitions(binary(), binary(), [partition_id()]) -> 'ok'.
 remove_replica_partitions(SetName, DDocId, Partitions) ->
     GroupPid = get_group_pid(SetName, DDocId),
     case couch_set_view_group:remove_replica_partitions(
@@ -191,6 +205,7 @@ remove_replica_partitions(SetName, DDocId, Partitions) ->
     end.
 
 
+-spec get_group_server(binary(), #set_view_group{}) -> pid().
 get_group_server(SetName, #set_view_group{sig = Sig} = Group) ->
     case ets:lookup(couch_sig_to_setview_pid, {SetName, Sig}) of
     [{_, Pid}] when is_pid(Pid) ->
@@ -205,6 +220,7 @@ get_group_server(SetName, #set_view_group{sig = Sig} = Group) ->
     end.
 
 
+-spec open_set_group(binary(), binary()) -> #set_view_group{}.
 open_set_group(SetName, GroupId) ->
     case couch_set_view_group:open_set_group(SetName, GroupId) of
     {ok, Group} ->
@@ -273,6 +289,7 @@ list_index_files(SetName) ->
     filelib:wildcard(filename:join([set_index_dir(RootDir, SetName), "*"])).
 
 
+-spec get_row_count(#set_view_group{}, #set_view{}) -> non_neg_integer().
 get_row_count(#set_view_group{replica_group = nil}, #set_view{btree = Bt}) ->
     {ok, {Count, _Reds, _AllPartitionsBitMaps}} = couch_btree:full_reduce(Bt),
     Count;
@@ -283,13 +300,19 @@ get_row_count(#set_view_group{replica_group = RepGroup}, View) ->
     CountMain + CountRep.
 
 
-extract_map_view({reduce, _N, _Lang, View}) ->
+extract_map_view({reduce, _N, View}) ->
     View.
 
 
+-spec fold_reduce(#set_view_group{},
+                  {'reduce', non_neg_integer(), #set_view{}},
+                  set_view_fold_reduce_fun(),
+                  term(),
+                  set_view_key_group_fun(),
+                  #view_query_args{}) -> {'ok', term()}.
 fold_reduce(#set_view_group{replica_group = #set_view_group{} = RepGroup} = Group, View, FoldFun, FoldAcc, _KeyGroupFun, ViewQueryArgs) ->
-    {reduce, NthRed, Lang, #set_view{id_num = Id}} = View,
-    RepView = {reduce, NthRed, Lang, lists:nth(Id + 1, RepGroup#set_view_group.views)},
+    {reduce, NthRed, #set_view{id_num = Id}} = View,
+    RepView = {reduce, NthRed, lists:nth(Id + 1, RepGroup#set_view_group.views)},
     ViewSpecs = [
         #set_view_spec{
             name = Group#set_view_group.set_name,
@@ -339,7 +362,7 @@ fold_reduce(Group, View, FoldFun, FoldAcc, KeyGroupFun, #view_query_args{keys = 
 
 
 do_fold_reduce(Group, ViewInfo, Fun, Acc, Options0) ->
-    {reduce, NthRed, _Lang, View} = ViewInfo,
+    {reduce, NthRed, View} = ViewInfo,
     #set_view{btree = Bt, reduce_funs = RedFuns} = View,
     Options = case (?set_pbitmask(Group) bor ?set_cbitmask(Group)) of
     0 ->
@@ -421,22 +444,21 @@ get_reduce_view(SetName, DDoc, ViewName, Req) ->
     {ok, Group0} = get_group(SetName, DDoc, Req),
     {Group, Unindexed} = modify_bitmasks(Group0, WantedPartitions),
     #set_view_group{
-        views = Views,
-        def_lang = Lang
+        views = Views
     } = Group,
-    case get_reduce_view0(ViewName, Lang, Views) of
+    case get_reduce_view0(ViewName, Views) of
     {ok, View} ->
         {ok, View, Group, Unindexed};
     Else ->
         Else
     end.
 
-get_reduce_view0(_Name, _Lang, []) ->
+get_reduce_view0(_Name, []) ->
     {not_found, missing_named_view};
-get_reduce_view0(Name, Lang, [#set_view{reduce_funs=RedFuns}=View|Rest]) ->
+get_reduce_view0(Name, [#set_view{reduce_funs = RedFuns} = View | Rest]) ->
     case get_key_pos(Name, RedFuns, 0) of
-        0 -> get_reduce_view0(Name, Lang, Rest);
-        N -> {ok, {reduce, N, Lang, View}}
+        0 -> get_reduce_view0(Name, Rest);
+        N -> {ok, {reduce, N, View}}
     end.
 
 
@@ -455,6 +477,11 @@ reduce_to_count(Reductions) ->
     Count.
 
 
+-spec fold(#set_view_group{},
+           #set_view{},
+           set_view_fold_fun(),
+           term(),
+           #view_query_args{}) -> {'ok', term(), term()}.
 fold(#set_view_group{replica_group = #set_view_group{} = RepGroup} = Group, View, Fun, Acc, ViewQueryArgs) ->
     RepView = lists:nth(View#set_view.id_num + 1, RepGroup#set_view_group.views),
     ViewSpecs = [

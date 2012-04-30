@@ -189,6 +189,7 @@ rebuild_plt:
 
 dialyzer: all $(COUCHDB_PLT)
 	dialyzer --plt $(COUCHDB_PLT) \
+		--verbose \
 		-Wrace_conditions \
 		-pa src/couchdb \
 		-pa src/couch_set_view \

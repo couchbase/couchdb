@@ -51,24 +51,29 @@ expand_dups([{_Key, {PartId, _Val}} = Kv | Rest], Abitmask, Acc) ->
     end.
 
 
+-spec partitions_map([{term(), {partition_id(), term()}}], bitmask()) -> bitmask().
 partitions_map([], BitMap) ->
     BitMap;
 partitions_map([{_Key, {PartitionId, _Val}} | RestKvs], BitMap) ->
     partitions_map(RestKvs, BitMap bor (1 bsl PartitionId)).
 
 
+-spec build_bitmask([partition_id()]) -> bitmask().
 build_bitmask(ActiveList) ->
     build_bitmask(ActiveList, 0).
 
+-spec build_bitmask([partition_id()], bitmask()) -> bitmask().
 build_bitmask([], Acc) ->
     Acc;
 build_bitmask([PartId | Rest], Acc) when is_integer(PartId), PartId >= 0 ->
     build_bitmask(Rest, (1 bsl PartId) bor Acc).
 
 
+-spec decode_bitmask(bitmask()) -> [partition_id()].
 decode_bitmask(Bitmask) ->
     decode_bitmask(Bitmask, 0).
 
+-spec decode_bitmask(bitmask(), partition_id()) -> [partition_id()].
 decode_bitmask(0, _) ->
     [];
 decode_bitmask(Bitmask, PartId) ->
@@ -80,6 +85,7 @@ decode_bitmask(Bitmask, PartId) ->
     end.
 
 
+-spec make_btree_purge_fun(#set_view_group{}) -> set_view_btree_purge_fun().
 make_btree_purge_fun(Group) when ?set_cbitmask(Group) =/= 0 ->
     fun(branch, Value, {go, Acc}) ->
             receive
@@ -112,10 +118,12 @@ btree_purge_fun(branch, Red, {go, Acc}, Cbitmask) ->
     end.
 
 
+-spec make_key_options(#view_query_args{}) -> [{atom(), term()}].
 make_key_options(QueryArgs) ->
     couch_httpd_view:make_key_options(QueryArgs).
 
 
+-spec get_ddoc_ids_with_sig(binary(), binary()) -> [binary()].
 get_ddoc_ids_with_sig(SetName, ViewGroupSig) ->
     {ok, Db} = couch_db:open_int(?master_dbname(SetName), []),
     {ok, DDocList} = couch_db:get_design_docs(Db, no_deletes),
@@ -132,11 +140,10 @@ get_ddoc_ids_with_sig(SetName, ViewGroupSig) ->
         [], DDocList).
 
 
+-spec design_doc_to_set_view_group(binary(), #doc{}) -> #set_view_group{}.
 design_doc_to_set_view_group(SetName, #doc{id = Id, body = {Fields}}) ->
-    Language = couch_util:get_value(<<"language">>, Fields, <<"javascript">>),
     {DesignOptions} = couch_util:get_value(<<"options">>, Fields, {[]}),
     {RawViews} = couch_util:get_value(<<"views">>, Fields, {[]}),
-    Lib = couch_util:get_value(<<"lib">>, RawViews, {[]}),
     % add the views to a dictionary object, with the map source as the key
     DictBySrc =
     lists:foldl(
@@ -169,34 +176,21 @@ design_doc_to_set_view_group(SetName, #doc{id = Id, body = {Fields}}) ->
     SetViewGroup = #set_view_group{
         set_name = SetName,
         name = Id,
-        lib = Lib,
         views = Views,
-        def_lang = Language,
         design_options = DesignOptions
     },
     set_view_sig(SetViewGroup).
 
 
+-spec set_view_sig(#set_view_group{}) -> #set_view_group{}.
 set_view_sig(#set_view_group{
             views = Views,
-            lib = Lib,
-            def_lang = Language,
             design_options = DesignOptions} = G) ->
-    Sig = couch_util:md5(term_to_binary({Views, Language, DesignOptions, sort_lib(Lib)})),
+    Sig = couch_util:md5(term_to_binary({Views, DesignOptions})),
     G#set_view_group{sig = Sig}.
 
 
-sort_lib({Lib}) ->
-    sort_lib(Lib, []).
-sort_lib([], LAcc) ->
-    lists:keysort(1, LAcc);
-sort_lib([{LName, {LObj}}|Rest], LAcc) ->
-    LSorted = sort_lib(LObj, []), % descend into nested object
-    sort_lib(Rest, [{LName, LSorted}|LAcc]);
-sort_lib([{LName, LCode}|Rest], LAcc) ->
-    sort_lib(Rest, [{LName, LCode}|LAcc]).
-
-
+-spec open_raw_read_fd(#set_view_group{}) -> 'ok'.
 open_raw_read_fd(Group) ->
     #set_view_group{
         fd = FilePid,
@@ -217,6 +211,7 @@ open_raw_read_fd(Group) ->
     end.
 
 
+-spec close_raw_read_fd(#set_view_group{}) -> 'ok'.
 close_raw_read_fd(#set_view_group{fd = FilePid}) ->
     case erlang:erase({FilePid, fast_fd_read}) of
     undefined ->

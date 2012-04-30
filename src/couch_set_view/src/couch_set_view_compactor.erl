@@ -23,17 +23,21 @@
    total_changes
 }).
 
+-spec start_compact(binary(), binary()) -> {'ok', pid()}.
 start_compact(SetName, DDocId) ->
     start_compact(SetName, DDocId, main).
 
+-spec start_compact(binary(), binary(), set_view_group_type()) -> {'ok', pid()}.
 start_compact(SetName, DDocId, Type) ->
     {ok, Pid} = get_group_pid(SetName, DDocId, Type),
     gen_server:call(Pid, {start_compact, fun compact_group/2}).
 
 
+-spec cancel_compact(binary(), binary()) -> 'ok'.
 cancel_compact(SetName, DDocId) ->
     cancel_compact(SetName, DDocId, main).
 
+-spec cancel_compact(binary(), binary(), set_view_group_type()) -> 'ok'.
 cancel_compact(SetName, DDocId, Type) ->
     {ok, Pid} = get_group_pid(SetName, DDocId, Type),
     gen_server:call(Pid, cancel_compact).
@@ -43,6 +47,7 @@ cancel_compact(SetName, DDocId, Type) ->
 %% internal functions
 %%=============================================================================
 
+-spec compact_group(#set_view_group{}, #set_view_group{}) -> no_return().
 compact_group(Group, EmptyGroup) ->
     #set_view_group{
         set_name = SetName,
