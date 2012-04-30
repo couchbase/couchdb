@@ -103,7 +103,7 @@ handle_info(_Info, State) ->
     {ok, State}.
 
 handle_call(_Args, State) ->
-    {ok, State}.
+    {ok, ok, State}.
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.

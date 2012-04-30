@@ -35,9 +35,6 @@
 -export([start_link/0]).
 -export([init/1]).
 
--type child() :: {atom(), {atom(), atom(), list(any)},
-    atom(), integer(), atom(), list(atom())}.
-
 %% @spec () -> {ok, pid()} | {error, Reason}
 %% Reason = atom()
 %% @doc Starts and links to the supervisor.
@@ -49,7 +46,6 @@ start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
 %% @hidden
--spec init(any()) -> {ok, {{atom(), integer(), integer()}, [child()]}}.
 init(_) ->
     LHTTPCManager = {lhttpc_manager, {lhttpc_manager, start_link, [[{name, lhttpc_manager}]]},
         permanent, 10000, worker, [lhttpc_manager]

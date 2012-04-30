@@ -124,7 +124,7 @@ init(Options) ->
         true ->
             % Make sure that the ssl random number generator is seeded
             % This was new in R13 (ssl-3.10.1 in R13B vs. ssl-3.10.0 in R12B-5)
-            ssl:seed(crypto:rand_bytes(255));
+            apply(ssl, seed, [crypto:rand_bytes(255)]);
         false ->
             ok
     end,
@@ -218,9 +218,9 @@ terminate(_, State) ->
     close_sockets(State#httpc_man.sockets).
 
 %% @hidden
--spec code_change(any(), #httpc_man{}, any()) -> #httpc_man{}.
+-spec code_change(any(), #httpc_man{}, any()) -> {'ok', #httpc_man{}}.
 code_change(_, State, _) ->
-    State.
+    {ok, State}.
 
 find_socket({_, _, Ssl} = Dest, Pid, State) ->
     Dests = State#httpc_man.destinations,

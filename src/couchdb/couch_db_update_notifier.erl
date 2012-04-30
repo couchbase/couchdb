@@ -59,7 +59,7 @@ handle_event({EventAtom, DbName}, Pid) ->
     {ok, Pid}.
 
 handle_call(_Request, State) ->
-    {reply, ok, State}.
+    {ok, ok, State}.
 
 handle_info({'EXIT', Pid, Reason}, Pid) ->
     ?LOG_ERROR("Update notification process ~p died: ~p", [Pid, Reason]),
