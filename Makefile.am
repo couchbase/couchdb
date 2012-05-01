@@ -81,7 +81,11 @@ README.gz: $(top_srcdir)/README
 THANKS.gz: $(top_srcdir)/THANKS
 	-gzip -9 < $< > $@
 
-check: dev
+check: dev dialyzer
+	rm -fr $(top_builddir)/tmp/lib/*
+	$(top_builddir)/test/etap/run test/etap
+
+check-no-dialyzer: dev
 	rm -fr $(top_builddir)/tmp/lib/*
 	$(top_builddir)/test/etap/run test/etap
 
@@ -149,7 +153,11 @@ distsign: distcheck check
 	sha1sum $(top_srcdir)/$(distdir).tar.gz \
 	    > $(top_srcdir)/$(distdir).tar.gz.sha
 
+if WINDOWS
 COUCHDB_PLT ?= couchdb.plt
+else
+COUCHDB_PLT ?= ~/.couchdb.plt
+endif
 
 $(COUCHDB_PLT):
 	$(MAKE) all
@@ -171,11 +179,9 @@ $(COUCHDB_PLT):
 			xmerl \
 			syntax_tools \
 			public_key \
-			snmp \
 			tools \
 			hipe \
 			runtime_tools \
-			mnesia \
 		-r \
 			src/erlang-oauth \
 			src/etap \
