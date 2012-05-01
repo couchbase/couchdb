@@ -716,7 +716,22 @@ write_changes(WriterAcc, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs) ->
 
 update_seqs(PartIdSeqs, Seqs) ->
     orddict:fold(
-        fun(PartId, S, Acc) -> ?replace(Acc, PartId, S) end,
+        fun(PartId, NewSeq, Acc) ->
+            OldSeq = couch_util:get_value(PartId, Acc),
+            case is_integer(OldSeq) of
+            true ->
+                ok;
+            false ->
+                exit({error, <<"Old seq is not an integer.">>, PartId, OldSeq, NewSeq})
+            end,
+            case NewSeq > OldSeq of
+            true ->
+                ok;
+            false ->
+                exit({error, <<"New seq smaller or equal than old seq.">>, PartId, OldSeq, NewSeq})
+            end,
+            ?replace(Acc, PartId, NewSeq)
+        end,
         Seqs, PartIdSeqs).
 
 
