@@ -234,6 +234,6 @@ endif
 
 # $(ERL) -noshell -run edoc_run files [\"$<\"]
 
-%.beam: %.erl couch_api_wrap.hrl couch_db.hrl couch_js_functions.hrl couch_replicator.hrl couch_view_merger.hrl couch_index_merger.hrl
+%.beam: %.erl couch_api_wrap.hrl couch_db.hrl couch_js_functions.hrl couch_replicator.hrl couch_view_merger.hrl couch_index_merger.hrl ../couch_set_view/include/couch_set_view.hrl
 	$(ERLC) -I$(top_srcdir)/src $(ERLC_FLAGS) ${TEST} $<;
 
