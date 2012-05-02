@@ -21,6 +21,7 @@
 -export([set_state/4]).
 -export([partition_deleted/2]).
 -export([add_replica_partitions/2, remove_replica_partitions/2]).
+-export([mark_as_unindexable/2, mark_as_indexable/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -247,6 +248,16 @@ remove_replica_partitions(Pid, Partitions) ->
     gen_server:call(Pid, {remove_replicas, ordsets:from_list(Partitions)}, infinity).
 
 
+-spec mark_as_unindexable(pid(), [partition_id()]) -> 'ok' | {'error', term()}.
+mark_as_unindexable(Pid, Partitions) ->
+    gen_server:call(Pid, {mark_as_unindexable, Partitions}, infinity).
+
+
+-spec mark_as_indexable(pid(), [partition_id()]) -> 'ok' | {'error', term()}.
+mark_as_indexable(Pid, Partitions) ->
+    gen_server:call(Pid, {mark_as_indexable, Partitions}, infinity).
+
+
 start_link({RootDir, SetName, Group}) ->
     Args = {RootDir, SetName, Group#set_view_group{type = main}},
     proc_lib:start_link(?MODULE, init, [Args]).
@@ -293,9 +304,10 @@ do_init({_, SetName, _} = InitArgs) ->
                 throw(Error)
             end,
             ?LOG_INFO("Started ~s set view group `~s`, group `~s`~n"
-                      "active partitions:  ~w~n"
-                      "passive partitions: ~w~n"
-                      "cleanup partitions: ~w~n"
+                      "active partitions:      ~w~n"
+                      "passive partitions:     ~w~n"
+                      "cleanup partitions:     ~w~n"
+                      "unindexable partitions: ~w~n"
                       "~sreplica support~n" ++
                       case Header#set_view_index_header.has_replica of
                       true ->
@@ -308,6 +320,7 @@ do_init({_, SetName, _} = InitArgs) ->
                        couch_set_view_util:decode_bitmask(Header#set_view_index_header.abitmask),
                        couch_set_view_util:decode_bitmask(Header#set_view_index_header.pbitmask),
                        couch_set_view_util:decode_bitmask(Header#set_view_index_header.cbitmask),
+                       Header#set_view_index_header.unindexable_seqs,
                        case Header#set_view_index_header.has_replica of
                        true ->
                            "";
@@ -524,6 +537,24 @@ handle_call({remove_replicas, Partitions}, _From, #state{replica_group = Replica
     ?LOG_INFO("Set view `~s`, ~s group `~s`, marked the following replica partitions for removal: ~w",
               [?set_name(State), ?type(State), ?group_id(State), Partitions]),
     {reply, ok, NewState, ?TIMEOUT};
+
+handle_call({mark_as_unindexable, Partitions}, _From, State) ->
+    try
+        State2 = process_mark_as_unindexable(State, Partitions),
+        {reply, ok, State2}
+    catch
+    throw:Error ->
+        {reply, Error, State}
+    end;
+
+handle_call({mark_as_indexable, Partitions}, _From, State) ->
+    try
+        State2 = process_mark_as_indexable(State, Partitions),
+        {reply, ok, State2}
+    catch
+    throw:Error ->
+        {reply, Error, State}
+    end;
 
 handle_call(#set_view_group_req{} = Req, From, State) ->
     #state{
@@ -1336,6 +1367,39 @@ commit_header(Group) ->
                                     #state{}) -> #state{}.
 maybe_update_partition_states(ActiveList, PassiveList, CleanupList, State) ->
     #state{group = Group} = State,
+    ActiveMarkedAsUnindexable = [
+        P || P <- ActiveList, orddict:is_key(P, ?set_unindexable_seqs(Group))
+    ],
+    case ActiveMarkedAsUnindexable of
+    [] ->
+        ok;
+    _ ->
+        ErrorMsg1 = io_lib:format("Intersection between requested active list "
+            "and current unindexable partitions: ~w", [ActiveMarkedAsUnindexable]),
+        throw({error, iolist_to_binary(ErrorMsg1)})
+    end,
+    PassiveMarkedAsUnindexable = [
+        P || P <- PassiveList, orddict:is_key(P, ?set_unindexable_seqs(Group))
+    ],
+    case PassiveMarkedAsUnindexable of
+    [] ->
+        ok;
+    _ ->
+        ErrorMsg2 = io_lib:format("Intersection between requested passive list "
+            "and current unindexable partitions: ~w", [PassiveMarkedAsUnindexable]),
+        throw({error, iolist_to_binary(ErrorMsg2)})
+    end,
+    CleanupMarkedAsUnindexable = [
+        P || P <- CleanupList, orddict:is_key(P, ?set_unindexable_seqs(Group))
+    ],
+    case CleanupMarkedAsUnindexable of
+    [] ->
+        ok;
+    _ ->
+        ErrorMsg3 = io_lib:format("Intersection between requested cleanup list "
+            "and current unindexable partitions: ~w", [CleanupMarkedAsUnindexable]),
+        throw({error, iolist_to_binary(ErrorMsg3)})
+    end,
     ActiveMask = couch_set_view_util:build_bitmask(ActiveList),
     case ActiveMask >= (1 bsl ?set_num_partitions(Group)) of
     true ->
@@ -1793,7 +1857,8 @@ update_header(State, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs, NewPurgeSeq
                     abitmask = Abitmask,
                     pbitmask = Pbitmask,
                     cbitmask = Cbitmask,
-                    replicas_on_transfer = ReplicasOnTransfer
+                    replicas_on_transfer = ReplicasOnTransfer,
+                    unindexable_seqs = UnindexableSeqs
                 } = Header
         } = Group,
         replica_partitions = ReplicaParts
@@ -1825,7 +1890,8 @@ update_header(State, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs, NewPurgeSeq
         "passive partitions before: ~w~n"
         "passive partitions after:  ~w~n"
         "cleanup partitions before: ~w~n"
-        "cleanup partitions after:  ~w~n" ++
+        "cleanup partitions after:  ~w~n"
+        "unindexable partitions:    ~w~n" ++
         case is_pid(State#state.replica_group) of
         true ->
             "replica partitions before:   ~w~n"
@@ -1841,7 +1907,8 @@ update_header(State, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs, NewPurgeSeq
          couch_set_view_util:decode_bitmask(Pbitmask),
          couch_set_view_util:decode_bitmask(NewPbitmask),
          couch_set_view_util:decode_bitmask(Cbitmask),
-         couch_set_view_util:decode_bitmask(NewCbitmask)] ++
+         couch_set_view_util:decode_bitmask(NewCbitmask),
+         UnindexableSeqs] ++
          case is_pid(State#state.replica_group) of
          true ->
              [ReplicaParts, NewReplicaParts, ReplicasOnTransfer, NewRelicasOnTransfer];
@@ -1913,7 +1980,12 @@ cleaner(#state{group = Group}) ->
 
 -spec index_needs_update(#state{}) -> {boolean(), partition_seqs()}.
 index_needs_update(#state{group = Group} = State) ->
-    {ok, CurSeqs} = couch_db_set:get_seqs(?db_set(State)),
+    {ok, CurSeqs} = case ?set_unindexable_seqs(Group) of
+    [] ->
+        couch_db_set:get_seqs(?db_set(State));
+    _ ->
+        couch_db_set:get_seqs(?db_set(State), [P || {P, _} <- ?set_seqs(Group)])
+    end,
     case get_pending_cleanup(Group) of
     [] ->
         {CurSeqs > ?set_seqs(Group), CurSeqs};
@@ -2417,4 +2489,121 @@ process_view_group_request(#set_view_group_req{stale = update_after} = Req, From
         State;
     nil ->
         start_updater(State)
+    end.
+
+
+-spec process_mark_as_unindexable(#state{}, [partition_id()]) -> #state{}.
+process_mark_as_unindexable(State, Partitions) ->
+    #state{
+        group = #set_view_group{index_header = Header} = Group,
+        replica_partitions = ReplicaParts
+    } = State,
+    ReplicasIntersection = [
+        P || P <- Partitions, ordsets:is_element(P, ReplicaParts)
+    ],
+    case ReplicasIntersection of
+    [] ->
+        ok;
+    _ ->
+        ErrorMsg = io_lib:format("Intersection between requested unindexable list"
+            " and current set of replica partitions: ~w", [ReplicasIntersection]),
+        throw({error, iolist_to_binary(ErrorMsg)})
+    end,
+
+    {Seqs2, PurgeSeqs2, UnindexableSeqs2, UnindexablePurgeSeqs2} =
+    lists:foldl(
+        fun(PartId, {AccSeqs, AccPurgeSeqs, AccUnSeqs, AccUnPurgeSeqs}) ->
+            PartMask = 1 bsl PartId,
+            case (?set_abitmask(Group) band PartMask) == 0 andalso
+                (?set_pbitmask(Group) band PartMask) == 0 of
+            true ->
+                ErrorMsg2 = io_lib:format("Partition ~p is not in the active "
+                    "nor passive state.", [PartId]),
+                throw({error, iolist_to_binary(ErrorMsg2)});
+            false ->
+                ok
+            end,
+            PartSeq = orddict:fetch(PartId, AccSeqs),
+            AccSeqs2 = orddict:erase(PartId, AccSeqs),
+            PartPurgeSeq = orddict:fetch(PartId, AccPurgeSeqs),
+            AccPurgeSeqs2 = orddict:erase(PartId, AccPurgeSeqs),
+            AccUnSeqs2 = orddict:store(PartId, PartSeq, AccUnSeqs),
+            AccUnPurgeSeqs2 = orddict:store(PartId, PartPurgeSeq, AccUnPurgeSeqs),
+            {AccSeqs2, AccPurgeSeqs2, AccUnSeqs2, AccUnPurgeSeqs2}
+        end,
+        {?set_seqs(Group), ?set_purge_seqs(Group),
+             ?set_unindexable_seqs(Group), ?set_unindexable_purge_seqs(Group)},
+        Partitions),
+    case UnindexableSeqs2 == ?set_unindexable_seqs(Group) of
+    true ->
+        State;
+    false ->
+        #state{group = Group2} = State2 = restart_compactor(
+            State, "set of unindexable partitions updated"),
+        Group3 = Group2#set_view_group{
+            index_header = Header#set_view_index_header{
+                seqs = Seqs2,
+                purge_seqs = PurgeSeqs2,
+                unindexable_seqs = UnindexableSeqs2,
+                unindexable_purge_seqs = UnindexablePurgeSeqs2
+            }
+        },
+        ok = commit_header(Group3),
+        ?LOG_INFO("Set view `~s`, ~s group `~s`, unindexable partitions added.~n"
+                  "Previous set: ~w~n"
+                  "New set:      ~w~n",
+                  [?set_name(State), ?type(State), ?group_id(State),
+                   ?set_unindexable_seqs(Group2), UnindexableSeqs2]),
+        State2#state{group = Group3}
+    end.
+
+
+-spec process_mark_as_indexable(#state{}, [partition_id()]) -> #state{}.
+process_mark_as_indexable(State, Partitions) ->
+    #state{
+        group = #set_view_group{index_header = Header} = Group
+    } = State,
+    {Seqs2, PurgeSeqs2, UnindexableSeqs2, UnindexablePurgeSeqs2} =
+    lists:foldl(
+        fun(PartId, {AccSeqs, AccPurgeSeqs, AccUnSeqs, AccUnPurgeSeqs}) ->
+            case orddict:is_key(PartId, AccUnSeqs) of
+            false ->
+                ErrorMsg = io_lib:format("Partition ~p is not currently "
+                    "marked as unindexable", [PartId]),
+                throw({error, iolist_to_binary(ErrorMsg)});
+            true ->
+                ok
+            end,
+            Seq = orddict:fetch(PartId, AccUnSeqs),
+            AccUnSeqs2 = orddict:erase(PartId, AccUnSeqs),
+            PurgeSeq = orddict:fetch(PartId, AccUnPurgeSeqs),
+            AccUnPurgeSeqs2 = orddict:erase(PartId, AccUnPurgeSeqs),
+            AccSeqs2 = orddict:store(PartId, Seq, AccSeqs),
+            AccPurgeSeqs2 = orddict:store(PartId, PurgeSeq, AccPurgeSeqs),
+            {AccSeqs2, AccPurgeSeqs2, AccUnSeqs2, AccUnPurgeSeqs2}
+        end,
+        {?set_seqs(Group), ?set_purge_seqs(Group),
+             ?set_unindexable_seqs(Group), ?set_unindexable_purge_seqs(Group)},
+        Partitions),
+    case UnindexableSeqs2 == ?set_unindexable_seqs(Group) of
+    true ->
+        State;
+    false ->
+        #state{group = Group2} = State2 = restart_compactor(
+            State, "set of unindexable partitions updated"),
+        Group3 = Group2#set_view_group{
+            index_header = Header#set_view_index_header{
+                seqs = Seqs2,
+                purge_seqs = PurgeSeqs2,
+                unindexable_seqs = UnindexableSeqs2,
+                unindexable_purge_seqs = UnindexablePurgeSeqs2
+            }
+        },
+        ok = commit_header(Group3),
+        ?LOG_INFO("Set view `~s`, ~s group `~s`, unindexable partitions removed.~n"
+                  "Previous set: ~w~n"
+                  "New set:      ~w~n",
+                  [?set_name(State), ?type(State), ?group_id(State),
+                   ?set_unindexable_seqs(Group2), UnindexableSeqs2]),
+        State2#state{group = Group3}
     end.

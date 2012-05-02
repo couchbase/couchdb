@@ -312,7 +312,8 @@ load_changes(Owner, Updater, Group, MapQueue, Writer, ActiveParts, PassiveParts)
     end,
 
     FoldFun = fun(PartId) ->
-        case ordsets:is_element(PartId, PendingCleanup) of
+        case ordsets:is_element(PartId, PendingCleanup) orelse
+            orddict:is_key(PartId, ?set_unindexable_seqs(Group)) of
         true ->
             ok;
         false ->

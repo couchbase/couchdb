@@ -15,7 +15,7 @@
 
 % public API
 -export([open/2, close/1]).
--export([get_seqs/1]).
+-export([get_seqs/1, get_seqs/2]).
 -export([add_partitions/2, remove_partitions/2]).
 
 % gen_server API
@@ -51,7 +51,13 @@ remove_partitions(Pid, Partitions) ->
     ok = gen_server:call(Pid, {remove_partitions, Partitions}, infinity).
 
 get_seqs(Pid) ->
-    {ok, _Seqs} = gen_server:call(Pid, get_seqs, infinity).
+    get_seqs(Pid, nil).
+
+get_seqs(Pid, nil) ->
+    {ok, _Seqs} = gen_server:call(Pid, get_seqs, infinity);
+get_seqs(Pid, FilterSortedSet) ->
+    {ok, Seqs} = gen_server:call(Pid, get_seqs, infinity),
+    {ok, [{P, S} || {P, S} <- Seqs, ordsets:is_element(P, FilterSortedSet)]}.
 
 
 init({SetName, Partitions} = Args) ->

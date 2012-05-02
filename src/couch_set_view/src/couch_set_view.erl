@@ -23,6 +23,7 @@
 
 -export([is_view_defined/2]).
 -export([set_partition_states/5, add_replica_partitions/3, remove_replica_partitions/3]).
+-export([mark_partitions_unindexable/3, mark_partitions_indexable/3]).
 
 -export([fold/5, fold_reduce/6]).
 -export([get_row_count/2, reduce_to_count/1, extract_map_view/1]).
@@ -198,6 +199,38 @@ remove_replica_partitions(SetName, DDocId, Partitions) ->
     GroupPid = get_group_pid(SetName, DDocId),
     case couch_set_view_group:remove_replica_partitions(
         GroupPid, Partitions) of
+    ok ->
+        ok;
+    Error ->
+        throw(Error)
+    end.
+
+
+% Mark a set of partitions, currently either in the active or passive states, as
+% unindexable. This means future index updates will ignore new changes found in the
+% corresponding partition databases. This operation doesn't remove any data from
+% the index, nor does it start any cleanup operation. Queries will still see
+% and get data from the corresponding partitions.
+-spec mark_partitions_unindexable(binary(), binary(), [partition_id()]) -> 'ok'.
+mark_partitions_unindexable(SetName, DDocId, Partitions) ->
+    Pid = get_group_pid(SetName, DDocId),
+    case couch_set_view_group:mark_as_unindexable(Pid, Partitions) of
+    ok ->
+        ok;
+    Error ->
+        throw(Error)
+    end.
+
+
+% This is the counterpart of mark_partitions_unindexable/3. It marks a set of partitions
+% as indexable again, meaning future index updates will process all new partition database
+% changes (changes that happened since the last index update prior to the
+% mark_partitions_unindexable/3 call). The given partitions are currently in either the
+% active or passive states and were marked as unindexable before.
+-spec mark_partitions_indexable(binary(), binary(), [partition_id()]) -> 'ok'.
+mark_partitions_indexable(SetName, DDocId, Partitions) ->
+    Pid = get_group_pid(SetName, DDocId),
+    case couch_set_view_group:mark_as_indexable(Pid, Partitions) of
     ok ->
         ok;
     Error ->

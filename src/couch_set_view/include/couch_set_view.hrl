@@ -50,6 +50,12 @@
 -define(set_pending_transition(SetViewGroup),
         (SetViewGroup#set_view_group.index_header)#set_view_index_header.pending_transition).
 
+-define(set_unindexable_seqs(SetViewGroup),
+        (SetViewGroup#set_view_group.index_header)#set_view_index_header.unindexable_seqs).
+
+-define(set_unindexable_purge_seqs(SetViewGroup),
+        (SetViewGroup#set_view_group.index_header)#set_view_index_header.unindexable_purge_seqs).
+
 
 -type partition_id()             :: non_neg_integer().
 -type staleness()                :: 'update_after' | 'ok' | 'false'.
@@ -126,7 +132,11 @@
     has_replica = false                             :: boolean(),
     replicas_on_transfer = []                       :: ordsets:ordset(partition_id()),
     % Pending partition states transition.
-    pending_transition = nil                        :: 'nil' | #set_view_transition{}
+    pending_transition = nil                        :: 'nil' | #set_view_transition{},
+    % Type should be something like orddict(partition_seq()), but however the orddict
+    % module doesn't export yet a type spec (unlike ordsets for e.g.).
+    unindexable_seqs = []                           :: [partition_seq()],
+    unindexable_purge_seqs = []                     :: [partition_seq()]
 }).
 
 % Keep all stats values as valid EJSON (except ets key).

@@ -51,7 +51,8 @@ test_files = \
     test/13-progressive-cleanup.t \
     test/14-duplicated-keys-per-doc.t \
     test/15-passive-partitions.t \
-    test/16-pending-transition.t
+    test/16-pending-transition.t \
+    test/17-unindexable-partitions.t
 
 compiled_files = \
     ebin/couch_set_view.app \
