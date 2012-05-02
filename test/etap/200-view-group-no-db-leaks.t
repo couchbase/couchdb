@@ -223,7 +223,7 @@ create_docs() ->
         {<<"_id">>, <<"doc3">>},
         {<<"value">>, 3}
     ]}),
-    ok = couch_db:update_docs(Db, [Doc1, Doc2, Doc3]),
+    ok = couch_db:update_docs(Db, [Doc1, Doc2, Doc3], [sort_docs]),
     couch_db:ensure_full_commit(Db),
     couch_db:close(Db).
 

@@ -17,7 +17,6 @@
 -include("couch_db.hrl").
 
 check_db_file(Filename) when is_list(Filename) or is_binary(Filename)->
-    ?LOG_DEBUG("validation process for db file \"~s\"", [Filename]),
     Fd = case couch_file:open(Filename) of
     {ok, Fd0} ->
         Fd0;
@@ -41,6 +40,7 @@ check_db_file(Filename) when is_list(Filename) or is_binary(Filename)->
     couch_file:close(Fd);
 check_db_file(Db) ->
     Filename = Db#db.filepath,
+    ?LOG_INFO("Doing consistency check for db file \"~s\"", [Filename]),
     % first scan the by_sequence index
     Count = couch_db:count_changes_since(Db, 0),
     EtsById = ets:new(couch_db_consistency_check_name, [set,private]),

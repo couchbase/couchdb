@@ -750,7 +750,56 @@ initial_copy_compact(#db{docinfo_by_seq_btree=SrcBySeq,
     NewDb#db{docinfo_by_seq_btree=NewBySeqBtree,
             docinfo_by_id_btree=DestById#btree{root=NewByIdRoot}}.
 
-start_copy_compact(#db{name=Name,filepath=Filepath,header=#db_header{purge_seq=PurgeSeq}}=Db) ->
+fd_to_db(#db{name=Name, header=#db_header{purge_seq=PurgeSeq}}=Db, CompactFile, Header, Fd) ->
+    NewDb = init_db(Name, CompactFile, Fd, Header, Db#db.options),
+    NewDb2 =
+        if PurgeSeq > 0 ->
+            {ok, PurgedIdsRevs} = couch_db:get_last_purged(Db),
+            {ok, Pointer, _} = couch_file:append_term(Fd, PurgedIdsRevs),
+            NewDb#db{header=Header#db_header{purge_seq=PurgeSeq, purged_docs=Pointer}};
+        true ->
+            NewDb
+    end,
+    unlink(Fd),
+    NewDb2.
+
+make_target_db(Db, CompactFile) ->
+    case couch_file:open(CompactFile) of
+        {ok, Fd} ->
+            case couch_file:read_header_bin(Fd) of
+                {ok, NewHeaderBin} ->
+                    Header = header_bin_to_db_header(NewHeaderBin),
+                    {ok, fd_to_db(Db, CompactFile, Header, Fd)};
+                no_valid_header ->
+                    {error, no_valid_header}
+            end;
+        {error, enoent} ->
+            {ok, Fd} = couch_file:open(CompactFile, [create]),
+            Header=#db_header{},
+            HeaderBin = db_header_to_header_bin(Header),
+            ok = couch_file:write_header_bin(Fd, HeaderBin),
+            {ok, fd_to_db(Db, CompactFile, Header, Fd)}
+    end.
+
+native_initial_compact(#db{filepath=Filepath}=Db, CompactFile) ->
+    ok = couch_file:flush(Db#db.fd),
+    CompactCmd = os:find_executable("couch_compact"),
+    try
+        Compactor = open_port({spawn_executable, CompactCmd}, [{args, [Filepath, CompactFile]}, exit_status]),
+        receive {Compactor, {exit_status, Status}} ->
+                case Status of
+                    0 ->
+                        make_target_db(Db, CompactFile);
+                    Error ->
+                        {error, {exit_status, Error}}
+                end
+        end
+    catch
+        T:E ->
+            {error, {T, E}}
+    end.
+
+start_copy_compact(#db{name=Name,filepath=Filepath}=Db) ->
     CompactFile = Filepath ++ ".compact",
     ?LOG_DEBUG("Compaction process spawned for db \"~s\"", [Name]),
     case couch_config:get("couchdb", "consistency_check_precompacted", "false") of
@@ -759,37 +808,24 @@ start_copy_compact(#db{name=Name,filepath=Filepath,header=#db_header{purge_seq=P
     _ ->
         ok
     end,
-    case couch_file:open(CompactFile) of
-    {ok, Fd} ->
-        Retry = true,
-        case couch_file:read_header_bin(Fd) of
-        {ok, NewHeaderBin} ->
-            Header = header_bin_to_db_header(NewHeaderBin),
-            ok;
-        no_valid_header ->
-            Header=#db_header{},
-            HeaderBin = db_header_to_header_bin(Header),
-            ok = couch_file:write_header_bin(Fd, HeaderBin)
-        end;
-    {error, enoent} ->
-        {ok, Fd} = couch_file:open(CompactFile, [create]),
-        Retry = false,
-        Header=#db_header{},
-        HeaderBin = db_header_to_header_bin(Header),
-        ok = couch_file:write_header_bin(Fd, HeaderBin)
+    % Compact it
+    NewDb = case file:read_file_info(CompactFile) of
+        {ok, _} -> % Catch up
+            {ok, TargetDB} = make_target_db(Db, CompactFile),
+            copy_compact(Db, TargetDB, true);
+        {error, enoent} -> % Initial compact
+            case native_initial_compact(Db, CompactFile) of
+                {ok, CompactedDb} ->
+                    ?LOG_DEBUG("Native initial compact succeeded for \"~s\"", [Name]),
+                    CompactedDb;
+                {error, Reason} ->
+                    ?LOG_DEBUG("Native compact for \"~s\" failed due to error ~w. Falling back to erlang.",
+                               [Name, Reason]),
+                    {ok, TargetDB} = make_target_db(Db, CompactFile),
+                    copy_compact(Db, TargetDB, false)
+            end
     end,
-    NewDb = init_db(Name, CompactFile, Fd, Header, Db#db.options),
-    NewDb2 = if PurgeSeq > 0 ->
-        {ok, PurgedIdsRevs} = couch_db:get_last_purged(Db),
-        {ok, Pointer, _} = couch_file:append_term(Fd, PurgedIdsRevs),
-        NewDb#db{header=Header#db_header{purge_seq=PurgeSeq, purged_docs=Pointer}};
-    true ->
-        NewDb
-    end,
-    unlink(Fd),
-
-    NewDb3 = copy_compact(Db, NewDb2, Retry),
-    close_db(NewDb3),
+    close_db(NewDb),
     case couch_config:get("couchdb", "consistency_check_compacted", "false") of
     "true" ->
         couch_db_consistency_check:check_db_file(CompactFile);
