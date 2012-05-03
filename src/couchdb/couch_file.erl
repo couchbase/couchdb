@@ -532,8 +532,6 @@ maybe_read_more_iolist(Buffer, DataSize, NextPos, Fd) ->
         [Buffer, Missing]
     end.
 
-read_raw_iolist_int(ReadFd, {Pos, _Size}, Len) -> % 0110 UPGRADE CODE
-    read_raw_iolist_int(ReadFd, Pos, Len);
 read_raw_iolist_int(ReadFd, Pos, Len) ->
     BlockOffset = Pos rem ?SIZE_BLOCK,
     TotalBytes = calculate_total_read_len(BlockOffset, Len),
