@@ -56,7 +56,7 @@ num_docs() -> 76992.  % keep it a multiple of num_set_partitions()
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(650),
+    etap:plan(561),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -285,7 +285,7 @@ fold_view(ActiveParts, ValueGenFun) ->
 
     etap:diag("Verifying some btree metadata"),
     #set_view_group{
-        views = [#set_view{update_seqs = View1UpdateSeqs}],
+        views = [#set_view{}],
         index_header = #set_view_index_header{
             seqs = HeaderUpdateSeqs,
             abitmask = Abitmask,
@@ -302,10 +302,6 @@ fold_view(ActiveParts, ValueGenFun) ->
         [ValueGenFun(I) || I <- lists:seq(0, num_docs() - 1),
             ordsets:is_element(I rem num_set_partitions(), ActiveParts)]),
 
-    etap:is(
-        [{P, S} || {P, S} <- View1UpdateSeqs, ordsets:is_element(P, ActiveParts)],
-        DbSeqsActive,
-        "View1 has right active update seqs list"),
     etap:is(
         [{P, S} || {P, S} <- HeaderUpdateSeqs, ordsets:is_element(P, ActiveParts)],
         DbSeqsActive,
@@ -389,8 +385,7 @@ verify_btrees(ActiveParts, ValueGenFun) ->
         }
     } = Group,
     #set_view{
-        btree = View1Btree,
-        update_seqs = View1UpdateSeqs
+        btree = View1Btree
     } = View1,
     ExpectedBitmask = couch_set_view_util:build_bitmask(
         lists:seq(0, num_set_partitions() - 1)),
@@ -412,7 +407,6 @@ verify_btrees(ActiveParts, ValueGenFun) ->
         {ok, {ExpectedKVCount, [ExpectedBtreeViewReduction], ExpectedBitmask}},
         "View1 Btree has the right reduce value"),
 
-    etap:is(View1UpdateSeqs, DbSeqs, "View1 has right update seqs list"),
     etap:is(HeaderUpdateSeqs, DbSeqs, "Header has right update seqs list"),
     etap:is(Abitmask, ExpectedABitmask, "Header has right active bitmask"),
     etap:is(Pbitmask, ExpectedPBitmask, "Header has right passive bitmask"),

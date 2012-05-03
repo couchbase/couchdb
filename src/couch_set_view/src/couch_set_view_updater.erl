@@ -370,13 +370,7 @@ purge_index(#set_view_group{fd=Fd, views=Views, id_btree=IdBtree}=Group, Db, Par
             case dict:find(Num, ViewKeysToRemoveDict) of
             {ok, RemoveKeys} ->
                 {ok, ViewBtree2} = couch_btree:add_remove(Btree, [], RemoveKeys),
-                case ViewBtree2 =/= Btree of
-                    true ->
-                        PSeqs = ?replace(View#set_view.purge_seqs, PartitionId, PurgeSeq),
-                        View#set_view{btree=ViewBtree2, purge_seqs=PSeqs};
-                    _ ->
-                        View#set_view{btree=ViewBtree2}
-                end;
+                View#set_view{btree = ViewBtree2};
             error -> % no keys to remove in this view
                 View
             end
@@ -670,12 +664,6 @@ write_changes(WriterAcc, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs) ->
             {NewView, {AccC + CleanupCount, AccI + length(AddKeyValues), AccD + length(KeysToRemove)}}
         end,
         {IdBtreePurgedKeyCount, 0, 0}, lists:zip(Group#set_view_group.views, ViewKeyValuesToAdd)),
-    Views3 = lists:map(
-        fun(View) ->
-            NewUpSeqs = update_seqs(PartIdSeqs, View#set_view.update_seqs),
-            View#set_view{update_seqs = NewUpSeqs}
-        end,
-        Views2),
     case ?set_cbitmask(Group) of
     0 ->
         NewCbitmask = 0,
@@ -687,7 +675,7 @@ write_changes(WriterAcc, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs) ->
                 {ok, {_, _, Bm}} = couch_btree:full_reduce(Bt),
                 AccMap bor Bm
             end,
-            IdBitmap, Views3),
+            IdBitmap, Views2),
         NewCbitmask = ?set_cbitmask(Group) band CombinedBitmap,
         CleanupTime = timer:now_diff(os:timestamp(), CleanupStart) / 1000000,
         ?LOG_INFO("Updater for set view `~s`, ~s group `~s`, performed cleanup "
@@ -698,7 +686,7 @@ write_changes(WriterAcc, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs) ->
     Header = Group#set_view_group.index_header,
     NewHeader = Header#set_view_index_header{seqs = NewSeqs, cbitmask = NewCbitmask},
     NewGroup = Group#set_view_group{
-        views = Views3,
+        views = Views2,
         id_btree = IdBtree2,
         index_header = NewHeader
     },

@@ -56,7 +56,7 @@ num_docs() -> 243200.  % keep it a multiple of num_set_partitions()
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(170),
+    etap:plan(154),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -611,12 +611,10 @@ verify_main_group_btrees_1(Group) ->
     View2 = get_view(<<"view_2">>, Views),
     etap:isnt(View1, View2, "Views 1 and 2 have different btrees"),
     #set_view{
-        btree = View1Btree,
-        update_seqs = View1UpdateSeqs
+        btree = View1Btree
     } = View1,
     #set_view{
-        btree = View2Btree,
-        update_seqs = View2UpdateSeqs
+        btree = View2Btree
     } = View2,
     ExpectedBitmask = couch_set_view_util:build_bitmask(lists:seq(0, 31)),
     DbSeqs = couch_set_view_test_util:get_db_seqs(test_set_name(), lists:seq(0, 31)),
@@ -636,8 +634,6 @@ verify_main_group_btrees_1(Group) ->
         {ok, {num_docs() div 2, ExpectedView2Reduction, ExpectedBitmask}},
         "View2 Btree has the right reduce value"),
 
-    etap:is(View1UpdateSeqs, DbSeqs, "View1 has right update seqs list"),
-    etap:is(View2UpdateSeqs, DbSeqs, "View2 has right update seqs list"),
     etap:is(HeaderUpdateSeqs, DbSeqs, "Header has right update seqs list"),
     etap:is(Abitmask, ExpectedBitmask, "Header has right active bitmask"),
     etap:is(Pbitmask, 0, "Header has right passive bitmask"),
@@ -746,12 +742,10 @@ verify_replica_group_btrees_1(MainGroup) ->
     View2 = get_view(<<"view_2">>, Views),
     etap:isnt(View1, View2, "Views 1 and 2 have different btrees"),
     #set_view{
-        btree = View1Btree,
-        update_seqs = View1UpdateSeqs
+        btree = View1Btree
     } = View1,
     #set_view{
-        btree = View2Btree,
-        update_seqs = View2UpdateSeqs
+        btree = View2Btree
     } = View2,
 
     etap:is(
@@ -767,8 +761,6 @@ verify_replica_group_btrees_1(MainGroup) ->
         {ok, {0, [0], 0}},
         "View2 Btree has the right reduce value"),
 
-    etap:is(View1UpdateSeqs, [], "View1 has right update seqs list"),
-    etap:is(View2UpdateSeqs, [], "View2 has right update seqs list"),
     etap:is(HeaderUpdateSeqs, [], "Header has right update seqs list"),
     etap:is(Abitmask, 0, "Header has right active bitmask"),
     etap:is(Pbitmask, 0, "Header has right passive bitmask"),
@@ -829,12 +821,10 @@ verify_replica_group_btrees_2(MainGroup) ->
     View2 = get_view(<<"view_2">>, Views),
     etap:isnt(View1, View2, "Views 1 and 2 have different btrees"),
     #set_view{
-        btree = View1Btree,
-        update_seqs = View1UpdateSeqs
+        btree = View1Btree
     } = View1,
     #set_view{
-        btree = View2Btree,
-        update_seqs = View2UpdateSeqs
+        btree = View2Btree
     } = View2,
     ExpectedBitmask = couch_set_view_util:build_bitmask(lists:seq(32, 63)),
     DbSeqs = couch_set_view_test_util:get_db_seqs(test_set_name(), lists:seq(32, 63)),
@@ -854,8 +844,6 @@ verify_replica_group_btrees_2(MainGroup) ->
         {ok, {num_docs() div 2, ExpectedView2Reduction, ExpectedBitmask}},
         "View2 Btree has the right reduce value"),
 
-    etap:is(View1UpdateSeqs, DbSeqs, "View1 has right update seqs list"),
-    etap:is(View2UpdateSeqs, DbSeqs, "View2 has right update seqs list"),
     etap:is(HeaderUpdateSeqs, DbSeqs, "Header has right update seqs list"),
     etap:is(Abitmask, 0, "Header has right active bitmask"),
     etap:is(Pbitmask, ExpectedBitmask, "Header has right passive bitmask"),
@@ -958,12 +946,10 @@ verify_main_group_btrees_3(Group) ->
     View2 = get_view(<<"view_2">>, Views),
     etap:isnt(View1, View2, "Views 1 and 2 have different btrees"),
     #set_view{
-        btree = View1Btree,
-        update_seqs = View1UpdateSeqs
+        btree = View1Btree
     } = View1,
     #set_view{
-        btree = View2Btree,
-        update_seqs = View2UpdateSeqs
+        btree = View2Btree
     } = View2,
     ExpectedBitmask = couch_set_view_util:build_bitmask(lists:seq(0, 63)),
     DbSeqs = couch_set_view_test_util:get_db_seqs(test_set_name(), lists:seq(0, 63)),
@@ -982,8 +968,6 @@ verify_main_group_btrees_3(Group) ->
         {ok, {num_docs(), ExpectedView2Reduction, ExpectedBitmask}},
         "View2 Btree has the right reduce value"),
 
-    etap:is(View1UpdateSeqs, DbSeqs, "View1 has right update seqs list"),
-    etap:is(View2UpdateSeqs, DbSeqs, "View2 has right update seqs list"),
     etap:is(HeaderUpdateSeqs, DbSeqs, "Header has right update seqs list"),
     etap:is(Abitmask, ExpectedBitmask, "Header has right active bitmask"),
     etap:is(Pbitmask, 0, "Header has right passive bitmask"),

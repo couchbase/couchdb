@@ -55,7 +55,7 @@
 -type btree_state()              :: 'nil' | tuple().
 -type partition_seq()            :: {partition_id(), update_seq()}.
 -type partition_seqs()           :: ordsets:ordset(partition_seq()).
--type view_state()               :: {btree_state(), partition_seqs(), partition_seqs()}.
+-type view_state()               :: btree_state().
 -type set_view_group_type()      :: 'main' | 'replica'.
 -type set_view_ets_stats_key()   :: {binary(), binary(), binary(), set_view_group_type()}.
 -type ejson_object()             :: {[{binary() | atom(), term()}]}.
@@ -160,8 +160,6 @@
 
 -record(set_view, {
     id_num = 0        :: non_neg_integer(),
-    update_seqs = []  :: partition_seqs(),
-    purge_seqs = []   :: partition_seqs(),
     map_names = []    :: [binary()],
     def = <<>>        :: binary(),
     btree = nil       :: 'nil' | #btree{},

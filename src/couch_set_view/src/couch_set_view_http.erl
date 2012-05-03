@@ -430,12 +430,16 @@ view_etag(Group, View) ->
 
 view_etag(Group, {reduce, _, View}, Extra) ->
     view_etag(Group, View, Extra);
-view_etag(#set_view_group{sig = Sig, index_header = Header},
-        #set_view{update_seqs = UpdateSeqs, purge_seqs = PurgeSeqs},
-        Extra) ->
+view_etag(Group, #set_view{}, Extra) ->
+    #set_view_group{
+        sig = Sig,
+        index_header = Header
+    } = Group,
     #set_view_index_header{
         num_partitions = NumPartitions,
-        abitmask = Abitmask
+        abitmask = Abitmask,
+        seqs = UpdateSeqs,
+        purge_seqs = PurgeSeqs
     } = Header,
     couch_httpd:make_etag(
         {Sig, UpdateSeqs, PurgeSeqs, Extra, NumPartitions, Abitmask}).

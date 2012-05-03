@@ -28,7 +28,7 @@ num_docs() -> 92800.  % keep it a multiple of num_set_partitions()
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(898),
+    etap:plan(770),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -214,12 +214,10 @@ verify_btrees([], _ExpectedView2Reduction) ->
     View2 = get_view(<<"view_2">>, Views),
     etap:isnt(View1, View2, "Views 1 and 2 have different btrees"),
     #set_view{
-        btree = View1Btree,
-        update_seqs = View1UpdateSeqs
+        btree = View1Btree
     } = View1,
     #set_view{
-        btree = View2Btree,
-        update_seqs = View2UpdateSeqs
+        btree = View2Btree
     } = View2,
 
     etap:is(
@@ -235,8 +233,6 @@ verify_btrees([], _ExpectedView2Reduction) ->
         {ok, {0, [0], 0}},
         "View2 Btree has the right reduce value"),
 
-    etap:is(View1UpdateSeqs, [], "View1 has right update seqs list"),
-    etap:is(View2UpdateSeqs, [], "View2 has right update seqs list"),
     etap:is(HeaderUpdateSeqs, [], "Header has right update seqs list"),
     etap:is(Abitmask, 0, "Header has right active bitmask"),
     etap:is(Pbitmask, 0, "Header has right passive bitmask"),
@@ -286,12 +282,10 @@ verify_btrees(ActiveParts, ExpectedView2Reduction) ->
     View2 = get_view(<<"view_2">>, Views),
     etap:isnt(View1, View2, "Views 1 and 2 have different btrees"),
     #set_view{
-        btree = View1Btree,
-        update_seqs = View1UpdateSeqs
+        btree = View1Btree
     } = View1,
     #set_view{
-        btree = View2Btree,
-        update_seqs = View2UpdateSeqs
+        btree = View2Btree
     } = View2,
     ExpectedBitmask = couch_set_view_util:build_bitmask(ActiveParts),
     DbSeqs = couch_set_view_test_util:get_db_seqs(test_set_name(), ActiveParts),
@@ -310,8 +304,6 @@ verify_btrees(ActiveParts, ExpectedView2Reduction) ->
         {ok, {ExpectedKVCount, [ExpectedView2Reduction], ExpectedBitmask}},
         "View2 Btree has the right reduce value"),
 
-    etap:is(View1UpdateSeqs, DbSeqs, "View1 has right update seqs list"),
-    etap:is(View2UpdateSeqs, DbSeqs, "View2 has right update seqs list"),
     etap:is(HeaderUpdateSeqs, DbSeqs, "Header has right update seqs list"),
     etap:is(Abitmask, ExpectedBitmask, "Header has right active bitmask"),
     etap:is(Pbitmask, 0, "Header has right passive bitmask"),

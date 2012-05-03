@@ -182,9 +182,7 @@ compact_view(Fd, View, #set_view{btree = ViewBtree} = EmptyView, FilterFun, Acc0
 
     ViewBtree2 = ViewBtree#btree{root = NewBtreeRoot},
     NewView = EmptyView#set_view{
-        btree = ViewBtree2,
-        update_seqs = View#set_view.update_seqs,
-        purge_seqs = View#set_view.purge_seqs
+        btree = ViewBtree2
     },
     {NewView, Acc2}.
 

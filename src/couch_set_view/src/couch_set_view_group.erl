@@ -347,8 +347,7 @@ handle_call({define_view, NumPartitions, ActiveList, ActiveBitmask,
         fun(PartId) -> {PartId, 0} end, lists:usort(ActiveList ++ PassiveList)),
     #set_view_group{
         name = DDocId,
-        index_header = Header,
-        views = Views
+        index_header = Header
     } = Group,
     NewHeader = Header#set_view_index_header{
         num_partitions = NumPartitions,
@@ -370,9 +369,7 @@ handle_call({define_view, NumPartitions, ActiveList, ActiveBitmask,
         NewGroup = Group#set_view_group{
             db_set = DbSet,
             index_header = NewHeader,
-            replica_pid = ReplicaPid,
-            views = lists:map(
-                fun(V) -> V#set_view{update_seqs = Seqs, purge_seqs = Seqs} end, Views)
+            replica_pid = ReplicaPid
         },
         ok = commit_header(NewGroup, true),
         NewState = State#state{
@@ -984,13 +981,7 @@ get_index_header_data(Group) ->
         views = Views,
         index_header = Header
     } = Group,
-    ViewStates = [
-        {
-            couch_btree:get_state(V#set_view.btree),
-            V#set_view.update_seqs,
-            V#set_view.purge_seqs
-        } || V <- Views
-    ],
+    ViewStates = [couch_btree:get_state(V#set_view.btree) || V <- Views],
     Header#set_view_index_header{
         id_btree_state = couch_btree:get_state(IdBtree),
         view_states = ViewStates
@@ -1239,7 +1230,7 @@ reset_file(Fd, SetName, #set_view_group{
                  'nil' | #set_view_index_header{}) -> #set_view_group{}.
 init_group(Fd, #set_view_group{views = Views} = Group, nil) ->
     EmptyHeader = #set_view_index_header{
-        view_states = [{nil, [], []} || _ <- Views]
+        view_states = [nil || _ <- Views]
     },
     init_group(Fd, Group, EmptyHeader);
 init_group(Fd, #set_view_group{views = Views0} = Group, IndexHeader) ->
@@ -1248,11 +1239,6 @@ init_group(Fd, #set_view_group{views = Views0} = Group, IndexHeader) ->
         id_btree_state = IdBtreeState,
         view_states = ViewStates
     } = IndexHeader,
-    StateUpdate = fun
-        ({_, _, _}=State) -> State;
-        (State) -> {State, [], []}
-    end,
-    ViewStates2 = lists:map(StateUpdate, ViewStates),
     IdTreeReduce = fun(reduce, KVs) ->
         {length(KVs), couch_set_view_util:partitions_map(KVs, 0)};
     (rereduce, [First | Rest]) ->
@@ -1266,7 +1252,7 @@ init_group(Fd, #set_view_group{views = Views0} = Group, IndexHeader) ->
     {ok, IdBtree} = couch_btree:open(
         IdBtreeState, Fd, [{reduce, IdTreeReduce} | BtreeOptions]),
     Views2 = lists:zipwith(
-        fun({BTState, USeqs, PSeqs}, #set_view{options = Options} = View) ->
+        fun(BTState, #set_view{options = Options} = View) ->
             ReduceFun =
                 fun(reduce, KVs) ->
                     AllPartitionsBitMap = couch_set_view_util:partitions_map(KVs, 0),
@@ -1292,9 +1278,9 @@ init_group(Fd, #set_view_group{views = Views0} = Group, IndexHeader) ->
             end,
             {ok, Btree} = couch_btree:open(
                 BTState, Fd, [{less, Less}, {reduce, ReduceFun} | BtreeOptions]),
-            View#set_view{btree=Btree, update_seqs=USeqs, purge_seqs=PSeqs}
+            View#set_view{btree = Btree}
         end,
-        ViewStates2, Views),
+        ViewStates, Views),
     Group#set_view_group{
         fd = Fd,
         id_btree = IdBtree,
@@ -1786,8 +1772,7 @@ update_header(State, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs, NewPurgeSeq
                     pbitmask = Pbitmask,
                     cbitmask = Cbitmask,
                     replicas_on_transfer = ReplicasOnTransfer
-                } = Header,
-            views = Views
+                } = Header
         } = Group,
         replica_partitions = ReplicaParts
     } = State,
@@ -1800,11 +1785,7 @@ update_header(State, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs, NewPurgeSeq
                 seqs = NewSeqs,
                 purge_seqs = NewPurgeSeqs,
                 replicas_on_transfer = NewRelicasOnTransfer
-            },
-            views = lists:map(
-                fun(V) ->
-                    V#set_view{update_seqs = NewSeqs, purge_seqs = NewPurgeSeqs}
-                end, Views)
+            }
         },
         replica_partitions = NewReplicaParts
     },
