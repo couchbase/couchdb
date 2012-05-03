@@ -1880,7 +1880,10 @@ stop_cleaner(#state{cleaner_pid = Pid, group = OldGroup} = State) when is_pid(Pi
             commit_ref = schedule_commit(State)
         };
     {'EXIT', Pid, Reason} ->
-        exit({cleanup_process_died, Reason})
+        ?LOG_ERROR("Cleanup process ~p for set view `~s`, ~s group `~s`, died "
+             "with reason: ~p",
+             [Pid, ?set_name(State), ?type(State), ?group_id(State), Reason]),
+        State#state{cleaner_pid = nil}
     end.
 
 
