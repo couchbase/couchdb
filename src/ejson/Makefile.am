@@ -93,7 +93,7 @@ endif
 if WINDOWS
 $(EJSON) : $(ejson_msbuild) $(ejson_vcproj)
 	$(MKDIR_P) "$(ejsonprivdir)" || true
-	(cd win32 && ./msbuild.bat)
+	(cd win32 && cmd /c msbuild.bat)
 	cp $(EJSON) $(ejsonprivdir)
 
 all: $(EJSON)

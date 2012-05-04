@@ -77,7 +77,7 @@ endif
 if WINDOWS
 $(SNAPPY_NIF) : $(snappy_msbuild) $(snappy_vcproj)
 	$(MKDIR_P) "$(snappyprivdir)" || true
-	(cd win32 && ./msbuild.bat)
+	(cd win32 && cmd /c msbuild.bat)
 	cp $(SNAPPY_NIF) $(snappyprivdir)
 
 all: $(SNAPPY_NIF)

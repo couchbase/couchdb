@@ -82,7 +82,7 @@ endif
 if WINDOWS
 $(MAPREDUCE_NIF) : $(mapreduce_msbuild) $(mapreduce_vcproj)
 	$(MKDIR_P) "$(mapreduceprivdir)" || true
-	(cd win32 && ./msbuild.bat)
+	(cd win32 && cmd /c msbuild.bat)
 	cp $(MAPREDUCE_NIF) $(mapreduceprivdir)
 
 all: $(MAPREDUCE_NIF)

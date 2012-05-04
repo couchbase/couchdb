@@ -74,7 +74,7 @@ if WINDOWS
 
 $(COUCH_ICU_DRIVER) : icu_driver/couch_icu_driver.c $(icu_driver_msbuild) $(icu_driver_vcproj)
 	$(MKDIR_P) "$(couchprivlibdir)" || true
-	(cd icu_driver/win32 && ./msbuild.bat)
+	(cd icu_driver/win32 && cmd /c msbuild.bat)
 	cp $(ICU_OUTPUT_DIR)/couch_icu_driver.dll $(couchprivlibdir)
 	cp $(ICU_OUTPUT_DIR)/couch_icu_driver.lib $(couchprivlibdir)
 
@@ -103,7 +103,7 @@ $(WIN_ERL_INCLUDE):$(ERLANG_INCLUDE)
 
 $(COUCH_EJSON_COMPARE) : couch_ejson_compare/couch_ejson_compare.c $(EJSON_COMPARE_MSBUILD) $(EJSON_COMPARE_VCPROJ)
 	$(MKDIR_P) "$(couchprivlibdir)" || true
-	(cd couch_ejson_compare/win32 && ./msbuild.bat)
+	(cd couch_ejson_compare/win32 && cmd /c msbuild.bat)
 	cp $(EJSON_COMPARE_DIR)/couch_ejson_compare.dll $(couchprivlibdir)
 	cp $(EJSON_COMPARE_DIR)/couch_ejson_compare.lib $(couchprivlibdir)
 
@@ -142,7 +142,6 @@ if WINDOWS
 	$(INSTALL) $(ICU_LOCAL_BIN)/icuuc44.dll $(bindir)
 	$(INSTALL) $(ICU_LOCAL_BIN)/icudt44.dll $(bindir)
 	$(INSTALL) $(ICU_LOCAL_BIN)/icuin44.dll $(bindir)
-	$(INSTALL) $(JS_LIB_BINARY) $(bindir)
 endif
 
 uninstall-local:
