@@ -1525,9 +1525,11 @@ persist_partition_states(State, ActiveList, PassiveList, CleanupList) ->
     end,
     case ordsets:intersection(PassiveList, ReplicasOnTransfer2) of
     [] ->
+        ReplicasToCleanup = [],
         PassiveList3 = PassiveList2,
         ReplicasOnTransfer3 = ReplicasOnTransfer2;
     CommonRep2 ->
+        ReplicasToCleanup = CommonRep2,
         PassiveList3 = ordsets:subtract(PassiveList2, CommonRep2),
         ReplicasOnTransfer3 = ordsets:subtract(ReplicasOnTransfer2, CommonRep2)
     end,
@@ -1535,11 +1537,11 @@ persist_partition_states(State, ActiveList, PassiveList, CleanupList) ->
     [] ->
         ReplicaParts2 = ReplicaParts,
         ReplicasOnTransfer4 = ReplicasOnTransfer3,
-        ReplicasToCleanup = [];
+        ReplicasToCleanup2 = ReplicasToCleanup;
     CommonRep3 ->
         ReplicaParts2 = ordsets:subtract(ReplicaParts, CommonRep3),
         ReplicasOnTransfer4 = ordsets:subtract(ReplicasOnTransfer3, CommonRep3),
-        ReplicasToCleanup = CommonRep3
+        ReplicasToCleanup2 = ordsets:union(ReplicasToCleanup, CommonRep3)
     end,
     {ok, NewAbitmask1, NewPbitmask1, NewSeqs1, NewPurgeSeqs1} =
         set_active_partitions(
@@ -1575,7 +1577,7 @@ persist_partition_states(State, ActiveList, PassiveList, CleanupList) ->
         ReplicaParts2),
     % A crash might happen between updating our header and updating the state of
     % replica view group. The init function must detect and correct this.
-    ok = set_state(ReplicaPid, ReplicasToMarkActive, [], ReplicasToCleanup),
+    ok = set_state(ReplicaPid, ReplicasToMarkActive, [], ReplicasToCleanup2),
     State2.
 
 
