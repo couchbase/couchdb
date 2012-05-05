@@ -351,6 +351,7 @@ handle_call({create, DbName, Options}, From, Server) ->
         {reply, file_exists, Server}
     end;
 handle_call({delete, DbName, _Options}, _From, Server) ->
+    ?LOG_INFO("Deleting database ~s", [DbName]),
     DbNameList = binary_to_list(DbName),
     case check_dbname(Server, DbNameList) of
     ok ->
@@ -385,8 +386,10 @@ handle_call({delete, DbName, _Options}, _From, Server) ->
             Server
         end,
         Files = filelib:wildcard(FullFilepath ++ ".*"),
-        Result =
-            [catch couch_file:delete(Server#server.root_dir, F) || F <- Files],
+        Result = lists:map(fun(F) ->
+                ?LOG_INFO("Deleting file ~s", [F]),
+                couch_file:delete(Server#server.root_dir, F)
+            end, Files),
 
         case Result of
         [ok|_] ->
