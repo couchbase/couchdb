@@ -63,11 +63,11 @@
     compactor_file = nil               :: 'nil' | pid(),
     compactor_fun = nil                :: 'nil' | compact_fun(),
     commit_ref = nil                   :: 'nil' | reference(),
-    waiting_list = []                  :: [term()],
+    waiting_list = []                  :: [{From::{pid(), reference()}, boolean()}],
     cleaner_pid = nil                  :: 'nil' | pid(),
     shutdown = false                   :: boolean(),
     replica_partitions = []            :: ordsets:ordset(partition_id()),
-    pending_transition_waiters = []    :: [{term(), #set_view_group_req{}}]
+    pending_transition_waiters = []    :: [{From::{pid(), reference()}, #set_view_group_req{}}]
 }).
 
 -define(inc_stat(Group, S),
@@ -897,36 +897,48 @@ code_change(_OldVsn, State, _Extra) ->
 
 -spec reply_with_group(#set_view_group{},
                        ordsets:ordset(partition_id()),
-                       [term()]) -> no_return().
-reply_with_group(_Group0, _ReplicaPartitions, []) ->
+                       [{{pid(), reference()}, boolean()}]) -> no_return().
+reply_with_group(_Group, _ReplicaPartitions, []) ->
     ok;
-reply_with_group(Group0, ReplicaPartitions, WaitList) ->
+reply_with_group(Group, ReplicaPartitions, WaitList) ->
     #set_view_group{
-        ref_counter = RefCnt,
-        debug_info = DebugInfo
-    } = Group0,
+        ref_counter = RefCnt
+    } = Group,
     ActiveReplicasBitmask = couch_set_view_util:build_bitmask(
-        ?set_replicas_on_transfer(Group0)),
-    [Stats] = ets:lookup(?SET_VIEW_STATS_ETS, ?set_view_group_stats_key(Group0)),
-    Group = Group0#set_view_group{
-        debug_info = DebugInfo#set_view_debug_info{
-            stats = Stats,
-            original_abitmask = ?set_abitmask(Group0),
-            original_pbitmask = ?set_pbitmask(Group0),
-            replica_partitions = ReplicaPartitions
-        }
-    },
-    lists:foreach(fun({Pid, _} = From) ->
-        couch_ref_counter:add(RefCnt, Pid),
-        gen_server:reply(From, {ok, Group, ActiveReplicasBitmask})
-    end, WaitList).
+        ?set_replicas_on_transfer(Group)),
+    _ = lists:foldr(
+        fun({{Pid, _} = From, false}, DebugGroup) ->
+            couch_ref_counter:add(RefCnt, Pid),
+            gen_server:reply(From, {ok, Group, ActiveReplicasBitmask}),
+            DebugGroup;
+        ({{Pid, _} = From, true}, nil) ->
+            [Stats] = ets:lookup(?SET_VIEW_STATS_ETS, ?set_view_group_stats_key(Group)),
+            DebugGroup = Group#set_view_group{
+                debug_info = #set_view_debug_info{
+                    stats = Stats,
+                    original_abitmask = ?set_abitmask(Group),
+                    original_pbitmask = ?set_pbitmask(Group),
+                    replica_partitions = ReplicaPartitions
+                }
+            },
+            couch_ref_counter:add(RefCnt, Pid),
+            gen_server:reply(From, {ok, DebugGroup, ActiveReplicasBitmask}),
+            DebugGroup;
+        ({{Pid, _} = From, true}, DebugGroup) ->
+            couch_ref_counter:add(RefCnt, Pid),
+            gen_server:reply(From, {ok, DebugGroup, ActiveReplicasBitmask}),
+            DebugGroup
+        end,
+        nil, WaitList).
 
 
 -spec reply_all(#state{}, term()) -> #state{}.
 reply_all(#state{waiting_list = []} = State, _Reply) ->
     State;
 reply_all(#state{waiting_list = WaitList} = State, Reply) ->
-    lists:foreach(fun(From) -> catch gen_server:reply(From, Reply) end, WaitList),
+    lists:foreach(fun({From, _Debug}) ->
+        catch gen_server:reply(From, Reply)
+    end, WaitList),
     State#state{waiting_list = []}.
 
 
@@ -1624,16 +1636,19 @@ notify_pending_transition_waiters(State) ->
     {TransWaiters2, WaitList2, GroupReplyList, TriggerGroupUpdate} =
         lists:foldr(
             fun({From, Req} = TransWaiter, {AccTrans, AccWait, ReplyAcc, AccTriggerUp}) ->
-                #set_view_group_req{stale = Stale} = Req,
+                #set_view_group_req{
+                    stale = Stale,
+                    debug = Debug
+                } = Req,
                 case is_any_partition_pending(Req, Group) of
                 true ->
                     {[TransWaiter | AccTrans], AccWait, ReplyAcc, AccTriggerUp};
                 false when Stale == ok ->
-                    {AccTrans, AccWait, [From | ReplyAcc], AccTriggerUp};
+                    {AccTrans, AccWait, [{From, Debug} | ReplyAcc], AccTriggerUp};
                 false when Stale == update_after ->
-                    {AccTrans, AccWait, [From | ReplyAcc], true};
+                    {AccTrans, AccWait, [{From, Debug} | ReplyAcc], true};
                 false when Stale == false ->
-                    {AccTrans, [From | AccWait], ReplyAcc, true}
+                    {AccTrans, [{From, Debug} | AccWait], ReplyAcc, true}
                 end
             end,
             {[], WaitList, [], false},
@@ -2399,7 +2414,7 @@ is_any_partition_pending(Req, Group) ->
 
 
 -spec process_view_group_request(#set_view_group_req{}, term(), #state{}) -> #state{}.
-process_view_group_request(#set_view_group_req{stale = false}, From, State) ->
+process_view_group_request(#set_view_group_req{stale = false} = Req, From, State) ->
     #state{
         group = Group,
         updater_pid = UpPid,
@@ -2407,30 +2422,33 @@ process_view_group_request(#set_view_group_req{stale = false}, From, State) ->
         waiting_list = WaitList,
         replica_partitions = ReplicaParts
     } = State,
+    #set_view_group_req{debug = Debug} = Req,
     case UpPid of
     nil ->
-        start_updater(State#state{waiting_list = [From | WaitList]});
+        start_updater(State#state{waiting_list = [{From, Debug} | WaitList]});
     _ when is_pid(UpPid), UpState =:= updating_passive ->
-        reply_with_group(Group, ReplicaParts, [From]),
+        reply_with_group(Group, ReplicaParts, [{From, Debug}]),
         State;
     _ when is_pid(UpPid) ->
-        State#state{waiting_list = [From | WaitList]}
+        State#state{waiting_list = [{From, Debug} | WaitList]}
     end;
 
-process_view_group_request(#set_view_group_req{stale = ok}, From, State) ->
+process_view_group_request(#set_view_group_req{stale = ok} = Req, From, State) ->
     #state{
         group = Group,
         replica_partitions = ReplicaParts
     } = State,
-    reply_with_group(Group, ReplicaParts, [From]),
+    #set_view_group_req{debug = Debug} = Req,
+    reply_with_group(Group, ReplicaParts, [{From, Debug}]),
     State;
 
-process_view_group_request(#set_view_group_req{stale = update_after}, From, State) ->
+process_view_group_request(#set_view_group_req{stale = update_after} = Req, From, State) ->
     #state{
         group = Group,
         replica_partitions = ReplicaParts
     } = State,
-    reply_with_group(Group, ReplicaParts, [From]),
+    #set_view_group_req{debug = Debug} = Req,
+    reply_with_group(Group, ReplicaParts, [{From, Debug}]),
     case State#state.updater_pid of
     Pid when is_pid(Pid) ->
         State;

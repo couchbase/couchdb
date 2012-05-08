@@ -141,9 +141,13 @@ test() ->
 get_group_snapshots() ->
     GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
     {ok, MainGroup, 0} = gen_server:call(
-        GroupPid, #set_view_group_req{stale = false}, infinity),
+        GroupPid,
+        #set_view_group_req{stale = false, debug = true},
+        infinity),
     {ok, RepGroup, 0} = gen_server:call(
-        MainGroup#set_view_group.replica_pid, #set_view_group_req{stale = false}, infinity),
+        MainGroup#set_view_group.replica_pid,
+        #set_view_group_req{stale = false, debug = true},
+        infinity),
     couch_ref_counter:drop(MainGroup#set_view_group.ref_counter),
     couch_ref_counter:drop(RepGroup#set_view_group.ref_counter),
     {MainGroup, RepGroup}.

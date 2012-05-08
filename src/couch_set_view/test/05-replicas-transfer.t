@@ -282,7 +282,8 @@ query_reduce_view(ViewName, Stale, Partitions) ->
     etap:diag("Querying reduce view " ++ binary_to_list(ViewName) ++ " with ?group=true"),
     GroupReq = #set_view_group_req{
         stale = Stale,
-        wanted_partitions = Partitions
+        wanted_partitions = Partitions,
+        debug = true
     },
     {ok, View, Group, []} = couch_set_view:get_reduce_view(
         test_set_name(), ddoc_id(), ViewName, GroupReq),
@@ -726,7 +727,8 @@ verify_replica_group_btrees_1(MainGroup) ->
         nil,
         "Main group points to a nil replica group"),
     {ok, RepGroup, 0} = gen_server:call(
-        MainGroup#set_view_group.replica_pid, #set_view_group_req{stale = ok}),
+        MainGroup#set_view_group.replica_pid,
+        #set_view_group_req{stale = ok, debug = true}),
     #set_view_group{
         id_btree = IdBtree,
         views = Views,
@@ -805,7 +807,8 @@ verify_replica_group_btrees_2(MainGroup) ->
         nil,
         "Main group points to a nil replica group"),
     {ok, RepGroup, 0} = gen_server:call(
-        MainGroup#set_view_group.replica_pid, #set_view_group_req{stale = ok}),
+        MainGroup#set_view_group.replica_pid,
+        #set_view_group_req{stale = ok, debug = true}),
     #set_view_group{
         id_btree = IdBtree,
         views = Views,

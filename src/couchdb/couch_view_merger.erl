@@ -641,7 +641,8 @@ map_set_view_folder(ViewSpec, MergeParams, UserCtx, DDoc, Queue) ->
         ViewGroupReq1 = #set_view_group_req{
             stale = Stale,
             update_stats = true,
-            wanted_partitions = WantedPartitions
+            wanted_partitions = WantedPartitions,
+            debug = ViewArgs#view_query_args.debug
         },
         case prepare_set_view(
             ViewSpec, ViewGroupReq1, DDoc, Queue, fun couch_set_view:get_map_view/4) of
@@ -952,7 +953,8 @@ reduce_set_view_folder(ViewSpec, MergeParams, DDoc, Queue) ->
         ViewGroupReq = #set_view_group_req{
             stale = ViewArgs#view_query_args.stale,
             update_stats = true,
-            wanted_partitions = WantedPartitions
+            wanted_partitions = WantedPartitions,
+            debug = ViewArgs#view_query_args.debug
         },
         prepare_set_view(ViewSpec, ViewGroupReq, DDoc, Queue, fun couch_set_view:get_reduce_view/4)
     end,
@@ -1355,10 +1357,13 @@ simple_set_view_query(Params, DDoc, Req) ->
 
     Stale = list_to_existing_atom(string:to_lower(
         couch_httpd:qs_value(Req, "stale", "update_after"))),
+    Debug = couch_set_view_http:parse_bool_param(
+        couch_httpd:qs_value(Req, "debug", "false")),
     GroupReq = #set_view_group_req{
         stale = Stale,
         update_stats = true,
-        wanted_partitions = Partitions
+        wanted_partitions = Partitions,
+        debug = Debug
     },
 
     case get_set_view(

@@ -281,7 +281,8 @@ doc_id(I) ->
 
 fold_view(ActiveParts, ValueGenFun) ->
     {ok, FoldView, Group, _} = couch_set_view:get_reduce_view(
-        test_set_name(), ddoc_id(), <<"view_1">>, #set_view_group_req{stale = false}),
+        test_set_name(), ddoc_id(), <<"view_1">>,
+        #set_view_group_req{stale = false, debug = true}),
 
     etap:diag("Verifying some btree metadata"),
     #set_view_group{
@@ -456,7 +457,7 @@ verify_btrees(ActiveParts, ValueGenFun) ->
 get_group_snapshot() ->
     GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
     {ok, Group, 0} = gen_server:call(
-        GroupPid, #set_view_group_req{stale = false}, infinity),
+        GroupPid, #set_view_group_req{stale = false, debug = true}, infinity),
     Group.
 
 

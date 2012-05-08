@@ -157,7 +157,7 @@ test() ->
 
 get_group_snapshot(StaleType) ->
     {ok, Group} = couch_set_view:get_group(
-        test_set_name(), ddoc_id(), #set_view_group_req{stale = StaleType}),
+        test_set_name(), ddoc_id(), #set_view_group_req{stale = StaleType, debug = true}),
     couch_ref_counter:drop(Group#set_view_group.ref_counter),
     Group.
 

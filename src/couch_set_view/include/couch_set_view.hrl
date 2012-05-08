@@ -93,7 +93,8 @@
 -record(set_view_group_req, {
     stale = updater_after   :: staleness(),
     update_stats = false    :: boolean(),
-    wanted_partitions = []  :: [partition_id()]
+    wanted_partitions = []  :: [partition_id()],
+    debug = false           :: boolean()
 }).
 
 -record(set_view_transition, {
@@ -182,7 +183,7 @@
     type = main                         :: set_view_group_type(),
     replica_group = nil                 :: 'nil' | #set_view_group{},
     replica_pid = nil                   :: 'nil' | pid(),
-    debug_info = #set_view_debug_info{} :: #set_view_debug_info{},
+    debug_info = nil                    :: #set_view_debug_info{} | 'nil',
     filepath = ""                       :: string()
 }).
 
