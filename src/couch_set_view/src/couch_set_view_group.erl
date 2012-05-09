@@ -1901,12 +1901,7 @@ cleaner(#state{group = Group}) ->
     PurgeFun = couch_set_view_util:make_btree_purge_fun(Group),
     {ok, NewIdBtree, {Go, IdPurgedCount}} =
         couch_btree:guided_purge(IdBtree, PurgeFun, {go, 0}),
-    {TotalPurgedCount, NewViews} = case Go of
-    go ->
-        clean_views(go, PurgeFun, Views, IdPurgedCount, []);
-    stop ->
-        {IdPurgedCount, Views}
-    end,
+    {TotalPurgedCount, NewViews} = clean_views(Go, PurgeFun, Views, IdPurgedCount, []),
     ok = couch_set_view_util:close_raw_read_fd(Group),
     {ok, {_, IdBitmap}} = couch_btree:full_reduce(NewIdBtree),
     CombinedBitmap = lists:foldl(
