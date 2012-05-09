@@ -2190,6 +2190,24 @@ maybe_fix_replica_group(ReplicaPid, Group) ->
             end
         end,
         [], RepGroupPassive),
+    case CleanupList of
+    [] ->
+        ok;
+    _ ->
+        ?LOG_INFO("Set view `~s`, main group `~s`, fixing replica group by marking "
+                  " partitions ~w for cleanup because they were already transferred into "
+                  " the main group",
+                  [Group#set_view_group.set_name, Group#set_view_group.set_name, CleanupList])
+    end,
+    case ActiveList of
+    [] ->
+        ok;
+    _ ->
+        ?LOG_INFO("Set view `~s`, main group `~s`, fixing replica group by marking "
+                  " partitions ~w as active because they are marked as on transfer in "
+                  " the main group",
+                  [Group#set_view_group.set_name, Group#set_view_group.set_name, ActiveList])
+    end,
     ok = set_state(ReplicaPid, ActiveList, [], CleanupList).
 
 
