@@ -404,6 +404,9 @@ handle_call(is_view_defined, _From, #state{group = Group} = State) ->
 handle_call({partition_deleted, master}, _From, State) ->
     Error = {error, {db_deleted, ?master_dbname((?set_name(State)))}},
     State2 = reply_all(State, Error),
+    ?LOG_INFO("Set view `~s`, ~s group `~s`, going to shutdown because "
+              "master database was deleted",
+              [?set_name(State), ?type(State), ?group_id(State)]),
     {stop, shutdown, shutdown, State2};
 handle_call({partition_deleted, PartId}, _From, #state{group = Group} = State) ->
     Mask = 1 bsl PartId,
@@ -412,6 +415,9 @@ handle_call({partition_deleted, PartId}, _From, #state{group = Group} = State) -
     true ->
         Error = {error, {db_deleted, ?dbname((?set_name(State)), PartId)}},
         State2 = reply_all(State, Error),
+        ?LOG_INFO("Set view `~s`, ~s group `~s`, going to shutdown because "
+                  "partition ~p was deleted",
+                  [?set_name(State), ?type(State), ?group_id(State), PartId]),
         {stop, shutdown, shutdown, State2};
     false ->
         {reply, ignore, State, ?TIMEOUT}
@@ -767,11 +773,12 @@ handle_info({'EXIT', Pid, {clean_group, NewGroup, Count, Time}}, #state{cleaner_
 handle_info({'EXIT', Pid, Reason}, #state{cleaner_pid = Pid} = State) ->
     {stop, {cleaner_died, Reason}, State#state{cleaner_pid = nil}};
 
-handle_info({'EXIT', Pid, shutdown},
+handle_info({'EXIT', Pid, Reason},
     #state{group = #set_view_group{db_set = Pid}} = State) ->
-    ?LOG_INFO("Set view `~s`, ~s group `~s`, terminating because database set "
-              "was shutdown", [?set_name(State), ?type(State), ?group_id(State)]),
-    {stop, normal, State};
+    ?LOG_INFO("Set view `~s`, ~s group `~s`, terminating because database set ~p"
+              " exited with reason: ~p",
+              [?set_name(State), ?type(State), ?group_id(State), Pid, Reason]),
+    {stop, Reason, State};
 
 handle_info({'EXIT', Pid, {updater_finished, Result}}, #state{updater_pid = Pid} = State) ->
     #state{

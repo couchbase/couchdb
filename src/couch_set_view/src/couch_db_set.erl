@@ -223,9 +223,9 @@ handle_cast({compacted, DbName}, State) ->
 
 
 handle_info({'DOWN', _Ref, _, Pid, Reason}, State) ->
-    ?LOG_INFO("Shutting down couch_db_set for set `~s` because partition `~s` "
+    ?LOG_INFO("Shutting down couch_db_set ~p for set `~s` because partition `~s` "
         "died with reason: ~p",
-        [State#state.set_name, get_db_name(Pid, State), Reason]),
+        [self(), State#state.set_name, get_db_name(Pid, State), Reason]),
     {stop, Reason, State}.
 
 
