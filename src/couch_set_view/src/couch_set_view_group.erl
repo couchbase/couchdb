@@ -581,15 +581,27 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
             index_header = get_index_header_data(NewGroup0)
         },
         if is_pid(UpdaterPid) ->
+            ?LOG_INFO("Set view `~s`, ~s group `~s`, compact group up to date - restarting updater",
+                      [?set_name(State), ?type(State), ?group_id(State)]),
             couch_util:shutdown_sync(UpdaterPid);
         true ->
             ok
         end,
-        ok = commit_header(NewGroup, true),
+        NewFilepath = increment_filepath(Group),
+        NewRefCounter = new_fd_ref_counter(NewGroup#set_view_group.fd),
+        NewGroup2 = NewGroup#set_view_group{
+            ref_counter = NewRefCounter,
+            filepath = NewFilepath,
+            index_header = (NewGroup#set_view_group.index_header)#set_view_index_header{
+                replicas_on_transfer = ?set_replicas_on_transfer(Group),
+                abitmask = ?set_abitmask(Group),
+                pbitmask = ?set_pbitmask(Group)
+            }
+        },
+        ok = commit_header(NewGroup2, true),
         ?LOG_INFO("Set view `~s`, ~s group `~s`, compaction complete in ~.3f seconds,"
             " filtered ~p key-value pairs",
             [?set_name(State), ?type(State), ?group_id(State), Duration, CleanupKVCount]),
-        NewFilepath = increment_filepath(Group),
         ok = couch_file:only_snapshot_reads(OldFd),
         ok = couch_file:delete(?root_dir(State), OldFilepath),
         ok = couch_file:rename(NewGroup#set_view_group.fd, NewFilepath),
@@ -597,14 +609,6 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
         %% cleanup old group
         unlink(CompactorPid),
         couch_ref_counter:drop(RefCounter),
-        NewRefCounter = new_fd_ref_counter(NewGroup#set_view_group.fd),
-        NewGroup2 = NewGroup#set_view_group{
-            ref_counter = NewRefCounter,
-            filepath = NewFilepath,
-            index_header = (NewGroup#set_view_group.index_header)#set_view_index_header{
-                replicas_on_transfer = ?set_replicas_on_transfer(Group)
-            }
-        },
 
         NewUpdaterPid =
         if is_pid(UpdaterPid) ->
