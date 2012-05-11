@@ -47,10 +47,14 @@
 -define(set_replicas_on_transfer(SetViewGroup),
         (SetViewGroup#set_view_group.index_header)#set_view_index_header.replicas_on_transfer).
 
+-define(set_pending_transition(SetViewGroup),
+        (SetViewGroup#set_view_group.index_header)#set_view_index_header.pending_transition).
+
 
 -type partition_id()             :: non_neg_integer().
 -type staleness()                :: 'update_after' | 'ok' | 'false'.
 -type bitmask()                  :: non_neg_integer().
+-type bitmap()                   :: non_neg_integer().
 -type update_seq()               :: non_neg_integer().
 -type btree_state()              :: 'nil' | tuple().
 -type partition_seq()            :: {partition_id(), update_seq()}.

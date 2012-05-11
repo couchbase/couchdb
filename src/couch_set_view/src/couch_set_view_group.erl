@@ -64,6 +64,7 @@
     waiting_list = []                  :: [{From::{pid(), reference()}, boolean()}],
     cleaner_pid = nil                  :: 'nil' | pid(),
     shutdown = false                   :: boolean(),
+    auto_cleanup = true                :: boolean(),
     replica_partitions = []            :: ordsets:ordset(partition_id()),
     pending_transition_waiters = []    :: [{From::{pid(), reference()}, #set_view_group_req{}}]
 }).
@@ -338,6 +339,10 @@ do_init({_, SetName, _} = InitArgs) ->
         throw(Error)
     end.
 
+handle_call({set_auto_cleanup, Enabled}, _From, State) ->
+    % To be used only by unit tests.
+    {reply, ok, State#state{auto_cleanup = Enabled}, ?TIMEOUT};
+
 handle_call({define_view, NumPartitions, ActiveList, ActiveBitmask,
         PassiveList, PassiveBitmask, UseReplicaIndex}, _From, State) when not ?is_defined(State) ->
     #state{init_args = InitArgs, group = Group} = State,
@@ -405,8 +410,10 @@ handle_call({partition_deleted, master}, _From, State) ->
     {stop, shutdown, shutdown, State2};
 handle_call({partition_deleted, PartId}, _From, #state{group = Group} = State) ->
     Mask = 1 bsl PartId,
-    case ((?set_abitmask(Group) band Mask) =/= 0) orelse
-        ((?set_pbitmask(Group) band Mask) =/= 0) of
+    PendingCleanup = get_pending_cleanup(State),
+    case (((?set_abitmask(Group) band Mask) =/= 0) orelse
+            ((?set_pbitmask(Group) band Mask) =/= 0)) andalso
+        (not ordsets:is_element(PartId, PendingCleanup)) of
     true ->
         Error = {error, {db_deleted, ?dbname((?set_name(State)), PartId)}},
         State2 = reply_all(State, Error),
@@ -773,7 +780,7 @@ handle_info({'EXIT', Pid, {clean_group, NewGroup, Count, Time}}, #state{cleaner_
         cleaner_pid = nil,
         group = NewGroup
     },
-    inc_cleanups(State2#state.group, Time, Count),
+    inc_cleanups(State2#state.group, Time, Count, false),
     {noreply, maybe_apply_pending_transition(State2)};
 
 handle_info({'EXIT', Pid, Reason}, #state{cleaner_pid = Pid} = State) ->
@@ -788,6 +795,27 @@ handle_info({'EXIT', Pid, Reason},
               " exited with reason: ~p",
               [?set_name(State), ?type(State), ?group_id(State), Pid, Reason]),
     {stop, Reason, State};
+
+handle_info({'EXIT', Pid, {full_cleanup_done, Result}}, #state{updater_pid = Pid} = State) ->
+    #set_view_updater_result{
+        group = CleanGroup,
+        cleanup_kv_count = CleanupKvCount,
+        cleanup_time = CleanupTime
+    } = Result,
+    ?LOG_INFO("Set view `~s`, ~s group `~s`, updater performed full cleanup, "
+              "applying pending transition",
+              [?set_name(State), ?type(State), ?group_id(State)]),
+    0 = ?set_cbitmask(CleanGroup),
+    true = ?have_pending_transition(State),
+    State2 = State#state{
+        group = CleanGroup,
+        updater_pid = nil,
+        updater_state = not_running
+    },
+    State3 = maybe_apply_pending_transition(State2),
+    State4 = start_updater(State3),
+    inc_cleanups(State4#state.group, CleanupTime, CleanupKvCount, true),
+    {noreply, State4, ?TIMEOUT};
 
 handle_info({'EXIT', Pid, {updater_finished, Result}}, #state{updater_pid = Pid} = State) ->
     #set_view_updater_result{
@@ -1383,6 +1411,7 @@ merge_into_pending_transition(ActiveList, PassiveList, CleanupList, State) ->
         passive = PassivePending4,
         cleanup = CleanupPending4
     } = Pending4,
+    ok = couch_db_set:remove_partitions(?db_set(State), CleanupList),
     State2 = set_pending_transition(State, Pending4),
     ok = commit_header(State2#state.group),
     ?LOG_INFO("Set view `~s`, ~s group `~s`, updated pending partition "
@@ -1457,9 +1486,10 @@ do_update_partition_states(ActiveList, PassiveList, CleanupList, State) ->
     [] ->
         State4 = persist_partition_states(State3, ActiveList, PassiveList, CleanupList);
     _ ->
+        ok = couch_db_set:remove_partitions(?db_set(State3), CleanupList),
         ?LOG_INFO("Set view `~s`, ~s group `~s`, created pending partition "
             "states transition, because the following partitions are still "
-            "in cleanup:~w~n~n"
+            "in cleanup: ~w~n~n"
             "Pending partition states transition details:~n"
             "    Active partitions:  ~w~n"
             "    Passive partitions: ~w~n"
@@ -1840,6 +1870,8 @@ update_header(State, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs, NewPurgeSeq
 -spec maybe_start_cleaner(#state{}) -> #state{}.
 maybe_start_cleaner(#state{cleaner_pid = Pid} = State) when is_pid(Pid) ->
     State;
+maybe_start_cleaner(#state{auto_cleanup = false} = State) ->
+    State;
 maybe_start_cleaner(#state{group = Group} = State) ->
     case is_pid(State#state.compactor_pid) orelse
         is_pid(State#state.updater_pid) orelse (?set_cbitmask(Group) == 0) of
@@ -1871,7 +1903,7 @@ stop_cleaner(#state{cleaner_pid = Pid, group = OldGroup} = State) when is_pid(Pi
                  couch_set_view_util:decode_bitmask(?set_cbitmask(OldGroup))]),
         case ?set_cbitmask(NewGroup) of
         0 ->
-            inc_cleanups(State#state.group, Time, Count);
+            inc_cleanups(State#state.group, Time, Count, false);
         _ ->
             ?inc_cleanup_stops(State#state.group)
         end,
@@ -1889,57 +1921,26 @@ stop_cleaner(#state{cleaner_pid = Pid, group = OldGroup} = State) when is_pid(Pi
 
 -spec cleaner(#state{}) -> {'clean_group', #set_view_group{}, non_neg_integer(), float()}.
 cleaner(#state{group = Group}) ->
-    #set_view_group{
-        index_header = Header,
-        views = Views,
-        id_btree = IdBtree
-    } = Group,
-    ok = couch_set_view_util:open_raw_read_fd(Group),
     StartTime = os:timestamp(),
-    PurgeFun = couch_set_view_util:make_btree_purge_fun(Group),
-    {ok, NewIdBtree, {Go, IdPurgedCount}} =
-        couch_btree:guided_purge(IdBtree, PurgeFun, {go, 0}),
-    {TotalPurgedCount, NewViews} = clean_views(Go, PurgeFun, Views, IdPurgedCount, []),
-    ok = couch_set_view_util:close_raw_read_fd(Group),
-    {ok, {_, IdBitmap}} = couch_btree:full_reduce(NewIdBtree),
-    CombinedBitmap = lists:foldl(
-        fun(#set_view{btree = Bt}, AccMap) ->
-            {ok, {_, _, Bm}} = couch_btree:full_reduce(Bt),
-            AccMap bor Bm
-        end,
-        IdBitmap, NewViews),
-    NewCbitmask = ?set_cbitmask(Group) band CombinedBitmap,
-    NewGroup = Group#set_view_group{
-        id_btree = NewIdBtree,
-        views = NewViews,
-        index_header = Header#set_view_index_header{cbitmask = NewCbitmask}
-    },
+    {ok, NewGroup, TotalPurgedCount} = couch_set_view_util:cleanup_group(Group),
     Duration = timer:now_diff(os:timestamp(), StartTime) / 1000000,
     {clean_group, NewGroup, TotalPurgedCount, Duration}.
-
-
--spec clean_views('stop' | 'go',
-                  set_view_btree_purge_fun(),
-                  [#set_view{}],
-                  non_neg_integer(),
-                  [#set_view{}]) -> {non_neg_integer(), [#set_view{}]}.
-clean_views(_, _, [], Count, Acc) ->
-    {Count, lists:reverse(Acc)};
-clean_views(stop, _, Rest, Count, Acc) ->
-    {Count, lists:reverse(Acc, Rest)};
-clean_views(go, PurgeFun, [#set_view{btree = Btree} = View | Rest], Count, Acc) ->
-    couch_set_view_mapreduce:start_reduce_context(View),
-    {ok, NewBtree, {Go, PurgedCount}} =
-        couch_btree:guided_purge(Btree, PurgeFun, {go, Count}),
-    couch_set_view_mapreduce:end_reduce_context(View),
-    NewAcc = [View#set_view{btree = NewBtree} | Acc],
-    clean_views(Go, PurgeFun, Rest, PurgedCount, NewAcc).
 
 
 -spec index_needs_update(#state{}) -> boolean().
 index_needs_update(#state{group = Group} = State) ->
     {ok, CurSeqs} = couch_db_set:get_seqs(?db_set(State)),
-    CurSeqs > ?set_seqs(Group).
+    case get_pending_cleanup(Group) of
+    [] ->
+        CurSeqs > ?set_seqs(Group);
+    PendingCleanup ->
+        FilteredSetSeqs = orddict:filter(
+            fun(PartId, _Seq) ->
+               not ordsets:is_element(PartId, PendingCleanup)
+            end,
+            ?set_seqs(Group)),
+        CurSeqs > FilteredSetSeqs
+    end.
 
 
 -spec make_partition_lists(#set_view_group{}) -> {[partition_id()], [partition_id()]}.
@@ -2282,17 +2283,14 @@ inc_updates(Group, UpdaterResult, PartialUpdate, ForcedStop) ->
     end.
 
 
--spec inc_cleanups(#set_view_group{},
-                   float(),
-                   non_neg_integer()) -> no_return().
-inc_cleanups(Group, Duration, Count) when is_record(Group, set_view_group) ->
-    [Stats] = ets:lookup(?SET_VIEW_STATS_ETS, ?set_view_group_stats_key(Group)),
-    inc_cleanups(Stats, Duration, Count, false).
-
--spec inc_cleanups(#set_view_group_stats{},
+-spec inc_cleanups(#set_view_group{} | #set_view_group_stats{},
                    float(),
                    non_neg_integer(),
                    boolean()) -> no_return().
+inc_cleanups(Group, Duration, Count, ByUpdater) when is_record(Group, set_view_group) ->
+    [Stats] = ets:lookup(?SET_VIEW_STATS_ETS, ?set_view_group_stats_key(Group)),
+    inc_cleanups(Stats, Duration, Count, ByUpdater);
+
 inc_cleanups(#set_view_group_stats{cleanup_history = Hist} = Stats, Duration, Count, ByUpdater) ->
     Entry = {[
         {<<"duration">>, Duration},
@@ -2382,6 +2380,16 @@ is_any_partition_pending(Req, Group) ->
         } = Trans,
         (not ordsets:is_disjoint(WantedPartitions, ActivePending)) orelse
         (not ordsets:is_disjoint(WantedPartitions, PassivePending))
+    end.
+
+
+-spec get_pending_cleanup(#state{} | #set_view_group{}) -> ordsets:ordset(partition_id()).
+get_pending_cleanup(State) ->
+    case get_pending_transition(State) of
+    nil ->
+        [];
+    #set_view_transition{cleanup = Cleanup} ->
+        Cleanup
     end.
 
 

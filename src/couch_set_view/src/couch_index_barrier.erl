@@ -65,14 +65,19 @@ init(LimitParamName) ->
 
 
 handle_call({enter, Pid}, From, #state{current = Current, waiting = Waiting} = State) ->
-    MonRef = erlang:monitor(process, Pid),
-    MonRefs2 = dict:store(Pid, MonRef, State#state.mon_refs),
-    State2 = State#state{mon_refs = MonRefs2},
-    case length(Current) >= State#state.limit of
+    case dict:is_key(Pid, State#state.mon_refs) of
     true ->
-        {noreply, State2#state{waiting = queue:in({From, Pid}, Waiting)}};
+        {reply, ok, State};
     false ->
-        {reply, ok, State2#state{current = [Pid | Current]}}
+        MonRef = erlang:monitor(process, Pid),
+        MonRefs2 = dict:store(Pid, MonRef, State#state.mon_refs),
+        State2 = State#state{mon_refs = MonRefs2},
+        case length(Current) >= State#state.limit of
+        true ->
+            {noreply, State2#state{waiting = queue:in({From, Pid}, Waiting)}};
+        false ->
+            {reply, ok, State2#state{current = [Pid | Current]}}
+        end
     end.
 
 

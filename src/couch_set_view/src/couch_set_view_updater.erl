@@ -57,14 +57,33 @@ update(Owner, Group) ->
         couch_set_view_util:decode_bitmask(?set_abitmask(Group))),
     PassiveParts = ordsets:from_list(
         couch_set_view_util:decode_bitmask(?set_pbitmask(Group))),
+    CleanupParts = ordsets:from_list(
+        couch_set_view_util:decode_bitmask(?set_cbitmask(Group))),
+
+    case ?set_pending_transition(Group) of
+    nil ->
+        PendingActive = [],
+        PendingPassive = [],
+        PendingCleanup = [];
+    PendingTrans ->
+        #set_view_transition{
+            active = PendingActive, passive = PendingPassive,
+            cleanup = PendingCleanup
+        } = PendingTrans
+    end,
 
     FoldFun = fun(P, {A1, A2, A3}) ->
-        {ok, Db} = couch_db:open_int(?dbname(SetName, P), []),
-        {ok, <<NotDel:40, Del:40, _Size:48>>} =
-                couch_btree:full_reduce(Db#db.docinfo_by_id_btree),
-        Seq = couch_db:get_update_seq(Db),
-        ok = couch_db:close(Db),
-        {[{P, Del} | A1], [{P, NotDel} | A2], [{P, Seq} | A3]}
+        case ordsets:is_element(P, PendingCleanup) of
+        true ->
+             {A1, A2, A3};
+        false ->
+            {ok, Db} = couch_db:open_int(?dbname(SetName, P), []),
+            {ok, <<NotDel:40, Del:40, _Size:48>>} =
+                    couch_btree:full_reduce(Db#db.docinfo_by_id_btree),
+            Seq = couch_db:get_update_seq(Db),
+            ok = couch_db:close(Db),
+            {[{P, Del} | A1], [{P, NotDel} | A2], [{P, Seq} | A3]}
+        end
     end,
 
     process_flag(trap_exit, true),
@@ -116,6 +135,7 @@ update(Owner, Group) ->
         ?LOG_INFO("Updater for set view `~s`, ~s group `~s` started~n"
                   "Active partitions:                      ~w~n"
                   "Passive partitions:                     ~w~n"
+                  "Cleanup partitions:                     ~w~n"
                   "Active partitions update seqs:          ~w~n"
                   "Active partitions indexed update seqs:  ~w~n"
                   "Passive partitions update seqs:         ~w~n"
@@ -124,10 +144,15 @@ update(Owner, Group) ->
                   "Active partitions # deleted docs:       ~w~n"
                   "Passive partitions # docs:              ~w~n"
                   "Passive partitions # deleted docs:      ~w~n"
-                  "Replicas to transfer:                   ~w~n",
+                  "Replicas to transfer:                   ~w~n"
+                  "Pending transition:                     ~n"
+                  "    active:                             ~w~n"
+                  "    passive:                            ~w~n"
+                  "    cleanup:                            ~w~n",
                   [SetName, Type, DDocId,
                    ActiveParts,
                    PassiveParts,
+                   CleanupParts,
                    lists:reverse(ActiveSeqs),
                    IndexedActiveSeqs,
                    lists:reverse(PassiveSeqs),
@@ -136,16 +161,35 @@ update(Owner, Group) ->
                    lists:reverse(ActiveDelCounts),
                    lists:reverse(PassiveNotDelCounts),
                    lists:reverse(PassiveDelCounts),
-                   ?set_replicas_on_transfer(Group)
+                   ?set_replicas_on_transfer(Group),
+                   PendingActive,
+                   PendingPassive,
+                   PendingCleanup
                   ]);
     false ->
         ok
     end,
 
-    update(Owner, Group, ActiveParts, PassiveParts, MaxSeqs, BlockedTime).
+    WriterAcc0 = #writer_acc{
+        parent = self(),
+        owner = Owner,
+        group = Group,
+        max_seqs = MaxSeqs
+    },
+    case (PendingCleanup /= []) andalso is_pid(Owner) of
+    true ->
+        do_full_cleanup(WriterAcc0, BlockedTime);
+    false ->
+        update(WriterAcc0, ActiveParts, PassiveParts, BlockedTime)
+    end.
 
 
-update(Owner, Group, ActiveParts, PassiveParts, MaxSeqs, BlockedTime) ->
+update(WriterAcc, ActiveParts, PassiveParts, BlockedTime) ->
+    #writer_acc{
+        owner = Owner,
+        group = Group,
+        max_seqs = MaxSeqs
+    } = WriterAcc,
     #set_view_group{
         set_name = SetName,
         type = Type,
@@ -217,19 +261,17 @@ update(Owner, Group, ActiveParts, PassiveParts, MaxSeqs, BlockedTime) ->
 
         InitialBuild = (0 =:= lists:sum([S || {_, S} <- ?set_seqs(Group)])),
         ViewEmptyKVs = [{View, []} || View <- Group2#set_view_group.views],
-        WriterAcc = #writer_acc{
+        WriterAcc2 = WriterAcc#writer_acc{
             parent = Parent,
-            owner = Owner,
             group = Group2,
             write_queue = WriteQueue,
             initial_build = InitialBuild,
-            view_empty_kvs = ViewEmptyKVs,
-            max_seqs = MaxSeqs
+            view_empty_kvs = ViewEmptyKVs
         },
         try
             couch_set_view_mapreduce:start_reduce_context(Group2),
             try
-                FinalWriterAcc = do_writes(WriterAcc),
+                FinalWriterAcc = do_writes(WriterAcc2),
                 Parent ! {writer_finished, FinalWriterAcc}
             after
                 couch_set_view_mapreduce:end_reduce_context(Group2)
@@ -304,23 +346,38 @@ load_changes(Owner, Updater, Group, MapQueue, Writer, ActiveParts, PassiveParts)
         index_header = #set_view_index_header{seqs = SinceSeqs}
     } = Group,
 
+    case ?set_pending_transition(Group) of
+    nil ->
+        PendingCleanup = [];
+    #set_view_transition{cleanup = PendingCleanup} ->
+        ok
+    end,
+
     FoldFun = fun(PartId, PartType) ->
-        {ok, Db} = couch_db:open_int(?dbname(SetName, PartId), []),
-        maybe_stop(),
-        Since = couch_util:get_value(PartId, SinceSeqs),
-        ?LOG_INFO("Reading changes (since sequence ~p) from ~s partition ~s to"
-                  " update ~s set view group `~s` from set `~s`",
-                  [Since, PartType, couch_db:name(Db), GroupType, DDocId, SetName]),
-        ChangesWrapper = fun(DocInfo, _, ok) ->
-            maybe_stop(),
-            load_doc(Db, PartId, DocInfo, MapQueue),
-            maybe_stop(),
-            {ok, ok}
+        case ordsets:is_element(PartId, PendingCleanup) of
+        true ->
+            ok;
+        false ->
+            {ok, Db} = couch_db:open_int(?dbname(SetName, PartId), []),
+            try
+                maybe_stop(),
+                Since = couch_util:get_value(PartId, SinceSeqs),
+                ?LOG_INFO("Reading changes (since sequence ~p) from ~s partition ~s to"
+                          " update ~s set view group `~s` from set `~s`",
+                          [Since, PartType, couch_db:name(Db), GroupType, DDocId, SetName]),
+                ChangesWrapper = fun(DocInfo, _, ok) ->
+                    maybe_stop(),
+                    load_doc(Db, PartId, DocInfo, MapQueue),
+                    maybe_stop(),
+                    {ok, ok}
+                end,
+                {ok, _, ok} = couch_db:fast_reads(Db, fun() ->
+                    couch_db:enum_docs_since(Db, Since, ChangesWrapper, ok, [])
+                end)
+            after
+                ok = couch_db:close(Db)
+            end
         end,
-        {ok, _, ok} = couch_db:fast_reads(Db, fun() ->
-            couch_db:enum_docs_since(Db, Since, ChangesWrapper, ok, [])
-        end),
-        ok = couch_db:close(Db),
         PartType
     end,
 
@@ -774,4 +831,46 @@ write_header(#set_view_group{fd = Fd} = Group, DoFsync) ->
         ok = couch_file:sync(Fd);
     false ->
         ok
+    end.
+
+
+do_full_cleanup(#writer_acc{group = Group}, BlockedTime) ->
+    #set_view_group{
+        index_header = Header,
+        set_name = SetName,
+        type = Type,
+        name = DDocId
+    } = Group,
+    #set_view_transition{cleanup = CleanupPending} = ?set_pending_transition(Group),
+    NewCleanupBitmask = ?set_cbitmask(Group) bor
+        couch_set_view_util:build_bitmask(CleanupPending),
+    Header2 = Header#set_view_index_header{cbitmask = NewCleanupBitmask},
+    Group2 = Group#set_view_group{index_header = Header2},
+    StartTime = os:timestamp(),
+    {ok, Group3, PurgedCount} = couch_set_view_util:cleanup_group(Group2),
+    CleanupTime = timer:now_diff(os:timestamp(), StartTime) / 1000000,
+    case ?set_cbitmask(Group3) of
+    0 ->
+        ?LOG_INFO("Updater for set view `~s`, ~s group `~s`, performed full cleanup "
+                  "in ~.3f seconds (~p key/value pairs removed)",
+                  [SetName, Type, DDocId, CleanupTime, PurgedCount]),
+        Result = #set_view_updater_result{
+            group = Group3,
+            blocked_time = BlockedTime,
+            cleanup_kv_count = PurgedCount,
+            cleanup_time = CleanupTime
+        },
+        exit({full_cleanup_done, Result});
+    _ ->
+        ?LOG_INFO("Updater for set view `~s`, ~s group `~s`, interrupted during "
+                  "full cleanup (ran for ~.3f seconds, ~p key/value pairs removed)",
+                  [SetName, Type, DDocId, CleanupTime, PurgedCount]),
+        % Return original group snapshot, and not the partially clean group, which is
+        % inconsistent because it has only some of the data from the current and future
+        % cleanup masks purged - therefore it can't be used to serve queries.
+        EmptyResult = #set_view_updater_result{
+            group = Group,
+            blocked_time = BlockedTime
+        },
+        exit({updater_finished, EmptyResult})
     end.
