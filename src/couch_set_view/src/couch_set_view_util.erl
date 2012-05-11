@@ -18,6 +18,7 @@
 -export([make_key_options/1]).
 -export([design_doc_to_set_view_group/2, get_ddoc_ids_with_sig/2]).
 -export([open_raw_read_fd/1, close_raw_read_fd/1]).
+-export([make_disk_header/1]).
 
 -include("couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
@@ -219,3 +220,20 @@ close_raw_read_fd(#set_view_group{fd = FilePid}) ->
     Fd ->
         ok = file:close(Fd)
     end.
+
+
+-spec make_disk_header(#set_view_group{}) ->
+                              {Signature::binary(), #set_view_index_header{}}.
+make_disk_header(Group) ->
+    #set_view_group{
+        sig = Sig,
+        id_btree = IdBtree,
+        views = Views,
+        index_header = Header
+    } = Group,
+    ViewStates = [couch_btree:get_state(V#set_view.btree) || V <- Views],
+    Header2 = Header#set_view_index_header{
+        id_btree_state = couch_btree:get_state(IdBtree),
+        view_states = ViewStates
+    },
+    {Sig, Header2}.

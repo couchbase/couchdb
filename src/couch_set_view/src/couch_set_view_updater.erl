@@ -684,7 +684,12 @@ write_changes(WriterAcc, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs) ->
     end,
     NewSeqs = update_seqs(PartIdSeqs, ?set_seqs(Group)),
     Header = Group#set_view_group.index_header,
-    NewHeader = Header#set_view_index_header{seqs = NewSeqs, cbitmask = NewCbitmask},
+    NewHeader = Header#set_view_index_header{
+        id_btree_state = couch_btree:get_state(IdBtree2),
+        view_states = [couch_btree:get_state(V#set_view.btree) || V <- Views2],
+        seqs = NewSeqs,
+        cbitmask = NewCbitmask
+    },
     NewGroup = Group#set_view_group{
         views = Views2,
         id_btree = IdBtree2,

@@ -118,7 +118,7 @@
     seqs = []                                       :: partition_seqs(),
     purge_seqs = []                                 :: partition_seqs(),
     id_btree_state = nil                            :: btree_state(),
-    view_states = nil                               :: 'nil' | [view_state()],
+    view_states = []                                :: [view_state()],
     has_replica = false                             :: boolean(),
     replicas_on_transfer = []                       :: ordsets:ordset(partition_id()),
     % Pending partition states transition.

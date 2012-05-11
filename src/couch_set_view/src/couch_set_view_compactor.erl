@@ -112,15 +112,14 @@ compact_group(Group, EmptyGroup) ->
         views = NewViews,
         index_header = Header#set_view_index_header{
             cbitmask = 0,
-            id_btree_state = nil,
-            view_states = nil
+            id_btree_state = couch_btree:get_state(NewIdBtree),
+            view_states = [couch_btree:get_state(V#set_view.btree) || V <- NewViews]
         }
     },
     CleanupKVCount = TotalChanges - total_kv_count(NewGroup),
     ok = couch_file:flush(NewGroup#set_view_group.fd),
     CompactResult = #set_view_compactor_result{
         group = NewGroup,
-        compact_time = timer:now_diff(os:timestamp(), StartTime) / 1000000,
         cleanup_kv_count = CleanupKVCount
     },
     maybe_retry_compact(CompactResult, StartTime, Group).
@@ -130,8 +129,12 @@ maybe_retry_compact(CompactResult0, StartTime, Group) ->
     #set_view_group{
         set_name = SetName,
         name = DDocId,
-        type = Type
+        type = Type,
+        fd = Fd
     } = NewGroup,
+    DiskHeader = couch_set_view_util:make_disk_header(NewGroup),
+    ok = couch_file:write_header(Fd, DiskHeader),
+    ok = couch_file:sync(Fd),
     CompactResult = CompactResult0#set_view_compactor_result{
         compact_time = timer:now_diff(os:timestamp(), StartTime) / 1000000
     },

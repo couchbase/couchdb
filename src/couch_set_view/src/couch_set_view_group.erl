@@ -567,16 +567,13 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
         filepath = OldFilepath
     } = Group,
     #set_view_compactor_result{
-        group = NewGroup0,
+        group = NewGroup,
         compact_time = Duration,
         cleanup_kv_count = CleanupKVCount
     } = Result,
 
-    case seqs_up_to_date(?set_seqs(NewGroup0), ?set_seqs(Group)) of
+    case seqs_up_to_date(?set_seqs(NewGroup), ?set_seqs(Group)) of
     true ->
-        NewGroup = NewGroup0#set_view_group{
-            index_header = get_index_header_data(NewGroup0)
-        },
         if is_pid(UpdaterPid) ->
             ?LOG_INFO("Set view `~s`, ~s group `~s`, compact group up to date - restarting updater",
                       [?set_name(State), ?type(State), ?group_id(State)]),
@@ -586,16 +583,32 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
         end,
         NewFilepath = increment_filepath(Group),
         NewRefCounter = new_fd_ref_counter(NewGroup#set_view_group.fd),
-        NewGroup2 = NewGroup#set_view_group{
-            ref_counter = NewRefCounter,
-            filepath = NewFilepath,
-            index_header = (NewGroup#set_view_group.index_header)#set_view_index_header{
-                replicas_on_transfer = ?set_replicas_on_transfer(Group),
-                abitmask = ?set_abitmask(Group),
-                pbitmask = ?set_pbitmask(Group)
+        case ?set_replicas_on_transfer(Group) /= ?set_replicas_on_transfer(NewGroup) of
+        true ->
+            % Set of replicas on transfer changed while compaction was running.
+            % Just write a new header with the new set of replicas on transfer and all the
+            % metadata that is updated when that set changes (active and passive bitmasks).
+            % This happens only during (or after, for a short period) a cluster rebalance or
+            % failover. This shouldn't take too long, as we are writing and fsync'ing only
+            % one header, all data was already fsync'ed by the compactor process.
+            NewGroup2 = NewGroup#set_view_group{
+                ref_counter = NewRefCounter,
+                filepath = NewFilepath,
+                index_header = (NewGroup#set_view_group.index_header)#set_view_index_header{
+                    replicas_on_transfer = ?set_replicas_on_transfer(Group),
+                    abitmask = ?set_abitmask(Group),
+                    pbitmask = ?set_pbitmask(Group)
+                }
+            },
+            ok = commit_header(NewGroup2, true);
+        false ->
+            % The compactor process committed an header with up to date state information and
+            % did an fsync before calling us. No need to commit a new header here (and fsync).
+            NewGroup2 = NewGroup#set_view_group{
+                ref_counter = NewRefCounter,
+                filepath = NewFilepath
             }
-        },
-        ok = commit_header(NewGroup2, true),
+        end,
         ?LOG_INFO("Set view `~s`, ~s group `~s`, compaction complete in ~.3f seconds,"
             " filtered ~p key-value pairs",
             [?set_name(State), ?type(State), ?group_id(State), Duration, CleanupKVCount]),
@@ -986,20 +999,6 @@ prepare_group({RootDir, SetName, #set_view_group{sig = Sig, type = Type} = Group
     end.
 
 
--spec get_index_header_data(#set_view_group{}) -> #set_view_index_header{}.
-get_index_header_data(Group) ->
-    #set_view_group{
-        id_btree = IdBtree,
-        views = Views,
-        index_header = Header
-    } = Group,
-    ViewStates = [couch_btree:get_state(V#set_view.btree) || V <- Views],
-    Header#set_view_index_header{
-        id_btree_state = couch_btree:get_state(IdBtree),
-        view_states = ViewStates
-    }.
-
-
 -spec hex_sig(binary()) -> string().
 hex_sig(GroupSig) ->
     couch_util:to_hex(?b2l(GroupSig)).
@@ -1303,7 +1302,7 @@ init_group(Fd, #set_view_group{views = Views0} = Group, IndexHeader) ->
 
 -spec commit_header(#set_view_group{}, boolean()) -> 'ok'.
 commit_header(Group, Sync) ->
-    Header = {Group#set_view_group.sig, get_index_header_data(Group)},
+    Header = couch_set_view_util:make_disk_header(Group),
     ok = couch_file:write_header(Group#set_view_group.fd, Header),
     case Sync of
     true ->
