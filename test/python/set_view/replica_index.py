@@ -254,6 +254,9 @@ class TestReplicaIndex(unittest.TestCase):
         # print "defining partitions [5, 7] as replicas again"
         common.add_replica_partitions(self._params, [5, 7])
 
+        # replica group likely has [5, 7] in a pending transition, just wait a while if so
+        self.wait_for_pending_transition_applied()
+
         # print "verifying group info"
         info = common.get_set_view_info(self._params)
         self.assertEqual(info["active_partitions"], [0, 1, 2, 3], "right active partitions list")

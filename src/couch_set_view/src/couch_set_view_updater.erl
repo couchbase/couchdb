@@ -21,6 +21,7 @@
 -define(QUEUE_MAX_SIZE, 500 * 1024).
 -define(MIN_WRITER_NUM_ITEMS, 1000).
 -define(MIN_WRITER_BATCH_SIZE, 100 * 1024).
+-define(CHECKPOINT_WRITE_INTERVAL, 5000000).
 -define(replace(L, K, V), lists:keystore(K, 1, L, {K, V})).
 
 -record(writer_acc, {
@@ -436,7 +437,9 @@ do_maps(Group, MapQueue, WriteQueue) ->
 do_writes(#writer_acc{kvs = Kvs, kvs_size = KvsSize, write_queue = WriteQueue} = Acc) ->
     case couch_work_queue:dequeue(WriteQueue) of
     closed ->
-        flush_writes(Acc#writer_acc{final_batch = true});
+        FinalAcc = flush_writes(Acc#writer_acc{final_batch = true}),
+        write_header(FinalAcc#writer_acc.group, false),
+        FinalAcc;
     {ok, Queue, QueueSize} ->
         Kvs2 = Kvs ++ lists:flatten(Queue),
         KvsSize2 = KvsSize + QueueSize,
@@ -451,13 +454,13 @@ do_writes(#writer_acc{kvs = Kvs, kvs_size = KvsSize, write_queue = WriteQueue} =
     end.
 
 
-flush_writes(#writer_acc{kvs = [], owner = Owner, parent = Parent, group = Group} = Acc) ->
-    #writer_acc{group = NewGroup} = Acc2 = update_transferred_replicas(Acc, []),
-    case NewGroup of
-    Group ->
-        ok;
-    _ ->
-        ok = gen_server:cast(Owner, {partial_update, Parent, NewGroup})
+flush_writes(#writer_acc{kvs = []} = Acc) ->
+    {Acc2, ReplicasTransferred} = update_transferred_replicas(Acc, []),
+    case ReplicasTransferred of
+    true ->
+        checkpoint(Acc2, true);
+    false ->
+        ok
     end,
     Acc2;
 flush_writes(Acc) ->
@@ -480,28 +483,27 @@ flush_writes(Acc) ->
         end,
         {ViewEmptyKVs, [], orddict:new()}, Queue),
     Acc2 = write_changes(Acc, ViewKVs, DocIdViewIdKeys, PartIdSeqs),
-    #writer_acc{group = Group3} = Acc3 = update_transferred_replicas(Acc2, PartIdSeqs),
-    case Owner of
-    nil ->
-        ok;
-    _ ->
-        ok = gen_server:cast(Owner, {partial_update, Parent, Group3})
-    end,
+    {Acc3, ReplicasTransferred} = update_transferred_replicas(Acc2, PartIdSeqs),
     update_task(length(Queue)),
     case (Acc3#writer_acc.state =:= updating_active) andalso
         lists:any(fun({PartId, _}) ->
             ((1 bsl PartId) band ?set_pbitmask(Group) =/= 0)
         end, PartIdSeqs) of
     true ->
+        checkpoint(Acc3, false),
         notify_owner(Owner, {state, updating_passive}, Parent),
         Acc3#writer_acc{state = updating_passive};
+    false when ReplicasTransferred ->
+        checkpoint(Acc3, true),
+        Acc3;
     false ->
+        maybe_checkpoint(Acc3),
         Acc3
     end.
 
 
 update_transferred_replicas(#writer_acc{group = Group} = Acc, _PartIdSeqs) when ?set_replicas_on_transfer(Group) =:= [] ->
-    Acc;
+    {Acc, false};
 update_transferred_replicas(Acc, PartIdSeqs) ->
     #writer_acc{
         group = #set_view_group{index_header = Header} = Group,
@@ -527,7 +529,7 @@ update_transferred_replicas(Acc, PartIdSeqs) ->
     ReplicasOnTransfer = ordsets:subtract(?set_replicas_on_transfer(Group), RepsTransferred2),
     case FinalBatch orelse (ReplicasOnTransfer =:= []) of
     false ->
-        Acc#writer_acc{replicas_transferred = RepsTransferred2};
+        {Acc#writer_acc{replicas_transferred = RepsTransferred2}, false};
     true ->
         {Abitmask2, Pbitmask2} = lists:foldl(
             fun(Id, {A, P}) ->
@@ -545,7 +547,7 @@ update_transferred_replicas(Acc, PartIdSeqs) ->
                 replicas_on_transfer = ReplicasOnTransfer
             }
         },
-        Acc#writer_acc{group = Group2}
+        {Acc#writer_acc{group = Group2}, ReplicasOnTransfer /= []}
     end.
 
 
@@ -733,3 +735,43 @@ update_task(NumChanges) ->
     Changes2 = Changes + NumChanges,
     Progress = (Changes2 * 100) div Total,
     couch_task_status:update([{progress, Progress}, {changes_done, Changes2}]).
+
+
+maybe_checkpoint(#writer_acc{owner = nil}) ->
+    ok;
+maybe_checkpoint(WriterAcc) ->
+    Before = get(last_header_commit_ts),
+    Now = os:timestamp(),
+    case (Before == undefined) orelse
+        (timer:now_diff(Now, Before) >= ?CHECKPOINT_WRITE_INTERVAL) of
+    true ->
+        checkpoint(WriterAcc, false),
+        put(last_header_commit_ts, Now);
+    false ->
+        ok
+    end.
+
+
+checkpoint(#writer_acc{owner = nil}, _DoFsync) ->
+    ok;
+checkpoint(#writer_acc{owner = Owner, parent = Parent, group = Group}, DoFsync) ->
+    #set_view_group{
+        set_name = SetName,
+        name = DDocId,
+        type = Type
+    } = Group,
+    ?LOG_INFO("Checkpointing set view `~s` update for ~s group `~s`",
+              [SetName, Type, DDocId]),
+    write_header(Group, DoFsync),
+    ok = gen_server:cast(Owner, {partial_update, Parent, Group}).
+
+
+write_header(#set_view_group{fd = Fd} = Group, DoFsync) ->
+    DiskHeader = couch_set_view_util:make_disk_header(Group),
+    ok = couch_file:write_header(Fd, DiskHeader),
+    case DoFsync of
+    true ->
+        ok = couch_file:sync(Fd);
+    false ->
+        ok
+    end.

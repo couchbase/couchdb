@@ -33,7 +33,6 @@
 -type compact_fun() :: fun((#set_view_group{}, #set_view_group{}) -> no_return()).
 
 -define(TIMEOUT, 3000).
--define(DELAYED_COMMIT_PERIOD, 5000).
 -define(MIN_CHANGES_AUTO_UPDATE, 20000).
 -define(BTREE_CHUNK_THRESHOLD, 5120).
 
@@ -62,7 +61,6 @@
     compactor_pid = nil                :: 'nil' | pid(),
     compactor_file = nil               :: 'nil' | pid(),
     compactor_fun = nil                :: 'nil' | compact_fun(),
-    commit_ref = nil                   :: 'nil' | reference(),
     waiting_list = []                  :: [{From::{pid(), reference()}, boolean()}],
     cleaner_pid = nil                  :: 'nil' | pid(),
     shutdown = false                   :: boolean(),
@@ -371,7 +369,7 @@ handle_call({define_view, NumPartitions, ActiveList, ActiveBitmask,
             index_header = NewHeader,
             replica_pid = ReplicaPid
         },
-        ok = commit_header(NewGroup, true),
+        ok = commit_header(NewGroup),
         NewState = State#state{
             group = NewGroup,
             replica_group = ReplicaPid
@@ -600,7 +598,7 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
                     pbitmask = ?set_pbitmask(Group)
                 }
             },
-            ok = commit_header(NewGroup2, true);
+            ok = commit_header(NewGroup2);
         false ->
             % The compactor process committed an header with up to date state information and
             % did an fsync before calling us. No need to commit a new header here (and fsync).
@@ -741,12 +739,6 @@ handle_info({updater_info, _Pid, {state, _UpdaterState}}, State) ->
     % Message from an old updater, ignore.
     {noreply, State, ?TIMEOUT};
 
-handle_info(delayed_commit, #state{group = Group} = State) ->
-    ?LOG_INFO("Checkpointing set view `~s` update for ~s group `~s`",
-        [?set_name(State), ?type(State), ?group_id(State)]),
-    commit_header(Group, false),
-    {noreply, State#state{commit_ref = nil}, ?TIMEOUT};
-
 handle_info({'EXIT', Pid, {clean_group, NewGroup, Count, Time}}, #state{cleaner_pid = Pid} = State) ->
     #state{group = OldGroup} = State,
     ?LOG_INFO("Cleanup finished for set view `~s`, ~s group `~s`~n"
@@ -795,11 +787,6 @@ handle_info({'EXIT', Pid, Reason},
     {stop, Reason, State};
 
 handle_info({'EXIT', Pid, {updater_finished, Result}}, #state{updater_pid = Pid} = State) ->
-    #state{
-        waiting_list = WaitList,
-        shutdown = Shutdown,
-        replica_partitions = ReplicaParts
-    } = State,
     #set_view_updater_result{
         indexing_time = IndexingTime,
         blocked_time = BlockedTime,
@@ -810,9 +797,15 @@ handle_info({'EXIT', Pid, {updater_finished, Result}}, #state{updater_pid = Pid}
         deleted_kvs = DeletedKVs,
         cleanup_kv_count = CleanupKVCount
     } = Result,
-    ok = commit_header(NewGroup, false),
-    reply_with_group(NewGroup, ReplicaParts, WaitList),
-    inc_updates(NewGroup, Result, false, false),
+    State2 = process_partial_update(State, NewGroup),
+    #state{
+        waiting_list = WaitList,
+        replica_partitions = ReplicaParts,
+        shutdown = Shutdown,
+        group = NewGroup2
+    } = State2,
+    reply_with_group(NewGroup2, ReplicaParts, WaitList),
+    inc_updates(NewGroup2, Result, false, false),
     ?LOG_INFO("Set view `~s`, ~s group `~s`, updater finished~n"
         "Indexing time: ~.3f seconds~n"
         "Blocked time:  ~.3f seconds~n"
@@ -825,19 +818,16 @@ handle_info({'EXIT', Pid, {updater_finished, Result}}, #state{updater_pid = Pid}
             InsertedIds, DeletedIds, InsertedKVs, DeletedKVs, CleanupKVCount]),
     case Shutdown of
     true ->
-        {stop, normal, State};
+        {stop, normal, State2#state{waiting_list = []}};
     false ->
-        cancel_commit(State),
-        State2 = State#state{
+        State3 = State2#state{
             updater_pid = nil,
             updater_state = not_running,
-            commit_ref = nil,
-            waiting_list = [],
-            group = NewGroup
+            waiting_list = []
         },
-        State3 = maybe_apply_pending_transition(State2),
-        State4 = maybe_start_cleaner(State3),
-        {noreply, State4, ?TIMEOUT}
+        State4 = maybe_apply_pending_transition(State3),
+        State5 = maybe_start_cleaner(State4),
+        {noreply, State5, ?TIMEOUT}
     end;
 
 handle_info({'EXIT', Pid, {updater_error, Error}}, #state{updater_pid = Pid} = State) ->
@@ -1108,7 +1098,6 @@ get_group_info(State) ->
         updater_pid = UpdaterPid,
         updater_state = UpdaterState,
         compactor_pid = CompactorPid,
-        commit_ref = CommitRef,
         waiting_list = WaitersList,
         cleaner_pid = CleanerPid,
         replica_partitions = ReplicaParts
@@ -1144,7 +1133,6 @@ get_group_info(State) ->
         {compact_running, CompactorPid /= nil},
         {cleanup_running, (CleanerPid /= nil) orelse
             ((CompactorPid /= nil) andalso (?set_cbitmask(Group) =/= 0))},
-        {waiting_commit, is_reference(CommitRef)},
         {max_number_partitions, ?set_num_partitions(Group)},
         {update_seqs, {[{couch_util:to_binary(P), S} || {P, S} <- ?set_seqs(Group)]}},
         {purge_seqs, {[{couch_util:to_binary(P), S} || {P, S} <- ?set_purge_seqs(Group)]}},
@@ -1300,16 +1288,11 @@ init_group(Fd, #set_view_group{views = Views0} = Group, IndexHeader) ->
     }.
 
 
--spec commit_header(#set_view_group{}, boolean()) -> 'ok'.
-commit_header(Group, Sync) ->
+-spec commit_header(#set_view_group{}) -> 'ok'.
+commit_header(Group) ->
     Header = couch_set_view_util:make_disk_header(Group),
     ok = couch_file:write_header(Group#set_view_group.fd, Header),
-    case Sync of
-    true ->
-        ok = couch_file:sync(Group#set_view_group.fd);
-    false ->
-        ok
-    end.
+    ok = couch_file:sync(Group#set_view_group.fd).
 
 
 -spec seqs_up_to_date(partition_seqs(), partition_seqs()) -> boolean().
@@ -1391,7 +1374,7 @@ merge_into_pending_transition(ActiveList, PassiveList, CleanupList, State) ->
         cleanup = CleanupPending4
     } = Pending4,
     State2 = set_pending_transition(State, Pending4),
-    ok = commit_header(State2#state.group, true),
+    ok = commit_header(State2#state.group),
     ?LOG_INFO("Set view `~s`, ~s group `~s`, updated pending partition "
         "states transition to:~n"
         "    Active partitions:  ~w~n"
@@ -1803,7 +1786,7 @@ update_header(State, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs, NewPurgeSeq
         },
         replica_partitions = NewReplicaParts
     },
-    ok = commit_header(NewState#state.group, true),
+    ok = commit_header(NewState#state.group),
     case (NewAbitmask =:= Abitmask) andalso (NewPbitmask =:= Pbitmask) of
     true ->
         ok;
@@ -1884,8 +1867,7 @@ stop_cleaner(#state{cleaner_pid = Pid, group = OldGroup} = State) when is_pid(Pi
         end,
         State#state{
             group = NewGroup,
-            cleaner_pid = nil,
-            commit_ref = schedule_commit(State)
+            cleaner_pid = nil
         };
     {'EXIT', Pid, Reason} ->
         ?LOG_ERROR("Cleanup process ~p for set view `~s`, ~s group `~s`, died "
@@ -1923,7 +1905,6 @@ cleaner(#state{group = Group}) ->
         index_header = Header#set_view_index_header{cbitmask = NewCbitmask}
     },
     Duration = timer:now_diff(os:timestamp(), StartTime) / 1000000,
-    commit_header(NewGroup, true),
     {clean_group, NewGroup, TotalPurgedCount, Duration}.
 
 
@@ -2210,42 +2191,24 @@ maybe_fix_replica_group(ReplicaPid, Group) ->
     ok = set_state(ReplicaPid, ActiveList, [], CleanupList).
 
 
--spec schedule_commit(#state{}) -> reference().
-schedule_commit(#state{commit_ref = Ref}) when is_reference(Ref) ->
-    Ref;
-schedule_commit(_State) ->
-    erlang:send_after(?DELAYED_COMMIT_PERIOD, self(), delayed_commit).
-
-
--spec cancel_commit(#state{}) -> no_return().
-cancel_commit(#state{commit_ref = Ref}) when is_reference(Ref) ->
-    erlang:cancel_timer(Ref);
-cancel_commit(_State) ->
-    ok.
-
-
 -spec process_partial_update(#state{}, #set_view_group{}) -> #state{}.
 process_partial_update(#state{group = Group} = State, NewGroup) ->
     ReplicasTransferred = ordsets:subtract(
         ?set_replicas_on_transfer(Group), ?set_replicas_on_transfer(NewGroup)),
     case ReplicasTransferred of
     [] ->
-        CommitRef2 = schedule_commit(State);
+        State#state{group = NewGroup};
     _ ->
         ?LOG_INFO("Set view `~s`, ~s group `~s`, completed transferral of replica partitions ~w~n"
                   "New group of replica partitions to transfer is ~w~n",
                   [?set_name(State), ?type(State), ?group_id(State),
                    ReplicasTransferred, ?set_replicas_on_transfer(NewGroup)]),
-        commit_header(NewGroup, true),
         ok = set_state(State#state.replica_group, [], [], ReplicasTransferred),
-        cancel_commit(State),
-        CommitRef2 = nil
-    end,
-    State#state{
-        group = NewGroup,
-        commit_ref = CommitRef2,
-        replica_partitions = ordsets:subtract(State#state.replica_partitions, ReplicasTransferred)
-    }.
+        State#state{
+            group = NewGroup,
+            replica_partitions = ordsets:subtract(State#state.replica_partitions, ReplicasTransferred)
+        }
+    end.
 
 
 -spec inc_updates(#set_view_group{},
