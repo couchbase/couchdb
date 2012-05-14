@@ -883,15 +883,15 @@ handle_info({'EXIT', Pid, Reason}, State) ->
 terminate(Reason, State) ->
     ?LOG_INFO("Set view `~s`, ~s group `~s`, terminating with reason: ~p",
         [?set_name(State), ?type(State), ?group_id(State), Reason]),
-    State2 = stop_cleaner(State),
-    State3 = reply_all(State2, Reason),
-    State4 = notify_pending_transition_waiters(State3, {shutdown, Reason}),
-    catch couch_db_set:close(?db_set(State4)),
-    couch_util:shutdown_sync(State4#state.updater_pid),
-    couch_util:shutdown_sync(State4#state.compactor_pid),
-    couch_util:shutdown_sync(State4#state.compactor_file),
-    couch_util:shutdown_sync(State4#state.replica_group),
-    catch couch_file:only_snapshot_reads((State4#state.group)#set_view_group.fd),
+    State2 = reply_all(State, Reason),
+    State3 = notify_pending_transition_waiters(State2, {shutdown, Reason}),
+    catch couch_db_set:close(?db_set(State3)),
+    couch_util:shutdown_sync(State3#state.cleaner_pid),
+    couch_util:shutdown_sync(State3#state.updater_pid),
+    couch_util:shutdown_sync(State3#state.compactor_pid),
+    couch_util:shutdown_sync(State3#state.compactor_file),
+    couch_util:shutdown_sync(State3#state.replica_group),
+    catch couch_file:only_snapshot_reads((State3#state.group)#set_view_group.fd),
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
