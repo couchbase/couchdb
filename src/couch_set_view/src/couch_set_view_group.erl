@@ -777,7 +777,10 @@ handle_info({'EXIT', Pid, {clean_group, NewGroup, Count, Time}}, #state{cleaner_
     {noreply, maybe_apply_pending_transition(State2)};
 
 handle_info({'EXIT', Pid, Reason}, #state{cleaner_pid = Pid} = State) ->
-    {stop, {cleaner_died, Reason}, State#state{cleaner_pid = nil}};
+    ?LOG_ERROR("Set view `~s`, ~s group `~s`, cleanup process ~p died with "
+               "unexpected reason: ~p",
+               [?set_name(State), ?type(State), ?group_id(State), Pid, Reason]),
+    {noreply, State#state{cleaner_pid = nil}, ?TIMEOUT};
 
 handle_info({'EXIT', Pid, Reason},
     #state{group = #set_view_group{db_set = Pid}} = State) ->
@@ -867,8 +870,15 @@ handle_info({'EXIT', Pid, normal}, State) ->
     {noreply, State, ?TIMEOUT};
 
 handle_info({'EXIT', Pid, Reason}, #state{compactor_pid = Pid} = State) ->
+    ?LOG_ERROR("Set view `~s`, ~s group `~s`, compactor process ~p died with "
+               "unexpected reason: ~p",
+               [?set_name(State), ?type(State), ?group_id(State), Pid, Reason]),
     couch_util:shutdown_sync(State#state.compactor_file),
-    {stop, {compactor_died, Reason}, State};
+    State2 = State#state{
+        compactor_pid = nil,
+        compactor_file = nil
+    },
+    {noreply, State2, ?TIMEOUT};
 
 handle_info({'EXIT', Pid, Reason}, #state{group = #set_view_group{db_set = Pid}} = State) ->
     {stop, {db_set_died, Reason}, State};
