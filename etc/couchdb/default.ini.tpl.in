@@ -102,6 +102,7 @@ stats_aggregator={couch_stats_aggregator, start, []}
 stats_collector={couch_stats_collector, start, []}
 uuids={couch_uuids, start, []}
 auth_cache={couch_auth_cache, start_link, []}
+couch_set_view_ddoc_cache={couch_set_view_ddoc_cache, start_link, []}
 replication_manager={couch_replication_manager, start_link, []}
 os_daemons={couch_os_daemons, start_link, []}
 compaction_daemon={couch_compaction_daemon, start_link, []}
@@ -304,3 +305,5 @@ min_file_size = 131072
 ;version = 2.0.0
 ;url = http://www.couchbase.com/
 
+[set_views]
+ddoc_cache_size = 1048576

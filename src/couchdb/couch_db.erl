@@ -441,8 +441,6 @@ update_docs(#db{name=DbName}=Db, Docs, Options0) ->
                 FullCommit},
         case get_result(Db#db.update_pid, MRef) of
         ok ->
-            [couch_db_update_notifier:notify({ddoc_updated, {DbName, Id}})
-                    || #doc{id = <<?DESIGN_DOC_PREFIX, _/binary>> = Id} <- Docs],
             ok;
         retry ->
             % This can happen if the db file we wrote to was swapped out by

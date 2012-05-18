@@ -1115,19 +1115,15 @@ do_open_index_file(Filepath) ->
 
 
 open_set_group(SetName, GroupId) ->
-    case couch_db:open_int(?master_dbname(SetName), []) of
-    {ok, Db} ->
-        case couch_db:open_doc(Db, GroupId, [ejson_body]) of
-        {ok, Doc} ->
-            couch_db:close(Db),
-            {ok, couch_set_view_util:design_doc_to_set_view_group(SetName, Doc)};
-        Else ->
-            couch_db:close(Db),
-            Else
-        end;
-    Else ->
-        Else
+    case couch_set_view_ddoc_cache:get_ddoc(SetName, GroupId) of
+    {ok, DDoc} ->
+        {ok, couch_set_view_util:design_doc_to_set_view_group(SetName, DDoc)};
+    {doc_open_error, Error} ->
+        Error;
+    {db_open_error, Error} ->
+        Error
     end.
+
 
 get_group_info(State) ->
     #state{

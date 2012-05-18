@@ -31,6 +31,7 @@ source_files = \
     src/couch_set_view_mapreduce.erl \
     src/couch_db_set.erl \
     src/couch_index_barrier.erl \
+    src/couch_set_view_ddoc_cache.erl \
     test/couch_set_view_test_util.erl
 
 test_files = \
@@ -63,6 +64,7 @@ compiled_files = \
     ebin/couch_set_view_mapreduce.beam \
     ebin/couch_db_set.beam \
     ebin/couch_index_barrier.beam \
+    ebin/couch_set_view_ddoc_cache.beam \
     test/couch_set_view_test_util.beam
 
 EXTRA_DIST = $(include_files) $(source_files) $(test_files) test/run.tpl

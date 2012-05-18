@@ -28,6 +28,7 @@
 -include("couch_index_merger.hrl").
 % needed for #set_view_spec{}
 -include("couch_view_merger.hrl").
+-include_lib("couch_set_view/include/couch_set_view.hrl").
 
 -import(couch_util, [
     get_value/2,
@@ -243,16 +244,21 @@ get_first_ddoc([#simple_index_spec{ddoc_id = nil} = Spec | _],
     #simple_index_spec{index_name = <<"_all_docs">>} = Spec,
     {ok, nil, <<"_all_docs">>};
 
-get_first_ddoc([#set_view_spec{} = Spec | _], UserCtx, Timeout) ->
+get_first_ddoc([#set_view_spec{} = Spec | _], _UserCtx, _Timeout) ->
     #set_view_spec {
         name = SetName, ddoc_id = Id, view_name = ViewName
     } = Spec,
 
-    {ok, Db} = open_db(<<SetName/binary, "/master">>, UserCtx, Timeout),
-    {ok, DDoc} = get_ddoc(Db, Id),
-    close_db(Db),
-
-    {ok, DDoc, ViewName};
+    case couch_set_view_ddoc_cache:get_ddoc(SetName, Id) of
+    {ok, DDoc} ->
+        {ok, DDoc, ViewName};
+    {db_open_error, {not_found, _}} ->
+        throw({not_found, db_not_found_msg(?master_dbname(SetName))});
+    {db_open_error, Error} ->
+        throw(Error);
+    {doc_open_error, {not_found, _}} ->
+        throw({not_found, ddoc_not_found_msg(?master_dbname(SetName), Id)})
+    end;
 
 get_first_ddoc([#simple_index_spec{} = Spec | _], UserCtx, Timeout) ->
     #simple_index_spec{

@@ -283,6 +283,14 @@ handle_info({update_docs, Client, Docs, NonRepDocs, FullCommit}, Db) ->
             couch_db_update_notifier:notify({updated, Db2#db.name});
         true -> ok
         end,
+        lists:foreach(
+            fun(#doc_update_info{id = <<?DESIGN_DOC_PREFIX, _/binary>> = Id, deleted = false}) ->
+                    couch_db_update_notifier:sync_notify({ddoc_updated, {Db#db.name, Id}});
+                (#doc_update_info{id = <<?DESIGN_DOC_PREFIX, _/binary>> = Id, deleted = true}) ->
+                    couch_db_update_notifier:sync_notify({ddoc_deleted, {Db#db.name, Id}});
+                (_) ->
+                    ok
+            end, Docs),
         catch(Client ! {done, self()}),
         {noreply, Db2}
     catch

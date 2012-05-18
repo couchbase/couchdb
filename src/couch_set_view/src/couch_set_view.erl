@@ -830,7 +830,7 @@ handle_db_event({created, _DbName}) ->
     % TODO: deal with this
     % ok = gen_server:cast(?MODULE, {reset_indexes, DbName});
     ok;
-handle_db_event({ddoc_updated, {DbName, DDocId}}) ->
+handle_db_event({Event, {DbName, DDocId}}) when Event == ddoc_updated; Event == ddoc_deleted ->
     case string:tokens(?b2l(DbName), "/") of
     [SetNameStr, "master"] ->
         SetName = ?l2b(SetNameStr),

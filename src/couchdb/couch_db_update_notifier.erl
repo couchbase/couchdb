@@ -22,7 +22,7 @@
 
 -behaviour(gen_event).
 
--export([start_link/1, notify/1]).
+-export([start_link/1, notify/1, sync_notify/1]).
 -export([init/1, terminate/2, handle_event/2, handle_call/2, handle_info/2, code_change/3,stop/1]).
 
 -include("couch_db.hrl").
@@ -32,6 +32,9 @@ start_link(Exec) ->
 
 notify(Event) ->
     gen_event:notify(couch_db_update, Event).
+
+sync_notify(Event) ->
+    gen_event:sync_notify(couch_db_update, Event).
 
 stop(Pid) ->
     couch_event_sup:stop(Pid).
