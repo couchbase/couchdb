@@ -328,7 +328,7 @@ get_ddoc(Db, Id) ->
     {ok, _} = Ok ->
         Ok;
     {not_found, _} ->
-        throw({not_found, ddoc_not_found_msg(Db, Id)})
+        throw({not_found, ddoc_not_found_msg(Db#db.name, Id)})
     end.
 
 % Returns the group ID of the indexer group that contains the Design Document
