@@ -60,12 +60,19 @@ peek(Pid) ->
     gen_server:call(Pid, peek).
 
 queue(Pid, Row) ->
-    try
-        ok = gen_server:call(Pid, {queue, Row}, infinity)
-    catch
-    exit:{shutdown, {gen_server, call, [Pid | _]}} ->
-        throw(queue_shutdown);
-    exit:{noproc, {gen_server, call, [Pid | _]}} ->
+    NextRef = make_ref(),
+    case wait_previous_row_processed(Pid) of
+    {ok, MonRef} ->
+        receive
+        {'DOWN', MonRef, _, _, _} ->
+            throw(queue_shutdown)
+        after 0 ->
+            erlang:demonitor(MonRef, [flush]),
+            ok = gen_server:cast(Pid, {queue, Row, self(), NextRef}),
+            erlang:put(queue_ref, NextRef)
+        end,
+        ok;
+    closed ->
         throw(queue_shutdown)
     end.
 
@@ -74,14 +81,25 @@ flush(Pid) ->
 
 % Producers call this when they're done (they will not queue anymore).
 done(Pid) ->
-    ok = gen_server:cast(Pid, done).
+    case wait_previous_row_processed(Pid) of
+    {ok, MonRef} ->
+        receive
+        {'DOWN', MonRef, _, _, _} ->
+            ok
+        after 0 ->
+            erlang:demonitor(MonRef, [flush]),
+            ok = gen_server:cast(Pid, done)
+        end;
+    closed ->
+        ok
+    end.
 
 
 init({NumProducers, LessFun}) ->
     State = #state{
         num_producers = NumProducers,
         rows = couch_skew:new(),
-        less_fun = fun({_, A}, {_, B}) -> LessFun(A, B) end
+        less_fun = fun({_, _, A}, {_, _, B}) -> LessFun(A, B) end
     },
     {ok, State}.
 
@@ -96,7 +114,7 @@ handle_call(pop, From, #state{poped = []} = State) ->
     true ->
         {noreply, State#state{consumer = From}};
     false ->
-        {{_, MinRow} = X, Rows2} = couch_skew:out(LessFun, Rows),
+        {{_, _, MinRow} = X, Rows2} = couch_skew:out(LessFun, Rows),
         {reply, {ok, MinRow}, State#state{rows = Rows2, poped = [X]}}
     end;
 
@@ -106,22 +124,33 @@ handle_call(pop_next, _From, #state{poped = [_ | _] = Poped} = State) ->
     0 ->
         {reply, empty, State};
     _ ->
-        {{_, MinRow} = X, Rows2} = couch_skew:out(LessFun, Rows),
+        {{_, _, MinRow} = X, Rows2} = couch_skew:out(LessFun, Rows),
         NewState = State#state{rows = Rows2, poped = [X | Poped]},
         {reply, {ok, MinRow}, NewState}
     end;
 
-handle_call({queue, Row}, From, #state{num_producers = N} = State) when N > 0 ->
+% Allowed to be called after the first pop in a merge iteration.
+handle_call(peek, _From, #state{poped = [_ | _], rows = Rows} = State) ->
+    case couch_skew:size(Rows) of
+    0 ->
+        {reply, empty, State};
+    _ ->
+        {_, _, Row} = couch_skew:min(Rows),
+        {reply, {ok, Row}, State}
+    end.
+
+
+handle_cast({queue, Row, Pid, Ref}, #state{num_producers = N} = State) when N > 0 ->
     #state{
         less_fun = LessFun,
         rows = Rows,
         consumer = Consumer,
         poped = Poped
     } = State,
-    Rows2 = couch_skew:in({From, Row}, LessFun, Rows),
+    Rows2 = couch_skew:in({Pid, Ref, Row}, LessFun, Rows),
     case (Consumer =/= nil) andalso (couch_skew:size(Rows2) >= N) of
     true ->
-        {{_, MinRow} = X, Rows3} = couch_skew:out(LessFun, Rows2),
+        {{_, _, MinRow} = X, Rows3} = couch_skew:out(LessFun, Rows2),
         gen_server:reply(Consumer, {ok, MinRow}),
         Poped2 = [X | Poped],
         Consumer2 = nil;
@@ -137,17 +166,6 @@ handle_call({queue, Row}, From, #state{num_producers = N} = State) when N > 0 ->
     },
     {noreply, NewState};
 
-% Allowed to be called after the first pop in a merge iteration.
-handle_call(peek, _From, #state{poped = [_ | _], rows = Rows} = State) ->
-    case couch_skew:size(Rows) of
-    0 ->
-        {reply, empty, State};
-    _ ->
-        {_, Row} = couch_skew:min(Rows),
-        {reply, {ok, Row}, State}
-    end.
-
-
 % Consumer should call this after doing its processing of the previously
 % poped rows.
 handle_cast(flush, #state{consumer = nil} = State) ->
@@ -156,7 +174,7 @@ handle_cast(flush, #state{consumer = nil} = State) ->
         num_producers = N,
         rows = Rows
     } = State,
-    lists:foreach(fun({Req, _}) -> gen_server:reply(Req, ok) end, Poped),
+    lists:foreach(fun({Pid, Ref, _}) -> Pid ! {ok, Ref} end, Poped),
     case (N =:= 0) andalso (couch_skew:size(Rows) =:= 0) of
     true ->
         {stop, normal, State#state{poped = []}};
@@ -195,7 +213,7 @@ handle_cast(done, #state{poped = []} = State) ->
         true ->
             {noreply, State#state{num_producers = NumProds2}};
         false ->
-            {{_, MinRow} = X, Rows2} = couch_skew:out(LessFun, Rows),
+            {{_, _, MinRow} = X, Rows2} = couch_skew:out(LessFun, Rows),
             gen_server:reply(Consumer, {ok, MinRow}),
             NewState = State#state{
                 num_producers = NumProds2,
@@ -218,3 +236,19 @@ terminate(_Reason, _State) ->
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
+
+
+wait_previous_row_processed(Pid) ->
+    MRef = erlang:monitor(process, Pid),
+    CurRef = erlang:erase(queue_ref),
+    case is_reference(CurRef) of
+    true ->
+        receive
+        {ok, CurRef} ->
+            {ok, MRef};
+        {'DOWN', MRef, _, _, _} ->
+            closed
+        end;
+    false ->
+        {ok, MRef}
+    end.
