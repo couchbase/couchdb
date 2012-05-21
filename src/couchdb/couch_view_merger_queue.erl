@@ -114,8 +114,8 @@ handle_call(pop, From, #state{poped = []} = State) ->
     true ->
         {noreply, State#state{consumer = From}};
     false ->
-        {{_, _, MinRow} = X, Rows2} = couch_skew:out(LessFun, Rows),
-        {reply, {ok, MinRow}, State#state{rows = Rows2, poped = [X]}}
+        {{Pid, Ref, MinRow}, Rows2} = couch_skew:out(LessFun, Rows),
+        {reply, {ok, MinRow}, State#state{rows = Rows2, poped = [{Pid, Ref}]}}
     end;
 
 handle_call(pop_next, _From, #state{poped = [_ | _] = Poped} = State) ->
@@ -124,8 +124,8 @@ handle_call(pop_next, _From, #state{poped = [_ | _] = Poped} = State) ->
     0 ->
         {reply, empty, State};
     _ ->
-        {{_, _, MinRow} = X, Rows2} = couch_skew:out(LessFun, Rows),
-        NewState = State#state{rows = Rows2, poped = [X | Poped]},
+        {{Pid, Ref, MinRow}, Rows2} = couch_skew:out(LessFun, Rows),
+        NewState = State#state{rows = Rows2, poped = [{Pid, Ref} | Poped]},
         {reply, {ok, MinRow}, NewState}
     end;
 
@@ -150,9 +150,9 @@ handle_cast({queue, Row, Pid, Ref}, #state{num_producers = N} = State) when N > 
     Rows2 = couch_skew:in({Pid, Ref, Row}, LessFun, Rows),
     case (Consumer =/= nil) andalso (couch_skew:size(Rows2) >= N) of
     true ->
-        {{_, _, MinRow} = X, Rows3} = couch_skew:out(LessFun, Rows2),
+        {{Pid2, Ref2, MinRow}, Rows3} = couch_skew:out(LessFun, Rows2),
         gen_server:reply(Consumer, {ok, MinRow}),
-        Poped2 = [X | Poped],
+        Poped2 = [{Pid2, Ref2} | Poped],
         Consumer2 = nil;
     false ->
         Poped2 = Poped,
@@ -174,7 +174,7 @@ handle_cast(flush, #state{consumer = nil} = State) ->
         num_producers = N,
         rows = Rows
     } = State,
-    lists:foreach(fun({Pid, Ref, _}) -> Pid ! {ok, Ref} end, Poped),
+    lists:foreach(fun({Pid, Ref}) -> Pid ! {ok, Ref} end, Poped),
     case (N =:= 0) andalso (couch_skew:size(Rows) =:= 0) of
     true ->
         {stop, normal, State#state{poped = []}};
@@ -213,13 +213,13 @@ handle_cast(done, #state{poped = []} = State) ->
         true ->
             {noreply, State#state{num_producers = NumProds2}};
         false ->
-            {{_, _, MinRow} = X, Rows2} = couch_skew:out(LessFun, Rows),
+            {{Pid, Ref, MinRow}, Rows2} = couch_skew:out(LessFun, Rows),
             gen_server:reply(Consumer, {ok, MinRow}),
             NewState = State#state{
                 num_producers = NumProds2,
                 consumer = nil,
                 rows = Rows2,
-                poped = [X]
+                poped = [{Pid, Ref}]
             },
             {noreply, NewState}
         end
