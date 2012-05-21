@@ -129,17 +129,15 @@ http_sender(start, #sender_acc{req = Req} = SAcc) ->
     #httpd{mochi_req = MReq} = Req,
     ok = mochiweb_socket:setopts(MReq:get(socket), [{nodelay, true}]),
     {ok, Resp} = couch_httpd:start_json_response(Req, 200, []),
-    couch_httpd:send_chunk(Resp, <<"{\"rows\":[">>),
-    {ok, SAcc#sender_acc{resp = Resp, acc = <<"\r\n">>}};
+    Start = <<"{\"rows\":[">>,
+    {ok, SAcc#sender_acc{resp = Resp, rows_acc = [Start], acc = <<"\r\n">>}};
 
 http_sender({start, RowCount}, #sender_acc{req = Req} = SAcc) ->
     #httpd{mochi_req = MReq} = Req,
     ok = mochiweb_socket:setopts(MReq:get(socket), [{nodelay, true}]),
-    Start = io_lib:format(
-        "{\"total_rows\":~w,\"rows\":[", [RowCount]),
     {ok, Resp} = couch_httpd:start_json_response(Req, 200, []),
-    couch_httpd:send_chunk(Resp, Start),
-    {ok, SAcc#sender_acc{resp = Resp, acc = <<"\r\n">>}};
+    Start = [<<"{\"total_rows\":">>, integer_to_list(RowCount), <<",\"rows\":[">>],
+    {ok, SAcc#sender_acc{resp = Resp, rows_acc = [Start], acc = <<"\r\n">>}};
 
 http_sender({row, Row}, SAcc) ->
     SAcc2 = maybe_flush_rows(Row, SAcc),
@@ -147,24 +145,23 @@ http_sender({row, Row}, SAcc) ->
 
 http_sender(stop, SAcc) ->
     #sender_acc{
+        rows_acc = RowsAcc,
         error_acc = ErrorAcc,
         resp = Resp
-    }= SAcc2 = flush_rows(SAcc),
+    }= SAcc,
     case ErrorAcc of
     [] ->
-        couch_httpd:send_chunk(Resp, <<"\r\n]">>);
+        Buffer1 = <<"\r\n]">>;
     _ ->
-        couch_httpd:send_chunk(Resp, [<<"\r\n">>, <<"],\r\n">>, <<"\"errors\":[">>]),
-        lists:foldl(
-            fun(Row, Sep) ->
-                couch_httpd:send_chunk(Resp, [Sep, Row]),
-                <<",\r\n">>
+        {_, Buffer0} = lists:foldl(
+            fun(Row, {Sep, A}) ->
+                {<<",\r\n">>, [[Sep, Row] | A]}
             end,
-            <<"\r\n">>, ErrorAcc),
-        couch_httpd:send_chunk(Resp, <<"\r\n]">>)
+            {<<"\r\n">>, []}, ErrorAcc),
+        Buffer1 = [<<"\r\n],\r\n\"errors\":[">> | lists:reverse(Buffer0, [<<"\r\n]">>])]
     end,
-    send_debug_info(SAcc2),
-    couch_httpd:send_chunk(Resp, <<"\r\n}">>),
+    Buffer2 = [lists:reverse(RowsAcc), Buffer1, debug_info_buffer(SAcc), <<"\r\n}">>],
+    couch_httpd:send_chunk(Resp, Buffer2),
     {ok, couch_httpd:end_json_response(Resp)};
 
 http_sender({error, Url, Reason}, #sender_acc{on_error = continue, error_acc = ErrorAcc} = SAcc) ->
@@ -176,7 +173,7 @@ http_sender({error, Url, Reason}, #sender_acc{on_error = continue, error_acc = E
     {ok, SAcc#sender_acc{error_acc = ErrorAcc2}};
 
 http_sender({error, Url, Reason}, #sender_acc{on_error = stop} = SAcc) ->
-    #sender_acc{req = Req, resp = Resp} = SAcc,
+    #sender_acc{rows_acc = RowsAcc, req = Req, resp = Resp} = SAcc,
     Row = {[
         {<<"from">>, couch_index_merger:rem_passwd(Url)},
         {<<"reason">>, to_binary(Reason)}
@@ -184,19 +181,21 @@ http_sender({error, Url, Reason}, #sender_acc{on_error = stop} = SAcc) ->
     case Resp of
     nil ->
         % we haven't started the response yet
-        Start = io_lib:format("{\"total_rows\":~w,\"rows\":[]\r\n", [0]),
+        Start = <<"{\"total_rows\":0,\"rows\":[]\r\n">>,
         {ok, Resp2} = couch_httpd:start_json_response(Req, 200, []),
         couch_httpd:send_chunk(Resp2, Start),
-        couch_httpd:send_chunk(Resp2, [<<",\r\n">>, <<"\"errors\":[">>]),
-        couch_httpd:send_chunk(Resp2, [?JSON_ENCODE(Row), "]"]);
+        Buffer1 = [
+            <<"{\"total_rows\":0,\"rows\":[]\r\n">>,
+            <<",\r\n\"errors\":[">>,
+            ?JSON_ENCODE(Row),
+            <<"]">>
+        ];
     _ ->
        Resp2 = Resp,
-       flush_rows(Resp2),
-       couch_httpd:send_chunk(Resp2, [<<"\r\n],">>, <<"\"errors\":[">>]),
-       couch_httpd:send_chunk(Resp2, [?JSON_ENCODE(Row), "]"])
+       Buffer1 = [<<"\r\n],\"errors\":[">>, ?JSON_ENCODE(Row), <<"]">>]
     end,
-    send_debug_info(SAcc),
-    couch_httpd:send_chunk(Resp2, <<"\r\n}">>),
+    Buffer2 = [lists:reverse(RowsAcc), Buffer1, debug_info_buffer(SAcc), <<"\r\n}">>],
+    couch_httpd:send_chunk(Resp2, Buffer2),
     couch_httpd:end_json_response(Resp2),
     {stop, Resp2}.
 
@@ -219,17 +218,15 @@ maybe_flush_rows(NewRow, SAcc) ->
         SAcc2
     end.
 
-flush_rows(#sender_acc{rows_acc = []} = SAcc) ->
-    SAcc;
 flush_rows(#sender_acc{rows_acc = RowsAcc, resp = Resp} = SAcc) ->
     couch_httpd:send_chunk(Resp, lists:reverse(RowsAcc)),
     SAcc#sender_acc{rows_acc = [], rows_acc_size = 0}.
 
-send_debug_info(#sender_acc{debug_info_acc = []}) ->
-    ok;
-send_debug_info(#sender_acc{debug_info_acc = DebugInfoAcc, resp = Resp}) ->
+debug_info_buffer(#sender_acc{debug_info_acc = []}) ->
+    <<>>;
+debug_info_buffer(#sender_acc{debug_info_acc = DebugInfoAcc}) ->
     DebugInfo = ?JSON_ENCODE({lists:reverse(DebugInfoAcc)}),
-    couch_httpd:send_chunk(Resp, [<<",\r\n">>, <<"\"debug_info\":">>, DebugInfo]).
+    [<<",\r\n">>, <<"\"debug_info\":">>, DebugInfo].
 
 
 %% Valid `views` example:
