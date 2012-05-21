@@ -497,8 +497,8 @@ merge_indexes_common(Params, RowFun) ->
             {stop, Resp}
         end;
     {ok, {row_count, _} = RowCount} ->
-        {ok, Col2} = Col(RowCount),
         ok = couch_view_merger_queue:flush(Queue),
+        {ok, Col2} = Col(RowCount),
         merge_indexes_common(Params#merge_params{collector = Col2}, RowFun);
     {ok, MinRow} ->
         RowFun(Params, MinRow)
