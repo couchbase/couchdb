@@ -112,8 +112,6 @@ do_query_index(Mod, IndexMergeParams, DDoc, IndexName) ->
        ddoc_revision = DesiredDDocRevision, user_ctx = UserCtx
     } = IndexMergeParams,
 
-    ?LOG_DEBUG("Running a index merging for the following indexes: ~p", [Indexes]),
-
     DDocRev = ddoc_rev(DDoc),
     case should_check_rev(IndexMergeParams, DDoc) of
     true ->
