@@ -53,9 +53,24 @@ query_index(Mod, #index_merge{http_params = HttpParams, user_ctx = UserCtx} = In
 query_index(Mod, #index_merge{indexes = [#set_view_spec{}]} = Params, Req) ->
     #index_merge{
         indexes = Indexes,
-        conn_timeout = Timeout
+        conn_timeout = Timeout,
+        ddoc_revision = DesiredDDocRevision
     } = Params,
     {ok, DDoc, _} = get_first_ddoc(Indexes, Req#httpd.user_ctx, Timeout),
+    DDocRev = ddoc_rev(DDoc),
+    case should_check_rev(Params, DDoc) of
+    true ->
+        case DesiredDDocRevision of
+        auto ->
+            ok;
+        DDocRev ->
+            ok;
+        _ ->
+            throw({error, revision_mismatch})
+        end;
+    false ->
+        ok
+    end,
     Mod:simple_set_view_query(Params, DDoc, Req);
 
 query_index(Mod, IndexMergeParams0, #httpd{user_ctx = UserCtx} = Req) ->
