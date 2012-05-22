@@ -80,7 +80,7 @@ do_init({SetName, Active0, Passive0, DbOpenOptions}) ->
     Passive = lists:usort(Passive0),
     OpenFun = fun(P, Acc) ->
         Name = ?dbname(SetName, P),
-        case couch_db:open(Name, DbOpenOptions) of
+        case couch_db:open_int(Name, DbOpenOptions) of
         {ok, Db} ->
             dict:store(Name, {Db, P, couch_db:monitor(Db)}, Acc);
         Error ->
@@ -97,12 +97,18 @@ do_init({SetName, Active0, Passive0, DbOpenOptions}) ->
     end,
     _Ref = couch_db:monitor(MasterDb),
     Server = self(),
-    EventFun = fun({compacted, Name} = Ev) ->
-            Sz = byte_size(SetName),
-            case Name of
-            <<SetName:Sz/binary, $/, _/binary>> ->
+    EventFun = fun({compacted, DbName} = Ev) ->
+            case is_set_db(DbName, SetName) of
+            true ->
                 ok = gen_server:cast(Server, Ev);
-            _ ->
+            false ->
+                ok
+            end;
+        ({updated, {DbName, _NewSeq}} = Ev) ->
+            case is_set_db(DbName, SetName) of
+            true ->
+                ok = gen_server:cast(Server, Ev);
+            false ->
                 ok
             end;
         (_) ->
@@ -122,31 +128,11 @@ do_init({SetName, Active0, Passive0, DbOpenOptions}) ->
 
 handle_call(get_seqs, _From, State) ->
     FoldFun = fun(_DbName, {Db, P, _Ref}, Acc) ->
-        {ok, S} = couch_db:get_current_seq(Db),
-        [{P, S} | Acc]              
+        [{P, Db#db.update_seq} | Acc]
     end,
     Seqs0 = dict:fold(FoldFun, [], State#state.dbs_active),
     Seqs = dict:fold(FoldFun, Seqs0, State#state.dbs_passive),
     {reply, {ok, Seqs}, State};
-
-handle_call(get_dbs, _From, State) ->
-    FoldFun = fun(_, {Db, P, _Ref}, A) -> [{P, Db#db.name} | A] end,
-    Active = dict:fold(FoldFun, [], State#state.dbs_active),
-    Passive = dict:fold(FoldFun, [], State#state.dbs_passive),
-    UserCtx = case Active of
-    [{_, DbName} | _] ->
-        {Db, _, _} = dict:fetch(DbName, State#state.dbs_active),
-        Db#db.user_ctx;
-    [] ->
-        case Passive of
-        [{_, DbName} | _] ->
-            {Db, _, _} = dict:fetch(DbName, State#state.dbs_passive),
-            Db#db.user_ctx;
-        [] ->
-            couch_util:get_value(user_ctx, State#state.db_open_options, #user_ctx{})
-        end
-    end,
-    {reply, {ok, Active, Passive, UserCtx}, State};
 
 handle_call({set_passive, PartList}, _From, State) ->
     #state{
@@ -198,6 +184,23 @@ handle_call(close, _From, State) ->
     {stop, normal, ok, State}.
 
 
+handle_cast({updated, {DbName, NewSeq}}, State) ->
+    case dict:find(DbName, State#state.dbs_active) of
+    {ok, {Db, Id, Ref}} ->
+        NewVal = {Db#db{update_seq = NewSeq}, Id, Ref},
+        Active2 = dict:store(DbName, NewVal, State#state.dbs_active),
+        {noreply, State#state{dbs_active = Active2}};
+    error ->
+        case dict:find(DbName, State#state.dbs_passive) of
+        {ok, {Db, Id, Ref}} ->
+            NewVal = {Db#db{update_seq = NewSeq}, Id, Ref},
+            Passive2 = dict:store(DbName, NewVal, State#state.dbs_passive),
+            {noreply, State#state{dbs_passive = Passive2}};
+        error ->
+            {noreply, State}
+        end
+    end;
+
 handle_cast({compacted, DbName}, State) ->
     case dict:find(DbName, State#state.dbs_active) of
     error ->
@@ -245,7 +248,7 @@ switch_partitions_state(PartList, SetName, OpenOpts, SetA, SetB) ->
             error ->
                  case dict:find(DbName, B) of
                  error ->
-                     {ok, Db} = couch_db:open(DbName, OpenOpts),
+                     {ok, Db} = couch_db:open_int(DbName, OpenOpts),
                      Ref = couch_db:monitor(Db),
                      {A, dict:store(DbName, {Db, Id, Ref}, B)};
                  {ok, _} ->
@@ -280,3 +283,12 @@ find_db_name(Pid, [{Name, {#db{main_pid = Pid}, _, _}} | _]) ->
 find_db_name(Pid, [_ | Rest]) ->
     find_db_name(Pid, Rest).
 
+
+is_set_db(DbName, SetName) ->
+    Sz = byte_size(SetName),
+    case DbName of
+    <<SetName:Sz/binary, $/, _/binary>> ->
+        true;
+    _ ->
+        false
+    end.

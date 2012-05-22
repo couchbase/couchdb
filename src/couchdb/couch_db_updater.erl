@@ -113,7 +113,7 @@ handle_call(full_commit, _From,  Db) ->
 handle_call(increment_update_seq, _From, Db) ->
     Db2 = commit_data(Db#db{update_seq=Db#db.update_seq+1}),
     ok = notify_db_updated(Db2),
-    couch_db_update_notifier:notify({updated, Db#db.name}),
+    couch_db_update_notifier:sync_notify({updated, {Db2#db.name, Db2#db.update_seq}}),
     {reply, {ok, Db2#db.update_seq}, Db2};
 
 handle_call({set_security, NewSec}, _From, Db) ->
@@ -172,7 +172,7 @@ handle_call({purge_docs, IdRevs}, _From, Db) ->
             header=Header#db_header{purge_seq=PurgeSeq+1, purged_docs=Pointer}}),
 
     ok = notify_db_updated(Db2),
-    couch_db_update_notifier:notify({updated, Db#db.name}),
+    couch_db_update_notifier:sync_notify({updated, {Db2#db.name, Db2#db.update_seq}}),
     {reply, {ok, (Db2#db.header)#db_header.purge_seq, IdRevsPurged}, Db2};
 handle_call(start_compact, _From, Db) ->
     case Db#db.compactor_info of
@@ -257,7 +257,7 @@ handle_call({update_header_pos, FileVersion, NewPos}, _From, Db) ->
             true ->
                 NewDb = populate_db_from_header(Db, NewHeader),
                 ok = notify_db_updated(NewDb),
-                couch_db_update_notifier:notify({updated, Db#db.name}),
+                couch_db_update_notifier:sync_notify({updated, {NewDb#db.name, NewDb#db.update_seq}}),
                 {reply, ok, NewDb}
             end;
         Error ->
@@ -280,7 +280,7 @@ handle_info({update_docs, Client, Docs, NonRepDocs, FullCommit}, Db) ->
     {ok, Db2} ->
         ok = notify_db_updated(Db2),
         if Db2#db.update_seq /= Db#db.update_seq ->
-            couch_db_update_notifier:notify({updated, Db2#db.name});
+            couch_db_update_notifier:sync_notify({updated, {Db2#db.name, Db2#db.update_seq}});
         true -> ok
         end,
         lists:foreach(
