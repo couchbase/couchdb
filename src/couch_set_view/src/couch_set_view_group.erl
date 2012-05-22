@@ -286,7 +286,7 @@ do_init({_, SetName, _} = InitArgs) ->
                       [Type, SetName, Group#set_view_group.name]);
         true ->
             {ActiveList, PassiveList} = make_partition_lists(Group),
-            DbSet = case (catch couch_db_set:open(SetName, ActiveList, PassiveList, [])) of
+            DbSet = case (catch couch_db_set:open(SetName, ActiveList ++ PassiveList)) of
             {ok, SetPid} ->
                 SetPid;
             Error ->
@@ -360,7 +360,7 @@ handle_call({define_view, NumPartitions, ActiveList, ActiveBitmask,
         purge_seqs = Seqs,
         has_replica = UseReplicaIndex
     },
-    case (catch couch_db_set:open(?set_name(State), ActiveList, PassiveList, [])) of
+    case (catch couch_db_set:open(?set_name(State), ActiveList ++ PassiveList)) of
     {ok, DbSet} ->
         case (?type(State) =:= main) andalso UseReplicaIndex of
         false ->
@@ -1828,8 +1828,7 @@ update_header(State, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs, NewPurgeSeq
         ok;
     false ->
         {ActiveList, PassiveList} = make_partition_lists(NewState#state.group),
-        ok = couch_db_set:set_active(?db_set(NewState), ActiveList),
-        ok = couch_db_set:set_passive(?db_set(NewState), PassiveList)
+        ok = couch_db_set:add_partitions(?db_set(NewState), ActiveList ++ PassiveList)
     end,
     ?LOG_INFO("Set view `~s`, ~s group `~s`, partition states updated~n"
         "active partitions before:  ~w~n"

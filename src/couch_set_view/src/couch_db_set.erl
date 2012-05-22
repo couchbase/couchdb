@@ -14,9 +14,9 @@
 -behaviour(gen_server).
 
 % public API
--export([open/4, close/1]).
+-export([open/2, close/1]).
 -export([get_seqs/1]).
--export([set_active/2, set_passive/2, remove_partitions/2]).
+-export([add_partitions/2, remove_partitions/2]).
 
 % gen_server API
 -export([init/1, handle_call/3, handle_info/2, handle_cast/2]).
@@ -27,75 +27,46 @@
 
 -record(state, {
     set_name,
-    dbs_active,
-    dbs_passive,
+    db_refs,
+    db_seqs,
     master_db,
-    db_notifier,
-    db_open_options
+    db_notifier
 }).
 
 
-open(SetName, Active, Passive, DbOpenOptions) ->
-    Args = {SetName, Active, Passive, DbOpenOptions},
-    proc_lib:start_link(?MODULE, init, [Args]).
+open(SetName, Partitions) ->
+    proc_lib:start_link(?MODULE, init, [{SetName, lists:usort(Partitions)}]).
 
 close(Pid) ->
     ok = gen_server:call(Pid, close, infinity).
 
-set_active(_Pid, []) ->
+add_partitions(_Pid, []) ->
     ok;
-set_active(Pid, PartList) ->
-    ok = gen_server:call(Pid, {set_active, PartList}, infinity).
-
-set_passive(_Pid, []) ->
-    ok;
-set_passive(Pid, PartList) ->
-    ok = gen_server:call(Pid, {set_passive, PartList}, infinity).
+add_partitions(Pid, Partitions) ->
+    ok = gen_server:call(Pid, {add_partitions, Partitions}, infinity).
 
 remove_partitions(_Pid, []) ->
     ok;
-remove_partitions(Pid, PartList) ->
-    ok = gen_server:call(Pid, {remove_partitions, PartList}, infinity).
+remove_partitions(Pid, Partitions) ->
+    ok = gen_server:call(Pid, {remove_partitions, Partitions}, infinity).
 
 get_seqs(Pid) ->
-    {ok, Seqs} = gen_server:call(Pid, get_seqs, infinity),
-    {ok, lists:keysort(1, Seqs)}.
+    {ok, _Seqs} = gen_server:call(Pid, get_seqs, infinity).
 
 
-init({SetName, Active, Passive, _} = Args) ->
+init({SetName, Partitions} = Args) ->
     {ok, State} = try
         do_init(Args)
     catch _:Error ->
         ?LOG_ERROR("Error opening database set `~s`: ~p~n"
-            "initial active partitions:  ~w~n"
-            "initial passive partitions: ~w~n",
-            [SetName, Error, Active, Passive]),
+                   "initial partitions:  ~w~n",
+                   [SetName, Error, Partitions]),
         exit(Error)
     end,
     proc_lib:init_ack({ok, self()}),
     gen_server:enter_loop(?MODULE, [], State).
 
-do_init({SetName, Active0, Passive0, DbOpenOptions}) ->
-    Active = lists:usort(Active0),
-    Passive = lists:usort(Passive0),
-    OpenFun = fun(P, Acc) ->
-        Name = ?dbname(SetName, P),
-        case couch_db:open_int(Name, DbOpenOptions) of
-        {ok, Db} ->
-            dict:store(Name, {Db, P, couch_db:monitor(Db)}, Acc);
-        Error ->
-            raise_db_open_error(Name, Error)
-        end
-    end,
-    DbsActive = lists:foldl(OpenFun, dict:new(), Active),
-    DbsPassive = lists:foldl(OpenFun, dict:new(), Passive),
-    MasterDb = case couch_db:open_int(?master_dbname(SetName), []) of
-    {ok, Db} ->
-        Db;
-    Error ->
-        raise_db_open_error(?master_dbname(SetName), Error)
-    end,
-    _Ref = couch_db:monitor(MasterDb),
+do_init({SetName, Partitions}) ->
     Server = self(),
     EventFun = fun({compacted, DbName} = Ev) ->
             case is_set_db(DbName, SetName) of
@@ -114,114 +85,105 @@ do_init({SetName, Active0, Passive0, DbOpenOptions}) ->
         (_) ->
             ok
     end,
+    MasterDb = case couch_db:open_int(?master_dbname(SetName), []) of
+    {ok, MDb} ->
+        MDb;
+    Error ->
+        raise_db_open_error(?master_dbname(SetName), Error)
+    end,
+    _Ref = couch_db:monitor(MasterDb),
+    {DbRefs, DbSeqs} = lists:foldl(
+        fun(PartId, {AccDbRefs, AccDbSeqs}) ->
+            Name = ?dbname(SetName, PartId),
+            case couch_db:open_int(Name, []) of
+            {ok, Db} ->
+                AccDbRefs2 = dict:store(
+                    Db#db.name, {Db, couch_db:monitor(Db)}, AccDbRefs),
+                AccDbSeqs2 = orddict:store(PartId, Db#db.update_seq, AccDbSeqs),
+                {AccDbRefs2, AccDbSeqs2};
+            Error2 ->
+                raise_db_open_error(Name, Error2)
+            end
+        end,
+        {dict:new(), orddict:new()}, Partitions),
     {ok, Notifier} = couch_db_update_notifier:start_link(EventFun),
     State = #state{
         set_name = SetName,
-        dbs_active = DbsActive,
-        dbs_passive = DbsPassive,
         master_db = MasterDb,
         db_notifier = Notifier,
-        db_open_options = DbOpenOptions
+        db_refs = DbRefs,
+        db_seqs = DbSeqs
     },
     {ok, State}.
 
 
 handle_call(get_seqs, _From, State) ->
-    FoldFun = fun(_DbName, {Db, P, _Ref}, Acc) ->
-        [{P, Db#db.update_seq} | Acc]
-    end,
-    Seqs0 = dict:fold(FoldFun, [], State#state.dbs_active),
-    Seqs = dict:fold(FoldFun, Seqs0, State#state.dbs_passive),
-    {reply, {ok, Seqs}, State};
+    {reply, {ok, State#state.db_seqs}, State};
 
-handle_call({set_passive, PartList}, _From, State) ->
-    #state{
-        db_open_options = OpenOpts,
-        set_name = SetName,
-        dbs_active = Active0,
-        dbs_passive = Passive0
-    } = State,
-    {Active, Passive} = switch_partitions_state(
-        PartList, SetName, OpenOpts, Active0, Passive0),
-    {reply, ok, State#state{dbs_active = Active, dbs_passive = Passive}};
-
-handle_call({set_active, PartList}, _From, State) ->
-    #state{
-        db_open_options = OpenOpts,
-        set_name = SetName,
-        dbs_active = Active0,
-        dbs_passive = Passive0
-    } = State,
-    {Passive, Active} = switch_partitions_state(
-        PartList, SetName, OpenOpts, Passive0, Active0),
-    {reply, ok, State#state{dbs_active = Active, dbs_passive = Passive}};
-
-handle_call({remove_partitions, PartList}, _From, State) ->
-    {Active, Passive} = lists:foldl(
-        fun(Id, {A, P}) ->
+handle_call({add_partitions, PartList}, _From, State) ->
+    {DbRefs2, DbSeqs2} = lists:foldl(
+        fun(Id, {AccDbRefs, AccDbSeqs}) ->
             DbName = ?dbname((State#state.set_name), Id),
-            case dict:find(DbName, A) of
+            case dict:find(DbName, AccDbRefs) of
             error ->
-                case dict:find(DbName, P) of
-                error ->
-                    {A, P};
-                {ok, {Db, Id, Ref}} ->
-                    erlang:demonitor(Ref, [flush]),
-                    catch couch_db:close(Db),
-                    {A, dict:erase(DbName, P)}
-                end;
-            {ok, {Db, Id, Ref}} ->
-                erlang:demonitor(Ref, [flush]),
-                catch couch_db:close(Db),
-                {dict:erase(DbName, A), P}
+                {ok, Db} = couch_db:open_int(DbName, []),
+                Ref = couch_db:monitor(Db),
+                AccDbRefs2 = dict:store(DbName, {Db, Ref}, AccDbRefs),
+                AccDbSeqs2 = orddict:store(Id, Db#db.update_seq, AccDbSeqs),
+                {AccDbRefs2, AccDbSeqs2};
+            {ok, {_Db, _Ref}} ->
+                {AccDbRefs, AccDbSeqs}
             end
         end,
-        {State#state.dbs_active, State#state.dbs_passive},
+        {State#state.db_refs, State#state.db_seqs},
         PartList),
-    {reply, ok, State#state{dbs_active = Active, dbs_passive = Passive}};
+    {reply, ok, State#state{db_refs = DbRefs2, db_seqs = DbSeqs2}};
+
+handle_call({remove_partitions, PartList}, _From, State) ->
+    {DbRefs2, DbSeqs2} = lists:foldl(
+        fun(Id, {AccDbRefs, AccDbSeqs}) ->
+            DbName = ?dbname((State#state.set_name), Id),
+            case dict:find(DbName, AccDbRefs) of
+            error ->
+                {AccDbRefs, AccDbSeqs};
+            {ok, {Db, Ref}} ->
+                erlang:demonitor(Ref, [flush]),
+                catch couch_db:close(Db),
+                {dict:erase(DbName, AccDbRefs), orddict:erase(Id, AccDbSeqs)}
+            end
+        end,
+        {State#state.db_refs, State#state.db_seqs},
+        PartList),
+    {reply, ok, State#state{db_refs = DbRefs2, db_seqs = DbSeqs2}};
 
 handle_call(close, _From, State) ->
     {stop, normal, ok, State}.
 
 
 handle_cast({updated, {DbName, NewSeq}}, State) ->
-    case dict:find(DbName, State#state.dbs_active) of
-    {ok, {Db, Id, Ref}} ->
-        NewVal = {Db#db{update_seq = NewSeq}, Id, Ref},
-        Active2 = dict:store(DbName, NewVal, State#state.dbs_active),
-        {noreply, State#state{dbs_active = Active2}};
+    case dict:find(DbName, State#state.db_refs) of
+    {ok, {_Db, _Ref}} ->
+        {ok, PartId} = get_part_id(DbName),
+        DbSeqs2 = orddict:store(PartId, NewSeq, State#state.db_seqs),
+        {noreply, State#state{db_seqs = DbSeqs2}};
     error ->
-        case dict:find(DbName, State#state.dbs_passive) of
-        {ok, {Db, Id, Ref}} ->
-            NewVal = {Db#db{update_seq = NewSeq}, Id, Ref},
-            Passive2 = dict:store(DbName, NewVal, State#state.dbs_passive),
-            {noreply, State#state{dbs_passive = Passive2}};
-        error ->
-            {noreply, State}
-        end
+        {noreply, State}
     end;
 
 handle_cast({compacted, DbName}, State) ->
-    case dict:find(DbName, State#state.dbs_active) of
+    case dict:find(DbName, State#state.db_refs) of
     error ->
-        case dict:find(DbName, State#state.dbs_passive) of
-        error ->
-            case DbName =:= couch_db:name(State#state.master_db) of
-            false ->
-                {noreply, State};
-            true ->
-                {ok, Db2} = couch_db:reopen(State#state.master_db),
-                {noreply, State#state{master_db = Db2}}
-            end;
-        {ok, {Db, P, Ref}} ->
-            {ok, Db2} = couch_db:reopen(Db),
-            DbsPassive = dict:store(DbName, {Db2, P, Ref}, State#state.dbs_passive),
-            {noreply, State#state{dbs_passive = DbsPassive}}
+        case DbName =:= couch_db:name(State#state.master_db) of
+        false ->
+            {noreply, State};
+        true ->
+            {ok, Db2} = couch_db:reopen(State#state.master_db),
+            {noreply, State#state{master_db = Db2}}
         end;
-    {ok, {Db, P, Ref}} ->
+    {ok, {Db, Ref}} ->
         {ok, Db2} = couch_db:reopen(Db),
-        DbsActive = dict:store(DbName, {Db2, P, Ref}, State#state.dbs_active),
-        {noreply, State#state{dbs_active = DbsActive}}
+        DbRefs2 = dict:store(DbName, {Db2, Ref}, State#state.db_refs),
+        {noreply, State#state{db_refs = DbRefs2}}
     end.
 
 
@@ -240,27 +202,6 @@ terminate(_Reason, State) ->
     couch_db_update_notifier:stop(State#state.db_notifier).
 
 
-switch_partitions_state(PartList, SetName, OpenOpts, SetA, SetB) ->
-    lists:foldl(
-        fun(Id, {A, B}) ->
-            DbName = ?dbname(SetName, Id),
-            case dict:find(DbName, A) of
-            error ->
-                 case dict:find(DbName, B) of
-                 error ->
-                     {ok, Db} = couch_db:open_int(DbName, OpenOpts),
-                     Ref = couch_db:monitor(Db),
-                     {A, dict:store(DbName, {Db, Id, Ref}, B)};
-                 {ok, _} ->
-                     {A, B}
-                 end;
-            {ok, Val} ->
-                {dict:erase(DbName, A), dict:store(DbName, Val, B)}
-            end
-        end,
-        {SetA, SetB}, PartList).
-
-
 raise_db_open_error(DbName, Error) ->
     Msg = io_lib:format("Couldn't open database `~s`, reason: ~w", [DbName, Error]),
     throw({db_open_error, DbName, Error, iolist_to_binary(Msg)}).
@@ -268,17 +209,12 @@ raise_db_open_error(DbName, Error) ->
 
 get_db_name(Pid, #state{master_db = #db{main_pid = Pid} = MasterDb}) ->
     MasterDb#db.name;
-get_db_name(Pid, #state{dbs_active = Active, dbs_passive = Passive}) ->
-    case find_db_name(Pid, dict:to_list(Active)) of
-    undefined ->
-        find_db_name(Pid, dict:to_list(Passive));
-    Name ->
-        Name
-    end.
+get_db_name(Pid, #state{db_refs = DbRefs}) ->
+    find_db_name(Pid, dict:to_list(DbRefs)).
 
 find_db_name(_Pid, []) ->
     undefined;
-find_db_name(Pid, [{Name, {#db{main_pid = Pid}, _, _}} | _]) ->
+find_db_name(Pid, [{Name, {#db{main_pid = Pid}, _}} | _]) ->
     Name;
 find_db_name(Pid, [_ | Rest]) ->
     find_db_name(Pid, Rest).
@@ -291,4 +227,19 @@ is_set_db(DbName, SetName) ->
         true;
     _ ->
         false
+    end.
+
+
+get_part_id(DbName) ->
+    case string:tokens(?b2l(DbName), "/") of
+    [_, PartIdList] ->
+        PartId = (catch list_to_integer(PartIdList)),
+        case is_integer(PartId) andalso (PartId >= 0) of
+        true ->
+            {ok, PartId};
+        false ->
+            error
+        end;
+    _ ->
+        error
     end.
