@@ -577,7 +577,7 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
         cleanup_kv_count = CleanupKVCount
     } = Result,
 
-    case seqs_up_to_date(?set_seqs(NewGroup), ?set_seqs(Group)) of
+    case (?set_seqs(NewGroup)) >= (?set_seqs(Group)) of
     true ->
         if is_pid(UpdaterPid) ->
             ?LOG_INFO("Set view `~s`, ~s group `~s`, compact group up to date - restarting updater",
@@ -1327,18 +1327,6 @@ commit_header(Group) ->
     Header = couch_set_view_util:make_disk_header(Group),
     ok = couch_file:write_header(Group#set_view_group.fd, Header),
     ok = couch_file:sync(Group#set_view_group.fd).
-
-
--spec seqs_up_to_date(partition_seqs(), partition_seqs()) -> boolean().
-seqs_up_to_date([], []) ->
-    true;
-seqs_up_to_date([{PartId, SeqA} | RestA], [{PartId, SeqB} | RestB]) ->
-    case SeqA - SeqB of
-    Greater when Greater >= 0 ->
-        seqs_up_to_date(RestA, RestB);
-    _Smaller ->
-        false
-    end.
 
 
 -spec maybe_update_partition_states(ordsets:ordset(partition_id()),
