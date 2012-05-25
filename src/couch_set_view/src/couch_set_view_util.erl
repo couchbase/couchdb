@@ -71,7 +71,7 @@ build_bitmask([PartId | Rest], Acc) when is_integer(PartId), PartId >= 0 ->
     build_bitmask(Rest, (1 bsl PartId) bor Acc).
 
 
--spec decode_bitmask(bitmask()) -> [partition_id()].
+-spec decode_bitmask(bitmask()) -> ordsets:ordset(partition_id()).
 decode_bitmask(Bitmask) ->
     decode_bitmask(Bitmask, 0).
 

@@ -599,25 +599,17 @@ terminate(_Reason, _Srv) ->
 
 
 handle_call({get_group_server, SetName, Group}, From, Server) ->
-    #set_view_group{sig = Sig, name = DDocId} = Group,
+    #set_view_group{sig = Sig} = Group,
     case ets:lookup(couch_sig_to_setview_pid, {SetName, Sig}) of
     [] ->
         WaitList = [From],
-        Worker = spawn_monitor(fun() ->
+        _ = spawn_monitor(fun() ->
             exit(new_group(Server#server.root_dir, SetName, Group))
         end),
-        ?LOG_INFO("~s spawned worker ~w to open set view group `~s`, "
-            "set `~s`, signature `~s`, new waiting list: ~w",
-            [?MODULE, Worker, DDocId, SetName,
-                couch_util:to_hex(?b2l(Sig)), WaitList]),
         ets:insert(couch_sig_to_setview_pid, {{SetName, Sig}, WaitList}),
         {noreply, Server};
     [{_, WaitList}] when is_list(WaitList) ->
         WaitList2 = [From | WaitList],
-        ?LOG_INFO("~s blocking client ~w because set view group `~s`, "
-            "set `~s`, signature `~s`, is being open, new waiting list: ~w",
-            [?MODULE, From, DDocId, SetName,
-                couch_util:to_hex(?b2l(Sig)), WaitList2]),
         ets:insert(couch_sig_to_setview_pid, {{SetName, Sig}, WaitList2}),
         {noreply, Server};
     [{_, ExistingPid}] ->
@@ -639,9 +631,6 @@ new_group(Root, SetName, #set_view_group{name = DDocId, sig = Sig} = Group) ->
     Error ->
         Error
     end,
-    ?LOG_INFO("~s opener worker ~w for set view group `~s`, set `~s`, signature `~s`,"
-        " finishing with reply ~p",
-        [?MODULE, self(), DDocId, SetName, couch_util:to_hex(?b2l(Sig)), Reply]),
     {SetName, DDocId, Sig, Reply}.
 
 handle_info({'EXIT', Pid, Reason}, #server{db_notifier = Pid} = Server) ->
@@ -665,13 +654,9 @@ handle_info({'EXIT', FromPid, Reason}, Server) ->
     end,
     {noreply, Server};
 
-handle_info({'DOWN', MonRef, _, Pid, {SetName, DDocId, Sig, Reply}}, Server) ->
-    Worker = {MonRef, Pid},
+handle_info({'DOWN', _MonRef, _, _Pid, {SetName, DDocId, Sig, Reply}}, Server) ->
     Key = {SetName, Sig},
     [{_, WaitList}] = ets:lookup(couch_sig_to_setview_pid, Key),
-    ?LOG_INFO("~s set view group `~s`, set `~s`, signature `~s`, opener worker ~w finished.~n"
-        "Replying with ~p to waiting list: ~w",
-        [?MODULE, DDocId, SetName, couch_util:to_hex(?b2l(Sig)), Worker, Reply, WaitList]),
     lists:foreach(fun(From) -> gen_server:reply(From, Reply) end, WaitList),
     case Reply of
     {ok, NewPid} ->

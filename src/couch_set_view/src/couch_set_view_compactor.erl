@@ -142,9 +142,9 @@ maybe_retry_compact(CompactResult0, StartTime, Group) ->
     case gen_server:call(Pid, {compact_done, CompactResult}, infinity) of
     ok ->
         ok = couch_set_view_util:close_raw_read_fd(Group);
-    update ->
+    {update, CurSeqs} ->
         {_, Ref} = erlang:spawn_monitor(
-            couch_set_view_updater, update, [nil, NewGroup]),
+            couch_set_view_updater, update, [nil, NewGroup, CurSeqs]),
         receive
         {'DOWN', Ref, _, _, {updater_finished, UpdaterResult}} ->
             CompactResult2 = CompactResult0#set_view_compactor_result{

@@ -12,7 +12,7 @@
 
 -module(couch_set_view_updater).
 
--export([update/2]).
+-export([update/3]).
 
 -include("couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
@@ -46,19 +46,15 @@
 }).
 
 
--spec update(pid() | 'nil', #set_view_group{}) -> no_return().
-update(Owner, Group) ->
+-spec update(pid() | 'nil', #set_view_group{}, partition_seqs()) -> no_return().
+update(Owner, Group, CurSeqs) ->
     #set_view_group{
         set_name = SetName,
         type = Type,
         name = DDocId
     } = Group,
-    ActiveParts = ordsets:from_list(
-        couch_set_view_util:decode_bitmask(?set_abitmask(Group))),
-    PassiveParts = ordsets:from_list(
-        couch_set_view_util:decode_bitmask(?set_pbitmask(Group))),
-    CleanupParts = ordsets:from_list(
-        couch_set_view_util:decode_bitmask(?set_cbitmask(Group))),
+    ActiveParts = couch_set_view_util:decode_bitmask(?set_abitmask(Group)),
+    PassiveParts = couch_set_view_util:decode_bitmask(?set_pbitmask(Group)),
 
     case ?set_pending_transition(Group) of
     nil ->
@@ -70,20 +66,6 @@ update(Owner, Group) ->
             active = PendingActive, passive = PendingPassive,
             cleanup = PendingCleanup
         } = PendingTrans
-    end,
-
-    FoldFun = fun(P, {A1, A2, A3}) ->
-        case ordsets:is_element(P, PendingCleanup) of
-        true ->
-             {A1, A2, A3};
-        false ->
-            {ok, Db} = couch_db:open_int(?dbname(SetName, P), []),
-            {ok, <<NotDel:40, Del:40, _Size:48>>} =
-                    couch_btree:full_reduce(Db#db.docinfo_by_id_btree),
-            Seq = couch_db:get_update_seq(Db),
-            ok = couch_db:close(Db),
-            {[{P, Del} | A1], [{P, NotDel} | A2], [{P, Seq} | A3]}
-        end
     end,
 
     process_flag(trap_exit, true),
@@ -121,29 +103,13 @@ update(Owner, Group) ->
         exit({updater_finished, EmptyResult})
     end,
 
-    {ActiveDelCounts, ActiveNotDelCounts, ActiveSeqs} =
-        lists:foldl(FoldFun, {[], [], []}, ActiveParts),
-    {PassiveDelCounts, PassiveNotDelCounts, PassiveSeqs} =
-        lists:foldl(FoldFun, {[], [], []}, PassiveParts),
-
-    MaxSeqs = dict:from_list(ActiveSeqs ++ PassiveSeqs),
-    IndexedActiveSeqs =  [{P, S} || {P, S} <- ?set_seqs(Group), ordsets:is_element(P, ActiveParts)],
-    IndexedPassiveSeqs = [{P, S} || {P, S} <- ?set_seqs(Group), ordsets:is_element(P, PassiveParts)],
-
     case is_pid(Owner) of
     true ->
+        CleanupParts = couch_set_view_util:decode_bitmask(?set_cbitmask(Group)),
         ?LOG_INFO("Updater for set view `~s`, ~s group `~s` started~n"
                   "Active partitions:                      ~w~n"
                   "Passive partitions:                     ~w~n"
                   "Cleanup partitions:                     ~w~n"
-                  "Active partitions update seqs:          ~w~n"
-                  "Active partitions indexed update seqs:  ~w~n"
-                  "Passive partitions update seqs:         ~w~n"
-                  "Passive partitions indexed update seqs: ~w~n"
-                  "Active partitions # docs:               ~w~n"
-                  "Active partitions # deleted docs:       ~w~n"
-                  "Passive partitions # docs:              ~w~n"
-                  "Passive partitions # deleted docs:      ~w~n"
                   "Replicas to transfer:                   ~w~n"
                   "Pending transition:                     ~n"
                   "    active:                             ~w~n"
@@ -153,14 +119,6 @@ update(Owner, Group) ->
                    ActiveParts,
                    PassiveParts,
                    CleanupParts,
-                   lists:reverse(ActiveSeqs),
-                   IndexedActiveSeqs,
-                   lists:reverse(PassiveSeqs),
-                   IndexedPassiveSeqs,
-                   lists:reverse(ActiveNotDelCounts),
-                   lists:reverse(ActiveDelCounts),
-                   lists:reverse(PassiveNotDelCounts),
-                   lists:reverse(PassiveDelCounts),
                    ?set_replicas_on_transfer(Group),
                    PendingActive,
                    PendingPassive,
@@ -174,7 +132,7 @@ update(Owner, Group) ->
         parent = self(),
         owner = Owner,
         group = Group,
-        max_seqs = MaxSeqs
+        max_seqs = CurSeqs
     },
     case (PendingCleanup /= []) andalso is_pid(Owner) of
     true ->
@@ -203,7 +161,7 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime) ->
         fun({{PartId, NewSeq}, {PartId, OldSeq}}, Acc) ->
              Acc + (NewSeq - OldSeq)
         end,
-        0, lists:zip(lists:keysort(1, dict:to_list(MaxSeqs)), SinceSeqs)),
+        0, lists:zip(MaxSeqs, SinceSeqs)),
 
     {ok, MapQueue} = couch_work_queue:new(
         [{max_size, ?QUEUE_MAX_SIZE}, {max_items, ?QUEUE_MAX_ITEMS}]),
@@ -353,18 +311,22 @@ load_changes(Owner, Updater, Group, MapQueue, Writer, ActiveParts, PassiveParts)
         ok
     end,
 
-    FoldFun = fun(PartId, PartType) ->
+    FoldFun = fun(PartId) ->
         case ordsets:is_element(PartId, PendingCleanup) of
         true ->
             ok;
         false ->
-            {ok, Db} = couch_db:open_int(?dbname(SetName, PartId), []),
+            Db = case couch_db:open_int(?dbname(SetName, PartId), []) of
+            {ok, PartDb} ->
+                PartDb;
+            Error ->
+                ErrorMsg = io_lib:format("Error opening database `~s': ~w",
+                                         [?dbname(SetName, PartId), Error]),
+                throw({error, iolist_to_binary(ErrorMsg)})
+            end,
             try
                 maybe_stop(),
                 Since = couch_util:get_value(PartId, SinceSeqs),
-                ?LOG_INFO("Reading changes (since sequence ~p) from ~s partition ~s to"
-                          " update ~s set view group `~s` from set `~s`",
-                          [Since, PartType, couch_db:name(Db), GroupType, DDocId, SetName]),
                 ChangesWrapper = fun(DocInfo, _, ok) ->
                     maybe_stop(),
                     load_doc(Db, PartId, DocInfo, MapQueue),
@@ -377,14 +339,29 @@ load_changes(Owner, Updater, Group, MapQueue, Writer, ActiveParts, PassiveParts)
             after
                 ok = couch_db:close(Db)
             end
-        end,
-        PartType
+        end
     end,
 
     notify_owner(Owner, {state, updating_active}, Updater),
     try
-        active = lists:foldl(FoldFun, active, ActiveParts),
-        passive = lists:foldl(FoldFun, passive, PassiveParts)
+        case ActiveParts of
+        [] ->
+            ok;
+        _ ->
+            ?LOG_INFO("Reading changes from active partitions to "
+                      "update ~s set view group `~s` from set `~s`",
+                      [GroupType, DDocId, SetName]),
+            ok = lists:foreach(FoldFun, ActiveParts)
+        end,
+        case PassiveParts of
+        [] ->
+            ok;
+        _ ->
+            ?LOG_INFO("Reading changes from passive partitions to "
+                      "update ~s set view group `~s` from set `~s`",
+                      [GroupType, DDocId, SetName]),
+            ok = lists:foreach(FoldFun, PassiveParts)
+        end
     catch throw:stop ->
         Writer ! stop
     end,
@@ -571,7 +548,7 @@ update_transferred_replicas(Acc, PartIdSeqs) ->
     RepsTransferred2 = lists:foldl(
         fun({PartId, Seq}, A) ->
             case ordsets:is_element(PartId, ?set_replicas_on_transfer(Group))
-                andalso (Seq >= dict:fetch(PartId, MaxSeqs)) of
+                andalso (Seq >= orddict:fetch(PartId, MaxSeqs)) of
             true ->
                 ordsets:add_element(PartId, A);
             false ->

@@ -50,7 +50,7 @@
         ((((State#state.group)#set_view_group.index_header)
           #set_view_index_header.pending_transition) /= nil)).
 
--define(MAX_HIST_SIZE, 20).
+-define(MAX_HIST_SIZE, 10).
 
 -record(state, {
     init_args                          :: init_args(),
@@ -627,7 +627,8 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
 
         NewUpdaterPid =
         if is_pid(UpdaterPid) ->
-            spawn_link(couch_set_view_updater, update, [self(), NewGroup2]);
+            {ok, CurSeqs} = couch_db_set:get_seqs(?db_set(State)),
+            spawn_link(couch_set_view_updater, update, [self(), NewGroup2, CurSeqs]);
         true ->
             nil
         end,
@@ -648,7 +649,7 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
     false ->
         ?LOG_INFO("Set view `~s`, ~s group `~s`, compaction still behind, retrying",
             [?set_name(State), ?type(State), ?group_id(State)]),
-        {reply, update, State}
+        {reply, {update, ?set_seqs(Group)}, State}
     end;
 handle_call({compact_done, _Result}, _From, State) ->
     % From a previous compactor that was killed/stopped, ignore.
@@ -1910,19 +1911,19 @@ cleaner(#state{group = Group}) ->
     {clean_group, NewGroup, TotalPurgedCount, Duration}.
 
 
--spec index_needs_update(#state{}) -> boolean().
+-spec index_needs_update(#state{}) -> {boolean(), partition_seqs()}.
 index_needs_update(#state{group = Group} = State) ->
     {ok, CurSeqs} = couch_db_set:get_seqs(?db_set(State)),
     case get_pending_cleanup(Group) of
     [] ->
-        CurSeqs > ?set_seqs(Group);
+        {CurSeqs > ?set_seqs(Group), CurSeqs};
     PendingCleanup ->
         FilteredSetSeqs = orddict:filter(
             fun(PartId, _Seq) ->
                not ordsets:is_element(PartId, PendingCleanup)
             end,
             ?set_seqs(Group)),
-        CurSeqs > FilteredSetSeqs
+        {CurSeqs > FilteredSetSeqs, CurSeqs}
     end.
 
 
@@ -2061,9 +2062,9 @@ start_updater(#state{updater_pid = nil, updater_state = not_running} = State) ->
         waiting_list = WaitList
     } = State,
     case index_needs_update(State) of
-    true ->
-        do_start_updater(State);
-    false ->
+    {true, CurSeqs} ->
+        do_start_updater(State, CurSeqs);
+    {false, _} ->
         case State#state.waiting_list of
         [] ->
             State;
@@ -2074,12 +2075,12 @@ start_updater(#state{updater_pid = nil, updater_state = not_running} = State) ->
     end.
 
 
--spec do_start_updater(#state{}) -> #state{}.
-do_start_updater(State) ->
+-spec do_start_updater(#state{}, partition_seqs()) -> #state{}.
+do_start_updater(State, CurSeqs) ->
     #state{group = Group} = State2 = stop_cleaner(State),
     ?LOG_INFO("Starting updater for set view `~s`, ~s group `~s`",
         [?set_name(State), ?type(State), ?group_id(State)]),
-    Pid = spawn_link(couch_set_view_updater, update, [self(), Group]),
+    Pid = spawn_link(couch_set_view_updater, update, [self(), Group, CurSeqs]),
     State2#state{
         updater_pid = Pid,
         updater_state = starting
@@ -2116,8 +2117,7 @@ open_replica_group({RootDir, SetName, Group} = _InitArgs) ->
 -spec get_replica_partitions(pid()) -> ordsets:ordset(partition_id()).
 get_replica_partitions(ReplicaPid) ->
     {ok, Group} = gen_server:call(ReplicaPid, request_group, infinity),
-    ordsets:from_list(couch_set_view_util:decode_bitmask(
-        ?set_abitmask(Group) bor ?set_pbitmask(Group))).
+    couch_set_view_util:decode_bitmask(?set_abitmask(Group) bor ?set_pbitmask(Group)).
 
 
 -spec maybe_update_replica_index(#state{}) -> #state{}.
@@ -2133,7 +2133,7 @@ maybe_update_replica_index(#state{group = Group, updater_state = not_running} = 
     case (ChangesCount >= ?MIN_CHANGES_AUTO_UPDATE) orelse
         (ChangesCount > 0 andalso ?set_cbitmask(Group) =/= 0) of
     true ->
-        do_start_updater(State);
+        do_start_updater(State, CurSeqs);
     false ->
         maybe_start_cleaner(State)
     end.
