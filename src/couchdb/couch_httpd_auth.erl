@@ -313,9 +313,7 @@ handle_session_req(#httpd{method='GET', user_ctx=UserCtx}=Req) ->
                     {roles, UserCtx#user_ctx.roles}
                 ]}},
                 {info, {[
-                    {authentication_db, ?l2b(couch_config:get("couch_httpd_auth", "authentication_db"))},
-                    {authentication_handlers, [auth_name(H) || H <- couch_httpd:make_fun_spec_strs(
-                            couch_config:get("httpd", "authentication_handlers"))]}
+                    {authentication_db, ?l2b(couch_config:get("couch_httpd_auth", "authentication_db"))}
                 ] ++ maybe_value(authenticated, UserCtx#user_ctx.handler, fun(Handler) ->
                         auth_name(?b2l(Handler))
                     end)}}

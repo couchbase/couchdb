@@ -49,12 +49,6 @@ init([]) ->
             brutal_kill,
             worker,
             [couch_server]},
-        {couch_compress_types,
-            {couch_compress_types, start_link, []},
-            permanent,
-            brutal_kill,
-            worker,
-            [couch_compress_types]},
         {couch_db_update_event,
             {gen_event, start_link, [{local, couch_db_update}]},
             permanent,
@@ -90,13 +84,7 @@ init([]) ->
             permanent,
             brutal_kill,
             worker,
-            [couch_index_barrier]},
-        {couch_access_log,
-            {couch_access_log, start_link, []},
-            permanent,
-            brutal_kill,
-            worker,
-            [couch_access_log]}
+            [couch_index_barrier]}
     ],
     {ok, {{one_for_one, 10, 3600}, Children}}.
 

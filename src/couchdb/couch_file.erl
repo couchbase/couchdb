@@ -300,7 +300,6 @@ init({Filepath, Options}) ->
        {ok, Writer, Eof} = proc_lib:start_link(?MODULE, spawn_writer,
             [Filepath, CloseTimeout]),
        ok = couch_file_write_guard:add(Filepath, Writer),
-       maybe_track_open_os_files(Options),
        proc_lib:init_ack({ok, self()}),
        InitState = #file{
            reader = Reader,
@@ -346,14 +345,6 @@ maybe_create_file(Filepath, Options) ->
         end;
     false ->
         ok
-    end.
-
-maybe_track_open_os_files(FileOptions) ->
-    case lists:member(sys_db, FileOptions) of
-    true ->
-        ok;
-    false ->
-        couch_stats_collector:track_process_count({couchdb, open_os_files})
     end.
 
 terminate(_Reason, #file{reader = Reader, writer = Writer}) ->

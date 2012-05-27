@@ -115,16 +115,7 @@ handle_changes_req1(Req, Db) ->
             FeedChangesFun(MakeCallback(Resp))
         end
     end,
-    couch_stats_collector:increment(
-        {httpd, clients_requesting_changes}
-    ),
-    try
-        WrapperFun(ChangesFun)
-    after
-    couch_stats_collector:decrement(
-        {httpd, clients_requesting_changes}
-    )
-    end.
+    WrapperFun(ChangesFun).
 
 handle_compact_req(#httpd{method='POST',
                           path_parts=[DbName,_,Id|_],
@@ -277,7 +268,6 @@ db_req(#httpd{path_parts=[_,<<"_ensure_full_commit">>]}=Req, _Db) ->
 db_req(#httpd{method='POST',
               path_parts=[_,<<"_bulk_docs">>],
               db_frontend=DbFrontend}=Req, Db) ->
-    couch_stats_collector:increment({httpd, bulk_requests}),
     couch_httpd:validate_ctype(Req, "application/json"),
     {JsonProps} = couch_httpd:json_body_obj(Req),
     case couch_util:get_value(<<"docs">>, JsonProps) of

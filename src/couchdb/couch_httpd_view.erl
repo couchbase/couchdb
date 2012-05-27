@@ -30,7 +30,7 @@ design_doc_view(Req, Db, DName, ViewName, Keys) ->
     DesignId = <<"_design/", DName/binary>>,
     Stale = get_stale_type(Req),
     Reduce = get_reduce_type(Req),
-    Result = case couch_view:get_map_view(Db, DesignId, ViewName, Stale) of
+    case couch_view:get_map_view(Db, DesignId, ViewName, Stale) of
     {ok, View, Group} ->
         QueryArgs = parse_view_params(Req, Keys, map),
         output_map_view(Req, View, Group, Db, QueryArgs, Keys);
@@ -49,9 +49,7 @@ design_doc_view(Req, Db, DName, ViewName, Keys) ->
         _ ->
             throw({not_found, Reason})
         end
-    end,
-    couch_stats_collector:increment({httpd, view_reads}),
-    Result.
+    end.
 
 handle_view_req(#httpd{method='GET',
         path_parts=[_, _, DName, _, ViewName]}=Req, Db, _DDoc) ->
@@ -79,7 +77,6 @@ handle_view_req(Req, _Db, _DDoc) ->
 handle_temp_view_req(#httpd{method='POST'}=Req, Db) ->
     couch_httpd:validate_ctype(Req, "application/json"),
     ok = couch_db:check_is_admin(Db),
-    couch_stats_collector:increment({httpd, temporary_view_reads}),
     {Props} = couch_httpd:json_body_obj(Req),
     Language = couch_util:get_value(<<"language">>, Props, <<"javascript">>),
     {DesignOptions} = couch_util:get_value(<<"options">>, Props, {[]}),

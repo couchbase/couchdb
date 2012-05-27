@@ -6,7 +6,6 @@
 database_dir = %localstatelibdir%
 view_index_dir = %localstatelibdir%
 util_driver_dir = %couchprivlibdir%
-max_document_size = 4294967296 ; 4 GB
 os_process_timeout = 30000 ; 5 seconds. for view and external servers.
 max_dbs_open = 100
 delayed_commits = true ; set this to false to ensure an fsync before 201 Created is returned
@@ -19,10 +18,6 @@ uri_file = %localstaterundir%/couch.uri
 ; deflate_[N]  - use zlib's deflate, N is the compression level which ranges from 1 (fastest,
 ;                lowest compression ratio) to 9 (slowest, highest compression ratio)
 file_compression = snappy
-; Higher values may give better read performance due to less read operations
-; and/or more OS page cache hits, but they can also increase overall response
-; time for writes when there are many attachment write requests in parallel.
-attachment_stream_buffer_size = 4096
 ; Maximum number of distinct view update/building processes at any point in time.
 max_parallel_indexers = 4
 max_parallel_replica_indexers = 2
@@ -37,10 +32,9 @@ checkpoint_after = 5242880 ; checkpoint after every N bytes were written
 [httpd]
 port = 5984
 bind_address = 127.0.0.1
-authentication_handlers = {couch_httpd_oauth, oauth_authentication_handler}, {couch_httpd_auth, cookie_authentication_handler}, {couch_httpd_auth, default_authentication_handler}
+authentication_handlers =
+; authentication_handlers = {couch_httpd_oauth, oauth_authentication_handler}, {couch_httpd_auth, cookie_authentication_handler}, {couch_httpd_auth, default_authentication_handler}
 default_handler = {couch_httpd_db, handle_request}
-secure_rewrites = true
-vhost_global_handlers = _utils, _uuids, _session, _oauth, _users
 allow_jsonp = false
 db_frontend = couch_db_frontend
 ; Options for the MochiWeb HTTP server.
@@ -55,21 +49,6 @@ port = 6984
 file = %localstatelogdir%/couch.log
 level = info
 include_sasl = true
-
-; Enable apache httpd-style access logging.
-; The default format is the "extended" or "combined" format that
-; includes:
-;   host ident authuser date request status bytes referer(sic) user-agent
-;
-; The alternative format is "common" that includes:
-;   host ident authuser date request status bytes
-;
-; If a value is not defined, the log entry will be " - " for that value.
-
-[access_log]
-enable = false
-format = extended
-file = %localstatelogdir%/couch_access.log
 
 [couch_httpd_auth]
 authentication_db = _users
@@ -94,17 +73,12 @@ os_process_limit = 50
 view_manager={couch_view, start_link, []}
 set_view_manager={couch_set_view, start_link, []}
 index_merger_pool={lhttpc_manager, start_link, [[{connection_timeout, 90000}, {pool_size, 10000}, {name, couch_index_merger_connection_pool}]]}
-external_manager={couch_external_manager, start_link, []}
 query_servers={couch_query_servers, start_link, []}
-vhosts={couch_httpd_vhost, start_link, []}
 httpd={couch_httpd, start_link, []}
-stats_aggregator={couch_stats_aggregator, start, []}
-stats_collector={couch_stats_collector, start, []}
 uuids={couch_uuids, start, []}
 auth_cache={couch_auth_cache, start_link, []}
 couch_set_view_ddoc_cache={couch_set_view_ddoc_cache, start_link, []}
 replication_manager={couch_replication_manager, start_link, []}
-os_daemons={couch_os_daemons, start_link, []}
 compaction_daemon={couch_compaction_daemon, start_link, []}
 
 [httpd_global_handlers]
@@ -118,7 +92,6 @@ _config = {couch_httpd_misc_handlers, handle_config_req}
 _replicate = {couch_httpd_replicator, handle_req}
 _uuids = {couch_httpd_misc_handlers, handle_uuids_req}
 _restart = {couch_httpd_misc_handlers, handle_restart_req}
-_stats = {couch_httpd_stats_handlers, handle_stats_req}
 _log = {couch_httpd_misc_handlers, handle_log_req}
 _session = {couch_httpd_auth, handle_session_req}
 _oauth = {couch_httpd_oauth, handle_oauth_req}
@@ -133,31 +106,12 @@ _design = {couch_httpd_db, handle_design_req}
 _temp_view = {couch_httpd_view, handle_temp_view_req}
 _changes = {couch_httpd_db, handle_changes_req}
 
-; The external module takes an optional argument allowing you to narrow it to a
-; single script. Otherwise the script name is inferred from the first path section
-; after _external's own path.
-; _mypath = {couch_httpd_external, handle_external_req, <<"mykey">>}
-; _external = {couch_httpd_external, handle_external_req}
-
 [httpd_design_handlers]
 _view = {couch_httpd_view, handle_view_req}
 _show = {couch_httpd_show, handle_doc_show_req}
 _list = {couch_httpd_show, handle_view_list_req}
 _info = {couch_httpd_db,   handle_design_info_req}
-_rewrite = {couch_httpd_rewrite, handle_rewrite_req}
 _update = {couch_httpd_show, handle_doc_update_req}
-
-; enable external as an httpd handler, then link it with commands here.
-; note, this api is still under consideration.
-; [external]
-; mykey = /path/to/mycommand
-
-; Here you can setup commands for CouchDB to manage
-; while it is alive. It will attempt to keep each command
-; alive if it exits.
-; [os_daemons]
-; some_daemon_name = /path/to/script -with args
-
 
 [uuids]
 ; Known algorithms:
@@ -170,16 +124,6 @@ _update = {couch_httpd_show, handle_doc_update_req}
 ;   utc_random - Time since Jan 1, 1970 UTC with microseconds
 ;     First 14 characters are the time in hex. Last 18 are random.
 algorithm = sequential
-
-[stats]
-; rate is in milliseconds
-rate = 1000
-; sample intervals are in seconds
-samples = [0, 60, 300, 900]
-
-[attachments]
-compression_level = 8 ; from 1 (lowest, fastest) to 9 (highest, slowest), 0 to disable compression
-compressible_types = text/*, application/javascript, application/json, application/xml
 
 [replicator]
 db = _replicator

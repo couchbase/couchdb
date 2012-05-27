@@ -138,15 +138,6 @@ config_delete(Section, Key, Persist) ->
 increment_update_seq(Db) ->
     couch_db:increment_update_seq(Db).
 
-stats_aggregator_all(Range) ->
-    couch_stats_aggregator:all(Range).
-
-stats_aggregator_get_json(Key, Range) ->
-    couch_stats_aggregator:get_json(Key, Range).
-
-stats_aggregator_collect_sample() ->
-    couch_stats_aggregator:collect_sample().
-
 welcome_message(WelcomeMessage) ->
     [
         {couchdb, WelcomeMessage},

@@ -39,7 +39,6 @@ source_files = \
     couch_changes.erl \
     couch_compaction_daemon.erl \
     couch_compress.erl \
-    couch_compress_types.erl \
     couch_config.erl \
     couch_config_writer.erl \
     couch_db.erl \
@@ -49,8 +48,6 @@ source_files = \
     couch_drv.erl \
     couch_ejson_compare.erl \
     couch_event_sup.erl \
-    couch_external_manager.erl \
-    couch_external_server.erl \
     couch_file.erl \
     couch_db_frontend.erl \
     couch_httpd.erl \
@@ -61,12 +58,8 @@ source_files = \
     couch_httpd_view.erl \
     couch_httpd_misc_handlers.erl \
     couch_httpd_replicator.erl \
-    couch_httpd_stats_handlers.erl \
-    couch_httpd_vhost.erl \
     couch_log.erl \
-    couch_access_log.erl \
     couch_native_process.erl \
-    couch_os_daemons.erl \
     couch_os_process.erl \
     couch_primary_sup.erl \
     couch_query_servers.erl \
@@ -80,8 +73,6 @@ source_files = \
     couch_secondary_sup.erl \
     couch_server.erl \
     couch_server_sup.erl \
-    couch_stats_aggregator.erl \
-    couch_stats_collector.erl \
     couch_task_status.erl \
     couch_util.erl \
     couch_uuids.erl \
@@ -116,7 +107,6 @@ compiled_files = \
     couch_changes.beam \
     couch_compaction_daemon.beam \
     couch_compress.beam \
-    couch_compress_types.beam \
     couch_config.beam \
     couch_config_writer.beam \
     couch_db.beam \
@@ -126,8 +116,6 @@ compiled_files = \
     couch_drv.beam \
     couch_ejson_compare.beam \
     couch_event_sup.beam \
-    couch_external_manager.beam \
-    couch_external_server.beam \
     couch_file.beam \
     couch_file_write_guard.beam \
     couch_db_frontend.beam \
@@ -139,12 +127,8 @@ compiled_files = \
     couch_httpd_view.beam \
     couch_httpd_misc_handlers.beam \
     couch_httpd_replicator.beam \
-    couch_httpd_stats_handlers.beam \
-    couch_httpd_vhost.beam \
     couch_log.beam \
-    couch_access_log.beam \
     couch_native_process.beam \
-    couch_os_daemons.beam \
     couch_os_process.beam \
     couch_primary_sup.beam \
     couch_query_servers.beam \
@@ -158,8 +142,6 @@ compiled_files = \
     couch_secondary_sup.beam \
     couch_server.beam \
     couch_server_sup.beam \
-    couch_stats_aggregator.beam \
-    couch_stats_collector.beam \
     couch_task_status.beam \
     couch_util.beam \
     couch_uuids.beam \

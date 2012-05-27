@@ -158,7 +158,6 @@ open_doc(Db, IdOrDocInfo) ->
     open_doc(Db, IdOrDocInfo, []).
 
 open_doc(Db, Id, Options) ->
-    increment_stat(Db, {couchdb, database_reads}),
     case open_doc_int(Db, Id, Options) of
     {ok, #doc{deleted=true}=Doc} ->
         case lists:member(deleted, Options) of
@@ -412,7 +411,6 @@ fast_reads(Db, Fun) ->
 
 
 update_docs(#db{name=DbName}=Db, Docs, Options0) ->
-    increment_stat(Db, {couchdb, database_writes}),
     % go ahead and generate the new revision ids for the documents.
     % separate out the NonRep documents from the rest of the documents
     {Docs1, NonRepDocs1} = lists:foldl(
@@ -581,12 +579,6 @@ init({DbName, Filepath, Fd, Options}) ->
     {ok, UpdaterPid} = gen_server:start_link(couch_db_updater, {self(), DbName, Filepath, Fd, Options}, []),
     {ok, #db{fd_ref_counter=RefCntr}=Db} = gen_server:call(UpdaterPid, get_db, infinity),
     couch_ref_counter:add(RefCntr),
-    case lists:member(sys_db, Options) of
-    true ->
-        ok;
-    false ->
-        couch_stats_collector:track_process_count({couchdb, open_databases})
-    end,
     process_flag(trap_exit, true),
     {ok, Db}.
 
@@ -669,13 +661,4 @@ doc_meta_info(#doc_info{local_seq=Seq}, Options) ->
     case lists:member(local_seq, Options) of
     false -> [];
     true -> [{local_seq, Seq}]
-    end.
-
-
-increment_stat(#db{options = Options}, Stat) ->
-    case lists:member(sys_db, Options) of
-    true ->
-        ok;
-    false ->
-        couch_stats_collector:increment(Stat)
     end.

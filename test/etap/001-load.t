@@ -18,7 +18,7 @@
 
 main(_) ->
     test_util:init_code_path(),
-    etap:plan(36),
+    etap:plan(31),
     Modules = [
         couch_btree,
         couch_config,
@@ -29,14 +29,11 @@ main(_) ->
         couch_db_updater,
         couch_doc,
         couch_event_sup,
-        couch_external_manager,
-        couch_external_server,
         couch_file,
         couch_httpd,
         couch_httpd_db,
         couch_httpd_external,
         couch_httpd_misc_handlers,
-        couch_httpd_stats_handlers,
         couch_httpd_view,
         couch_log,
         couch_os_process,
@@ -48,8 +45,6 @@ main(_) ->
         couch_rep_sup,
         couch_server,
         couch_server_sup,
-        couch_stats_aggregator,
-        couch_stats_collector,
         couch_task_status,
         couch_util,
         couch_view,

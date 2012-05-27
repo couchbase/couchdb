@@ -59,10 +59,6 @@ EXTRA_DIST = \
     083-config-no-files.t \
     090-task-status.t \
     100-ref-counter.t \
-    120-stats-collect.t \
-    121-stats-aggregates.cfg \
-    121-stats-aggregates.ini \
-    121-stats-aggregates.t \
     150-invalid-view-seq.t \
     190-json-stream-parse.t \
     200-view-group-no-db-leaks.t \

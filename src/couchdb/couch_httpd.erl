@@ -28,7 +28,7 @@
 -export([start_json_response/2, start_json_response/3, end_json_response/1]).
 -export([send_response/4,send_method_not_allowed/2,send_error/4, send_redirect/2,send_chunked_error/2]).
 -export([send_json/2,send_json/3,send_json/4,last_chunk/1,parse_multipart_request/3]).
--export([accepted_encodings/1,handle_request_int/6,validate_referer/1,validate_ctype/2]).
+-export([accepted_encodings/1,validate_referer/1,validate_ctype/2]).
 -export([is_ctype/2]).
 
 start_link() ->
@@ -88,7 +88,6 @@ start_link(Name, Options) ->
         couch_config:get("httpd", "socket_options", "[]")),
 
     DbFrontendModule = list_to_atom(couch_config:get("httpd", "db_frontend", "couch_db_frontend")),
-    set_auth_handlers(),
 
     Loop = fun(Req)->
         case SocketOptions of
@@ -134,21 +133,12 @@ config_change("httpd", "server_options") ->
     ?MODULE:stop();
 config_change("httpd", "socket_options") ->
     ?MODULE:stop();
-config_change("httpd", "authentication_handlers") ->
-    set_auth_handlers();
 config_change("httpd_global_handlers", _) ->
     ?MODULE:stop();
 config_change("httpd_db_handlers", _) ->
     ?MODULE:stop();
 config_change("ssl", _) ->
     ?MODULE:stop().
-
-set_auth_handlers() ->
-    AuthenticationSrcs = make_fun_spec_strs(
-        couch_config:get("httpd", "authentication_handlers", "")),
-    AuthHandlers = lists:map(
-        fun(A) -> {make_arity_1_fun(A), ?l2b(A)} end, AuthenticationSrcs),
-    ok = application:set_env(couch, auth_handlers, AuthHandlers).
 
 % SpecStr is a string like "{my_module, my_fun}"
 %  or "{my_module, my_fun, <<"my_arg">>}"
@@ -180,29 +170,12 @@ make_arity_3_fun(SpecStr) ->
 make_fun_spec_strs(SpecStr) ->
     re:split(SpecStr, "(?<=})\\s*,\\s*(?={)", [{return, list}]).
 
-handle_request(MochiReq, DbFrontendModule, DefaultFun, UrlHandlers, DbUrlHandlers,
-    DesignUrlHandlers) ->
-
-    MochiReq1 = couch_httpd_vhost:dispatch_host(MochiReq),
-
-    handle_request_int(MochiReq1, DbFrontendModule, DefaultFun,
-                UrlHandlers, DbUrlHandlers, DesignUrlHandlers).
-
-handle_request_int(MochiReq, DbFrontendModule, DefaultFun,
+handle_request(MochiReq, DbFrontendModule, DefaultFun,
             UrlHandlers, DbUrlHandlers, DesignUrlHandlers) ->
-    Begin = now(),
     % for the path, use the raw path with the query string and fragment
     % removed, but URL quoting left intact
     RawUri = MochiReq:get(raw_path),
     {"/" ++ Path, _, _} = mochiweb_util:urlsplit_path(RawUri),
-
-    Headers = MochiReq:get(headers),
-
-    % get requested path
-    RequestedPath = case MochiReq:get_header_value("x-couchdb-vhost-path") of
-        undefined -> RawUri;
-        P -> P
-    end,
 
     HandlerKey =
     case mochiweb_util:partition(Path, "/") of
@@ -211,13 +184,6 @@ handle_request_int(MochiReq, DbFrontendModule, DefaultFun,
     {FirstPart, _, _} ->
         list_to_binary(FirstPart)
     end,
-    ?LOG_DEBUG("~p ~s ~p from ~p~nHeaders: ~p", [
-        MochiReq:get(method),
-        RawUri,
-        MochiReq:get(version),
-        MochiReq:get(peer),
-        mochiweb_headers:to_list(MochiReq:get(headers))
-    ]),
 
     Method1 =
     case MochiReq:get(method) of
@@ -228,55 +194,32 @@ handle_request_int(MochiReq, DbFrontendModule, DefaultFun,
         % possible (if any module references the atom, then it's existing).
         Meth -> couch_util:to_existing_atom(Meth)
     end,
-    increment_method_stats(Method1),
-
-    % allow broken HTTP clients to fake a full method vocabulary with an X-HTTP-METHOD-OVERRIDE header
-    MethodOverride = MochiReq:get_primary_header_value("X-HTTP-Method-Override"),
-    Method2 = case lists:member(MethodOverride, ["GET", "HEAD", "POST", "PUT", "DELETE", "TRACE", "CONNECT", "COPY"]) of
-    true ->
-        ?LOG_INFO("MethodOverride: ~s (real method was ~s)", [MethodOverride, Method1]),
-        case Method1 of
-        'POST' -> couch_util:to_existing_atom(MethodOverride);
-        _ ->
-            % Ignore X-HTTP-Method-Override when the original verb isn't POST.
-            % I'd like to send a 406 error to the client, but that'd require a nasty refactor.
-            % throw({not_acceptable, <<"X-HTTP-Method-Override may only be used with POST requests.">>})
-            Method1
-        end;
-    _ -> Method1
-    end,
 
     % alias HEAD to GET as mochiweb takes care of stripping the body
-    Method = case Method2 of
+    Method = case Method1 of
         'HEAD' -> 'GET';
         Other -> Other
     end,
 
+    PathParts = [?l2b(unquote(Part)) || Part <- string:tokens(Path, "/")],
     HttpReq = #httpd{
         mochi_req = MochiReq,
         peer = MochiReq:get(peer),
         method = Method,
-        requested_path_parts =
-            [?l2b(unquote(Part)) || Part <- string:tokens(RequestedPath, "/")],
-        path_parts = [?l2b(unquote(Part)) || Part <- string:tokens(Path, "/")],
+        path_parts = PathParts,
         db_frontend = DbFrontendModule,
         db_url_handlers = DbUrlHandlers,
         design_url_handlers = DesignUrlHandlers,
         default_fun = DefaultFun,
-        url_handlers = UrlHandlers
+        url_handlers = UrlHandlers,
+        user_ctx = #user_ctx{roles = [<<"_admin">>]}
     },
 
     HandlerFun = couch_util:dict_find(HandlerKey, UrlHandlers, DefaultFun),
-    {ok, AuthHandlers} = application:get_env(couch, auth_handlers),
 
     {ok, Resp} =
     try
-        case authenticate_request(HttpReq, AuthHandlers) of
-        #httpd{} = Req ->
-            HandlerFun(Req);
-        Response ->
-            Response
-        end
+        HandlerFun(HttpReq)
     catch
         throw:{http_head_abort, Resp0} ->
             {ok, Resp0};
@@ -318,35 +261,7 @@ handle_request_int(MochiReq, DbFrontendModule, DefaultFun,
             ?LOG_INFO("Stacktrace: ~p",[Stack]),
             send_error(HttpReq, Error)
     end,
-    RequestTime = round(timer:now_diff(now(), Begin)/1000),
-    couch_stats_collector:record({couchdb, request_time}, RequestTime),
-    couch_stats_collector:increment({httpd, requests}),
     {ok, Resp}.
-
-% Try authentication handlers in order until one sets a user_ctx
-% the auth funs also have the option of returning a response
-% move this to couch_httpd_auth?
-authenticate_request(#httpd{user_ctx=#user_ctx{}} = Req, _AuthHandlers) ->
-    Req;
-authenticate_request(#httpd{} = Req, []) ->
-    case couch_config:get("couch_httpd_auth", "require_valid_user", "false") of
-    "true" ->
-        throw({unauthorized, <<"Authentication required.">>});
-    "false" ->
-        Req#httpd{user_ctx=#user_ctx{}}
-    end;
-authenticate_request(#httpd{} = Req, [{AuthFun, AuthSrc} | RestAuthHandlers]) ->
-    R = case AuthFun(Req) of
-        #httpd{user_ctx=#user_ctx{}=UserCtx}=Req2 ->
-            Req2#httpd{user_ctx=UserCtx#user_ctx{handler=AuthSrc}};
-        Else -> Else
-    end,
-    authenticate_request(R, RestAuthHandlers);
-authenticate_request(Response, _AuthSrcs) ->
-    Response.
-
-increment_method_stats(Method) ->
-    couch_stats_collector:increment({httpd_request_methods, Method}).
 
 validate_referer(Req) ->
     Host = host_for_request(Req),
@@ -415,8 +330,7 @@ serve_file(Req, RelativePath, DocumentRoot) ->
 
 serve_file(#httpd{mochi_req=MochiReq}=Req, RelativePath, DocumentRoot, ExtraHeaders) ->
     log_request(Req, 200),
-    {ok, MochiReq:serve_file(RelativePath, DocumentRoot,
-        server_header() ++ couch_httpd_auth:cookie_auth_header(Req, []) ++ ExtraHeaders)}.
+    {ok, MochiReq:serve_file(RelativePath, DocumentRoot, ExtraHeaders)}.
 
 qs_value(Req, Key) ->
     qs_value(Req, Key, undefined).
@@ -571,13 +485,9 @@ log_request(#httpd{mochi_req=MochiReq,peer=Peer}, Code) ->
         Code
     ]).
 
-access_log_request(MochiReq, Code, Body) ->
-    couch_access_log:log(MochiReq, Code, Body).
-
 start_response_length(#httpd{mochi_req=MochiReq}=Req, Code, Headers, Length) ->
     log_request(Req, Code),
-    couch_stats_collector:increment({httpd_status_codes, Code}),
-    Resp = MochiReq:start_response_length({Code, Headers ++ server_header() ++ couch_httpd_auth:cookie_auth_header(Req, Headers), Length}),
+    Resp = MochiReq:start_response_length({Code, Headers, Length}),
     case MochiReq:get(method) of
     'HEAD' -> throw({http_head_abort, Resp});
     _ -> ok
@@ -586,10 +496,7 @@ start_response_length(#httpd{mochi_req=MochiReq}=Req, Code, Headers, Length) ->
 
 start_response(#httpd{mochi_req=MochiReq}=Req, Code, Headers) ->
     log_request(Req, Code),
-    couch_stats_collector:increment({httpd_status_cdes, Code}),
-    CookieHeader = couch_httpd_auth:cookie_auth_header(Req, Headers),
-    Headers2 = Headers ++ server_header() ++ CookieHeader,
-    Resp = MochiReq:start_response({Code, Headers2}),
+    Resp = MochiReq:start_response({Code, Headers}),
     case MochiReq:get(method) of
         'HEAD' -> throw({http_head_abort, Resp});
         _ -> ok
@@ -609,19 +516,19 @@ no_resp_conn_header([{Hdr, _}|Rest]) ->
     end.
 
 http_1_0_keep_alive(Req, Headers) ->
-    KeepOpen = Req:should_close() == false,
-    IsHttp10 = Req:get(version) == {1, 0},
-    NoRespHeader = no_resp_conn_header(Headers),
-    case KeepOpen andalso IsHttp10 andalso NoRespHeader of
-        true -> [{"Connection", "Keep-Alive"} | Headers];
-        false -> Headers
+    case (Req:get(version) == {1, 0}) andalso
+        (Req:should_close() == false) andalso
+        no_resp_conn_header(Headers) of
+    true ->
+        [{"Connection", "Keep-Alive"} | Headers];
+    false ->
+        Headers
     end.
 
 start_chunked_response(#httpd{mochi_req=MochiReq}=Req, Code, Headers) ->
     log_request(Req, Code),
-    couch_stats_collector:increment({httpd_status_codes, Code}),
     Headers2 = http_1_0_keep_alive(MochiReq, Headers),
-    Resp = MochiReq:respond({Code, Headers2 ++ server_header() ++ couch_httpd_auth:cookie_auth_header(Req, Headers2), chunked}),
+    Resp = MochiReq:respond({Code, Headers2, chunked}),
     case MochiReq:get(method) of
     'HEAD' -> throw({http_head_abort, Resp});
     _ -> ok
@@ -636,20 +543,17 @@ send_chunk(Resp, Data) ->
     {ok, Resp}.
 
 last_chunk(Resp) ->
-    access_log_request(Resp:get(request), Resp:get(code), chunked),
     Resp:write_chunk([]),
     {ok, Resp}.
 
 send_response(#httpd{mochi_req=MochiReq}=Req, Code, Headers, Body) ->
     log_request(Req, Code),
-    access_log_request(MochiReq, Code, Body),
-    couch_stats_collector:increment({httpd_status_codes, Code}),
     Headers2 = http_1_0_keep_alive(MochiReq, Headers),
     if Code >= 400 ->
         ?LOG_DEBUG("httpd ~p error response:~n ~s", [Code, Body]);
     true -> ok
     end,
-    {ok, MochiReq:respond({Code, Headers2 ++ server_header() ++ couch_httpd_auth:cookie_auth_header(Req, Headers2), Body})}.
+    {ok, MochiReq:respond({Code, Headers2, Body})}.
 
 send_method_not_allowed(Req, Methods) ->
     send_error(Req, 405, [{"Allow", Methods}], <<"method_not_allowed">>, ?l2b("Only " ++ Methods ++ " allowed")).
@@ -677,7 +581,6 @@ start_json_response(Req, Code, Headers) ->
         {"Cache-Control", "must-revalidate"}
     ],
     start_jsonp(Req), % Validate before starting chunked.
-    %start_chunked_response(Req, Code, DefaultHeaders ++ Headers).
     {ok, Resp} = start_chunked_response(Req, Code, DefaultHeaders ++ Headers),
     case start_jsonp(Req) of
         [] -> ok;

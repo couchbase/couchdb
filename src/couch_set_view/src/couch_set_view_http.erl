@@ -168,7 +168,6 @@ design_doc_view(Req, SetName, DDocId, ViewName, FilteredPartitions, Keys) ->
             throw({not_found, Reason})
         end
     end,
-    couch_stats_collector:increment({httpd, view_reads}),
     Result.
 
 output_map_view(Req, View, Group, QueryArgs) ->
