@@ -89,11 +89,11 @@ ebin/%.app: src/%.app.src
 	sed -e "s|%version%|@version@|g" \
 	< $< > $@
 
-ebin/%.beam: src/%.erl $(include_files) $(top_srcdir)/src/couchdb/couch_db.hrl
+ebin/%.beam: src/%.erl $(include_files) $(top_srcdir)/src/couchdb/couch_db.hrl $(top_srcdir)/src/couchdb/couch_index_merger.hrl $(top_srcdir)/src/couchdb/couch_view_merger.hrl
 	@mkdir -p ebin/
 	$(ERLC) -Wall -I$(top_srcdir)/src -I$(top_srcdir)/src/couchdb \
         -o ebin/ $(ERLC_FLAGS) ${TEST} $<;
 
-test/%.beam: test/%.erl $(include_files) $(top_srcdir)/src/couchdb/couch_db.hrl
+test/%.beam: test/%.erl $(include_files) $(top_srcdir)/src/couchdb/couch_db.hrl $(top_srcdir)/src/couchdb/couch_index_merger.hrl $(top_srcdir)/src/couchdb/couch_view_merger.hrl
 	$(ERLC) -Wall -I$(top_srcdir)/src -I$(top_srcdir)/src/couchdb \
         -o test/ $(ERLC_FLAGS) ${TEST} $<;

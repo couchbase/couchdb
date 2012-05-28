@@ -13,7 +13,6 @@
 -record(view_merge, {
     keys = nil,
     rereduce_fun = nil,
-    rereduce_fun_lang = <<"javascript">>,
     make_row_fun = nil
 }).
 

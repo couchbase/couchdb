@@ -38,7 +38,7 @@
 % callback!
 parse_http_params(Req, DDoc, ViewName, #view_merge{keys = Keys}) ->
     % view type =~ query type
-    {_Collation, ViewType0, _ViewLang} = view_details(DDoc, ViewName),
+    {_Collation, ViewType0} = view_details(DDoc, ViewName),
     ViewType = case {ViewType0, couch_httpd:qs_value(Req, "reduce", "true")} of
     {reduce, "false"} ->
        red_map;
@@ -65,23 +65,22 @@ make_funs(DDoc, ViewName, IndexMergeParams) ->
     } = IndexMergeParams,
     #view_merge{
        rereduce_fun = InRedFun,
-       rereduce_fun_lang = InRedFunLang,
        make_row_fun = MakeRowFun0
     } = Extra,
-    {Collation, ViewType0, ViewLang} = view_details(DDoc, ViewName),
+    {Collation, ViewType0} = view_details(DDoc, ViewName),
     ViewType = case {ViewType0, ViewArgs#view_query_args.run_reduce} of
     {reduce, false} ->
        red_map;
     _ ->
        ViewType0
     end,
-    {RedFun, RedFunLang} = case {ViewType, InRedFun} of
+    RedFun = case {ViewType, InRedFun} of
     {reduce, nil} ->
-        {reduce_function(DDoc, ViewName), ViewLang};
+        reduce_function(DDoc, ViewName);
     {reduce, _} when is_binary(InRedFun) ->
-        {InRedFun, InRedFunLang};
+        InRedFun;
     _ ->
-        {nil, nil}
+        nil
     end,
     LessFun = view_less_fun(Collation, ViewArgs#view_query_args.direction,
         ViewType),
@@ -121,8 +120,7 @@ make_funs(DDoc, ViewName, IndexMergeParams) ->
         end
     end,
     Extra2 = #view_merge{
-        rereduce_fun = RedFun,
-        rereduce_fun_lang = RedFunLang
+        rereduce_fun = RedFun
     },
     {LessFun, FoldFun, MergeFun, CollectorFun, Extra2}.
 
@@ -214,10 +212,9 @@ http_index_folder_req_details(#simple_index_spec{} = IndexSpec, MergeParams, _DD
 
 
 view_details(nil, <<"_all_docs">>) ->
-    {<<"raw">>, map, nil};
+    {<<"raw">>, map};
 
 view_details(DDoc, ViewName) ->
-    {Props} = DDoc#doc.body,
     {ViewDef} = get_view_def(DDoc, ViewName),
     {ViewOptions} = get_value(<<"options">>, ViewDef, {[]}),
     Collation = get_value(<<"collation">>, ViewOptions, <<"default">>),
@@ -227,8 +224,7 @@ view_details(DDoc, ViewName) ->
     RedFun when is_binary(RedFun) ->
         reduce
     end,
-    Lang = get_value(<<"language">>, Props, <<"javascript">>),
-    {Collation, ViewType, Lang}.
+    {Collation, ViewType}.
 
 
 reduce_function(#doc{id = DDocId} = DDoc, ViewName) ->

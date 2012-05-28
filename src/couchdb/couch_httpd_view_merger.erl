@@ -54,15 +54,10 @@ setup_http_sender(MergeParams, Req) ->
 handle_req(#httpd{method = 'GET'} = Req) ->
     Views = validate_views_param(qs_json_value(Req, "views", nil)),
     Keys = validate_keys_param(qs_json_value(Req, "keys", nil)),
-    RedFun = validate_reredfun_param(qs_json_value(Req, <<"rereduce">>, nil)),
-    RedFunLang = validate_lang_param(
-        qs_json_value(Req, <<"language">>, <<"javascript">>)),
     DDocRevision = couch_index_merger:validate_revision_param(
         qs_json_value(Req, <<"ddoc_revision">>, nil)),
     ViewMergeParams = #view_merge{
-        keys = Keys,
-        rereduce_fun = RedFun,
-        rereduce_fun_lang = RedFunLang
+        keys = Keys
     },
     MergeParams0 = #index_merge{
         indexes = Views,
@@ -77,15 +72,10 @@ handle_req(#httpd{method = 'POST'} = Req) ->
     {Props} = couch_httpd:json_body_obj(Req),
     Views = validate_views_param(get_value(<<"views">>, Props)),
     Keys = validate_keys_param(get_value(<<"keys">>, Props, nil)),
-    RedFun = validate_reredfun_param(get_value(<<"rereduce">>, Props, nil)),
-    RedFunLang = validate_lang_param(
-        get_value(<<"language">>, Props, <<"javascript">>)),
     DDocRevision = couch_index_merger:validate_revision_param(
         get_value(<<"ddoc_revision">>, Props, nil)),
     ViewMergeParams = #view_merge{
-        keys = Keys,
-        rereduce_fun = RedFun,
-        rereduce_fun_lang = RedFunLang
+        keys = Keys
     },
     MergeParams0 = #index_merge{
         indexes = Views,
@@ -384,20 +374,6 @@ validate_keys_param(Keys) when is_list(Keys) ->
     Keys;
 validate_keys_param(_) ->
     throw({bad_request, "`keys` parameter is not an array."}).
-
-
-validate_reredfun_param(nil) ->
-    nil;
-validate_reredfun_param(RedFun) when is_binary(RedFun) ->
-    RedFun;
-validate_reredfun_param(_) ->
-    throw({bad_request, "`rereduce` parameter is not a string."}).
-
-
-validate_lang_param(Lang) when is_binary(Lang) ->
-    Lang;
-validate_lang_param(_) ->
-    throw({bad_request, "`language` parameter is not a string."}).
 
 
 validate_on_error_param("continue") ->
