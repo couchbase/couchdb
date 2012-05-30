@@ -647,11 +647,46 @@ handle_call({get_group_server, SetName, Group}, From, Server) ->
         {noreply, Server};
     [{_, ExistingPid}] ->
         {reply, {ok, ExistingPid}, Server}
-    end.
+    end;
 
-handle_cast({reset_indexes, DbName}, #server{root_dir=Root}=Server) ->
-    maybe_reset_indexes(DbName, Root),
-    {noreply, Server}.
+handle_call({before_database_delete, DbName}, _From, Server) ->
+    #server{root_dir = RootDir} = Server,
+    case is_set_db(DbName) of
+    false ->
+        ok;
+    {true, SetName, PartId} ->
+        DeleteIndexDir = lists:foldl(
+            fun({_SetName, {DDocId, Sig}}, Acc) ->
+                [{_, Pid}] = ets:lookup(couch_sig_to_setview_pid, {SetName, Sig}),
+                case couch_set_view_group:before_partition_delete(Pid, PartId) of
+                shutdown ->
+                    ?LOG_INFO("View group `~s` for set `~s` (PID ~p), shutdown because "
+                              "database `~s` is about to be deleted",
+                              [DDocId, SetName, Pid, DbName]),
+                    delete_from_ets(Pid, SetName, DDocId, Sig),
+                    unlink(Pid),
+                    receive {'EXIT', Pid, _} -> ok after 0 -> ok end,
+                    Acc;
+                ignore ->
+                    false
+                end
+            end,
+            true,
+            ets:lookup(couch_setview_name_to_sig, SetName)),
+        case DeleteIndexDir andalso filelib:is_dir(set_index_dir(RootDir, SetName)) of
+        true ->
+            ?LOG_INFO("Deleting index files for set `~s` because database "
+                      "partition `~s` is about to deleted", [SetName, DbName]),
+            delete_index_dir(RootDir, SetName);
+        false ->
+            ok
+        end
+    end,
+    {reply, ok, Server}.
+
+
+handle_cast(Msg, Server) ->
+    {stop, {unexpected_cast, Msg}, Server}.
 
 new_group(Root, SetName, #set_view_group{name = DDocId, sig = Sig} = Group) ->
     process_flag(trap_exit, true),
@@ -740,48 +775,6 @@ nuke_dir(RootDelDir, Dir) ->
         ok = file:del_dir(Dir)
     end.
 
-maybe_reset_indexes(DbName, Root) ->
-    case string:tokens(?b2l(DbName), "/") of
-    [SetName, "master"] ->
-        reset_indexes(?l2b(SetName), DbName, master, Root);
-    [SetName, Rest] ->
-        PartId = (catch list_to_integer(Rest)),
-        case is_integer(PartId) of
-        true ->
-            reset_indexes(?l2b(SetName), DbName, PartId, Root);
-        false ->
-            ok
-        end;
-    _ ->
-        ok
-    end.
-
-reset_indexes(SetName, DbName, PartId, RootDir) ->
-    DeleteIndexDir = lists:foldl(
-        fun({_SetName, {DDocId, Sig}}, Acc) ->
-            [{_, Pid}] = ets:lookup(couch_sig_to_setview_pid, {SetName, Sig}),
-            case couch_set_view_group:partition_deleted(Pid, PartId) of
-            shutdown ->
-                ?LOG_INFO("View group `~s` for set `~s` (PID ~p), shutdown because "
-                    "database `~s` was deleted", [DDocId, SetName, Pid, DbName]),
-                delete_from_ets(Pid, SetName, DDocId, Sig),
-                unlink(Pid),
-                receive {'EXIT', Pid, _} -> ok after 0 -> ok end,
-                Acc;
-            ignore ->
-                false
-            end
-        end,
-        true,
-        ets:lookup(couch_setview_name_to_sig, SetName)),
-    case DeleteIndexDir andalso filelib:is_dir(set_index_dir(RootDir, SetName)) of
-    true ->
-        ?LOG_INFO("Deleting index files for set `~s` because database "
-            "partition `~s` was deleted", [SetName, DbName]),
-        delete_index_dir(RootDir, SetName);
-    false ->
-        ok
-    end.
 
 % keys come back in the language of btree - tuples.
 less_json_ids({JsonA, IdA}, {JsonB, IdB}) ->
@@ -842,12 +835,8 @@ modify_bitmasks(#set_view_group{replica_group = RepGroup} = Group, Partitions) -
     {Group2, Unindexed}.
 
 
-handle_db_event({deleted, DbName}) ->
-    ok = gen_server:cast(?MODULE, {reset_indexes, DbName});
-handle_db_event({created, _DbName}) ->
-    % TODO: deal with this
-    % ok = gen_server:cast(?MODULE, {reset_indexes, DbName});
-    ok;
+handle_db_event({before_delete, DbName}) ->
+    ok = gen_server:call(?MODULE, {before_database_delete, DbName}, infinity);
 handle_db_event({Event, {DbName, DDocId}}) when Event == ddoc_updated; Event == ddoc_deleted ->
     case string:tokens(?b2l(DbName), "/") of
     [SetNameStr, "master"] ->
@@ -910,3 +899,20 @@ reduce_view_merge_callback({row, {Key, Red}}, #merge_acc{fold_fun = Fun, acc = A
 
 reduce_view_merge_callback({debug_info, _From, _Info}, Acc) ->
     {ok, Acc}.
+
+
+is_set_db(DbName) ->
+    case string:tokens(?b2l(DbName), "/") of
+    [SetName, "master"] ->
+        {true, ?l2b(SetName), master};
+    [SetName, Rest] ->
+        PartId = (catch list_to_integer(Rest)),
+        case is_integer(PartId) of
+        true ->
+            {true, ?l2b(SetName), PartId};
+        false ->
+            false
+        end;
+    _ ->
+        false
+    end.

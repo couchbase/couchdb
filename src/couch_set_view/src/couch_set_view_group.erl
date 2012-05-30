@@ -19,7 +19,7 @@
 -export([request_group/2, release_group/1]).
 -export([is_view_defined/1, define_view/2]).
 -export([set_state/4]).
--export([partition_deleted/2]).
+-export([before_partition_delete/2]).
 -export([add_replica_partitions/2, remove_replica_partitions/2]).
 -export([mark_as_unindexable/2, mark_as_indexable/2]).
 
@@ -162,16 +162,9 @@ get_data_size(Pid) ->
     end.
 
 
--spec partition_deleted(pid(), partition_id()) -> 'shutdown' | 'ignore'.
-partition_deleted(Pid, PartId) ->
-    try
-        gen_server:call(Pid, {partition_deleted, PartId}, infinity)
-    catch
-    _:_ ->
-        % May have stopped already, because partition was part of the
-        % group's db set (active or passive partition).
-        shutdown
-    end.
+-spec before_partition_delete(pid(), partition_id()) -> 'shutdown' | 'ignore'.
+before_partition_delete(Pid, PartId) ->
+    gen_server:call(Pid, {before_partition_delete, PartId}, infinity).
 
 
 -spec define_view(pid(), #set_view_params{}) -> 'ok' | {'error', term()}.
@@ -414,28 +407,49 @@ handle_call({define_view, _, _, _, _, _, _}, _From, State) ->
 handle_call(is_view_defined, _From, #state{group = Group} = State) ->
     {reply, is_integer(?set_num_partitions(Group)), State, ?TIMEOUT};
 
-handle_call({partition_deleted, master}, _From, State) ->
+handle_call({before_partition_delete, master}, _From, State) ->
     Error = {error, {db_deleted, ?master_dbname((?set_name(State)))}},
     State2 = reply_all(State, Error),
     ?LOG_INFO("Set view `~s`, ~s group `~s`, going to shutdown because "
-              "master database was deleted",
+              "master database is being deleted",
               [?set_name(State), ?type(State), ?group_id(State)]),
     {stop, shutdown, shutdown, State2};
-handle_call({partition_deleted, PartId}, _From, #state{group = Group} = State) ->
+handle_call({before_partition_delete, PartId}, _From, #state{group = Group} = State) ->
+    #state{
+        replica_partitions = ReplicaParts,
+        replica_group = ReplicaPid
+    } = State,
     Mask = 1 bsl PartId,
-    PendingCleanup = get_pending_cleanup(State),
-    case (((?set_abitmask(Group) band Mask) =/= 0) orelse
-            ((?set_pbitmask(Group) band Mask) =/= 0)) andalso
-        (not ordsets:is_element(PartId, PendingCleanup)) of
+    case ((?set_abitmask(Group) band Mask) /= 0) orelse
+        ((?set_pbitmask(Group) band Mask) /= 0) of
     true ->
-        Error = {error, {db_deleted, ?dbname((?set_name(State)), PartId)}},
-        State2 = reply_all(State, Error),
-        ?LOG_INFO("Set view `~s`, ~s group `~s`, going to shutdown because "
-                  "partition ~p was deleted",
+        ?LOG_INFO("Set view `~s`, ~s group `~s`, marking partition ~p for "
+                  "cleanup because it's about to be deleted",
                   [?set_name(State), ?type(State), ?group_id(State), PartId]),
-        {stop, shutdown, shutdown, State2};
+        case orddict:is_key(PartId, ?set_unindexable_seqs(State#state.group)) of
+        true ->
+            State2 = process_mark_as_indexable(State, [PartId], false);
+        false ->
+            State2 = State
+        end,
+        State3 = update_partition_states([], [], [PartId], State2),
+        {reply, ignore, State3, ?TIMEOUT};
     false ->
-        {reply, ignore, State, ?TIMEOUT}
+        case ordsets:is_element(PartId, ReplicaParts) of
+        true ->
+            % Can't be a replica on transfer, otherwise it would be part of the
+            % set of passive partitions.
+            ?LOG_INFO("Set view `~s`, ~s group `~s`, removing replica partition ~p"
+                      " because it's about to be deleted",
+                      [?set_name(State), ?type(State), ?group_id(State), PartId]),
+            ok = set_state(ReplicaPid, [], [], [PartId]),
+            State2 = State#state{
+               replica_partitions = ordsets:del_element(PartId, ReplicaParts)
+            },
+            {reply, ignore, State2, ?TIMEOUT};
+        false ->
+            {reply, ignore, State, ?TIMEOUT}
+        end
     end;
 
 handle_call(_Msg, _From, State) when not ?is_defined(State) ->
@@ -549,7 +563,7 @@ handle_call({mark_as_unindexable, Partitions}, _From, State) ->
 
 handle_call({mark_as_indexable, Partitions}, _From, State) ->
     try
-        State2 = process_mark_as_indexable(State, Partitions),
+        State2 = process_mark_as_indexable(State, Partitions, true),
         {reply, ok, State2}
     catch
     throw:Error ->
@@ -575,6 +589,10 @@ handle_call(request_group, _From, #state{group = Group} = State) ->
     % Callers aren't supposed to read from the group's fd, we don't
     % increment here the ref counter on behalf of the caller.
     {reply, {ok, Group}, State, ?TIMEOUT};
+
+handle_call(replica_pid, _From, #state{replica_group = Pid} = State) ->
+    % To be used only by unit tests.
+    {reply, {ok, Pid}, State, ?TIMEOUT};
 
 handle_call(request_group_info, _From, State) ->
     GroupInfo = get_group_info(State),
@@ -2558,8 +2576,8 @@ process_mark_as_unindexable(State, Partitions) ->
     end.
 
 
--spec process_mark_as_indexable(#state{}, [partition_id()]) -> #state{}.
-process_mark_as_indexable(State, Partitions) ->
+-spec process_mark_as_indexable(#state{}, [partition_id()], boolean()) -> #state{}.
+process_mark_as_indexable(State, Partitions, CommitHeader) ->
     #state{
         group = #set_view_group{index_header = Header} = Group
     } = State,
@@ -2588,7 +2606,7 @@ process_mark_as_indexable(State, Partitions) ->
     case UnindexableSeqs2 == ?set_unindexable_seqs(Group) of
     true ->
         State;
-    false ->
+    false when CommitHeader ->
         #state{group = Group2} = State2 = restart_compactor(
             State, "set of unindexable partitions updated"),
         Group3 = Group2#set_view_group{
@@ -2605,5 +2623,15 @@ process_mark_as_indexable(State, Partitions) ->
                   "New set:      ~w~n",
                   [?set_name(State), ?type(State), ?group_id(State),
                    ?set_unindexable_seqs(Group2), UnindexableSeqs2]),
-        State2#state{group = Group3}
+        State2#state{group = Group3};
+    false ->
+        Group2 = Group#set_view_group{
+            index_header = Header#set_view_index_header{
+                seqs = Seqs2,
+                purge_seqs = PurgeSeqs2,
+                unindexable_seqs = UnindexableSeqs2,
+                unindexable_purge_seqs = UnindexablePurgeSeqs2
+            }
+        },
+        State#state{group = Group2}
     end.

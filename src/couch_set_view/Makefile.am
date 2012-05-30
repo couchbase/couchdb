@@ -39,7 +39,7 @@ test_files = \
     test/01-load.t \
     test/02-old-index-cleanup.t \
     test/03-db-compaction-file-leaks.t \
-    test/04-group-shutdown.t \
+    test/04-handle-db-deletes.t \
     test/05-replicas-transfer.t \
     test/06-main-compaction.t \
     test/07-replica-compaction.t \

@@ -356,6 +356,13 @@ handle_call({delete, DbName, _Options}, _From, Server) ->
     case check_dbname(Server, DbNameList) of
     ok ->
         FullFilepath = get_full_filename(Server, DbNameList),
+        Files = filelib:wildcard(FullFilepath ++ ".*"),
+        case Files of
+        [] ->
+            ok;
+        _ ->
+            couch_db_update_notifier:sync_notify({before_delete, DbName})
+        end,
         UpdateState =
         case ets:lookup(couch_dbs_by_name, DbName) of
         [] -> false;
@@ -385,7 +392,6 @@ handle_call({delete, DbName, _Options}, _From, Server) ->
         false ->
             Server
         end,
-        Files = filelib:wildcard(FullFilepath ++ ".*"),
         Result = lists:map(fun(F) ->
                 ?LOG_INFO("Deleting file ~s", [F]),
                 couch_file:delete(Server#server.root_dir, F)
