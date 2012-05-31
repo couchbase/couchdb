@@ -94,10 +94,12 @@ update(Owner, Group, CurSeqs, NumChanges) ->
     Parent = self(),
     Pid = spawn_link(fun() ->
         case Type of
-        main ->
+        main when is_pid(Owner) ->
             ok = couch_index_barrier:enter(couch_main_index_barrier, Parent);
-        replica ->
-            ok = couch_index_barrier:enter(couch_replica_index_barrier, Parent)
+        replica when is_pid(Owner) ->
+            ok = couch_index_barrier:enter(couch_replica_index_barrier, Parent);
+        _ when Owner == nil ->
+            ok
         end,
         exit({done, (timer:now_diff(os:timestamp(), BeforeEnterTs) / 1000000)})
     end),
@@ -280,10 +282,12 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime, NumChanges) ->
 
     Result = wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime),
     case Type of
-    main ->
+    main when is_pid(Owner) ->
         ok = couch_index_barrier:leave(couch_main_index_barrier);
-    replica ->
-        ok = couch_index_barrier:leave(couch_replica_index_barrier)
+    replica when is_pid(Owner) ->
+        ok = couch_index_barrier:leave(couch_replica_index_barrier);
+    _ when Owner == nil ->
+        ok
     end,
     exit(Result).
 
