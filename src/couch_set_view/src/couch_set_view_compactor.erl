@@ -122,9 +122,9 @@ compact_group(Group, EmptyGroup) ->
         group = NewGroup,
         cleanup_kv_count = CleanupKVCount
     },
-    maybe_retry_compact(CompactResult, StartTime, Group).
+    maybe_retry_compact(CompactResult, StartTime, Group, 1).
 
-maybe_retry_compact(CompactResult0, StartTime, Group) ->
+maybe_retry_compact(CompactResult0, StartTime, Group, Retries) ->
     NewGroup = CompactResult0#set_view_compactor_result.group,
     #set_view_group{
         set_name = SetName,
@@ -143,6 +143,15 @@ maybe_retry_compact(CompactResult0, StartTime, Group) ->
     ok ->
         ok = couch_set_view_util:close_raw_read_fd(Group);
     {update, CurSeqs} ->
+        NumNewChanges = lists:foldl(
+            fun({{PartId, NewSeq}, {PartId, OldSeq}}, Acc) ->
+                Acc + (NewSeq - OldSeq)
+            end,
+            0, lists:zip(CurSeqs, ?set_seqs(NewGroup))),
+        ?LOG_INFO("Compactor for set view `~s`, ~s group `~s` "
+                  "spawning updater to apply delta of ~p changes "
+                  "(retry number ~p)",
+                  [SetName, Type, DDocId, NumNewChanges, Retries]),
         {_, Ref} = erlang:spawn_monitor(
             couch_set_view_updater, update, [nil, NewGroup, CurSeqs]),
         receive
@@ -150,7 +159,7 @@ maybe_retry_compact(CompactResult0, StartTime, Group) ->
             CompactResult2 = CompactResult0#set_view_compactor_result{
                 group = UpdaterResult#set_view_updater_result.group
             },
-            maybe_retry_compact(CompactResult2, StartTime, Group);
+            maybe_retry_compact(CompactResult2, StartTime, Group, Retries + 1);
         {'DOWN', Ref, _, _, Reason} ->
             exit(Reason)
         end
