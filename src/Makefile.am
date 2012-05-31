@@ -25,4 +25,5 @@ SUBDIRS += \
     lhttpc \
     mochiweb \
     snappy \
-    couch_set_view
+    couch_set_view \
+    couch_index_merger

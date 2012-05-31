@@ -17,8 +17,7 @@ couchlibdir = $(localerlanglibdir)/couch-$(version)
 couchincludedir = $(couchlibdir)/include
 couchebindir = $(couchlibdir)/ebin
 
-couchinclude_DATA = couch_api_wrap.hrl couch_db.hrl couch_js_functions.hrl couch_replicator.hrl \
-	couch_view_merger.hrl couch_index_merger.hrl
+couchinclude_DATA = couch_api_wrap.hrl couch_db.hrl couch_js_functions.hrl couch_replicator.hrl
 couchebin_DATA = $(compiled_files)
 
 # dist_devdoc_DATA = $(doc_base) $(doc_modules)
@@ -84,12 +83,7 @@ source_files = \
     couch_view_mapreduce.erl \
     couch_db_updater.erl \
     couch_work_queue.erl \
-    json_stream_parse.erl \
-    couch_httpd_view_merger.erl \
-    couch_index_merger.erl \
-    couch_view_merger.erl \
-    couch_view_merger_queue.erl \
-    couch_skew.erl
+    json_stream_parse.erl
 
 
 EXTRA_DIST = $(source_files) couch_api_wrap.hrl couch_db.hrl couch_js_functions.hrl couch_replicator.hrl \
@@ -154,12 +148,7 @@ compiled_files = \
     couch_view_mapreduce.beam \
     couch_db_updater.beam \
     couch_work_queue.beam \
-    json_stream_parse.beam \
-    couch_httpd_view_merger.beam \
-    couch_index_merger.beam \
-    couch_view_merger.beam \
-    couch_view_merger_queue.beam \
-    couch_skew.beam
+    json_stream_parse.beam
 
 # doc_base = \
 #     erlang.png \
@@ -218,6 +207,6 @@ endif
 
 # $(ERL) -noshell -run edoc_run files [\"$<\"]
 
-%.beam: %.erl couch_api_wrap.hrl couch_db.hrl couch_js_functions.hrl couch_replicator.hrl couch_view_merger.hrl couch_index_merger.hrl ../couch_set_view/include/couch_set_view.hrl
+%.beam: %.erl couch_api_wrap.hrl couch_db.hrl couch_js_functions.hrl couch_replicator.hrl ../couch_index_merger/include/couch_view_merger.hrl ../couch_index_merger/include/couch_index_merger.hrl ../couch_set_view/include/couch_set_view.hrl
 	$(ERLC) -I$(top_srcdir)/src $(ERLC_FLAGS) ${TEST} $<;
 

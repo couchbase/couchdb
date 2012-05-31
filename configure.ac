@@ -511,6 +511,7 @@ AC_CONFIG_FILES([src/snappy/Makefile])
 AC_CONFIG_FILES([src/snappy/snappy-$SNAPPY_MAJOR.$SNAPPY_MINOR.$SNAPPY_PATCHLEVEL/snappy-stubs-public.h])
 AC_CONFIG_FILES([src/ejson/Makefile])
 AC_CONFIG_FILES([src/couch_set_view/Makefile])
+AC_CONFIG_FILES([src/couch_index_merger/Makefile])
 AS_IF([ test "x${ac_enable_v8}" = "xyes" ], [
     AC_CONFIG_FILES([src/mapreduce/Makefile])
 ])

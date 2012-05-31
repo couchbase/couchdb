@@ -25,9 +25,8 @@
     rem_passwd/1, ddoc_not_found_msg/2]).
 
 -include("couch_db.hrl").
--include("couch_index_merger.hrl").
-% needed for #set_view_spec{}
--include("couch_view_merger.hrl").
+-include_lib("couch_index_merger/include/couch_index_merger.hrl").
+-include_lib("couch_index_merger/include/couch_view_merger.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
 
 -import(couch_util, [

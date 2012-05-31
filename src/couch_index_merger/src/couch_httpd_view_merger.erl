@@ -15,8 +15,8 @@
 -export([handle_req/1, apply_http_config/3]).
 
 -include("couch_db.hrl").
--include("couch_index_merger.hrl").
--include("couch_view_merger.hrl").
+-include_lib("couch_index_merger/include/couch_index_merger.hrl").
+-include_lib("couch_index_merger/include/couch_view_merger.hrl").
 -include("../lhttpc/lhttpc.hrl").
 
 -import(couch_util, [

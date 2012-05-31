@@ -165,6 +165,7 @@ $(COUCHDB_PLT):
 		-pa src/lhttpc \
 		-pa src/couchdb \
 		-pa src/couch_set_view \
+		-pa src/couch_index_merger \
 		-pa src/mapreduce \
 		--apps \
 			compiler \
@@ -198,12 +199,14 @@ dialyzer: all $(COUCHDB_PLT)
 		--verbose \
 		-pa src/couchdb \
 		-pa src/couch_set_view \
+		-pa src/couch_index_merger \
 		-pa src/mapreduce \
 		-pa src/lhttpc \
 		-pa src/snappy \
 		-r \
 			src/couchdb \
 			src/couch_set_view/ebin \
+			src/couch_index_merger/ebin \
 			src/snappy \
 			src/lhttpc \
 			src/mapreduce

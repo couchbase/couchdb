@@ -94,6 +94,9 @@
 ^src/couch_set_view/Makefile
 ^src/couch_set_view/Makefile.in
 ^src/couch_set_view/ebin/.*beam
+^src/couch_index_merger/Makefile
+^src/couch_index_merger/Makefile.in
+^src/couch_index_merger/ebin/.*beam
 ^stamp-h1
 ^test/Makefile
 ^test/Makefile.in

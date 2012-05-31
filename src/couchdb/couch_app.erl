@@ -22,7 +22,7 @@ start(_Type, DefaultIniFiles) ->
     IniFiles = get_ini_files(DefaultIniFiles),
     case start_apps([
         crypto, public_key, sasl, inets, oauth, ssl, lhttpc,
-        mochiweb, os_mon, couch_set_view, mapreduce
+        mochiweb, os_mon, couch_set_view, couch_index_merger, mapreduce
     ]) of
     ok ->
         couch_server_sup:start_link(IniFiles);

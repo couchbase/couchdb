@@ -37,8 +37,8 @@
 -export([init/1, terminate/2, handle_call/3, handle_cast/2, handle_info/2, code_change/3]).
 
 -include("couch_db.hrl").
--include("couch_index_merger.hrl").
--include("couch_view_merger.hrl").
+-include_lib("couch_index_merger/include/couch_index_merger.hrl").
+-include_lib("couch_index_merger/include/couch_view_merger.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
 
 
