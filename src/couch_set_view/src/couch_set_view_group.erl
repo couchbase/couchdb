@@ -22,6 +22,7 @@
 -export([before_partition_delete/2]).
 -export([add_replica_partitions/2, remove_replica_partitions/2]).
 -export([mark_as_unindexable/2, mark_as_indexable/2]).
+-export([monitor_partition_update/4, demonitor_partition_update/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -53,6 +54,13 @@
 
 -define(MAX_HIST_SIZE, 10).
 
+-record(up_listener, {
+    pid,
+    monref,
+    partition,
+    seq
+}).
+
 -record(state, {
     init_args                          :: init_args(),
     replica_group = nil                :: 'nil' | pid(),
@@ -67,7 +75,8 @@
     shutdown = false                   :: boolean(),
     auto_cleanup = true                :: boolean(),
     replica_partitions = []            :: ordsets:ordset(partition_id()),
-    pending_transition_waiters = []    :: [{From::{pid(), reference()}, #set_view_group_req{}}]
+    pending_transition_waiters = []    :: [{From::{pid(), reference()}, #set_view_group_req{}}],
+    update_listeners = dict:new()      :: dict()
 }).
 
 -define(inc_stat(Group, S),
@@ -249,6 +258,18 @@ mark_as_unindexable(Pid, Partitions) ->
 -spec mark_as_indexable(pid(), [partition_id()]) -> 'ok' | {'error', term()}.
 mark_as_indexable(Pid, Partitions) ->
     gen_server:call(Pid, {mark_as_indexable, Partitions}, infinity).
+
+
+-spec monitor_partition_update(pid(), partition_id(), reference(), pid()) ->
+                               'ok' | {'error', term()}.
+monitor_partition_update(Pid, PartitionId, Ref, CallerPid) ->
+    gen_server:call(
+        Pid, {monitor_partition_update, PartitionId, Ref, CallerPid}, infinity).
+
+
+-spec demonitor_partition_update(pid(), reference()) -> 'ok'.
+demonitor_partition_update(Pid, Ref) ->
+    ok = gen_server:call(Pid, {demonitor_partition_update, Ref}, infinity).
 
 
 start_link({RootDir, SetName, Group}) ->
@@ -594,6 +615,10 @@ handle_call(replica_pid, _From, #state{replica_group = Pid} = State) ->
     % To be used only by unit tests.
     {reply, {ok, Pid}, State, ?TIMEOUT};
 
+handle_call(updater_pid, _From, #state{updater_pid = Pid} = State) ->
+    % To be used only by unit tests.
+    {reply, {ok, Pid}, State, ?TIMEOUT};
+
 handle_call(request_group_info, _From, State) ->
     GroupInfo = get_group_info(State),
     {reply, {ok, GroupInfo}, State, ?TIMEOUT};
@@ -712,7 +737,58 @@ handle_call(cancel_compact, _From, #state{compactor_pid = Pid, compactor_file = 
     CompactFile = compact_file_name(State),
     ok = couch_file:delete(?root_dir(State), CompactFile),
     State2 = maybe_start_cleaner(State#state{compactor_pid = nil, compactor_file = nil}),
-    {reply, ok, State2, ?TIMEOUT}.
+    {reply, ok, State2, ?TIMEOUT};
+
+handle_call({monitor_partition_update, PartId, _Ref, _Pid}, _From, State)
+        when PartId >= ?set_num_partitions(State#state.group) ->
+    Msg = io_lib:format("Invalid partition: ~p", [PartId]),
+    {reply, {error, iolist_to_binary(Msg)}, State, ?TIMEOUT};
+
+handle_call({monitor_partition_update, PartId, Ref, Pid}, _From, State) ->
+    #state{
+        group = Group,
+        update_listeners = UpdateListeners
+    } = State,
+    case ((1 bsl PartId) band (?set_abitmask(Group) bor ?set_pbitmask(Group))) of
+    0 ->
+        Msg = io_lib:format("Partition ~p not in active nor passive set", [PartId]),
+        {reply, {error, iolist_to_binary(Msg)}, State, ?TIMEOUT};
+    _ ->
+        {ok, [{PartId, CurSeq}]} = couch_db_set:get_seqs(?db_set(State), [PartId]),
+        case orddict:find(PartId, ?set_seqs(Group)) of
+        error ->
+            Seq = orddict:fetch(PartId, ?set_unindexable_seqs(Group));
+        {ok, Seq} ->
+            ok
+        end,
+        case CurSeq > Seq of
+        true ->
+             Listener = #up_listener{
+                 pid = Pid,
+                 monref = erlang:monitor(process, Pid),
+                 partition = PartId,
+                 seq = CurSeq
+             },
+             State2 = State#state{
+                 update_listeners = dict:store(Ref, Listener, UpdateListeners)
+             };
+        false ->
+             Pid ! {Ref, updated},
+             State2 = State
+        end,
+        {reply, ok, State2, ?TIMEOUT}
+    end;
+
+handle_call({demonitor_partition_update, Ref}, _From, State) ->
+    #state{update_listeners = Listeners} = State,
+    case dict:find(Ref, Listeners) of
+    error ->
+        {reply, ok, State, ?TIMEOUT};
+    {ok, #up_listener{monref = MonRef}}  ->
+        erlang:demonitor(MonRef, [flush]),
+        State2 = State#state{update_listeners = dict:erase(Ref, Listeners)},
+        {reply, ok, State2, ?TIMEOUT}
+    end.
 
 
 handle_cast({partial_update, Pid, NewGroup}, #state{updater_pid = Pid} = State) ->
@@ -965,13 +1041,25 @@ handle_info({'EXIT', Pid, Reason}, State) ->
     ?LOG_ERROR("Set view `~s`, ~s group `~s`, terminating because linked PID ~p "
               "died with reason: ~p",
               [?set_name(State), ?type(State), ?group_id(State), Pid, Reason]),
-    {stop, Reason, State}.
+    {stop, Reason, State};
+
+handle_info({'DOWN', _Ref, process, Pid, _Reason}, State) ->
+    UpdateListeners2 = dict:filter(
+        fun(_, #up_listener{pid = Pid0}) -> Pid0 /= Pid end,
+        State#state.update_listeners),
+    {noreply, State#state{update_listeners = UpdateListeners2}}.
+
 
 
 terminate(Reason, State) ->
     ?LOG_INFO("Set view `~s`, ~s group `~s`, terminating with reason: ~p",
         [?set_name(State), ?type(State), ?group_id(State), Reason]),
-    State2 = reply_all(State, Reason),
+    _ = dict:fold(
+        fun(Ref, #up_listener{pid = Pid}, _Acc) ->
+            Pid ! {Ref, {shutdown, Reason}}
+        end,
+        ok, State#state.update_listeners),
+    State2 = reply_all(State#state{update_listeners = dict:new()}, Reason),
     State3 = notify_pending_transition_waiters(State2, {shutdown, Reason}),
     catch couch_db_set:close(?db_set(State3)),
     couch_util:shutdown_sync(State3#state.cleaner_pid),
@@ -1607,7 +1695,8 @@ persist_partition_states(State, ActiveList, PassiveList, CleanupList) ->
     #state{
         group = Group,
         replica_partitions = ReplicaParts,
-        replica_group = ReplicaPid
+        replica_group = ReplicaPid,
+        update_listeners = Listeners
     } = State,
     case ordsets:intersection(ActiveList, ReplicaParts) of
     [] ->
@@ -1676,7 +1765,29 @@ persist_partition_states(State, ActiveList, PassiveList, CleanupList) ->
     % A crash might happen between updating our header and updating the state of
     % replica view group. The init function must detect and correct this.
     ok = set_state(ReplicaPid, ReplicasToMarkActive, [], ReplicasToCleanup2),
-    State2.
+    Listeners2 = case (dict:size(Listeners) > 0) andalso (CleanupList /= []) of
+    true ->
+        dict:filter(
+            fun(Ref, Listener) ->
+                #up_listener{
+                    pid = Pid,
+                    monref = MonRef,
+                    partition = PartId
+                } = Listener,
+                case ordsets:is_element(PartId, CleanupList) of
+                true ->
+                    Pid ! {Ref, marked_for_cleanup},
+                    erlang:demonitor(MonRef, [flush]),
+                    false;
+                false ->
+                    true
+                end
+            end,
+            Listeners);
+    false ->
+        Listeners
+    end,
+    State2#state{update_listeners = Listeners2}.
 
 
 -spec maybe_apply_pending_transition(#state{}) -> #state{}.
@@ -2276,12 +2387,39 @@ maybe_fix_replica_group(ReplicaPid, Group) ->
 
 
 -spec process_partial_update(#state{}, #set_view_group{}) -> #state{}.
-process_partial_update(#state{group = Group} = State, NewGroup) ->
+process_partial_update(State, NewGroup) ->
+    #state{
+        group = Group,
+        update_listeners = Listeners
+    } = State,
+    Listeners2 = case dict:size(Listeners) == 0 of
+    true ->
+        Listeners;
+    false ->
+        dict:filter(
+            fun(Ref, Listener) ->
+                #up_listener{
+                    pid = Pid,
+                    monref = MonRef,
+                    seq = Seq,
+                    partition = PartId
+                } = Listener,
+                case orddict:find(PartId, ?set_seqs(NewGroup)) of
+                {ok, IndexedSeq} when IndexedSeq >= Seq ->
+                    Pid ! {Ref, updated},
+                    erlang:demonitor(MonRef, [flush]),
+                    false;
+                _ ->
+                    true
+                end
+            end,
+            Listeners)
+    end,
     ReplicasTransferred = ordsets:subtract(
         ?set_replicas_on_transfer(Group), ?set_replicas_on_transfer(NewGroup)),
     case ReplicasTransferred of
     [] ->
-        State#state{group = NewGroup};
+        State#state{group = NewGroup, update_listeners = Listeners2};
     _ ->
         ?LOG_INFO("Set view `~s`, ~s group `~s`, completed transferral of replica partitions ~w~n"
                   "New group of replica partitions to transfer is ~w~n",
@@ -2290,6 +2428,7 @@ process_partial_update(#state{group = Group} = State, NewGroup) ->
         ok = set_state(State#state.replica_group, [], [], ReplicasTransferred),
         State#state{
             group = NewGroup,
+            update_listeners = Listeners2,
             replica_partitions = ordsets:subtract(State#state.replica_partitions, ReplicasTransferred)
         }
     end.

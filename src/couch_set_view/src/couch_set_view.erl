@@ -24,6 +24,7 @@
 -export([is_view_defined/2]).
 -export([set_partition_states/5, add_replica_partitions/3, remove_replica_partitions/3]).
 -export([mark_partitions_unindexable/3, mark_partitions_indexable/3]).
+-export([monitor_partition_update/3, demonitor_partition_update/3]).
 
 -export([fold/5, fold_reduce/6]).
 -export([get_row_count/2, reduce_to_count/1, extract_map_view/1]).
@@ -235,6 +236,60 @@ mark_partitions_indexable(SetName, DDocId, Partitions) ->
         ok;
     Error ->
         throw(Error)
+    end.
+
+
+% Allow a caller to be notified, via a message, when a particular partition is
+% up to date in the index (its current database sequence number matches the
+% one in the index for that partition).
+% When the partition is up to date, the caller will receive a message with the
+% following shape:
+%
+%    {Ref::reference(), updated}
+%
+% Where the reference is the one returned when this function is called.
+% If the underlying view group process dies before the partition is up to date,
+% the caller will receive a message with the following shape:
+%
+%    {Ref::reference(), {shutdown, Reason::term()}}
+%
+% If the requested partition is marked for cleanup (because some process asked
+% for that or the partition's database was deleted), the caller will receive a
+% message with the following shape:
+%
+%    {Ref::reference(), marked_for_cleanup}
+%
+% The target partition must be either an active or passive partition.
+% Replica partitions are not supported at the moment.
+-spec monitor_partition_update(binary(), binary(), partition_id()) -> reference().
+monitor_partition_update(SetName, DDocId, PartitionId) ->
+    Ref = make_ref(),
+    Pid = get_group_pid(SetName, DDocId),
+    case couch_set_view_group:monitor_partition_update(Pid, PartitionId, Ref, self()) of
+    ok ->
+        Ref;
+    Error ->
+        throw(Error)
+    end.
+
+
+% Stop monitoring for notification of when a partition is fully indexed.
+% This is a counter part to monitor_partition_update/3. This call flushes
+% any monitor messsages from the callers mailbox.
+-spec demonitor_partition_update(binary(), binary(), reference()) -> 'ok'.
+demonitor_partition_update(SetName, DDocId, Ref) ->
+    receive
+    {Ref, _} ->
+        ok
+    after 0 ->
+        Pid = get_group_pid(SetName, DDocId),
+        ok = couch_set_view_group:demonitor_partition_update(Pid, Ref),
+        receive
+        {Ref, _} ->
+            ok
+        after 0 ->
+            ok
+        end
     end.
 
 
