@@ -34,20 +34,9 @@
 }).
 
 % Database request handlers
-handle_request(#httpd{path_parts=[DbName|RestParts],method=Method,
+handle_request(#httpd{path_parts=[_|RestParts],method=Method,
         db_frontend = DbFrontend, db_url_handlers=DbUrlHandlers}=Req)->
     case {Method, RestParts} of
-    {'PUT', []} ->
-        create_db_req(Req, DbName);
-    {'DELETE', []} ->
-        % if we get ?rev=... the user is using a faulty script where the
-        % document id is empty by accident. Let them recover safely.
-        case couch_httpd:qs_value(Req, "rev", false) of
-            false -> delete_db_req(Req, DbName);
-            _Rev -> throw({bad_request,
-                "You tried to DELETE a database with a ?=rev parameter. "
-                ++ "Did you mean to DELETE a document instead?"})
-        end;
     {_, []} ->
         DbFrontend:do_db_req(Req, fun db_req/2);
     {_, [SecondPart|_]} ->
@@ -176,25 +165,6 @@ handle_design_info_req(#httpd{
 handle_design_info_req(Req, _Db, _DDoc) ->
     send_method_not_allowed(Req, "GET").
 
-create_db_req(#httpd{user_ctx=UserCtx,db_frontend=DbFrontend}=Req, DbName) ->
-    ok = couch_httpd:verify_is_server_admin(Req),
-    case DbFrontend:create_db(DbName, UserCtx) of
-    ok ->
-        DbUrl = absolute_uri(Req, "/" ++ couch_util:url_encode(DbName)),
-        send_json(Req, 201, [{"Location", DbUrl}], {[{ok, true}]});
-    Error ->
-        throw(Error)
-    end.
-
-delete_db_req(#httpd{user_ctx=UserCtx,db_frontend=DbFrontend}=Req, DbName) ->
-    ok = couch_httpd:verify_is_server_admin(Req),
-    case DbFrontend:delete_db(DbName, UserCtx) of
-    ok ->
-        send_json(Req, 200, {[{ok, true}]});
-    Error ->
-        throw(Error)
-    end.
-
 db_req(#httpd{method='GET',
               path_parts=[_DbName],
               db_frontend=DbFrontend}=Req, Db) ->
@@ -246,7 +216,7 @@ db_req(#httpd{method='POST',
 
 
 db_req(#httpd{path_parts=[_DbName]}=Req, _Db) ->
-    send_method_not_allowed(Req, "DELETE,GET,HEAD,POST");
+    send_method_not_allowed(Req, "POST");
 
 db_req(#httpd{method='POST',
               path_parts=[_,<<"_ensure_full_commit">>],
@@ -330,24 +300,6 @@ db_req(#httpd{method='POST',
 db_req(#httpd{path_parts=[_,<<"_bulk_docs">>]}=Req, _Db) ->
     send_method_not_allowed(Req, "POST");
 
-db_req(#httpd{method='POST',
-              path_parts=[_,<<"_purge">>],
-              db_frontend=DbFrontend}=Req, Db) ->
-    couch_httpd:validate_ctype(Req, "application/json"),
-    {IdsRevs} = couch_httpd:json_body_obj(Req),
-    IdsRevs2 = [{Id, couch_doc:parse_revs(Revs)} || {Id, Revs} <- IdsRevs],
-
-    case DbFrontend:purge_docs(Db, IdsRevs2) of
-    {ok, PurgeSeq, PurgedIdsRevs} ->
-        PurgedIdsRevs2 = [{Id, couch_doc:revs_to_strs(Revs)} || {Id, Revs} <- PurgedIdsRevs],
-        send_json(Req, 200, {[{<<"purge_seq">>, PurgeSeq}, {<<"purged">>, {PurgedIdsRevs2}}]});
-    Error ->
-        throw(Error)
-    end;
-
-db_req(#httpd{path_parts=[_,<<"_purge">>]}=Req, _Db) ->
-    send_method_not_allowed(Req, "POST");
-
 db_req(#httpd{method='GET',path_parts=[_,<<"_all_docs">>]}=Req, Db) ->
     Keys = couch_httpd:qs_json_value(Req, "keys", nil),
     all_docs_view(Req, Db, Keys);
@@ -385,21 +337,6 @@ db_req(#httpd{method='POST',
 db_req(#httpd{path_parts=[_,<<"_revs_diff">>]}=Req, _Db) ->
     send_method_not_allowed(Req, "POST");
 
-db_req(#httpd{method='PUT',
-              path_parts=[_,<<"_security">>],
-              db_frontend=DbFrontend}=Req, Db) ->
-    SecObj = couch_httpd:json_body(Req),
-    ok = DbFrontend:set_security(Db, SecObj),
-    send_json(Req, {[{<<"ok">>, true}]});
-
-db_req(#httpd{method='GET',
-              path_parts=[_,<<"_security">>],
-              db_frontend=DbFrontend}=Req, Db) ->
-    send_json(Req, DbFrontend:get_security(Db));
-
-db_req(#httpd{path_parts=[_,<<"_security">>]}=Req, _Db) ->
-    send_method_not_allowed(Req, "PUT,GET");
-
 % Special case to enable using an unencoded slash in the URL of design docs,
 % as slashes in document IDs must otherwise be URL encoded.
 db_req(#httpd{method='GET',mochi_req=MochiReq, path_parts=[DbName,<<"_design/",_/binary>>|_]}=Req, _Db) ->
@@ -428,7 +365,14 @@ db_req(#httpd{path_parts=[_DbName, <<"_local">>, Name]}=Req, Db) ->
 db_req(#httpd{path_parts=[_DbName, <<"_local">> | _Rest]}, _Db) ->
     throw({bad_request, <<"_local documents do not accept attachments.">>});
 
+db_req(#httpd{path_parts=[_, _, _]}, _Db) ->
+    throw({bad_request, <<"attachments not supported in Couchbase">>});
+
+db_req(#httpd{path_parts=[_, _, _ | _]}, _Db) ->
+    throw({bad_request, <<"attachments not supported in Couchbase">>});
+
 db_req(#httpd{path_parts=[_, DocId]}=Req, Db) ->
+    % throw({bad_request, <<"no REST doc access via API.">>}).
     db_doc_req(Req, Db, DocId).
 
 all_docs_view(Req, Db, Keys) ->
