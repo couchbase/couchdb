@@ -109,8 +109,7 @@
 
 -record(set_view_transition, {
     active = []  :: ordsets:ordset(partition_id()),
-    passive = [] :: ordsets:ordset(partition_id()),
-    cleanup = [] :: ordsets:ordset(partition_id())
+    passive = [] :: ordsets:ordset(partition_id())
 }).
 
 -define(LATEST_COUCH_SET_VIEW_HEADER_VERSION, 1).

@@ -48,20 +48,12 @@
 
 -spec update(pid() | 'nil', #set_view_group{}, partition_seqs()) -> no_return().
 update(Owner, Group, CurSeqs) ->
-    case ?set_pending_transition(Group) of
-    #set_view_transition{cleanup = [_ | _]} ->
-        % update/4 will perform a full cleanup of set of current
-        % cleanup list + set of pending cleanup list. NumChanges
-        % is not needed for this case.
-        NumChanges = 0;
-    _ ->
-        SinceSeqs = ?set_seqs(Group),
-        NumChanges = lists:foldl(
-            fun({{PartId, NewSeq}, {PartId, OldSeq}}, Acc) when NewSeq >= OldSeq ->
-                Acc + (NewSeq - OldSeq)
-            end,
-            0, lists:zip(CurSeqs, SinceSeqs))
-    end,
+    SinceSeqs = ?set_seqs(Group),
+    NumChanges = lists:foldl(
+        fun({{PartId, NewSeq}, {PartId, OldSeq}}, Acc) when NewSeq >= OldSeq ->
+            Acc + (NewSeq - OldSeq)
+        end,
+        0, lists:zip(CurSeqs, SinceSeqs)),
     update(Owner, Group, CurSeqs, NumChanges).
 
 
@@ -79,13 +71,9 @@ update(Owner, Group, CurSeqs, NumChanges) ->
     case ?set_pending_transition(Group) of
     nil ->
         PendingActive = [],
-        PendingPassive = [],
-        PendingCleanup = [];
-    PendingTrans ->
-        #set_view_transition{
-            active = PendingActive, passive = PendingPassive,
-            cleanup = PendingCleanup
-        } = PendingTrans
+        PendingPassive = [];
+    #set_view_transition{active = PendingActive, passive = PendingPassive} ->
+        ok
     end,
 
     process_flag(trap_exit, true),
@@ -135,16 +123,14 @@ update(Owner, Group, CurSeqs, NumChanges) ->
                   "Replicas to transfer:                   ~w~n"
                   "Pending transition:                     ~n"
                   "    active:                             ~w~n"
-                  "    passive:                            ~w~n"
-                  "    cleanup:                            ~w~n",
+                  "    passive:                            ~w~n",
                   [SetName, Type, DDocId,
                    ActiveParts,
                    PassiveParts,
                    CleanupParts,
                    ?set_replicas_on_transfer(Group),
                    PendingActive,
-                   PendingPassive,
-                   PendingCleanup
+                   PendingPassive
                   ]);
     false ->
         ok
@@ -156,12 +142,7 @@ update(Owner, Group, CurSeqs, NumChanges) ->
         group = Group,
         max_seqs = CurSeqs
     },
-    case (PendingCleanup /= []) andalso is_pid(Owner) of
-    true ->
-        do_full_cleanup(WriterAcc0, BlockedTime);
-    false ->
-        update(WriterAcc0, ActiveParts, PassiveParts, BlockedTime, NumChanges)
-    end.
+    update(WriterAcc0, ActiveParts, PassiveParts, BlockedTime, NumChanges).
 
 
 update(WriterAcc, ActiveParts, PassiveParts, BlockedTime, NumChanges) ->
@@ -327,16 +308,8 @@ load_changes(Owner, Updater, Group, MapQueue, Writer, ActiveParts, PassiveParts)
         index_header = #set_view_index_header{seqs = SinceSeqs}
     } = Group,
 
-    case ?set_pending_transition(Group) of
-    nil ->
-        PendingCleanup = [];
-    #set_view_transition{cleanup = PendingCleanup} ->
-        ok
-    end,
-
     FoldFun = fun(PartId) ->
-        case ordsets:is_element(PartId, PendingCleanup) orelse
-            orddict:is_key(PartId, ?set_unindexable_seqs(Group)) of
+        case orddict:is_key(PartId, ?set_unindexable_seqs(Group)) of
         true ->
             ok;
         false ->
@@ -836,48 +809,6 @@ write_header(#set_view_group{fd = Fd} = Group, DoFsync) ->
         ok = couch_file:sync(Fd);
     false ->
         ok
-    end.
-
-
-do_full_cleanup(#writer_acc{group = Group, owner = Owner}, BlockedTime) ->
-    #set_view_group{
-        index_header = Header,
-        set_name = SetName,
-        type = Type,
-        name = DDocId
-    } = Group,
-    #set_view_transition{cleanup = CleanupPending} = ?set_pending_transition(Group),
-    NewCleanupBitmask = ?set_cbitmask(Group) bor
-        couch_set_view_util:build_bitmask(CleanupPending),
-    Header2 = Header#set_view_index_header{cbitmask = NewCleanupBitmask},
-    Group2 = Group#set_view_group{index_header = Header2},
-    StartTime = os:timestamp(),
-    {ok, Group3, PurgedCount} = couch_set_view_util:cleanup_group(Group2),
-    CleanupTime = timer:now_diff(os:timestamp(), StartTime) / 1000000,
-    case ?set_cbitmask(Group3) of
-    0 ->
-        ?LOG_INFO("~s for set view `~s`, ~s group `~s`, performed full cleanup "
-                  "in ~.3f seconds (~p key/value pairs removed)",
-                  [updater_type(Owner), SetName, Type, DDocId, CleanupTime, PurgedCount]),
-        Result = #set_view_updater_result{
-            group = Group3,
-            blocked_time = BlockedTime,
-            cleanup_kv_count = PurgedCount,
-            cleanup_time = CleanupTime
-        },
-        exit({full_cleanup_done, Result});
-    _ ->
-        ?LOG_INFO("~s for set view `~s`, ~s group `~s`, interrupted during "
-                  "full cleanup (ran for ~.3f seconds, ~p key/value pairs removed)",
-                  [updater_type(Owner), SetName, Type, DDocId, CleanupTime, PurgedCount]),
-        % Return original group snapshot, and not the partially clean group, which is
-        % inconsistent because it has only some of the data from the current and future
-        % cleanup masks purged - therefore it can't be used to serve queries.
-        EmptyResult = #set_view_updater_result{
-            group = Group,
-            blocked_time = BlockedTime
-        },
-        exit({updater_finished, EmptyResult})
     end.
 
 

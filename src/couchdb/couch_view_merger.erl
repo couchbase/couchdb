@@ -1315,8 +1315,7 @@ pending_transition_debug_info(#set_view_group{index_header = Header}) ->
         {<<"pending_transition">>,
             {[
                 {<<"active">>, Pt#set_view_transition.active},
-                {<<"passive">>, Pt#set_view_transition.passive},
-                {<<"cleanup">>, Pt#set_view_transition.cleanup}
+                {<<"passive">>, Pt#set_view_transition.passive}
             ]}
         }
     end.

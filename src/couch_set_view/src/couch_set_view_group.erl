@@ -440,9 +440,21 @@ handle_call({before_partition_delete, PartId}, _From, #state{group = Group} = St
         replica_partitions = ReplicaParts,
         replica_group = ReplicaPid
     } = State,
+    case ?set_pending_transition(Group) of
+    nil ->
+        ActivePending = [],
+        PassivePending = [];
+    PendingTrans ->
+        #set_view_transition{
+            active = ActivePending,
+            passive = PassivePending
+        } = PendingTrans
+    end,
     Mask = 1 bsl PartId,
     case ((?set_abitmask(Group) band Mask) /= 0) orelse
-        ((?set_pbitmask(Group) band Mask) /= 0) of
+        ((?set_pbitmask(Group) band Mask) /= 0) orelse
+        ordsets:is_element(PartId, ActivePending) orelse
+        ordsets:is_element(PartId, PassivePending) of
     true ->
         ?LOG_INFO("Set view `~s`, ~s group `~s`, marking partition ~p for "
                   "cleanup because it's about to be deleted",
@@ -559,7 +571,8 @@ handle_call({remove_replicas, Partitions}, _From, #state{replica_group = Replica
             NewSeqs,
             NewPurgeSeqs,
             ReplicasOnTransfer2,
-            ReplicaPartitions2),
+            ReplicaPartitions2,
+            ?set_pending_transition(State4#state.group)),
         ok = set_state(ReplicaPid, [], [], Partitions),
         case UpdaterWasRunning of
         true ->
@@ -921,27 +934,6 @@ handle_info({'EXIT', Pid, Reason},
               " exited with reason: ~p",
               [?set_name(State), ?type(State), ?group_id(State), Pid, Reason]),
     {stop, Reason, State};
-
-handle_info({'EXIT', Pid, {full_cleanup_done, Result}}, #state{updater_pid = Pid} = State) ->
-    #set_view_updater_result{
-        group = CleanGroup,
-        cleanup_kv_count = CleanupKvCount,
-        cleanup_time = CleanupTime
-    } = Result,
-    ?LOG_INFO("Set view `~s`, ~s group `~s`, updater performed full cleanup, "
-              "applying pending transition",
-              [?set_name(State), ?type(State), ?group_id(State)]),
-    0 = ?set_cbitmask(CleanGroup),
-    true = ?have_pending_transition(State),
-    State2 = State#state{
-        group = CleanGroup,
-        updater_pid = nil,
-        updater_state = not_running
-    },
-    State3 = maybe_apply_pending_transition(State2),
-    State4 = start_updater(State3),
-    inc_cleanups(State4#state.group, CleanupTime, CleanupKvCount, true),
-    {noreply, State4, ?TIMEOUT};
 
 handle_info({'EXIT', Pid, {updater_finished, Result}}, #state{updater_pid = Pid} = State) ->
     #set_view_updater_result{
@@ -1318,8 +1310,7 @@ get_group_info(State) ->
             #set_view_transition{} ->
                 {[
                     {active, PendingTrans#set_view_transition.active},
-                    {passive, PendingTrans#set_view_transition.passive},
-                    {cleanup, PendingTrans#set_view_transition.cleanup}
+                    {passive, PendingTrans#set_view_transition.passive}
                 ]}
             end
         }
@@ -1542,123 +1533,49 @@ maybe_update_partition_states(ActiveList, PassiveList, CleanupList, State) ->
                               ordsets:ordset(partition_id()),
                               #state{}) -> #state{}.
 update_partition_states(ActiveList, PassiveList, CleanupList, State) ->
-    case ?have_pending_transition(State) of
-    true ->
-        merge_into_pending_transition(ActiveList, PassiveList, CleanupList, State);
-    false ->
-        do_update_partition_states(ActiveList, PassiveList, CleanupList, State)
-    end.
-
-
--spec merge_into_pending_transition(ordsets:ordset(partition_id()),
-                                    ordsets:ordset(partition_id()),
-                                    ordsets:ordset(partition_id()),
-                                    #state{}) -> #state{}.
-merge_into_pending_transition(ActiveList, PassiveList, CleanupList, State) ->
-    % Note: checking if there's an intersection between active, passive and
-    % cleanup lists must have been done already.
-    Pending = get_pending_transition(State),
-    Pending2 = merge_pending_active(Pending, ActiveList),
-    Pending3 = merge_pending_passive(Pending2, PassiveList),
-    Pending4 = merge_pending_cleanup(Pending3, CleanupList),
-    #set_view_transition{
-        active = ActivePending4,
-        passive = PassivePending4,
-        cleanup = CleanupPending4
-    } = Pending4,
-    ok = couch_db_set:remove_partitions(?db_set(State), CleanupList),
-    State2 = set_pending_transition(State, Pending4),
-    ok = commit_header(State2#state.group),
-    ?LOG_INFO("Set view `~s`, ~s group `~s`, updated pending partition "
-        "states transition to:~n"
-        "    Active partitions:  ~w~n"
-        "    Passive partitions: ~w~n"
-        "    Cleanup partitions: ~w~n",
-        [?set_name(State), ?type(State), ?group_id(State),
-             ActivePending4, PassivePending4, CleanupPending4]),
-    State3 = notify_pending_transition_waiters(State2),
-    maybe_apply_pending_transition(State3).
-
-
--spec merge_pending_active(#set_view_transition{},
-                           ordsets:ordset(partition_id())) ->
-                                  #set_view_transition{}.
-merge_pending_active(Pending, ActiveList) ->
-    #set_view_transition{
-        active = ActivePending,
-        passive = PassivePending,
-        cleanup = CleanupPending
-    } = Pending,
-    Pending#set_view_transition{
-        active = ordsets:union(ActivePending, ActiveList),
-        passive = ordsets:subtract(PassivePending, ActiveList),
-        cleanup = ordsets:subtract(CleanupPending, ActiveList)
-    }.
-
-
--spec merge_pending_passive(#set_view_transition{},
-                            ordsets:ordset(partition_id())) ->
-                                   #set_view_transition{}.
-merge_pending_passive(Pending, PassiveList) ->
-    #set_view_transition{
-        active = ActivePending,
-        passive = PassivePending,
-        cleanup = CleanupPending
-    } = Pending,
-    Pending#set_view_transition{
-        active = ordsets:subtract(ActivePending, PassiveList),
-        passive = ordsets:union(PassivePending, PassiveList),
-        cleanup = ordsets:subtract(CleanupPending, PassiveList)
-    }.
-
-
--spec merge_pending_cleanup(#set_view_transition{},
-                            ordsets:ordset(partition_id())) ->
-                                   #set_view_transition{}.
-merge_pending_cleanup(Pending, CleanupList) ->
-    #set_view_transition{
-        active = ActivePending,
-        passive = PassivePending,
-        cleanup = CleanupPending
-    } = Pending,
-    Pending#set_view_transition{
-        active = ordsets:subtract(ActivePending, CleanupList),
-        passive = ordsets:subtract(PassivePending, CleanupList),
-        cleanup = ordsets:union(CleanupPending, CleanupList)
-    }.
-
-
--spec do_update_partition_states(ordsets:ordset(partition_id()),
-                                 ordsets:ordset(partition_id()),
-                                 ordsets:ordset(partition_id()),
-                                 #state{}) -> #state{}.
-do_update_partition_states(ActiveList, PassiveList, CleanupList, State) ->
-    UpdaterRunning = is_pid(State#state.updater_pid),
     State2 = stop_cleaner(State),
     #state{group = Group3} = State3 = stop_updater(State2),
-    InCleanup = partitions_still_in_cleanup(ActiveList ++ PassiveList, Group3),
-    case InCleanup of
-    [] ->
-        State4 = persist_partition_states(State3, ActiveList, PassiveList, CleanupList);
-    _ ->
-        ok = couch_db_set:remove_partitions(?db_set(State3), CleanupList),
-        ?LOG_INFO("Set view `~s`, ~s group `~s`, created pending partition "
-            "states transition, because the following partitions are still "
-            "in cleanup: ~w~n~n"
-            "Pending partition states transition details:~n"
-            "    Active partitions:  ~w~n"
-            "    Passive partitions: ~w~n"
-            "    Cleanup partitions: ~w~n",
-            [?set_name(State), ?type(State), ?group_id(State),
-                InCleanup, ActiveList, PassiveList, CleanupList]),
-        Pending = #set_view_transition{
-            active = ActiveList,
-            passive = PassiveList,
-            cleanup = CleanupList
-        },
-        State4 = set_pending_transition(State3, Pending)
+    UpdaterWasRunning = is_pid(State#state.updater_pid),
+    ActiveInCleanup = partitions_still_in_cleanup(ActiveList, Group3),
+    PassiveInCleanup = partitions_still_in_cleanup(PassiveList, Group3),
+    NewPendingTrans = merge_into_pending_transition(
+        Group3, ActiveInCleanup, PassiveInCleanup, CleanupList),
+    ApplyActiveList = ordsets:subtract(ActiveList, ActiveInCleanup),
+    ApplyPassiveList = ordsets:subtract(PassiveList, PassiveInCleanup),
+    ApplyCleanupList = CleanupList,
+    State4 = persist_partition_states(
+               State3, ApplyActiveList, ApplyPassiveList,
+               ApplyCleanupList, NewPendingTrans),
+    State5 = notify_pending_transition_waiters(State4),
+    after_partition_states_updated(State5, UpdaterWasRunning).
+
+
+-spec merge_into_pending_transition(#set_view_group{},
+                                    ordsets:ordset(partition_id()),
+                                    ordsets:ordset(partition_id()),
+                                    ordsets:ordset(partition_id())) ->
+                                           #set_view_transition{}.
+merge_into_pending_transition(Group, ActiveInCleanup, PassiveInCleanup, CleanupList) ->
+    case ?set_pending_transition(Group) of
+    nil ->
+        ActivePending = [],
+        PassivePending = [];
+    #set_view_transition{active = ActivePending, passive = PassivePending} ->
+        ok
     end,
-    after_partition_states_updated(State4, UpdaterRunning).
+    ActivePending2 = ordsets:subtract(ActivePending, CleanupList),
+    PassivePending2 = ordsets:subtract(PassivePending, CleanupList),
+    ActivePending3 = ordsets:union(ActivePending2, ActiveInCleanup),
+    PassivePending3 = ordsets:union(PassivePending2, PassiveInCleanup),
+    case (ActivePending3 == []) andalso (PassivePending3 == []) of
+    true ->
+        nil;
+    false ->
+        #set_view_transition{
+            active = ActivePending3,
+            passive = PassivePending3
+        }
+    end.
 
 
 -spec after_partition_states_updated(#state{}, boolean()) -> #state{}.
@@ -1690,8 +1607,9 @@ after_partition_states_updated(State, UpdaterWasRunning) ->
 -spec persist_partition_states(#state{},
                                ordsets:ordset(partition_id()),
                                ordsets:ordset(partition_id()),
-                               ordsets:ordset(partition_id())) -> #state{}.
-persist_partition_states(State, ActiveList, PassiveList, CleanupList) ->
+                               ordsets:ordset(partition_id()),
+                               #set_view_transition{} | 'nil') -> #state{}.
+persist_partition_states(State, ActiveList, PassiveList, CleanupList, PendingTrans) ->
     #state{
         group = Group,
         replica_partitions = ReplicaParts,
@@ -1761,7 +1679,8 @@ persist_partition_states(State, ActiveList, PassiveList, CleanupList) ->
         NewSeqs3,
         NewPurgeSeqs3,
         ReplicasOnTransfer4,
-        ReplicaParts2),
+        ReplicaParts2,
+        PendingTrans),
     % A crash might happen between updating our header and updating the state of
     % replica view group. The init function must detect and correct this.
     ok = set_state(ReplicaPid, ReplicasToMarkActive, [], ReplicasToCleanup2),
@@ -1794,33 +1713,42 @@ persist_partition_states(State, ActiveList, PassiveList, CleanupList) ->
 maybe_apply_pending_transition(State) when not ?have_pending_transition(State) ->
     State;
 maybe_apply_pending_transition(State) ->
+    State2 = stop_cleaner(State),
+    #state{group = Group3} = State3 = stop_updater(State2),
+    UpdaterWasRunning = is_pid(State#state.updater_pid),
     #set_view_transition{
         active = ActivePending,
-        passive = PassivePending,
-        cleanup = CleanupPending
+        passive = PassivePending
     } = get_pending_transition(State),
-    InCleanup = partitions_still_in_cleanup(
-        ActivePending ++ PassivePending, State#state.group),
-    case InCleanup of
-    [] ->
-        ?LOG_INFO("Set view `~s`, ~s group `~s`, applying pending partition "
-            "states transition:~n"
-            "    Active partitions:  ~w~n"
-            "    Passive partitions: ~w~n"
-            "    Cleanup partitions: ~w~n",
-            [?set_name(State), ?type(State), ?group_id(State),
-                ActivePending, PassivePending, CleanupPending]),
-        UpdaterRunning = is_pid(State#state.updater_pid),
-        State2 = stop_cleaner(State),
-        State3 = stop_updater(State2),
-        State4 = set_pending_transition(State3, nil),
+    ActiveInCleanup = partitions_still_in_cleanup(ActivePending, Group3),
+    PassiveInCleanup = partitions_still_in_cleanup(PassivePending, Group3),
+    ApplyActiveList = ordsets:subtract(ActivePending, ActiveInCleanup),
+    ApplyPassiveList = ordsets:subtract(PassivePending, PassiveInCleanup),
+    case (ApplyActiveList /= []) orelse (ApplyPassiveList /= []) of
+    true ->
+        ?LOG_INFO("Set view `~s`, ~s group `~s`, applying state transitions "
+                  "from pending transition:~n"
+                  "  Active partitions:  ~w~n"
+                  "  Passive partitions: ~w~n",
+                  [?set_name(State), ?type(State), ?group_id(State),
+                   ApplyActiveList, ApplyPassiveList]),
+        case (ActiveInCleanup == []) andalso (PassiveInCleanup == []) of
+        true ->
+            NewPendingTrans = nil;
+        false ->
+            NewPendingTrans = #set_view_transition{
+                active = ActiveInCleanup,
+                passive = PassiveInCleanup
+            }
+        end,
+        State4 = set_pending_transition(State3, NewPendingTrans),
         State5 = persist_partition_states(
-            State4, ActivePending, PassivePending, CleanupPending),
-        State6 = notify_pending_transition_waiters(State5),
-        after_partition_states_updated(State6, UpdaterRunning);
-    _ ->
-        State
-    end.
+            State4, ApplyActiveList, ApplyPassiveList, [], NewPendingTrans),
+        NewState = notify_pending_transition_waiters(State5);
+    false ->
+        NewState = State3
+    end,
+    after_partition_states_updated(NewState, UpdaterWasRunning).
 
 
 -spec notify_pending_transition_waiters(#state{}) -> #state{}.
@@ -1976,9 +1904,10 @@ set_cleanup_partitions([PartId | Rest], Abitmask, Pbitmask, Cbitmask, Seqs, Purg
                     partition_seqs(),
                     partition_seqs(),
                     ordsets:ordset(partition_id()),
-                    ordsets:ordset(partition_id())) -> #state{}.
+                    ordsets:ordset(partition_id()),
+                    #set_view_transition{} | 'nil') -> #state{}.
 update_header(State, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs, NewPurgeSeqs,
-              NewRelicasOnTransfer, NewReplicaParts) ->
+              NewRelicasOnTransfer, NewReplicaParts, NewPendingTrans) ->
     #state{
         group = #set_view_group{
             index_header =
@@ -1987,7 +1916,8 @@ update_header(State, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs, NewPurgeSeq
                     pbitmask = Pbitmask,
                     cbitmask = Cbitmask,
                     replicas_on_transfer = ReplicasOnTransfer,
-                    unindexable_seqs = UnindexableSeqs
+                    unindexable_seqs = UnindexableSeqs,
+                    pending_transition = PendingTrans
                 } = Header
         } = Group,
         replica_partitions = ReplicaParts
@@ -2000,7 +1930,8 @@ update_header(State, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs, NewPurgeSeq
                 cbitmask = NewCbitmask,
                 seqs = NewSeqs,
                 purge_seqs = NewPurgeSeqs,
-                replicas_on_transfer = NewRelicasOnTransfer
+                replicas_on_transfer = NewRelicasOnTransfer,
+                pending_transition = NewPendingTrans
             }
         },
         replica_partitions = NewReplicaParts
@@ -2013,37 +1944,54 @@ update_header(State, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs, NewPurgeSeq
         {ActiveList, PassiveList} = make_partition_lists(NewState#state.group),
         ok = couch_db_set:add_partitions(?db_set(NewState), ActiveList ++ PassiveList)
     end,
+    case PendingTrans of
+    nil ->
+        OldPendingActive = [],
+        OldPendingPassive = [];
+    #set_view_transition{active = OldPendingActive, passive = OldPendingPassive} ->
+        ok
+    end,
+    case NewPendingTrans of
+    nil ->
+        NewPendingActive = [],
+        NewPendingPassive = [];
+    #set_view_transition{active = NewPendingActive, passive = NewPendingPassive} ->
+        ok
+    end,
     ?LOG_INFO("Set view `~s`, ~s group `~s`, partition states updated~n"
-        "active partitions before:  ~w~n"
-        "active partitions after:   ~w~n"
-        "passive partitions before: ~w~n"
-        "passive partitions after:  ~w~n"
-        "cleanup partitions before: ~w~n"
-        "cleanup partitions after:  ~w~n"
-        "unindexable partitions:    ~w~n" ++
-        case is_pid(State#state.replica_group) of
-        true ->
-            "replica partitions before:   ~w~n"
-            "replica partitions after:    ~w~n"
-            "replicas on transfer before: ~w~n"
-            "replicas on transfer after:  ~w~n";
-        false ->
-            ""
-        end,
-        [?set_name(State), ?type(State), ?group_id(State),
-         couch_set_view_util:decode_bitmask(Abitmask),
-         couch_set_view_util:decode_bitmask(NewAbitmask),
-         couch_set_view_util:decode_bitmask(Pbitmask),
-         couch_set_view_util:decode_bitmask(NewPbitmask),
-         couch_set_view_util:decode_bitmask(Cbitmask),
-         couch_set_view_util:decode_bitmask(NewCbitmask),
-         UnindexableSeqs] ++
-         case is_pid(State#state.replica_group) of
-         true ->
-             [ReplicaParts, NewReplicaParts, ReplicasOnTransfer, NewRelicasOnTransfer];
-         false ->
-             []
-         end),
+              "active partitions before:    ~w~n"
+              "active partitions after:     ~w~n"
+              "passive partitions before:   ~w~n"
+              "passive partitions after:    ~w~n"
+              "cleanup partitions before:   ~w~n"
+              "cleanup partitions after:    ~w~n"
+              "unindexable partitions:      ~w~n"
+              "replica partitions before:   ~w~n"
+              "replica partitions after:    ~w~n"
+              "replicas on transfer before: ~w~n"
+              "replicas on transfer after:  ~w~n"
+              "pending transition before:~n"
+              "  active:  ~w~n"
+              "  passive: ~w~n"
+              "pending transition after:~n"
+              "  active:  ~w~n"
+              "  passive: ~w~n",
+              [?set_name(State), ?type(State), ?group_id(State),
+               couch_set_view_util:decode_bitmask(Abitmask),
+               couch_set_view_util:decode_bitmask(NewAbitmask),
+               couch_set_view_util:decode_bitmask(Pbitmask),
+               couch_set_view_util:decode_bitmask(NewPbitmask),
+               couch_set_view_util:decode_bitmask(Cbitmask),
+               couch_set_view_util:decode_bitmask(NewCbitmask),
+               UnindexableSeqs,
+               ReplicaParts,
+               NewReplicaParts,
+               ReplicasOnTransfer,
+               NewRelicasOnTransfer,
+               OldPendingActive,
+               OldPendingPassive,
+               NewPendingActive,
+               NewPendingPassive]),
     NewState.
 
 
@@ -2115,17 +2063,7 @@ index_needs_update(#state{group = Group} = State) ->
     _ ->
         couch_db_set:get_seqs(?db_set(State), [P || {P, _} <- ?set_seqs(Group)])
     end,
-    case get_pending_cleanup(Group) of
-    [] ->
-        {CurSeqs > ?set_seqs(Group), CurSeqs};
-    PendingCleanup ->
-        FilteredSetSeqs = orddict:filter(
-            fun(PartId, _Seq) ->
-               not ordsets:is_element(PartId, PendingCleanup)
-            end,
-            ?set_seqs(Group)),
-        {CurSeqs > FilteredSetSeqs, CurSeqs}
-    end.
+    {CurSeqs > ?set_seqs(Group), CurSeqs}.
 
 
 -spec make_partition_lists(#set_view_group{}) -> {[partition_id()], [partition_id()]}.
@@ -2325,12 +2263,9 @@ get_replica_partitions(ReplicaPid) ->
 maybe_update_replica_index(#state{updater_pid = Pid} = State) when is_pid(Pid) ->
     State;
 maybe_update_replica_index(#state{group = Group, updater_state = not_running} = State) ->
+    IndexedSeqs = ?set_seqs(Group),
     {ok, CurSeqs} = couch_db_set:get_seqs(?db_set(State)),
-    ChangesCount = lists:foldl(
-        fun({{PartId, CurSeq}, {PartId, UpSeq}}, Acc) when CurSeq >= UpSeq ->
-            Acc + (CurSeq - UpSeq)
-        end,
-        0, lists:zip(CurSeqs, ?set_seqs(Group))),
+    ChangesCount = count_new_changes(CurSeqs, IndexedSeqs, 0),
     case (ChangesCount >= ?MIN_CHANGES_AUTO_UPDATE) orelse
         (ChangesCount > 0 andalso ?set_cbitmask(Group) =/= 0) of
     true ->
@@ -2338,6 +2273,14 @@ maybe_update_replica_index(#state{group = Group, updater_state = not_running} = 
     false ->
         maybe_start_cleaner(State)
     end.
+
+
+count_new_changes([], [], Count) ->
+    Count;
+count_new_changes([{PartId, PartSeq} | RestPartSeqs],
+                  [{PartId, IndexedSeq} | RestIndexedSeqs],
+                  Count) when PartSeq >= IndexedSeq ->
+    count_new_changes(RestPartSeqs, RestIndexedSeqs, Count + (PartSeq - IndexedSeq)).
 
 
 -spec maybe_fix_replica_group(pid(), #set_view_group{}) -> 'ok'.
@@ -2592,16 +2535,6 @@ is_any_partition_pending(Req, Group) ->
         } = Trans,
         (not ordsets:is_disjoint(WantedPartitions, ActivePending)) orelse
         (not ordsets:is_disjoint(WantedPartitions, PassivePending))
-    end.
-
-
--spec get_pending_cleanup(#state{} | #set_view_group{}) -> ordsets:ordset(partition_id()).
-get_pending_cleanup(State) ->
-    case get_pending_transition(State) of
-    nil ->
-        [];
-    #set_view_transition{cleanup = Cleanup} ->
-        Cleanup
     end.
 
 

@@ -86,15 +86,14 @@ test() ->
     ok = timer:sleep(6000),
     etap:is(is_process_alive(GroupPid), true, "Group process didn't die"),
 
-    % Recreate database 1, populate new contents, verify old contents are not in
-    % the index anymore.
+    % Recreate database 1, populate new contents, verify that neither old
+    % contents nor new contents are in the index after a stale=false request.
     etap:diag("Recreating partition 1 database, currenly marked as active in the"
               " pending transition - shouldn't cause the group process to die"),
     recreate_db(1),
     ok = timer:sleep(6000),
     etap:is(is_process_alive(GroupPid), true, "Group process didn't die"),
 
-    % Add one new doc to ensure group request will trigger an update.
     {ok, Db0} = open_db(0),
     Doc = couch_doc:from_json_obj({[
         {<<"_id">>, doc_id(9000010)},
@@ -379,8 +378,8 @@ verify_btrees_3(ValueGenFun) ->
     #set_view{
         btree = View1Btree
     } = View1,
-    ActiveParts = lists:seq(0, num_set_partitions() - 1, 2),
-    CleanupParts = lists:seq(1, num_set_partitions() - 1, 2),
+    ActiveParts = [0],
+    CleanupParts = lists:seq(1, num_set_partitions() - 1),
     ExpectedBitmask = couch_set_view_util:build_bitmask(lists:seq(0, num_set_partitions() - 1)),
     ExpectedABitmask = couch_set_view_util:build_bitmask(ActiveParts),
     ExpectedCBitmask = couch_set_view_util:build_bitmask(CleanupParts),
@@ -389,8 +388,7 @@ verify_btrees_3(ValueGenFun) ->
     ExpectedBtreeViewReduction = num_docs(),
     ExpectedPendingTrans = #set_view_transition{
         active = [1],
-        passive = [],
-        cleanup = lists:seq(2, num_set_partitions() - 1, 2)
+        passive = []
     },
 
     etap:is(
@@ -466,12 +464,12 @@ verify_btrees_4(ValueGenFun) ->
     #set_view{
         btree = View1Btree
     } = View1,
-    ActiveParts = [0, 1],
+    ActiveParts = [0],
     ExpectedBitmask = couch_set_view_util:build_bitmask(ActiveParts),
     ExpectedABitmask = couch_set_view_util:build_bitmask(ActiveParts),
     ExpectedDbSeqs = couch_set_view_test_util:get_db_seqs(test_set_name(), ActiveParts),
-    ExpectedKVCount = (num_docs() div num_set_partitions()) + 2,
-    ExpectedBtreeViewReduction = (num_docs() div num_set_partitions()) + 2,
+    ExpectedKVCount = (num_docs() div num_set_partitions()) + 1,
+    ExpectedBtreeViewReduction = (num_docs() div num_set_partitions()) + 1,
 
     etap:is(
         couch_btree:full_reduce(IdBtree),
@@ -497,14 +495,8 @@ verify_btrees_4(ValueGenFun) ->
                 DocId = doc_id(9000010),
                 PartId = 0;
             false ->
-                case Count == (ExpectedKVCount - 2) of
-                true ->
-                    DocId = doc_id(9000009),
-                    PartId = 1;
-                false ->
-                    DocId = doc_id(I),
-                    PartId = I rem num_set_partitions()
-                end
+                DocId = doc_id(I),
+                PartId = I rem num_set_partitions()
             end,
             Value = [{View1#set_view.id_num, DocId}],
             ExpectedKv = {DocId, {PartId, Value}},
@@ -530,16 +522,9 @@ verify_btrees_4(ValueGenFun) ->
                 PartId = 0,
                 Value = 9000010;
             false ->
-                case Count == (ExpectedKVCount - 2) of
-                true ->
-                    DocId = doc_id(9000009),
-                    PartId = 1,
-                    Value = 9000009;
-                false ->
-                    DocId = doc_id(I),
-                    PartId = I rem num_set_partitions(),
-                    Value = ValueGenFun(I)
-                end
+                DocId = doc_id(I),
+                PartId = I rem num_set_partitions(),
+                Value = ValueGenFun(I)
             end,
             ExpectedKv = {{DocId, DocId}, {PartId, {json, ?JSON_ENCODE(Value)}}},
             case ExpectedKv =:= Kv of
