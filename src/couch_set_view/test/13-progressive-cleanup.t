@@ -22,7 +22,7 @@
 test_set_name() -> <<"couch_test_set_index_cleanups">>.
 num_set_partitions() -> 64.
 ddoc_id() -> <<"_design/test">>.
-num_docs() -> 92800.  % keep it a multiple of num_set_partitions()
+num_docs() -> 58880.  % keep it a multiple of num_set_partitions()
 
 
 main(_) ->

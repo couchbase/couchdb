@@ -50,7 +50,7 @@
 test_set_name() -> <<"couch_test_set_index_replicas_transfer">>.
 num_set_partitions() -> 64.
 ddoc_id() -> <<"_design/test">>.
-num_docs() -> 243200.  % keep it a multiple of num_set_partitions()
+num_docs() -> 92160.  % keep it a multiple of num_set_partitions()
 
 
 main(_) ->
