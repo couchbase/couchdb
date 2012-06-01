@@ -326,8 +326,17 @@ load_changes(Owner, Updater, Group, MapQueue, Writer, ActiveParts, PassiveParts)
         type = GroupType,
         index_header = #set_view_index_header{seqs = SinceSeqs}
     } = Group,
+
+    case ?set_pending_transition(Group) of
+    nil ->
+        PendingCleanup = [];
+    #set_view_transition{cleanup = PendingCleanup} ->
+        ok
+    end,
+
     FoldFun = fun(PartId) ->
-        case orddict:is_key(PartId, ?set_unindexable_seqs(Group)) of
+        case ordsets:is_element(PartId, PendingCleanup) orelse
+            orddict:is_key(PartId, ?set_unindexable_seqs(Group)) of
         true ->
             ok;
         false ->
