@@ -651,7 +651,9 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
         cleanup_kv_count = CleanupKVCount
     } = Result,
 
-    case (?set_seqs(NewGroup)) >= (?set_seqs(Group)) of
+    MissingChangesCount = couch_set_view_util:missing_changes_count(
+        ?set_seqs(Group), ?set_seqs(NewGroup)),
+    case MissingChangesCount == 0 of
     true ->
         if is_pid(UpdaterPid) ->
             ?LOG_INFO("Set view `~s`, ~s group `~s`, compact group up to date - restarting updater",
@@ -721,9 +723,7 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
         inc_compactions(Result),
         {reply, ok, maybe_apply_pending_transition(State2), ?TIMEOUT};
     false ->
-        ?LOG_INFO("Set view `~s`, ~s group `~s`, compaction still behind, retrying",
-            [?set_name(State), ?type(State), ?group_id(State)]),
-        {reply, {update, ?set_seqs(Group)}, State}
+        {reply, {update, ?set_seqs(Group), MissingChangesCount}, State}
     end;
 handle_call({compact_done, _Result}, _From, State) ->
     % From a previous compactor that was killed/stopped, ignore.

@@ -57,7 +57,7 @@ update(Owner, Group, CurSeqs) ->
     _ ->
         SinceSeqs = ?set_seqs(Group),
         NumChanges = lists:foldl(
-            fun({{PartId, NewSeq}, {PartId, OldSeq}}, Acc) ->
+            fun({{PartId, NewSeq}, {PartId, OldSeq}}, Acc) when NewSeq >= OldSeq ->
                 Acc + (NewSeq - OldSeq)
             end,
             0, lists:zip(CurSeqs, SinceSeqs))

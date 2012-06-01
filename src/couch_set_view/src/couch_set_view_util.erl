@@ -20,6 +20,7 @@
 -export([open_raw_read_fd/1, close_raw_read_fd/1]).
 -export([make_disk_header/1]).
 -export([compute_indexed_bitmap/1, cleanup_group/1]).
+-export([missing_changes_count/2]).
 
 -include("couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
@@ -298,3 +299,19 @@ clean_views(go, PurgeFun, [#set_view{btree = Btree} = View | Rest], Count, Acc) 
     couch_set_view_mapreduce:end_reduce_context(View),
     NewAcc = [View#set_view{btree = NewBtree} | Acc],
     clean_views(Go, PurgeFun, Rest, PurgedCount, NewAcc).
+
+
+-spec missing_changes_count(partition_seqs(), partition_seqs()) -> non_neg_integer().
+missing_changes_count(CurSeqs, NewSeqs) ->
+    missing_changes_count(CurSeqs, NewSeqs, 0).
+
+missing_changes_count([], [], MissingCount) ->
+    MissingCount;
+missing_changes_count([{Part, CurSeq} | RestCur], [{Part, NewSeq} | RestNew], Acc) ->
+    Diff = CurSeq - NewSeq,
+    case Diff > 0 of
+    true ->
+        missing_changes_count(RestCur, RestNew, Acc + Diff);
+    false ->
+        missing_changes_count(RestCur, RestNew, Acc)
+    end.

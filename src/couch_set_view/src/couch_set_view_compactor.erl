@@ -142,18 +142,13 @@ maybe_retry_compact(CompactResult0, StartTime, Group, Retries) ->
     case gen_server:call(Pid, {compact_done, CompactResult}, infinity) of
     ok ->
         ok = couch_set_view_util:close_raw_read_fd(Group);
-    {update, CurSeqs} ->
-        NumNewChanges = lists:foldl(
-            fun({{PartId, NewSeq}, {PartId, OldSeq}}, Acc) ->
-                Acc + (NewSeq - OldSeq)
-            end,
-            0, lists:zip(CurSeqs, ?set_seqs(NewGroup))),
+    {update, CurSeqs, MissingCount} ->
         ?LOG_INFO("Compactor for set view `~s`, ~s group `~s` "
                   "spawning updater to apply delta of ~p changes "
                   "(retry number ~p)",
-                  [SetName, Type, DDocId, NumNewChanges, Retries]),
+                  [SetName, Type, DDocId, MissingCount, Retries]),
         {_, Ref} = erlang:spawn_monitor(
-            couch_set_view_updater, update, [nil, NewGroup, CurSeqs]),
+            couch_set_view_updater, update, [nil, NewGroup, CurSeqs, MissingCount]),
         receive
         {'DOWN', Ref, _, _, {updater_finished, UpdaterResult}} ->
             CompactResult2 = CompactResult0#set_view_compactor_result{
