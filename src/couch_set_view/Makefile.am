@@ -73,7 +73,7 @@ EXTRA_DIST = $(include_files) $(source_files) $(test_files) test/run.tpl
 CLEANFILES = $(compiled_files) test/run
 
 noinst_SCRIPTS = test/run
-TEST_JOBS ?= 3
+TEST_JOBS ?= 2
 maybe_jN = $(if $(shell prove --help | grep jobs), -j$(TEST_JOBS))
 
 check:
