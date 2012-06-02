@@ -76,7 +76,12 @@ shutdown_sync(Pid) ->
         catch exit(Pid, shutdown),
         receive
         {'DOWN', MRef, _, _, _} ->
-            ok
+            receive
+            {'EXIT', Pid, _} ->
+                ok
+            after 0 ->
+                ok
+            end
         end
     after
         erlang:demonitor(MRef, [flush])
