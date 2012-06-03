@@ -286,6 +286,7 @@ cleanup_group(Group) ->
             view_states = [couch_btree:get_state(V#set_view.btree) || V <- NewViews]
         }
     },
+    ok = couch_file:flush(Group#set_view_group.fd),
     {ok, Group2, TotalPurgedCount}.
 
 clean_views(_, _, [], Count, Acc) ->
