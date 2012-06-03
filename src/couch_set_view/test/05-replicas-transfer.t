@@ -390,6 +390,8 @@ wait_for_replica_full_update(RepGroupInfo) ->
     receive
     {'DOWN', Ref, process, Pid, normal} ->
         ok;
+    {'DOWN', Ref, process, Pid, noproc} ->
+        ok;
     {'DOWN', Ref, process, Pid, Reason} ->
         etap:bail("Failure waiting for full replica group update: " ++ couch_util:to_list(Reason))
     after ?MAX_WAIT_TIME ->
@@ -407,6 +409,8 @@ wait_for_replica_cleanup() ->
     Ref = erlang:monitor(process, Pid),
     receive
     {'DOWN', Ref, process, Pid, normal} ->
+        ok;
+    {'DOWN', Ref, process, Pid, noproc} ->
         ok;
     {'DOWN', Ref, process, Pid, Reason} ->
         etap:bail("Failure waiting for replica index cleanup: " ++ couch_util:to_list(Reason))
