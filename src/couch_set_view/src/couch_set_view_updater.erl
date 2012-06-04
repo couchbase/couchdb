@@ -308,10 +308,10 @@ load_changes(Owner, Updater, Group, MapQueue, Writer, ActiveParts, PassiveParts)
         index_header = #set_view_index_header{seqs = SinceSeqs}
     } = Group,
 
-    FoldFun = fun(PartId) ->
+    FoldFun = fun(PartId, Acc) ->
         case orddict:is_key(PartId, ?set_unindexable_seqs(Group)) of
         true ->
-            ok;
+            Acc;
         false ->
             Db = case couch_db:open_int(?dbname(SetName, PartId), []) of
             {ok, PartDb} ->
@@ -324,15 +324,16 @@ load_changes(Owner, Updater, Group, MapQueue, Writer, ActiveParts, PassiveParts)
             try
                 maybe_stop(),
                 Since = couch_util:get_value(PartId, SinceSeqs),
-                ChangesWrapper = fun(DocInfo, _, ok) ->
+                ChangesWrapper = fun(DocInfo, _, Acc2) ->
                     maybe_stop(),
                     load_doc(Db, PartId, DocInfo, MapQueue),
                     maybe_stop(),
-                    {ok, ok}
+                    {ok, Acc2 + 1}
                 end,
-                {ok, _, ok} = couch_db:fast_reads(Db, fun() ->
-                    couch_db:enum_docs_since(Db, Since, ChangesWrapper, ok, [])
-                end)
+                {ok, _, Acc3} = couch_db:fast_reads(Db, fun() ->
+                    couch_db:enum_docs_since(Db, Since, ChangesWrapper, Acc, [])
+                end),
+                Acc3
             after
                 ok = couch_db:close(Db)
             end
@@ -343,22 +344,24 @@ load_changes(Owner, Updater, Group, MapQueue, Writer, ActiveParts, PassiveParts)
     try
         case ActiveParts of
         [] ->
-            ok;
+            ActiveChangesCount = 0;
         _ ->
             ?LOG_INFO("~s reading changes from active partitions to "
                       "update ~s set view group `~s` from set `~s`",
                       [updater_type(Owner), GroupType, DDocId, SetName]),
-            ok = lists:foreach(FoldFun, ActiveParts)
+            ActiveChangesCount = lists:foldl(FoldFun, 0, ActiveParts)
         end,
         case PassiveParts of
         [] ->
-            ok;
+            FinalChangesCount = ActiveChangesCount;
         _ ->
             ?LOG_INFO("~s reading changes from passive partitions to "
                       "update ~s set view group `~s` from set `~s`",
                       [updater_type(Owner), GroupType, DDocId, SetName]),
-            ok = lists:foreach(FoldFun, PassiveParts)
-        end
+            FinalChangesCount = lists:foldl(FoldFun, ActiveChangesCount, PassiveParts)
+        end,
+        ?LOG_INFO("~s for ~s set view group `~s`, set `~s`, read a total of ~p changes",
+                  [updater_type(Owner), GroupType, DDocId, SetName, FinalChangesCount])
     catch throw:stop ->
         Writer ! stop
     end,
@@ -795,8 +798,8 @@ checkpoint(#writer_acc{owner = Owner, parent = Parent, group = Group}, DoFsync) 
         name = DDocId,
         type = Type
     } = Group,
-    ?LOG_INFO("Checkpointing set view `~s` update for ~s group `~s`",
-              [SetName, Type, DDocId]),
+    ?LOG_INFO("~s checkpointing set view `~s` update for ~s group `~s`",
+              [updater_type(Owner), SetName, Type, DDocId]),
     write_header(Group, DoFsync),
     ok = gen_server:cast(Owner, {partial_update, Parent, Group}).
 
