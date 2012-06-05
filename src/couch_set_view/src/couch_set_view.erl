@@ -658,9 +658,14 @@ init([]) ->
     RootDir = couch_config:get("couchdb", "view_index_dir"),
     Self = self(),
     ok = couch_config:register(
-        fun("couchdb", "view_index_dir")->
-            exit(Self, config_change)
+        fun("couchdb", "view_index_dir", _NewIndexDir)->
+            exit(Self, config_change);
+        ("mapreduce", "function_timeout", NewTimeout) ->
+            ok = mapreduce:set_timeout(list_to_integer(NewTimeout))
         end),
+
+    ok = mapreduce:set_timeout(list_to_integer(
+        couch_config:get("mapreduce", "function_timeout", "10000"))),
 
     % {SetName, {DDocId, Signature}}
     ets:new(couch_setview_name_to_sig, [bag, protected, named_table]),

@@ -235,5 +235,11 @@ min_file_size = 131072
 ;version = 2.0.0
 ;url = http://www.couchbase.com/
 
+[mapreduce]
+; Maximum duration, in milliseconds, for the execution time of all the map/reduce
+; functions in a design document against a single document (map function) or against
+; a list of map values/reductions (reduce/rereduce function).
+function_timeout = 10000
+
 [set_views]
 ddoc_cache_size = 1048576
