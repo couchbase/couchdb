@@ -21,7 +21,7 @@
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(1),
+    etap:plan(2),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -34,6 +34,7 @@ main(_) ->
 
 test() ->
     test_sum_function(),
+    test_base64decode_function(),
     ok.
 
 
@@ -43,3 +44,10 @@ test_sum_function() ->
     ]),
     Results = mapreduce:map_doc(Ctx, <<"{\"_id\": \"doc1\", \"values\": [1, 2, 3, 4]}">>),
     etap:is(Results, {ok, [[{<<"\"doc1\"">>, <<"10">>}]]}, "sum() builtin function works").
+
+test_base64decode_function() ->
+    {ok, Ctx} = mapreduce:start_map_context([
+        <<"function(doc) { emit(doc._id, decodeBase64(doc._bin)); }">>
+    ]),
+    Results = mapreduce:map_doc(Ctx, <<"{ \"_id\": \"counter\", \"_bin\": \"NQ==\" }">>),
+    etap:is(Results, {ok,[[{<<"\"counter\"">>,<<"\"5\"">>}]]}, "decodeBase64() builtin function works").
