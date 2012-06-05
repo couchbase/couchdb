@@ -103,7 +103,8 @@ check_db_file(Db) ->
     true ->
         ok
     end,
-    {ok, CountById, _Id} = couch_db:enum_docs(Db, fun(DocInfo, PrevId) ->
+    {ok, _NonDeletedByIdCount, {_Id, ByIdCount}} = couch_db:enum_docs(Db,
+        fun(DocInfo, {PrevId, ByIdCountAcc}) ->
             [{_, DocInfo2}] = ets:lookup(EtsById, DocInfo#doc_info.id),
             if DocInfo == DocInfo2 ->
                 ok;
@@ -120,8 +121,8 @@ check_db_file(Db) ->
                         [Filename, DocInfo])
             end,
             true = ets:delete(EtsById, DocInfo#doc_info.id),
-            {ok, DocInfo#doc_info.id}
-        end, 0, []), % first docid is num, as sorts lower than all strings
+            {ok, {DocInfo#doc_info.id, ByIdCountAcc + 1}}
+        end, {0, 0}, []), % first docid is num, as sorts lower than all strings
     case ets:tab2list(EtsById) of
     [] ->
         ok;
@@ -130,9 +131,9 @@ check_db_file(Db) ->
             [Filename, LeftOverDocInfos])
     end,
     ets:delete(EtsById),
-    if CountById /= Count ->
+    if ByIdCount /= Count ->
         fatal_error("Count of by id index is not the same as by seq DB ~s ~p ~p",
-            [Filename, EncounteredCount, Count]);
+            [Filename, ByIdCount, Count]);
     true ->
         ok
     end.
