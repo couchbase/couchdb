@@ -30,7 +30,7 @@ start_compact(SetName, DDocId) ->
 -spec start_compact(binary(), binary(), set_view_group_type()) -> {'ok', pid()}.
 start_compact(SetName, DDocId, Type) ->
     {ok, Pid} = get_group_pid(SetName, DDocId, Type),
-    gen_server:call(Pid, {start_compact, fun compact_group/2}).
+    gen_server:call(Pid, {start_compact, fun compact_group/5}).
 
 
 -spec cancel_compact(binary(), binary()) -> 'ok'.
@@ -47,14 +47,51 @@ cancel_compact(SetName, DDocId, Type) ->
 %% internal functions
 %%=============================================================================
 
--spec compact_group(#set_view_group{}, #set_view_group{}) -> no_return().
-compact_group(Group, EmptyGroup) ->
+-spec compact_group(#set_view_group{},
+                    #set_view_group{},
+                    string(),
+                    pid() | 'nil',
+                    pid()) -> no_return().
+compact_group(Group0, EmptyGroup, LogFilePath, UpdaterPid, Owner) ->
     #set_view_group{
         set_name = SetName,
+        name = GroupId,
+        type = Type
+    } = Group0,
+
+    case file:delete(LogFilePath) of
+    ok ->
+       ok;
+    {error, enoent} ->
+       ok;
+    {error, Reason} ->
+       ?LOG_ERROR("Set view `~s` compactor, ~s group `~s`, error deleting log "
+                  "file `~s`: ~s",
+                  [SetName, Type, GroupId, LogFilePath, file:format_error(Reason)]),
+       exit({error, Reason})
+    end,
+
+    case is_pid(UpdaterPid) of
+    true ->
+        MonRef = erlang:monitor(process, UpdaterPid),
+        Ref = make_ref(),
+        UpdaterPid ! {log_new_changes, self(), Ref, LogFilePath},
+        Group = receive
+        {Ref, {ok, Group2}} ->
+            erlang:demonitor(MonRef, [flush]),
+            Group2;
+        {'DOWN', MonRef, _, _, {updater_finished, UpResult}} ->
+            UpResult#set_view_updater_result.group;
+        {'DOWN', MonRef, _, _, Reason2} ->
+            exit({updater_died, Reason2})
+        end;
+    false ->
+        Group = Group0
+    end,
+
+    #set_view_group{
         id_btree = IdBtree,
         views = Views,
-        name = GroupId,
-        type = Type,
         index_header = Header,
         sig = GroupSig
     } = Group,
@@ -97,7 +134,7 @@ compact_group(Group, EmptyGroup) ->
     FilterFun = fun({_Key, {PartId, _}}) ->
         ((1 bsl PartId) band ?set_cbitmask(Group)) =:= 0
     end,
-    % First copy the id btree.
+
     {ok, NewIdBtreeRoot, Acc1} = couch_btree_copy:copy(
         IdBtree, Fd,
         [{before_kv_write, {BeforeKVWriteFun, Acc0}}, {filter, FilterFun}]),
@@ -106,6 +143,8 @@ compact_group(Group, EmptyGroup) ->
     {NewViews, _} = lists:mapfoldl(fun({View, EmptyView}, Acc) ->
         compact_view(Fd, View, EmptyView, FilterFun, Acc)
     end, Acc1, lists:zip(Views, EmptyViews)),
+
+    ok = couch_set_view_util:close_raw_read_fd(Group),
 
     NewGroup = EmptyGroup#set_view_group{
         id_btree = NewIdBtree,
@@ -116,15 +155,15 @@ compact_group(Group, EmptyGroup) ->
             view_states = [couch_btree:get_state(V#set_view.btree) || V <- NewViews]
         }
     },
+
     CleanupKVCount = TotalChanges - total_kv_count(NewGroup),
-    ok = couch_file:flush(NewGroup#set_view_group.fd),
     CompactResult = #set_view_compactor_result{
         group = NewGroup,
         cleanup_kv_count = CleanupKVCount
     },
-    maybe_retry_compact(CompactResult, StartTime, Group, 1).
+    maybe_retry_compact(CompactResult, StartTime, LogFilePath, 0, Owner, 1).
 
-maybe_retry_compact(CompactResult0, StartTime, Group, Retries) ->
+maybe_retry_compact(CompactResult0, StartTime, LogFilePath, LogOffsetStart, Owner, Retries) ->
     NewGroup = CompactResult0#set_view_compactor_result.group,
     #set_view_group{
         set_name = SetName,
@@ -138,26 +177,36 @@ maybe_retry_compact(CompactResult0, StartTime, Group, Retries) ->
     CompactResult = CompactResult0#set_view_compactor_result{
         compact_time = timer:now_diff(os:timestamp(), StartTime) / 1000000
     },
+    % For compaction retry testing purposes
+    receive
+    pause ->
+        receive unpause -> ok end
+    after 0 ->
+        ok
+    end,
     {ok, Pid} = get_group_pid(SetName, DDocId, Type),
     case gen_server:call(Pid, {compact_done, CompactResult}, infinity) of
     ok ->
-        ok = couch_set_view_util:close_raw_read_fd(Group);
-    {update, CurSeqs, MissingCount} ->
-        ?LOG_INFO("Compactor for set view `~s`, ~s group `~s` "
-                  "spawning updater to apply delta of ~p changes "
-                  "(retry number ~p)",
-                  [SetName, Type, DDocId, MissingCount, Retries]),
-        {_, Ref} = erlang:spawn_monitor(
-            couch_set_view_updater, update, [nil, NewGroup, CurSeqs, MissingCount]),
-        receive
-        {'DOWN', Ref, _, _, {updater_finished, UpdaterResult}} ->
-            CompactResult2 = CompactResult0#set_view_compactor_result{
-                group = UpdaterResult#set_view_updater_result.group
-            },
-            maybe_retry_compact(CompactResult2, StartTime, Group, Retries + 1);
-        {'DOWN', Ref, _, _, Reason} ->
-            exit(Reason)
-        end
+        _ = file:delete(LogFilePath),
+        ok;
+    {update, MissingCount} ->
+        {ok, LogEof} = gen_server:call(Owner, log_eof, infinity),
+        ?LOG_INFO("Compactor for set view `~s`, ~s group `~s`, "
+                  "applying delta of ~p changes (retry number ~p), "
+                  "log start offset ~p, log eof ~p",
+                  [SetName, Type, DDocId, MissingCount, Retries,
+                   LogOffsetStart, LogEof]),
+        {ok, LogFd} = file:open(LogFilePath, [read, raw, binary]),
+        {ok, LogOffsetStart} = file:position(LogFd, LogOffsetStart),
+        ok = couch_set_view_util:open_raw_read_fd(NewGroup),
+        NewGroup2 = apply_log(NewGroup, LogFd, LogOffsetStart, LogEof),
+        ok = file:close(LogFd),
+        ok = couch_set_view_util:close_raw_read_fd(NewGroup),
+        CompactResult2 = CompactResult0#set_view_compactor_result{
+            group = NewGroup2
+        },
+        maybe_retry_compact(CompactResult2, StartTime, LogFilePath,
+                            LogEof, Owner, Retries + 1)
     end.
 
 
@@ -175,7 +224,6 @@ get_group_pid(SetName, DDocId, replica) ->
     end.
 
 
-%% @spec compact_view(Fd, View, EmptyView, Acc) -> {CompactView, NewAcc}
 compact_view(Fd, View, #set_view{btree = ViewBtree} = EmptyView, FilterFun, Acc0) ->
     BeforeKVWriteFun = fun(Item, Acc) ->
         {Item, update_task(Acc, 1)}
@@ -215,3 +263,39 @@ total_kv_count(#set_view_group{id_btree = IdBtree, views = Views}) ->
             Acc + Count
         end,
         IdCount, Views).
+
+
+apply_log(Group, _LogFd, LogOffset, LogEof) when LogOffset == LogEof ->
+    Group;
+apply_log(Group, LogFd, LogOffset, LogEof) when LogOffset < LogEof ->
+    {ok, <<EntrySize:32>>} = file:read(LogFd, 4),
+    {ok, <<EntryBin:EntrySize/binary>>} = file:read(LogFd, EntrySize),
+    Entry = binary_to_term(couch_compress:decompress(EntryBin)),
+    Group2 = apply_log_entry(Group, Entry),
+    apply_log(Group2, LogFd, LogOffset + 4 + EntrySize, LogEof).
+
+
+apply_log_entry(Group, Entry) ->
+    #set_view_group{
+        id_btree = IdBtree,
+        views = Views,
+        index_header = Header
+    } = Group,
+    {NewSeqs, AddDocIdViewIdKeys, RemoveDocIds, LogViewsAddRemoveKvs} = Entry,
+    {ok, NewIdBtree} = couch_btree:add_remove(IdBtree, AddDocIdViewIdKeys, RemoveDocIds),
+    NewViews = lists:zipwith(
+        fun(#set_view{btree = Bt} = View, {AddKeyValues, KeysToRemove}) ->
+            {ok, Bt2} = couch_btree:add_remove(Bt, AddKeyValues, KeysToRemove),
+            View#set_view{btree = Bt2}
+        end,
+        Views,
+        LogViewsAddRemoveKvs),
+    Group#set_view_group{
+        id_btree = NewIdBtree,
+        views = NewViews,
+        index_header = Header#set_view_index_header{
+            seqs = NewSeqs,
+            id_btree_state = couch_btree:get_state(NewIdBtree),
+            view_states = [couch_btree:get_state(V#set_view.btree) || V <- NewViews]
+        }
+    }.

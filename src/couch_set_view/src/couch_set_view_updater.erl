@@ -12,7 +12,7 @@
 
 -module(couch_set_view_updater).
 
--export([update/3, update/4]).
+-export([update/4]).
 
 -include("couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
@@ -28,6 +28,7 @@
     parent,
     owner,
     group,
+    log_fd = nil,
     write_queue,
     initial_build,
     view_empty_kvs,
@@ -46,20 +47,8 @@
 }).
 
 
--spec update(pid() | 'nil', #set_view_group{}, partition_seqs()) -> no_return().
-update(Owner, Group, CurSeqs) ->
-    SinceSeqs = ?set_seqs(Group),
-    NumChanges = lists:foldl(
-        fun({{PartId, NewSeq}, {PartId, OldSeq}}, Acc) when NewSeq >= OldSeq ->
-            Acc + (NewSeq - OldSeq)
-        end,
-        0, lists:zip(CurSeqs, SinceSeqs)),
-    update(Owner, Group, CurSeqs, NumChanges).
-
-
--spec update(pid() | 'nil', #set_view_group{},
-             partition_seqs(), non_neg_integer()) -> no_return().
-update(Owner, Group, CurSeqs, NumChanges) ->
+-spec update(pid(), #set_view_group{}, partition_seqs(), string() | 'nil') -> no_return().
+update(Owner, Group, CurSeqs, LogFilePath) ->
     #set_view_group{
         set_name = SetName,
         type = Type,
@@ -67,6 +56,12 @@ update(Owner, Group, CurSeqs, NumChanges) ->
     } = Group,
     ActiveParts = couch_set_view_util:decode_bitmask(?set_abitmask(Group)),
     PassiveParts = couch_set_view_util:decode_bitmask(?set_pbitmask(Group)),
+    SinceSeqs = ?set_seqs(Group),
+    NumChanges = lists:foldl(
+        fun({{PartId, NewSeq}, {PartId, OldSeq}}, Acc) when NewSeq >= OldSeq ->
+            Acc + (NewSeq - OldSeq)
+        end,
+        0, lists:zip(CurSeqs, SinceSeqs)),
 
     case ?set_pending_transition(Group) of
     nil ->
@@ -82,12 +77,10 @@ update(Owner, Group, CurSeqs, NumChanges) ->
     Parent = self(),
     Pid = spawn_link(fun() ->
         case Type of
-        main when is_pid(Owner) ->
+        main ->
             ok = couch_index_barrier:enter(couch_main_index_barrier, Parent);
-        replica when is_pid(Owner) ->
-            ok = couch_index_barrier:enter(couch_replica_index_barrier, Parent);
-        _ when Owner == nil ->
-            ok
+        replica ->
+            ok = couch_index_barrier:enter(couch_replica_index_barrier, Parent)
         end,
         exit({done, (timer:now_diff(os:timestamp(), BeforeEnterTs) / 1000000)})
     end),
@@ -113,28 +106,23 @@ update(Owner, Group, CurSeqs, NumChanges) ->
         exit({updater_finished, EmptyResult})
     end,
 
-    case is_pid(Owner) of
-    true ->
-        CleanupParts = couch_set_view_util:decode_bitmask(?set_cbitmask(Group)),
-        ?LOG_INFO("Updater for set view `~s`, ~s group `~s` started~n"
-                  "Active partitions:                      ~w~n"
-                  "Passive partitions:                     ~w~n"
-                  "Cleanup partitions:                     ~w~n"
-                  "Replicas to transfer:                   ~w~n"
-                  "Pending transition:                     ~n"
-                  "    active:                             ~w~n"
-                  "    passive:                            ~w~n",
-                  [SetName, Type, DDocId,
-                   ActiveParts,
-                   PassiveParts,
-                   CleanupParts,
-                   ?set_replicas_on_transfer(Group),
-                   PendingActive,
-                   PendingPassive
-                  ]);
-    false ->
-        ok
-    end,
+    CleanupParts = couch_set_view_util:decode_bitmask(?set_cbitmask(Group)),
+    ?LOG_INFO("Updater for set view `~s`, ~s group `~s` started~n"
+              "Active partitions:    ~w~n"
+              "Passive partitions:   ~w~n"
+              "Cleanup partitions:   ~w~n"
+              "Replicas to transfer: ~w~n"
+              "Pending transition:   ~n"
+              "    active:           ~w~n"
+              "    passive:          ~w~n",
+              [SetName, Type, DDocId,
+               ActiveParts,
+               PassiveParts,
+               CleanupParts,
+               ?set_replicas_on_transfer(Group),
+               PendingActive,
+               PendingPassive
+              ]),
 
     WriterAcc0 = #writer_acc{
         parent = self(),
@@ -142,10 +130,10 @@ update(Owner, Group, CurSeqs, NumChanges) ->
         group = Group,
         max_seqs = CurSeqs
     },
-    update(WriterAcc0, ActiveParts, PassiveParts, BlockedTime, NumChanges).
+    update(WriterAcc0, ActiveParts, PassiveParts, BlockedTime, NumChanges, LogFilePath).
 
 
-update(WriterAcc, ActiveParts, PassiveParts, BlockedTime, NumChanges) ->
+update(WriterAcc, ActiveParts, PassiveParts, BlockedTime, NumChanges, LogFilePath) ->
     #writer_acc{
         owner = Owner,
         group = Group
@@ -168,16 +156,16 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime, NumChanges) ->
         try
             couch_set_view_mapreduce:start_map_context(Group),
             try
-                do_maps(Group, MapQueue, WriteQueue, Owner)
+                do_maps(Group, MapQueue, WriteQueue)
             after
                 couch_set_view_mapreduce:end_map_context()
             end
         catch _:Error ->
             Stacktrace = erlang:get_stacktrace(),
-            ?LOG_ERROR("Set view `~s`, ~s group `~s`, ~s mapper error~n"
+            ?LOG_ERROR("Set view `~s`, ~s group `~s`, mapper error~n"
                 "error:      ~p~n"
                 "stacktrace: ~p~n",
-                [SetName, Type, DDocId, updater_type(Owner), Error, Stacktrace]),
+                [SetName, Type, DDocId, Error, Stacktrace]),
             exit(Error)
         end
     end),
@@ -186,23 +174,17 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime, NumChanges) ->
     Writer = spawn_link(fun() ->
         ok = couch_set_view_util:open_raw_read_fd(Group),
 
-        case is_pid(Owner) of
-        true ->
-            DDocIds = couch_set_view_util:get_ddoc_ids_with_sig(SetName, GroupSig),
-            couch_task_status:add_task([
-                {type, indexer},
-                {set, SetName},
-                {design_documents, DDocIds},
-                {indexer_type, Type},
-                {progress, 0},
-                {changes_done, 0},
-                {total_changes, NumChanges}
-            ]),
-            couch_task_status:set_update_frequency(1000);
-        false ->
-            % Compactor has its own task already.
-            ok
-        end,
+        DDocIds = couch_set_view_util:get_ddoc_ids_with_sig(SetName, GroupSig),
+        couch_task_status:add_task([
+            {type, indexer},
+            {set, SetName},
+            {design_documents, DDocIds},
+            {indexer_type, Type},
+            {progress, 0},
+            {changes_done, 0},
+            {total_changes, NumChanges}
+        ]),
+        couch_task_status:set_update_frequency(1000),
 
         Group2 = lists:foldl(
             fun({PartId, PurgeSeq}, GroupAcc) ->
@@ -226,22 +208,29 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime, NumChanges) ->
             group = Group2,
             write_queue = WriteQueue,
             initial_build = InitialBuild,
-            view_empty_kvs = ViewEmptyKVs
+            view_empty_kvs = ViewEmptyKVs,
+            log_fd = open_log_file(LogFilePath)
         },
         try
             couch_set_view_mapreduce:start_reduce_context(Group2),
             try
                 FinalWriterAcc = do_writes(WriterAcc2),
+                case FinalWriterAcc#writer_acc.log_fd of
+                nil ->
+                    ok;
+                _ ->
+                    ok = file:close(FinalWriterAcc#writer_acc.log_fd)
+                end,
                 Parent ! {writer_finished, FinalWriterAcc}
             after
                 couch_set_view_mapreduce:end_reduce_context(Group2)
             end
         catch _:Error ->
             Stacktrace = erlang:get_stacktrace(),
-            ?LOG_ERROR("Set view `~s`, ~s group `~s`, ~s writer error~n"
+            ?LOG_ERROR("Set view `~s`, ~s group `~s`, writer error~n"
                 "error:      ~p~n"
                 "stacktrace: ~p~n",
-                [SetName, Type, DDocId, updater_type(Owner), Error, Stacktrace]),
+                [SetName, Type, DDocId, Error, Stacktrace]),
             exit(Error)
         after
             ok = couch_set_view_util:close_raw_read_fd(Group)
@@ -253,22 +242,20 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime, NumChanges) ->
             load_changes(Owner, Parent, Group, MapQueue, Writer, ActiveParts, PassiveParts)
         catch _:Error ->
             Stacktrace = erlang:get_stacktrace(),
-            ?LOG_ERROR("Set view `~s`, ~s group `~s`, ~s doc loader error~n"
+            ?LOG_ERROR("Set view `~s`, ~s group `~s`, doc loader error~n"
                 "error:      ~p~n"
                 "stacktrace: ~p~n",
-                [SetName, Type, DDocId, updater_type(Owner), Error, Stacktrace]),
+                [SetName, Type, DDocId, Error, Stacktrace]),
             exit(Error)
         end
     end),
 
     Result = wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime),
     case Type of
-    main when is_pid(Owner) ->
+    main ->
         ok = couch_index_barrier:leave(couch_main_index_barrier);
-    replica when is_pid(Owner) ->
-        ok = couch_index_barrier:leave(couch_replica_index_barrier);
-    _ when Owner == nil ->
-        ok
+    replica ->
+        ok = couch_index_barrier:leave(couch_replica_index_barrier)
     end,
     exit(Result).
 
@@ -291,6 +278,14 @@ wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime) ->
         {updater_finished, Result};
     stop_immediately ->
         DocLoader ! stop_immediately,
+        wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime);
+    {log_new_changes, Pid, Ref, LogFilePath} ->
+        Writer ! {log_new_changes, self(), LogFilePath},
+        erlang:put(log_request, {Pid, Ref}),
+        wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime);
+    {log_started, Writer, GroupSnapshot} ->
+        {Pid, Ref} = erlang:erase(log_request),
+        Pid ! {Ref, {ok, GroupSnapshot}},
         wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime);
     {'EXIT', _, Reason} when Reason =/= normal ->
         couch_util:shutdown_sync(DocLoader),
@@ -317,8 +312,8 @@ load_changes(Owner, Updater, Group, MapQueue, Writer, ActiveParts, PassiveParts)
             {ok, PartDb} ->
                 PartDb;
             Error ->
-                ErrorMsg = io_lib:format("~s error opening database `~s': ~w",
-                                         [updater_type(Owner), ?dbname(SetName, PartId), Error]),
+                ErrorMsg = io_lib:format("Updater error opening database `~s': ~w",
+                                         [?dbname(SetName, PartId), Error]),
                 throw({error, iolist_to_binary(ErrorMsg)})
             end,
             try
@@ -346,22 +341,22 @@ load_changes(Owner, Updater, Group, MapQueue, Writer, ActiveParts, PassiveParts)
         [] ->
             ActiveChangesCount = 0;
         _ ->
-            ?LOG_INFO("~s reading changes from active partitions to "
+            ?LOG_INFO("Updater reading changes from active partitions to "
                       "update ~s set view group `~s` from set `~s`",
-                      [updater_type(Owner), GroupType, DDocId, SetName]),
+                      [GroupType, DDocId, SetName]),
             ActiveChangesCount = lists:foldl(FoldFun, 0, ActiveParts)
         end,
         case PassiveParts of
         [] ->
             FinalChangesCount = ActiveChangesCount;
         _ ->
-            ?LOG_INFO("~s reading changes from passive partitions to "
+            ?LOG_INFO("Updater reading changes from passive partitions to "
                       "update ~s set view group `~s` from set `~s`",
-                      [updater_type(Owner), GroupType, DDocId, SetName]),
+                      [GroupType, DDocId, SetName]),
             FinalChangesCount = lists:foldl(FoldFun, ActiveChangesCount, PassiveParts)
         end,
-        ?LOG_INFO("~s for ~s set view group `~s`, set `~s`, read a total of ~p changes",
-                  [updater_type(Owner), GroupType, DDocId, SetName, FinalChangesCount])
+        ?LOG_INFO("Updater for ~s set view group `~s`, set `~s`, read a total of ~p changes",
+                  [GroupType, DDocId, SetName, FinalChangesCount])
     catch throw:stop ->
         Writer ! stop
     end,
@@ -376,9 +371,7 @@ maybe_stop() ->
         ok
     end.
 
-notify_owner(nil, _Msg, _UpdaterPid) ->
-    ok;
-notify_owner(Owner, Msg, UpdaterPid) when is_pid(Owner) ->
+notify_owner(Owner, Msg, UpdaterPid) ->
     Owner ! {updater_info, UpdaterPid, Msg}.
 
 
@@ -436,7 +429,7 @@ load_doc(Db, PartitionId, DocInfo, MapQueue) ->
     end.
 
 
-do_maps(Group, MapQueue, WriteQueue, Owner) ->
+do_maps(Group, MapQueue, WriteQueue) ->
     case couch_work_queue:dequeue(MapQueue) of
     closed ->
         couch_work_queue:close(WriteQueue);
@@ -456,36 +449,37 @@ do_maps(Group, MapQueue, WriteQueue, Owner) ->
                         name = DDocId,
                         type = Type
                     } = Group,
-                    ?LOG_ERROR("Set view `~s`, ~s group `~s`, ~s error mapping "
+                    ?LOG_ERROR("Set view `~s`, ~s group `~s`, error mapping "
                                "document `~s`: ~s~n",
-                               [SetName, Type, DDocId, updater_type(Owner),
-                                Id, couch_util:to_binary(Reason)]),
+                               [SetName, Type, DDocId, Id, couch_util:to_binary(Reason)]),
                     Acc
                 end
             end,
             [], Queue),
         ok = couch_work_queue:queue(WriteQueue, Items),
-        do_maps(Group, MapQueue, WriteQueue, Owner)
+        do_maps(Group, MapQueue, WriteQueue)
     end.
 
 
 do_writes(#writer_acc{kvs = Kvs, kvs_size = KvsSize, write_queue = WriteQueue} = Acc) ->
+    Acc2 = maybe_open_log_file(Acc),
     case couch_work_queue:dequeue(WriteQueue) of
     closed ->
-        FinalAcc = flush_writes(Acc#writer_acc{final_batch = true}),
+        FinalAcc = flush_writes(Acc2#writer_acc{final_batch = true}),
         write_header(FinalAcc#writer_acc.group, false),
         FinalAcc;
     {ok, Queue, QueueSize} ->
+        Acc3 = maybe_open_log_file(Acc2),
         Kvs2 = Kvs ++ lists:flatten(Queue),
         KvsSize2 = KvsSize + QueueSize,
         case (KvsSize2 >= ?MIN_WRITER_BATCH_SIZE) orelse (length(Kvs2) >= ?MIN_WRITER_NUM_ITEMS) of
         true ->
-            Acc1 = flush_writes(Acc#writer_acc{kvs = Kvs2, kvs_size = KvsSize2}),
-            Acc2 = Acc1#writer_acc{kvs = [], kvs_size = 0};
+            Acc4 = flush_writes(Acc3#writer_acc{kvs = Kvs2, kvs_size = KvsSize2}),
+            Acc5 = Acc4#writer_acc{kvs = [], kvs_size = 0};
         false ->
-            Acc2 = Acc#writer_acc{kvs = Kvs2, kvs_size = KvsSize2}
+            Acc5 = Acc3#writer_acc{kvs = Kvs2, kvs_size = KvsSize2}
         end,
-        do_writes(Acc2)
+        do_writes(Acc5)
     end.
 
 
@@ -519,7 +513,7 @@ flush_writes(Acc) ->
         {ViewEmptyKVs, [], orddict:new()}, Queue),
     Acc2 = write_changes(Acc, ViewKVs, DocIdViewIdKeys, PartIdSeqs),
     {Acc3, ReplicasTransferred} = update_transferred_replicas(Acc2, PartIdSeqs),
-    update_task(Owner, length(Queue)),
+    update_task(length(Queue)),
     case (Acc3#writer_acc.state =:= updating_active) andalso
         lists:any(fun({PartId, _}) ->
             ((1 bsl PartId) band ?set_pbitmask(Group) =/= 0)
@@ -620,6 +614,7 @@ view_insert_doc_query_results(DocId, PartitionId, [ResultKVs | RestResults],
 
 write_changes(WriterAcc, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs) ->
     #writer_acc{
+        log_fd = LogFd,
         owner = Owner,
         group = Group,
         initial_build = InitialBuild,
@@ -702,6 +697,7 @@ write_changes(WriterAcc, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs) ->
             {NewView, {AccC + CleanupCount, AccI + length(AddKeyValues), AccD + length(KeysToRemove)}}
         end,
         {IdBtreePurgedKeyCount, 0, 0}, lists:zip(Group#set_view_group.views, ViewKeyValuesToAdd)),
+
     case ?set_cbitmask(Group) of
     0 ->
         NewCbitmask = 0,
@@ -716,11 +712,27 @@ write_changes(WriterAcc, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs) ->
             IdBitmap, Views2),
         NewCbitmask = ?set_cbitmask(Group) band CombinedBitmap,
         CleanupTime = timer:now_diff(os:timestamp(), CleanupStart) / 1000000,
-        ?LOG_INFO("~s for set view `~s`, ~s group `~s`, performed cleanup "
+        ?LOG_INFO("Updater for set view `~s`, ~s group `~s`, performed cleanup "
             "of ~p key/value pairs in ~.3f seconds",
-            [updater_type(Owner), SetName, GroupType, GroupName, CleanupKvCount, CleanupTime])
+            [SetName, GroupType, GroupName, CleanupKvCount, CleanupTime])
     end,
     NewSeqs = update_seqs(PartIdSeqs, ?set_seqs(Group)),
+    case LogFd of
+    nil ->
+        ok;
+    _ ->
+        LogViewsAddRemoveKvs = lists:map(
+            fun({#set_view{id_num = ViewId}, AddKeyValues}) ->
+                KeysToRemove = couch_util:dict_find(ViewId, KeysToRemoveByView, []),
+                {AddKeyValues, KeysToRemove}
+            end,
+            ViewKeyValuesToAdd),
+        LogEntry = {NewSeqs, AddDocIdViewIdKeys, RemoveDocIds, LogViewsAddRemoveKvs},
+        LogEntryBin = couch_compress:compress(?term_to_bin(LogEntry)),
+        ok = file:write(LogFd, [<<(byte_size(LogEntryBin)):32>>, LogEntryBin]),
+        {ok, LogEof} = file:position(LogFd, eof),
+        ok = gen_server:call(Owner, {log_eof, LogEof}, infinity)
+    end,
     Header = Group#set_view_group.index_header,
     NewHeader = Header#set_view_index_header{
         id_btree_state = couch_btree:get_state(IdBtree2),
@@ -766,17 +778,13 @@ update_seqs(PartIdSeqs, Seqs) ->
         Seqs, PartIdSeqs).
 
 
-update_task(nil = _Owner, _NumChanges) ->
-    ok;
-update_task(Owner, NumChanges) when is_pid(Owner) ->
+update_task(NumChanges) ->
     [Changes, Total] = couch_task_status:get([changes_done, total_changes]),
     Changes2 = Changes + NumChanges,
     Progress = (Changes2 * 100) div Total,
     couch_task_status:update([{progress, Progress}, {changes_done, Changes2}]).
 
 
-maybe_checkpoint(#writer_acc{owner = nil}) ->
-    ok;
 maybe_checkpoint(WriterAcc) ->
     Before = get(last_header_commit_ts),
     Now = os:timestamp(),
@@ -790,16 +798,14 @@ maybe_checkpoint(WriterAcc) ->
     end.
 
 
-checkpoint(#writer_acc{owner = nil}, _DoFsync) ->
-    ok;
 checkpoint(#writer_acc{owner = Owner, parent = Parent, group = Group}, DoFsync) ->
     #set_view_group{
         set_name = SetName,
         name = DDocId,
         type = Type
     } = Group,
-    ?LOG_INFO("~s checkpointing set view `~s` update for ~s group `~s`",
-              [updater_type(Owner), SetName, Type, DDocId]),
+    ?LOG_INFO("Updater checkpointing set view `~s` update for ~s group `~s`",
+              [SetName, Type, DDocId]),
     write_header(Group, DoFsync),
     ok = gen_server:cast(Owner, {partial_update, Parent, Group}).
 
@@ -815,7 +821,20 @@ write_header(#set_view_group{fd = Fd} = Group, DoFsync) ->
     end.
 
 
-updater_type(nil = _Owner) ->
-    "compactor updater";
-updater_type(Owner) when is_pid(Owner) ->
-    "updater".
+open_log_file(nil) ->
+    nil;
+open_log_file(Path) when is_list(Path) ->
+    {ok, LogFd} = file:open(Path, [raw, binary, append]),
+    LogFd.
+
+
+maybe_open_log_file(Acc) ->
+    receive
+    {log_new_changes, Pid, LogFilePath} ->
+        nil = Acc#writer_acc.log_fd,
+        LogFd = open_log_file(LogFilePath),
+        Pid ! {log_started, self(), Acc#writer_acc.group},
+        Acc#writer_acc{log_fd = LogFd}
+    after 0 ->
+        Acc
+    end.

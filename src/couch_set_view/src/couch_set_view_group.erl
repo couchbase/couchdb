@@ -32,7 +32,11 @@
 -include_lib("couch_set_view/include/couch_set_view.hrl").
 
 -type init_args()   :: {string(), binary(), #set_view_group{}}.
--type compact_fun() :: fun((#set_view_group{}, #set_view_group{}) -> no_return()).
+-type compact_fun() :: fun((#set_view_group{},
+                            #set_view_group{},
+                            string(),
+                            pid() | 'nil',
+                            pid()) -> no_return()).
 
 -define(TIMEOUT, 3000).
 -define(MIN_CHANGES_AUTO_UPDATE, 20000).
@@ -76,7 +80,8 @@
     auto_cleanup = true                :: boolean(),
     replica_partitions = []            :: ordsets:ordset(partition_id()),
     pending_transition_waiters = []    :: [{From::{pid(), reference()}, #set_view_group_req{}}],
-    update_listeners = dict:new()      :: dict()
+    update_listeners = dict:new()      :: dict(),
+    log_eof = 0                        :: non_neg_integer()
 }).
 
 -define(inc_stat(Group, S),
@@ -717,7 +722,7 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
         NewUpdaterPid =
         if is_pid(UpdaterPid) ->
             {ok, CurSeqs} = couch_db_set:get_seqs(?db_set(State)),
-            spawn_link(couch_set_view_updater, update, [self(), NewGroup2, CurSeqs]);
+            spawn_link(couch_set_view_updater, update, [self(), NewGroup2, CurSeqs, nil]);
         true ->
             nil
         end,
@@ -736,7 +741,7 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
         inc_compactions(Result),
         {reply, ok, maybe_apply_pending_transition(State2), ?TIMEOUT};
     false ->
-        {reply, {update, ?set_seqs(Group), MissingChangesCount}, State}
+        {reply, {update, MissingChangesCount}, State}
     end;
 handle_call({compact_done, _Result}, _From, State) ->
     % From a previous compactor that was killed/stopped, ignore.
@@ -801,7 +806,14 @@ handle_call({demonitor_partition_update, Ref}, _From, State) ->
         erlang:demonitor(MonRef, [flush]),
         State2 = State#state{update_listeners = dict:erase(Ref, Listeners)},
         {reply, ok, State2, ?TIMEOUT}
-    end.
+    end;
+
+handle_call({log_eof, LogEof}, _From, State) ->
+    {reply, ok, State#state{log_eof = LogEof}, ?TIMEOUT};
+
+handle_call(log_eof, _From, State) ->
+    {reply, {ok, State#state.log_eof}, State, ?TIMEOUT}.
+
 
 
 handle_cast({partial_update, Pid, NewGroup}, #state{updater_pid = Pid} = State) ->
@@ -1165,6 +1177,13 @@ hex_sig(GroupSig) ->
 -spec base_index_file_name(#set_view_group{}, set_view_group_type()) -> string().
 base_index_file_name(Group, Type) ->
     atom_to_list(Type) ++ "_" ++ hex_sig(Group#set_view_group.sig) ++ ".view".
+
+
+-spec index_file_log_path(#state{}) -> string().
+index_file_log_path(#state{group = Group} = State) ->
+    DesignRoot = couch_set_view:set_index_dir(?root_dir(State), ?set_name(State)),
+    BaseName = base_index_file_name(Group, Group#set_view_group.type),
+    filename:join([DesignRoot, BaseName ++ ".log"]).
 
 
 -spec find_index_file(string(), #set_view_group{}) -> string().
@@ -2091,8 +2110,13 @@ start_compactor(State, CompactFun) ->
     #set_view_group{
         fd = CompactFd
     } = NewGroup = compact_group(State2),
+    Owner = self(),
     Pid = spawn_link(fun() ->
-        CompactFun(Group, NewGroup)
+        CompactFun(Group,
+                   NewGroup,
+                   index_file_log_path(State),
+                   State#state.updater_pid,
+                   Owner)
     end),
     State2#state{
         compactor_pid = Pid,
@@ -2219,7 +2243,14 @@ do_start_updater(State, CurSeqs) ->
     #state{group = Group} = State2 = stop_cleaner(State),
     ?LOG_INFO("Starting updater for set view `~s`, ~s group `~s`",
         [?set_name(State), ?type(State), ?group_id(State)]),
-    Pid = spawn_link(couch_set_view_updater, update, [self(), Group, CurSeqs]),
+    IndexLogFilePath = case is_pid(State#state.compactor_pid) of
+    true ->
+        index_file_log_path(State);
+    false ->
+        nil
+    end,
+    Pid = spawn_link(couch_set_view_updater, update,
+                     [self(), Group, CurSeqs, IndexLogFilePath]),
     State2#state{
         updater_pid = Pid,
         updater_state = starting
