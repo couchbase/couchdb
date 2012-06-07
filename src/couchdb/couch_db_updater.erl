@@ -601,9 +601,14 @@ commit_data(Db, _) ->
 
 copy_docs(#db{fd = SrcFd}, #db{fd = DestFd} = NewDb, Infos, Retry) ->
     NewInfos = lists:map(fun(#doc_info{body_ptr=Bp} = DocInfo) ->
-            {ok, Body} = couch_file:pread_iolist(SrcFd, Bp),
-            {ok, BpNew, _} = couch_file:append_binary_crc32(DestFd, Body),
-            DocInfo#doc_info{body_ptr = BpNew}
+            case Bp of
+                0 ->
+                    DocInfo;
+                _Bp ->
+                    {ok, Body} = couch_file:pread_iolist(SrcFd, Bp),
+                    {ok, BpNew, _} = couch_file:append_binary_crc32(DestFd, Body),
+                    DocInfo#doc_info{body_ptr = BpNew}
+            end
         end, Infos),
 
     RemoveSeqs =
@@ -709,14 +714,19 @@ initial_copy_compact(#db{docinfo_by_seq_btree=SrcBySeq,
         #db{docinfo_by_seq_btree=DestBySeq,
         docinfo_by_id_btree=DestById, fd=DestFd} = NewDb) ->
     CopyBodyFun = fun(#doc_info{body_ptr=Bp}=Info, ok) ->
-        {ok, Body} = couch_file:pread_iolist(SrcFd, Bp),
-        {ok, BpNew, WrittenSize} = couch_file:append_binary_crc32(DestFd, Body),
-        update_compact_task(1),
-        NewInfo = Info#doc_info{
-            body_ptr = BpNew,
-            size = WrittenSize
-        },
-        {NewInfo, ok}
+        case Bp of
+            0 ->
+                {Info, ok};
+            _Bp ->
+                {ok, Body} = couch_file:pread_iolist(SrcFd, Bp),
+                {ok, BpNew, WrittenSize} = couch_file:append_binary_crc32(DestFd, Body),
+                update_compact_task(1),
+                NewInfo = Info#doc_info{
+                    body_ptr = BpNew,
+                    size = WrittenSize
+                },
+                {NewInfo, ok}
+        end
     end,
     % first copy the by_seq index and the values.
     {ok, NewBySeqRoot, ok} = couch_btree_copy:copy(
