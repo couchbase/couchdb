@@ -314,6 +314,11 @@ handle_info(delayed_commit, Db) ->
     end;
 handle_info({'EXIT', _Pid, normal}, Db) ->
     {noreply, Db};
+handle_info({'EXIT', Pid, Reason}, #db{compactor_info = Pid, name=Name} = Db) ->
+    ?LOG_INFO("Database `~s` compactor died with reason: ~p", [Name, Reason]),
+    RootDir = couch_config:get("couchdb", "database_dir", "."),
+    catch couch_file:delete(RootDir, Db#db.filepath ++ ".compact"),
+    {noreply, #db{compactor_info = nil}};
 handle_info({'EXIT', _Pid, Reason}, Db) ->
     {stop, Reason, Db}.
 
