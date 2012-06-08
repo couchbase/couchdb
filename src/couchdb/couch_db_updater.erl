@@ -189,12 +189,15 @@ handle_call(start_compact, _From, Db) ->
 handle_call(cancel_compact, _From, #db{compactor_info = nil} = Db) ->
     {reply, ok, Db};
 handle_call(cancel_compact, _From, #db{compactor_info = Pid} = Db) ->
-    unlink(Pid),
-    exit(Pid, kill),
+    couch_util:shutdown_sync(Pid),
     RootDir = couch_config:get("couchdb", "database_dir", "."),
-    ok = couch_file:delete(RootDir, Db#db.filepath ++ ".compact"),
+    catch couch_file:delete(RootDir, Db#db.filepath ++ ".compact"),
     {reply, ok, Db#db{compactor_info = nil}};
 
+handle_call({compact_done, _Path}, _From, #db{compactor_info = nil} = Db) ->
+    % this means the compactor was shutdown, but we still have a message from
+    % it before it died, so just ignore the message.
+    {noreply, Db};
 
 handle_call({compact_done, CompactFilepath}, _From, Db) ->
     #db{filepath = Filepath, fd = OldFd} = Db,
