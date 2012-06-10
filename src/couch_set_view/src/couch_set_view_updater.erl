@@ -201,7 +201,8 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime, NumChanges, LogFilePat
             end,
             Group, ?set_purge_seqs(Group)),
 
-        InitialBuild = (0 =:= lists:sum([S || {_, S} <- ?set_seqs(Group)])),
+        InitialBuild = lists:all(fun({_, Seq}) -> Seq == 0 end, ?set_seqs(Group)) andalso
+                lists:all(fun({_, Seq}) -> Seq == 0 end, ?set_unindexable_seqs(Group)),
         ViewEmptyKVs = [{View, []} || View <- Group2#set_view_group.views],
         WriterAcc2 = WriterAcc#writer_acc{
             parent = Parent,
