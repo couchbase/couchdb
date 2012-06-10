@@ -831,7 +831,14 @@ open_log_file(Path) when is_list(Path) ->
 maybe_open_log_file(Acc) ->
     receive
     {log_new_changes, Pid, LogFilePath} ->
-        nil = Acc#writer_acc.log_fd,
+        case Acc#writer_acc.log_fd of
+        nil ->
+            ok;
+        OldLogFd ->
+            % Compactor died and just restarted, close the current
+            % log and open a new one.
+            file:close(OldLogFd)
+        end,
         LogFd = open_log_file(LogFilePath),
         Pid ! {log_started, self(), Acc#writer_acc.group},
         Acc#writer_acc{log_fd = LogFd}
