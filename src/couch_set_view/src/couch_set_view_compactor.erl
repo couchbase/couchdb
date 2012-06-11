@@ -290,6 +290,7 @@ apply_log_entry(Group, Entry) ->
         end,
         Views,
         LogViewsAddRemoveKvs),
+    ok = couch_file:flush(Group#set_view_group.fd),
     Group#set_view_group{
         id_btree = NewIdBtree,
         views = NewViews,
