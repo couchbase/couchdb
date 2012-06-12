@@ -22,7 +22,7 @@
 test_set_name() -> <<"couch_test_set_index_compaction_retry">>.
 num_set_partitions() -> 64.
 ddoc_id() -> <<"_design/test">>.
-num_docs_0() -> 63936.
+num_docs_0() -> 25856.
 
 
 main(_) ->

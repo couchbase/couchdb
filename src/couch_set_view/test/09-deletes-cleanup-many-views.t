@@ -53,7 +53,7 @@
 test_set_name() -> <<"couch_test_set_index_deletes_cleanup_many">>.
 num_set_partitions() -> 64.
 ddoc_id() -> <<"_design/test">>.
-initial_num_docs() -> 67200.  % must be multiple of num_set_partitions()
+initial_num_docs() -> 35520.  % must be multiple of num_set_partitions()
 
 
 main(_) ->

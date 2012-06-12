@@ -22,7 +22,7 @@
 test_set_name() -> <<"couch_test_set_index_cleanups">>.
 num_set_partitions() -> 64.
 ddoc_id() -> <<"_design/test">>.
-num_docs() -> 58880.  % keep it a multiple of num_set_partitions()
+num_docs() -> 25856.  % keep it a multiple of num_set_partitions()
 
 
 main(_) ->
@@ -44,6 +44,8 @@ test() ->
 
     create_set(),
     add_documents(0, num_docs()),
+    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    erlang:put(group_pid, GroupPid),
 
     % build index
     _ = get_group_snapshot(),
@@ -104,28 +106,32 @@ get_group_snapshot() ->
 
 
 wait_for_cleanup() ->
-    etap:diag("Waiting for main index cleanup to finish"),
-    GroupInfo = get_group_info(),
-    Pid = spawn(fun() ->
-        wait_for_cleanup_loop(GroupInfo)
-    end),
-    Ref = erlang:monitor(process, Pid),
-    receive
-    {'DOWN', Ref, process, Pid, normal} ->
-        ok;
-    {'DOWN', Ref, process, Pid, Reason} ->
-        etap:bail("Failure waiting for main index cleanup: " ++ couch_util:to_list(Reason))
-    after ?MAX_WAIT_TIME ->
-        etap:bail("Timeout waiting for main index cleanup")
-    end.
-
-
-wait_for_cleanup_loop(GroupInfo) ->
-    case couch_util:get_value(cleanup_partitions, GroupInfo) of
-    [] ->
-        ok;
+    {ok, Pid} = gen_server:call(erlang:get(group_pid), cleaner_pid, infinity),
+    CheckCleanupList = case Pid of
+    nil ->
+        true;
     _ ->
-        wait_for_cleanup_loop(get_group_info())
+        Ref = erlang:monitor(process, Pid),
+        receive
+        {'DOWN', Ref, process, Pid, noproc} ->
+            true;
+        {'DOWN', Ref, process, Pid, {clean_group, _, _, _}} ->
+            false
+        after ?MAX_WAIT_TIME ->
+            etap:bail("Timeout waiting for index cleanup")
+        end
+    end,
+    case CheckCleanupList of
+    true ->
+        GroupInfo = get_group_info(),
+        case couch_util:get_value(cleanup_partitions, GroupInfo) of
+        [] ->
+            ok;
+        _ ->
+            etap:bail("Cleanup was not triggered")
+        end;
+    false ->
+        ok
     end.
 
 

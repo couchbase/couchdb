@@ -637,6 +637,10 @@ handle_call(updater_pid, _From, #state{updater_pid = Pid} = State) ->
     % To be used only by unit tests.
     {reply, {ok, Pid}, State, ?TIMEOUT};
 
+handle_call(cleaner_pid, _From, #state{cleaner_pid = Pid} = State) ->
+    % To be used only by unit tests.
+    {reply, {ok, Pid}, State, ?TIMEOUT};
+
 handle_call(request_group_info, _From, State) ->
     GroupInfo = get_group_info(State),
     {reply, {ok, GroupInfo}, State, ?TIMEOUT};
