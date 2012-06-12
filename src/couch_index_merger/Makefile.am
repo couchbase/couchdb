@@ -26,6 +26,7 @@ source_files = \
     src/couch_index_merger.erl \
     src/couch_view_merger.erl \
     src/couch_view_merger_queue.erl \
+    src/couch_http_view_streamer.erl \
     src/couch_httpd_view_merger.erl \
     src/couch_skew.erl
 
@@ -34,6 +35,7 @@ compiled_files = \
     ebin/couch_index_merger.beam \
     ebin/couch_view_merger.beam \
     ebin/couch_view_merger_queue.beam \
+    ebin/couch_http_view_streamer.beam \
     ebin/couch_httpd_view_merger.beam \
     ebin/couch_skew.beam
 

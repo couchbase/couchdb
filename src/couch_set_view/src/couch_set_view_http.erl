@@ -292,7 +292,7 @@ open_row_doc(SetName, PartId, Id, UserCtx, DocOptions) ->
     {ok, #doc{} = Doc} ->
         {json, couch_doc:to_raw_json_binary(Doc)};
     _ ->
-        null
+        {json, <<"null">>}
     end,
     ok = couch_db:close(Db),
     JsonDoc.

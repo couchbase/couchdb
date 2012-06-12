@@ -97,6 +97,7 @@
 ^src/couch_index_merger/Makefile
 ^src/couch_index_merger/Makefile.in
 ^src/couch_index_merger/ebin/.*beam
+^src/couch_view_parser/*
 ^stamp-h1
 ^test/Makefile
 ^test/Makefile.in

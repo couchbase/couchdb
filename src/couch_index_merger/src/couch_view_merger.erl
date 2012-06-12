@@ -259,7 +259,9 @@ view_less_fun(Collation, Dir, ViewType) ->
                 couch_view:less_json_ids(element(1, RowA), element(1, RowB))
             end;
         reduce ->
-            fun({KeyA, _}, {KeyB, _}) -> couch_view:less_json(KeyA, KeyB) end
+            fun(RowA, RowB) ->
+                couch_view:less_json(element(1, RowA), element(1, RowB))
+            end
         end;
     <<"raw">> ->
         fun(A, B) -> A < B end
@@ -271,33 +273,91 @@ view_less_fun(Collation, Dir, ViewType) ->
         fun(A, B) -> not LessFun(A, B) end
     end.
 
-view_row_obj_map({{Key, error}, Value}, _DebugMode) ->
-    {[{key, Key}, {error, Value}]};
+% Optimized path, row assembled by couch_http_view_streamer
+view_row_obj_map({_KeyDocId, {row_json, RowJson}}, _Debug) ->
+    RowJson;
 
-% set view
+% Row from local _all_docs, old couchdb
+view_row_obj_map({{Key, error}, Reason}, _DebugMode) ->
+    <<"{\"key\":", (?JSON_ENCODE(Key))/binary,
+      ",\"error\":", (couch_util:to_binary(Reason))/binary, "}">>;
+
+% Row from local node, query with ?debug=true
 view_row_obj_map({{Key, DocId}, {PartId, Value}}, true) when is_integer(PartId) ->
-    {[{id, DocId}, {key, Key}, {partition, PartId}, {node, ?LOCAL}, {value, Value}]};
+    {json, RawValue} = Value,
+    <<"{\"id\":", (?JSON_ENCODE(DocId))/binary,
+      ",\"key\":", (?JSON_ENCODE(Key))/binary,
+      ",\"partition\":", (?l2b(integer_to_list(PartId)))/binary,
+      ",\"node\":\"", (?LOCAL)/binary, "\"",
+      ",\"value\":", RawValue/binary, "}">>;
+
+% Row from remote node, using Erlang based stream JSON parser, query with ?debug=true
 view_row_obj_map({{Key, DocId}, {PartId, Node, Value}}, true) when is_integer(PartId) ->
-    {[{id, DocId}, {key, Key}, {partition, PartId}, {node, Node}, {value, Value}]};
+    {json, RawValue} = Value,
+    <<"{\"id\":", (?JSON_ENCODE(DocId))/binary,
+      ",\"key\":", (?JSON_ENCODE(Key))/binary,
+      ",\"partition\":", (?l2b(integer_to_list(PartId)))/binary,
+      ",\"node\":", (?JSON_ENCODE(Node))/binary,
+      ",\"value\":", RawValue/binary, "}">>;
+
+% Row from local node, query with ?debug=false
 view_row_obj_map({{Key, DocId}, {PartId, Value}}, false) when is_integer(PartId) ->
-    {[{id, DocId}, {key, Key}, {value, Value}]};
+    {json, RawValue} = Value,
+    <<"{\"id\":", (?JSON_ENCODE(DocId))/binary,
+      ",\"key\":", (?JSON_ENCODE(Key))/binary,
+      ",\"value\":", RawValue/binary, "}">>;
 
+% Row from local node, old couchdb views
 view_row_obj_map({{Key, DocId}, Value}, _DebugMode) ->
-    {[{id, DocId}, {key, Key}, {value, Value}]};
+    <<"{\"id\":", (?JSON_ENCODE(DocId))/binary,
+      ",\"key\":", (?JSON_ENCODE(Key))/binary,
+      ",\"value\":", (?JSON_ENCODE(Value))/binary, "}">>;
 
-% set view
+% Row from local node with ?include_docs=true
 view_row_obj_map({{Key, DocId}, {PartId, Value}, Doc}, true) when is_integer(PartId) ->
-    {[{id, DocId}, {key, Key}, {partition, PartId}, {node, ?LOCAL}, {value, Value}, Doc]};
+    {json, RawValue} = Value,
+    {json, RawDoc} = Doc,
+    <<"{\"id\":", (?JSON_ENCODE(DocId))/binary,
+      ",\"key\":", (?JSON_ENCODE(Key))/binary,
+      ",\"partition\":", (?l2b(integer_to_list(PartId)))/binary,
+      ",\"node\":\"", (?LOCAL)/binary, "\"",
+      ",\"value\":", RawValue/binary,
+      ",\"doc\":", RawDoc/binary, "}">>;
+
+% Row from remote node queried with ?debug=true and ?include_docs=true
 view_row_obj_map({{Key, DocId}, {PartId, Node, Value}, Doc}, true) when is_integer(PartId) ->
-    {[{id, DocId}, {key, Key}, {partition, PartId}, {node, Node}, {value, Value}, Doc]};
+    {json, RawValue} = Value,
+    {json, RawDoc} = Doc,
+    <<"{\"id\":", (?JSON_ENCODE(DocId))/binary,
+      ",\"key\":", (?JSON_ENCODE(Key))/binary,
+      ",\"partition\":", (?l2b(integer_to_list(PartId)))/binary,
+      ",\"node\":", (?JSON_ENCODE(Node))/binary,
+      ",\"value\":", RawValue/binary,
+      ",\"doc\":", RawDoc/binary, "}">>;
+
+% Row from local node with ?include_docs=true and ?debug=false
 view_row_obj_map({{Key, DocId}, {PartId, Value}, Doc}, false) when is_integer(PartId) ->
-    {[{id, DocId}, {key, Key}, {value, Value}, Doc]};
+    {json, RawValue} = Value,
+    {json, RawDoc} = Doc,
+    <<"{\"id\":", (?JSON_ENCODE(DocId))/binary,
+      ",\"key\":", (?JSON_ENCODE(Key))/binary,
+      ",\"value\":", RawValue/binary,
+      ",\"doc\":", RawDoc/binary, "}">>;
 
+% Row from local node, old couchdb views (no partition id)
 view_row_obj_map({{Key, DocId}, Value, Doc}, _DebugMode) ->
-    {[{id, DocId}, {key, Key}, {value, Value}, Doc]}.
+    <<"{\"id\":", (?JSON_ENCODE(DocId))/binary,
+      ",\"key\":", (?JSON_ENCODE(Key))/binary,
+      ",\"value\":", (?JSON_ENCODE(Value))/binary,
+      ",\"doc\":", (?JSON_ENCODE(Doc))/binary, "}">>.
 
+% Optimized path, reduce row assembled by couch_http_view_streamer
+view_row_obj_reduce({_Key, {row_json, RowJson}, _ValueJson}, _DebugMode) ->
+    RowJson;
+% Reduce row from local node
 view_row_obj_reduce({Key, Value}, _DebugMode) ->
-    {[{key, Key}, {value, Value}]}.
+    <<"{\"key\":", (?JSON_ENCODE(Key))/binary,
+      ",\"value\":", (?JSON_ENCODE(Value))/binary, "}">>.
 
 
 merge_map_views(#merge_params{limit = 0} = Params) ->
@@ -344,7 +404,7 @@ handle_all_docs_row(MinRow, Queue) ->
     {ValueRows, ErrorRows} = case Id0 of
     error ->
         pop_similar_rows(Key0, Queue, [], [MinRow]);
-    _ when is_binary(Id0) ->
+    _ ->
         pop_similar_rows(Key0, Queue, [MinRow], [])
     end,
     case {ValueRows, ErrorRows} of
@@ -403,10 +463,10 @@ merge_reduce_min_row(Params, MinRow) ->
         {Row, Col2} = case RowGroup of
         [R] ->
             {{row, R}, Col};
-        [{K, _}, _ | _] ->
+        [FirstRow, _ | _] ->
             try
                 RedVal = rereduce(RowGroup, Params),
-                {{row, {K, RedVal}}, Col}
+                {{row, {element(1, FirstRow), RedVal}}, Col}
             catch
             _Tag:Error ->
                 Stack = erlang:get_stacktrace(),
@@ -454,13 +514,14 @@ reduce_error(Error) ->
     {error, ?LOCAL, to_binary(Error)}.
 
 
-group_keys_for_rereduce(Queue, [{K, _} | _] = Acc) ->
+group_keys_for_rereduce(Queue, [Row | _] = Acc) ->
+    K = element(1, Row),
     case couch_view_merger_queue:peek(Queue) of
     empty ->
         Acc;
-    {ok, {K, _} = Row} ->
-        {ok, Row} = couch_view_merger_queue:pop_next(Queue),
-        group_keys_for_rereduce(Queue, [Row | Acc]);
+    {ok, Row2} when element(1, Row2) == K ->
+        {ok, Row2} = couch_view_merger_queue:pop_next(Queue),
+        group_keys_for_rereduce(Queue, [Row2 | Acc]);
     {ok, revision_mismatch} ->
         revision_mismatch;
     {ok, _} ->
@@ -468,12 +529,23 @@ group_keys_for_rereduce(Queue, [{K, _} | _] = Acc) ->
     end.
 
 
-rereduce(Reds, #merge_params{extra = #view_merge{rereduce_fun = <<"_", _/binary>> = FunSrc}}) ->
+rereduce(Reds0, #merge_params{extra = #view_merge{rereduce_fun = <<"_", _/binary>> = FunSrc}}) ->
+    Reds = lists:map(
+        fun({Key, _RowJson, {value_json, ValueJson}}) ->
+            {Key, ?JSON_DECODE(ValueJson)};
+        (Ejson) ->
+            Ejson
+        end, Reds0),
     {ok, [Value]} = couch_set_view_mapreduce:builtin_reduce(rereduce, [FunSrc], Reds),
     Value;
 
 rereduce(Rows, #merge_params{extra = #view_merge{rereduce_fun = FunSrc}}) ->
-    Reds = [?JSON_ENCODE(Val) || {_Key, Val} <- Rows],
+    Reds = lists:map(
+        fun({_Key, _RowJson, {value_json, ValueJson}}) ->
+            ValueJson;
+        ({_Key, Val}) ->
+            ?JSON_ENCODE(Val)
+        end, Rows),
     case get(reduce_context) of
     undefined ->
         {ok, Ctx} = mapreduce:start_reduce_context([FunSrc]),
@@ -763,11 +835,10 @@ all_docs_row(DocInfo, Db, IncludeDoc, Conflicts) ->
     true ->
         case Del of
         true ->
-            DocVal = {<<"doc">>, null};
+            DocVal = null;
         false ->
             DocOptions = if Conflicts -> [conflicts]; true -> [] end,
-            [DocVal] = couch_httpd_view:doc_member(Db, DocInfo, DocOptions),
-            DocVal
+            [{doc, DocVal}] = couch_httpd_view:doc_member(Db, DocInfo, DocOptions)
         end,
         {{Id, Id}, Value, DocVal};
     false ->
@@ -876,7 +947,7 @@ http_view_fold_queue_row({Props}, Queue) ->
             nil ->
                 {{Key, Id}, Value};
             Doc ->
-                {{Key, Id}, Value, {doc, Doc}}
+                {{Key, Id}, Value, Doc}
             end
         end;
     Error ->
@@ -1061,7 +1132,7 @@ make_map_set_fold_fun(true, Conflicts, SetName, UserCtx, Queue) ->
     fun({{Key, DocId}, {PartId, Value}} = Kv, _, Acc) ->
         JsonDoc = couch_set_view_http:get_row_doc(
                 Kv, SetName, true, UserCtx, DocOpenOpts),
-        Row = {{Key, DocId}, {PartId, Value}, {doc, JsonDoc}},
+        Row = {{Key, DocId}, {PartId, Value}, JsonDoc},
         ok = couch_view_merger_queue:queue(Queue, Row),
         {ok, Acc}
     end.
@@ -1079,11 +1150,11 @@ make_map_fold_fun(true, Conflicts, Db, Queue) ->
         {ok, Acc};
     ({{_Key, DocId} = Kd, {Props} = Value}, _, Acc) ->
         IncludeId = get_value(<<"_id">>, Props, DocId),
-        [Doc] = couch_httpd_view:doc_member(Db, IncludeId, DocOpenOpts),
+        [{doc, Doc}] = couch_httpd_view:doc_member(Db, IncludeId, DocOpenOpts),
         ok = couch_view_merger_queue:queue(Queue, {Kd, Value, Doc}),
         {ok, Acc};
     ({{_Key, DocId} = Kd, Value}, _, Acc) ->
-        [Doc] = couch_httpd_view:doc_member(Db, DocId, DocOpenOpts),
+        [{doc, Doc}] = couch_httpd_view:doc_member(Db, DocId, DocOpenOpts),
         ok = couch_view_merger_queue:queue(Queue, {Kd, Value, Doc}),
         {ok, Acc}
     end.
@@ -1449,7 +1520,7 @@ simple_set_view_map_query(Params, Group, View, ViewArgs) ->
             nil ->
                 RowDetails = Kv;
             JsonDoc ->
-                RowDetails = {{Key, DocId}, {PartId, Value}, {doc, JsonDoc}}
+                RowDetails = {{Key, DocId}, {PartId, Value}, JsonDoc}
             end,
             Row = view_row_obj_map(RowDetails, DebugMode),
             {ok, UAcc2} = Callback({row, Row}, UAcc),

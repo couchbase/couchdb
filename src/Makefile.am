@@ -24,6 +24,12 @@ SUBDIRS += \
     etap \
     lhttpc \
     mochiweb \
-    snappy \
+    snappy
+
+if !WINDOWS
+SUBDIRS += couch_view_parser
+endif
+
+SUBDIRS += \
     couch_set_view \
     couch_index_merger

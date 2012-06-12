@@ -74,6 +74,10 @@ src/mapreduce/mapreduce.app
 src/mapreduce/.deps/
 src/mapreduce/.libs/
 src/mapreduce/priv
+src/couch_view_parser/couch_view_parser.app
+src/couch_view_parser/.deps/
+src/couch_view_parser/.libs/
+src/couch_view_parser/priv
 src/mochiweb/mochiweb.app
 src/snappy/.deps/
 src/snappy/.libs/
@@ -85,6 +89,7 @@ src/snappy/*/.deps/
 src/couch_set_view/ebin/
 src/couch_set_view/test/run
 src/couch_index_merger/ebin/
+src/couch_view_parser/test/run
 src/mapreduce/test/run
 test/local.ini
 test/etap/.deps/

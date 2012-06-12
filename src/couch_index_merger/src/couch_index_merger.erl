@@ -635,7 +635,6 @@ http_index_folder(Mod, IndexSpec, MergeParams, DDoc, Queue) ->
     end.
 
 run_http_index_folder(Mod, IndexSpec, MergeParams, DDoc, Queue) ->
-    EventFun = Mod:make_event_fun(MergeParams#index_merge.http_params, Queue),
     {Url, Method, Headers, Body, BaseOptions} =
         Mod:http_index_folder_req_details(IndexSpec, MergeParams, DDoc),
     #index_merge{
@@ -646,9 +645,17 @@ run_http_index_folder(Mod, IndexSpec, MergeParams, DDoc, Queue) ->
     case lhttpc:request(Url, Method, Headers, Body, Timeout, LhttpcOptions) of
     {ok, {{200, _}, _RespHeaders, Pid}} when is_pid(Pid) ->
         put(streamer_pid, Pid),
-        DataFun = fun() -> stream_data(Pid, Timeout) end,
         try
-            json_stream_parse:events(DataFun, EventFun)
+            case os:type() of
+            {win32, _} ->
+                % TODO: make couch_view_parser build and run on Windows
+                EventFun = Mod:make_event_fun(MergeParams#index_merge.http_params, Queue),
+                DataFun = fun() -> stream_data(Pid, Timeout) end,
+                json_stream_parse:events(DataFun, EventFun);
+            _ ->
+                DataFun = fun() -> next_chunk(Pid, Timeout) end,
+                ok = couch_http_view_streamer:parse(DataFun, Queue, get(from_url))
+            end
         catch throw:{error, Error} ->
             ok = couch_view_merger_queue:queue(Queue, {error, Url, Error})
         after
@@ -691,6 +698,17 @@ stream_data(Pid, Timeout) ->
          {<<>>, fun() -> throw({error, <<"more view data expected">>}) end};
     {ok, Data} ->
          {Data, fun() -> stream_data(Pid, Timeout) end};
+    {error, _} = Error ->
+         throw(Error)
+    end.
+
+
+next_chunk(Pid, Timeout) ->
+    case lhttpc:get_body_part(Pid, Timeout) of
+    {ok, {http_eob, _Trailers}} ->
+         eof;
+    {ok, _Data} = Ok ->
+         Ok;
     {error, _} = Error ->
          throw(Error)
     end.

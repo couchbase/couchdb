@@ -129,7 +129,7 @@ http_sender({start, RowCount}, #sender_acc{req = Req} = SAcc) ->
     Start = [<<"{\"total_rows\":">>, integer_to_list(RowCount), <<",\"rows\":[">>],
     {ok, SAcc#sender_acc{resp = Resp, rows_acc = [Start], acc = <<"\r\n">>}};
 
-http_sender({row, Row}, SAcc) ->
+http_sender({row, Row}, SAcc) when is_binary(Row) ->
     SAcc2 = maybe_flush_rows(Row, SAcc),
     {ok, SAcc2#sender_acc{acc = <<",\r\n">>}};
 
@@ -154,20 +154,13 @@ http_sender(stop, SAcc) ->
     couch_httpd:send_chunk(Resp, Buffer2),
     {ok, couch_httpd:end_json_response(Resp)};
 
-http_sender({error, Url, Reason}, #sender_acc{on_error = continue, error_acc = ErrorAcc} = SAcc) ->
-    Row = {[
-        {<<"from">>, couch_index_merger:rem_passwd(Url)},
-            {<<"reason">>, to_binary(Reason)}
-    ]},
-    ErrorAcc2 = [?JSON_ENCODE(Row) | ErrorAcc],
+http_sender({error, _, _} = Error, #sender_acc{on_error = continue, error_acc = ErrorAcc} = SAcc) ->
+    ErrorAcc2 = [make_error_row(Error) | ErrorAcc],
     {ok, SAcc#sender_acc{error_acc = ErrorAcc2}};
 
-http_sender({error, Url, Reason}, #sender_acc{on_error = stop} = SAcc) ->
+http_sender({error, _, _} = Error, #sender_acc{on_error = stop} = SAcc) ->
     #sender_acc{rows_acc = RowsAcc, req = Req, resp = Resp} = SAcc,
-    Row = {[
-        {<<"from">>, couch_index_merger:rem_passwd(Url)},
-        {<<"reason">>, to_binary(Reason)}
-    ]},
+    ErrorRow = make_error_row(Error),
     case Resp of
     nil ->
         % we haven't started the response yet
@@ -177,26 +170,25 @@ http_sender({error, Url, Reason}, #sender_acc{on_error = stop} = SAcc) ->
         Buffer1 = [
             <<"{\"total_rows\":0,\"rows\":[]\r\n">>,
             <<",\r\n\"errors\":[">>,
-            ?JSON_ENCODE(Row),
+            ErrorRow,
             <<"]">>
         ];
     _ ->
        Resp2 = Resp,
-       Buffer1 = [<<"\r\n],\"errors\":[">>, ?JSON_ENCODE(Row), <<"]">>]
+       Buffer1 = [<<"\r\n],\"errors\":[">>, ErrorRow, <<"]">>]
     end,
     Buffer2 = [lists:reverse(RowsAcc), Buffer1, debug_info_buffer(SAcc), <<"\r\n}">>],
     couch_httpd:send_chunk(Resp2, Buffer2),
     couch_httpd:end_json_response(Resp2),
     {stop, Resp2}.
 
-maybe_flush_rows(NewRow, SAcc) ->
+maybe_flush_rows(JsonRow, SAcc) ->
     #sender_acc{
         acc = Acc,
         rows_acc = RowsAcc,
         rows_acc_size = RowsAccSize
     } = SAcc,
-    JsonRow = ?JSON_ENCODE(NewRow),
-    RowsAccSize2 = RowsAccSize + iolist_size(JsonRow),
+    RowsAccSize2 = RowsAccSize + byte_size(JsonRow),
     SAcc2 = SAcc#sender_acc{
         rows_acc = [[Acc, JsonRow] | RowsAcc],
         rows_acc_size = RowsAccSize2
@@ -384,3 +376,10 @@ validate_on_error_param(Value) ->
     Msg = io_lib:format("Invalid value (`~s`) for the parameter `on_error`."
         " It must be `continue` (default) or `stop`.", [to_binary(Value)]),
     throw({bad_request, Msg}).
+
+
+make_error_row({error, row_json, Json}) ->
+    Json;
+make_error_row({error, Url, Reason}) ->
+    ?JSON_ENCODE({[{<<"from">>, iolist_to_binary(Url)},
+                   {<<"reason">>, to_binary(Reason)}]}).

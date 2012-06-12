@@ -1,5 +1,9 @@
 #!/bin/sh -e
 
+# @copyright 2012 Couchbase, Inc.
+#
+# @author Filipe Manana  <filipe@couchbase.com>
+#
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not
 # use this file except in compliance with the License. You may obtain a copy of
 # the License at
@@ -12,25 +16,7 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-SRCDIR="%abs_top_srcdir%"
 BUILDDIR="%abs_top_builddir%"
-export ERL_LIBS="$BUILDDIR/src/:$ERL_LIBS"
-export ERL_FLAGS="$ERL_FLAGS -pa $BUILDDIR/test/etap/ -pa $BUILDDIR/src/mapreduce/ -pa $BUILDDIR/src/couch_index_merger/ -pa $BUILDDIR/src/couch_view_parser/"
+export ERL_FLAGS="$ERL_FLAGS -pa $BUILDDIR/src/couch_view_parser/test/"
 
-if test $# -eq 1; then
-    if test "x${ETAP_VERBOSE}" != "x"; then
-        OPTS="-v"
-    else
-        OPTS=""
-    fi
-    TGT=$1
-else
-    OPTS=$1
-    TGT=$2
-fi
-
-if test -f $TGT; then
-    prove $OPTS $TGT
-else
-    prove $OPTS $TGT/*.t
-fi
+$BUILDDIR/test/etap/run $@

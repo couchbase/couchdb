@@ -166,6 +166,7 @@ $(COUCHDB_PLT):
 		-pa src/couchdb \
 		-pa src/couch_set_view \
 		-pa src/couch_index_merger \
+		-pa src/couch_view_parser \
 		-pa src/mapreduce \
 		--apps \
 			compiler \
@@ -200,6 +201,7 @@ dialyzer: all $(COUCHDB_PLT)
 		-pa src/couchdb \
 		-pa src/couch_set_view \
 		-pa src/couch_index_merger \
+		-pa src/couch_view_parser \
 		-pa src/mapreduce \
 		-pa src/lhttpc \
 		-pa src/snappy \
@@ -207,6 +209,7 @@ dialyzer: all $(COUCHDB_PLT)
 			src/couchdb \
 			src/couch_set_view/ebin \
 			src/couch_index_merger/ebin \
+			src/couch_view_parser \
 			src/snappy \
 			src/lhttpc \
 			src/mapreduce
