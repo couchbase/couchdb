@@ -1400,9 +1400,11 @@ get_data_size_info(State) ->
     } = Group,
     {ok, FileSize} = couch_file:bytes(Fd),
     DataSize = view_group_data_size(Btree, Views),
+    [Stats] = ets:lookup(?SET_VIEW_STATS_ETS, ?set_view_group_stats_key(Group)),
     Info = [
         {disk_size, FileSize},
         {data_size, DataSize},
+        {accesses, Stats#set_view_group_stats.accesses},
         {updater_running, is_pid(UpdaterPid)}
     ],
     case is_pid(ReplicaPid) of
