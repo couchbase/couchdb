@@ -389,7 +389,6 @@ handle_call({define_view, NumPartitions, ActiveList, ActiveBitmask,
         abitmask = ActiveBitmask,
         pbitmask = PassiveBitmask,
         seqs = Seqs,
-        purge_seqs = Seqs,
         has_replica = UseReplicaIndex
     },
     case (catch couch_db_set:open(?set_name(State), ActiveList ++ PassiveList)) of
@@ -551,14 +550,13 @@ handle_call({remove_replicas, Partitions}, _From, #state{replica_group = Replica
         UpdaterWasRunning = is_pid(State#state.updater_pid),
         State2 = stop_cleaner(State),
         #state{group = Group3} = State3 = stop_updater(State2),
-        {ok, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs, NewPurgeSeqs} =
+        {ok, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs} =
             set_cleanup_partitions(
                 Common,
                 ?set_abitmask(Group3),
                 ?set_pbitmask(Group3),
                 ?set_cbitmask(Group3),
-                ?set_seqs(Group3),
-                ?set_purge_seqs(Group3)),
+                ?set_seqs(Group3)),
         case NewCbitmask =/= ?set_cbitmask(Group3) of
         true ->
              State4 = restart_compactor(State3, "partition states were updated");
@@ -574,7 +572,6 @@ handle_call({remove_replicas, Partitions}, _From, #state{replica_group = Replica
             NewPbitmask,
             NewCbitmask,
             NewSeqs,
-            NewPurgeSeqs,
             ReplicasOnTransfer2,
             ReplicaPartitions2,
             ?set_pending_transition(State4#state.group)),
@@ -1322,7 +1319,6 @@ get_group_info(State) ->
             ((CompactorPid /= nil) andalso (?set_cbitmask(Group) =/= 0))},
         {max_number_partitions, ?set_num_partitions(Group)},
         {update_seqs, {[{couch_util:to_binary(P), S} || {P, S} <- ?set_seqs(Group)]}},
-        {purge_seqs, {[{couch_util:to_binary(P), S} || {P, S} <- ?set_purge_seqs(Group)]}},
         {active_partitions, couch_set_view_util:decode_bitmask(?set_abitmask(Group))},
         {passive_partitions, couch_set_view_util:decode_bitmask(?set_pbitmask(Group))},
         {cleanup_partitions, couch_set_view_util:decode_bitmask(?set_cbitmask(Group))},
@@ -1608,8 +1604,8 @@ after_partition_states_updated(State, UpdaterWasRunning) ->
         State2 = case UpdaterWasRunning of
         true ->
             % Updater was running, we stopped it, updated the group we received
-            % from the updater, updated that group's bitmasks and update/purge
-            % seqs, and now restart the updater with this modified group.
+            % from the updater, updated that group's bitmasks and update seqs,
+            % and now restart the updater with this modified group.
             start_updater(State);
         false ->
             State
@@ -1671,28 +1667,25 @@ persist_partition_states(State, ActiveList, PassiveList, CleanupList, PendingTra
         ReplicasOnTransfer4 = ordsets:subtract(ReplicasOnTransfer3, CommonRep3),
         ReplicasToCleanup2 = ordsets:union(ReplicasToCleanup, CommonRep3)
     end,
-    {ok, NewAbitmask1, NewPbitmask1, NewSeqs1, NewPurgeSeqs1} =
+    {ok, NewAbitmask1, NewPbitmask1, NewSeqs1} =
         set_active_partitions(
             ActiveList2,
             ?set_abitmask(Group),
             ?set_pbitmask(Group),
-            ?set_seqs(Group),
-            ?set_purge_seqs(Group)),
-    {ok, NewAbitmask2, NewPbitmask2, NewSeqs2, NewPurgeSeqs2} =
+            ?set_seqs(Group)),
+    {ok, NewAbitmask2, NewPbitmask2, NewSeqs2} =
         set_passive_partitions(
             PassiveList3,
             NewAbitmask1,
             NewPbitmask1,
-            NewSeqs1,
-            NewPurgeSeqs1),
-    {ok, NewAbitmask3, NewPbitmask3, NewCbitmask3, NewSeqs3, NewPurgeSeqs3} =
+            NewSeqs1),
+    {ok, NewAbitmask3, NewPbitmask3, NewCbitmask3, NewSeqs3} =
         set_cleanup_partitions(
             CleanupList,
             NewAbitmask2,
             NewPbitmask2,
             ?set_cbitmask(Group),
-            NewSeqs2,
-            NewPurgeSeqs2),
+            NewSeqs2),
     ok = couch_db_set:remove_partitions(?db_set(State), CleanupList),
     State2 = update_header(
         State,
@@ -1700,7 +1693,6 @@ persist_partition_states(State, ActiveList, PassiveList, CleanupList, PendingTra
         NewPbitmask3,
         NewCbitmask3,
         NewSeqs3,
-        NewPurgeSeqs3,
         ReplicasOnTransfer4,
         ReplicaParts2,
         PendingTrans),
@@ -1828,58 +1820,48 @@ notify_pending_transition_waiters(#state{pending_transition_waiters = Waiters} =
 -spec set_passive_partitions(ordsets:ordset(partition_id()),
                              bitmask(),
                              bitmask(),
-                             partition_seqs(),
                              partition_seqs()) ->
-                                    {'ok', bitmask(), bitmask(),
-                                     partition_seqs(), partition_seqs()}.
-set_passive_partitions([], Abitmask, Pbitmask, Seqs, PurgeSeqs) ->
-    {ok, Abitmask, Pbitmask, Seqs, PurgeSeqs};
+                                    {'ok', bitmask(), bitmask(), partition_seqs()}.
+set_passive_partitions([], Abitmask, Pbitmask, Seqs) ->
+    {ok, Abitmask, Pbitmask, Seqs};
 
-set_passive_partitions([PartId | Rest], Abitmask, Pbitmask, Seqs, PurgeSeqs) ->
+set_passive_partitions([PartId | Rest], Abitmask, Pbitmask, Seqs) ->
     PartMask = 1 bsl PartId,
     case PartMask band Abitmask of
     0 ->
         case PartMask band Pbitmask of
         PartMask ->
-            set_passive_partitions(Rest, Abitmask, Pbitmask, Seqs, PurgeSeqs);
+            set_passive_partitions(Rest, Abitmask, Pbitmask, Seqs);
         0 ->
             NewSeqs = lists:ukeymerge(1, [{PartId, 0}], Seqs),
-            NewPurgeSeqs = lists:ukeymerge(1, [{PartId, 0}], PurgeSeqs),
-            set_passive_partitions(
-                Rest, Abitmask, Pbitmask bor PartMask, NewSeqs, NewPurgeSeqs)
+            set_passive_partitions(Rest, Abitmask, Pbitmask bor PartMask, NewSeqs)
         end;
     PartMask ->
-        set_passive_partitions(
-            Rest, Abitmask bxor PartMask, Pbitmask bor PartMask, Seqs, PurgeSeqs)
+        set_passive_partitions(Rest, Abitmask bxor PartMask, Pbitmask bor PartMask, Seqs)
     end.
 
 
 -spec set_active_partitions(ordsets:ordset(partition_id()),
                             bitmask(),
                             bitmask(),
-                            partition_seqs(),
                             partition_seqs()) ->
-                                   {'ok', bitmask(), bitmask(),
-                                    partition_seqs(), partition_seqs()}.
-set_active_partitions([], Abitmask, Pbitmask, Seqs, PurgeSeqs) ->
-    {ok, Abitmask, Pbitmask, Seqs, PurgeSeqs};
+                                   {'ok', bitmask(), bitmask(), partition_seqs()}.
+set_active_partitions([], Abitmask, Pbitmask, Seqs) ->
+    {ok, Abitmask, Pbitmask, Seqs};
 
-set_active_partitions([PartId | Rest], Abitmask, Pbitmask, Seqs, PurgeSeqs) ->
+set_active_partitions([PartId | Rest], Abitmask, Pbitmask, Seqs) ->
     PartMask = 1 bsl PartId,
     case PartMask band Pbitmask of
     0 ->
         case PartMask band Abitmask of
         PartMask ->
-            set_active_partitions(Rest, Abitmask, Pbitmask, Seqs, PurgeSeqs);
+            set_active_partitions(Rest, Abitmask, Pbitmask, Seqs);
         0 ->
             NewSeqs = lists:ukeymerge(1, Seqs, [{PartId, 0}]),
-            NewPurgeSeqs = lists:ukeymerge(1, PurgeSeqs, [{PartId, 0}]),
-            set_active_partitions(
-                Rest, Abitmask bor PartMask, Pbitmask, NewSeqs, NewPurgeSeqs)
+            set_active_partitions(Rest, Abitmask bor PartMask, Pbitmask, NewSeqs)
         end;
     PartMask ->
-        set_active_partitions(
-            Rest, Abitmask bor PartMask, Pbitmask bxor PartMask, Seqs, PurgeSeqs)
+        set_active_partitions(Rest, Abitmask bor PartMask, Pbitmask bxor PartMask, Seqs)
     end.
 
 
@@ -1887,34 +1869,31 @@ set_active_partitions([PartId | Rest], Abitmask, Pbitmask, Seqs, PurgeSeqs) ->
                              bitmask(),
                              bitmask(),
                              bitmask(),
-                             partition_seqs(),
                              partition_seqs()) ->
                                     {'ok', bitmask(), bitmask(), bitmask(),
-                                     partition_seqs(), partition_seqs()}.
-set_cleanup_partitions([], Abitmask, Pbitmask, Cbitmask, Seqs, PurgeSeqs) ->
-    {ok, Abitmask, Pbitmask, Cbitmask, Seqs, PurgeSeqs};
+                                     partition_seqs()}.
+set_cleanup_partitions([], Abitmask, Pbitmask, Cbitmask, Seqs) ->
+    {ok, Abitmask, Pbitmask, Cbitmask, Seqs};
 
-set_cleanup_partitions([PartId | Rest], Abitmask, Pbitmask, Cbitmask, Seqs, PurgeSeqs) ->
+set_cleanup_partitions([PartId | Rest], Abitmask, Pbitmask, Cbitmask, Seqs) ->
     PartMask = 1 bsl PartId,
     case PartMask band Cbitmask of
     PartMask ->
-        set_cleanup_partitions(Rest, Abitmask, Pbitmask, Cbitmask, Seqs, PurgeSeqs);
+        set_cleanup_partitions(Rest, Abitmask, Pbitmask, Cbitmask, Seqs);
     0 ->
         Seqs2 = lists:keydelete(PartId, 1, Seqs),
-        PurgeSeqs2 = lists:keydelete(PartId, 1, PurgeSeqs),
         Cbitmask2 = Cbitmask bor PartMask,
         case PartMask band Abitmask of
         PartMask ->
             set_cleanup_partitions(
-                Rest, Abitmask bxor PartMask, Pbitmask, Cbitmask2, Seqs2, PurgeSeqs2);
+                Rest, Abitmask bxor PartMask, Pbitmask, Cbitmask2, Seqs2);
         0 ->
             case (PartMask band Pbitmask) of
             PartMask ->
                 set_cleanup_partitions(
-                    Rest, Abitmask, Pbitmask bxor PartMask, Cbitmask2, Seqs2, PurgeSeqs2);
+                    Rest, Abitmask, Pbitmask bxor PartMask, Cbitmask2, Seqs2);
             0 ->
-                set_cleanup_partitions(
-                    Rest, Abitmask, Pbitmask, Cbitmask, Seqs, PurgeSeqs)
+                set_cleanup_partitions(Rest, Abitmask, Pbitmask, Cbitmask, Seqs)
             end
         end
     end.
@@ -1925,11 +1904,10 @@ set_cleanup_partitions([PartId | Rest], Abitmask, Pbitmask, Cbitmask, Seqs, Purg
                     bitmask(),
                     bitmask(),
                     partition_seqs(),
-                    partition_seqs(),
                     ordsets:ordset(partition_id()),
                     ordsets:ordset(partition_id()),
                     #set_view_transition{} | 'nil') -> #state{}.
-update_header(State, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs, NewPurgeSeqs,
+update_header(State, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs,
               NewRelicasOnTransfer, NewReplicaParts, NewPendingTrans) ->
     #state{
         group = #set_view_group{
@@ -1952,7 +1930,6 @@ update_header(State, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs, NewPurgeSeq
                 pbitmask = NewPbitmask,
                 cbitmask = NewCbitmask,
                 seqs = NewSeqs,
-                purge_seqs = NewPurgeSeqs,
                 replicas_on_transfer = NewRelicasOnTransfer,
                 pending_transition = NewPendingTrans
             }
@@ -2636,9 +2613,9 @@ process_mark_as_unindexable(State, Partitions) ->
         throw({error, iolist_to_binary(ErrorMsg)})
     end,
 
-    {Seqs2, PurgeSeqs2, UnindexableSeqs2, UnindexablePurgeSeqs2} =
+    {Seqs2, UnindexableSeqs2} =
     lists:foldl(
-        fun(PartId, {AccSeqs, AccPurgeSeqs, AccUnSeqs, AccUnPurgeSeqs}) ->
+        fun(PartId, {AccSeqs, AccUnSeqs}) ->
             PartMask = 1 bsl PartId,
             case (?set_abitmask(Group) band PartMask) == 0 andalso
                 (?set_pbitmask(Group) band PartMask) == 0 of
@@ -2651,14 +2628,10 @@ process_mark_as_unindexable(State, Partitions) ->
             end,
             PartSeq = orddict:fetch(PartId, AccSeqs),
             AccSeqs2 = orddict:erase(PartId, AccSeqs),
-            PartPurgeSeq = orddict:fetch(PartId, AccPurgeSeqs),
-            AccPurgeSeqs2 = orddict:erase(PartId, AccPurgeSeqs),
             AccUnSeqs2 = orddict:store(PartId, PartSeq, AccUnSeqs),
-            AccUnPurgeSeqs2 = orddict:store(PartId, PartPurgeSeq, AccUnPurgeSeqs),
-            {AccSeqs2, AccPurgeSeqs2, AccUnSeqs2, AccUnPurgeSeqs2}
+            {AccSeqs2, AccUnSeqs2}
         end,
-        {?set_seqs(Group), ?set_purge_seqs(Group),
-             ?set_unindexable_seqs(Group), ?set_unindexable_purge_seqs(Group)},
+        {?set_seqs(Group), ?set_unindexable_seqs(Group)},
         Partitions),
     case UnindexableSeqs2 == ?set_unindexable_seqs(Group) of
     true ->
@@ -2669,9 +2642,7 @@ process_mark_as_unindexable(State, Partitions) ->
         Group3 = Group2#set_view_group{
             index_header = Header#set_view_index_header{
                 seqs = Seqs2,
-                purge_seqs = PurgeSeqs2,
-                unindexable_seqs = UnindexableSeqs2,
-                unindexable_purge_seqs = UnindexablePurgeSeqs2
+                unindexable_seqs = UnindexableSeqs2
             }
         },
         ok = commit_header(Group3),
@@ -2689,9 +2660,9 @@ process_mark_as_indexable(State, Partitions, CommitHeader) ->
     #state{
         group = #set_view_group{index_header = Header} = Group
     } = State,
-    {Seqs2, PurgeSeqs2, UnindexableSeqs2, UnindexablePurgeSeqs2} =
+    {Seqs2, UnindexableSeqs2} =
     lists:foldl(
-        fun(PartId, {AccSeqs, AccPurgeSeqs, AccUnSeqs, AccUnPurgeSeqs}) ->
+        fun(PartId, {AccSeqs, AccUnSeqs}) ->
             case orddict:is_key(PartId, AccUnSeqs) of
             false ->
                 ErrorMsg = io_lib:format("Partition ~p is not currently "
@@ -2702,14 +2673,10 @@ process_mark_as_indexable(State, Partitions, CommitHeader) ->
             end,
             Seq = orddict:fetch(PartId, AccUnSeqs),
             AccUnSeqs2 = orddict:erase(PartId, AccUnSeqs),
-            PurgeSeq = orddict:fetch(PartId, AccUnPurgeSeqs),
-            AccUnPurgeSeqs2 = orddict:erase(PartId, AccUnPurgeSeqs),
             AccSeqs2 = orddict:store(PartId, Seq, AccSeqs),
-            AccPurgeSeqs2 = orddict:store(PartId, PurgeSeq, AccPurgeSeqs),
-            {AccSeqs2, AccPurgeSeqs2, AccUnSeqs2, AccUnPurgeSeqs2}
+            {AccSeqs2, AccUnSeqs2}
         end,
-        {?set_seqs(Group), ?set_purge_seqs(Group),
-             ?set_unindexable_seqs(Group), ?set_unindexable_purge_seqs(Group)},
+        {?set_seqs(Group), ?set_unindexable_seqs(Group)},
         Partitions),
     case UnindexableSeqs2 == ?set_unindexable_seqs(Group) of
     true ->
@@ -2720,9 +2687,7 @@ process_mark_as_indexable(State, Partitions, CommitHeader) ->
         Group3 = Group2#set_view_group{
             index_header = Header#set_view_index_header{
                 seqs = Seqs2,
-                purge_seqs = PurgeSeqs2,
-                unindexable_seqs = UnindexableSeqs2,
-                unindexable_purge_seqs = UnindexablePurgeSeqs2
+                unindexable_seqs = UnindexableSeqs2
             }
         },
         ok = commit_header(Group3),
@@ -2736,9 +2701,7 @@ process_mark_as_indexable(State, Partitions, CommitHeader) ->
         Group2 = Group#set_view_group{
             index_header = Header#set_view_index_header{
                 seqs = Seqs2,
-                purge_seqs = PurgeSeqs2,
-                unindexable_seqs = UnindexableSeqs2,
-                unindexable_purge_seqs = UnindexablePurgeSeqs2
+                unindexable_seqs = UnindexableSeqs2
             }
         },
         State#state{group = Group2}

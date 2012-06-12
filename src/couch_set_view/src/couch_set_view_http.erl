@@ -438,11 +438,9 @@ view_etag(Group, #set_view{}, Extra) ->
     #set_view_index_header{
         num_partitions = NumPartitions,
         abitmask = Abitmask,
-        seqs = UpdateSeqs,
-        purge_seqs = PurgeSeqs
+        seqs = UpdateSeqs
     } = Header,
-    couch_httpd:make_etag(
-        {Sig, UpdateSeqs, PurgeSeqs, Extra, NumPartitions, Abitmask}).
+    couch_httpd:make_etag({Sig, UpdateSeqs, Extra, NumPartitions, Abitmask}).
 
 % the view row has an error
 view_row_obj({{Key, error}, Value}, _Doc, _DebugMode) ->

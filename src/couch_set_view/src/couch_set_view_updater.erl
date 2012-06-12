@@ -186,34 +186,19 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime, NumChanges, LogFilePat
         ]),
         couch_task_status:set_update_frequency(1000),
 
-        Group2 = lists:foldl(
-            fun({PartId, PurgeSeq}, GroupAcc) ->
-                {ok, Db} = couch_db:open_int(?dbname(SetName, PartId), []),
-                DbPurgeSeq = couch_db:get_purge_seq(Db),
-                GroupAcc2 =
-                if DbPurgeSeq == PurgeSeq + 1 ->
-                    purge_index(GroupAcc, Db, PartId);
-                true ->
-                    GroupAcc
-                end,
-                couch_db:close(Db),
-                GroupAcc2
-            end,
-            Group, ?set_purge_seqs(Group)),
-
         InitialBuild = lists:all(fun({_, Seq}) -> Seq == 0 end, ?set_seqs(Group)) andalso
                 lists:all(fun({_, Seq}) -> Seq == 0 end, ?set_unindexable_seqs(Group)),
-        ViewEmptyKVs = [{View, []} || View <- Group2#set_view_group.views],
+        ViewEmptyKVs = [{View, []} || View <- Group#set_view_group.views],
         WriterAcc2 = WriterAcc#writer_acc{
             parent = Parent,
-            group = Group2,
+            group = Group,
             write_queue = WriteQueue,
             initial_build = InitialBuild,
             view_empty_kvs = ViewEmptyKVs,
             log_fd = open_log_file(LogFilePath)
         },
         try
-            couch_set_view_mapreduce:start_reduce_context(Group2),
+            couch_set_view_mapreduce:start_reduce_context(Group),
             try
                 FinalWriterAcc = do_writes(WriterAcc2),
                 case FinalWriterAcc#writer_acc.log_fd of
@@ -224,7 +209,7 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime, NumChanges, LogFilePat
                 end,
                 Parent ! {writer_finished, FinalWriterAcc}
             after
-                couch_set_view_mapreduce:end_reduce_context(Group2)
+                couch_set_view_mapreduce:end_reduce_context(Group)
             end
         catch _:Error ->
             Stacktrace = erlang:get_stacktrace(),
@@ -374,45 +359,6 @@ maybe_stop() ->
 
 notify_owner(Owner, Msg, UpdaterPid) ->
     Owner ! {updater_info, UpdaterPid, Msg}.
-
-
-purge_index(#set_view_group{fd=Fd, views=Views, id_btree=IdBtree}=Group, Db, PartitionId) ->
-    {ok, PurgedIdsRevs} = couch_db:get_last_purged(Db),
-    Ids = [Id || {Id, _Revs} <- PurgedIdsRevs],
-    {ok, Lookups, IdBtree2} = couch_btree:query_modify(IdBtree, Ids, [], Ids),
-
-    % now populate the dictionary with all the keys to delete
-    ViewKeysToRemoveDict = lists:foldl(
-        fun({ok, {DocId, {_Part, ViewNumRowKeys}}}, ViewDictAcc) ->
-            lists:foldl(
-                fun({ViewNum, RowKey}, ViewDictAcc2) ->
-                    dict:append(ViewNum, {RowKey, DocId}, ViewDictAcc2)
-                end, ViewDictAcc, ViewNumRowKeys);
-        ({not_found, _}, ViewDictAcc) ->
-            ViewDictAcc
-        end, dict:new(), Lookups),
-
-    % Now remove the values from the btrees
-    PurgeSeq = couch_db:get_purge_seq(Db),
-    Views2 = lists:map(
-        fun(#set_view{id_num=Num,btree=Btree}=View) ->
-            case dict:find(Num, ViewKeysToRemoveDict) of
-            {ok, RemoveKeys} ->
-                {ok, ViewBtree2} = couch_btree:add_remove(Btree, [], RemoveKeys),
-                View#set_view{btree = ViewBtree2};
-            error -> % no keys to remove in this view
-                View
-            end
-        end, Views),
-    ok = couch_file:flush(Fd),
-    NewPurgeSeqs = ?replace(?set_purge_seqs(Group), PartitionId, PurgeSeq),
-    Header = Group#set_view_group.index_header,
-    NewHeader = Header#set_view_index_header{purge_seqs = NewPurgeSeqs},
-    Group#set_view_group{
-        id_btree = IdBtree2,
-        views = Views2,
-        index_header = NewHeader
-    }.
 
 
 load_doc(Db, PartitionId, DocInfo, MapQueue) ->

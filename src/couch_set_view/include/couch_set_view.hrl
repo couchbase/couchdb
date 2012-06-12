@@ -41,9 +41,6 @@
 -define(set_seqs(SetViewGroup),
         (SetViewGroup#set_view_group.index_header)#set_view_index_header.seqs).
 
--define(set_purge_seqs(SetViewGroup),
-        (SetViewGroup#set_view_group.index_header)#set_view_index_header.purge_seqs).
-
 -define(set_replicas_on_transfer(SetViewGroup),
         (SetViewGroup#set_view_group.index_header)#set_view_index_header.replicas_on_transfer).
 
@@ -52,9 +49,6 @@
 
 -define(set_unindexable_seqs(SetViewGroup),
         (SetViewGroup#set_view_group.index_header)#set_view_index_header.unindexable_seqs).
-
--define(set_unindexable_purge_seqs(SetViewGroup),
-        (SetViewGroup#set_view_group.index_header)#set_view_index_header.unindexable_purge_seqs).
 
 
 -type partition_id()             :: non_neg_integer().
@@ -125,7 +119,6 @@
     % cleanup partitions bitmap
     cbitmask = 0                                    :: bitmask(),
     seqs = []                                       :: partition_seqs(),
-    purge_seqs = []                                 :: partition_seqs(),
     id_btree_state = nil                            :: btree_state(),
     view_states = []                                :: [view_state()],
     has_replica = false                             :: boolean(),
@@ -134,8 +127,7 @@
     pending_transition = nil                        :: 'nil' | #set_view_transition{},
     % Type should be something like orddict(partition_seq()), but however the orddict
     % module doesn't export yet a type spec (unlike ordsets for e.g.).
-    unindexable_seqs = []                           :: [partition_seq()],
-    unindexable_purge_seqs = []                     :: [partition_seq()]
+    unindexable_seqs = []                           :: [partition_seq()]
 }).
 
 % Keep all stats values as valid EJSON (except ets key).
