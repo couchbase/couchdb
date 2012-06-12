@@ -809,13 +809,12 @@ handle_call({demonitor_partition_update, Ref}, _From, State) ->
         {reply, ok, State2, ?TIMEOUT}
     end;
 
-handle_call({log_eof, LogEof}, _From, State) ->
-    {reply, ok, State#state{log_eof = LogEof}, ?TIMEOUT};
-
 handle_call(log_eof, _From, State) ->
     {reply, {ok, State#state.log_eof}, State, ?TIMEOUT}.
 
 
+handle_cast({log_eof, LogEof}, State) ->
+    {noreply, State#state{log_eof = LogEof}, ?TIMEOUT};
 
 handle_cast({partial_update, Pid, NewGroup}, #state{updater_pid = Pid} = State) ->
     case ?have_pending_transition(State) andalso
