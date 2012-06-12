@@ -282,10 +282,6 @@ handle_info({update_docs, Client, Docs, NonRepDocs, FullCommit}, Db) ->
     try update_docs_int(Db, Docs, NonRepDocs, FullCommit) of
     {ok, Db2} ->
         ok = notify_db_updated(Db2),
-        if Db2#db.update_seq /= Db#db.update_seq ->
-            couch_db_update_notifier:sync_notify({updated, {Db2#db.name, Db2#db.update_seq}});
-        true -> ok
-        end,
         lists:foreach(
             fun(#doc_update_info{id = <<?DESIGN_DOC_PREFIX, _/binary>> = Id, deleted = false}) ->
                     couch_db_update_notifier:sync_notify({ddoc_updated, {Db#db.name, Id}});
@@ -294,6 +290,10 @@ handle_info({update_docs, Client, Docs, NonRepDocs, FullCommit}, Db) ->
                 (_) ->
                     ok
             end, Docs),
+        if Db2#db.update_seq /= Db#db.update_seq ->
+            couch_db_update_notifier:sync_notify({updated, {Db2#db.name, Db2#db.update_seq}});
+        true -> ok
+        end,
         catch(Client ! {done, self()}),
         {noreply, Db2}
     catch
