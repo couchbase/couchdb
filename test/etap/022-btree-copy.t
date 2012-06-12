@@ -86,6 +86,7 @@ test_copy(NumItems, ReduceFun) ->
     CopyCallback = fun(KV, Acc) -> {KV, Acc + 1} end,
     {ok, RootCopy, FinalAcc} = couch_btree_copy:copy(
         Btree, FdCopy, [{before_kv_write, {CopyCallback, 0}}]),
+    ok = couch_file:flush(FdCopy),
     etap:is(FinalAcc, length(KVs),
         "couch_btree_copy returned the right final user acc"),
 
