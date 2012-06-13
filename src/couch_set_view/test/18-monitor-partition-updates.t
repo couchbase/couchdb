@@ -125,7 +125,7 @@ test() ->
     GotPart20CleanupNotify = receive
     {Ref6, marked_for_cleanup} ->
         true
-    after 0 ->
+    after 3000 ->
         false
     end,
     etap:is(GotPart20CleanupNotify, true, "Got cleanup notification for partition 20"),

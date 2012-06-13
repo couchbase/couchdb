@@ -47,11 +47,9 @@ test() ->
 
 
 test_partition_deletes_when_group_is_alive() ->
-    couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
-    couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
-
-    populate_set(),
-    configure_view_group([0, 1, 2, 3], [4]),
+    create_set([0, 1, 2, 3], [4]),
+    ValueGenFun1 = fun(I) -> I end,
+    update_documents(0, num_docs(), ValueGenFun1),
 
     GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
     ok = gen_server:call(GroupPid, {set_auto_cleanup, false}, infinity),
@@ -66,6 +64,7 @@ test_partition_deletes_when_group_is_alive() ->
     etap:is(filelib:is_file(RepIndexFile), true, "Replica index file exists"),
 
     query_view(4000, []),
+
     etap:is(is_process_alive(GroupPid), true, "Group alive after query"),
     etap:is(is_process_alive(RepGroupPid), true, "Replica group alive after query"),
 
@@ -247,9 +246,12 @@ query_view(ExpectedRowCount, QueryString) ->
     etap:is(SortedKeys, true, "View result keys are sorted").
 
 
-populate_set() ->
-    etap:diag("Populating the " ++ integer_to_list(num_set_partitions()) ++
-        " databases with " ++ integer_to_list(num_docs()) ++ " documents"),
+create_set(ActiveParts, PassiveParts) ->
+    couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
+    couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
+    couch_set_view:cleanup_index_files(test_set_name()),
+    etap:diag("Creating the set databases (# of partitions: " ++
+        integer_to_list(num_set_partitions()) ++ ")"),
     DDoc = {[
         {<<"_id">>, ddoc_id()},
         {<<"language">>, <<"javascript">>},
@@ -260,33 +262,36 @@ populate_set() ->
         ]}}
     ]},
     ok = couch_set_view_test_util:update_ddoc(test_set_name(), DDoc),
-    DocList = lists:map(
+    etap:diag("Configuring set view with partitions [0 .. 31]"
+              " as active and [32 .. 47] as passive"),
+    Params = #set_view_params{
+        max_partitions = num_set_partitions(),
+        active_partitions = ActiveParts,
+        passive_partitions = PassiveParts,
+        use_replica_index = true
+    },
+    ok = couch_set_view:define_group(test_set_name(), ddoc_id(), Params).
+
+
+update_documents(StartId, Count, ValueGenFun) ->
+    etap:diag("Updating " ++ integer_to_list(Count) ++ " new documents"),
+    DocList0 = lists:map(
         fun(I) ->
-            {[
-                {<<"_id">>, iolist_to_binary(["doc", integer_to_list(I)])},
-                {<<"value">>, I}
-            ]}
+            {I rem num_set_partitions(), {[
+                {<<"_id">>, doc_id(I)},
+                {<<"value">>, ValueGenFun(I)}
+            ]}}
         end,
-        lists:seq(1, num_docs())),
-    ok = couch_set_view_test_util:populate_set_alternated(
+        lists:seq(StartId, StartId + Count - 1)),
+    DocList = [Doc || {_, Doc} <- lists:keysort(1, DocList0)],
+    ok = couch_set_view_test_util:populate_set_sequentially(
         test_set_name(),
         lists:seq(0, num_set_partitions() - 1),
         DocList).
 
 
-configure_view_group(Active, Passive) ->
-    etap:diag("Configuring view group"),
-    Params = #set_view_params{
-        max_partitions = num_set_partitions(),
-        active_partitions = Active,
-        passive_partitions = Passive,
-        use_replica_index = true
-    },
-    try
-        couch_set_view:define_group(test_set_name(), ddoc_id(), Params)
-    catch _:Error ->
-        Error
-    end.
+doc_id(I) ->
+    iolist_to_binary(io_lib:format("doc_~8..0b", [I])).
 
 
 group_index_file(Type) ->

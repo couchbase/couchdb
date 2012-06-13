@@ -14,6 +14,8 @@
 % License for the specific language governing permissions and limitations under
 % the License.
 
+-include_lib("couch_set_view/include/couch_set_view.hrl").
+
 -define(b2l(B), binary_to_list(B)).
 
 test_set_name() -> <<"couch_test_set_index_compaction">>.
@@ -39,9 +41,9 @@ main(_) ->
 test() ->
     couch_set_view_test_util:start_server(),
 
-    couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
-    couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
-    ok = populate_set(),
+    create_set(lists:seq(0, num_set_partitions() - 1), []),
+    ValueGenFun1 = fun(I) -> I end,
+    update_documents(0, num_docs(), ValueGenFun1),
 
     GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
     etap:is(is_process_alive(GroupPid), true, "Group is alive"),
@@ -100,7 +102,12 @@ query_view(ExpectedRowCount) ->
     {ok, {ViewResults}}.
 
 
-populate_set() ->
+create_set(ActiveParts, PassiveParts) ->
+    couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
+    couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
+    couch_set_view:cleanup_index_files(test_set_name()),
+    etap:diag("Creating the set databases (# of partitions: " ++
+        integer_to_list(num_set_partitions()) ++ ")"),
     DDoc = {[
         {<<"_id">>, ddoc_id()},
         {<<"language">>, <<"javascript">>},
@@ -111,21 +118,33 @@ populate_set() ->
         ]}}
     ]},
     ok = couch_set_view_test_util:update_ddoc(test_set_name(), DDoc),
-    DocList = lists:map(
+    etap:diag("Configuring set view with partitions [0 .. 31]"
+              " as active and [32 .. 47] as passive"),
+    Params = #set_view_params{
+        max_partitions = num_set_partitions(),
+        active_partitions = ActiveParts,
+        passive_partitions = PassiveParts,
+        use_replica_index = true
+    },
+    ok = couch_set_view:define_group(test_set_name(), ddoc_id(), Params).
+
+
+update_documents(StartId, Count, ValueGenFun) ->
+    etap:diag("Updating " ++ integer_to_list(Count) ++ " new documents"),
+    DocList0 = lists:map(
         fun(I) ->
-            {[
-                {<<"_id">>, iolist_to_binary(["doc", integer_to_list(I)])},
-                {<<"value">>, I}
-            ]}
+            {I rem num_set_partitions(), {[
+                {<<"_id">>, doc_id(I)},
+                {<<"value">>, ValueGenFun(I)}
+            ]}}
         end,
-        lists:seq(1, num_docs())),
-    ok = couch_set_view_test_util:populate_set_alternated(
+        lists:seq(StartId, StartId + Count - 1)),
+    DocList = [Doc || {_, Doc} <- lists:keysort(1, DocList0)],
+    ok = couch_set_view_test_util:populate_set_sequentially(
         test_set_name(),
         lists:seq(0, num_set_partitions() - 1),
-        DocList),
-    ok = couch_set_view_test_util:define_set_view(
-        test_set_name(),
-        ddoc_id(),
-        num_set_partitions(),
-        lists:seq(0, num_set_partitions() - 1),
-        []).
+        DocList).
+
+
+doc_id(I) ->
+    iolist_to_binary(io_lib:format("doc_~8..0b", [I])).

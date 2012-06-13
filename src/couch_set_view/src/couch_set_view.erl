@@ -715,30 +715,25 @@ handle_call({before_database_delete, DbName}, _From, Server) ->
     false ->
         ok;
     {true, SetName, PartId} ->
-        DeleteIndexDir = lists:foldl(
-            fun({_SetName, {DDocId, Sig}}, Acc) ->
+        lists:foreach(
+            fun({_SetName, {_DDocId, Sig}}) ->
                 [{_, Pid}] = ets:lookup(couch_sig_to_setview_pid, {SetName, Sig}),
-                case couch_set_view_group:before_partition_delete(Pid, PartId) of
-                shutdown ->
-                    ?LOG_INFO("View group `~s` for set `~s` (PID ~p), shutdown because "
-                              "database `~s` is about to be deleted",
-                              [DDocId, SetName, Pid, DbName]),
-                    delete_from_ets(Pid, SetName, DDocId, Sig),
-                    unlink(Pid),
-                    receive {'EXIT', Pid, _} -> ok after 0 -> ok end,
-                    Acc;
-                ignore ->
-                    false
-                end
+                % Important: view group processes monitor database processes, and
+                % they must be notified that a database is about to be deleted
+                % before they receive the monitor DOWN messages, therefore the
+                % before_delete event sent by couch_server must be synchronous
+                % and happen before it shutdowns the database processes. However
+                % we must be sure here that we don't do any synchronous calls to
+                % couch_server in order to avoid deadlocks.
+                gen_server:cast(Pid, {before_partition_delete, PartId})
             end,
-            true,
             ets:lookup(couch_setview_name_to_sig, SetName)),
-        case DeleteIndexDir andalso filelib:is_dir(set_index_dir(RootDir, SetName)) of
-        true ->
-            ?LOG_INFO("Deleting index files for set `~s` because database "
-                      "partition `~s` is about to deleted", [SetName, DbName]),
+        case PartId of
+        master ->
+            ?LOG_INFO("Deleting index files for set `~s` because master database"
+                      "is about to deleted", [SetName]),
             delete_index_dir(RootDir, SetName);
-        false ->
+        _ ->
             ok
         end
     end,

@@ -19,7 +19,6 @@
 -export([request_group/2, release_group/1]).
 -export([is_view_defined/1, define_view/2]).
 -export([set_state/4]).
--export([before_partition_delete/2]).
 -export([add_replica_partitions/2, remove_replica_partitions/2]).
 -export([mark_as_unindexable/2, mark_as_indexable/2]).
 -export([monitor_partition_update/4, demonitor_partition_update/2]).
@@ -81,7 +80,10 @@
     replica_partitions = []            :: ordsets:ordset(partition_id()),
     pending_transition_waiters = []    :: [{From::{pid(), reference()}, #set_view_group_req{}}],
     update_listeners = dict:new()      :: dict(),
-    log_eof = 0                        :: non_neg_integer()
+    log_eof = 0                        :: non_neg_integer(),
+    % Monitor references for active, passive and replica partitions.
+    % Applies to main group only, replica group must always have an empty dict.
+    db_refs = dict:new()               :: dict()
 }).
 
 -define(inc_stat(Group, S),
@@ -174,11 +176,6 @@ get_data_size(Pid) ->
     Error ->
         throw(Error)
     end.
-
-
--spec before_partition_delete(pid(), partition_id()) -> 'shutdown' | 'ignore'.
-before_partition_delete(Pid, PartId) ->
-    gen_server:call(Pid, {before_partition_delete, PartId}, infinity).
 
 
 -spec define_view(pid(), #set_view_params{}) -> 'ok' | {'error', term()}.
@@ -300,6 +297,7 @@ do_init({_, SetName, _} = InitArgs) ->
     case prepare_group(InitArgs, false) of
     {ok, #set_view_group{fd = Fd, index_header = Header, type = Type} = Group} ->
         RefCounter = new_fd_ref_counter(Fd),
+        {ActiveList, PassiveList} = make_partition_lists(Group),
         case Header#set_view_index_header.has_replica of
         false ->
             ReplicaPid = nil,
@@ -315,7 +313,6 @@ do_init({_, SetName, _} = InitArgs) ->
             ?LOG_INFO("Started undefined ~s set view group `~s`, group `~s`",
                       [Type, SetName, Group#set_view_group.name]);
         true ->
-            {ActiveList, PassiveList} = make_partition_lists(Group),
             DbSet = case (catch couch_db_set:open(SetName, ActiveList ++ PassiveList)) of
             {ok, SetPid} ->
                 SetPid;
@@ -353,7 +350,7 @@ do_init({_, SetName, _} = InitArgs) ->
                            []
                        end)
         end,
-        InitState = #state{
+        State = #state{
             init_args = InitArgs,
             replica_group = ReplicaPid,
             replica_partitions = ReplicaParts,
@@ -363,10 +360,13 @@ do_init({_, SetName, _} = InitArgs) ->
                 replica_pid = ReplicaPid
             }
         },
+        State2 = monitor_partitions(State, [master | ActiveList]),
+        State3 = monitor_partitions(State2, PassiveList),
+        State4 = monitor_partitions(State3, ReplicaParts),
         true = ets:insert(
              ?SET_VIEW_STATS_ETS,
              #set_view_group_stats{ets_key = ?set_view_group_stats_key(Group)}),
-        {ok, maybe_apply_pending_transition(InitState)};
+        {ok, maybe_apply_pending_transition(State4)};
     Error ->
         throw(Error)
     end.
@@ -405,11 +405,13 @@ handle_call({define_view, NumPartitions, ActiveList, ActiveBitmask,
             index_header = NewHeader,
             replica_pid = ReplicaPid
         },
-        ok = commit_header(NewGroup),
-        NewState = State#state{
+        State2 = State#state{
             group = NewGroup,
             replica_group = ReplicaPid
         },
+        State3 = monitor_partitions(State2, ActiveList),
+        State4 = monitor_partitions(State3, PassiveList),
+        ok = commit_header(NewGroup),
         ?LOG_INFO("Set view `~s`, ~s group `~s`, configured with:~n"
             "~p partitions~n"
             "~sreplica support~n"
@@ -421,7 +423,7 @@ handle_call({define_view, NumPartitions, ActiveList, ActiveBitmask,
             false -> "no "
             end,
             ActiveList, PassiveList]),
-        {reply, ok, NewState, ?TIMEOUT};
+        {reply, ok, State4, ?TIMEOUT};
     Error ->
         {reply, Error, State, ?TIMEOUT}
     end;
@@ -431,63 +433,6 @@ handle_call({define_view, _, _, _, _, _, _}, _From, State) ->
 
 handle_call(is_view_defined, _From, #state{group = Group} = State) ->
     {reply, is_integer(?set_num_partitions(Group)), State, ?TIMEOUT};
-
-handle_call({before_partition_delete, master}, _From, State) ->
-    Error = {error, {db_deleted, ?master_dbname((?set_name(State)))}},
-    State2 = reply_all(State, Error),
-    ?LOG_INFO("Set view `~s`, ~s group `~s`, going to shutdown because "
-              "master database is being deleted",
-              [?set_name(State), ?type(State), ?group_id(State)]),
-    {stop, shutdown, shutdown, State2};
-handle_call({before_partition_delete, PartId}, _From, #state{group = Group} = State) ->
-    #state{
-        replica_partitions = ReplicaParts,
-        replica_group = ReplicaPid
-    } = State,
-    case ?set_pending_transition(Group) of
-    nil ->
-        ActivePending = [],
-        PassivePending = [];
-    PendingTrans ->
-        #set_view_transition{
-            active = ActivePending,
-            passive = PassivePending
-        } = PendingTrans
-    end,
-    Mask = 1 bsl PartId,
-    case ((?set_abitmask(Group) band Mask) /= 0) orelse
-        ((?set_pbitmask(Group) band Mask) /= 0) orelse
-        ordsets:is_element(PartId, ActivePending) orelse
-        ordsets:is_element(PartId, PassivePending) of
-    true ->
-        ?LOG_INFO("Set view `~s`, ~s group `~s`, marking partition ~p for "
-                  "cleanup because it's about to be deleted",
-                  [?set_name(State), ?type(State), ?group_id(State), PartId]),
-        case orddict:is_key(PartId, ?set_unindexable_seqs(State#state.group)) of
-        true ->
-            State2 = process_mark_as_indexable(State, [PartId], false);
-        false ->
-            State2 = State
-        end,
-        State3 = update_partition_states([], [], [PartId], State2),
-        {reply, ignore, State3, ?TIMEOUT};
-    false ->
-        case ordsets:is_element(PartId, ReplicaParts) of
-        true ->
-            % Can't be a replica on transfer, otherwise it would be part of the
-            % set of passive partitions.
-            ?LOG_INFO("Set view `~s`, ~s group `~s`, removing replica partition ~p"
-                      " because it's about to be deleted",
-                      [?set_name(State), ?type(State), ?group_id(State), PartId]),
-            ok = set_state(ReplicaPid, [], [], [PartId]),
-            State2 = State#state{
-               replica_partitions = ordsets:del_element(PartId, ReplicaParts)
-            },
-            {reply, ignore, State2, ?TIMEOUT};
-        false ->
-            {reply, ignore, State, ?TIMEOUT}
-        end
-    end;
 
 handle_call(_Msg, _From, State) when not ?is_defined(State) ->
     {reply, {error, view_undefined}, State};
@@ -533,22 +478,27 @@ handle_call({add_replicas, BitMask}, _From, #state{replica_group = ReplicaPid} =
     ?LOG_INFO("Set view `~s`, ~s group `~s`, defined new replica partitions: ~w~n"
               "New full set of replica partitions is: ~w~n",
               [?set_name(State), ?type(State), ?group_id(State), Parts, NewReplicaParts]),
-    {reply, ok, State#state{replica_partitions = NewReplicaParts}, ?TIMEOUT};
+    State2 = State#state{
+        replica_partitions = NewReplicaParts
+    },
+    State3 = monitor_partitions(State2, Parts),
+    {reply, ok, State3, ?TIMEOUT};
 
 handle_call({remove_replicas, Partitions}, _From, #state{replica_group = ReplicaPid} = State) when is_pid(ReplicaPid) ->
     #state{
         replica_partitions = ReplicaParts,
         group = Group
     } = State,
+    State0 = demonitor_partitions(State, Partitions),
     case ordsets:intersection(?set_replicas_on_transfer(Group), Partitions) of
     [] ->
         ok = set_state(ReplicaPid, [], [], Partitions),
-        NewState = State#state{
+        NewState = State0#state{
             replica_partitions = ordsets:subtract(ReplicaParts, Partitions)
         };
     Common ->
         UpdaterWasRunning = is_pid(State#state.updater_pid),
-        State2 = stop_cleaner(State),
+        State2 = stop_cleaner(State0),
         #state{group = Group3} = State3 = stop_updater(State2),
         {ok, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs} =
             set_cleanup_partitions(
@@ -857,6 +807,69 @@ handle_cast(ddoc_updated, State) ->
         _ ->
             {noreply, State#state{shutdown = true}}
         end
+    end;
+
+
+handle_cast({before_partition_delete, master}, State) ->
+    Error = {error, {db_deleted, ?master_dbname((?set_name(State)))}},
+    State2 = reply_all(State, Error),
+    ?LOG_INFO("Set view `~s`, ~s group `~s`, going to shutdown because "
+              "master database is being deleted",
+              [?set_name(State), ?type(State), ?group_id(State)]),
+    {stop, shutdown, State2};
+
+handle_cast({before_partition_delete, _PartId}, State) when not ?is_defined(State) ->
+    {noreply, State};
+
+handle_cast({before_partition_delete, PartId}, #state{group = Group} = State) ->
+    #state{
+        replica_partitions = ReplicaParts,
+        replica_group = ReplicaPid
+    } = State,
+    case ?set_pending_transition(Group) of
+    nil ->
+        ActivePending = [],
+        PassivePending = [];
+    PendingTrans ->
+        #set_view_transition{
+            active = ActivePending,
+            passive = PassivePending
+        } = PendingTrans
+    end,
+    Mask = 1 bsl PartId,
+    case ((?set_abitmask(Group) band Mask) /= 0) orelse
+        ((?set_pbitmask(Group) band Mask) /= 0) orelse
+        ordsets:is_element(PartId, ActivePending) orelse
+        ordsets:is_element(PartId, PassivePending) of
+    true ->
+        ?LOG_INFO("Set view `~s`, ~s group `~s`, marking partition ~p for "
+                  "cleanup because it's about to be deleted",
+                  [?set_name(State), ?type(State), ?group_id(State), PartId]),
+        case orddict:is_key(PartId, ?set_unindexable_seqs(State#state.group)) of
+        true ->
+            State2 = process_mark_as_indexable(State, [PartId], false);
+        false ->
+            State2 = State
+        end,
+        State3 = update_partition_states([], [], [PartId], State2),
+        {noreply, State3, ?TIMEOUT};
+    false ->
+        case ordsets:is_element(PartId, ReplicaParts) of
+        true ->
+            % Can't be a replica on transfer, otherwise it would be part of the
+            % set of passive partitions.
+            ?LOG_INFO("Set view `~s`, ~s group `~s`, removing replica partition ~p"
+                      " because it's about to be deleted",
+                      [?set_name(State), ?type(State), ?group_id(State), PartId]),
+            ok = set_state(ReplicaPid, [], [], [PartId]),
+            State2 = State#state{
+               replica_partitions = ordsets:del_element(PartId, ReplicaParts)
+            },
+            State3 = demonitor_partitions(State2, [PartId]),
+            {noreply, State3, ?TIMEOUT};
+        false ->
+            {noreply, State, ?TIMEOUT}
+        end
     end.
 
 
@@ -1047,12 +1060,26 @@ handle_info({'EXIT', Pid, Reason}, State) ->
               [?set_name(State), ?type(State), ?group_id(State), Pid, Reason]),
     {stop, Reason, State};
 
-handle_info({'DOWN', _Ref, process, Pid, _Reason}, State) ->
-    UpdateListeners2 = dict:filter(
-        fun(_, #up_listener{pid = Pid0}) -> Pid0 /= Pid end,
-        State#state.update_listeners),
-    {noreply, State#state{update_listeners = UpdateListeners2}}.
-
+handle_info({'DOWN', Ref, process, Pid, Reason}, State) ->
+    try
+        _ = dict:fold(
+            fun(Id, Ref0, _Acc) when Ref0 == Ref ->
+                    throw({found, Id});
+                (_Id, _Ref0, Acc) ->
+                    Acc
+            end,
+            undefined,
+            State#state.db_refs),
+        UpdateListeners2 = dict:filter(
+            fun(_, #up_listener{pid = Pid0}) -> Pid0 /= Pid end,
+            State#state.update_listeners),
+        {noreply, State#state{update_listeners = UpdateListeners2}}
+    catch throw:{found, PartId} ->
+        ?LOG_ERROR("Set view `~s`, ~s group `~s`, terminating because "
+                   "partition ~p died with reason: ~p",
+                   [?set_name(State), ?type(State), ?group_id(State), PartId, Reason]),
+        {stop, shutdown, State}
+    end.
 
 
 terminate(Reason, State) ->
@@ -1686,8 +1713,9 @@ persist_partition_states(State, ActiveList, PassiveList, CleanupList, PendingTra
             ?set_cbitmask(Group),
             NewSeqs2),
     ok = couch_db_set:remove_partitions(?db_set(State), CleanupList),
+    State0 = demonitor_partitions(State, CleanupList),
     State2 = update_header(
-        State,
+        State0,
         NewAbitmask3,
         NewPbitmask3,
         NewCbitmask3,
@@ -1922,27 +1950,25 @@ update_header(State, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs,
         } = Group,
         replica_partitions = ReplicaParts
     } = State,
-    NewState = State#state{
-        group = Group#set_view_group{
-            index_header = Header#set_view_index_header{
-                abitmask = NewAbitmask,
-                pbitmask = NewPbitmask,
-                cbitmask = NewCbitmask,
-                seqs = NewSeqs,
-                replicas_on_transfer = NewRelicasOnTransfer,
-                pending_transition = NewPendingTrans
-            }
-        },
+    NewGroup = Group#set_view_group{
+        index_header = Header#set_view_index_header{
+            abitmask = NewAbitmask,
+            pbitmask = NewPbitmask,
+            cbitmask = NewCbitmask,
+            seqs = NewSeqs,
+            replicas_on_transfer = NewRelicasOnTransfer,
+            pending_transition = NewPendingTrans
+        }
+    },
+    {ActiveList, PassiveList} = make_partition_lists(NewGroup),
+    ok = couch_db_set:add_partitions(?db_set(State), ActiveList ++ PassiveList),
+    NewState0 = State#state{
+        group = NewGroup,
         replica_partitions = NewReplicaParts
     },
+    NewState1 = monitor_partitions(NewState0, ActiveList),
+    NewState = monitor_partitions(NewState1, PassiveList),
     ok = commit_header(NewState#state.group),
-    case (NewAbitmask =:= Abitmask) andalso (NewPbitmask =:= Pbitmask) of
-    true ->
-        ok;
-    false ->
-        {ActiveList, PassiveList} = make_partition_lists(NewState#state.group),
-        ok = couch_db_set:add_partitions(?db_set(NewState), ActiveList ++ PassiveList)
-    end,
     case PendingTrans of
     nil ->
         OldPendingActive = [],
@@ -2703,4 +2729,51 @@ process_mark_as_indexable(State, Partitions, CommitHeader) ->
             }
         },
         State#state{group = Group2}
+    end.
+
+
+monitor_partitions(State, []) ->
+    State;
+monitor_partitions(State, _Partitions) when ?type(State) == replica ->
+    State;
+monitor_partitions(#state{db_refs = DbRefs} = State, Partitions) ->
+    DbRefs2 = monitor_partitions(Partitions, ?set_name(State), DbRefs),
+    State#state{db_refs = DbRefs2}.
+
+monitor_partitions([], _SetName, Dict) ->
+    Dict;
+monitor_partitions([PartId | Rest], SetName, Dict) ->
+    case dict:is_key(PartId, Dict) of
+    true ->
+        monitor_partitions(Rest, SetName, Dict);
+    false ->
+        {ok, Db} = case PartId of
+        master ->
+            couch_db:open_int(?master_dbname(SetName), []);
+        _ when is_integer(PartId) ->
+            couch_db:open_int(?dbname(SetName, PartId), [])
+        end,
+        Ref = couch_db:monitor(Db),
+        ok = couch_db:close(Db),
+        monitor_partitions(Rest, SetName, dict:store(PartId, Ref, Dict))
+    end.
+
+
+demonitor_partitions(State, []) ->
+    State;
+demonitor_partitions(State, _Partitions) when ?type(State) == replica ->
+    State;
+demonitor_partitions(#state{db_refs = DbRefs} = State, Partitions) ->
+    DbRefs2 = demonitor_partitions(Partitions, ?set_name(State), DbRefs),
+    State#state{db_refs = DbRefs2}.
+
+demonitor_partitions([], _SetName, Dict) ->
+    Dict;
+demonitor_partitions([PartId | Rest], SetName, Dict) ->
+    case dict:find(PartId, Dict) of
+    error ->
+        demonitor_partitions(Rest, SetName, Dict);
+    {ok, Ref} ->
+        erlang:demonitor(Ref, [flush]),
+        demonitor_partitions(Rest, SetName, dict:erase(PartId, Dict))
     end.
