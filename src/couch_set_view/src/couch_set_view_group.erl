@@ -2126,7 +2126,6 @@ restart_compactor(#state{compactor_pid = Pid, compactor_file = CompactFd} = Stat
 compact_group(#state{group = Group} = State) ->
     CompactFilepath = compact_file_name(State),
     {ok, Fd} = open_index_file(CompactFilepath),
-    ok = couch_file:truncate(Fd, 0),
     reset_file(Fd, ?set_name(State), Group#set_view_group{filepath = CompactFilepath}).
 
 
