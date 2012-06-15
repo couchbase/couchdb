@@ -1334,6 +1334,7 @@ get_group_info(State) ->
         {cleanup_history, Stats#set_view_group_stats.cleanup_history}
     ]},
     {ok, Size} = couch_file:bytes(Fd),
+    {ok, DbSeqs} = couch_db_set:get_seqs(?db_set(State)),
     [
         {signature, ?l2b(hex_sig(GroupSig))},
         {disk_size, Size},
@@ -1345,9 +1346,11 @@ get_group_info(State) ->
             ((CompactorPid /= nil) andalso (?set_cbitmask(Group) =/= 0))},
         {max_number_partitions, ?set_num_partitions(Group)},
         {update_seqs, {[{couch_util:to_binary(P), S} || {P, S} <- ?set_seqs(Group)]}},
+        {partition_seqs, {[{couch_util:to_binary(P), S} || {P, S} <- DbSeqs]}},
         {active_partitions, couch_set_view_util:decode_bitmask(?set_abitmask(Group))},
         {passive_partitions, couch_set_view_util:decode_bitmask(?set_pbitmask(Group))},
         {cleanup_partitions, couch_set_view_util:decode_bitmask(?set_cbitmask(Group))},
+        {unindexable_partitions, {[{couch_util:to_binary(P), S} || {P, S} <- ?set_unindexable_seqs(Group)]}},
         {stats, JsonStats},
         {pending_transition, case PendingTrans of
             nil ->
