@@ -820,10 +820,10 @@ native_initial_compact(#db{filepath=Filepath}=Db, CompactFile) ->
 start_copy_compact(#db{name=Name,filepath=Filepath}=Db) ->
     CompactFile = Filepath ++ ".compact",
     ?LOG_DEBUG("Compaction process spawned for db \"~s\"", [Name]),
-    % we maybe don't want to consistency every time, so get the ratio
-    % and generate a random number.
+    % we don't want to consistency every time, so get the ratio
+    % and generate a random number. Default to 10%
     CheckRatio = list_to_float(couch_config:get("couchdb",
-                               "consistency_check_ratio", "1.0")),
+                               "consistency_check_ratio", "0.1")),
     random:seed(now()),
     Rand = random:uniform(),
     case couch_config:get("couchdb", "consistency_check_precompacted", "false") of
