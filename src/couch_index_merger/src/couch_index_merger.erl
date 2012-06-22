@@ -568,6 +568,8 @@ index_folder(_Mod, IndexSpec, MergeParams, UserCtx, DDoc, Queue, FoldFun) ->
         try
             FoldFun(Db, IndexSpec, MergeParams, UserCtx, DDoc, Queue)
         catch
+        queue_shutdown ->
+            ok;
         {not_found, Reason} when Reason =:= missing; Reason =:= deleted ->
             ok = couch_view_merger_queue:queue(
                 Queue, {error, ?LOCAL, ddoc_not_found_msg(DbName, DDocId)});
