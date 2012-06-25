@@ -76,7 +76,7 @@ static const char *BASE64_FUNCTION_STRING =
     "        arr.push((tmp >> 8) & 0xFF);"
     "        arr.push(tmp & 0xFF);"
     "    }"
-    "    return String.fromCharCode.apply(String, arr);"
+    "    return arr;"
     "})";
 
 static Persistent<Context> createJsContext(map_reduce_ctx_t *ctx);
@@ -123,20 +123,21 @@ void initContext(map_reduce_ctx_t *ctx, const std::list<std::string> &funs)
 }
 
 
-std::list< std::list< map_result_t > > mapDoc(map_reduce_ctx_t *ctx, const json_bin_t &doc)
+std::list< std::list< map_result_t > > mapDoc(map_reduce_ctx_t *ctx, const json_bin_t &doc, const json_bin_t &meta)
 {
     Locker locker(ctx->isolate);
     Isolate::Scope isolateScope(ctx->isolate);
     HandleScope handleScope;
     Context::Scope contextScope(ctx->jsContext);
     Handle<Value> docObject = jsonParse(doc);
+    Handle<Value> metaObject = jsonParse(meta);
 
-    if (!docObject->IsObject()) {
-        throw MapReduceError("document is not a JSON object");
+    if (!metaObject->IsObject()) {
+        throw MapReduceError("metadata is not a JSON object");
     }
 
     std::list< std::list< map_result_t > > results;
-    Handle<Value> funArgs[] = { docObject };
+    Handle<Value> funArgs[] = { docObject, metaObject };
 
     taskStarted(ctx);
 
@@ -146,7 +147,7 @@ std::list< std::list< map_result_t > > mapDoc(map_reduce_ctx_t *ctx, const json_
         TryCatch trycatch;
 
         ctx->mapFunResults = &funResults;
-        Handle<Value> result = fun->Call(fun, 1, funArgs);
+        Handle<Value> result = fun->Call(fun, 2, funArgs);
 
         if (result.IsEmpty()) {
             std::list< std::list< map_result_t > >::iterator it = results.begin();

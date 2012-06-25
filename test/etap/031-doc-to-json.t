@@ -20,7 +20,7 @@
 
 main(_) ->
     test_util:init_code_path(),
-    etap:plan(6),
+    etap:plan(10*3-2),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -40,41 +40,76 @@ test_to_json_success() ->
     Cases = [
         {
             #doc{},
-            {[{<<"_id">>, <<"">>}]},
-            "Empty docs are {\"_id\": \"\"}"
+            '{"meta":{"id":""},"json":{}}',
+            "Empty docs have {\"id\": \"\"}"
         },
         {
             #doc{id= <<"foo">>},
-            {[{<<"_id">>, <<"foo">>}]},
+            '{"meta":{"id":"foo"},"json":{}}',
             "_id is added."
         },
         {
+            #doc{id= <<255,255,99>>},
+            '{"meta":{"id":[255,255,99]},"json":{}}',
+            "_id is non-UTF8."
+        },
+        {
             #doc{rev={5, <<0>>}},
-            {[{<<"_id">>, <<>>}, {<<"_rev">>, <<"5-00">>}]},
+            '{"meta":{"id":"","rev":"5-00"},"json":{}}',
             "_rev is added."
         },
         {
             #doc{body={[{<<"foo">>, <<"bar">>}]}},
-            {[{<<"_id">>, <<>>}, {<<"foo">>, <<"bar">>}]},
+            '{"meta":{"id":""},"json":{"foo":"bar"}}',
             "Arbitrary fields are added."
         },
         {
+            #doc{content_meta=0, deleted=true, body= <<"{\"foobar\":true}">>},
+            '{"meta":{"id":"","deleted":true},"json":{"foobar":true}}',
+            "Body can be json binary"
+        },
+        { % ?CONTENT_META_JSON == 0
+            #doc{content_meta=3, body= <<255,23>>},
+            '{"meta":{"id":"","att_reason":"non-JSON mode"},"base64":\"/xc=\"}',
+            "Body can be raw binary", read_only
+        },
+        {
             #doc{deleted=true, body={[{<<"foo">>, <<"bar">>}]}},
-            {[{<<"_id">>, <<>>}, {<<"foo">>, <<"bar">>}, {<<"_deleted">>, true}]},
+            '{"meta":{"id":"","deleted":true},"json":{"foo":"bar"}}',
             "Deleted docs no longer drop body members."
         },
         {
+            #doc{deleted=true, body= <<"{\"foobar\":true}">>},
+            '{"meta":{"id":"","deleted":true},"json":{"foobar":true}}',
+            "Delete with bin json"
+        },
+        {
             #doc{meta=[{local_seq, 5}]},
-            {[{<<"_id">>, <<>>}, {<<"_local_seq">>, 5}]},
-            "_local_seq is added as an integer."
+            '{"meta":{"id":"","local_seq":5},"json":{}}',
+            "local_seq is added as an integer.", read_only
         }
     ],
 
     lists:foreach(fun
-        ({Doc, EJson, Mesg}) ->
-            etap:is(couch_doc:to_json_obj(Doc, []), EJson, Mesg);
-        ({Options, Doc, EJson, Mesg}) ->
-            etap:is(couch_doc:to_json_obj(Doc, Options), EJson, Mesg)
+        ({Doc, DocJSON, Mesg}) ->
+            read_assertions(Doc, DocJSON, Mesg),
+            write_assertions(Doc, DocJSON, Mesg);
+        ({Doc, DocJSON, Mesg, read_only}) ->
+            read_assertions(Doc, DocJSON, Mesg)
     end, Cases),
     ok.
 
+read_assertions(Doc, DocJSON, Mesg) ->
+    WantJSON = atom_to_binary(DocJSON, utf8),
+    DocEJSON = couch_doc:to_json_obj(Doc, []),
+    DocDJSON = ejson:encode(DocEJSON),
+    etap:is(DocDJSON, WantJSON, Mesg),
+    ToBinJSON = couch_doc:to_json_bin(Doc),
+    etap:is(DocDJSON, ToBinJSON, Mesg).
+
+write_assertions(Doc, DocJSON, Mesg) ->
+    WantJSON = atom_to_binary(DocJSON, utf8),
+    WantEJSON = ejson:decode(WantJSON),
+    ParsedDoc = couch_doc:from_json_obj(WantEJSON),
+    ParsedDocJSON = ejson:encode(couch_doc:to_json_obj(ParsedDoc, [])),
+    etap:is(ParsedDocJSON, WantJSON, Mesg ++ " parsed").

@@ -24,13 +24,13 @@
 % Which will then allow following example map function to be used:
 %
 %  fun({Doc}) ->
-%    % Below, we emit a single record - the _id as key, null as value
-%    DocId = couch_util:get_value(<<"_id">>, Doc, null),
-%    Emit(DocId, null)
+%    % Below, we emit a single record - with lastname as key, null as value
+%    LastName = couch_util:get_value(<<"lastname">>, Doc, null),
+%    Emit(LastName, null)
 %  end.
 %
 % which should be roughly the same as the javascript:
-%    emit(doc._id, null);
+%    emit(doc.lastname, null);
 %
 % This module exposes enough functions such that a native erlang server can
 % act as a fully-fleged view server, but no 'helper' functions specifically

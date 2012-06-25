@@ -348,7 +348,7 @@ maybe_flush_docs(Doc,State) ->
 
 maybe_flush_docs(#httpdb{} = Target, Batch, Doc) ->
     #batch{docs = DocAcc, size = SizeAcc} = Batch,
-    JsonDoc = couch_doc:to_raw_json_binary(Doc, false),
+    JsonDoc = couch_doc:to_json_bin(Doc),
     case SizeAcc + iolist_size(JsonDoc) of
     SizeAcc2 when SizeAcc2 > ?DOC_BUFFER_BYTE_SIZE ->
         ?LOG_DEBUG("Worker flushing doc batch of size ~p bytes", [SizeAcc2]),

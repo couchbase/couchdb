@@ -278,21 +278,25 @@ populate_set() ->
     etap:diag("Populating the " ++ integer_to_list(num_set_partitions()) ++
         " databases with " ++ integer_to_list(num_docs()) ++ " documents"),
     DDoc = {[
-        {<<"_id">>, ddoc_id()},
+        {<<"meta">>, {[{<<"id">>, ddoc_id()}]}},
+        {<<"json">>, {[
         {<<"language">>, <<"javascript">>},
         {<<"views">>, {[
             {<<"test">>, {[
-                {<<"map">>, <<"function(doc) { emit(doc._id, null); }">>},
+                {<<"map">>, <<"function(doc, meta) { emit(meta.id, null); }">>},
                 {<<"reduce">>, <<"_count">>}
             ]}}
+        ]}}
         ]}}
     ]},
     ok = couch_set_view_test_util:update_ddoc(test_set_name(), DDoc),
     DocList = lists:map(
         fun(I) ->
             {[
-                {<<"_id">>, iolist_to_binary(["doc", integer_to_list(I)])},
-                {<<"value">>, I}
+                {<<"meta">>, {[{<<"id">>, iolist_to_binary(["doc", integer_to_list(I)])}]}},
+                {<<"json">>, {[
+                    {<<"value">>, I}
+                ]}}
             ]}
         end,
         lists:seq(1, num_docs())),

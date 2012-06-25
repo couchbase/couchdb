@@ -221,20 +221,22 @@ get_group_info() ->
 
 same_key_by_same_doc_multiple_times_create_set() ->
     DDoc = {[
-        {<<"_id">>, ddoc_id()},
+        {<<"meta">>, {[{<<"id">>, ddoc_id()}]}},
+        {<<"json">>, {[
         {<<"language">>, <<"javascript">>},
         {<<"views">>, {[
             {<<"view_1">>, {[
-                {<<"map">>, <<"function(doc) { "
+                {<<"map">>, <<"function(doc, meta) { "
                     "if (doc.emit2) { "
-                        "emit(doc._id, doc.value);"
+                        "emit(meta.id, doc.value);"
                     "} else {"
-                        "emit(doc._id, null);"
+                        "emit(meta.id, null);"
                     "}"
-                    "if (doc.emit2) { emit(doc._id, doc.value + 1); }"
+                    "if (doc.emit2) { emit(meta.id, doc.value + 1); }"
                 "}">>},
                 {<<"reduce">>, <<"_count">>}
             ]}}
+        ]}}
         ]}}
     ]},
     create_set(DDoc).
@@ -242,11 +244,12 @@ same_key_by_same_doc_multiple_times_create_set() ->
 
 test_same_key_by_different_docs_multiple_times_create_set() ->
     DDoc = {[
-        {<<"_id">>, ddoc_id()},
+        {<<"meta">>, {[{<<"id">>, ddoc_id()}]}},
+        {<<"json">>, {[
         {<<"language">>, <<"javascript">>},
         {<<"views">>, {[
             {<<"view_1">>, {[
-                {<<"map">>, <<"function(doc) { "
+                {<<"map">>, <<"function(doc, meta) { "
                     "emit(doc.value, doc.value * 2);"
                     "if (doc.emit2) { "
                         "emit(doc.value + 1, doc.value * 3);"
@@ -254,6 +257,7 @@ test_same_key_by_different_docs_multiple_times_create_set() ->
                 "}">>},
                 {<<"reduce">>, <<"_sum">>}
             ]}}
+        ]}}
         ]}}
     ]},
     create_set(DDoc).
@@ -281,9 +285,11 @@ add_documents(StartId, Count) ->
     DocList0 = lists:map(
         fun(I) ->
             {I rem num_set_partitions(), {[
-                {<<"_id">>, doc_id(I)},
+            {<<"meta">>, {[{<<"id">>, doc_id(I)}]}},
+            {<<"json">>, {[
                 {<<"value">>, I},
                 {<<"emit2">>, true}
+            ]}}
             ]}}
         end,
         lists:seq(StartId, StartId + Count - 1)),
@@ -304,9 +310,11 @@ update_documents(StartId, NumDocs, Emit2) ->
     Docs = lists:foldl(
         fun(I, Acc) ->
             Doc = couch_doc:from_json_obj({[
-                {<<"_id">>, doc_id(I)},
-                {<<"value">>, I},
-                {<<"emit2">>, Emit2}
+                {<<"meta">>, {[{<<"id">>, doc_id(I)}]}},
+                {<<"json">>, {[
+                    {<<"value">>, I},
+                    {<<"emit2">>, Emit2}
+                ]}}
             ]}),
             DocList = case orddict:find(I rem 64, Acc) of
             {ok, L} ->
@@ -339,8 +347,8 @@ delete_documents(StartId, NumDocs) ->
     Docs = lists:foldl(
         fun(I, Acc) ->
             Doc = couch_doc:from_json_obj({[
-                {<<"_id">>, doc_id(I)},
-                {<<"_deleted">>, true}
+                {<<"meta">>, {[{<<"deleted">>, true}, {<<"id">>, doc_id(I)}]}},
+                {<<"json">>, {[]}}
             ]}),
             DocList = case orddict:find(I rem 64, Acc) of
             {ok, L} ->

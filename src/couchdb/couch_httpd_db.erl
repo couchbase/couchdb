@@ -177,25 +177,17 @@ db_req(#httpd{method='GET',
 db_req(#httpd{method='POST',
               path_parts=[DbName],
               db_frontend=DbFrontend}=Req, Db) ->
-    
-    case couch_httpd:is_ctype(Req, "application/json") of
-    true ->
-        Doc = couch_doc:from_json_obj(couch_httpd:json_body(Req));
-    false ->
-        Doc = #doc{body=couch_httpd:body(Req)}
-    end,
-    Doc2 = case Doc#doc.id of
-        <<"">> ->
-            Doc#doc{id=couch_uuids:new(), rev={0, <<>>}};
-        _ ->
-            Doc
-    end,
-    DocId = Doc2#doc.id,
+
+    Doc = couch_doc:from_json_obj({[
+        {<<"meta">>, {[{<<"id">>,couch_uuids:new()}]}},
+        {<<"json">>, couch_httpd:json_body(Req)}]}),
+
+    DocId = Doc#doc.id,
     case couch_httpd:qs_value(Req, "batch") of
     "ok" ->
         % async_batching
         spawn(fun() ->
-                case catch(DbFrontend:update_doc(Db, Doc2, [])) of
+                case catch(DbFrontend:update_doc(Db, Doc, [])) of
                 ok -> ok;
                 Error ->
                     ?LOG_INFO("Batch doc error (~s): ~p",[DocId, Error])
@@ -208,7 +200,7 @@ db_req(#httpd{method='POST',
         ]});
     _Normal ->
         % normal
-        ok = DbFrontend:update_doc(Db, Doc2, []),
+        ok = DbFrontend:update_doc(Db, Doc, []),
         DocUrl = absolute_uri(
             Req, binary_to_list(<<"/",DbName/binary,"/", DocId/binary>>)),
         send_json(Req, 201, [{"Location", DocUrl}], {[
@@ -243,6 +235,7 @@ db_req(#httpd{method='POST',
               db_frontend=DbFrontend}=Req, Db) ->
     couch_httpd:validate_ctype(Req, "application/json"),
     {JsonProps} = couch_httpd:json_body_obj(Req),
+    ?LOG_INFO("_bulk_docs POST ~p", [JsonProps]),
     case couch_util:get_value(<<"docs">>, JsonProps) of
     undefined ->
         send_error(Req, 400, <<"bad_request">>, <<"Missing JSON list of 'docs'">>);
@@ -258,20 +251,13 @@ db_req(#httpd{method='POST',
         case couch_util:get_value(<<"new_edits">>, JsonProps, true) of
         true ->
             Docs = lists:map(
-                fun({ObjProps} = JsonObj) ->
+                fun(JsonObj) ->
                     Doc = couch_doc:from_json_obj(JsonObj),
                     Id = case Doc#doc.id of
                         <<>> -> couch_uuids:new();
                         Id0 -> Id0
                     end,
-                    case couch_util:get_value(<<"_rev">>, ObjProps) of
-                    undefined ->
-                       Rev2 = {0, <<>>};
-                    Rev  ->
-                        {Pos, RevId} = couch_doc:parse_rev(Rev),
-                        Rev2 = {Pos, RevId}
-                    end,
-                    Doc#doc{id=Id,rev=Rev2}
+                    Doc#doc{id=Id}
                 end,
                 DocsArray),
             Options2 =
@@ -490,11 +476,12 @@ db_doc_req(#httpd{method='DELETE',db_frontend=DbFrontend}=Req, Db, DocId) ->
     case couch_httpd:qs_value(Req, "rev") of
     undefined ->
         update_doc(Req, Db, DocId,
-                couch_doc_from_req(DocId, {[{<<"_deleted">>,true}]}));
+            couch_doc:from_json_obj({[{<<"meta">>,
+                {[{<<"id">>, DocId}, {<<"deleted">>, true}]}}]}));
     Rev ->
         update_doc(Req, Db, DocId,
-                couch_doc_from_req(DocId,
-                    {[{<<"_rev">>, ?l2b(Rev)},{<<"_deleted">>,true}]}))
+            couch_doc:from_json_obj({[{<<"meta">>,
+                {[{<<"id">>, DocId}, {<<"deleted">>, true}, {<<"rev">>, ?l2b(Rev)}]}}]}))
     end;
 
 db_doc_req(#httpd{method = 'GET',
@@ -510,32 +497,32 @@ db_doc_req(#httpd{method='PUT'}=Req, Db, DocId) ->
     couch_doc:validate_docid(DocId),
     Loc = absolute_uri(Req, "/" ++ ?b2l(Db#db.name) ++ "/" ++ ?b2l(DocId)),
     RespHeaders = [{"Location", Loc}],
-    case couch_httpd:is_ctype(Req, "application/json") of
+    Doc = case couch_httpd:is_ctype(Req, "application/json") of
     true ->
         Body = couch_httpd:json_body(Req),
-        Doc = couch_doc_from_req(DocId, Body);
+        couch_doc:from_json_obj({[
+            {<<"meta">>, {[{<<"id">>, DocId}]}},
+            {<<"json">>, Body}]});
     false ->
         Body = couch_httpd:body(Req),
-        Doc = couch_doc:from_binary(DocId, Body, false)
+        couch_doc:from_binary(DocId, Body, false)
     end,
+    % Body = couch_httpd:body(Req),
+    % Doc = couch_doc:from_binary(DocId, Body, couch_httpd:is_ctype(Req, "application/json")),
     update_doc(Req, Db, DocId, Doc, RespHeaders);
 
 db_doc_req(Req, _Db, _DocId) ->
     send_method_not_allowed(Req, "DELETE,GET,HEAD,POST,PUT").
 
 
-send_doc(Req, Doc0, Options) ->
-    Doc = couch_doc:with_uncompressed_body(Doc0),
-    case Doc#doc.content_meta == ?CONTENT_META_JSON of
-    true ->
-        send_json(Req, 200, [], couch_doc:to_json_obj(Doc, Options));
-    _ ->
-        Headers = [
-            {"Content-Type", "application/content-stream"},
-            {"Cache-Control", "must-revalidate"}
-        ],
-        send_response(Req, 200, Headers, Doc#doc.body)
-    end.
+send_doc(Req, Doc, _Options) ->
+    {DocBody, DocMeta} = couch_doc:to_raw_json_binary_views(Doc),
+    Headers = [
+        {"Content-Type", "application/json"},
+        {"Cache-Control", "must-revalidate"},
+        {"X-Couchbase-Meta", DocMeta}
+    ],
+    send_response(Req, 200, Headers, DocBody).
 
 
 update_doc_result_to_json({{Id, Rev}, Error}) ->
@@ -570,12 +557,6 @@ update_doc(Req, Db, DocId, #doc{deleted=Deleted}=Doc, Headers) ->
         Headers, {[
             {ok, true},
             {id, DocId}]}).
-
-couch_doc_from_req(DocId, #doc{} = Doc) ->
-    Doc#doc{id=DocId};
-couch_doc_from_req(DocId, {_}=EJson) ->
-    couch_doc_from_req(DocId, couch_doc:from_json_obj(EJson)).
-
 
 parse_doc_query(Req) ->
     lists:foldl(fun({Key,Value}, Args) ->

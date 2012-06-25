@@ -110,11 +110,13 @@ create_set(ActiveParts, PassiveParts) ->
     etap:diag("Creating the set databases (# of partitions: " ++
         integer_to_list(num_set_partitions()) ++ ")"),
     DDoc = {[
-        {<<"_id">>, ddoc_id()},
-        {<<"language">>, <<"javascript">>},
-        {<<"views">>, {[
-            {<<"test">>, {[
-                {<<"map">>, <<"function(doc) { emit(doc.value, doc._id); }">>}
+        {<<"meta">>, {[{<<"id">>, ddoc_id()}]}},
+        {<<"json">>, {[
+            {<<"language">>, <<"javascript">>},
+            {<<"views">>, {[
+                {<<"test">>, {[
+                    {<<"map">>, <<"function(doc, meta) { emit(doc.value, meta.id); }">>}
+                ]}}
             ]}}
         ]}}
     ]},
@@ -135,8 +137,10 @@ update_documents(StartId, Count, ValueGenFun) ->
     DocList0 = lists:map(
         fun(I) ->
             {I rem num_set_partitions(), {[
-                {<<"_id">>, doc_id(I)},
-                {<<"value">>, ValueGenFun(I)}
+                    {<<"meta">>, {[{<<"id">>, doc_id(I)}]}},
+                    {<<"json">>, {[
+                        {<<"value">>, ValueGenFun(I)}
+                    ]}}
             ]}}
         end,
         lists:seq(StartId, StartId + Count - 1)),

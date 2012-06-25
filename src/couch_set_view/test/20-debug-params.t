@@ -89,15 +89,16 @@ setup_test() ->
     couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
 
     DDoc = {[
-        {<<"_id">>, ddoc_id()},
-        {<<"language">>, <<"javascript">>},
-        {<<"views">>, {[
-            {<<"test">>, {[
-                {<<"map">>, <<"function(doc) { emit(doc._id, doc.value); }">>}
-            ]}},
-            {<<"testred">>, {[
-                {<<"map">>, <<"function(doc) { emit(doc._id, doc.value); }">>},
-                {<<"reduce">>, <<"_count">>}
+        {<<"meta">>, {[{<<"id">>, ddoc_id()}]}},
+        {<<"json">>, {[
+            {<<"views">>, {[
+                {<<"test">>, {[
+                    {<<"map">>, <<"function(doc, meta) { emit(meta.id, doc.value); }">>}
+                ]}},
+                {<<"testred">>, {[
+                    {<<"map">>, <<"function(doc, meta) { emit(meta.id, doc.value); }">>},
+                    {<<"reduce">>, <<"_count">>}
+                ]}}
             ]}}
         ]}}
     ]},
@@ -266,8 +267,8 @@ populate_set(DDoc) ->
     DocList = lists:map(
         fun(I) ->
             {[
-                {<<"_id">>, iolist_to_binary(["doc", integer_to_list(I)])},
-                {<<"value">>, I}
+                {<<"meta">>, {[{<<"id">>, iolist_to_binary(["doc", integer_to_list(I)])}]}},
+                {<<"json">>, {[{<<"value">>, I}]}}
             ]}
         end,
         lists:seq(1, num_docs())),

@@ -17,7 +17,7 @@
 -module(mapreduce).
 
 -export([start_map_context/1]).
--export([map_doc/2]).
+-export([map_doc/3]).
 
 -export([start_reduce_context/1]).
 -export([reduce/2, reduce/3]).
@@ -55,7 +55,7 @@ start_map_context(_MapFunSources, _Ref) ->
     erlang:nif_error(mapreduce_nif_not_loaded).
 
 
-map_doc(_Context, _Doc) ->
+map_doc(_Context, _Doc, _Meta) ->
     erlang:nif_error(mapreduce_nif_not_loaded).
 
 

@@ -61,8 +61,8 @@ end_reduce_context(#view{ref = Ref}) ->
 
 map(Doc) ->
     Ctx = erlang:get(map_context),
-    DocBin = couch_doc:to_raw_json_binary(Doc),
-    case mapreduce:map_doc(Ctx, DocBin) of
+    {DocBody, DocMeta} = couch_doc:to_raw_json_binary_views(Doc),
+    case mapreduce:map_doc(Ctx, DocBody, DocMeta) of
     {ok, Results} ->
         {ok, [
             [{?JSON_DECODE(K), ?JSON_DECODE(V)} || {K, V} <- FunResult]

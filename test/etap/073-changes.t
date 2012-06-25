@@ -79,15 +79,15 @@ test() ->
 test_by_doc_ids() ->
     {ok, Db} = create_db(test_db_name()),
 
-    ok = save_doc(Db, {[{<<"_id">>, <<"doc1">>}]}),
-    ok = save_doc(Db, {[{<<"_id">>, <<"doc2">>}]}),
-    ok = save_doc(Db, {[{<<"_id">>, <<"doc3">>}]}),
-    ok = save_doc(Db, {[{<<"_id">>, <<"doc4">>}]}),
-    ok = save_doc(Db, {[{<<"_id">>, <<"doc5">>}]}),
-    ok = save_doc(Db, {[{<<"_id">>, <<"doc3">>}]}),
-    ok = save_doc(Db, {[{<<"_id">>, <<"doc6">>}]}),
-    ok = save_doc(Db, {[{<<"_id">>, <<"doc7">>}]}),
-    ok = save_doc(Db, {[{<<"_id">>, <<"doc8">>}]}),
+    ok = save_doc_meta(Db, {[{<<"id">>, <<"doc1">>}]}),
+    ok = save_doc_meta(Db, {[{<<"id">>, <<"doc2">>}]}),
+    ok = save_doc_meta(Db, {[{<<"id">>, <<"doc3">>}]}),
+    ok = save_doc_meta(Db, {[{<<"id">>, <<"doc4">>}]}),
+    ok = save_doc_meta(Db, {[{<<"id">>, <<"doc5">>}]}),
+    ok = save_doc_meta(Db, {[{<<"id">>, <<"doc3">>}]}),
+    ok = save_doc_meta(Db, {[{<<"id">>, <<"doc6">>}]}),
+    ok = save_doc_meta(Db, {[{<<"id">>, <<"doc7">>}]}),
+    ok = save_doc_meta(Db, {[{<<"id">>, <<"doc8">>}]}),
 
     etap:diag("Folding changes in ascending order with _doc_ids filter"),
     ChangesArgs = #changes_args{
@@ -133,15 +133,15 @@ test_by_doc_ids() ->
 test_by_doc_ids_with_since() ->
     {ok, Db} = create_db(test_db_name()),
 
-    ok = save_doc(Db, {[{<<"_id">>, <<"doc1">>}]}),
-    ok = save_doc(Db, {[{<<"_id">>, <<"doc2">>}]}),
-    ok = save_doc(Db, {[{<<"_id">>, <<"doc3">>}]}),
-    ok = save_doc(Db, {[{<<"_id">>, <<"doc4">>}]}),
-    ok = save_doc(Db, {[{<<"_id">>, <<"doc5">>}]}),
-    ok = save_doc(Db, {[{<<"_id">>, <<"doc3">>}]}),
-    ok = save_doc(Db, {[{<<"_id">>, <<"doc6">>}]}),
-    ok = save_doc(Db, {[{<<"_id">>, <<"doc7">>}]}),
-    ok = save_doc(Db, {[{<<"_id">>, <<"doc8">>}]}),
+    ok = save_doc_meta(Db, {[{<<"id">>, <<"doc1">>}]}),
+    ok = save_doc_meta(Db, {[{<<"id">>, <<"doc2">>}]}),
+    ok = save_doc_meta(Db, {[{<<"id">>, <<"doc3">>}]}),
+    ok = save_doc_meta(Db, {[{<<"id">>, <<"doc4">>}]}),
+    ok = save_doc_meta(Db, {[{<<"id">>, <<"doc5">>}]}),
+    ok = save_doc_meta(Db, {[{<<"id">>, <<"doc3">>}]}),
+    ok = save_doc_meta(Db, {[{<<"id">>, <<"doc6">>}]}),
+    ok = save_doc_meta(Db, {[{<<"id">>, <<"doc7">>}]}),
+    ok = save_doc_meta(Db, {[{<<"id">>, <<"doc8">>}]}),
 
     ChangesArgs = #changes_args{
         filter = "_doc_ids",
@@ -178,9 +178,9 @@ test_by_doc_ids_with_since() ->
 
     stop(Consumer2),
 
-    ok = save_doc(
+    ok = save_doc_meta(
         Db,
-        {[{<<"_id">>, <<"doc3">>}, {<<"_deleted">>, true}]}),
+        {[{<<"id">>, <<"doc3">>}, {<<"deleted">>, true}]}),
 
     ChangesArgs3 = #changes_args{
         filter = "_doc_ids",
@@ -207,15 +207,15 @@ test_by_doc_ids_with_since() ->
 test_by_doc_ids_continuous() ->
     {ok, Db} = create_db(test_db_name()),
 
-    ok = save_doc(Db, {[{<<"_id">>, <<"doc1">>}]}),
-    ok = save_doc(Db, {[{<<"_id">>, <<"doc2">>}]}),
-    ok = save_doc(Db, {[{<<"_id">>, <<"doc3">>}]}),
-    ok = save_doc(Db, {[{<<"_id">>, <<"doc4">>}]}),
-    ok = save_doc(Db, {[{<<"_id">>, <<"doc5">>}]}),
-    ok = save_doc(Db, {[{<<"_id">>, <<"doc3">>}]}),
-    ok = save_doc(Db, {[{<<"_id">>, <<"doc6">>}]}),
-    ok = save_doc(Db, {[{<<"_id">>, <<"doc7">>}]}),
-    ok = save_doc(Db, {[{<<"_id">>, <<"doc8">>}]}),
+    ok = save_doc_meta(Db, {[{<<"id">>, <<"doc1">>}]}),
+    ok = save_doc_meta(Db, {[{<<"id">>, <<"doc2">>}]}),
+    ok = save_doc_meta(Db, {[{<<"id">>, <<"doc3">>}]}),
+    ok = save_doc_meta(Db, {[{<<"id">>, <<"doc4">>}]}),
+    ok = save_doc_meta(Db, {[{<<"id">>, <<"doc5">>}]}),
+    ok = save_doc_meta(Db, {[{<<"id">>, <<"doc3">>}]}),
+    ok = save_doc_meta(Db, {[{<<"id">>, <<"doc6">>}]}),
+    ok = save_doc_meta(Db, {[{<<"id">>, <<"doc7">>}]}),
+    ok = save_doc_meta(Db, {[{<<"id">>, <<"doc8">>}]}),
 
     ChangesArgs = #changes_args{
         filter = "_doc_ids",
@@ -236,17 +236,17 @@ test_by_doc_ids_continuous() ->
     etap:is(Seq2, 6, "Second row has seq 6"),
 
     clear_rows(Consumer),
-    ok = save_doc(Db, {[{<<"_id">>, <<"doc9">>}]}),
-    ok = save_doc(Db, {[{<<"_id">>, <<"doc10">>}]}),
+    ok = save_doc_meta(Db, {[{<<"id">>, <<"doc9">>}]}),
+    ok = save_doc_meta(Db, {[{<<"id">>, <<"doc10">>}]}),
     unpause(Consumer),
     pause(Consumer),
     etap:is(get_rows(Consumer), [], "No new rows"),
 
-    ok = save_doc(Db, {[{<<"_id">>, <<"doc4">>}]}),
-    ok = save_doc(Db, {[{<<"_id">>, <<"doc11">>}]}),
-    ok = save_doc(Db, {[{<<"_id">>, <<"doc4">>}]}),
-    ok = save_doc(Db, {[{<<"_id">>, <<"doc12">>}]}),
-    ok = save_doc(Db, {[{<<"_id">>, <<"doc3">>}]}),
+    ok = save_doc_meta(Db, {[{<<"id">>, <<"doc4">>}]}),
+    ok = save_doc_meta(Db, {[{<<"id">>, <<"doc11">>}]}),
+    ok = save_doc_meta(Db, {[{<<"id">>, <<"doc4">>}]}),
+    ok = save_doc_meta(Db, {[{<<"id">>, <<"doc12">>}]}),
+    ok = save_doc_meta(Db, {[{<<"id">>, <<"doc3">>}]}),
     unpause(Consumer),
     pause(Consumer),
 
@@ -259,7 +259,7 @@ test_by_doc_ids_continuous() ->
     etap:is(Row16#row.id, <<"doc3">>, "Second row is for doc doc3"),
 
     clear_rows(Consumer),
-    ok = save_doc(Db, {[{<<"_id">>, <<"doc3">>}]}),
+    ok = save_doc_meta(Db, {[{<<"id">>, <<"doc3">>}]}),
     unpause(Consumer),
     pause(Consumer),
     etap:is(get_rows(Consumer), [#row{seq = 17, id = <<"doc3">>}],
@@ -273,9 +273,9 @@ test_by_doc_ids_continuous() ->
 test_design_docs_only() ->
     {ok, Db} = create_db(test_db_name()),
 
-    ok = save_doc(Db, {[{<<"_id">>, <<"doc1">>}]}),
-    ok = save_doc(Db, {[{<<"_id">>, <<"doc2">>}]}),
-    ok = save_doc(Db, {[{<<"_id">>, <<"_design/foo">>}]}),
+    ok = save_doc_meta(Db, {[{<<"id">>, <<"doc1">>}]}),
+    ok = save_doc_meta(Db, {[{<<"id">>, <<"doc2">>}]}),
+    ok = save_doc_meta(Db, {[{<<"id">>, <<"_design/foo">>}]}),
 
     ChangesArgs = #changes_args{
         filter = "_design"
@@ -295,10 +295,10 @@ test_design_docs_only() ->
 
     {ok, Db3} = couch_db:open_int(
         test_db_name(), [{user_ctx, #user_ctx{roles = [<<"_admin">>]}}]),
-    ok = save_doc(
+    ok = save_doc_meta(
         Db3,
-        {[{<<"_id">>, <<"_design/foo">>},
-            {<<"_deleted">>, true}]}),
+        {[{<<"id">>, <<"_design/foo">>},
+            {<<"deleted">>, true}]}),
 
     Consumer2 = spawn_consumer(test_db_name(), ChangesArgs, {json, null}),
 
@@ -317,8 +317,8 @@ test_design_docs_only() ->
     delete_db(Db).
 
 
-save_doc(Db, Json) ->
-    Doc = couch_doc:from_json_obj(Json),
+save_doc_meta(Db, JsonMeta) ->
+    Doc = couch_doc:from_json_obj({[{<<"meta">>, JsonMeta}]}),
     couch_db:update_doc(Db, Doc, []).
 
 

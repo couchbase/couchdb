@@ -67,8 +67,8 @@ end_reduce_context(#set_view{ref = Ref}) ->
 
 map(Doc) ->
     Ctx = erlang:get(map_context),
-    DocBin = couch_doc:to_raw_json_binary(Doc),
-    case mapreduce:map_doc(Ctx, DocBin) of
+    {DocBody, DocMeta} = couch_doc:to_raw_json_binary_views(Doc),
+    case mapreduce:map_doc(Ctx, DocBody, DocMeta) of
     {ok, _Results} = Ok ->
         Ok;
     Error ->

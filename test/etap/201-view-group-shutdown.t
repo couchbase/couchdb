@@ -143,23 +143,27 @@ test_view_group_compaction() ->
 create_main_db() ->
     {ok, Db} = create_db(main_db_name()),
     DDoc = couch_doc:from_json_obj({[
-        {<<"_id">>, <<"_design/foo">>},
-        {<<"language">>, <<"javascript">>},
-        {<<"views">>, {[
-            {<<"foo">>, {[
-                {<<"map">>, <<"function(doc) { emit(doc._id, doc); }">>}
-            ]}},
-            {<<"foo2">>, {[
-                {<<"map">>, <<"function(doc) { emit(doc._id, doc); }">>}
-            ]}},
-            {<<"foo3">>, {[
-                {<<"map">>, <<"function(doc) { emit(doc._id, doc); }">>}
-            ]}},
-            {<<"foo4">>, {[
-                {<<"map">>, <<"function(doc) { emit(doc._id, doc); }">>}
-            ]}},
-            {<<"foo5">>, {[
-                {<<"map">>, <<"function(doc) { emit(doc._id, doc); }">>}
+        {<<"meta">>, {[
+            {<<"id">>, <<"_design/foo">>}
+        ]}},
+        {<<"json">>, {[
+            {<<"language">>, <<"javascript">>},
+            {<<"views">>, {[
+                {<<"foo">>, {[
+                    {<<"map">>, <<"function(doc) { emit(doc._id, doc); }">>}
+                ]}},
+                {<<"foo2">>, {[
+                    {<<"map">>, <<"function(doc) { emit(doc._id, doc); }">>}
+                ]}},
+                {<<"foo3">>, {[
+                    {<<"map">>, <<"function(doc) { emit(doc._id, doc); }">>}
+                ]}},
+                {<<"foo4">>, {[
+                    {<<"map">>, <<"function(doc) { emit(doc._id, doc); }">>}
+                ]}},
+                {<<"foo5">>, {[
+                    {<<"map">>, <<"function(doc) { emit(doc._id, doc); }">>}
+                ]}}
             ]}}
         ]}}
     ]}),
@@ -173,8 +177,12 @@ populate_main_db(Db, BatchSize, N) when N > 0 ->
     Docs = lists:map(
         fun(_) ->
             couch_doc:from_json_obj({[
-                {<<"_id">>, couch_uuids:new()},
-                {<<"value">>, base64:encode(crypto:rand_bytes(1000))}
+                {<<"meta">>, {[
+                    {<<"id">>, couch_uuids:new()}
+                ]}},
+                {<<"json">>, {[
+                    {<<"value">>, base64:encode(crypto:rand_bytes(1000))}
+                ]}}
             ]})
         end,
         lists:seq(1, BatchSize)),

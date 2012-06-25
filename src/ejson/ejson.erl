@@ -34,18 +34,11 @@ init() ->
 
 
 decode(IoList) ->
-    try
-        nif_decode(IoList)
-    catch exit:ejson_nif_not_loaded ->
-        erl_decode(IoList)
-    end.
+    nif_decode(IoList).
+
 
 encode(EJson) ->
-    try
-        nif_encode(EJson)
-    catch exit:ejson_nif_not_loaded ->
-        erl_encode(EJson)
-    end.
+    nif_encode(EJson).
 
 
 nif_decode(IoList) ->
@@ -58,29 +51,11 @@ nif_decode(IoList) ->
     end.
 
 
-erl_decode(IoList) ->
-    try
-        (mochijson2:decoder([{object_hook, fun({struct, L}) -> {L} end}]))(IoList)
-    catch _Type:Error ->
-        throw({invalid_json, {Error, IoList}})
-    end.
-
-
 nif_encode({json, RawJson}) ->
     RawJson;
 nif_encode(EJson) ->
     RevList = encode_rev(EJson),
     final_encode(lists:reverse(lists:flatten([RevList]))).
-
-
-erl_encode(EJson) ->
-    Opts = [{handler, fun mochi_encode_handler/1}],
-    iolist_to_binary((mochijson2:encoder(Opts))(EJson)).
-
-mochi_encode_handler({L}) when is_list(L) ->
-    {struct, L};
-mochi_encode_handler(Bad) ->
-    exit({json_encode, {bad_term, Bad}}).
 
 
 % Encode the json into a reverse list that's almost an iolist

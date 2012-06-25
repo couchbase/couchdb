@@ -115,12 +115,19 @@ ERL_NIF_TERM doMapDoc(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         return enif_make_badarg(env);
     }
 
+    ErlNifBinary metaBin;
+
+    if (!enif_inspect_iolist_as_binary(env, argv[2], &metaBin)) {
+        return enif_make_badarg(env);
+    }
+
     json_bin_t doc((char *) docBin.data, (size_t) docBin.size);
+    json_bin_t meta((char *) metaBin.data, (size_t) metaBin.size);
 
     try {
         // Map results is a list of lists. An inner list is the list of key value
         // pairs emitted by a map function for the document.
-        std::list< std::list< map_result_t > > mapResults = mapDoc(ctx, doc);
+        std::list< std::list< map_result_t > > mapResults = mapDoc(ctx, doc, meta);
         ERL_NIF_TERM outerList = enif_make_list(env, 0);
         std::list< std::list< map_result_t > >::reverse_iterator i = mapResults.rbegin();
         bool allocError = false;
@@ -540,7 +547,7 @@ void unregisterContext(map_reduce_ctx_t *ctx)
 
 static ErlNifFunc nif_functions[] = {
     {"start_map_context", 2, startMapContext},
-    {"map_doc", 2, doMapDoc},
+    {"map_doc", 3, doMapDoc},
     {"start_reduce_context", 2, startReduceContext},
     {"reduce", 2, doReduce},
     {"reduce", 3, doReduce},

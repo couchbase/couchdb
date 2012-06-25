@@ -42,12 +42,12 @@ test_sum_function() ->
     {ok, Ctx} = mapreduce:start_map_context([
         <<"function(doc) { emit(doc._id, sum(doc.values)); }">>
     ]),
-    Results = mapreduce:map_doc(Ctx, <<"{\"_id\": \"doc1\", \"values\": [1, 2, 3, 4]}">>),
+    Results = mapreduce:map_doc(Ctx, <<"{\"_id\": \"doc1\", \"values\": [1, 2, 3, 4]}">>, <<"{}">>),
     etap:is(Results, {ok, [[{<<"\"doc1\"">>, <<"10">>}]]}, "sum() builtin function works").
 
 test_base64decode_function() ->
     {ok, Ctx} = mapreduce:start_map_context([
-        <<"function(doc) { emit(doc._id, decodeBase64(doc._bin)); }">>
+        <<"function(doc) { emit(doc._id, String.fromCharCode.apply(this, decodeBase64(doc._bin))); }">>
     ]),
-    Results = mapreduce:map_doc(Ctx, <<"{ \"_id\": \"counter\", \"_bin\": \"NQ==\" }">>),
+    Results = mapreduce:map_doc(Ctx, <<"{ \"_id\": \"counter\", \"_bin\": \"NQ==\" }">>, <<"{}">>),
     etap:is(Results, {ok,[[{<<"\"counter\"">>,<<"\"5\"">>}]]}, "decodeBase64() builtin function works").

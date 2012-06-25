@@ -396,8 +396,10 @@ ensure_auth_ddoc_exists(Db, DDocId) ->
 
 auth_design_doc(DocId) ->
     DocProps = [
-        {<<"_id">>, DocId},
-        {<<"language">>,<<"javascript">>},
-        {<<"validate_doc_update">>, ?AUTH_DB_DOC_VALIDATE_FUNCTION}
+        {<<"meta">>, {[{<<"id">>, DocId}]}},
+        {<<"json">>, {[
+            {<<"language">>,<<"javascript">>},
+            {<<"validate_doc_update">>, ?AUTH_DB_DOC_VALIDATE_FUNCTION}
+        ]}}
     ],
     {ok, couch_doc:from_json_obj({DocProps})}.

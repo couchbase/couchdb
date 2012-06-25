@@ -47,7 +47,7 @@ typedef struct {
 
 void initContext(map_reduce_ctx_t *ctx, const std::list<std::string> &funs);
 void destroyContext(map_reduce_ctx_t *ctx);
-std::list< std::list< map_result_t > > mapDoc(map_reduce_ctx_t *ctx, const json_bin_t &doc);
+std::list< std::list< map_result_t > > mapDoc(map_reduce_ctx_t *ctx, const json_bin_t &doc, const json_bin_t &meta);
 std::list<json_bin_t> runReduce(map_reduce_ctx_t *ctx, const std::list<json_bin_t> &keys, const std::list<json_bin_t> &values);
 json_bin_t runReduce(map_reduce_ctx_t *ctx, int reduceFunNum, const std::list<json_bin_t> &keys, const std::list<json_bin_t> &values);
 json_bin_t runRereduce(map_reduce_ctx_t *ctx, int reduceFunNum, const std::list<json_bin_t> &reductions);

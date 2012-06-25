@@ -351,7 +351,8 @@ get_ddoc(#httpdb{} = HttpDb, Id) ->
     Url = BaseUrl ++ ?b2l(Id),
     case lhttpc:request(Url, "GET", Headers, [], Timeout, Options) of
     {ok, {{200, _}, _RespHeaders, Body}} ->
-        Doc = couch_doc:from_json_obj(?JSON_DECODE(Body)),
+        Doc = couch_doc:from_json_obj({[{<<"meta">>, {[{<<"id">>,Id}]}},
+                {<<"json">>,?JSON_DECODE(Body)}]}),
         {ok, couch_doc:with_ejson_body(Doc)};
     {ok, {{_Code, _}, _RespHeaders, Body}} ->
         {Props} = ?JSON_DECODE(Body),

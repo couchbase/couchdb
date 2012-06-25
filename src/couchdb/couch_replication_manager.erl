@@ -124,8 +124,9 @@ handle_call({rep_db_update, {ChangeProps} = Change}, _From, State) ->
         process_update(State, Change)
     catch
     _Tag:Error ->
-        {RepProps} = get_value(doc, ChangeProps),
-        DocId = get_value(<<"_id">>, RepProps),
+        {DocProps} = get_value(doc, ChangeProps),
+        {RepProps} = get_value(<<"meta">>, DocProps),
+        DocId = get_value(<<"id">>, RepProps),
         rep_db_update_error(Error, DocId),
         State
     end,
@@ -304,8 +305,10 @@ restart(#state{changes_feed_loop = Loop, rep_start_pids = StartPids} = State) ->
 
 
 process_update(State, {Change}) ->
-    {RepProps} = JsonRepDoc = get_value(doc, Change),
-    DocId = get_value(<<"_id">>, RepProps),
+    {DocProps} = JsonRepDoc = get_value(doc, Change),
+    {RepMeta} = get_value(<<"meta">>, DocProps),
+    {RepProps} = get_value(<<"json">>, DocProps),
+    DocId = get_value(<<"id">>, RepMeta),
     case get_value(<<"deleted">>, Change, false) of
     true ->
         rep_doc_deleted(DocId),
@@ -581,9 +584,11 @@ ensure_rep_ddoc_exists(RepDb, DDocID) ->
         ok;
     _ ->
         DDoc = couch_doc:from_json_obj({[
-            {<<"_id">>, DDocID},
-            {<<"language">>, <<"javascript">>},
-            {<<"validate_doc_update">>, ?REP_DB_DOC_VALIDATE_FUN}
+            {<<"meta">>, {[{<<"id">>, DDocID}]}},
+            {<<"json">>, {[
+                {<<"language">>, <<"javascript">>},
+                {<<"validate_doc_update">>, ?REP_DB_DOC_VALIDATE_FUN}
+            ]}}
         ]}),
         ok = couch_db:update_doc(RepDb, DDoc, [])
      end.

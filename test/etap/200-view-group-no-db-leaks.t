@@ -211,17 +211,28 @@ check_db_ref_count() ->
 create_docs() ->
     {ok, Db} = couch_db:open(test_db_name(), [admin_user_ctx()]),
     Doc1 = couch_doc:from_json_obj({[
-        {<<"_id">>, <<"doc1">>},
-        {<<"value">>, 1}
+        {<<"meta">>, {[
+            {<<"id">>, <<"doc1">>}
+        ]}},
+        {<<"json">>, {[
+            {<<"value">>, 1}
+        ]}}
     ]}),
     Doc2 = couch_doc:from_json_obj({[
-        {<<"_id">>, <<"doc2">>},
-        {<<"value">>, 2}
-
+        {<<"meta">>, {[
+            {<<"id">>, <<"doc2">>}
+        ]}},
+        {<<"json">>, {[
+            {<<"value">>, 2}
+        ]}}
     ]}),
     Doc3 = couch_doc:from_json_obj({[
-        {<<"_id">>, <<"doc3">>},
-        {<<"value">>, 3}
+        {<<"meta">>, {[
+            {<<"id">>, <<"doc3">>}
+        ]}},
+        {<<"json">>, {[
+            {<<"value">>, 3}
+        ]}}
     ]}),
     ok = couch_db:update_docs(Db, [Doc1, Doc2, Doc3], [sort_docs]),
     couch_db:ensure_full_commit(Db),
@@ -230,11 +241,15 @@ create_docs() ->
 create_design_doc() ->
     {ok, Db} = couch_db:open(test_db_name(), [admin_user_ctx()]),
     DDoc = couch_doc:from_json_obj({[
-        {<<"_id">>, <<"_design/", (ddoc_name())/binary>>},
-        {<<"language">>, <<"javascript">>},
-        {<<"views">>, {[
-            {<<"bar">>, {[
-                {<<"map">>, <<"function(doc) { emit(doc._id, null); }">>}
+        {<<"meta">>, {[
+            {<<"id">>, <<"_design/", (ddoc_name())/binary>>}
+        ]}},
+        {<<"json">>, {[
+            {<<"language">>, <<"javascript">>},
+            {<<"views">>, {[
+                {<<"bar">>, {[
+                    {<<"map">>, <<"function(doc) { emit(doc._id, null); }">>}
+                ]}}
             ]}}
         ]}}
     ]}),
@@ -245,11 +260,15 @@ create_design_doc() ->
 update_ddoc_view() ->
     {ok, Db} = couch_db:open(test_db_name(), [admin_user_ctx()]),
     DDoc = couch_doc:from_json_obj({[
-        {<<"_id">>, <<"_design/", (ddoc_name())/binary>>},
-        {<<"language">>, <<"javascript">>},
-        {<<"views">>, {[
-            {<<"bar">>, {[
-                {<<"map">>, <<"function(doc) { emit(doc._id, 1); }">>}
+        {<<"meta">>, {[
+            {<<"id">>, <<"_design/", (ddoc_name())/binary>>}
+        ]}},
+        {<<"json">>, {[
+            {<<"language">>, <<"javascript">>},
+            {<<"views">>, {[
+                {<<"bar">>, {[
+                    {<<"map">>, <<"function(doc) { emit(doc._id, 1); }">>}
+                ]}}
             ]}}
         ]}}
     ]}),
@@ -260,8 +279,12 @@ update_ddoc_view() ->
 create_new_doc(Id) ->
     {ok, Db} = couch_db:open(test_db_name(), [admin_user_ctx()]),
     Doc666 = couch_doc:from_json_obj({[
-        {<<"_id">>, Id},
-        {<<"value">>, 999}
+        {<<"meta">>, {[
+            {<<"id">>, Id}
+        ]}},
+        {<<"json">>, {[
+            {<<"value">>, 999}
+        ]}}
     ]}),
     ok = couch_db:update_docs(Db, [Doc666]),
     couch_db:ensure_full_commit(Db),

@@ -162,7 +162,12 @@ open_doc(#httpdb{} = Db, Id, Options) ->
         Db,
         [{path, encode_doc_id(Id)}],
         fun(200, _, Body) ->
-            BinDoc = couch_doc:from_json_obj(Body),
+            % If we need the rev, we can get it from the
+            % "X-Couchbase-Meta" header.
+            BinDoc = couch_doc:from_json_obj({[
+                {<<"meta">>, {[{<<"id">>, Id}]}},
+                {<<"json">>, Body}]}),
+
             case lists:member(ejson_body, Options) of
             true ->
                 {ok, couch_doc:with_ejson_body(BinDoc)};
@@ -213,7 +218,7 @@ update_docs(#httpdb{} = HttpDb, DocList, Options, UpdateType) ->
     % and JSON encode each doc only before sending it through the socket.
     {Docs, Len} = lists:mapfoldl(
         fun(#doc{} = Doc, Acc) ->
-            Json = ?JSON_ENCODE(couch_doc:to_json_obj(Doc, [encode_binary_body])),
+            Json = couch_doc:to_json_bin(Doc),
             {Json, Acc + iolist_size(Json)};
         (Doc, Acc) ->
             {Doc, Acc + iolist_size(Doc)}
@@ -386,7 +391,7 @@ changes_json_req(Db, FilterName, {QueryParams}, _Options) ->
         {<<"path">>, [couch_db:name(Db), <<"_changes">>]},
         {<<"query">>, {[{<<"filter">>, FilterName} | QueryParams]}},
         {<<"headers">>, []},
-        {<<"body">>, []},
+        {<<"json">>, []},
         {<<"peer">>, <<"replicator">>},
         {<<"form">>, []},
         {<<"cookie">>, []},

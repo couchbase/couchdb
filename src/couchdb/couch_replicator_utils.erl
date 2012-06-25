@@ -31,7 +31,9 @@
 ]).
 
 
-parse_rep_doc({Props}, UserCtx) ->
+parse_rep_doc({Doc}, UserCtx) ->
+    {Meta} = get_value(<<"meta">>, Doc, {[]}),
+    {Props} = get_value(<<"json">>, Doc, {[]}),
     ProxyParams = parse_proxy_params(get_value(<<"proxy">>, Props, <<>>)),
     Options = make_options(Props),
     case get_value(cancel, Options, false) andalso
@@ -46,7 +48,7 @@ parse_rep_doc({Props}, UserCtx) ->
             target = Target,
             options = Options,
             user_ctx = UserCtx,
-            doc_id = get_value(<<"_id">>, Props)
+            doc_id = get_value(<<"id">>, Meta)
         },
         {ok, Rep#rep{id = replication_id(Rep)}}
     end.

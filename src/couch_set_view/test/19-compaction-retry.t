@@ -208,17 +208,19 @@ create_set() ->
     etap:diag("Creating the set databases (# of partitions: " ++
         integer_to_list(num_set_partitions()) ++ ")"),
     DDoc = {[
-        {<<"_id">>, ddoc_id()},
+        {<<"meta">>, {[{<<"id">>, ddoc_id()}]}},
+        {<<"json">>, {[
         {<<"language">>, <<"javascript">>},
         {<<"views">>, {[
             {<<"view_1">>, {[
-                {<<"map">>, <<"function(doc) { emit(doc._id, doc.value); }">>},
+                {<<"map">>, <<"function(doc, meta) { emit(meta.id, doc.value); }">>},
                 {<<"reduce">>, <<"_count">>}
             ]}},
             {<<"view_2">>, {[
-                {<<"map">>, <<"function(doc) { emit(doc._id, doc._id); }">>},
+                {<<"map">>, <<"function(doc, meta) { emit(meta.id, meta.id); }">>},
                 {<<"reduce">>, <<"_count">>}
             ]}}
+        ]}}
         ]}}
     ]},
     ok = couch_set_view_test_util:update_ddoc(test_set_name(), DDoc),
@@ -237,8 +239,10 @@ update_documents(StartId, Count, ValueGenFun) ->
     DocList0 = lists:map(
         fun(I) ->
             {I rem num_set_partitions(), {[
-                {<<"_id">>, doc_id(I)},
-                {<<"value">>, ValueGenFun(I)}
+                {<<"meta">>, {[{<<"id">>, doc_id(I)}]}},
+                {<<"json">>, {[
+                    {<<"value">>, ValueGenFun(I)}
+                ]}}
             ]}}
         end,
         lists:seq(StartId, StartId + Count - 1)),
@@ -259,8 +263,8 @@ delete_docs(StartId, NumDocs) ->
     Docs = lists:foldl(
         fun(I, Acc) ->
             Doc = couch_doc:from_json_obj({[
-                {<<"_id">>, doc_id(I)},
-                {<<"_deleted">>, true}
+                {<<"meta">>, {[{<<"deleted">>, true},{<<"id">>, doc_id(I)}]}},
+                {<<"json">>, {[]}}
             ]}),
             DocList = case orddict:find(I rem 64, Acc) of
             {ok, L} ->
@@ -291,7 +295,7 @@ verify_btrees(ValueGenFun, NumDocs) ->
     Group = get_group_snapshot(),
     #set_view_group{
         id_btree = IdBtree,
-        views = [View2, View1],
+        views = [View1, View2],
         index_header = #set_view_index_header{
             seqs = HeaderUpdateSeqs,
             abitmask = Abitmask,
@@ -331,7 +335,7 @@ verify_btrees(ValueGenFun, NumDocs) ->
         fun(Kv, _, I) ->
             PartId = I rem num_set_partitions(),
             DocId = doc_id(I),
-            Value = [{View2#set_view.id_num, DocId}, {View1#set_view.id_num, DocId}],
+            Value = [{View1#set_view.id_num, DocId}, {View2#set_view.id_num, DocId}],
             ExpectedKv = {DocId, {PartId, Value}},
             case ExpectedKv =:= Kv of
             true ->
@@ -357,7 +361,8 @@ verify_btrees(ValueGenFun, NumDocs) ->
             true ->
                 ok;
             false ->
-                etap:bail("View1 Btree has an unexpected KV at iteration " ++ integer_to_list(I))
+                etap:bail(io_lib:format("View1 Btree has an unexpected KV at iteration " ++ integer_to_list(I)
+                    ++ ": ExpectedKv ~w Kv ~w", [ExpectedKv, Kv]))
             end,
             {ok, I + 1}
         end,

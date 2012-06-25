@@ -45,57 +45,67 @@ test_from_json_success() ->
             "Return an empty document for an empty JSON object."
         },
         {
-            {[{<<"_id">>, <<"zing!">>}]},
+            {[{<<"meta">>, {[{<<"id">>, <<"zing!">>}]}}]},
             #doc{id= <<"zing!">>},
             "Parses document ids."
         },
         {
-            {[{<<"_id">>, <<"_design/foo">>}]},
+            {[{<<"meta">>, {[{<<"id">>, <<"_foo">>}]}}]},
+            #doc{id= <<"_foo">>},
+            "_underscore ids."
+        },
+        {
+            {[{<<"meta">>, {[{<<"id">>, <<"_design/foo">>}]}}]},
             #doc{id= <<"_design/foo">>},
             "_design/document ids."
         },
         {
-            {[{<<"_id">>, <<"_local/bam">>}]},
+            {[{<<"meta">>, {[{<<"id">>, <<"_local/bam">>}]}}]},
             #doc{id= <<"_local/bam">>},
             "_local/document ids."
         },
         {
-            {[{<<"_rev">>, <<"4-1111">>}]},
+            {[{<<"meta">>, {[{<<"rev">>, <<"4-1111">>}]}}]},
             #doc{rev={4, <<17,17>>}},
             "_rev stored in revs."
         },
         {
-            {[{<<"soap">>, 35}]},
-            #doc{body= <<"{\"soap\":35}">>},
-            "Non underscore prefixed fields stored in body."
+            {[{<<"json">>, {[{<<"soap">>, 35}]}},{<<"meta">>, {[{<<"id">>, <<"foo">>}]}}]},
+            #doc{id= <<"foo">>, body= <<"{\"soap\":35}">>},
+            "Non meta fields stored in body."
         },
         {
-            {[{<<"_deleted">>, true}]},
+            {[{<<"json">>, {[{<<"_soap">>, 35}]}}]},
+            #doc{body= <<"{\"_soap\":35}">>},
+            "Underscore fields are legal."
+        },
+        {
+            {[{<<"meta">>, {[{<<"deleted">>, true}]}}]},
             #doc{deleted=true},
             "_deleted controls the deleted field."
         },
         {
-            {[{<<"_deleted">>, false}]},
+            {[{<<"meta">>, {[{<<"deleted">>, false}]}}]},
             #doc{},
             "{\"_deleted\": false} is ok."
         },
         {
-            {[{<<"_revs_info">>, dropping}]},
+            {[{<<"meta">>, {[{<<"revs_info">>, dropping}]}}]},
             #doc{},
             "Drops _revs_info."
         },
         {
-            {[{<<"_local_seq">>, dropping}]},
+            {[{<<"meta">>, {[{<<"local_seq">>, dropping}]}}]},
             #doc{},
             "Drops _local_seq."
         },
         {
-            {[{<<"_conflicts">>, dropping}]},
+            {[{<<"meta">>, {[{<<"conflicts">>, dropping}]}}]},
             #doc{},
             "Drops _conflicts."
         },
         {
-            {[{<<"_deleted_conflicts">>, dropping}]},
+            {[{<<"meta">>, {[{<<"deleted_conflicts">>, dropping}]}}]},
             #doc{},
             "Drops _deleted_conflicts."
         }
@@ -124,34 +134,23 @@ test_from_json_errors() ->
             "literals are invalid"
         },
         {
-            {[{<<"_id">>, {[{<<"foo">>, 5}]}}]},
+            {[{<<"meta">>, {[{<<"id">>, {[{<<"foo">>, 5}]}}]}}]},
             {bad_request, <<"Document id must be a string">>},
             "Document id must be a string."
         },
         {
-            {[{<<"_id">>, <<"_random">>}]},
-            {bad_request,
-                <<"Only reserved document ids may start with underscore.">>},
-            "Disallow arbitrary underscore prefixed docids."
-        },
-        {
-            {[{<<"_rev">>, 5}]},
+            {[{<<"meta">>, {[{<<"rev">>, 5}]}}]},
             {bad_request, <<"Invalid rev format">>},
             "_rev must be a string"
         },
         {
-            {[{<<"_rev">>, "foobar"}]},
+            {[{<<"meta">>, {[{<<"rev">>, "foobar"}]}}]},
             {bad_request, <<"Invalid rev format">>},
             "_rev must be %d-%s"
         },
         {
-            {[{<<"_rev">>, "foo-bar"}]},
+            {[{<<"meta">>, {[{<<"rev">>, "foo-bar"}]}}]},
             "Error if _rev's integer expection is broken."
-        },
-        {
-            {[{<<"_something">>, 5}]},
-            {doc_validation, <<"Bad special document member: _something">>},
-            "Underscore prefix fields are reserved."
         }
     ],
 

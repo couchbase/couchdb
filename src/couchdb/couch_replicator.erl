@@ -774,10 +774,10 @@ do_checkpoint(State) ->
             ]
         end,
         % limit history to 50 entries
-        NewRepHistory = {
+        NewRepHistory = 
             BaseHistory ++
             [{<<"history">>, lists:sublist([NewHistoryEntry | OldHistory], 50)}]
-        },
+        ,
 
         Rand = crypto:rand_uniform(0, 16#100000000),
         RandBin = <<Rand:32/integer>>,

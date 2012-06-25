@@ -675,9 +675,6 @@ view_etag(_Db, #group{sig=Sig}, #view{update_seq=UpdateSeq, purge_seq=PurgeSeq},
 view_row_obj(_Db, {{Key, error}, Value}, _IncludeDocs, _Conflicts) ->
     {[{key, Key}, {error, Value}]};
 % include docs in the view output
-view_row_obj(Db, {{Key, DocId}, {Props}}, true, Conflicts) ->
-    IncludeId = couch_util:get_value(<<"_id">>, Props, DocId),
-    view_row_with_doc(Db, {{Key, DocId}, {Props}}, IncludeId, Conflicts);
 view_row_obj(Db, {{Key, DocId}, Value}, true, Conflicts) ->
     view_row_with_doc(Db, {{Key, DocId}, Value}, DocId, Conflicts);
 % the normal case for rendering a view row
@@ -691,15 +688,14 @@ view_row_with_doc(Db, {{Key, DocId}, Value}, IdRev, Conflicts) ->
 doc_member(Db, #doc_info{} = Info, Options) ->
     case couch_db:open_doc(Db, Info, [deleted | Options]) of
     {ok, Doc} ->
-        [{doc, couch_doc:to_json_obj(Doc, [])}];
+        [{doc, {json, couch_doc:to_json_bin(Doc)}}];
     _ ->
         [{doc, null}]
     end;
 doc_member(Db, DocId, Options) ->
     case (catch couch_db_frontend:open_doc(Db, DocId, Options)) of
     {ok, #doc{} = Doc} ->
-        JsonDoc = couch_doc:to_json_obj(Doc, []),
-        [{doc, JsonDoc}];
+        [{doc, {json, couch_doc:to_json_bin(Doc)}}];
     _Else ->
         [{doc, null}]
     end.

@@ -193,8 +193,7 @@ update_ddoc(SetName, DDoc) ->
 delete_ddoc(SetName, DDocId) ->
     DbName = iolist_to_binary([SetName, "/master"]),
     {ok, Db} = couch_db:open_int(DbName, [admin_user_ctx()]),
-    {ok, DDoc} = couch_db:open_doc(Db, DDocId, []),
-    ok = couch_db:update_doc(Db, DDoc#doc{deleted = true}, []),
+    ok = couch_db:update_doc(Db, #doc{id = DDocId, deleted = true}, []),
     ok = couch_db:close(Db).
 
 

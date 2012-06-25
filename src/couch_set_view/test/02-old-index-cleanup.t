@@ -126,11 +126,13 @@ query_view(ExpectedRowCount, QueryString) ->
 
 populate_set() ->
     DDoc = {[
-        {<<"_id">>, ddoc_id()},
-        {<<"language">>, <<"javascript">>},
-        {<<"views">>, {[
-            {<<"test">>, {[
-                {<<"map">>, <<"function(doc) { emit(doc.value, doc._id); }">>}
+        {<<"meta">>, {[{<<"id">>, ddoc_id()}]}},
+        {<<"json">>, {[
+            {<<"language">>, <<"javascript">>},
+            {<<"views">>, {[
+                {<<"test">>, {[
+                    {<<"map">>, <<"function(doc, meta) { emit(doc.value, meta.id); }">>}
+                ]}}
             ]}}
         ]}}
     ]},
@@ -138,8 +140,10 @@ populate_set() ->
     DocList = lists:map(
         fun(I) ->
             {[
-                {<<"_id">>, iolist_to_binary(["doc", integer_to_list(I)])},
-                {<<"value">>, I}
+                {<<"meta">>, {[{<<"id">>, iolist_to_binary(["doc", integer_to_list(I)])}]}},
+                {<<"json">>, {[
+                    {<<"value">>, I}
+                    ]}}
             ]}
         end,
         lists:seq(1, num_docs())),
@@ -158,13 +162,15 @@ populate_set() ->
 
 update_ddoc() ->
     NewDDoc = {[
-        {<<"_id">>, ddoc_id()},
-        {<<"language">>, <<"javascript">>},
-        {<<"views">>, {[
-            {<<"test">>, {[
-                {<<"map">>, <<"function(doc) { emit(doc.value, null); }">>}
+        {<<"meta">>, {[{<<"id">>, ddoc_id()}]}},
+        {<<"json">>, {[
+            {<<"language">>, <<"javascript">>},
+            {<<"views">>, {[
+                {<<"test">>, {[
+                    {<<"map">>, <<"function(doc, meta) { emit(doc.value, null); }">>}
+                ]}}
             ]}}
-        ]}}
+            ]}}
     ]},
     ok = couch_set_view_test_util:update_ddoc(test_set_name(), NewDDoc),
     ok = couch_set_view_test_util:define_set_view(

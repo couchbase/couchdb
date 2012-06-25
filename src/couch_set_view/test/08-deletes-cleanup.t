@@ -243,8 +243,8 @@ delete_docs(StartId, NumDocs) ->
     Docs = lists:foldl(
         fun(I, Acc) ->
             Doc = couch_doc:from_json_obj({[
-                {<<"_id">>, doc_id(I)},
-                {<<"_deleted">>, true}
+                {<<"meta">>, {[{<<"deleted">>, true}, {<<"id">>, doc_id(I)}]}},
+                {<<"json">>, {[]}}
             ]}),
             DocList = case orddict:find(I rem 64, Acc) of
             {ok, L} ->
@@ -274,13 +274,15 @@ create_set() ->
     etap:diag("Creating the set databases (# of partitions: " ++
         integer_to_list(num_set_partitions()) ++ ")"),
     DDoc = {[
-        {<<"_id">>, ddoc_id()},
+        {<<"meta">>, {[{<<"id">>, ddoc_id()}]}},
+        {<<"json">>, {[
         {<<"language">>, <<"javascript">>},
         {<<"views">>, {[
             {<<"test">>, {[
-                {<<"map">>, <<"function(doc) { emit(doc._id, doc.value); }">>},
+                {<<"map">>, <<"function(doc, meta) { emit(meta.id, doc.value); }">>},
                 {<<"reduce">>, <<"_count">>}
             ]}}
+        ]}}
         ]}}
     ]},
     ok = couch_set_view_test_util:update_ddoc(test_set_name(), DDoc),
@@ -299,8 +301,10 @@ add_documents(StartId, Count) ->
     DocList0 = lists:map(
         fun(I) ->
             {I rem num_set_partitions(), {[
-                {<<"_id">>, doc_id(I)},
-                {<<"value">>, I}
+                {<<"meta">>, {[{<<"id">>, doc_id(I)}]}},
+                {<<"json">>, {[
+                    {<<"value">>, I}
+                ]}}
             ]}}
         end,
         lists:seq(StartId, StartId + Count - 1)),

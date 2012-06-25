@@ -97,8 +97,10 @@ test() ->
 
     {ok, Db0} = open_db(0),
     Doc = couch_doc:from_json_obj({[
-        {<<"_id">>, doc_id(9000010)},
-        {<<"value">>, 9000010}
+        {<<"meta">>, {[{<<"id">>, doc_id(9000010)}]}},
+        {<<"json">>, {[
+            {<<"value">>, 9000010}
+        ]}}
     ]}),
     ok = couch_db:update_doc(Db0, Doc, []),
     ok = couch_db:close(Db0),
@@ -122,8 +124,10 @@ recreate_db(PartId) ->
     ok = timer:sleep(300),
     {ok, Db} = couch_db:create(DbName, [admin_user_ctx()]),
     Doc = couch_doc:from_json_obj({[
-        {<<"_id">>, doc_id(9000009)},
-        {<<"value">>, 9000009}
+        {<<"meta">>, {[{<<"id">>, doc_id(9000009)}]}},
+        {<<"json">>, {[
+            {<<"value">>, 9000009}
+        ]}}
     ]}),
     ok = couch_db:update_doc(Db, Doc, []),
     ok = couch_db:close(Db).
@@ -141,13 +145,15 @@ create_set() ->
     etap:diag("Creating the set databases (# of partitions: " ++
         integer_to_list(num_set_partitions()) ++ ")"),
     DDoc = {[
-        {<<"_id">>, ddoc_id()},
+        {<<"meta">>, {[{<<"id">>, ddoc_id()}]}},
+        {<<"json">>, {[
         {<<"language">>, <<"javascript">>},
         {<<"views">>, {[
             {<<"view_1">>, {[
-                {<<"map">>, <<"function(doc) { emit(doc._id, doc.value); }">>},
+                {<<"map">>, <<"function(doc, meta) { emit(meta.id, doc.value); }">>},
                 {<<"reduce">>, <<"_count">>}
             ]}}
+        ]}}
         ]}}
     ]},
     ok = couch_set_view_test_util:update_ddoc(test_set_name(), DDoc),
@@ -172,8 +178,10 @@ update_documents(StartId, NumDocs, ValueGenFun) ->
     Docs = lists:foldl(
         fun(I, Acc) ->
             Doc = couch_doc:from_json_obj({[
-                {<<"_id">>, doc_id(I)},
-                {<<"value">>, ValueGenFun(I)}
+                {<<"meta">>, {[{<<"id">>, doc_id(I)}]}},
+                {<<"json">>, {[
+                    {<<"value">>, ValueGenFun(I)}
+                ]}}
             ]}),
             DocList = case orddict:find(I rem num_set_partitions(), Acc) of
             {ok, L} ->

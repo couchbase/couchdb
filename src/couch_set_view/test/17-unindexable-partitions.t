@@ -198,12 +198,14 @@ create_set() ->
     etap:diag("Creating the set databases (# of partitions: " ++
         integer_to_list(num_set_partitions()) ++ ")"),
     DDoc = {[
-        {<<"_id">>, ddoc_id()},
-        {<<"language">>, <<"javascript">>},
-        {<<"views">>, {[
-            {<<"view_1">>, {[
-                {<<"map">>, <<"function(doc) { emit(doc._id, doc.value); }">>},
-                {<<"reduce">>, <<"_sum">>}
+        {<<"meta">>, {[{<<"id">>, ddoc_id()}]}},
+        {<<"json">>, {[
+            {<<"language">>, <<"javascript">>},
+            {<<"views">>, {[
+                {<<"view_1">>, {[
+                    {<<"map">>, <<"function(doc, meta) { emit(meta.id, doc.value); }">>},
+                    {<<"reduce">>, <<"_sum">>}
+                ]}}
             ]}}
         ]}}
     ]},
@@ -223,8 +225,10 @@ update_documents(StartId, Count, ValueGenFun) ->
     DocList0 = lists:map(
         fun(I) ->
             {I rem num_set_partitions(), {[
-                {<<"_id">>, doc_id(I)},
-                {<<"value">>, ValueGenFun(I)}
+                {<<"meta">>, {[{<<"id">>, doc_id(I)}]}},
+                {<<"json">>, {[
+                    {<<"value">>, ValueGenFun(I)}
+                ]}}
             ]}}
         end,
         lists:seq(StartId, StartId + Count - 1)),
@@ -287,7 +291,7 @@ verify_btrees_1(ExpectedSeqs, ExpectedUnindexableSeqs, ValueGenFun) ->
     etap:is(
         couch_set_view_test_util:full_reduce_view_btree(Group, View1Btree),
         {ok, {ExpectedKVCount, [ExpectedView1Reduction], ExpectedBitmask}},
-        "View1 Btree has the right reduce value"),
+        "View1 Btree has the right reduce value 1"),
 
     etap:is(HeaderUpdateSeqs, ExpectedSeqs, "Header has right update seqs list"),
     etap:is(UnindexableSeqs, ExpectedUnindexableSeqs, "Header has right unindexable seqs list"),
@@ -375,7 +379,7 @@ verify_btrees_2(ExpectedSeqs, ExpectedUnindexableSeqs, ValueGenFun1, ValueGenFun
     etap:is(
         couch_set_view_test_util:full_reduce_view_btree(Group, View1Btree),
         {ok, {ExpectedKVCount, [ExpectedView1Reduction], ExpectedBitmask}},
-        "View1 Btree has the right reduce value"),
+        "View1 Btree has the right reduce value 2"),
 
     etap:is(HeaderUpdateSeqs, ExpectedSeqs, "Header has right update seqs list"),
     etap:is(UnindexableSeqs, ExpectedUnindexableSeqs, "Header has right unindexable seqs list"),
