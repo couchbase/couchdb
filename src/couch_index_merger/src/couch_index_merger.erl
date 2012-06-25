@@ -209,12 +209,22 @@ do_query_index(Mod, IndexMergeParams, DDoc, IndexName) ->
         % HTTP folders (bloked by queue calls) will get an error/exit and
         % then stream all the remaining data from the socket, otherwise
         % the socket can't be reused for future requests.
-        couch_util:shutdown_sync(Queue),
-        lists:foreach(fun couch_util:shutdown_sync/1, Folders),
+        QRef = erlang:monitor(process, Queue),
+        exit(Queue, shutdown),
+        FolderRefs = lists:map(fun(Pid) ->
+                Ref = erlang:monitor(process, Pid),
+                exit(Pid, shutdown),
+                Ref
+            end, Folders),
+        lists:foreach(fun(Ref) ->
+                receive {'DOWN', Ref, _, _, _} -> ok end
+            end, [QRef | FolderRefs]),
         Reason = clean_exit_messages(normal),
         process_flag(trap_exit, TrapExitBefore),
         case Reason of
         normal ->
+            ok;
+        shutdown ->
             ok;
         _ ->
             exit(Reason)
@@ -225,6 +235,8 @@ do_query_index(Mod, IndexMergeParams, DDoc, IndexName) ->
 clean_exit_messages(FinalReason) ->
     receive
     {'EXIT', _Pid, normal} ->
+        clean_exit_messages(FinalReason);
+    {'EXIT', _Pid, shutdown} ->
         clean_exit_messages(FinalReason);
     {'EXIT', _Pid, Reason} ->
         clean_exit_messages(Reason)
