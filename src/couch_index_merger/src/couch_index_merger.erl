@@ -167,7 +167,6 @@ do_query_index(Mod, IndexMergeParams, DDoc, IndexName) ->
     % requests).
     TrapExitBefore = process_flag(trap_exit, true),
     {ok, Queue} = couch_view_merger_queue:start_link(NumFolders, QueueLessFun),
-    Collector = CollectorFun(NumFolders, Callback, UserAcc),
     Folders = lists:foldr(
         fun(Index, Acc) ->
             Pid = spawn_link(fun() ->
@@ -177,6 +176,7 @@ do_query_index(Mod, IndexMergeParams, DDoc, IndexName) ->
             [Pid | Acc]
         end,
         [], Indexes),
+    Collector = CollectorFun(NumFolders, Callback, UserAcc),
     {Skip, Limit} = Mod:get_skip_and_limit(IndexMergeParams#index_merge.http_params),
     MergeParams = #merge_params{
         index_name = IndexName,
