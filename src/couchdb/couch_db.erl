@@ -29,6 +29,7 @@
 -export([changes_since/4,changes_since/5]).
 -export([check_is_admin/1, check_is_member/1]).
 -export([reopen/1,get_current_seq/1,fast_reads/2,get_trailing_file_num/1]).
+-export([add_update_listener/3, remove_update_listener/2]).
 
 -include("couch_db.hrl").
 
@@ -375,6 +376,12 @@ validate_names_and_roles({Props}) when is_list(Props) ->
 
 name(#db{name=Name}) ->
     Name.
+
+add_update_listener(#db{update_pid = UpPid}, Pid, Tag) ->
+    gen_server:call(UpPid, {add_update_listener, Pid, Tag}, infinity).
+
+remove_update_listener(#db{update_pid = UpPid}, Pid) ->
+    gen_server:call(UpPid, {remove_update_listener, Pid}, infinity).
 
 update_doc(Db, Docs) ->
     update_doc(Db, Docs, []).

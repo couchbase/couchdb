@@ -207,6 +207,7 @@ test_map_runtime_error() ->
     after 5000 ->
         etap:is(is_process_alive(GroupPid), true, "View group is still alive")
     end,
+    couch_util:shutdown_sync(GroupPid),
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()).
 
 
@@ -243,6 +244,7 @@ test_map_syntax_error() ->
     after 5000 ->
         etap:is(is_process_alive(GroupPid), true, "View group is still alive")
     end,
+    couch_util:shutdown_sync(GroupPid),
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()).
 
 
@@ -280,6 +282,7 @@ test_builtin_reduce_runtime_error() ->
     after 5000 ->
         etap:is(is_process_alive(GroupPid), true, "View group is still alive")
     end,
+    couch_util:shutdown_sync(GroupPid),
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()).
 
 
@@ -317,6 +320,7 @@ test_invalid_builtin_reduce_error() ->
     after 5000 ->
         etap:is(is_process_alive(GroupPid), true, "View group is still alive")
     end,
+    couch_util:shutdown_sync(GroupPid),
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()).
 
 
@@ -343,7 +347,7 @@ test_reduce_runtime_error() ->
 
     QueryResult = try
         query_reduce_view(DDocId, <<"test">>, false)
-	catch _:Error ->
+    catch _:Error ->
         Error
     end,
     ?etap_match(QueryResult, {error, _}, "Received error response"),
@@ -354,6 +358,7 @@ test_reduce_runtime_error() ->
     after 5000 ->
         etap:is(is_process_alive(GroupPid), true, "View group is still alive")
     end,
+    couch_util:shutdown_sync(GroupPid),
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()).
 
 
@@ -391,6 +396,7 @@ test_reduce_syntax_error() ->
     after 5000 ->
         etap:is(is_process_alive(GroupPid), true, "View group is still alive")
     end,
+    couch_util:shutdown_sync(GroupPid),
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()).
 
 

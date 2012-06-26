@@ -27,8 +27,7 @@
 
 -record(state, {
     set_name,
-    db_seqs,
-    db_notifier
+    db_seqs
 }).
 
 
@@ -71,22 +70,12 @@ init({SetName, Partitions} = Args) ->
     gen_server:enter_loop(?MODULE, [], State).
 
 do_init({SetName, Partitions}) ->
-    Server = self(),
-    EventFun = fun({updated, {DbName, _NewSeq}} = Ev) ->
-            case is_set_db(DbName, SetName) of
-            true ->
-                ok = gen_server:cast(Server, Ev);
-            false ->
-                ok
-            end;
-        (_) ->
-            ok
-    end,
     DbSeqs = lists:foldl(
         fun(PartId, Acc) ->
             Name = ?dbname(SetName, PartId),
             case couch_db:open_int(Name, []) of
             {ok, Db} ->
+                ok = couch_db:add_update_listener(Db, self(), PartId),
                 ok = couch_db:close(Db),
                 orddict:store(PartId, Db#db.update_seq, Acc);
             Error2 ->
@@ -94,10 +83,8 @@ do_init({SetName, Partitions}) ->
             end
         end,
         orddict:new(), Partitions),
-    {ok, Notifier} = couch_db_update_notifier:start_link(EventFun),
     State = #state{
         set_name = SetName,
-        db_notifier = Notifier,
         db_seqs = DbSeqs
     },
     {ok, State}.
@@ -106,6 +93,19 @@ do_init({SetName, Partitions}) ->
 handle_call(get_seqs, _From, State) ->
     {reply, {ok, State#state.db_seqs}, State};
 
+% Used for debugging/troubleshooting only
+handle_call(get_seqs_debug, _From, State) ->
+    RealSeqs = orddict:fold(
+        fun(PartId, _, Acc) ->
+            DbName = ?dbname((State#state.set_name), PartId),
+            {ok, Db} = couch_db:open_int(DbName, []),
+            ok = couch_db:close(Db),
+            orddict:store(PartId, Db#db.update_seq, Acc)
+        end,
+        orddict:new(),
+        State#state.db_seqs),
+    {reply, {ok, State#state.db_seqs, RealSeqs}, State};
+
 handle_call({add_partitions, PartList}, _From, State) ->
     DbSeqs2 = lists:foldl(
         fun(Id, AccDbSeqs) ->
@@ -113,6 +113,7 @@ handle_call({add_partitions, PartList}, _From, State) ->
             false ->
                 DbName = ?dbname((State#state.set_name), Id),
                 {ok, Db} = couch_db:open_int(DbName, []),
+                ok = couch_db:add_update_listener(Db, self(), Id),
                 ok = couch_db:close(Db),
                 orddict:store(Id, Db#db.update_seq, AccDbSeqs);
             true ->
@@ -130,6 +131,15 @@ handle_call({remove_partitions, PartList}, _From, State) ->
             false ->
                 AccDbSeqs;
             true ->
+                DbName = ?dbname((State#state.set_name), Id),
+                case couch_db:open_int(DbName, []) of
+                {ok, Db} ->
+                    ok = couch_db:remove_update_listener(Db, self()),
+                    ok = couch_db:close(Db);
+                {not_found, no_db_file} ->
+                    ok % deleted, ignore
+                end,
+                clean_update_messages(Id),
                 orddict:erase(Id, AccDbSeqs)
             end
         end,
@@ -141,20 +151,13 @@ handle_call(close, _From, State) ->
     {stop, normal, ok, State}.
 
 
-handle_cast({updated, {DbName, NewSeq}}, State) ->
-    case get_part_id(DbName) of
-    {ok, PartId} ->
-        case orddict:is_key(PartId, State#state.db_seqs) of
-        true ->
-            DbSeqs2 = orddict:store(PartId, NewSeq, State#state.db_seqs),
-            {noreply, State#state{db_seqs = DbSeqs2}};
-        false ->
-            {noreply, State}
-        end;
-    _ ->
-        {noreply, State}
-    end.
+handle_cast(Msg, State) ->
+    {stop, {unexpected_cast, Msg}, State}.
 
+
+handle_info({db_updated, PartId, NewSeq}, State) ->
+    DbSeqs2 = orddict:store(PartId, NewSeq, State#state.db_seqs),
+    {noreply, State#state{db_seqs = DbSeqs2}};
 
 handle_info(Msg, State) ->
     {stop, {unexpected_msg, Msg}, State}.
@@ -164,8 +167,8 @@ code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 
-terminate(_Reason, State) ->
-    couch_db_update_notifier:stop(State#state.db_notifier).
+terminate(_Reason, _State) ->
+    ok.
 
 
 raise_db_open_error(DbName, Error) ->
@@ -173,26 +176,11 @@ raise_db_open_error(DbName, Error) ->
     throw({db_open_error, DbName, Error, iolist_to_binary(Msg)}).
 
 
-is_set_db(DbName, SetName) ->
-    Sz = byte_size(SetName),
-    case DbName of
-    <<SetName:Sz/binary, $/, _/binary>> ->
-        true;
-    _ ->
-        false
+clean_update_messages(PartId) ->
+    receive
+    {db_updated, PartId, _NewSeq} ->
+        clean_update_messages(PartId)
+    after 0 ->
+        ok
     end.
 
-
-get_part_id(DbName) ->
-    case string:tokens(?b2l(DbName), "/") of
-    [_, PartIdList] ->
-        PartId = (catch list_to_integer(PartIdList)),
-        case is_integer(PartId) andalso (PartId >= 0) of
-        true ->
-            {ok, PartId};
-        false ->
-            error
-        end;
-    _ ->
-        error
-    end.

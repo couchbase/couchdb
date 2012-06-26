@@ -48,6 +48,7 @@ init({MainPid, DbName, Filepath, Fd, Options}) ->
     end,
 
     Db = init_db(DbName, Filepath, Fd, Header, Options),
+    erlang:put(update_listeners, dict:new()),
     {ok, Db#db{main_pid = MainPid}}.
 
 null_to_nil(<<>>) -> nil;
@@ -113,7 +114,7 @@ handle_call(full_commit, _From,  Db) ->
 handle_call(increment_update_seq, _From, Db) ->
     Db2 = commit_data(Db#db{update_seq=Db#db.update_seq+1}),
     ok = notify_db_updated(Db2),
-    couch_db_update_notifier:sync_notify({updated, {Db2#db.name, Db2#db.update_seq}}),
+    couch_db_update_notifier:notify({updated, {Db2#db.name, Db2#db.update_seq}}),
     {reply, {ok, Db2#db.update_seq}, Db2};
 
 handle_call({set_security, NewSec}, _From, Db) ->
@@ -172,7 +173,7 @@ handle_call({purge_docs, IdRevs}, _From, Db) ->
             header=Header#db_header{purge_seq=PurgeSeq+1, purged_docs=Pointer}}),
 
     ok = notify_db_updated(Db2),
-    couch_db_update_notifier:sync_notify({updated, {Db2#db.name, Db2#db.update_seq}}),
+    couch_db_update_notifier:notify({updated, {Db2#db.name, Db2#db.update_seq}}),
     {reply, {ok, (Db2#db.header)#db_header.purge_seq, IdRevsPurged}, Db2};
 handle_call(start_compact, _From, Db) ->
     case Db#db.compactor_info of
@@ -260,7 +261,7 @@ handle_call({update_header_pos, FileVersion, NewPos}, _From, Db) ->
             true ->
                 NewDb = populate_db_from_header(Db, NewHeader),
                 ok = notify_db_updated(NewDb),
-                couch_db_update_notifier:sync_notify({updated, {NewDb#db.name, NewDb#db.update_seq}}),
+                couch_db_update_notifier:notify({updated, {NewDb#db.name, NewDb#db.update_seq}}),
                 {reply, ok, NewDb}
             end;
         Error ->
@@ -270,7 +271,30 @@ handle_call({update_header_pos, FileVersion, NewPos}, _From, Db) ->
         {reply, retry_new_file_version, Db};
     true ->
         {reply, update_file_ahead_of_couchdb, Db}
-    end.
+    end;
+
+handle_call({add_update_listener, Pid, Tag}, _From, Db) ->
+    UpdateListeners = erlang:get(update_listeners),
+    UpdateListeners2 = case dict:find(Pid, UpdateListeners) of
+    {ok, {_OldTag, MonRef}} ->
+        dict:store(Pid, {Tag, MonRef}, UpdateListeners);
+    error ->
+        MonRef = erlang:monitor(process, Pid),
+        dict:store(Pid, {Tag, MonRef}, UpdateListeners)
+    end,
+    erlang:put(update_listeners, UpdateListeners2),
+    {reply, ok, Db};
+
+handle_call({remove_update_listener, Pid}, _From, Db) ->
+    UpdateListeners = erlang:get(update_listeners),
+    case dict:find(Pid, UpdateListeners) of
+    {ok, {_Tag, MonRef}} ->
+        erlang:demonitor(MonRef, [flush]),
+        erlang:put(update_listeners, dict:erase(Pid, UpdateListeners));
+    error ->
+        ok
+    end,
+    {reply, ok, Db}.
 
 
 handle_cast(Msg, #db{name = Name} = Db) ->
@@ -291,7 +315,7 @@ handle_info({update_docs, Client, Docs, NonRepDocs, FullCommit}, Db) ->
                     ok
             end, Docs),
         if Db2#db.update_seq /= Db#db.update_seq ->
-            couch_db_update_notifier:sync_notify({updated, {Db2#db.name, Db2#db.update_seq}});
+            couch_db_update_notifier:notify({updated, {Db2#db.name, Db2#db.update_seq}});
         true -> ok
         end,
         catch(Client ! {done, self()}),
@@ -311,6 +335,15 @@ handle_info(delayed_commit, Db) ->
         Db2 ->
             ok = notify_db_updated(Db2),
             {noreply, Db2}
+    end;
+handle_info({'DOWN', _Ref, process, Pid, _Reason} = Msg, Db) ->
+    UpdateListeners = erlang:get(update_listeners),
+    case dict:is_key(Pid, UpdateListeners) of
+    true ->
+        erlang:put(update_listeners, dict:erase(Pid, UpdateListeners)),
+        {noreply, Db};
+    false ->
+        {stop, {unexpected_msg, Msg}, Db}
     end;
 handle_info({'EXIT', _Pid, normal}, Db) ->
     {noreply, Db};
@@ -878,7 +911,11 @@ update_compact_task(NumChanges) ->
 
 notify_db_updated(NewDb) ->
     Ref = make_ref(),
+    UpdateListeners = erlang:get(update_listeners),
     NewDb#db.main_pid ! {db_updated, Ref, NewDb},
+    _ = dict:fold(fun(Pid, {Tag, _MonRef}, _) ->
+        Pid ! {db_updated, Tag, NewDb#db.update_seq}
+    end, ok, UpdateListeners),
     receive
     {ok, Ref} ->
         ok;
