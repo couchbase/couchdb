@@ -27,7 +27,8 @@
 
 -record(state, {
     set_name,
-    db_seqs
+    db_seqs,
+    ets
 }).
 
 
@@ -51,10 +52,24 @@ get_seqs(Pid) ->
     get_seqs(Pid, nil).
 
 get_seqs(Pid, nil) ->
-    {ok, _Seqs} = gen_server:call(Pid, get_seqs, infinity);
+    Tid = get_ets_id(Pid),
+    [{seqs, Seqs}] = ets:lookup(Tid, seqs),
+    {ok, Seqs};
 get_seqs(Pid, FilterSortedSet) ->
-    {ok, Seqs} = gen_server:call(Pid, get_seqs, infinity),
+    Tid = get_ets_id(Pid),
+    [{seqs, Seqs}] = ets:lookup(Tid, seqs),
     {ok, [{P, S} || {P, S} <- Seqs, ordsets:is_element(P, FilterSortedSet)]}.
+
+
+get_ets_id(Pid) ->
+    Key = {db_set_ets, Pid},
+    case erlang:get(Key) of
+    undefined ->
+        {ok, Tid} = gen_server:call(Pid, get_ets_id, infinity);
+    Tid ->
+        erlang:put(Key, Tid)
+    end,
+    Tid.
 
 
 init({SetName, Partitions} = Args) ->
@@ -70,6 +85,8 @@ init({SetName, Partitions} = Args) ->
     gen_server:enter_loop(?MODULE, [], State).
 
 do_init({SetName, Partitions}) ->
+    % parent will shutdown us if any database process dies. No need
+    % to monitor databases here.
     DbSeqs = lists:foldl(
         fun(PartId, Acc) ->
             Name = ?dbname(SetName, PartId),
@@ -83,15 +100,18 @@ do_init({SetName, Partitions}) ->
             end
         end,
         orddict:new(), Partitions),
+    Ets = ets:new(db_set_update_seqs_ets, [set, protected]),
+    true = ets:insert(Ets, [{seqs, DbSeqs}]),
     State = #state{
         set_name = SetName,
-        db_seqs = DbSeqs
+        db_seqs = DbSeqs,
+        ets = Ets
     },
     {ok, State}.
 
 
-handle_call(get_seqs, _From, State) ->
-    {reply, {ok, State#state.db_seqs}, State};
+handle_call(get_ets_id, _From, State) ->
+    {reply, {ok, State#state.ets}, State};
 
 % Used for debugging/troubleshooting only
 handle_call(get_seqs_debug, _From, State) ->
@@ -122,6 +142,7 @@ handle_call({add_partitions, PartList}, _From, State) ->
         end,
         State#state.db_seqs,
         PartList),
+    true = ets:insert(State#state.ets, [{seqs, DbSeqs2}]),
     {reply, ok, State#state{db_seqs = DbSeqs2}};
 
 handle_call({remove_partitions, PartList}, _From, State) ->
@@ -145,6 +166,7 @@ handle_call({remove_partitions, PartList}, _From, State) ->
         end,
         State#state.db_seqs,
         PartList),
+    true = ets:insert(State#state.ets, [{seqs, DbSeqs2}]),
     {reply, ok, State#state{db_seqs = DbSeqs2}};
 
 handle_call(close, _From, State) ->
@@ -157,6 +179,7 @@ handle_cast(Msg, State) ->
 
 handle_info({db_updated, PartId, NewSeq}, State) ->
     DbSeqs2 = orddict:store(PartId, NewSeq, State#state.db_seqs),
+    true = ets:insert(State#state.ets, [{seqs, DbSeqs2}]),
     {noreply, State#state{db_seqs = DbSeqs2}};
 
 handle_info(Msg, State) ->
