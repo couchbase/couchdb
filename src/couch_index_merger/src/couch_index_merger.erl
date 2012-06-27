@@ -65,7 +65,12 @@ query_index(Mod, #index_merge{indexes = [#set_view_spec{}]} = Params, Req) ->
             ok;
         DDocRev ->
             ok;
-        _ ->
+        OtherDDocRev ->
+            ?LOG_ERROR("View merger, revision mismatch for design document `~s',"
+                       " wanted ~s, got ~s",
+                       [DDoc#doc.id,
+                        rev_str(DesiredDDocRevision),
+                        rev_str(OtherDDocRev)]),
             throw({error, revision_mismatch})
         end;
     false ->
@@ -119,7 +124,12 @@ do_query_index(Mod, IndexMergeParams, DDoc, IndexName) ->
             ok;
         DDocRev ->
             ok;
-        _ ->
+        OtherDDocRev ->
+            ?LOG_ERROR("View merger, revision mismatch for design document `~s',"
+                       " wanted ~s, got ~s",
+                       [DDoc#doc.id,
+                        rev_str(DesiredDDocRevision),
+                        rev_str(OtherDDocRev)]),
             throw({error, revision_mismatch})
         end;
     false ->
@@ -194,7 +204,12 @@ do_query_index(Mod, IndexMergeParams, DDoc, IndexName) ->
             case DesiredDDocRevision of
             auto ->
                 throw(retry);
-            _ ->
+            OtherDDocRev2 ->
+                ?LOG_ERROR("View merger, revision mismatch for design document `~s',"
+                           " wanted ~s, got ~s",
+                           [DDoc#doc.id,
+                            rev_str(DesiredDDocRevision),
+                            rev_str(OtherDDocRev2)]),
                 throw({error, revision_mismatch})
             end;
         {ok, Resp} ->
@@ -732,10 +747,17 @@ ddoc_rev(#doc{rev = Rev}) ->
     Rev.
 
 ddoc_rev_str(DDoc) ->
-    couch_doc:rev_to_str(ddoc_rev(DDoc)).
+    rev_str(ddoc_rev(DDoc)).
 
 should_check_rev(#index_merge{ddoc_revision = DDocRevision}, DDoc) ->
     DDocRevision =/= nil andalso DDoc =/= nil.
+
+rev_str(nil) ->
+    "nil";
+rev_str(auto) ->
+    "auto";
+rev_str(DocRev) ->
+    couch_doc:rev_to_str(DocRev).
 
 ddoc_unchanged(DbName, DDoc) when is_binary(DbName) ->
     case couch_db:open_int(DbName, []) of
