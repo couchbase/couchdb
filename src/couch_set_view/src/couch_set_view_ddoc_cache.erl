@@ -104,12 +104,9 @@ handle_call({add_ddoc, SetName, DDoc, DDocSize}, From, State) ->
 
 handle_call({update_ddoc, SetName, DDoc, DDocSize}, From, State) ->
     gen_server:reply(From, ok),
-    #doc{id = Id, rev = Rev} = DDoc,
-    Key = {SetName, Id},
+    Key = {SetName, DDoc#doc.id},
     case ets:lookup(?BY_DDOC_ID, Key) of
     [] ->
-        {noreply, State};
-    [{_, _ATime, #doc{rev = OldRev}, _OldDDocSize}] when OldRev > Rev ->
         {noreply, State};
     [{_, ATime, _OldDDoc, OldDDocSize}] ->
         % ddoc update, using current access time stamp
