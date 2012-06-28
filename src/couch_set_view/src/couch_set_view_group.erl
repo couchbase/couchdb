@@ -870,6 +870,21 @@ handle_cast({before_partition_delete, PartId}, #state{group = Group} = State) ->
         false ->
             {noreply, State, ?TIMEOUT}
         end
+    end;
+
+handle_cast({update, MinNumChanges}, #state{group = Group} = State) ->
+    case is_pid(State#state.updater_pid) of
+    true ->
+        {noreply, State};
+    false ->
+        CurSeqs = get_partition_seqs(State),
+        MissingCount = couch_set_view_util:missing_changes_count(CurSeqs, ?set_seqs(Group)),
+        case MissingCount >= MinNumChanges of
+        true ->
+            {noreply, do_start_updater(State, CurSeqs)};
+        false ->
+            {noreply, State}
+        end
     end.
 
 
@@ -2096,13 +2111,19 @@ cleaner(#state{group = Group}) ->
 
 -spec index_needs_update(#state{}) -> {boolean(), partition_seqs()}.
 index_needs_update(#state{group = Group} = State) ->
+    CurSeqs = get_partition_seqs(State),
+    {CurSeqs > ?set_seqs(Group), CurSeqs}.
+
+
+-spec get_partition_seqs(#state{}) -> partition_seqs().
+get_partition_seqs(#state{group = Group} = State) ->
     {ok, CurSeqs} = case ?set_unindexable_seqs(Group) of
     [] ->
         couch_db_set:get_seqs(?db_set(State));
     _ ->
         couch_db_set:get_seqs(?db_set(State), [P || {P, _} <- ?set_seqs(Group)])
     end,
-    {CurSeqs > ?set_seqs(Group), CurSeqs}.
+    CurSeqs.
 
 
 -spec make_partition_lists(#set_view_group{}) -> {[partition_id()], [partition_id()]}.

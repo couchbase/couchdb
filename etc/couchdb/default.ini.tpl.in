@@ -82,6 +82,7 @@ auth_cache={couch_auth_cache, start_link, []}
 couch_set_view_ddoc_cache={couch_set_view_ddoc_cache, start_link, []}
 replication_manager={couch_replication_manager, start_link, []}
 compaction_daemon={couch_compaction_daemon, start_link, []}
+couch_set_view_update_daemon={couch_set_view_update_daemon, start_link, []}
 
 [httpd_global_handlers]
 / = {couch_httpd_misc_handlers, handle_welcome_req, <<"Welcome">>}
@@ -243,3 +244,9 @@ function_timeout = 10000
 
 [set_views]
 ddoc_cache_size = 1048576
+; Attempt to trigger index updates every N milliseconds.
+; A value of 0 milliseconds means no auto-update of indexes.
+update_interval = 5000
+; Minimum number of new changes required to trigger index updates.
+; A value of 0 means no auto-update of indexes.
+update_min_changes = 5000

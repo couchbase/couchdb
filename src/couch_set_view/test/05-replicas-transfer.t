@@ -69,6 +69,7 @@ main(_) ->
 
 test() ->
     couch_set_view_test_util:start_server(),
+    ok = couch_config:set("set_views", "update_interval", "0", false),
 
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
     couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
