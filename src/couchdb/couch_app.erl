@@ -20,11 +20,17 @@
 
 start(_Type, DefaultIniFiles) ->
     IniFiles = get_ini_files(DefaultIniFiles),
-    case start_apps([
+    Apps0 = [
         crypto, public_key, sasl, inets, oauth, ssl, lhttpc,
-        mochiweb, os_mon, couch_set_view, couch_index_merger, mapreduce,
-        couch_view_parser
-    ]) of
+        mochiweb, os_mon, couch_set_view, couch_index_merger, mapreduce
+    ],
+    Apps = case os:type() of
+    {win32, _} ->
+        Apps0;
+    _ ->
+        [couch_view_parser | Apps0]
+    end,
+    case start_apps(Apps) of
     ok ->
         couch_server_sup:start_link(IniFiles);
     {error, Reason} ->
