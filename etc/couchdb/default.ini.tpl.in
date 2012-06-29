@@ -94,7 +94,7 @@ _set_view = {couch_set_view_http, handle_req}
 _view_cleanup = {couch_httpd_db, handle_view_cleanup_req}
 _compact = {couch_httpd_db, handle_compact_req}
 _design = {couch_httpd_db, handle_design_req}
-
+_changes = {couch_httpd_db, handle_changes_req}
 
 [httpd_design_handlers]
 _view = {couch_httpd_view, handle_view_req}
