@@ -80,23 +80,23 @@ transform_row({{Key, error}, Reason}, _Url) ->
 
 % map view rows
 transform_row({{Key, DocId}, Value}, _Url) when is_binary(Value) ->
-    RowJson = <<"{\"key\":", Key/binary, ",\"id\":", DocId/binary,
+    RowJson = <<"{\"id\":", DocId/binary, ",\"key\":", Key/binary,
                 ",\"value\":", Value/binary, "}">>,
     {{?JSON_DECODE(Key), ?JSON_DECODE(DocId)}, {row_json, RowJson}};
 
 transform_row({{Key, DocId}, Value, Doc}, _Url) when is_binary(Value) ->
-    RowJson = <<"{\"key\":", Key/binary, ",\"id\":", DocId/binary,
+    RowJson = <<"{\"id\":", DocId/binary, ",\"key\":", Key/binary,
                 ",\"value\":", Value/binary, ",\"doc\":", Doc/binary, "}">>,
     {{?JSON_DECODE(Key), ?JSON_DECODE(DocId)}, {row_json, RowJson}};
 
 transform_row({{Key, DocId}, {PartId, _Node, Value}}, Url) ->
-    RowJson = <<"{\"key\":", Key/binary, ",\"id\":", DocId/binary,
+    RowJson = <<"{\"id\":", DocId/binary, ",\"key\":", Key/binary,
                 ",\"partition\":", PartId/binary, ",\"node\":", Url/binary,
                 ",\"value\":", Value/binary, "}">>,
     {{?JSON_DECODE(Key), ?JSON_DECODE(DocId)}, {row_json, RowJson}};
 
 transform_row({{Key, DocId}, {PartId, _Node, Value}, Doc}, Url) ->
-    RowJson = <<"{\"key\":", Key/binary, ",\"id\":", DocId/binary,
+    RowJson = <<"{\"id\":", DocId/binary, ",\"key\":", Key/binary,
                 ",\"partition\":", PartId/binary, ",\"node\":", Url/binary,
                 ",\"value\":", Value/binary, ",\"doc\":", Doc/binary, "}">>,
     {{?JSON_DECODE(Key), ?JSON_DECODE(DocId)}, {row_json, RowJson}};
