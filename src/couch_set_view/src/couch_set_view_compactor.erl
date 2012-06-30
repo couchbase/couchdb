@@ -131,8 +131,13 @@ compact_group(Group0, EmptyGroup, LogFilePath, UpdaterPid, Owner) ->
         {KV, update_task(Acc, 1)}
     end,
 
-    FilterFun = fun({_Key, {PartId, _}}) ->
-        ((1 bsl PartId) band ?set_cbitmask(Group)) =:= 0
+    FilterFun = case ?set_cbitmask(Group) of
+    0 ->
+        fun(_Kv) -> true end;
+    _ ->
+        fun({_Key, {PartId, _}}) ->
+            ((1 bsl PartId) band ?set_cbitmask(Group)) =:= 0
+        end
     end,
 
     {ok, NewIdBtreeRoot, Acc1} = couch_btree_copy:copy(
@@ -246,10 +251,15 @@ update_task(#acc{total_changes = 0} = Acc, _ChangesInc) ->
     Acc;
 update_task(#acc{changes = Changes, total_changes = Total} = Acc, ChangesInc) ->
     Changes2 = Changes + ChangesInc,
-    couch_task_status:update([
-        {changes_done, Changes2},
-        {progress, (Changes2 * 100) div Total}
-    ]),
+    case (Changes2 rem 10000) == 0 of
+    true ->
+        couch_task_status:update([
+            {changes_done, Changes2},
+            {progress, (Changes2 * 100) div Total}
+        ]);
+    false ->
+        ok
+    end,
     Acc#acc{changes = Changes2}.
 
 

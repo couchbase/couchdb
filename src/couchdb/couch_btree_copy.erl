@@ -22,7 +22,7 @@
     before_kv_write = {fun(Item, Acc) -> {Item, Acc} end, []},
     filter = fun(_) -> true end,
     chunk_threshold,
-    nodes = dict:from_list([{1, []}]),
+    nodes = dict:from_list([{1, {0, []}}]),
     cur_level = 1,
     max_level = 1
 }).
@@ -139,14 +139,16 @@ fold_copy(Item, _Reds, #acc{nodes = Nodes, cur_level = 1, filter = Filter} = Acc
         {ok, Acc};
     true ->
         {K, V} = extract(Acc, Item),
-        LevelNode = dict:fetch(1, Nodes),
-        LevelNodes2 = [{K, V} | LevelNode],
-        NextAcc = case ?term_size(LevelNodes2) >= Acc#acc.chunk_threshold of
+        {Size, LevelNode} = dict:fetch(1, Nodes),
+        Kv = {K, V},
+        Size2 = Size + ?term_size(Kv),
+        LevelNodes2 = [Kv | LevelNode],
+        NextAcc = case Size2 >= Acc#acc.chunk_threshold of
         true ->
             {LeafState, Acc2} = flush_leaf(LevelNodes2, Acc),
             bubble_up({K, LeafState}, Acc2);
         false ->
-            Acc#acc{nodes = dict:store(1, LevelNodes2, Nodes)}
+            Acc#acc{nodes = dict:store(1, {Size2, LevelNodes2}, Nodes)}
         end,
         {ok, NextAcc}
     end.
@@ -157,24 +159,27 @@ bubble_up({Key, NodeState}, #acc{cur_level = Level} = Acc) ->
 
 bubble_up({Key, NodeState}, Level, Acc) ->
     #acc{max_level = MaxLevel, nodes = Nodes} = Acc,
-    Acc2 = Acc#acc{nodes = dict:store(Level, [], Nodes)},
+    Acc2 = Acc#acc{nodes = dict:store(Level, {0, []}, Nodes)},
+    Kp = {Key, NodeState},
+    KpSize = ?term_size(Kp),
     case Level of
     MaxLevel ->
         Acc2#acc{
-            nodes = dict:store(Level + 1, [{Key, NodeState}], Acc2#acc.nodes),
+            nodes = dict:store(Level + 1, {KpSize, [Kp]}, Acc2#acc.nodes),
             max_level = Level + 1
         };
     _ when Level < MaxLevel ->
-        NextLevelNodes = dict:fetch(Level + 1, Acc2#acc.nodes),
-        NextLevelNodes2 = [{Key, NodeState} | NextLevelNodes],
-        case ?term_size(NextLevelNodes2) >= Acc#acc.chunk_threshold of
+        {Size, NextLevelNodes} = dict:fetch(Level + 1, Acc2#acc.nodes),
+        NextLevelNodes2 = [Kp | NextLevelNodes],
+        Size2 = Size + KpSize,
+        case Size2 >= Acc#acc.chunk_threshold of
         true ->
             {ok, NewNodeState} = write_kp_node(
                 Acc2, lists:reverse(NextLevelNodes2)),
             bubble_up({Key, NewNodeState}, Level + 1, Acc2);
         false ->
             Acc2#acc{
-                nodes = dict:store(Level + 1, NextLevelNodes2, Acc2#acc.nodes)
+                nodes = dict:store(Level + 1, {Size2, NextLevelNodes2}, Acc2#acc.nodes)
             }
         end
     end.
@@ -182,28 +187,28 @@ bubble_up({Key, NodeState}, Level, Acc) ->
 
 finish_copy(#acc{cur_level = 1, max_level = 1, nodes = Nodes} = Acc) ->
     case dict:fetch(1, Nodes) of
-    [] ->
+    {0, []} ->
         {ok, nil, Acc};
-    [{_Key, _Value} | _] = KvList ->
+    {_Size, [{_Key, _Value} | _] = KvList} ->
         {RootState, Acc2} = flush_leaf(KvList, Acc),
         {ok, RootState, Acc2}
     end;
 
 finish_copy(#acc{cur_level = Level, max_level = Level, nodes = Nodes} = Acc) ->
     case dict:fetch(Level, Nodes) of
-    [{_Key, {Pos, Red, Size}}] ->
+    {_Size, [{_Key, {Pos, Red, Size}}]} ->
         {ok, {Pos, Red, Size}, Acc};
-    NodeList ->
+    {_Size, NodeList} ->
         {ok, RootState} = write_kp_node(Acc, lists:reverse(NodeList)),
         {ok, RootState, Acc}
     end;
 
 finish_copy(#acc{cur_level = Level, nodes = Nodes} = Acc) ->
     case dict:fetch(Level, Nodes) of
-    [] ->
+    {0, []} ->
         Acc2 = Acc#acc{cur_level = Level + 1},
         finish_copy(Acc2);
-    [{LastKey, _} | _] = NodeList ->
+    {_Size, [{LastKey, _} | _] = NodeList} ->
         {UpperNodeState, Acc2} = case Level of
         1 ->
             flush_leaf(NodeList, Acc);
@@ -211,9 +216,11 @@ finish_copy(#acc{cur_level = Level, nodes = Nodes} = Acc) ->
             {ok, KpNodeState} = write_kp_node(Acc, lists:reverse(NodeList)),
             {KpNodeState, Acc}
         end,
-        ParentNode = dict:fetch(Level + 1, Nodes),
+        Kp = {LastKey, UpperNodeState},
+        {ParentSize, ParentNode} = dict:fetch(Level + 1, Nodes),
+        ParentSize2 = ParentSize + ?term_size(Kp),
         Acc3 = Acc2#acc{
-            nodes = dict:store(Level + 1, [{LastKey, UpperNodeState} | ParentNode], Nodes),
+            nodes = dict:store(Level + 1, {ParentSize2, [Kp | ParentNode]}, Nodes),
             cur_level = Level + 1
         },
         finish_copy(Acc3)
