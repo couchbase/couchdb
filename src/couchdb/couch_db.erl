@@ -417,7 +417,7 @@ fast_reads(Db, Fun) ->
 
 
 
-update_docs(#db{name=DbName}=Db, Docs, Options0) ->
+update_docs(Db, Docs, Options0) ->
     % go ahead and generate the new revision ids for the documents.
     % separate out the NonRep documents from the rest of the documents
     {Docs1, NonRepDocs1} = lists:foldl(
@@ -458,8 +458,6 @@ update_docs(#db{name=DbName}=Db, Docs, Options0) ->
                     FullCommit},
             case get_result(Db#db.update_pid, MRef) of
             ok ->
-                [couch_db_update_notifier:notify({ddoc_updated, {DbName, Id}})
-                        || #doc{id = <<?DESIGN_DOC_PREFIX, _/binary>> = Id} <- Docs],
                 ok;
             retry -> throw({update_error, compaction_retry})
             end
