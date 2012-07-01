@@ -2655,11 +2655,12 @@ process_view_group_request(#set_view_group_req{stale = update_after} = Req, From
 
 
 -spec process_mark_as_unindexable(#state{}, [partition_id()]) -> #state{}.
-process_mark_as_unindexable(State, Partitions) ->
+process_mark_as_unindexable(State0, Partitions) ->
     #state{
         group = #set_view_group{index_header = Header} = Group,
         replica_partitions = ReplicaParts
-    } = State,
+    } = State = stop_updater(State0),
+    UpdaterWasRunning = is_pid(State0#state.updater_pid),
     ReplicasIntersection = [
         P || P <- Partitions, ordsets:is_element(P, ReplicaParts)
     ],
@@ -2692,33 +2693,39 @@ process_mark_as_unindexable(State, Partitions) ->
         end,
         {?set_seqs(Group), ?set_unindexable_seqs(Group)},
         Partitions),
-    case UnindexableSeqs2 == ?set_unindexable_seqs(Group) of
+    NewState = case UnindexableSeqs2 == ?set_unindexable_seqs(Group) of
     true ->
         State;
     false ->
-        #state{group = Group2} = State2 = restart_compactor(
-            State, "set of unindexable partitions updated"),
-        Group3 = Group2#set_view_group{
+        Group2 = Group#set_view_group{
             index_header = Header#set_view_index_header{
                 seqs = Seqs2,
                 unindexable_seqs = UnindexableSeqs2
             }
         },
-        ok = commit_header(Group3),
+        ok = commit_header(Group2),
         ?LOG_INFO("Set view `~s`, ~s group `~s`, unindexable partitions added.~n"
                   "Previous set: ~w~n"
                   "New set:      ~w~n",
                   [?set_name(State), ?type(State), ?group_id(State),
-                   ?set_unindexable_seqs(Group2), UnindexableSeqs2]),
-        State2#state{group = Group3}
+                   ?set_unindexable_seqs(Group), UnindexableSeqs2]),
+        State#state{group = Group2}
+    end,
+    NewState2 = restart_compactor(NewState, "set of unindexable partitions updated"),
+    case UpdaterWasRunning of
+    true ->
+        start_updater(NewState2);
+    false ->
+        NewState2
     end.
 
 
 -spec process_mark_as_indexable(#state{}, [partition_id()], boolean()) -> #state{}.
-process_mark_as_indexable(State, Partitions, CommitHeader) ->
+process_mark_as_indexable(State0, Partitions, CommitHeader) ->
     #state{
         group = #set_view_group{index_header = Header} = Group
-    } = State,
+    } = State = stop_updater(State0),
+    UpdaterWasRunning = is_pid(State0#state.updater_pid),
     {Seqs2, UnindexableSeqs2} =
     lists:foldl(
         fun(PartId, {AccSeqs, AccUnSeqs}) ->
@@ -2737,25 +2744,23 @@ process_mark_as_indexable(State, Partitions, CommitHeader) ->
         end,
         {?set_seqs(Group), ?set_unindexable_seqs(Group)},
         Partitions),
-    case UnindexableSeqs2 == ?set_unindexable_seqs(Group) of
+    NewState = case UnindexableSeqs2 == ?set_unindexable_seqs(Group) of
     true ->
         State;
     false when CommitHeader ->
-        #state{group = Group2} = State2 = restart_compactor(
-            State, "set of unindexable partitions updated"),
-        Group3 = Group2#set_view_group{
+        Group2 = Group#set_view_group{
             index_header = Header#set_view_index_header{
                 seqs = Seqs2,
                 unindexable_seqs = UnindexableSeqs2
             }
         },
-        ok = commit_header(Group3),
+        ok = commit_header(Group2),
         ?LOG_INFO("Set view `~s`, ~s group `~s`, unindexable partitions removed.~n"
                   "Previous set: ~w~n"
                   "New set:      ~w~n",
                   [?set_name(State), ?type(State), ?group_id(State),
-                   ?set_unindexable_seqs(Group2), UnindexableSeqs2]),
-        State2#state{group = Group3};
+                   ?set_unindexable_seqs(Group), UnindexableSeqs2]),
+        State#state{group = Group2};
     false ->
         Group2 = Group#set_view_group{
             index_header = Header#set_view_index_header{
@@ -2764,6 +2769,13 @@ process_mark_as_indexable(State, Partitions, CommitHeader) ->
             }
         },
         State#state{group = Group2}
+    end,
+    NewState2 = restart_compactor(NewState, "set of unindexable partitions updated"),
+    case UpdaterWasRunning of
+    true ->
+        start_updater(NewState2);
+    false ->
+        NewState2
     end.
 
 
