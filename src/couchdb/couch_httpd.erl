@@ -655,6 +655,8 @@ error_info({bad_request, Reason}) ->
     {400, <<"bad_request">>, Reason};
 error_info({query_parse_error, Reason}) ->
     {400, <<"query_parse_error">>, Reason};
+error_info({invalid_design_doc, Reason}) ->
+    {400, <<"invalid_design_document">>, Reason};
 % Prior art for md5 mismatch resulting in a 400 is from AWS S3
 error_info(md5_mismatch) ->
     {400, <<"content_md5_mismatch">>, <<"Possible message corruption.">>};

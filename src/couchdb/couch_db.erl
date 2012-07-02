@@ -425,7 +425,10 @@ update_docs(Db, Docs, Options0) ->
             case Id of
             <<?LOCAL_DOC_PREFIX, _/binary>> ->
                 {DocsAcc, [Doc | NonRepDocsAcc]};
-            Id->
+            <<?DESIGN_DOC_PREFIX, _/binary>> ->
+                validate_ddoc(Doc),
+                {[Doc | DocsAcc], NonRepDocsAcc};
+            Id ->
                 {[Doc | DocsAcc], NonRepDocsAcc}
             end
         end, {[], []}, Docs),
@@ -667,3 +670,14 @@ doc_meta_info(#doc_info{local_seq=Seq}, Options) ->
     false -> [];
     true -> [{local_seq, Seq}]
     end.
+
+
+validate_ddoc(#doc{content_meta = ?CONTENT_META_JSON} = DDoc0) ->
+    DDoc = couch_doc:with_ejson_body(DDoc0),
+    try
+        couch_set_view_mapreduce:validate_ddoc_views(DDoc)
+    catch throw:{error, Reason} ->
+        throw({invalid_design_doc, Reason})
+    end;
+validate_ddoc(_DDoc) ->
+    throw({invalid_design_doc, <<"Content is not json.">>}).

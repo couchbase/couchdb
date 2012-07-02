@@ -56,7 +56,7 @@ num_docs() -> 1000.
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(15),
+    etap:plan(12),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -226,26 +226,15 @@ test_map_syntax_error() ->
             ]}}
         ]}}
     ]},
-    populate_set(DDoc),
-
-    ok = configure_view_group(DDocId, [0, 1, 2, 3], []),
-    GroupPid = couch_set_view:get_group_pid(test_set_name(), DDocId),
-    MonRef = erlang:monitor(process, GroupPid),
-
-    QueryResult = try
-        query_map_view(DDocId, <<"test">>, false)
-    catch _:Error ->
+    Result = try
+        couch_set_view_test_util:update_ddoc(test_set_name(), DDoc)
+    catch throw:Error ->
         Error
     end,
-    ?etap_match(QueryResult, {error, _}, "Received error response"),
+    ?etap_match(Result, {invalid_design_doc, _}, "Design document creation got rejected"),
+    {invalid_design_doc, Reason} = Result,
+    etap:diag("Design document creation error reason: " ++ binary_to_list(Reason)),
 
-    receive
-    {'DOWN', MonRef, _, _, _} ->
-        etap:bail("view group died")
-    after 5000 ->
-        etap:is(is_process_alive(GroupPid), true, "View group is still alive")
-    end,
-    couch_util:shutdown_sync(GroupPid),
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()).
 
 
@@ -302,26 +291,15 @@ test_invalid_builtin_reduce_error() ->
             ]}}
         ]}}
     ]},
-    populate_set(DDoc),
-
-    ok = configure_view_group(DDocId, [0, 1, 2, 3], []),
-    GroupPid = couch_set_view:get_group_pid(test_set_name(), DDocId),
-    MonRef = erlang:monitor(process, GroupPid),
-
-    QueryResult = try
-        query_reduce_view(DDocId, <<"test">>, false)
-    catch _:Error ->
+    Result = try
+        couch_set_view_test_util:update_ddoc(test_set_name(), DDoc)
+    catch throw:Error ->
         Error
     end,
-    ?etap_match(QueryResult, {error, _}, "Received error response"),
+    ?etap_match(Result, {invalid_design_doc, _}, "Design document creation got rejected"),
+    {invalid_design_doc, Reason} = Result,
+    etap:diag("Design document creation error reason: " ++ binary_to_list(Reason)),
 
-    receive
-    {'DOWN', MonRef, _, _, _} ->
-        etap:bail("view group died")
-    after 5000 ->
-        etap:is(is_process_alive(GroupPid), true, "View group is still alive")
-    end,
-    couch_util:shutdown_sync(GroupPid),
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()).
 
 
@@ -378,26 +356,16 @@ test_reduce_syntax_error() ->
             ]}}
         ]}}
     ]},
-    populate_set(DDoc),
 
-    ok = configure_view_group(DDocId, [0, 1, 2, 3], []),
-    GroupPid = couch_set_view:get_group_pid(test_set_name(), DDocId),
-    MonRef = erlang:monitor(process, GroupPid),
-
-    QueryResult = try
-        query_reduce_view(DDocId, <<"test">>, false)
-    catch _:Error ->
+    Result = try
+        couch_set_view_test_util:update_ddoc(test_set_name(), DDoc)
+    catch throw:Error ->
         Error
     end,
-    ?etap_match(QueryResult, {error, _}, "Received error response"),
+    ?etap_match(Result, {invalid_design_doc, _}, "Design document creation got rejected"),
+    {invalid_design_doc, Reason} = Result,
+    etap:diag("Design document creation error reason: " ++ binary_to_list(Reason)),
 
-    receive
-    {'DOWN', MonRef, _, _, _} ->
-        etap:bail("view group died")
-    after 5000 ->
-        etap:is(is_process_alive(GroupPid), true, "View group is still alive")
-    end,
-    couch_util:shutdown_sync(GroupPid),
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()).
 
 

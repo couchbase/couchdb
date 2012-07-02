@@ -19,6 +19,7 @@
 -export([end_map_context/0, end_reduce_context/1]).
 -export([map/1, reduce/2, reduce/3, rereduce/2, rereduce/3]).
 -export([builtin_reduce/3]).
+-export([validate_ddoc_views/1]).
 
 
 start_map_context(#set_view_group{views = Views}) ->
@@ -310,3 +311,76 @@ encode_kvs([KV | Rest], Acc) ->
     {{Key,Id}, {_PartId, Value}} = KV,
     NKV = {?JSON_ENCODE([Key, Id]), ?JSON_ENCODE(Value)},
     encode_kvs(Rest, [NKV | Acc]).
+
+
+validate_ddoc_views(#doc{body = {Body}}) ->
+    Views = couch_util:get_value(<<"views">>, Body, {[]}),
+    case Views of
+    {L} when is_list(L) ->
+        ok;
+    _ ->
+        throw({error, <<"The field `views' is not a json object.">>})
+    end,
+    lists:foreach(
+        fun({ViewName, Value}) ->
+            validate_view_definition(ViewName, Value)
+        end,
+        element(1, Views)).
+
+
+validate_view_definition(ViewName, {ViewProps}) when is_list(ViewProps) ->
+    MapDef = couch_util:get_value(<<"map">>, ViewProps),
+    validate_view_map_function(ViewName, MapDef),
+    ReduceDef = couch_util:get_value(<<"reduce">>, ViewProps),
+    validate_view_reduce_function(ViewName, ReduceDef);
+validate_view_definition(ViewName, _) ->
+    ErrorMsg = io_lib:format("Value for view `~s' is not "
+                             "a json object.", [ViewName]),
+    throw({error, iolist_to_binary(ErrorMsg)}).
+
+
+validate_view_map_function(ViewName, undefined) ->
+    ErrorMsg = io_lib:format("The `map' field for the view `~s' is missing.",
+                             [ViewName]),
+    throw({error, iolist_to_binary(ErrorMsg)});
+validate_view_map_function(ViewName, MapDef) when not is_binary(MapDef) ->
+    ErrorMsg = io_lib:format("The `map' field of the view `~s' is not "
+                             "a json string.", [ViewName]),
+    throw({error, iolist_to_binary(ErrorMsg)});
+validate_view_map_function(ViewName, MapDef) ->
+    case mapreduce:start_map_context([MapDef]) of
+    {ok, _Ctx} ->
+        ok;
+    {error, Reason} ->
+        ErrorMsg = io_lib:format("Syntax error in the map function of"
+                                 " the view `~s': ~s", [ViewName, Reason]),
+        throw({error, iolist_to_binary(ErrorMsg)})
+    end.
+
+
+validate_view_reduce_function(_ViewName, undefined) ->
+    ok;
+validate_view_reduce_function(ViewName, ReduceDef) when not is_binary(ReduceDef) ->
+    ErrorMsg = io_lib:format("The `reduce' field of the view `~s' is not "
+                             "a json string.", [ViewName]),
+    throw({error, iolist_to_binary(ErrorMsg)});
+validate_view_reduce_function(_ViewName, <<"_count">>) ->
+    ok;
+validate_view_reduce_function(_ViewName, <<"_sum">>) ->
+    ok;
+validate_view_reduce_function(_ViewName, <<"_stats">>) ->
+    ok;
+validate_view_reduce_function(ViewName, <<"_", _/binary>> = ReduceDef) ->
+    ErrorMsg = io_lib:format("Invalid built-in reduce function "
+                             "for view `~s': ~s",
+                             [ViewName, ReduceDef]),
+    throw({error, iolist_to_binary(ErrorMsg)});
+validate_view_reduce_function(ViewName, ReduceDef) ->
+    case mapreduce:start_reduce_context([ReduceDef]) of
+    {ok, _Ctx} ->
+        ok;
+    {error, Reason} ->
+        ErrorMsg = io_lib:format("Syntax error in the reduce function of"
+                                 " the view `~s': ~s", [ViewName, Reason]),
+        throw({error, iolist_to_binary(ErrorMsg)})
+    end.
