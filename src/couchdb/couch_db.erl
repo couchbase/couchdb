@@ -30,6 +30,7 @@
 -export([check_is_admin/1, check_is_member/1]).
 -export([reopen/1,get_current_seq/1,fast_reads/2,get_trailing_file_num/1]).
 -export([add_update_listener/3, remove_update_listener/2]).
+-export([random_doc_info/1]).
 
 -include("couch_db.hrl").
 
@@ -216,6 +217,42 @@ get_doc_info(Db, Id) ->
 
 get_doc_infos(Db, Ids) ->
     couch_btree:lookup(Db#db.docinfo_by_id_btree, Ids).
+
+
+-spec random_doc_info(#db{}) -> {'ok', #doc_info{}} | 'empty'.
+random_doc_info(#db{docinfo_by_id_btree = IdBtree}) ->
+    {ok, <<DocCount:40, _DelDocCount:40, _Size:48>>} = couch_btree:full_reduce(IdBtree),
+    case DocCount of
+    0 ->
+        empty;
+    _ ->
+        N = crypto:rand_uniform(1, DocCount + 1),
+        Acc0 = {1, undefined},
+        FoldFun = fun
+        (value, #doc_info{deleted = false} = DI, _Reds, {I, undefined}) ->
+            case I == N of
+            true ->
+                {stop, {I, DI}};
+            false ->
+                {ok, {I + 1, undefined}}
+            end;
+        (value, #doc_info{deleted = true}, _Reds, Acc) ->
+            {ok, Acc};
+        (branch, _Key, Red, {I, undefined}) ->
+            <<BranchCount:40, _BranchDelCount:40, _SubSize:48>> = Red,
+            I2 = I + BranchCount,
+            case I2 >= N of
+            true ->
+                {ok, {I, undefined}};
+            false ->
+                {skip, {I2, undefined}}
+            end
+        end,
+        {ok, _, FinalAcc} = couch_btree:fold(IdBtree, FoldFun, Acc0, []),
+        {N, #doc_info{} = DocInfo} = FinalAcc,
+        {ok, DocInfo}
+    end.
+
 
 increment_update_seq(#db{update_pid=UpdatePid}) ->
     gen_server:call(UpdatePid, increment_update_seq, infinity).
