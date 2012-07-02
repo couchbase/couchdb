@@ -172,6 +172,7 @@ case "$(uname -s)" in
 esac
 
 AM_CONDITIONAL([WINDOWS], [test x$IS_WINDOWS = xTRUE])
+AM_CONDITIONAL([GCC], [ test x$GCC = xyes])
 
 AC_ARG_ENABLE([v8],
     [AS_HELP_STRING([--disable-v8],

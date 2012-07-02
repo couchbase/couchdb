@@ -84,7 +84,9 @@ endif
 if !WINDOWS
 couch_view_parserpriv_LTLIBRARIES = couch_view_parser_nif.la
 couch_view_parser_nif_la_AM_CPPFLAGS = $(AM_CPPFLAGS) -Icouch_view_parser-$(COUCH_VIEW_PARSER_VERSION) -Iyajl
+if GCC
 couch_view_parser_nif_la_CPPFLAGS = -std=c99 -Wall
+endif
 couch_view_parser_nif_la_SOURCES = $(couch_view_parser_cxx_srcs)
 couch_view_parser_nif_la_LDFLAGS = -module -avoid-version
 
