@@ -86,8 +86,7 @@ source_files = \
     json_stream_parse.erl
 
 
-EXTRA_DIST = $(source_files) couch_api_wrap.hrl couch_db.hrl couch_js_functions.hrl couch_replicator.hrl \
-	couch_view_merger.hrl couch_index_merger.hrl
+EXTRA_DIST = $(source_files) couch_api_wrap.hrl couch_db.hrl couch_js_functions.hrl couch_replicator.hrl
 
 compiled_files = \
     erl_diag.beam \

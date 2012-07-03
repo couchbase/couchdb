@@ -12,3 +12,12 @@
 
 SUBDIRS = set_view
 
+EXTRA_DIST = \
+    lib/couchdb/__init__.py  \
+    lib/couchdb/client.py \
+    lib/couchdb/design.py \
+    lib/couchdb/http.py \
+    lib/couchdb/json.py \
+    lib/couchdb/mapping.py \
+    lib/couchdb/multipart.py \
+    lib/couchdb/view.py
