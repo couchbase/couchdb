@@ -69,6 +69,7 @@
     replica_group = nil                :: 'nil' | pid(),
     group = #set_view_group{}          :: #set_view_group{},
     updater_pid = nil                  :: 'nil' | pid(),
+    initial_build = false              :: boolean(),
     updater_state = not_running        :: set_view_updater_state() | 'not_running' | 'starting',
     compactor_pid = nil                :: 'nil' | pid(),
     compactor_file = nil               :: 'nil' | pid(),
@@ -683,6 +684,8 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
             compactor_file = nil,
             compactor_fun = nil,
             updater_pid = NewUpdaterPid,
+            initial_build = is_pid(NewUpdaterPid) andalso
+                    couch_set_view_util:is_group_empty(NewGroup2),
             updater_state = case is_pid(NewUpdaterPid) of
                 true -> starting;
                 false -> not_running
@@ -1011,6 +1014,7 @@ handle_info({'EXIT', Pid, {updater_finished, Result}}, #state{updater_pid = Pid}
     false ->
         State3 = State2#state{
             updater_pid = nil,
+            initial_build = false,
             updater_state = not_running,
             waiting_list = []
         },
@@ -1028,6 +1032,7 @@ handle_info({'EXIT', Pid, {updater_error, Error}}, #state{updater_pid = Pid} = S
     false ->
         State2 = State#state{
             updater_pid = nil,
+            initial_build = false,
             updater_state = not_running
         },
         ?inc_updater_errors(State#state.group),
@@ -1359,7 +1364,8 @@ get_group_info(State) ->
         {signature, ?l2b(hex_sig(GroupSig))},
         {disk_size, Size},
         {data_size, view_group_data_size(Btree, Views)},
-        {updater_running, UpdaterPid /= nil},
+        {updater_running, is_pid(UpdaterPid)},
+        {initial_build, is_pid(UpdaterPid) andalso State#state.initial_build},
         {updater_state, couch_util:to_binary(UpdaterState)},
         {compact_running, CompactorPid /= nil},
         {cleanup_running, (CleanerPid /= nil) orelse
@@ -1420,7 +1426,8 @@ get_data_size_info(State) ->
         {disk_size, FileSize},
         {data_size, DataSize},
         {accesses, Stats#set_view_group_stats.accesses},
-        {updater_running, is_pid(UpdaterPid)}
+        {updater_running, is_pid(UpdaterPid)},
+        {initial_build, is_pid(UpdaterPid) andalso State#state.initial_build}
     ],
     case is_pid(ReplicaPid) of
     false ->
@@ -2262,6 +2269,7 @@ after_updater_stopped(State, {updater_finished, Result}) ->
     end,
     State2#state{
         updater_pid = nil,
+        initial_build = false,
         updater_state = not_running,
         waiting_list = WaitingList2
      };
@@ -2277,6 +2285,7 @@ after_updater_stopped(State, Reason) ->
                [?set_name(State), ?type(State), ?group_id(State), Reason]),
     State2 = State#state{
         updater_pid = nil,
+        initial_build = false,
         updater_state = not_running
     },
     ?inc_updater_errors(State2#state.group),
@@ -2321,6 +2330,7 @@ do_start_updater(State, CurSeqs) ->
                      [self(), Group, CurSeqs, IndexLogFilePath]),
     State2#state{
         updater_pid = Pid,
+        initial_build = couch_set_view_util:is_group_empty(Group),
         updater_state = starting
     }.
 

@@ -176,6 +176,7 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime, NumChanges, LogFilePat
         ok = couch_set_view_util:open_raw_read_fd(Group),
 
         DDocIds = couch_set_view_util:get_ddoc_ids_with_sig(SetName, GroupSig),
+        InitialBuild = couch_set_view_util:is_group_empty(Group),
         couch_task_status:add_task([
             {type, indexer},
             {set, SetName},
@@ -183,12 +184,11 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime, NumChanges, LogFilePat
             {indexer_type, Type},
             {progress, 0},
             {changes_done, 0},
+            {initial_build, InitialBuild},
             {total_changes, NumChanges}
         ]),
         couch_task_status:set_update_frequency(1000),
 
-        InitialBuild = lists:all(fun({_, Seq}) -> Seq == 0 end, ?set_seqs(Group)) andalso
-                lists:all(fun({_, Seq}) -> Seq == 0 end, ?set_unindexable_seqs(Group)),
         ViewEmptyKVs = [{View, []} || View <- Group#set_view_group.views],
         WriterAcc2 = WriterAcc#writer_acc{
             parent = Parent,

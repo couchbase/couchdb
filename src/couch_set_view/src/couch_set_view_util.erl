@@ -21,6 +21,7 @@
 -export([make_disk_header/1]).
 -export([compute_indexed_bitmap/1, cleanup_group/1]).
 -export([missing_changes_count/2]).
+-export([is_group_empty/1]).
 
 -include("couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
@@ -316,3 +317,10 @@ missing_changes_count([{Part, CurSeq} | RestCur], [{Part, NewSeq} | RestNew], Ac
     false ->
         missing_changes_count(RestCur, RestNew, Acc)
     end.
+
+
+-spec is_group_empty(#set_view_group{}) -> boolean().
+is_group_empty(Group) ->
+    Predicate = fun({_PartId, Seq}) -> Seq == 0 end,
+    lists:all(Predicate, ?set_seqs(Group)) andalso
+        lists:all(Predicate, ?set_unindexable_seqs(Group)).
