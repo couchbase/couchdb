@@ -728,8 +728,13 @@ update_seqs(PartIdSeqs, Seqs) ->
 update_task(NumChanges) ->
     [Changes, Total] = couch_task_status:get([changes_done, total_changes]),
     Changes2 = Changes + NumChanges,
-    Progress = (Changes2 * 100) div Total,
-    couch_task_status:update([{progress, Progress}, {changes_done, Changes2}]).
+    Total2 = erlang:max(Total, Changes2),
+    Progress = (Changes2 * 100) div Total2,
+    couch_task_status:update([
+        {progress, Progress},
+        {changes_done, Changes2},
+        {total_changes, Total2}
+    ]).
 
 
 maybe_checkpoint(WriterAcc) ->
