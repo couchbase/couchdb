@@ -2071,14 +2071,16 @@ maybe_start_cleaner(#state{group = Group} = State) ->
 stop_cleaner(#state{cleaner_pid = nil} = State) ->
     State;
 stop_cleaner(#state{cleaner_pid = Pid} = State) when is_pid(Pid) ->
-    Pid ! stop,
     MRef = erlang:monitor(process, Pid),
+    Pid ! stop,
+    unlink(Pid),
     ?LOG_INFO("Stopping cleanup process for set view `~s`, group `~s`",
         [?set_name(State), ?group_id(State)]),
     NewState = receive
     {'EXIT', Pid, Reason} ->
         after_cleaner_stopped(State, Reason);
     {'DOWN', MRef, process, Pid, Reason} ->
+        receive {'EXIT', Pid, _} -> ok after 0 -> ok end,
         after_cleaner_stopped(State, Reason)
     end,
     erlang:demonitor(MRef, [flush]),
@@ -2204,8 +2206,9 @@ compact_group(#state{group = Group} = State) ->
 stop_updater(#state{updater_pid = nil} = State) ->
     State;
 stop_updater(#state{updater_pid = Pid} = State) when is_pid(Pid) ->
-    Pid ! stop_immediately,
     MRef = erlang:monitor(process, Pid),
+    Pid ! stop_immediately,
+    unlink(Pid),
     ?LOG_INFO("Stopping updater for set view `~s`, ~s group `~s`",
         [?set_name(State), ?type(State), ?group_id(State)]),
     NewState = receive
@@ -2216,6 +2219,7 @@ stop_updater(#state{updater_pid = Pid} = State) when is_pid(Pid) ->
             [?set_name(State), ?type(State), ?group_id(State)]),
         State#state{updater_pid = nil, updater_state = not_running};
     {'DOWN', MRef, process, Pid, Reason} ->
+        receive {'EXIT', Pid, _} -> ok after 0 -> ok end,
         after_updater_stopped(State, Reason)
     end,
     erlang:demonitor(MRef, [flush]),
