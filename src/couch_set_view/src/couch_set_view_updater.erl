@@ -34,6 +34,7 @@
     view_empty_kvs,
     kvs = [],
     kvs_size = 0,
+    kvs_length = 0,
     state = updating_active,
     final_batch = false,
     max_seqs,
@@ -408,25 +409,38 @@ do_maps(Group, MapQueue, WriteQueue) ->
     end.
 
 
-do_writes(#writer_acc{kvs = Kvs, kvs_size = KvsSize, write_queue = WriteQueue} = Acc) ->
+do_writes(Acc) ->
+    #writer_acc{
+        kvs = Kvs,
+        kvs_size = KvsSize,
+        kvs_length = KvsLength,
+        write_queue = WriteQueue
+    } = Acc,
     Acc2 = maybe_open_log_file(Acc),
     case couch_work_queue:dequeue(WriteQueue) of
     closed ->
         FinalAcc = flush_writes(Acc2#writer_acc{final_batch = true}),
         write_header(FinalAcc#writer_acc.group, false),
         FinalAcc;
-    {ok, Queue, QueueSize} ->
+    {ok, Queue0, QueueSize} ->
+        Queue = lists:flatten(Queue0),
         Acc3 = maybe_open_log_file(Acc2),
-        Kvs2 = Kvs ++ lists:flatten(Queue),
+        Kvs2 = Kvs ++ Queue,
         KvsSize2 = KvsSize + QueueSize,
-        case (KvsSize2 >= ?MIN_WRITER_BATCH_SIZE) orelse (length(Kvs2) >= ?MIN_WRITER_NUM_ITEMS) of
+        KvsLength2 = KvsLength + length(Queue),
+        Acc4 = Acc3#writer_acc{
+            kvs = Kvs2,
+            kvs_size = KvsSize2,
+            kvs_length = KvsLength2
+        },
+        case (KvsSize2 >= ?MIN_WRITER_BATCH_SIZE) orelse (KvsLength2 >= ?MIN_WRITER_NUM_ITEMS) of
         true ->
-            Acc4 = flush_writes(Acc3#writer_acc{kvs = Kvs2, kvs_size = KvsSize2}),
-            Acc5 = Acc4#writer_acc{kvs = [], kvs_size = 0};
+            Acc5 = flush_writes(Acc4),
+            Acc6 = Acc5#writer_acc{kvs = [], kvs_size = 0, kvs_length = 0};
         false ->
-            Acc5 = Acc3#writer_acc{kvs = Kvs2, kvs_size = KvsSize2}
+            Acc6 = Acc4
         end,
-        do_writes(Acc5)
+        do_writes(Acc6)
     end.
 
 
@@ -460,7 +474,7 @@ flush_writes(Acc) ->
         {ViewEmptyKVs, [], orddict:new()}, Queue),
     Acc2 = write_changes(Acc, ViewKVs, DocIdViewIdKeys, PartIdSeqs),
     {Acc3, ReplicasTransferred} = update_transferred_replicas(Acc2, PartIdSeqs),
-    update_task(length(Queue)),
+    update_task(Acc#writer_acc.kvs_length),
     case (Acc3#writer_acc.state =:= updating_active) andalso
         lists:any(fun({PartId, _}) ->
             ((1 bsl PartId) band ?set_pbitmask(Group) =/= 0)
