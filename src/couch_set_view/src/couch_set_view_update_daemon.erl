@@ -56,8 +56,10 @@ handle_call(Msg, _From, State) ->
 
 handle_cast(trigger_updates, #state{num_changes = MinNumChanges} = State) ->
     ok = ets:foldl(
-        fun({{_SetName, _Sig}, Pid}, ok) ->
-            ok = gen_server:cast(Pid, {update, MinNumChanges})
+        fun({{_SetName, _Sig}, Pid}, ok) when is_pid(Pid) ->
+                ok = gen_server:cast(Pid, {update, MinNumChanges});
+            ({{_SetName, _Sig}, _WaitList}, ok) ->
+                ok
         end,
         ok, couch_sig_to_setview_pid),
     {noreply, schedule_timer(State)};
