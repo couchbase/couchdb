@@ -766,6 +766,9 @@ handle_call(log_eof, _From, State) ->
     {reply, {ok, State#state.log_eof}, State, ?TIMEOUT}.
 
 
+handle_cast(_Msg, State) when not ?is_defined(State) ->
+    {noreply, State};
+
 handle_cast({log_eof, LogEof}, State) ->
     {noreply, State#state{log_eof = LogEof}, ?TIMEOUT};
 
