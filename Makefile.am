@@ -207,7 +207,7 @@ dialyzer: all $(COUCHDB_PLT)
 		-pa src/snappy \
 		-r \
 			src/couchdb \
-			src/couch_set_view/ebin \
+			src/couch_set_view \
 			src/couch_index_merger/ebin \
 			src/couch_view_parser \
 			src/snappy \

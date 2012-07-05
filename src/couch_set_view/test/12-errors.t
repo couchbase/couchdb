@@ -58,7 +58,7 @@ num_docs() -> 1000.
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(12),
+    etap:plan(14),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -81,8 +81,10 @@ test() ->
     etap:diag("Testing map function with invalid syntax"),
     test_map_syntax_error(),
 
-    etap:diag("Testing builtin reduce function with a runtime error"),
-    test_builtin_reduce_runtime_error(),
+    etap:diag("Testing builtin reduce _sum function with a runtime error"),
+    test_builtin_reduce_sum_runtime_error(),
+    etap:diag("Testing builtin reduce _stats function with a runtime error"),
+    test_builtin_reduce_stats_runtime_error(),
     etap:diag("Testing with an invalid builtin reduce function"),
     test_invalid_builtin_reduce_error(),
     etap:diag("Testing reduce function with a runtime error"),
@@ -240,7 +242,7 @@ test_map_syntax_error() ->
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()).
 
 
-test_builtin_reduce_runtime_error() ->
+test_builtin_reduce_sum_runtime_error() ->
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
     couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
 
@@ -266,7 +268,51 @@ test_builtin_reduce_runtime_error() ->
     catch _:Error ->
         Error
     end,
-    ?etap_match(QueryResult, {error, _}, "Received error response"),
+
+    etap:is(QueryResult,
+            {error, <<"Builtin _sum function requires map values to be numbers">>},
+            "Received error response"),
+
+    receive
+    {'DOWN', MonRef, _, _, _} ->
+        etap:bail("view group died")
+    after 5000 ->
+        etap:is(is_process_alive(GroupPid), true, "View group is still alive")
+    end,
+    couch_util:shutdown_sync(GroupPid),
+    couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()).
+
+
+test_builtin_reduce_stats_runtime_error() ->
+    couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
+    couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
+
+    DDocId = <<"_design/test">>,
+    DDoc = {[
+        {<<"_id">>, DDocId},
+        {<<"language">>, <<"javascript">>},
+        {<<"views">>, {[
+            {<<"test">>, {[
+                {<<"map">>, <<"function(doc) { emit(doc._id, 'foobar'); }">>},
+                {<<"reduce">>, <<"_stats">>}
+            ]}}
+        ]}}
+    ]},
+    populate_set(DDoc),
+
+    ok = configure_view_group(DDocId, [0, 1, 2, 3], []),
+    GroupPid = couch_set_view:get_group_pid(test_set_name(), DDocId),
+    MonRef = erlang:monitor(process, GroupPid),
+
+    QueryResult = try
+        query_reduce_view(DDocId, <<"test">>, false)
+    catch _:Error ->
+        Error
+    end,
+
+    etap:is(QueryResult,
+            {error, <<"Builtin _stats function requires map values to be numbers">>},
+            "Received error response"),
 
     receive
     {'DOWN', MonRef, _, _, _} ->
@@ -393,16 +439,15 @@ query_reduce_view(DDocId, ViewName, Stale) ->
         binary_to_list(ViewName) ++ "with ?group=true"),
     {ok, View, Group, _} = couch_set_view:get_reduce_view(
         test_set_name(), DDocId, ViewName, #set_view_group_req{stale = Stale}),
-    KeyGroupFun = fun({_Key1, _}, {_Key2, _}) -> true end,
     FoldFun = fun(Key, Red, Acc) -> {ok, [{Key, Red} | Acc]} end,
     ViewArgs = #view_query_args{
         run_reduce = true,
         view_name = <<"test">>
     },
-    {ok, Rows} = couch_set_view:fold_reduce(Group, View, FoldFun, [], KeyGroupFun, ViewArgs),
+    {ok, Rows} = couch_set_view:fold_reduce(Group, View, FoldFun, [], ViewArgs),
     couch_set_view:release_group(Group),
     case Rows of
-    [{_Key, RedValue}] ->
+    [{_Key, {json, RedValue}}] ->
         {ok, RedValue};
     [] ->
         empty

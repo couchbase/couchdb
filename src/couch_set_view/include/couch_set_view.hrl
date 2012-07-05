@@ -10,6 +10,7 @@
 % License for the specific language governing permissions and limitations under
 % the License.
 
+-define(MAX_NUM_PARTITIONS, 1024).
 -define(SET_VIEW_STATS_ETS, couch_set_view_stats).
 
 -define(set_view_group_stats_key(Group),
@@ -84,7 +85,6 @@
                                     {'ok' | 'stop', FinalAcc::term()}).
 -type set_view_fold_reduce_fun() :: fun((set_view_key(), Reduction::term(), Acc::term()) ->
                                     {'ok' | 'stop', FinalAcc::term()}).
--type set_view_key_group_fun()   :: fun((set_view_key(), set_view_key()) -> boolean()).
 
 
 % Used to configure a new set view.

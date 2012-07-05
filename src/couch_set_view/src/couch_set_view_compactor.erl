@@ -127,7 +127,7 @@ compact_group(Group0, EmptyGroup, LogFilePath, UpdaterPid, Owner) ->
     0 ->
         fun(_Kv) -> true end;
     _ ->
-        fun({_Key, {PartId, _}}) ->
+        fun({_Key, <<PartId:16, _/binary>>}) ->
             ((1 bsl PartId) band ?set_cbitmask(Group)) =:= 0
         end
     end,
@@ -256,11 +256,11 @@ update_task(#acc{changes = Changes, total_changes = Total} = Acc, ChangesInc) ->
 
 
 total_kv_count(#set_view_group{id_btree = IdBtree, views = Views}) ->
-    {ok, {IdCount, _}} = couch_btree:full_reduce(IdBtree),
+    {ok, <<IdCount:40, _/binary>>} = couch_btree:full_reduce(IdBtree),
     lists:foldl(
         fun(#set_view{btree = Bt} = View, Acc) ->
             couch_set_view_mapreduce:start_reduce_context(View),
-            {ok, {Count, _, _}} = couch_btree:full_reduce(Bt),
+            {ok, <<Count:40, _/binary>>} = couch_btree:full_reduce(Bt),
             couch_set_view_mapreduce:end_reduce_context(View),
             Acc + Count
         end,

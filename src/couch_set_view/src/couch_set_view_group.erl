@@ -391,6 +391,10 @@ handle_call({set_auto_cleanup, Enabled}, _From, State) ->
     % To be used only by unit tests.
     {reply, ok, State#state{auto_cleanup = Enabled}, ?TIMEOUT};
 
+handle_call({define_view, NumPartitions, _, _, _, _, _}, _From, State)
+        when (not ?is_defined(State)), NumPartitions > ?MAX_NUM_PARTITIONS ->
+    {reply, {error, <<"Too high value for number of partitions">>}, State};
+
 handle_call({define_view, NumPartitions, ActiveList, ActiveBitmask,
         PassiveList, PassiveBitmask, UseReplicaIndex}, _From, State) when not ?is_defined(State) ->
     #state{init_args = InitArgs, group = Group} = State,
@@ -1568,19 +1572,22 @@ init_group(Fd, Group, IndexHeader) ->
         view_states = ViewStates
     } = IndexHeader,
     IdTreeReduce = fun(reduce, KVs) ->
-        {length(KVs), couch_set_view_util:partitions_map(KVs, 0)};
+        <<(length(KVs)):40, (couch_set_view_util:partitions_map(KVs, 0)):?MAX_NUM_PARTITIONS>>;
     (rereduce, [First | Rest]) ->
         lists:foldl(
-            fun({S, M}, {T, A}) -> {S + T, M bor A} end,
+            fun(<<S:40, M:?MAX_NUM_PARTITIONS>>, <<T:40, A:?MAX_NUM_PARTITIONS>>) ->
+                <<(S + T):40, (M bor A):?MAX_NUM_PARTITIONS>>
+            end,
             First, Rest)
     end,
     BtreeOptions = [
-        {chunk_threshold, ?BTREE_CHUNK_THRESHOLD}
+        {chunk_threshold, ?BTREE_CHUNK_THRESHOLD},
+        {binary_mode, true}
     ],
     {ok, IdBtree} = couch_btree:open(
         IdBtreeState, Fd, [{reduce, IdTreeReduce} | BtreeOptions]),
     Views2 = lists:zipwith(
-        fun(BTState, #set_view{options = Options} = View) ->
+        fun(BTState, View) ->
             case View#set_view.reduce_funs of
             [{ViewName, _} | _] ->
                 ok;
@@ -1591,44 +1598,51 @@ init_group(Fd, Group, IndexHeader) ->
                 fun(reduce, KVs) ->
                     AllPartitionsBitMap = couch_set_view_util:partitions_map(KVs, 0),
                     KVs2 = couch_set_view_util:expand_dups(KVs, []),
-                    try
-                        {ok, Reduced} = couch_set_view_mapreduce:reduce(View, KVs2),
-                        {length(KVs2), Reduced, AllPartitionsBitMap}
-                    catch throw:{error, Reason} = Error ->
-                        ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, error executing"
-                                             " reduce function for view `~s'~n"
-                                             "  reason:                ~s~n"
-                                             "  input key-value pairs: ~p~n",
-                                             [SetName, Type, DDocId, ViewName,
-                                              couch_util:to_binary(Reason), KVs]),
-                        throw(Error)
-                    end;
-                (rereduce, [{Count0, Red0, AllPartitionsBitMap0} | Reds]) ->
-                    {Count, UserReds, AllPartitionsBitMap} = lists:foldl(
-                        fun({C, R, Apbm}, {CountAcc, RedAcc, ApbmAcc}) ->
-                            {C + CountAcc, [R | RedAcc], Apbm bor ApbmAcc}
+                    {ok, Reduced} =
+                        try
+                             couch_set_view_mapreduce:reduce(View, KVs2)
+                        catch throw:{error, Reason} = Error ->
+                            ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, error executing"
+                                                 " reduce function for view `~s'~n"
+                                                 "  reason:                ~s~n"
+                                                 "  input key-value pairs: ~p~n",
+                                                 [SetName, Type, DDocId, ViewName,
+                                                  couch_util:to_binary(Reason), KVs2]),
+                            throw(Error)
                         end,
-                        {Count0, [Red0], AllPartitionsBitMap0},
+                    if length(Reduced) > 255 ->
+                        throw({too_many_reductions, <<"Maximum reductions allowed is 255">>});
+                    true -> ok
+                    end,
+                    LenReductions = [<<(size(R)):16, R/binary>> || R <- Reduced],
+                    iolist_to_binary([<<(length(KVs2)):40, AllPartitionsBitMap:?MAX_NUM_PARTITIONS>> | LenReductions]);
+                (rereduce, [<<Count0:40, AllPartitionsBitMap0:?MAX_NUM_PARTITIONS, Red0/binary>> | Reds]) ->
+                    {Count, AllPartitionsBitMap, UserReds} = lists:foldl(
+                        fun(<<C:40, Apbm:?MAX_NUM_PARTITIONS, R/binary>>, {CountAcc, ApbmAcc, RedAcc}) ->
+                            {C + CountAcc, Apbm bor ApbmAcc, [couch_set_view_util:parse_reductions(R) | RedAcc]}
+                        end,
+                        {Count0, AllPartitionsBitMap0, [couch_set_view_util:parse_reductions(Red0)]},
                         Reds),
-                    try
-                        {ok, Reduced} = couch_set_view_mapreduce:rereduce(View, UserReds),
-                        {Count, Reduced, AllPartitionsBitMap}
-                    catch throw:{error, Reason} = Error ->
-                        ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, error executing"
-                                             " rereduce function for view `~s'~n"
-                                             "  reason:           ~s~n"
-                                             "  input reductions: ~p~n",
-                                             [SetName, Type, DDocId, ViewName,
-                                              couch_util:to_binary(Reason), UserReds]),
-                        throw(Error)
-                    end
+                    {ok, Reduced} =
+                        try
+                            couch_set_view_mapreduce:rereduce(View, UserReds)
+                        catch throw:{error, Reason} = Error ->
+                            ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, error executing"
+                                                 " rereduce function for view `~s'~n"
+                                                 "  reason:           ~s~n"
+                                                 "  input reductions: ~p~n",
+                                                 [SetName, Type, DDocId, ViewName,
+                                                  couch_util:to_binary(Reason), UserReds]),
+                            throw(Error)
+                        end,
+                    LenReductions = [<<(size(R1)):16, R1/binary>> || R1 <- Reduced],
+                    iolist_to_binary([<<Count:40, AllPartitionsBitMap:?MAX_NUM_PARTITIONS>> | LenReductions])
                 end,
-            
-            case couch_util:get_value(<<"collation">>, Options, <<"default">>) of
-            <<"default">> ->
-                Less = fun couch_set_view:less_json_ids/2;
-            <<"raw">> ->
-                Less = fun(A,B) -> A < B end
+            Less = fun(A, B) ->
+                % TODO: more efficient collation, avoid full decoding of keys
+                Key1DocId1 = couch_set_view_util:decode_key_docid(A),
+                Key2DocId2 = couch_set_view_util:decode_key_docid(B),
+                couch_set_view:less_json_ids(Key1DocId1, Key2DocId2)
             end,
             {ok, Btree} = couch_btree:open(
                 BTState, Fd, [{less, Less}, {reduce, ReduceFun} | BtreeOptions]),

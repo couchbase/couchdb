@@ -228,15 +228,15 @@ verify_btrees([], _ExpectedView2Reduction) ->
     } = View2,
 
     etap:is(
-        couch_btree:full_reduce(IdBtree),
+        couch_set_view_test_util:full_reduce_id_btree(Group, IdBtree),
         {ok, {0, 0}},
         "Id Btree has the right reduce value"),
     etap:is(
-        couch_btree:full_reduce(View1Btree),
+        couch_set_view_test_util:full_reduce_view_btree(Group, View1Btree),
         {ok, {0, [0], 0}},
         "View1 Btree has the right reduce value"),
     etap:is(
-        couch_btree:full_reduce(View2Btree),
+        couch_set_view_test_util:full_reduce_view_btree(Group, View2Btree),
         {ok, {0, [0], 0}},
         "View2 Btree has the right reduce value"),
 
@@ -246,7 +246,8 @@ verify_btrees([], _ExpectedView2Reduction) ->
     etap:is(Cbitmask, 0, "Header has right cleanup bitmask"),
 
     etap:diag("Verifying the Id Btree"),
-    {ok, _, IdBtreeFoldResult} = couch_btree:fold(
+    {ok, _, IdBtreeFoldResult} = couch_set_view_test_util:fold_id_btree(
+        Group,
         IdBtree,
         fun(_Kv, _, I) ->
             {ok, I + 1}
@@ -255,7 +256,8 @@ verify_btrees([], _ExpectedView2Reduction) ->
     etap:is(IdBtreeFoldResult, 0, "Id Btree is empty"),
 
     etap:diag("Verifying the View1 Btree"),
-    {ok, _, View1BtreeFoldResult} = couch_btree:fold(
+    {ok, _, View1BtreeFoldResult} = couch_set_view_test_util:fold_view_btree(
+        Group,
         View1Btree,
         fun(_Kv, _, I) ->
             {ok, I + 1}
@@ -264,7 +266,8 @@ verify_btrees([], _ExpectedView2Reduction) ->
     etap:is(View1BtreeFoldResult, 0, "View1 Btree is empty"),
 
     etap:diag("Verifying the View2 Btree"),
-    {ok, _, View2BtreeFoldResult} = couch_btree:fold(
+    {ok, _, View2BtreeFoldResult} = couch_set_view_test_util:fold_view_btree(
+        Group,
         View2Btree,
         fun(_Kv, _, I) ->
             {ok, I + 1}
@@ -299,15 +302,15 @@ verify_btrees(ActiveParts, ExpectedView2Reduction) ->
     ExpectedKVCount = (num_docs() div num_set_partitions()) * length(ActiveParts),
 
     etap:is(
-        couch_btree:full_reduce(IdBtree),
+        couch_set_view_test_util:full_reduce_id_btree(Group, IdBtree),
         {ok, {ExpectedKVCount, ExpectedBitmask}},
         "Id Btree has the right reduce value"),
     etap:is(
-        couch_btree:full_reduce(View1Btree),
+        couch_set_view_test_util:full_reduce_view_btree(Group, View1Btree),
         {ok, {ExpectedKVCount, [ExpectedKVCount], ExpectedBitmask}},
         "View1 Btree has the right reduce value"),
     etap:is(
-        couch_btree:full_reduce(View2Btree),
+        couch_set_view_test_util:full_reduce_view_btree(Group, View2Btree),
         {ok, {ExpectedKVCount, [ExpectedView2Reduction], ExpectedBitmask}},
         "View2 Btree has the right reduce value"),
 
@@ -317,7 +320,8 @@ verify_btrees(ActiveParts, ExpectedView2Reduction) ->
     etap:is(Cbitmask, 0, "Header has right cleanup bitmask"),
 
     etap:diag("Verifying the Id Btree"),
-    {ok, _, {_, IdBtreeFoldResult}} = couch_btree:fold(
+    {ok, _, {_, IdBtreeFoldResult}} = couch_set_view_test_util:fold_id_btree(
+        Group,
         IdBtree,
         fun(Kv, _, {NextVal, I}) ->
             PartId = NextVal rem num_set_partitions(),
@@ -340,12 +344,13 @@ verify_btrees(ActiveParts, ExpectedView2Reduction) ->
         "Id Btree has " ++ integer_to_list(ExpectedKVCount) ++ " entries"),
 
     etap:diag("Verifying the View1 Btree"),
-    {ok, _, {_, View1BtreeFoldResult}} = couch_btree:fold(
+    {ok, _, {_, View1BtreeFoldResult}} = couch_set_view_test_util:fold_view_btree(
+        Group,
         View1Btree,
         fun(Kv, _, {NextVal, I}) ->
             PartId = NextVal rem num_set_partitions(),
             DocId = doc_id(NextVal),
-            ExpectedKv = {{DocId, DocId}, {PartId, {json, ?JSON_ENCODE(NextVal)}}},
+            ExpectedKv = {{DocId, DocId}, {PartId, NextVal}},
             case ExpectedKv =:= Kv of
             true ->
                 ok;
@@ -359,12 +364,13 @@ verify_btrees(ActiveParts, ExpectedView2Reduction) ->
         "View1 Btree has " ++ integer_to_list(ExpectedKVCount) ++ " entries"),
 
     etap:diag("Verifying the View2 Btree"),
-    {ok, _, {_, View2BtreeFoldResult}} = couch_btree:fold(
+    {ok, _, {_, View2BtreeFoldResult}} = couch_set_view_test_util:fold_view_btree(
+        Group,
         View2Btree,
         fun(Kv, _, {NextVal, I}) ->
             PartId = NextVal rem num_set_partitions(),
             DocId = doc_id(NextVal),
-            ExpectedKv = {{DocId, DocId}, {PartId, {json, ?JSON_ENCODE(NextVal * 3)}}},
+            ExpectedKv = {{DocId, DocId}, {PartId, NextVal * 3}},
             case ExpectedKv =:= Kv of
             true ->
                 ok;

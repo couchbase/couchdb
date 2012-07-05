@@ -399,11 +399,11 @@ same_key_by_same_doc_multiple_times_verify_btrees_1(Group) ->
     DbSeqs = couch_set_view_test_util:get_db_seqs(test_set_name(), PartList),
 
     etap:is(
-        couch_btree:full_reduce(IdBtree),
+        couch_set_view_test_util:full_reduce_id_btree(Group, IdBtree),
         {ok, {num_docs(), ExpectedBitmask}},
         "Id Btree has the right reduce value"),
     etap:is(
-        couch_btree:full_reduce(View1Btree),
+        couch_set_view_test_util:full_reduce_view_btree(Group, View1Btree),
         {ok, {num_docs() * 2, [num_docs() * 2], ExpectedBitmask}},
         "View1 Btree has the right reduce value"),
 
@@ -413,11 +413,12 @@ same_key_by_same_doc_multiple_times_verify_btrees_1(Group) ->
     etap:is(Cbitmask, 0, "Header has right cleanup bitmask"),
 
     etap:diag("Verifying the Id Btree"),
-    {ok, _, IdBtreeFoldResult} = couch_btree:fold(
+    {ok, _, IdBtreeFoldResult} = couch_set_view_test_util:fold_id_btree(
+        Group,
         IdBtree,
         fun(Kv, _, I) ->
             PartId = I rem num_set_partitions(),
-            Value = [{View1#set_view.id_num, doc_id(I)}, {View1#set_view.id_num, doc_id(I)}],
+            Value = [{View1#set_view.id_num, doc_id(I)}],
             ExpectedKv = {doc_id(I), {PartId, Value}},
             case ExpectedKv =:= Kv of
             true ->
@@ -432,11 +433,12 @@ same_key_by_same_doc_multiple_times_verify_btrees_1(Group) ->
         "Id Btree has " ++ integer_to_list(num_docs()) ++ " entries"),
 
     etap:diag("Verifying the View1 Btree"),
-    {ok, _, View1BtreeFoldResult} = couch_btree:fold(
+    {ok, _, View1BtreeFoldResult} = couch_set_view_test_util:fold_view_btree(
+        Group,
         View1Btree,
         fun(Kv, _, I) ->
             PartId = I rem num_set_partitions(),
-            ExpectedDups = [{json, ?JSON_ENCODE(I + 1)}, {json, ?JSON_ENCODE(I)}],
+            ExpectedDups = [I + 1, I],
             ExpectedKv = {
                 {doc_id(I), doc_id(I)},
                 {PartId, {dups, lists:sort(ExpectedDups)}}
@@ -446,7 +448,6 @@ same_key_by_same_doc_multiple_times_verify_btrees_1(Group) ->
             true ->
                 ok;
             false ->
-                io:format("Got: ~p~nExpected: ~p~n", [Kv, ExpectedKv]),
                 etap:bail("View1 Btree has an unexpected KV at iteration " ++ integer_to_list(I))
             end,
             {ok, I + 1}
@@ -478,11 +479,11 @@ same_key_by_same_doc_multiple_times_verify_btrees_2(Group) ->
     DbSeqs = couch_set_view_test_util:get_db_seqs(test_set_name(), PartList),
 
     etap:is(
-        couch_btree:full_reduce(IdBtree),
+        couch_set_view_test_util:full_reduce_id_btree(Group, IdBtree),
         {ok, {num_docs(), ExpectedBitmask}},
         "Id Btree has the right reduce value"),
     etap:is(
-        couch_btree:full_reduce(View1Btree),
+        couch_set_view_test_util:full_reduce_view_btree(Group, View1Btree),
         {ok, {num_docs(), [num_docs()], ExpectedBitmask}},
         "View1 Btree has the right reduce value"),
 
@@ -492,7 +493,8 @@ same_key_by_same_doc_multiple_times_verify_btrees_2(Group) ->
     etap:is(Cbitmask, 0, "Header has right cleanup bitmask"),
 
     etap:diag("Verifying the Id Btree"),
-    {ok, _, IdBtreeFoldResult} = couch_btree:fold(
+    {ok, _, IdBtreeFoldResult} = couch_set_view_test_util:fold_id_btree(
+        Group,
         IdBtree,
         fun(Kv, _, I) ->
             PartId = I rem num_set_partitions(),
@@ -511,11 +513,12 @@ same_key_by_same_doc_multiple_times_verify_btrees_2(Group) ->
         "Id Btree has " ++ integer_to_list(num_docs()) ++ " entries"),
 
     etap:diag("Verifying the View1 Btree"),
-    {ok, _, View1BtreeFoldResult} = couch_btree:fold(
+    {ok, _, View1BtreeFoldResult} = couch_set_view_test_util:fold_view_btree(
+        Group,
         View1Btree,
         fun(Kv, _, I) ->
             PartId = I rem num_set_partitions(),
-            ExpectedKv = {{doc_id(I), doc_id(I)}, {PartId, {json, <<"null">>}}},
+            ExpectedKv = {{doc_id(I), doc_id(I)}, {PartId, null}},
             case ExpectedKv =:= Kv of
             true ->
                 ok;
@@ -551,11 +554,11 @@ same_key_by_same_doc_multiple_times_verify_btrees_3(Group) ->
     DbSeqs = couch_set_view_test_util:get_db_seqs(test_set_name(), PartList),
 
     etap:is(
-        couch_btree:full_reduce(IdBtree),
+        couch_set_view_test_util:full_reduce_id_btree(Group, IdBtree),
         {ok, {num_docs() div 2, ExpectedBitmask}},
         "Id Btree has the right reduce value"),
     etap:is(
-        couch_btree:full_reduce(View1Btree),
+        couch_set_view_test_util:full_reduce_view_btree(Group, View1Btree),
         {ok, {num_docs(), [num_docs()], ExpectedBitmask}},
         "View1 Btree has the right reduce value"),
 
@@ -565,11 +568,12 @@ same_key_by_same_doc_multiple_times_verify_btrees_3(Group) ->
     etap:is(Cbitmask, 0, "Header has right cleanup bitmask"),
 
     etap:diag("Verifying the Id Btree"),
-    {ok, _, {_, IdBtreeFoldResult}} = couch_btree:fold(
+    {ok, _, {_, IdBtreeFoldResult}} = couch_set_view_test_util:fold_id_btree(
+        Group,
         IdBtree,
         fun(Kv, _, {A, I}) ->
             PartId = I rem num_set_partitions(),
-            Value = [{View1#set_view.id_num, doc_id(I)}, {View1#set_view.id_num, doc_id(I)}],
+            Value = [{View1#set_view.id_num, doc_id(I)}],
             ExpectedKv = {doc_id(I), {PartId, Value}},
             case ExpectedKv =:= Kv of
             true ->
@@ -584,13 +588,14 @@ same_key_by_same_doc_multiple_times_verify_btrees_3(Group) ->
         "Id Btree has " ++ integer_to_list(num_docs()) ++ " entries"),
 
     etap:diag("Verifying the View1 Btree"),
-    {ok, _, View1BtreeFoldResult} = couch_btree:fold(
+    {ok, _, View1BtreeFoldResult} = couch_set_view_test_util:fold_view_btree(
+        Group,
         View1Btree,
         fun(Kv, _, I) ->
             PartId = I rem num_set_partitions(),
             ExpectedKv = {
                 {doc_id(I), doc_id(I)},
-                {PartId, {dups, [{json, ?JSON_ENCODE(I + 1)}, {json, ?JSON_ENCODE(I)}]}}
+                {PartId, {dups, [I, I + 1]}}
             },
             case ExpectedKv =:= Kv of
             true ->
@@ -627,11 +632,11 @@ same_key_by_same_doc_multiple_times_verify_btrees_4(Group) ->
     DbSeqs = couch_set_view_test_util:get_db_seqs(test_set_name(), PartList),
 
     etap:is(
-        couch_btree:full_reduce(IdBtree),
+        couch_set_view_test_util:full_reduce_id_btree(Group, IdBtree),
         {ok, {0, 0}},
         "Id Btree is empty"),
     etap:is(
-        couch_btree:full_reduce(View1Btree),
+        couch_set_view_test_util:full_reduce_view_btree(Group, View1Btree),
         {ok, {0, [0], 0}},
         "View1 Btree is empty"),
 
@@ -641,7 +646,8 @@ same_key_by_same_doc_multiple_times_verify_btrees_4(Group) ->
     etap:is(Cbitmask, 0, "Header has right cleanup bitmask"),
 
     etap:diag("Verifying the Id Btree"),
-    {ok, _, IdBtreeFoldResult} = couch_btree:fold(
+    {ok, _, IdBtreeFoldResult} = couch_set_view_test_util:fold_id_btree(
+        Group,
         IdBtree,
         fun(_Kv, _, I) ->
             {ok, I + 1}
@@ -650,7 +656,8 @@ same_key_by_same_doc_multiple_times_verify_btrees_4(Group) ->
     etap:is(IdBtreeFoldResult, 0, "Id Btree has 0 entries"),
 
     etap:diag("Verifying the View1 Btree"),
-    {ok, _, View1BtreeFoldResult} = couch_btree:fold(
+    {ok, _, View1BtreeFoldResult} = couch_set_view_test_util:fold_view_btree(
+        Group,
         View1Btree,
         fun(_Kv, _, I) ->
             {ok, I + 1}
@@ -681,12 +688,12 @@ test_same_key_by_different_docs_multiple_times_verify_btrees_1(Group) ->
     DbSeqs = couch_set_view_test_util:get_db_seqs(test_set_name(), PartList),
 
     etap:is(
-        couch_btree:full_reduce(IdBtree),
+        couch_set_view_test_util:full_reduce_id_btree(Group, IdBtree),
         {ok, {64, ExpectedBitmask}},
         "Id Btree has the right reduce value"),
     ExpectedViewReduction = lists:sum([I * 2 + I * 3 || I <- lists:seq(0, 63)]),
     etap:is(
-        couch_btree:full_reduce(View1Btree),
+        couch_set_view_test_util:full_reduce_view_btree(Group, View1Btree),
         {ok, {64 * 2, [ExpectedViewReduction], ExpectedBitmask}},
         "View1 Btree has the right reduce value"),
 
@@ -696,7 +703,8 @@ test_same_key_by_different_docs_multiple_times_verify_btrees_1(Group) ->
     etap:is(Cbitmask, 0, "Header has right cleanup bitmask"),
 
     etap:diag("Verifying the Id Btree"),
-    {ok, _, IdBtreeFoldResult} = couch_btree:fold(
+    {ok, _, IdBtreeFoldResult} = couch_set_view_test_util:fold_id_btree(
+        Group,
         IdBtree,
         fun(Kv, _, I) ->
             PartId = I rem num_set_partitions(),
@@ -714,16 +722,17 @@ test_same_key_by_different_docs_multiple_times_verify_btrees_1(Group) ->
     etap:is(IdBtreeFoldResult, 64, "Id Btree has 64 entries"),
 
     etap:diag("Verifying the View1 Btree"),
-    {ok, _, {_, _, View1BtreeFoldResult}} = couch_btree:fold(
+    {ok, _, {_, _, View1BtreeFoldResult}} = couch_set_view_test_util:fold_view_btree(
+        Group,
         View1Btree,
         fun(Kv, _, {DocIdBase, Key, I}) ->
             PartId = DocIdBase rem num_set_partitions(),
             DocId = doc_id(DocIdBase),
             ExpectedKv = case (I + 1) rem 2 of
             0 ->
-                {{Key, DocId}, {PartId, {json, ?JSON_ENCODE(DocIdBase * 3)}}};
+                {{Key, DocId}, {PartId, DocIdBase * 3}};
             1 ->
-                {{Key, DocId}, {PartId, {json, ?JSON_ENCODE(DocIdBase * 2)}}}
+                {{Key, DocId}, {PartId, DocIdBase * 2}}
             end,
             case ExpectedKv =:= Kv of
             true ->
@@ -776,12 +785,12 @@ test_same_key_by_different_docs_multiple_times_verify_btrees_2(Group) ->
     DbSeqs = couch_set_view_test_util:get_db_seqs(test_set_name(), PartList),
 
     etap:is(
-        couch_btree:full_reduce(IdBtree),
+        couch_set_view_test_util:full_reduce_id_btree(Group, IdBtree),
         {ok, {64, ExpectedBitmask}},
         "Id Btree has the right reduce value"),
     ExpectedViewReduction = lists:sum([I * 2 || I <- lists:seq(0, 63)]),
     etap:is(
-        couch_btree:full_reduce(View1Btree),
+        couch_set_view_test_util:full_reduce_view_btree(Group, View1Btree),
         {ok, {64, [ExpectedViewReduction], ExpectedBitmask}},
         "View1 Btree has the right reduce value"),
 
@@ -791,7 +800,8 @@ test_same_key_by_different_docs_multiple_times_verify_btrees_2(Group) ->
     etap:is(Cbitmask, 0, "Header has right cleanup bitmask"),
 
     etap:diag("Verifying the Id Btree"),
-    {ok, _, IdBtreeFoldResult} = couch_btree:fold(
+    {ok, _, IdBtreeFoldResult} = couch_set_view_test_util:fold_id_btree(
+        Group,
         IdBtree,
         fun(Kv, _, I) ->
             PartId = I rem num_set_partitions(),
@@ -809,12 +819,13 @@ test_same_key_by_different_docs_multiple_times_verify_btrees_2(Group) ->
     etap:is(IdBtreeFoldResult, 64, "Id Btree has 64 entries"),
 
     etap:diag("Verifying the View1 Btree"),
-    {ok, _, View1BtreeFoldResult} = couch_btree:fold(
+    {ok, _, View1BtreeFoldResult} = couch_set_view_test_util:fold_view_btree(
+        Group,
         View1Btree,
         fun(Kv, _, I) ->
             PartId = I rem num_set_partitions(),
             DocId = doc_id(I),
-            ExpectedKv = {{I, DocId}, {PartId, {json, ?JSON_ENCODE(I * 2)}}},
+            ExpectedKv = {{I, DocId}, {PartId, I * 2}},
             case ExpectedKv =:= Kv of
             true ->
                 ok;
@@ -849,11 +860,11 @@ test_same_key_by_different_docs_multiple_times_verify_btrees_3(Group) ->
     DbSeqs = couch_set_view_test_util:get_db_seqs(test_set_name(), PartList),
 
     etap:is(
-        couch_btree:full_reduce(IdBtree),
+        couch_set_view_test_util:full_reduce_id_btree(Group, IdBtree),
         {ok, {0, 0}},
         "Id Btree is empty"),
     etap:is(
-        couch_btree:full_reduce(View1Btree),
+        couch_set_view_test_util:full_reduce_view_btree(Group, View1Btree),
         {ok, {0, [0], 0}},
         "View1 Btree is empty"),
 
@@ -863,7 +874,8 @@ test_same_key_by_different_docs_multiple_times_verify_btrees_3(Group) ->
     etap:is(Cbitmask, 0, "Header has right cleanup bitmask"),
 
     etap:diag("Verifying the Id Btree"),
-    {ok, _, IdBtreeFoldResult} = couch_btree:fold(
+    {ok, _, IdBtreeFoldResult} = couch_set_view_test_util:fold_id_btree(
+        Group,
         IdBtree,
         fun(_Kv, _, I) ->
             {ok, I + 1}
@@ -872,7 +884,8 @@ test_same_key_by_different_docs_multiple_times_verify_btrees_3(Group) ->
     etap:is(IdBtreeFoldResult, 0, "Id Btree has 0 entries"),
 
     etap:diag("Verifying the View1 Btree"),
-    {ok, _, View1BtreeFoldResult} = couch_btree:fold(
+    {ok, _, View1BtreeFoldResult} = couch_set_view_test_util:fold_view_btree(
+        Group,
         View1Btree,
         fun(_Kv, _, I) ->
             {ok, I + 1}

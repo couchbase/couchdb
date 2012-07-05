@@ -320,12 +320,11 @@ fold_view(ActiveParts, ValueGenFun) ->
 
     etap:diag("Folding the view with ?group=false"),
 
-    FullRedKeyGroupFun = fun({_Key1, _}, {_Key2, _}) -> true end,
-    FullRedFoldFun = fun(_Key, Red, Acc) ->
+    FullRedFoldFun = fun(_Key, {json, Red}, Acc) ->
         {ok, [Red | Acc]}
     end,
     {ok, FullRedResult} = couch_set_view:fold_reduce(
-        Group, FoldView, FullRedFoldFun, [], FullRedKeyGroupFun, ViewArgs),
+        Group, FoldView, FullRedFoldFun, [], ViewArgs),
     case ActiveParts of
     [] ->
         etap:is(
@@ -334,18 +333,17 @@ fold_view(ActiveParts, ValueGenFun) ->
            "Got correct fold reduce value with ?group=false");
     _ ->
         etap:is(
-            FullRedResult,
-            [ExpectedViewReduction],
+            ejson:decode(FullRedResult),
+            ExpectedViewReduction,
             "Got correct fold reduce value with ?group=false")
     end,
 
     etap:diag("Folding the view with ?group=true"),
 
-    PerKeyRedKeyGroupFun = fun({Key1, _}, {Key2, _}) -> Key1 =:= Key2 end,
-    PerKeyRedFoldFun = fun(Key, Red, {NextVal, I}) ->
+    PerKeyRedFoldFun = fun(Key, {json, Red}, {NextVal, I}) ->
         ExpectedKey = doc_id(NextVal),
         ExpectedRed = ValueGenFun(NextVal),
-        case {Key, Red} of
+        case {Key, ejson:decode(Red)} of
         {ExpectedKey, ExpectedRed} ->
             ok;
         _ ->
@@ -356,7 +354,7 @@ fold_view(ActiveParts, ValueGenFun) ->
     {ok, {_, PerKeyRedResult}} = couch_set_view:fold_reduce(
         Group, FoldView, PerKeyRedFoldFun,
         {case ActiveParts of [] -> nil; _ -> hd(ActiveParts) end, 0},
-        PerKeyRedKeyGroupFun, ViewArgs),
+        ViewArgs#view_query_args{group_level = exact}),
     etap:is(
         PerKeyRedResult,
         length(ActiveParts) * (num_docs() div num_set_partitions()),
@@ -402,11 +400,11 @@ verify_btrees(ActiveParts, ValueGenFun) ->
         [ValueGenFun(I) || I <- lists:seq(0, num_docs() - 1)]),
 
     etap:is(
-        couch_btree:full_reduce(IdBtree),
+        couch_set_view_test_util:full_reduce_id_btree(Group, IdBtree),
         {ok, {ExpectedKVCount, ExpectedBitmask}},
         "Id Btree has the right reduce value"),
     etap:is(
-        couch_btree:full_reduce(View1Btree),
+        couch_set_view_test_util:full_reduce_view_btree(Group, View1Btree),
         {ok, {ExpectedKVCount, [ExpectedBtreeViewReduction], ExpectedBitmask}},
         "View1 Btree has the right reduce value"),
 
@@ -416,7 +414,8 @@ verify_btrees(ActiveParts, ValueGenFun) ->
     etap:is(Cbitmask, 0, "Header has right cleanup bitmask"),
 
     etap:diag("Verifying the Id Btree"),
-    {ok, _, IdBtreeFoldResult} = couch_btree:fold(
+    {ok, _, IdBtreeFoldResult} = couch_set_view_test_util:fold_id_btree(
+        Group,
         IdBtree,
         fun(Kv, _, I) ->
             PartId = I rem num_set_partitions(),
@@ -436,12 +435,13 @@ verify_btrees(ActiveParts, ValueGenFun) ->
         "Id Btree has " ++ integer_to_list(ExpectedKVCount) ++ " entries"),
 
     etap:diag("Verifying the View1 Btree"),
-    {ok, _, View1BtreeFoldResult} = couch_btree:fold(
+    {ok, _, View1BtreeFoldResult} = couch_set_view_test_util:fold_view_btree(
+        Group,
         View1Btree,
         fun(Kv, _, I) ->
             PartId = I rem num_set_partitions(),
             DocId = doc_id(I),
-            ExpectedKv = {{DocId, DocId}, {PartId, {json, ?JSON_ENCODE(ValueGenFun(I))}}},
+            ExpectedKv = {{DocId, DocId}, {PartId, ValueGenFun(I)}},
             case ExpectedKv =:= Kv of
             true ->
                 ok;

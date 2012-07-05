@@ -26,7 +26,7 @@
 -export([mark_partitions_unindexable/3, mark_partitions_indexable/3]).
 -export([monitor_partition_update/3, demonitor_partition_update/3]).
 
--export([fold/5, fold_reduce/6]).
+-export([fold/5, fold_reduce/5]).
 -export([get_row_count/2, reduce_to_count/1, extract_map_view/1]).
 
 -export([less_json/2, less_json_ids/2]).
@@ -401,12 +401,12 @@ list_index_files(SetName) ->
 
 -spec get_row_count(#set_view_group{}, #set_view{}) -> non_neg_integer().
 get_row_count(#set_view_group{replica_group = nil}, #set_view{btree = Bt}) ->
-    {ok, {Count, _Reds, _AllPartitionsBitMaps}} = couch_btree:full_reduce(Bt),
+    {ok, <<Count:40, _/binary>>} = couch_btree:full_reduce(Bt),
     Count;
 get_row_count(#set_view_group{replica_group = RepGroup}, View) ->
     RepView = lists:nth(View#set_view.id_num + 1, RepGroup#set_view_group.views),
-    {ok, {CountMain, _, _}} = couch_btree:full_reduce(View#set_view.btree),
-    {ok, {CountRep, _, _}} = couch_btree:full_reduce(RepView#set_view.btree),
+    {ok, <<CountMain:40, _/binary>>} = couch_btree:full_reduce(View#set_view.btree),
+    {ok, <<CountRep:40, _/binary>>} = couch_btree:full_reduce(RepView#set_view.btree),
     CountMain + CountRep.
 
 
@@ -421,9 +421,8 @@ extract_map_view({reduce, _N, View}) ->
                   {'reduce', non_neg_integer(), #set_view{}},
                   set_view_fold_reduce_fun(),
                   term(),
-                  set_view_key_group_fun(),
                   #view_query_args{}) -> {'ok', term()}.
-fold_reduce(#set_view_group{replica_group = #set_view_group{} = RepGroup} = Group, View, FoldFun, FoldAcc, _KeyGroupFun, ViewQueryArgs) ->
+fold_reduce(#set_view_group{replica_group = #set_view_group{} = RepGroup} = Group, View, FoldFun, FoldAcc, ViewQueryArgs) ->
     {reduce, NthRed, #set_view{id_num = Id}} = View,
     RepView = {reduce, NthRed, lists:nth(Id + 1, RepGroup#set_view_group.views)},
     ViewSpecs = [
@@ -459,11 +458,13 @@ fold_reduce(#set_view_group{replica_group = #set_view_group{} = RepGroup} = Grou
     #merge_acc{acc = FinalAcc} = couch_index_merger:query_index(couch_view_merger, MergeParams),
     {ok, FinalAcc};
 
-fold_reduce(Group, View, FoldFun, FoldAcc, KeyGroupFun, #view_query_args{keys = nil} = ViewQueryArgs) ->
+fold_reduce(Group, View, FoldFun, FoldAcc, #view_query_args{keys = nil} = ViewQueryArgs) ->
+    KeyGroupFun = make_reduce_group_keys_fun(ViewQueryArgs#view_query_args.group_level),
     Options = [{key_group_fun, KeyGroupFun} | couch_set_view_util:make_key_options(ViewQueryArgs)],
     do_fold_reduce(Group, View, FoldFun, FoldAcc, Options, ViewQueryArgs);
 
-fold_reduce(Group, View, FoldFun, FoldAcc, KeyGroupFun, #view_query_args{keys = Keys} = ViewQueryArgs0) ->
+fold_reduce(Group, View, FoldFun, FoldAcc, #view_query_args{keys = Keys} = ViewQueryArgs0) ->
+    KeyGroupFun = make_reduce_group_keys_fun(ViewQueryArgs0#view_query_args.group_level),
     {_, FinalAcc} = lists:foldl(
         fun(Key, {_, Acc}) ->
             ViewQueryArgs = ViewQueryArgs0#view_query_args{start_key = Key, end_key = Key},
@@ -478,7 +479,11 @@ fold_reduce(Group, View, FoldFun, FoldAcc, KeyGroupFun, #view_query_args{keys = 
 do_fold_reduce(Group, ViewInfo, Fun, Acc, Options0, ViewQueryArgs) ->
     {reduce, NthRed, View} = ViewInfo,
     #set_view{btree = Bt, reduce_funs = RedFuns} = View,
-    Filter = case ViewQueryArgs#view_query_args.filter of
+    #view_query_args{
+        filter = DoFilter,
+        group_level = GroupLevel
+    } = ViewQueryArgs,
+    Filter = case DoFilter of
         false ->
             false;
         true ->
@@ -489,9 +494,9 @@ do_fold_reduce(Group, ViewInfo, Fun, Acc, Options0, ViewQueryArgs) ->
     false ->
         Options0;
     {true, ExcludeBitmask, IncludeBitmask} ->
-        FilterFun = fun(value, {_K, {PartId, _}}) ->
+        FilterFun = fun(value, {_K, <<PartId:16, _/binary>>}) ->
             ((1 bsl PartId) band IncludeBitmask) =/= 0;
-        (branch, {_, _, PartsBitmap}) ->
+        (branch, <<_Count:40, PartsBitmap:?MAX_NUM_PARTITIONS, _/binary>>) ->
             case PartsBitmap band ExcludeBitmask of
             0 ->
                 all;
@@ -503,24 +508,47 @@ do_fold_reduce(Group, ViewInfo, Fun, Acc, Options0, ViewQueryArgs) ->
         end,
         lists:keystore(filter_fun, 1, Options0, {filter_fun, FilterFun})
     end,
-    PreResultPadding = lists:duplicate(NthRed - 1, []),
-    PostResultPadding = lists:duplicate(length(RedFuns) - NthRed, []),
+    PreResultPadding = lists:duplicate(NthRed - 1, <<>>),
+    PostResultPadding = lists:duplicate(length(RedFuns) - NthRed, <<>>),
     couch_set_view_mapreduce:start_reduce_context(View),
     ReduceFun =
         fun(reduce, KVs) ->
             KVs2 = couch_set_view_util:expand_dups(KVs, []),
             {ok, Reduced} = couch_set_view_mapreduce:reduce(View, NthRed, KVs2),
-            {0, PreResultPadding ++ Reduced ++ PostResultPadding, 0};
+            Reduced2 = PreResultPadding ++ Reduced ++ PostResultPadding,
+            LenReductions = [<<(size(R)):16, R/binary>> || R <- Reduced2],
+            iolist_to_binary([<<0:40, 0:?MAX_NUM_PARTITIONS>> | LenReductions]);
         (rereduce, Reds) ->
             UserReds = lists:map(
-                fun({_, UserRedsList, _}) -> [lists:nth(NthRed, UserRedsList)] end,
+                fun(<<_Count:40, _BitMap:?MAX_NUM_PARTITIONS, UserRedsList/binary>>) ->
+                    [lists:nth(NthRed, couch_set_view_util:parse_reductions(UserRedsList))]
+                end,
                 Reds),
             {ok, Reduced} = couch_set_view_mapreduce:rereduce(View, NthRed, UserReds),
-            {0, PreResultPadding ++ Reduced ++ PostResultPadding, 0}
+            Reduced2 = PreResultPadding ++ Reduced ++ PostResultPadding,
+            LenReductions = [<<(size(R)):16, R/binary>> || R <- Reduced2],
+            iolist_to_binary([<<0:40, 0:?MAX_NUM_PARTITIONS>> | LenReductions])
         end,
-    WrapperFun = fun({GroupedKey, _}, PartialReds, Acc0) ->
-            {_, Reds, _} = couch_btree:final_reduce(ReduceFun, PartialReds),
-            Fun(GroupedKey, lists:nth(NthRed, Reds), Acc0)
+    WrapperFun = fun(KeyDocId, PartialReds, Acc0) ->
+            GroupedKey = case GroupLevel of
+            0 ->
+                null;
+            _ when is_integer(GroupLevel) ->
+                {Key, _DocId} = couch_set_view_util:decode_key_docid(KeyDocId),
+                case is_list(Key) of
+                true ->
+                    lists:sublist(Key, GroupLevel);
+                false ->
+                    Key
+                end;
+            _ ->
+                {Key, _DocId} = couch_set_view_util:decode_key_docid(KeyDocId),
+                Key
+            end,
+            <<_Count:40, _BitMap:?MAX_NUM_PARTITIONS, Reds/binary>> =
+                couch_btree:final_reduce(ReduceFun, PartialReds),
+            UserRed = lists:nth(NthRed, couch_set_view_util:parse_reductions(Reds)),
+            Fun(GroupedKey, {json, UserRed}, Acc0)
         end,
     couch_set_view_util:open_raw_read_fd(Group),
     try
@@ -583,16 +611,15 @@ get_reduce_view0(Name, [#set_view{reduce_funs = RedFuns} = View | Rest]) ->
 
 
 reduce_to_count(Reductions) ->
-    {Count, _, _} =
+    <<Count:40, _/binary>> =
     couch_btree:final_reduce(
         fun(reduce, KVs) ->
             Count = lists:sum(
-                [case V of {_PartId, {dups, Vals}} -> length(Vals); _ -> 1 end
-                || {_, V} <- KVs]),
-            {Count, [], 0};
+                [length(couch_set_view_util:parse_values(V)) || {_, V} <- KVs]),
+            <<Count:40>>;
         (rereduce, Reds) ->
-            Count = lists:foldl(fun({C, _, _}, Acc) -> Acc + C end, 0, Reds),
-            {Count, [], 0}
+            Count = lists:foldl(fun(<<C:40, _/binary>>, Acc) -> Acc + C end, 0, Reds),
+            <<Count:40>>
         end, Reductions),
     Count.
 
@@ -686,10 +713,14 @@ do_fold(Group, #set_view{btree=Btree}, Fun, Acc, ViewQueryArgs) ->
 
 fold_fun(_Fun, [], _, Acc) ->
     {ok, Acc};
-fold_fun(Fun, [KV|Rest], {KVReds, Reds}, Acc) ->
-    case Fun(KV, {KVReds, Reds}, Acc) of
+fold_fun(Fun, [KV | Rest], {KVReds, Reds}, Acc) ->
+    {KeyDocId, <<PartId:16, Value/binary>>} = KV,
+    <<KeyLen:16, KeyJson:KeyLen/binary,
+      DocIdLen:16, DocId:DocIdLen/binary>> = KeyDocId,
+    Key = ?JSON_DECODE(KeyJson),
+    case Fun({{Key, DocId}, {PartId, {json, Value}}}, {KVReds, Reds}, Acc) of
     {ok, Acc2} ->
-        fold_fun(Fun, Rest, {[KV|KVReds], Reds}, Acc2);
+        fold_fun(Fun, Rest, {[KV | KVReds], Reds}, Acc2);
     {stop, Acc2} ->
         {stop, Acc2}
     end.
@@ -1030,4 +1061,25 @@ filter(#set_view_group{type = replica} = Group) ->
         false;
     ExcludeBitmask ->
         {true, ExcludeBitmask, ?set_pbitmask(Group)}
+    end.
+
+
+make_reduce_group_keys_fun(0) ->
+    fun(_, _) -> true end;
+make_reduce_group_keys_fun(GroupLevel) when is_integer(GroupLevel) ->
+    fun(KeyDocId1, KeyDocId2) ->
+        {Key1, _DocId1} = couch_set_view_util:decode_key_docid(KeyDocId1),
+        {Key2, _DocId2} = couch_set_view_util:decode_key_docid(KeyDocId2),
+        case is_list(Key1) andalso is_list(Key2) of
+        true ->
+            lists:sublist(Key1, GroupLevel) == lists:sublist(Key2, GroupLevel);
+        false ->
+            Key1 == Key2
+        end
+    end;
+make_reduce_group_keys_fun(_) ->
+    fun(KeyDocId1, KeyDocId2) ->
+        {Key1, _DocId1} = couch_set_view_util:decode_key_docid(KeyDocId1),
+        {Key2, _DocId2} = couch_set_view_util:decode_key_docid(KeyDocId2),
+        Key1 == Key2
     end.

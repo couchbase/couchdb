@@ -182,17 +182,16 @@ query_reduce_view(Stale) ->
     {ok, View, Group, _} = couch_set_view:get_reduce_view(
         test_set_name(), ddoc_id(), <<"test">>,
         #set_view_group_req{stale = Stale, debug = true}),
-    KeyGroupFun = fun({_Key1, _}, {_Key2, _}) -> true end,
     FoldFun = fun(Key, Red, Acc) -> {ok, [{Key, Red} | Acc]} end,
     ViewArgs = #view_query_args{
         run_reduce = true,
         view_name = <<"test">>
     },
-    {ok, Rows} = couch_set_view:fold_reduce(Group, View, FoldFun, [], KeyGroupFun, ViewArgs),
+    {ok, Rows} = couch_set_view:fold_reduce(Group, View, FoldFun, [], ViewArgs),
     couch_set_view:release_group(Group),
     case Rows of
-    [{_Key, RedValue}] ->
-        {RedValue, Group};
+    [{_Key, {json, RedValue}}] ->
+        {ejson:decode(RedValue), Group};
     [] ->
         {empty, Group}
     end.
@@ -352,11 +351,11 @@ verify_btrees_1(Group) ->
     DbSeqs = couch_set_view_test_util:get_db_seqs(test_set_name(), lists:seq(0, 63)),
 
     etap:is(
-        couch_btree:full_reduce(IdBtree),
+        couch_set_view_test_util:full_reduce_id_btree(Group, IdBtree),
         {ok, {initial_num_docs(), ExpectedBitmask}},
         "Id Btree has the right reduce value"),
     etap:is(
-        couch_btree:full_reduce(View0Btree),
+        couch_set_view_test_util:full_reduce_view_btree(Group, View0Btree),
         {ok, {initial_num_docs(), [initial_num_docs()], ExpectedBitmask}},
         "View0 Btree has the right reduce value"),
 
@@ -369,7 +368,9 @@ verify_btrees_1(Group) ->
     {ok, _, IdBtreeFoldResult} = couch_btree:fold(
         IdBtree,
         fun(Kv, _, Acc) ->
-            ExpectedKv = {doc_id(Acc), {Acc rem 64, [{0, doc_id(Acc)}]}},
+            V = ?JSON_ENCODE(doc_id(Acc)),
+            [ExpectedKv] = couch_set_view_updater:convert_back_index_kvs_to_binary(
+                [{doc_id(Acc), {Acc rem 64, [{0, [V]}]}}], []),
             case ExpectedKv =:= Kv of
             true ->
                 ok;
@@ -385,7 +386,10 @@ verify_btrees_1(Group) ->
     {ok, _, View0BtreeFoldResult} = couch_btree:fold(
         View0Btree,
         fun(Kv, _, Acc) ->
-            ExpectedKv = {{doc_id(Acc), doc_id(Acc)}, {Acc rem 64, {json, ?JSON_ENCODE(Acc)}}},
+            V = ?JSON_ENCODE(Acc),
+            ExpectedKeyDocId = couch_set_view_util:encode_key_docid(
+                ?JSON_ENCODE(doc_id(Acc)), doc_id(Acc)),
+            ExpectedKv = {ExpectedKeyDocId, <<(Acc rem 64):16, (size(V)):24, V/binary>>},
             case ExpectedKv =:= Kv of
             true ->
                 ok;
@@ -419,11 +423,11 @@ verify_btrees_2(Group) ->
     DbSeqs = couch_set_view_test_util:get_db_seqs(test_set_name(), lists:seq(0, 31)),
 
     etap:is(
-        couch_btree:full_reduce(IdBtree),
+        couch_set_view_test_util:full_reduce_id_btree(Group, IdBtree),
         {ok, {0, 0}},
         "Id Btree has the right reduce value"),
     etap:is(
-        couch_btree:full_reduce(View0Btree),
+        couch_set_view_test_util:full_reduce_view_btree(Group, View0Btree),
         {ok, {0, [0], 0}},
         "View0 Btree has the right reduce value"),
 
@@ -433,7 +437,8 @@ verify_btrees_2(Group) ->
     etap:is(Cbitmask, 0, "Header has right cleanup bitmask"),
 
     etap:diag("Verifying the Id Btree"),
-    {ok, _, IdBtreeFoldResult} = couch_btree:fold(
+    {ok, _, IdBtreeFoldResult} = couch_set_view_test_util:fold_id_btree(
+        Group,
         IdBtree,
         fun(_Kv, _, Acc) ->
             {ok, Acc + 1}
@@ -441,7 +446,8 @@ verify_btrees_2(Group) ->
         0, []),
     etap:is(IdBtreeFoldResult, 0, "Id Btree is empty"),
     etap:diag("Verifying the View0 Btree"),
-    {ok, _, View0BtreeFoldResult} = couch_btree:fold(
+    {ok, _, View0BtreeFoldResult} = couch_set_view_test_util:fold_view_btree(
+        Group,
         View0Btree,
         fun(_Kv, _, Acc) ->
             {ok, Acc + 1}
@@ -470,11 +476,11 @@ verify_btrees_3(Group) ->
     DbSeqs = couch_set_view_test_util:get_db_seqs(test_set_name(), lists:seq(0, 63)),
 
     etap:is(
-        couch_btree:full_reduce(IdBtree),
+        couch_set_view_test_util:full_reduce_id_btree(Group, IdBtree),
         {ok, {0, 0}},
         "Id Btree has the right reduce value"),
     etap:is(
-        couch_btree:full_reduce(View0Btree),
+        couch_set_view_test_util:full_reduce_view_btree(Group, View0Btree),
         {ok, {0, [0], 0}},
         "View0 Btree has the right reduce value"),
 
@@ -484,7 +490,8 @@ verify_btrees_3(Group) ->
     etap:is(Cbitmask, 0, "Header has right cleanup bitmask"),
 
     etap:diag("Verifying the Id Btree"),
-    {ok, _, IdBtreeFoldResult} = couch_btree:fold(
+    {ok, _, IdBtreeFoldResult} = couch_set_view_test_util:fold_id_btree(
+        Group,
         IdBtree,
         fun(_Kv, _, Acc) ->
             {ok, Acc + 1}
@@ -492,7 +499,8 @@ verify_btrees_3(Group) ->
         0, []),
     etap:is(IdBtreeFoldResult, 0, "Id Btree is empty"),
     etap:diag("Verifying the View0 Btree"),
-    {ok, _, View0BtreeFoldResult} = couch_btree:fold(
+    {ok, _, View0BtreeFoldResult} = couch_set_view_test_util:fold_view_btree(
+        Group,
         View0Btree,
         fun(_Kv, _, Acc) ->
             {ok, Acc + 1}

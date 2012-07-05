@@ -23,43 +23,73 @@
 -export([missing_changes_count/2]).
 -export([is_group_empty/1]).
 -export([new_sort_file_path/1, delete_sort_files/1]).
+-export([encode_key_docid/2, decode_key_docid/1, split_key_docid/1]).
+-export([parse_values/1, parse_reductions/1, parse_view_id_keys/1]).
+
 
 -include("couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
 
 
+parse_values(Values) ->
+    parse_values(Values, []).
+
+parse_values(<<>>, Acc) ->
+    lists:reverse(Acc);
+parse_values(Values, Acc) ->
+    <<ValLen:24, Val:ValLen/binary, ValueRest/binary>> = Values,
+    parse_values(ValueRest, [Val | Acc]).
+
+
+parse_len_keys(0, Rest, AccKeys) ->
+    {AccKeys, Rest};
+parse_len_keys(NumKeys, <<Len:16, Key:Len/binary, Rest/binary>>, AccKeys) ->
+    parse_len_keys(NumKeys - 1, Rest, [Key | AccKeys]).
+
+
+parse_view_id_keys(<<>>) ->
+    [];
+parse_view_id_keys(<<ViewId:8, NumKeys:16, LenKeys/binary>>) ->
+    {Keys, Rest} = parse_len_keys(NumKeys, LenKeys, []),
+    [{ViewId, Keys} | parse_view_id_keys(Rest)].
+
+
+parse_reductions(<<>>) ->
+    [];
+parse_reductions(<<Size:16, Red:Size/binary, Rest/binary>>) ->
+    [Red | parse_reductions(Rest)].
+
+
 expand_dups([], Acc) ->
     lists:reverse(Acc);
-expand_dups([{Key, {PartId, {dups, Vals}}} | Rest], Acc) ->
-    Expanded = lists:map(fun(Val) -> {Key, {PartId, Val}} end, Vals),
-    expand_dups(Rest, Expanded ++ Acc);
-expand_dups([{_Key, {_PartId, _Val}} = Kv | Rest], Acc) ->
-    expand_dups(Rest, [Kv | Acc]).
+expand_dups([KV | Rest], Acc) ->
+    {BinKeyDocId, <<PartId:16, ValuesBin/binary>>} = KV,
+    Vals = parse_values(ValuesBin),
+    Expanded = [{BinKeyDocId, <<PartId:16, Val/binary>>} || Val <- Vals],
+    expand_dups(Rest, Expanded ++ Acc).
 
 
 expand_dups([], _Abitmask, Acc) ->
     lists:reverse(Acc);
-expand_dups([{Key, {PartId, {dups, Vals}}} | Rest], Abitmask, Acc) ->
+expand_dups([KV | Rest], Abitmask, Acc) ->
+    {_BinKeyDocId, <<PartId:16, ValuesBin/binary>>} = KV,
     case (1 bsl PartId) band Abitmask of
     0 ->
         expand_dups(Rest, Abitmask, Acc);
     _ ->
-        Expanded = lists:map(fun(V) -> {Key, {PartId, V}} end, Vals),
+        {BinKeyDocId, <<_PartId:16, ValuesBin/binary>>} = KV,
+        Values = parse_values(ValuesBin),
+        Expanded = lists:map(fun(Val) ->
+            {BinKeyDocId, <<PartId:16, Val/binary>>}
+        end, Values),
         expand_dups(Rest, Abitmask, Expanded ++ Acc)
-    end;
-expand_dups([{_Key, {PartId, _Val}} = Kv | Rest], Abitmask, Acc) ->
-    case (1 bsl PartId) band Abitmask of
-    0 ->
-        expand_dups(Rest, Abitmask, Acc);
-    _ ->
-        expand_dups(Rest, Abitmask, [Kv | Acc])
     end.
 
 
 -spec partitions_map([{term(), {partition_id(), term()}}], bitmask()) -> bitmask().
 partitions_map([], BitMap) ->
     BitMap;
-partitions_map([{_Key, {PartitionId, _Val}} | RestKvs], BitMap) ->
+partitions_map([{_Key, <<PartitionId:16, _Val/binary>>} | RestKvs], BitMap) ->
     partitions_map(RestKvs, BitMap bor (1 bsl PartitionId)).
 
 
@@ -103,7 +133,7 @@ make_btree_purge_fun(Group) when ?set_cbitmask(Group) =/= 0 ->
             btree_purge_fun(value, Value, {go, Acc}, ?set_cbitmask(Group))
     end.
 
-btree_purge_fun(value, {_K, {PartId, _}}, {go, Acc}, Cbitmask) ->
+btree_purge_fun(value, {_K, <<PartId:16, _/binary>>}, {go, Acc}, Cbitmask) ->
     Mask = 1 bsl PartId,
     case (Cbitmask band Mask) of
     Mask ->
@@ -112,20 +142,38 @@ btree_purge_fun(value, {_K, {PartId, _}}, {go, Acc}, Cbitmask) ->
         {keep, {go, Acc}}
     end;
 btree_purge_fun(branch, Red, {go, Acc}, Cbitmask) ->
-    Bitmap = element(tuple_size(Red), Red),
+     <<Count:40, Bitmap:?MAX_NUM_PARTITIONS, _Reds/binary>> = Red,
     case Bitmap band Cbitmask of
     0 ->
         {keep, {go, Acc}};
     Bitmap ->
-        {purge, {go, Acc + element(1, Red)}};
+        {purge, {go, Acc + Count}};
     _ ->
         {partial_purge, {go, Acc}}
     end.
 
 
 -spec make_key_options(#view_query_args{}) -> [{atom(), term()}].
-make_key_options(QueryArgs) ->
-    couch_httpd_view:make_key_options(QueryArgs).
+make_key_options(#view_query_args{direction = Dir} = QArgs) ->
+    [{dir, Dir} | make_start_key_option(QArgs) ++ make_end_key_option(QArgs)].
+
+make_start_key_option(#view_query_args{start_key = Key, start_docid = DocId}) ->
+    if Key == undefined ->
+        [];
+    true ->
+        [{start_key, encode_key_docid(?JSON_ENCODE(Key), DocId)}]
+    end.
+
+make_end_key_option(#view_query_args{end_key = undefined}) ->
+    [];
+make_end_key_option(#view_query_args{end_key = Key, end_docid = DocId, inclusive_end = true}) ->
+    [{end_key, encode_key_docid(?JSON_ENCODE(Key), DocId)}];
+make_end_key_option(#view_query_args{end_key = Key, end_docid = DocId, inclusive_end = false}) ->
+    [{end_key_gt, encode_key_docid(?JSON_ENCODE(Key), reverse_key_default(DocId))}].
+
+reverse_key_default(?MIN_STR) -> ?MAX_STR;
+reverse_key_default(?MAX_STR) -> ?MIN_STR;
+reverse_key_default(Key) -> Key.
 
 
 -spec get_ddoc_ids_with_sig(binary(), binary()) -> [binary()].
@@ -248,9 +296,9 @@ compute_indexed_bitmap(#set_view_group{id_btree = IdBtree, views = Views}) ->
     compute_indexed_bitmap(IdBtree, Views).
 
 compute_indexed_bitmap(IdBtree, Views) ->
-    {ok, {_, IdBitmap}} = couch_btree:full_reduce(IdBtree),
+    {ok, <<_Count:40, IdBitmap:?MAX_NUM_PARTITIONS>>} = couch_btree:full_reduce(IdBtree),
     lists:foldl(fun(#set_view{btree = Bt}, AccMap) ->
-        {ok, {_, _, Bm}} = couch_btree:full_reduce(Bt),
+        {ok, <<_Size:40, Bm:?MAX_NUM_PARTITIONS, _/binary>>} = couch_btree:full_reduce(Bt),
         AccMap bor Bm
     end,
     IdBitmap, Views).
@@ -335,3 +383,19 @@ delete_sort_files(RootDir) ->
     lists:foreach(
         fun(F) -> _ = file:delete(F) end,
         filelib:wildcard(WildCard)).
+
+
+-spec decode_key_docid(binary()) -> {term(), binary()}.
+decode_key_docid(<<KeyLen:16, KeyJson:KeyLen/binary, DocIdLen:16, DocId:DocIdLen/binary>>) ->
+    {?JSON_DECODE(KeyJson), DocId}.
+
+
+-spec split_key_docid(binary()) -> {binary(), binary()}.
+split_key_docid(<<KeyLen:16, KeyJson:KeyLen/binary, DocIdLen:16, DocId:DocIdLen/binary>>) ->
+    {KeyJson, DocId}.
+
+
+-spec encode_key_docid(binary(), binary()) -> binary().
+encode_key_docid(JsonKey, DocId) ->
+    <<(byte_size(JsonKey)):16, JsonKey/binary,
+      (byte_size(DocId)):16, DocId/binary>>.

@@ -466,7 +466,7 @@ merge_reduce_min_row(Params, MinRow) ->
         [FirstRow, _ | _] ->
             try
                 RedVal = rereduce(RowGroup, Params),
-                {{row, {element(1, FirstRow), RedVal}}, Col}
+                {{row, {element(1, FirstRow), {json, RedVal}}}, Col}
             catch
             _Tag:Error ->
                 Stack = erlang:get_stacktrace(),
@@ -532,9 +532,11 @@ group_keys_for_rereduce(Queue, [Row | _] = Acc) ->
 rereduce(Reds0, #merge_params{extra = #view_merge{rereduce_fun = <<"_", _/binary>> = FunSrc}}) ->
     Reds = lists:map(
         fun({Key, _RowJson, {value_json, ValueJson}}) ->
-            {Key, ?JSON_DECODE(ValueJson)};
-        (Ejson) ->
-            Ejson
+            {Key, ValueJson};
+        ({Key, {json, ValueJson}}) ->
+            {Key, ValueJson};
+        ({Key, Ejson}) ->
+            {Key, ?JSON_ENCODE(Ejson)}
         end, Reds0),
     {ok, [Value]} = couch_set_view_mapreduce:builtin_reduce(rereduce, [FunSrc], Reds),
     Value;
@@ -542,6 +544,8 @@ rereduce(Reds0, #merge_params{extra = #view_merge{rereduce_fun = <<"_", _/binary
 rereduce(Rows, #merge_params{extra = #view_merge{rereduce_fun = FunSrc}}) ->
     Reds = lists:map(
         fun({_Key, _RowJson, {value_json, ValueJson}}) ->
+            ValueJson;
+        ({_Key, {json, ValueJson}}) ->
             ValueJson;
         ({_Key, Val}) ->
             ?JSON_ENCODE(Val)
@@ -555,7 +559,7 @@ rereduce(Rows, #merge_params{extra = #view_merge{rereduce_fun = FunSrc}}) ->
     end,
     case mapreduce:rereduce(Ctx, 1, Reds) of
     {ok, Value} ->
-        ?JSON_DECODE(Value);
+        Value;
     Error ->
         throw(Error)
     end.
@@ -655,10 +659,9 @@ map_view_folder(Db, ViewSpec, MergeParams, _UserCtx, DDoc, Queue) ->
     } = MergeParams,
     #view_query_args{
         stale = Stale,
-        include_docs = IncludeDocs,
-        conflicts = Conflicts
+        include_docs = IncludeDocs
     } = ViewArgs,
-    FoldlFun = make_map_fold_fun(IncludeDocs, Conflicts, Db, Queue),
+    FoldlFun = make_map_fold_fun(IncludeDocs, Db, Queue),
     {DDocDb, View} = get_map_view(Db, DDocDbName, DDocId, ViewName, Stale),
 
     case not(couch_index_merger:should_check_rev(MergeParams, DDoc)) orelse
@@ -696,7 +699,6 @@ map_set_view_folder(ViewSpec, MergeParams, UserCtx, DDoc, Queue) ->
     } = MergeParams,
     #view_query_args{
         include_docs = IncludeDocs,
-        conflicts = Conflicts,
         stale = Stale,
         debug = Debug,
         type = IndexType
@@ -746,8 +748,7 @@ map_set_view_folder(ViewSpec, MergeParams, UserCtx, DDoc, Queue) ->
     {View, Group} ->
         queue_debug_info(ViewArgs, Group, Queue),
         try
-            FoldFun = make_map_set_fold_fun(IncludeDocs, Conflicts, SetName,
-                UserCtx, Queue),
+            FoldFun = make_map_set_fold_fun(IncludeDocs, SetName, UserCtx, Queue),
 
             case not(couch_index_merger:should_check_rev(MergeParams, DDoc)) orelse
                 couch_index_merger:ddoc_unchanged(DDocDbName, DDoc) of
@@ -1054,13 +1055,15 @@ reduce_set_view_folder(ViewSpec, MergeParams, DDoc, Queue) ->
     {View, Group} ->
         queue_debug_info(ViewArgs, Group, Queue),
         try
-            FoldFun = make_reduce_fold_fun(ViewArgs, Queue),
-            KeyGroupFun = make_group_rows_fun(ViewArgs),
+            FoldFun = fun(GroupedKey, Red, Acc) ->
+                ok = couch_view_merger_queue:queue(Queue, {GroupedKey, Red}),
+                {ok, Acc}
+            end,
 
             case not(couch_index_merger:should_check_rev(MergeParams, DDoc)) orelse
                 couch_index_merger:ddoc_unchanged(DDocDbName, DDoc) of
             true ->
-                {ok, _} = couch_set_view:fold_reduce(Group, View, FoldFun, [], KeyGroupFun, ViewArgs);
+                {ok, _} = couch_set_view:fold_reduce(Group, View, FoldFun, [], ViewArgs);
             false ->
                 ok = couch_view_merger_queue:queue(Queue, revision_mismatch)
             end
@@ -1141,41 +1144,33 @@ get_map_view(Db, DDocDbName, DDocId, ViewName, Stale) ->
         DDocId -> {nil, View}
     end.
 
-make_map_set_fold_fun(false, _Conflicts, _SetName, _UserCtx, Queue) ->
-    fun({{Key, DocId}, {PartId, Value}}, _, Acc) ->
-        Kv = {{Key, DocId}, {PartId, Value}},
+make_map_set_fold_fun(false, _SetName, _UserCtx, Queue) ->
+    fun({{_Key, _DocId}, {_PartId, _Value}} = Kv, _, Acc) ->
         ok = couch_view_merger_queue:queue(Queue, Kv),
         {ok, Acc}
     end;
 
-make_map_set_fold_fun(true, Conflicts, SetName, UserCtx, Queue) ->
-    DocOpenOpts = if Conflicts -> [conflicts]; true -> [] end,
-    fun({{Key, DocId}, {PartId, Value}} = Kv, _, Acc) ->
+make_map_set_fold_fun(true, SetName, UserCtx, Queue) ->
+    fun({{Key, DocId}, {PartId, Value}}, _, Acc) ->
         JsonDoc = couch_set_view_http:get_row_doc(
-                Kv, SetName, true, UserCtx, DocOpenOpts),
+                DocId, PartId, SetName, UserCtx, []),
         Row = {{Key, DocId}, {PartId, Value}, JsonDoc},
         ok = couch_view_merger_queue:queue(Queue, Row),
         {ok, Acc}
     end.
 
-make_map_fold_fun(false, _Conflicts, _Db, Queue) ->
+make_map_fold_fun(false, _Db, Queue) ->
     fun(Row, _, Acc) ->
         ok = couch_view_merger_queue:queue(Queue, Row),
         {ok, Acc}
     end;
 
-make_map_fold_fun(true, Conflicts, Db, Queue) ->
-    DocOpenOpts = if Conflicts -> [conflicts]; true -> [] end,
+make_map_fold_fun(true, Db, Queue) ->
     fun({{_Key, error}, _Value} = Row, _, Acc) ->
         ok = couch_view_merger_queue:queue(Queue, Row),
         {ok, Acc};
-    ({{_Key, DocId} = Kd, {Props} = Value}, _, Acc) ->
-        IncludeId = get_value(<<"_id">>, Props, DocId),
-        [{doc, Doc}] = couch_httpd_view:doc_member(Db, IncludeId, DocOpenOpts),
-        ok = couch_view_merger_queue:queue(Queue, {Kd, Value, Doc}),
-        {ok, Acc};
     ({{_Key, DocId} = Kd, Value}, _, Acc) ->
-        [{doc, Doc}] = couch_httpd_view:doc_member(Db, DocId, DocOpenOpts),
+        [{doc, Doc}] = couch_httpd_view:doc_member(Db, DocId, []),
         ok = couch_view_merger_queue:queue(Queue, {Kd, Value, Doc}),
         {ok, Acc}
     end.
@@ -1560,12 +1555,13 @@ simple_set_view_map_query(Params, Group, View, ViewArgs) ->
         (_Kv, _, {AccLim, AccSkip, UAcc}) when AccSkip > 0 ->
             {ok, {AccLim, AccSkip - 1, UAcc}};
         ({{Key, DocId}, {PartId, Value}} = Kv, _, {AccLim, 0, UAcc}) ->
-            case couch_set_view_http:get_row_doc(
-                Kv, SetName, IncludeDocs, UserCtx, []) of
-            nil ->
-                RowDetails = Kv;
-            JsonDoc ->
-                RowDetails = {{Key, DocId}, {PartId, Value}, JsonDoc}
+            case IncludeDocs of
+            true ->
+                JsonDoc = couch_set_view_http:get_row_doc(
+                    DocId, PartId, SetName, UserCtx, []),
+                RowDetails = {{Key, DocId}, {PartId, Value}, JsonDoc};
+            false ->
+                RowDetails = Kv
             end,
             Row = view_row_obj_map(RowDetails, DebugMode),
             {ok, UAcc2} = Callback({row, Row}, UAcc),
@@ -1588,33 +1584,20 @@ simple_set_view_reduce_query(Params, Group, View, ViewArgs) ->
     #view_query_args{
         limit = Limit,
         skip = Skip,
-        debug = DebugMode,
-        group_level = GroupLevel
+        debug = DebugMode
     } = ViewArgs,
 
-    FoldFun = fun(_Key, _Red, {0, _, _} = Acc) ->
+    FoldFun = fun(_GroupedKey, _Red, {0, _, _} = Acc) ->
             {stop, Acc};
-        (_Key, _Red, {AccLim, AccSkip, UAcc}) when AccSkip > 0 ->
+        (_GroupedKey, _Red, {AccLim, AccSkip, UAcc}) when AccSkip > 0 ->
             {ok, {AccLim, AccSkip - 1, UAcc}};
-
-        (_Key, Red, {AccLim, 0, UAcc}) when GroupLevel == 0 ->
-            Row = view_row_obj_reduce({null, Red}, DebugMode),
-            {ok, UAcc2} = Callback({row, Row}, UAcc),
-            {ok, {AccLim - 1, 0, UAcc2}};
-
-        (Key, Red, {AccLim, 0, UAcc}) when is_integer(GroupLevel), is_list(Key) ->
-            Row = view_row_obj_reduce({lists:sublist(Key, GroupLevel), Red}, DebugMode),
-            {ok, UAcc2} = Callback({row, Row}, UAcc),
-            {ok, {AccLim - 1, 0, UAcc2}};
-
-        (Key, Red, {AccLim, 0, UAcc}) ->
-            Row = view_row_obj_reduce({Key, Red}, DebugMode),
+        (GroupedKey, Red, {AccLim, 0, UAcc}) ->
+            Row = view_row_obj_reduce({GroupedKey, Red}, DebugMode),
             {ok, UAcc2} = Callback({row, Row}, UAcc),
             {ok, {AccLim - 1, 0, UAcc2}}
     end,
 
     {ok, UserAcc2} = Callback(start, UserAcc),
-    KeyGroupFun = make_group_rows_fun(ViewArgs),
     {ok, {_, _, UserAcc3}} = couch_set_view:fold_reduce(
-        Group, View, FoldFun, {Limit, Skip, UserAcc2}, KeyGroupFun, ViewArgs),
+        Group, View, FoldFun, {Limit, Skip, UserAcc2}, ViewArgs),
     Callback(stop, UserAcc3).

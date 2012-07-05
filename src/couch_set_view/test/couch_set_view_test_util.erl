@@ -23,6 +23,10 @@
 -export([are_view_keys_sorted/2]).
 -export([get_db_ref_counters/2, compact_set_dbs/3]).
 -export([get_db_seqs/2]).
+-export([full_reduce_id_btree/2]).
+-export([full_reduce_view_btree/2]).
+-export([fold_id_btree/5]).
+-export([fold_view_btree/5]).
 
 -include("couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
@@ -290,3 +294,35 @@ get_db_seqs(SetName, Partitions) ->
         {[], Partitions}, Dbs),
     lists:foreach(fun couch_db:close/1, Dbs),
     lists:reverse(Seqs).
+
+
+full_reduce_id_btree(_Group, Btree) ->
+    {ok, <<Count:40, Bitmap:?MAX_NUM_PARTITIONS, _/binary>>} = couch_btree:full_reduce(Btree),
+    {ok, {Count, Bitmap}}.
+
+full_reduce_view_btree(_Group, Btree) ->
+    {ok, <<Count:40, Bitmap:?MAX_NUM_PARTITIONS, RedsBin/binary>>} = couch_btree:full_reduce(Btree),
+    Reds = couch_set_view_util:parse_reductions(RedsBin),
+    {ok, {Count, [?JSON_DECODE(R) || R <- Reds], Bitmap}}.
+
+fold_id_btree(_Group, Btree, Fun, Acc, Args) ->
+    FunWrap = fun ({Id, Value}, AccRed, Acc0) ->
+        <<PartId:16, ValuesBin/binary>> = Value,
+        Vals = couch_set_view_util:parse_view_id_keys(ValuesBin),
+        ExpandedVals = lists:sort(lists:flatten([[{ViewId, ?JSON_DECODE(KeyVal)} || KeyVal <- KeysVal] || {ViewId,KeysVal} <- Vals])),
+        Fun({Id, {PartId, ExpandedVals}}, AccRed, Acc0)
+    end,
+    couch_btree:fold(Btree, FunWrap, Acc, Args).
+
+fold_view_btree(_Group, Btree, Fun, Acc, Args) ->
+    FunWrap = fun({KeyDocId, <<PartId:16, ValsBin/binary>>}, AccRed, Acc0) ->
+        case couch_set_view_util:parse_values(ValsBin) of
+        [Val0] ->
+            Val = ?JSON_DECODE(Val0);
+        Vals ->
+            Val = {dups, lists:sort([?JSON_DECODE(V) || V <- Vals])}
+        end,
+        {Key, Id} = couch_set_view_util:decode_key_docid(KeyDocId),
+        Fun({{Key, Id}, {PartId, Val}}, AccRed, Acc0)
+    end,
+    couch_btree:fold(Btree, FunWrap, Acc, Args).

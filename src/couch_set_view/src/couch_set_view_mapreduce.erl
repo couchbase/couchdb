@@ -21,6 +21,9 @@
 -export([builtin_reduce/3]).
 -export([validate_ddoc_views/1]).
 
+-define(STATS_ERROR_MSG, <<"Builtin _stats function requires map values to be numbers">>).
+-define(SUM_ERROR_MSG,   <<"Builtin _sum function requires map values to be numbers">>).
+
 
 start_map_context(#set_view_group{views = Views}) ->
     {ok, Ctx} = mapreduce:start_map_context([View#set_view.def || View <- Views]),
@@ -66,17 +69,8 @@ map(Doc) ->
     Ctx = erlang:get(map_context),
     DocBin = couch_doc:to_raw_json_binary(Doc),
     case mapreduce:map_doc(Ctx, DocBin) of
-    {ok, Results} ->
-        % Keep map values as raw json to avoid encoding them before passing
-        % them to JavaScript reduce functions or builtin _count reduce function,
-        % and when serving map queries.
-        % For the builtins _sum and stats, we decode the map values before
-        % supplying them to those functions - they're just numbers, so the
-        % decoding is fast (faster then encoding map values).
-        {ok, [
-            [{?JSON_DECODE(K), {json, V}} || {K, V} <- FunResult]
-                || FunResult <- Results
-        ]};
+    {ok, _Results} = Ok ->
+        Ok;
     Error ->
         throw(Error)
     end.
@@ -97,8 +91,7 @@ reduce(#set_view{ref = Ref, reduce_funs = RedFuns}, KVs0) ->
         {ok, NativeResults} = builtin_reduce(reduce, NativeFuns, KVs, []),
         Ctx = erlang:get({reduce_context, Ref}),
         case mapreduce:reduce(Ctx, KVs) of
-        {ok, JsResults0} ->
-            JsResults = [?JSON_DECODE(R) || R <- JsResults0],
+        {ok, JsResults} ->
             recombine_reduce_results(RedFunSources, JsResults, NativeResults, []);
         Error ->
             throw(Error)
@@ -126,7 +119,7 @@ reduce(#set_view{ref = Ref, reduce_funs = RedFuns}, NthRed, KVs0) ->
             Before),
         case mapreduce:reduce(Ctx, NthRed2, KVs) of
         {ok, ReduceValue} ->
-            {ok, [?JSON_DECODE(ReduceValue)]};
+            {ok, [ReduceValue]};
         Error ->
             throw(Error)
         end
@@ -143,9 +136,9 @@ rereduce(#set_view{ref = Ref, reduce_funs = RedFuns}, ReducedValues) ->
             {ok, [Result]} = builtin_reduce(rereduce, [FunSrc], [{[], V} || V <- Values], []),
             Result;
         (Idx, Values) ->
-            case mapreduce:rereduce(Ctx, Idx, [?JSON_ENCODE(V) || V <- Values]) of
+            case mapreduce:rereduce(Ctx, Idx, Values) of
             {ok, Reduction} ->
-                ?JSON_DECODE(Reduction);
+                Reduction;
             Error ->
                 throw(Error)
             end
@@ -171,9 +164,9 @@ rereduce(#set_view{ref = Ref, reduce_funs = RedFuns}, NthRed, ReducedValues) ->
             end,
             NthRed,
             Before),
-        case mapreduce:rereduce(Ctx, NthRed2, [?JSON_ENCODE(V) || V <- Values]) of
+        case mapreduce:rereduce(Ctx, NthRed2, Values) of
         {ok, ReduceValue} ->
-            {ok, [?JSON_DECODE(ReduceValue)]};
+            {ok, [ReduceValue]};
         Error ->
             throw(Error)
         end
@@ -230,8 +223,8 @@ builtin_reduce(Re, [<<"_sum", _/binary>> | BuiltinReds], KVs, Acc) ->
     Sum = builtin_sum_rows(KVs2),
     builtin_reduce(Re, BuiltinReds, KVs, [Sum | Acc]);
 builtin_reduce(reduce, [<<"_count", _/binary>> | BuiltinReds], KVs, Acc) ->
-    Count = length(KVs),
-    builtin_reduce(reduce, BuiltinReds, KVs, [Count | Acc]);
+    Json = ?JSON_ENCODE(length(KVs)),
+    builtin_reduce(reduce, BuiltinReds, KVs, [Json | Acc]);
 builtin_reduce(rereduce, [<<"_count", _/binary>> | BuiltinReds], KVs, Acc) ->
     Count = builtin_sum_rows(KVs),
     builtin_reduce(rereduce, BuiltinReds, KVs, [Count | Acc]);
@@ -248,67 +241,84 @@ builtin_reduce(_Re, [InvalidBuiltin | _BuiltinReds], _KVs, _Acc) ->
     throw({error, <<"Invalid builtin reduce function: ", InvalidBuiltin/binary>>}).
 
 
-builtin_sum_rows(KVs) ->
-    lists:foldl(fun
-        ({_Key, Value}, Acc) when is_number(Value), is_number(Acc) ->
-            Acc + Value;
-        ({_Key, Value}, Acc) when is_list(Value), is_list(Acc) ->
-            sum_terms(Acc, Value);
-        ({_Key, Value}, Acc) when is_number(Value), is_list(Acc) ->
-            sum_terms(Acc, [Value]);
-        ({_Key, Value}, Acc) when is_list(Value), is_number(Acc) ->
-            sum_terms([Acc], Value);
-        (_Else, _Acc) ->
-            throw({error, <<"Builtin _sum function requires map values to be numbers or lists of numbers">>})
-    end, 0, KVs).
+parse_number(NumberBin, ErrorMsg) when is_binary(NumberBin) ->
+    parse_number(?b2l(NumberBin), ErrorMsg);
+parse_number(NumberStr, ErrorMsg) ->
+    case (catch list_to_integer(NumberStr)) of
+    {'EXIT', {badarg, _Stack}} ->
+        case (catch list_to_float(NumberStr)) of
+        {'EXIT', {badarg, _Stack2}} ->
+            throw({error, ErrorMsg});
+        Float ->
+            Float
+        end;
+    Int ->
+        Int
+    end.
 
-sum_terms([], []) ->
-    [];
-sum_terms([_ | _] = Xs, []) ->
-    Xs;
-sum_terms([], [_ | _] = Ys) ->
-    Ys;
-sum_terms([X | Xs], [Y | Ys]) when is_number(X), is_number(Y) ->
-    [X + Y | sum_terms(Xs, Ys)];
-sum_terms(_, _) ->
-    throw({error, <<"Builtin _sum function requires map values to be numbers or lists of numbers">>}).
+
+builtin_sum_rows(KVs) ->
+    Result = lists:foldl(fun({_Key, Value}, SumAcc) ->
+        parse_number(Value, ?SUM_ERROR_MSG) + SumAcc
+    end, 0, KVs),
+    ?JSON_ENCODE(Result).
+
 
 builtin_stats(reduce, []) ->
-    {[]};
-builtin_stats(reduce, [{_, First} | Rest]) when is_number(First) ->
-    Stats = lists:foldl(fun({_K, V}, {S, C , Mi, Ma, Sq}) when is_number(V) ->
-        {S + V, C + 1, erlang:min(Mi, V), erlang:max(Ma, V), Sq + (V * V)};
-    (_, _) ->
-        throw({error, <<"Builtin _stats function requires map values to be numbers">>})
+    <<"{}">>;
+
+builtin_stats(reduce, [{_, First0} | Rest]) ->
+    First = parse_number(First0, ?STATS_ERROR_MSG),
+    {Sum, Cnt, Min, Max, Sqr} = lists:foldl(fun({_K, V0}, {S, C , Mi, Ma, Sq}) ->
+        V = parse_number(V0, ?STATS_ERROR_MSG),
+        {S + V, C + 1, erlang:min(Mi, V), erlang:max(Ma, V), Sq + (V * V)}
     end, {First, 1, First, First, First * First}, Rest),
-    {Sum, Cnt, Min, Max, Sqr} = Stats,
-    {[{<<"sum">>, Sum}, {<<"count">>, Cnt}, {<<"min">>, Min}, {<<"max">>, Max}, {<<"sumsqr">>, Sqr}]};
-builtin_stats(reduce, KVs) when is_list(KVs) ->
-    throw({error, <<"Builtin _stats function requires map values to be numbers">>});
+    Result = {[
+        {<<"sum">>, Sum},
+        {<<"count">>, Cnt},
+        {<<"min">>, Min},
+        {<<"max">>, Max},
+        {<<"sumsqr">>, Sqr}
+    ]},
+    ?JSON_ENCODE(Result);
 
 builtin_stats(rereduce, [{_, First} | Rest]) ->
-    {[{<<"sum">>, Sum0}, {<<"count">>, Cnt0}, {<<"min">>, Min0}, {<<"max">>, Max0}, {<<"sumsqr">>, Sqr0}]} = First,
-    Stats = lists:foldl(fun({_K, Red}, {S, C, Mi, Ma, Sq}) ->
-        {[{<<"sum">>, Sum}, {<<"count">>, Cnt}, {<<"min">>, Min}, {<<"max">>, Max}, {<<"sumsqr">>, Sqr}]} = Red,
+    {[{<<"sum">>, Sum0},
+      {<<"count">>, Cnt0},
+      {<<"min">>, Min0},
+      {<<"max">>, Max0},
+      {<<"sumsqr">>, Sqr0}]} = ?JSON_DECODE(First),
+    {Sum, Cnt, Min, Max, Sqr} = lists:foldl(fun({_K, Red}, {S, C, Mi, Ma, Sq}) ->
+        {[{<<"sum">>, Sum},
+          {<<"count">>, Cnt},
+          {<<"min">>, Min},
+          {<<"max">>, Max},
+          {<<"sumsqr">>, Sqr}]} = ?JSON_DECODE(Red),
         {Sum + S, Cnt + C, erlang:min(Min, Mi), erlang:max(Max, Ma), Sqr + Sq}
     end, {Sum0, Cnt0, Min0, Max0, Sqr0}, Rest),
-    {Sum, Cnt, Min, Max, Sqr} = Stats,
-    {[{<<"sum">>, Sum}, {<<"count">>, Cnt}, {<<"min">>, Min}, {<<"max">>, Max}, {<<"sumsqr">>, Sqr}]}.
+    Result = {[
+        {<<"sum">>, Sum},
+        {<<"count">>, Cnt},
+        {<<"min">>, Min},
+        {<<"max">>, Max},
+        {<<"sumsqr">>, Sqr}
+    ]},
+    ?JSON_ENCODE(Result).
 
 
 contract_kvs([], Acc) ->
     lists:reverse(Acc);
 contract_kvs([KV | Rest], Acc) ->
-    {{Key, Id}, {_PartId, {json, Value}}} = KV,
-    NKV = {[Key, Id], ?JSON_DECODE(Value)},
-    contract_kvs(Rest, [NKV | Acc]).
+    {KeyId, <<_PartId:16, Value/binary>>} = KV,
+    contract_kvs(Rest, [{KeyId, Value} | Acc]).
+
 
 encode_kvs([], Acc) ->
     lists:reverse(Acc);
 encode_kvs([KV | Rest], Acc) ->
-    {{Key,Id}, {_PartId, Value}} = KV,
-    NKV = {?JSON_ENCODE([Key, Id]), ?JSON_ENCODE(Value)},
-    encode_kvs(Rest, [NKV | Acc]).
+    {KeyDocId, <<_PartId:16, Value/binary>>} = KV,
+    {Key, _DocId} = couch_set_view_util:split_key_docid(KeyDocId),
+    encode_kvs(Rest, [{Key, Value} | Acc]).
 
 
 validate_ddoc_views(#doc{body = {Body}}) ->

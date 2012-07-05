@@ -13,6 +13,8 @@
 -module(couch_set_view_updater).
 
 -export([update/5]).
+% Exported for unit tests only.
+-export([convert_back_index_kvs_to_binary/2]).
 
 -include("couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
@@ -496,7 +498,7 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
         kvs_length = KvsLength,
         view_empty_kvs = ViewEmptyKVs,
         merge_buffers = Buffers,
-        group = #set_view_group{id_btree = IdBtree} = Group,
+        group = Group,
         final_batch = IsFinalBatch,
         max_seqs = MaxSeqs
     } = WriterAcc,
@@ -504,7 +506,8 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
         id_btree = IdBtree,
         set_name = SetName,
         type = Type,
-        name = DDocId
+        name = DDocId,
+        fd = GroupFd
     } = Group,
     {ViewKVs, DocIdViewIdKeys, MaxSeqs2} = process_map_results(Kvs, ViewEmptyKVs, MaxSeqs),
     IdBuffer = dict:fetch(ids_index, Buffers),
@@ -513,7 +516,9 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
         fun({_DocId, {_PartId, []}}, Acc) ->
             Acc;
         (Kv, AccBuf) ->
-            KvBin = ?term_to_bin(Kv),
+            [{KeyBin, ValBin}] = convert_back_index_kvs_to_binary([Kv], []),
+            KvBin = <<(byte_size(KeyBin)):16, KeyBin/binary,
+                      (byte_size(ValBin)):32, ValBin/binary>>,
             <<AccBuf/binary, (byte_size(KvBin)):32, KvBin/binary>>
         end,
         IdBuffer,
@@ -523,13 +528,14 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
             Buf = dict:fetch(Id, AccBuffers),
             ViewLessFun = fun({A, _}, {B, _}) -> (Bt#btree.less)(A, B) end,
             {NewBuf, AccCount3} = lists:foldl(
-                fun(Kv, {AccBuf, AccCount2}) ->
-                    KvBin = ?term_to_bin(Kv),
+                fun({KeyBin, ValBin}, {AccBuf, AccCount2}) ->
+                    KvBin = <<(byte_size(KeyBin)):16, KeyBin/binary,
+                              (byte_size(ValBin)):32, ValBin/binary>>,
                     AccBuf2 = <<AccBuf/binary, (byte_size(KvBin)):32, KvBin/binary>>,
                     {AccBuf2, AccCount2 + 1}
                 end,
                 {Buf, AccCount},
-                lists:sort(ViewLessFun, KvList)),
+                lists:sort(ViewLessFun, convert_primary_index_kvs_to_binary(KvList, []))),
             {dict:store(Id, NewBuf, AccBuffers), AccCount3}
         end,
         {dict:store(ids_index, NewIdBuffer, Buffers), 0},
@@ -553,14 +559,14 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
         wait_for_workers(SortFileWorkers2),
         [IdsSortedFile] = dict:fetch(ids_index, NewSortFiles2),
         {ok, NewIdBtreeRoot} = couch_btree_copy:from_sorted_file(
-            IdBtree, IdsSortedFile, Group#set_view_group.fd),
+            IdBtree, IdsSortedFile, GroupFd, fun file_sorter_format_function/1),
         NewIdBtree = IdBtree#btree{root = NewIdBtreeRoot},
         ok = file:delete(IdsSortedFile),
         NewViews = lists:map(
             fun(#set_view{id_num = Id, btree = Bt} = View) ->
                [KvSortedFile] = dict:fetch(Id, NewSortFiles2),
                {ok, NewBtRoot} = couch_btree_copy:from_sorted_file(
-                   Bt, KvSortedFile, Group#set_view_group.fd),
+                   Bt, KvSortedFile, GroupFd, fun file_sorter_format_function/1),
                ok = file:delete(KvSortedFile),
                View#set_view{
                    btree = Bt#btree{root = NewBtRoot}
@@ -632,7 +638,11 @@ maybe_flush_merge_buffers(BuffersDict, WriterAcc) ->
                 MergeSortFile = new_sort_file_name(WriterAcc),
                 wait_for_workers(AccWorkers),
                 MergeWorker = spawn_monitor(fun() ->
-                    SortOptions = [{order, LessFun}, {tmpdir, TmpDir}],
+                    SortOptions = [
+                        {order, LessFun},
+                        {tmpdir, TmpDir},
+                        {format, fun file_sorter_format_function/1}
+                    ],
                     case file_sorter:merge(InputFiles, MergeSortFile, SortOptions) of
                     ok ->
                         ok;
@@ -721,14 +731,20 @@ view_insert_doc_query_results(DocId, PartitionId, [ResultKVs | RestResults],
             {PartitionId, UserPrevVal} ->
                 [{Kd, {PartitionId, {dups, [Val, UserPrevVal]}}} | AccRest]
             end,
-            {AccKv2, [{View#set_view.id_num, Key} | AccVid]};
+            {AccKv2, AccVid};
         ({Key, Val}, {AccKv, AccVid}) ->
-            {[{{Key, DocId}, {PartitionId, Val}} | AccKv], [{View#set_view.id_num, Key} | AccVid]}
+            {[{{Key, DocId}, {PartitionId, Val}} | AccKv], [Key | AccVid]}
         end,
-        {KVs, ViewIdKeysAcc}, lists:sort(ResultKVs)),
+        {KVs, []}, lists:sort(ResultKVs)),
     NewViewKVsAcc = [{View, NewKVs} | ViewKVsAcc],
+    case NewViewIdKeysAcc of
+    [] ->
+        NewViewIdKeysAcc2 = ViewIdKeysAcc;
+    _ ->
+        NewViewIdKeysAcc2 = [{View#set_view.id_num, NewViewIdKeysAcc} | ViewIdKeysAcc]
+    end,
     view_insert_doc_query_results(
-        DocId, PartitionId, RestResults, RestViewKVs, NewViewKVsAcc, NewViewIdKeysAcc).
+        DocId, PartitionId, RestResults, RestViewKVs, NewViewKVsAcc, NewViewIdKeysAcc2).
 
 
 write_changes(WriterAcc, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs) ->
@@ -748,13 +764,14 @@ write_changes(WriterAcc, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs) ->
         type = GroupType
     } = Group,
 
-    {AddDocIdViewIdKeys, RemoveDocIds, LookupDocIds} = lists:foldr(
+    {AddDocIdViewIdKeys0, RemoveDocIds, LookupDocIds} = lists:foldr(
         fun({DocId, {_PartId, [] = _ViewIdKeys}}, {A, B, C}) ->
                 {A, [DocId | B], [DocId | C]};
             ({DocId, {_PartId, _ViewIdKeys}} = KvPairs, {A, B, C}) ->
                 {[KvPairs | A], B, [DocId | C]}
         end,
         {[], [], []}, DocIdViewIdKeys),
+    AddDocIdViewIdKeys = convert_back_index_kvs_to_binary(AddDocIdViewIdKeys0, []),
 
     CleanupFun = case ?set_cbitmask(Group) of
     0 ->
@@ -777,17 +794,23 @@ write_changes(WriterAcc, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs) ->
     KeysToRemoveByView = lists:foldl(
         fun(LookupResult, KeysToRemoveByViewAcc) ->
             case LookupResult of
-            {ok, {DocId, {_Part, ViewIdKeys}}} ->
+            {ok, {DocId, <<_Part:16, ViewIdKeys/binary>>}} ->
                 lists:foldl(
-                    fun({ViewId, Key}, KeysToRemoveByViewAcc2) ->
-                        dict:append(ViewId, {Key, DocId}, KeysToRemoveByViewAcc2)
+                    fun({ViewId, Keys}, KeysToRemoveByViewAcc2) ->
+                        EncodedKeys = [couch_set_view_util:encode_key_docid(Key, DocId) || Key <- Keys],
+                        dict:append_list(ViewId, EncodedKeys, KeysToRemoveByViewAcc2)
                     end,
-                    KeysToRemoveByViewAcc, ViewIdKeys);
+                    KeysToRemoveByViewAcc, couch_set_view_util:parse_view_id_keys(ViewIdKeys));
             {not_found, _} ->
                 KeysToRemoveByViewAcc
             end
         end,
         dict:new(), LookupResults),
+    ViewKeyValuesToAddBinary = lists:map(
+        fun({View, AddKeyValues}) ->
+            {View, convert_primary_index_kvs_to_binary(AddKeyValues, [])}
+        end,
+        ViewKeyValuesToAdd),
     {Views2, {CleanupKvCount, InsertedKvCount, DeletedKvCount}} =
         lists:mapfoldl(fun({View, {_View, AddKeyValues}}, {AccC, AccI, AccD}) ->
             KeysToRemove = couch_util:dict_find(View#set_view.id_num, KeysToRemoveByView, []),
@@ -803,17 +826,17 @@ write_changes(WriterAcc, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs) ->
             NewView = View#set_view{btree = ViewBtree2},
             {NewView, {AccC + CleanupCount, AccI + length(AddKeyValues), AccD + length(KeysToRemove)}}
         end,
-        {IdBtreePurgedKeyCount, 0, 0}, lists:zip(Group#set_view_group.views, ViewKeyValuesToAdd)),
+        {IdBtreePurgedKeyCount, 0, 0}, lists:zip(Group#set_view_group.views, ViewKeyValuesToAddBinary)),
 
     case ?set_cbitmask(Group) of
     0 ->
         NewCbitmask = 0,
         CleanupTime = 0;
     _ ->
-        {ok, {_, IdBitmap}} = couch_btree:full_reduce(IdBtree2),
+        {ok, <<_Count:40, IdBitmap:?MAX_NUM_PARTITIONS>>} = couch_btree:full_reduce(IdBtree2),
         CombinedBitmap = lists:foldl(
             fun(#set_view{btree = Bt}, AccMap) ->
-                {ok, {_, _, Bm}} = couch_btree:full_reduce(Bt),
+                {ok, <<_Count:40, Bm:?MAX_NUM_PARTITIONS, _/binary>>} = couch_btree:full_reduce(Bt),
                 AccMap bor Bm
             end,
             IdBitmap, Views2),
@@ -833,7 +856,7 @@ write_changes(WriterAcc, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs) ->
                 KeysToRemove = couch_util:dict_find(ViewId, KeysToRemoveByView, []),
                 {AddKeyValues, KeysToRemove}
             end,
-            ViewKeyValuesToAdd),
+            ViewKeyValuesToAddBinary),
         LogEntry = {NewSeqs, AddDocIdViewIdKeys, RemoveDocIds, LogViewsAddRemoveKvs},
         LogEntryBin = couch_compress:compress(?term_to_bin(LogEntry)),
         ok = file:write(LogFd, [<<(byte_size(LogEntryBin)):32>>, LogEntryBin]),
@@ -1000,3 +1023,43 @@ wait_for_workers(Pids) ->
             exit({sort_worker_died, Reason})
         end
     end, ok, Pids).
+
+
+convert_primary_index_kvs_to_binary([], Acc)->
+    lists:reverse(Acc);
+convert_primary_index_kvs_to_binary([{{Key, DocId}, {PartId, V0}} | Rest], Acc)->
+    V = case V0 of
+    {dups, Values} ->
+        ValueListBinary = lists:foldl(
+            fun(V, Acc2) ->
+                <<Acc2/binary, (byte_size(V)):24, V/binary>>
+            end,
+            <<>>, Values),
+        <<PartId:16, ValueListBinary/binary>>;
+    _ ->
+        <<PartId:16, (byte_size(V0)):24, V0/binary>>
+    end,
+    KvBin = {couch_set_view_util:encode_key_docid(Key, DocId), V},
+    convert_primary_index_kvs_to_binary(Rest, [KvBin | Acc]).
+
+
+convert_back_index_kvs_to_binary([], Acc)->
+    lists:reverse(Acc);
+convert_back_index_kvs_to_binary([{DocId, {PartId, ViewIdKeys}} | Rest], Acc) ->
+    ViewIdKeysBinary = lists:foldl(
+        fun({ViewId, Keys}, Acc2) ->
+            KeyListBinary = lists:foldl(
+                fun(Key, AccKeys) ->
+                    <<AccKeys/binary, (byte_size(Key)):16, Key/binary>>
+                end,
+                <<>>, Keys),
+            <<Acc2/binary, ViewId:8, (length(Keys)):16, KeyListBinary/binary>>
+        end,
+        <<>>, ViewIdKeys),
+    KvBin = {DocId, <<PartId:16, ViewIdKeysBinary/binary>>},
+    convert_back_index_kvs_to_binary(Rest, [KvBin | Acc]).
+
+
+file_sorter_format_function(Bin) ->
+    <<KeyLen:16, Key:KeyLen/binary, ValueLen:32, Value:ValueLen/binary>> = Bin,
+    {Key, Value}.

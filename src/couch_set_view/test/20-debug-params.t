@@ -112,7 +112,7 @@ test_filter_parameter_main(AccessType) ->
         lists:seq(56, 63)),
 
     {ok, Rows} = (catch query_map_view(AccessType, <<"test">>, main, true)),
-    etap:is(length(Rows), (num_docs())*0.75,
+    etap:is(length(Rows), (num_docs()) * 0.75,
             "Map view query returned all rows from active partitions"),
     {ok, Rows2} = (catch query_map_view(AccessType, <<"test">>, main, false)),
     etap:is(length(Rows2), num_docs(),
@@ -122,7 +122,7 @@ test_filter_parameter_main(AccessType) ->
     % The same, but with a reduce function
     {ok, RowsRed} = (catch query_reduce_view(
         AccessType, <<"testred">>, main, true)),
-    etap:is(RowsRed, (num_docs())*0.75,
+    etap:is(RowsRed, (num_docs()) * 0.75,
             "Reduce view query returned all rows from active partitions"),
     {ok, RowsRed2} = (catch query_reduce_view(
          AccessType, <<"testred">>, main, false)),
@@ -147,26 +147,26 @@ test_filter_parameter_replica(AccessType) ->
 
     {ok, Rows} = (catch query_map_view(
         AccessType, <<"test">>, replica, true)),
-    etap:is(length(Rows), (num_docs()*0.25)*0.125,
+    etap:is(length(Rows), (num_docs() * 0.25) * 0.125,
             "Replica map view query returned all rows from "
             "passive partitions"),
 
     {ok, Rows2} = (catch query_map_view(
         AccessType, <<"test">>, replica, false)),
     % There are 75% main and 25% replica partitions
-    etap:is(length(Rows2), (num_docs())*0.25,
+    etap:is(length(Rows2), (num_docs()) * 0.25,
             "Replica map view query queried with _filter=false returns all "
             "partitions"),
 
     % The same, but with a reduce function
     {ok, RowsRed} = (catch query_reduce_view(
         AccessType, <<"testred">>, replica, true)),
-    etap:is(RowsRed, (num_docs()*0.25)*0.125,
+    etap:is(RowsRed, (num_docs() * 0.25) * 0.125,
         "Replica reduce view query returned all rows from passive partitions"),
     {ok, RowsRed2} = (catch query_reduce_view(
         AccessType, <<"testred">>, replica, false)),
     % There are 75% active and 25% replica partitions
-    etap:is(RowsRed2, (num_docs())*0.25,
+    etap:is(RowsRed2, (num_docs()) * 0.25,
         "Replica reduce view query queried with _filter=false returns all "
         "partitions"),
 
@@ -229,15 +229,15 @@ query_reduce_view_erlang(ViewName, Type, Filter) ->
     {ok, View, Group, _} = couch_set_view:get_reduce_view(
         test_set_name(), ddoc_id(), ViewName, Req),
 
-    KeyGroupFun = fun({_Key1, _}, {_Key2, _}) -> true end,
-    FoldFun = fun(Key, Red, Acc) -> {ok, [{Key, Red} | Acc]} end,
+    FoldFun = fun(Key, {json, Red}, Acc) ->
+        {ok, [{Key, ejson:decode(Red)} | Acc]}
+    end,
     ViewArgs = #view_query_args{
         run_reduce = true,
         view_name = ViewName,
         filter = Filter
     },
-    {ok, Rows} = couch_set_view:fold_reduce(Group, View, FoldFun, [],
-        KeyGroupFun, ViewArgs),
+    {ok, Rows} = couch_set_view:fold_reduce(Group, View, FoldFun, [], ViewArgs),
     couch_set_view:release_group(Group),
     case Rows of
     [{_Key, RedValue}] ->
@@ -294,7 +294,7 @@ configure_view_group(DDocId, Active, Passive, Cleanup) ->
         % Somehow the set_auto_cleanup doesn't get set when I don't request
         % the group afterwards
         Req = #set_view_group_req{stale = false},
-        {ok, Group} = couch_set_view:get_group(test_set_name(), DDocId, Req),
+        {ok, _Group} = couch_set_view:get_group(test_set_name(), DDocId, Req),
 
         couch_set_view_group:set_state(GroupPid, Active, Passive, Cleanup)
     catch _:Error ->

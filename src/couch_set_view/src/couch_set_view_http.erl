@@ -15,7 +15,7 @@
 -export([handle_req/1]).
 
 -export([make_view_fold_fun/6, finish_view_fold/4, finish_view_fold/5]).
--export([view_etag/2, view_etag/3, make_reduce_fold_funs/5]).
+-export([view_etag/2, view_etag/3]).
 -export([design_doc_view/6, parse_bool_param/1, get_row_doc/5]).
 
 -import(couch_httpd,
@@ -197,16 +197,14 @@ output_map_view(Req, View, Group, QueryArgs) ->
 output_reduce_view(Req, View, Group, QueryArgs) ->
     #view_query_args{
         limit = Limit,
-        skip = Skip,
-        group_level = GroupLevel
+        skip = Skip
     } = QueryArgs,
     CurrentEtag = view_etag(Group, View, QueryArgs#view_query_args.keys),
     couch_httpd:etag_respond(Req, CurrentEtag, fun() ->
-        {ok, KeyGroupFun, FoldFun} = make_reduce_fold_funs(
-            Req, GroupLevel, QueryArgs, CurrentEtag, #reduce_fold_helper_funs{}),
+        FoldFun = make_reduce_fold_fun(Req, QueryArgs, CurrentEtag, #reduce_fold_helper_funs{}),
         FoldAccInit = {Limit, Skip, undefined, []},
         {ok, {_, _, Resp, _}} = couch_set_view:fold_reduce(
-            Group, View, FoldFun, FoldAccInit, KeyGroupFun, QueryArgs),
+            Group, View, FoldFun, FoldAccInit, QueryArgs),
         finish_reduce_fold(Req, Resp)
     end).
 
@@ -249,7 +247,7 @@ make_view_fold_fun(Req, QueryArgs, Etag, Group, TotalViewCount, HelperFuns) ->
         []
     end,
     
-    fun({{_Key, _DocId}, {_PartId, _Value}} = Kv, OffsetReds,
+    fun({{_Key, DocId}, {PartId, _Value}} = Kv, OffsetReds,
             {AccLimit, AccSkip, Resp, RowFunAcc}) ->
         case {AccLimit, AccSkip, Resp} of
         {0, _, _} ->
@@ -263,35 +261,30 @@ make_view_fold_fun(Req, QueryArgs, Etag, Group, TotalViewCount, HelperFuns) ->
             Offset = ReduceCountFun(OffsetReds),
             {ok, Resp2, RowFunAcc0} = StartRespFun(Req, Etag,
                 TotalViewCount, Offset, RowFunAcc),
-            JsonDoc = get_row_doc(
-                Kv, SetName, IncludeDocs, Req#httpd.user_ctx, DocOpenOptions),
+            JsonDoc = maybe_get_row_doc(
+                IncludeDocs, DocId, PartId, SetName, Req#httpd.user_ctx, DocOpenOptions),
             {Go, RowFunAcc2} = SendRowFun(Resp2, Kv, JsonDoc, RowFunAcc0, Debug),
             {Go, {AccLimit - 1, 0, Resp2, RowFunAcc2}};
         {AccLimit, _, Resp} when (AccLimit > 0) ->
             % rendering all other rows
-            JsonDoc = get_row_doc(
-                Kv, SetName, IncludeDocs, Req#httpd.user_ctx, DocOpenOptions),
+            JsonDoc = maybe_get_row_doc(
+                IncludeDocs, DocId, PartId, SetName, Req#httpd.user_ctx, DocOpenOptions),
             {Go, RowFunAcc2} = SendRowFun(Resp, Kv, JsonDoc, RowFunAcc, Debug),
             {Go, {AccLimit - 1, 0, Resp, RowFunAcc2}}
         end
     end.
 
 
-get_row_doc(_Kv, _SetName, false, _UserCtx, _DocOpenOptions) ->
+maybe_get_row_doc(false, _KeyDocId, _PartId, _SetName, _UserCtx, _DocOpenOptions) ->
     nil;
-
-get_row_doc({{_Key, DocId}, {PartId, {Props}}}, SetName, true, UserCtx, DocOpenOptions) ->
-    Id = couch_util:get_value(<<"_id">>, Props, DocId),
-    open_row_doc(SetName, PartId, Id, UserCtx, DocOpenOptions);
-
-get_row_doc({{_Key, DocId}, {PartId, _Value}}, SetName, true, UserCtx, DocOpenOptions) ->
-    open_row_doc(SetName, PartId, DocId, UserCtx, DocOpenOptions).
+maybe_get_row_doc(true, DocId, PartId, SetName, UserCtx, DocOpenOptions) ->
+    get_row_doc(SetName, PartId, DocId, UserCtx, DocOpenOptions).
 
 
-open_row_doc(SetName, PartId, Id, UserCtx, DocOptions) ->
+get_row_doc(DocId, PartId, SetName, UserCtx, DocOptions) ->
     {ok, Db} = couch_db:open(
         ?dbname(SetName, PartId), [{user_ctx, UserCtx}]),
-    JsonDoc = case (catch couch_db_frontend:open_doc(Db, Id, DocOptions)) of
+    JsonDoc = case (catch couch_db_frontend:open_doc(Db, DocId, DocOptions)) of
     {ok, #doc{} = Doc} ->
         {json, couch_doc:to_raw_json_binary(Doc)};
     _ ->
@@ -301,65 +294,30 @@ open_row_doc(SetName, PartId, Id, UserCtx, DocOptions) ->
     JsonDoc.
 
 
-make_reduce_fold_funs(Req, GroupLevel, _QueryArgs, Etag, HelperFuns) ->
+make_reduce_fold_fun(Req, _QueryArgs, Etag, HelperFuns) ->
     #reduce_fold_helper_funs{
         start_response = StartRespFun,
         send_row = SendRowFun
     } = apply_default_helper_funs(HelperFuns),
 
-    GroupRowsFun =
-        fun({_Key1,_}, {_Key2,_}) when GroupLevel == 0 ->
-            true;
-        ({Key1,_}, {Key2,_})
-                when is_integer(GroupLevel) and is_list(Key1) and is_list(Key2) ->
-            lists:sublist(Key1, GroupLevel) == lists:sublist(Key2, GroupLevel);
-        ({Key1,_}, {Key2,_}) ->
-            Key1 == Key2
-        end,
-
-    RespFun = fun
-    (_Key, _Red, {AccLimit, AccSkip, Resp, RowAcc}) when AccSkip > 0 ->
+    fun
+    (_GroupedKey, _Red, {AccLimit, AccSkip, Resp, RowAcc}) when AccSkip > 0 ->
         % keep skipping
         {ok, {AccLimit, AccSkip - 1, Resp, RowAcc}};
-    (_Key, _Red, {0, _AccSkip, Resp, RowAcc}) ->
+    (_GroupedKey, _Red, {0, _AccSkip, Resp, RowAcc}) ->
         % we've exhausted limit rows, stop
         {stop, {0, _AccSkip, Resp, RowAcc}};
 
-    (_Key, Red, {AccLimit, 0, undefined, RowAcc0}) when GroupLevel == 0 ->
-        % we haven't started responding yet and group=false
-        {ok, Resp2, RowAcc} = StartRespFun(Req, Etag, RowAcc0),
-        {Go, RowAcc2} = SendRowFun(Resp2, {null, Red}, RowAcc),
-        {Go, {AccLimit - 1, 0, Resp2, RowAcc2}};
-    (_Key, Red, {AccLimit, 0, Resp, RowAcc}) when GroupLevel == 0 ->
-        % group=false but we've already started the response
-        {Go, RowAcc2} = SendRowFun(Resp, {null, Red}, RowAcc),
-        {Go, {AccLimit - 1, 0, Resp, RowAcc2}};
-
-    (Key, Red, {AccLimit, 0, undefined, RowAcc0})
-            when is_integer(GroupLevel), is_list(Key) ->
-        % group_level and we haven't responded yet
-        {ok, Resp2, RowAcc} = StartRespFun(Req, Etag, RowAcc0),
-        {Go, RowAcc2} = SendRowFun(Resp2,
-                {lists:sublist(Key, GroupLevel), Red}, RowAcc),
-        {Go, {AccLimit - 1, 0, Resp2, RowAcc2}};
-    (Key, Red, {AccLimit, 0, Resp, RowAcc})
-            when is_integer(GroupLevel), is_list(Key) ->
-        % group_level and we've already started the response
-        {Go, RowAcc2} = SendRowFun(Resp,
-                {lists:sublist(Key, GroupLevel), Red}, RowAcc),
-        {Go, {AccLimit - 1, 0, Resp, RowAcc2}};
-
-    (Key, Red, {AccLimit, 0, undefined, RowAcc0}) ->
+    (GroupedKey, Red, {AccLimit, 0, undefined, RowAcc0}) ->
         % group=true and we haven't responded yet
         {ok, Resp2, RowAcc} = StartRespFun(Req, Etag, RowAcc0),
-        {Go, RowAcc2} = SendRowFun(Resp2, {Key, Red}, RowAcc),
+        {Go, RowAcc2} = SendRowFun(Resp2, {GroupedKey, Red}, RowAcc),
         {Go, {AccLimit - 1, 0, Resp2, RowAcc2}};
-    (Key, Red, {AccLimit, 0, Resp, RowAcc}) ->
+    (GroupedKey, Red, {AccLimit, 0, Resp, RowAcc}) ->
         % group=true and we've already started the response
-        {Go, RowAcc2} = SendRowFun(Resp, {Key, Red}, RowAcc),
+        {Go, RowAcc2} = SendRowFun(Resp, {GroupedKey, Red}, RowAcc),
         {Go, {AccLimit - 1, 0, Resp, RowAcc2}}
-    end,
-    {ok, GroupRowsFun, RespFun}.
+    end.
 
 apply_default_helper_funs(
         #view_fold_helper_funs{
@@ -417,7 +375,7 @@ json_view_start_resp(Req, Etag, TotalRowCount, Offset, _Acc) ->
 
 send_json_view_row(Resp, Kv, Doc, RowFront, DebugMode) ->
     JsonObj = view_row_obj(Kv, Doc, DebugMode),
-    send_chunk(Resp, RowFront ++  ?JSON_ENCODE(JsonObj)),
+    send_chunk(Resp, RowFront ++ ?JSON_ENCODE(JsonObj)),
     {ok, ",\r\n"}.
 
 json_reduce_start_resp(Req, Etag, _Acc0) ->
@@ -425,7 +383,7 @@ json_reduce_start_resp(Req, Etag, _Acc0) ->
     {ok, Resp, "{\"rows\":[\r\n"}.
 
 send_json_reduce_row(Resp, {Key, Value}, RowFront) ->
-    send_chunk(Resp, RowFront ++ ?JSON_ENCODE({[{key, Key}, {value, Value}]})),
+    send_chunk(Resp, RowFront ++ ?JSON_ENCODE({[{<<"key">>, Key}, {<<"value">>, Value}]})),
     {ok, ",\r\n"}.
 
 view_etag(Group, View) ->
@@ -447,15 +405,15 @@ view_etag(Group, #set_view{}, Extra) ->
 
 % the view row has an error
 view_row_obj({{Key, error}, Value}, _Doc, _DebugMode) ->
-    {[{key, Key}, {error, Value}]};
+    {[{<<"key">>, Key}, {<<"error">>, Value}]};
 view_row_obj({{Key, DocId}, {_PartId, Value}}, nil, false) ->
-    {[{id, DocId}, {key, Key}, {value, Value}]};
+    {[{<<"id">>, DocId}, {<<"key">>, Key}, {<<"value">>, Value}]};
 view_row_obj({{Key, DocId}, {PartId, Value}}, nil, true) ->
-    {[{id, DocId}, {key, Key}, {partition, PartId}, {value, Value}]};
+    {[{<<"id">>, DocId}, {<<"key">>, Key}, {<<"partition">>, PartId}, {<<"value">>, Value}]};
 view_row_obj({{Key, DocId}, {_PartId, Value}}, Doc, false) ->
-    {[{id, DocId}, {key, Key}, {value, Value}, {doc, Doc}]};
+    {[{<<"id">>, DocId}, {<<"key">>, Key}, {<<"value">>, Value}, {<<"doc">>, Doc}]};
 view_row_obj({{Key, DocId}, {PartId, Value}}, Doc, true) ->
-    {[{id, DocId}, {key, Key}, {partition, PartId}, {value, Value}, {doc, Doc}]}.
+    {[{<<"id">>, DocId}, {<<"key">>, Key}, {<<"partition">>, PartId}, {<<"value">>, Value}, {<<"doc">>, Doc}]}.
 
 
 finish_view_fold(Req, TotalRows, Offset, FoldResult) ->

@@ -15,6 +15,7 @@
 % the License.
 
 -define(JSON_ENCODE(V), ejson:encode(V)). % couch_db.hrl
+-define(JSON_DECODE(V), ejson:decode(V)). % couch_db.hrl
 -define(MAX_WAIT_TIME, 600 * 1000).
 
 -include_lib("couch_set_view/include/couch_set_view.hrl").
@@ -290,17 +291,16 @@ query_reduce_view(ViewName, Stale, Partitions) ->
     },
     {ok, View, Group, []} = couch_set_view:get_reduce_view(
         test_set_name(), ddoc_id(), ViewName, GroupReq),
-    KeyGroupFun = fun({_Key1, _}, {_Key2, _}) -> true end,
     FoldFun = fun(Key, Red, Acc) -> {ok, [{Key, Red} | Acc]} end,
     ViewArgs = #view_query_args{
         run_reduce = true,
         view_name = ViewName
     },
-    {ok, Rows} = couch_set_view:fold_reduce(Group, View, FoldFun, [], KeyGroupFun, ViewArgs),
+    {ok, Rows} = couch_set_view:fold_reduce(Group, View, FoldFun, [], ViewArgs),
     couch_set_view:release_group(Group),
     case Rows of
-    [{_Key, RedValue}] ->
-        {RedValue, Group};
+    [{_Key, {json, RedValue}}] ->
+        {ejson:decode(RedValue), Group};
     [] ->
         {empty, Group}
     end.
@@ -628,17 +628,17 @@ verify_main_group_btrees_1(Group) ->
     DbSeqs = couch_set_view_test_util:get_db_seqs(test_set_name(), lists:seq(0, 31)),
 
     etap:is(
-        couch_btree:full_reduce(IdBtree),
+        couch_set_view_test_util:full_reduce_id_btree(Group, IdBtree),
         {ok, {num_docs() div 2, ExpectedBitmask}},
         "Id Btree has the right reduce value"),
     etap:is(
-        couch_btree:full_reduce(View1Btree),
+        couch_set_view_test_util:full_reduce_view_btree(Group, View1Btree),
         {ok, {num_docs() div 2, [num_docs() div 2], ExpectedBitmask}},
         "View1 Btree has the right reduce value"),
     ExpectedView2Reduction = [lists:sum(
         [I * 2 || I <- lists:seq(0, num_docs() - 1), (I rem 64) < 32])],
     etap:is(
-        couch_btree:full_reduce(View2Btree),
+        couch_set_view_test_util:full_reduce_view_btree(Group, View2Btree),
         {ok, {num_docs() div 2, ExpectedView2Reduction, ExpectedBitmask}},
         "View2 Btree has the right reduce value"),
 
@@ -648,7 +648,8 @@ verify_main_group_btrees_1(Group) ->
     etap:is(Cbitmask, 0, "Header has right cleanup bitmask"),
 
     etap:diag("Verifying the Id Btree"),
-    {ok, _, {_, IdBtreeFoldResult}} = couch_btree:fold(
+    {ok, _, {_, IdBtreeFoldResult}} = couch_set_view_test_util:fold_id_btree(
+        Group,
         IdBtree,
         fun(Kv, _, {NextId, I}) ->
             PartId = NextId rem 64,
@@ -675,13 +676,14 @@ verify_main_group_btrees_1(Group) ->
         "Id Btree has " ++ integer_to_list(num_docs() div 2) ++ " entries"),
 
     etap:diag("Verifying the View1 Btree"),
-    {ok, _, {_, View1BtreeFoldResult}} = couch_btree:fold(
+    {ok, _, {_, View1BtreeFoldResult}} = couch_set_view_test_util:fold_view_btree(
+        Group,
         View1Btree,
         fun(Kv, _, {NextId, I}) ->
             PartId = NextId rem 64,
             ExpectedKv = {
                 {doc_id(NextId), doc_id(NextId)},
-                {PartId, {json, ?JSON_ENCODE(NextId)}}
+                {PartId, NextId}
             },
             case ExpectedKv =:= Kv of
             true ->
@@ -701,13 +703,14 @@ verify_main_group_btrees_1(Group) ->
         "View1 Btree has " ++ integer_to_list(num_docs() div 2) ++ " entries"),
 
     etap:diag("Verifying the View2 Btree"),
-    {ok, _, {_, View2BtreeFoldResult}} = couch_btree:fold(
+    {ok, _, {_, View2BtreeFoldResult}} = couch_set_view_test_util:fold_view_btree(
+        Group,
         View2Btree,
         fun(Kv, _, {NextId, I}) ->
             PartId = NextId rem 64,
             ExpectedKv = {
                 {doc_id(NextId), doc_id(NextId)},
-                {PartId, {json, ?JSON_ENCODE(NextId * 2)}}
+                {PartId, NextId * 2}
             },
             case ExpectedKv =:= Kv of
             true ->
@@ -758,15 +761,15 @@ verify_replica_group_btrees_1(MainGroup) ->
     } = View2,
 
     etap:is(
-        couch_btree:full_reduce(IdBtree),
+        couch_set_view_test_util:full_reduce_id_btree(MainGroup, IdBtree),
         {ok, {0, 0}},
         "Id Btree has the right reduce value"),
     etap:is(
-        couch_btree:full_reduce(View1Btree),
+        couch_set_view_test_util:full_reduce_view_btree(MainGroup, View1Btree),
         {ok, {0, [0], 0}},
         "View1 Btree has the right reduce value"),
     etap:is(
-        couch_btree:full_reduce(View2Btree),
+        couch_set_view_test_util:full_reduce_view_btree(MainGroup, View2Btree),
         {ok, {0, [0], 0}},
         "View2 Btree has the right reduce value"),
 
@@ -840,17 +843,17 @@ verify_replica_group_btrees_2(MainGroup) ->
     DbSeqs = couch_set_view_test_util:get_db_seqs(test_set_name(), lists:seq(32, 63)),
 
     etap:is(
-        couch_btree:full_reduce(IdBtree),
+        couch_set_view_test_util:full_reduce_id_btree(MainGroup, IdBtree),
         {ok, {num_docs() div 2, ExpectedBitmask}},
         "Id Btree has the right reduce value"),
     etap:is(
-        couch_btree:full_reduce(View1Btree),
+        couch_set_view_test_util:full_reduce_view_btree(MainGroup, View1Btree),
         {ok, {num_docs() div 2, [num_docs() div 2], ExpectedBitmask}},
         "View1 Btree has the right reduce value"),
     ExpectedView2Reduction = [lists:sum(
         [I * 2 || I <- lists:seq(0, num_docs() - 1), (I rem 64) > 31])],
     etap:is(
-        couch_btree:full_reduce(View2Btree),
+        couch_set_view_test_util:full_reduce_view_btree(MainGroup, View2Btree),
         {ok, {num_docs() div 2, ExpectedView2Reduction, ExpectedBitmask}},
         "View2 Btree has the right reduce value"),
 
@@ -860,7 +863,8 @@ verify_replica_group_btrees_2(MainGroup) ->
     etap:is(Cbitmask, 0, "Header has right cleanup bitmask"),
 
     etap:diag("Verifying the Id Btree"),
-    {ok, _, {_, IdBtreeFoldResult}} = couch_btree:fold(
+    {ok, _, {_, IdBtreeFoldResult}} = couch_set_view_test_util:fold_id_btree(
+        MainGroup,
         IdBtree,
         fun(Kv, _, {NextId, I}) ->
             PartId = NextId rem 64,
@@ -887,13 +891,14 @@ verify_replica_group_btrees_2(MainGroup) ->
         "Id Btree has " ++ integer_to_list(num_docs() div 2) ++ " entries"),
 
     etap:diag("Verifying the View1 Btree"),
-    {ok, _, {_, View1BtreeFoldResult}} = couch_btree:fold(
+    {ok, _, {_, View1BtreeFoldResult}} = couch_set_view_test_util:fold_view_btree(
+        MainGroup,
         View1Btree,
         fun(Kv, _, {NextId, I}) ->
             PartId = NextId rem 64,
             ExpectedKv = {
                 {doc_id(NextId), doc_id(NextId)},
-                {PartId, {json, ?JSON_ENCODE(NextId)}}
+                {PartId, NextId}
             },
             case ExpectedKv =:= Kv of
             true ->
@@ -913,13 +918,14 @@ verify_replica_group_btrees_2(MainGroup) ->
         "View1 Btree has " ++ integer_to_list(num_docs() div 2) ++ " entries"),
 
     etap:diag("Verifying the View2 Btree"),
-    {ok, _, {_, View2BtreeFoldResult}} = couch_btree:fold(
+    {ok, _, {_, View2BtreeFoldResult}} = couch_set_view_test_util:fold_view_btree(
+        MainGroup,
         View2Btree,
         fun(Kv, _, {NextId, I}) ->
             PartId = NextId rem 64,
             ExpectedKv = {
                 {doc_id(NextId), doc_id(NextId)},
-                {PartId, {json, ?JSON_ENCODE(NextId * 2)}}
+                {PartId, NextId * 2}
             },
             case ExpectedKv =:= Kv of
             true ->
@@ -965,16 +971,16 @@ verify_main_group_btrees_3(Group) ->
     DbSeqs = couch_set_view_test_util:get_db_seqs(test_set_name(), lists:seq(0, 63)),
 
     etap:is(
-        couch_btree:full_reduce(IdBtree),
+        couch_set_view_test_util:full_reduce_id_btree(Group, IdBtree),
         {ok, {num_docs(), ExpectedBitmask}},
         "Id Btree has the right reduce value"),
     etap:is(
-        couch_btree:full_reduce(View1Btree),
+        couch_set_view_test_util:full_reduce_view_btree(Group, View1Btree),
         {ok, {num_docs(), [num_docs()], ExpectedBitmask}},
         "View1 Btree has the right reduce value"),
     ExpectedView2Reduction = [lists:sum([I * 2 || I <- lists:seq(0, num_docs() - 1)])],
     etap:is(
-        couch_btree:full_reduce(View2Btree),
+        couch_set_view_test_util:full_reduce_view_btree(Group, View2Btree),
         {ok, {num_docs(), ExpectedView2Reduction, ExpectedBitmask}},
         "View2 Btree has the right reduce value"),
 
@@ -984,7 +990,8 @@ verify_main_group_btrees_3(Group) ->
     etap:is(Cbitmask, 0, "Header has right cleanup bitmask"),
 
     etap:diag("Verifying the Id Btree"),
-    {ok, _, IdBtreeFoldResult} = couch_btree:fold(
+    {ok, _, IdBtreeFoldResult} = couch_set_view_test_util:fold_id_btree(
+        Group,
         IdBtree,
         fun(Kv, _, I) ->
             PartId = I rem 64,
@@ -1006,11 +1013,12 @@ verify_main_group_btrees_3(Group) ->
         "Id Btree has " ++ integer_to_list(num_docs()) ++ " entries"),
 
     etap:diag("Verifying the View1 Btree"),
-    {ok, _, View1BtreeFoldResult} = couch_btree:fold(
+    {ok, _, View1BtreeFoldResult} = couch_set_view_test_util:fold_view_btree(
+        Group,
         View1Btree,
         fun(Kv, _, I) ->
             PartId = I rem 64,
-            ExpectedKv = {{doc_id(I), doc_id(I)}, {PartId, {json, ?JSON_ENCODE(I)}}},
+            ExpectedKv = {{doc_id(I), doc_id(I)}, {PartId, I}},
             case ExpectedKv =:= Kv of
             true ->
                 ok;
@@ -1024,11 +1032,12 @@ verify_main_group_btrees_3(Group) ->
         "View1 Btree has " ++ integer_to_list(num_docs()) ++ " entries"),
 
     etap:diag("Verifying the View2 Btree"),
-    {ok, _, View2BtreeFoldResult} = couch_btree:fold(
+    {ok, _, View2BtreeFoldResult} = couch_set_view_test_util:fold_view_btree(
+        Group,
         View2Btree,
         fun(Kv, _, I) ->
             PartId = I rem 64,
-            ExpectedKv = {{doc_id(I), doc_id(I)}, {PartId, {json, ?JSON_ENCODE(I * 2)}}},
+            ExpectedKv = {{doc_id(I), doc_id(I)}, {PartId, I * 2}},
             case ExpectedKv =:= Kv of
             true ->
                 ok;

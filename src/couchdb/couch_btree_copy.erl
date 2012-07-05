@@ -12,7 +12,7 @@
 
 -module(couch_btree_copy).
 
--export([copy/3, from_sorted_file/3, file_sort_output_fun/3]).
+-export([copy/3, from_sorted_file/4, file_sort_output_fun/3]).
 
 -include("couch_db.hrl").
 
@@ -52,7 +52,7 @@ copy(Btree, Fd, Options) ->
 
 
 
-from_sorted_file(EmptyBtree, SortedFileName, DestFd) ->
+from_sorted_file(EmptyBtree, SortedFileName, DestFd, BinToKvFun) ->
     Acc = #acc{
         btree = EmptyBtree,
         fd = DestFd,
@@ -60,7 +60,7 @@ from_sorted_file(EmptyBtree, SortedFileName, DestFd) ->
     },
     {ok, SourceFd} = file:open(SortedFileName, [read, raw, binary, read_ahead]),
     {ok, Acc2} = try
-        sorted_file_fold(SourceFd, SortedFileName, Acc)
+        sorted_file_fold(SourceFd, SortedFileName, BinToKvFun, Acc)
     after
         ok = file:close(SourceFd)
     end,
@@ -68,14 +68,14 @@ from_sorted_file(EmptyBtree, SortedFileName, DestFd) ->
     {ok, CopyRootState}.
 
 
-sorted_file_fold(Fd, FileName, Acc) ->
+sorted_file_fold(Fd, FileName, BinToKvFun, Acc) ->
     case file:read(Fd, 4) of
     {ok, <<Len:32>>} ->
         case file:read(Fd, Len) of
         {ok, KvBin} ->
-            Kv = binary_to_term(KvBin),
+            Kv = BinToKvFun(KvBin),
             {ok, Acc2} = fold_copy(Kv, Len, Acc),
-            sorted_file_fold(Fd, FileName, Acc2);
+            sorted_file_fold(Fd, FileName, BinToKvFun, Acc2);
         eof ->
             throw({unexpected_eof, FileName});
         {error, Error} ->
@@ -163,7 +163,11 @@ write_kp_node(#acc{fd = Fd, btree = Bt}, NodeList) ->
         end,
         {[], 0}, NodeList),
     Red = case Bt#btree.reduce of
-    nil -> [];
+    nil ->
+        case Bt#btree.binary_mode of
+        false -> [];
+        true -> <<>>
+        end;
     _ ->
         couch_btree:final_reduce(Bt, {[], ChildrenReds})
     end,
@@ -290,7 +294,11 @@ finish_copy_loop(#acc{cur_level = Level, nodes = Nodes} = Acc) ->
 flush_leaf(KVs, #acc{btree = Btree} = Acc) ->
     {NewKVs, Acc2} = before_leaf_write(Acc, lists:reverse(KVs)),
     Red = case Btree#btree.reduce of
-    nil -> [];
+    nil ->
+        case Btree#btree.binary_mode of
+        false -> [];
+        true -> <<>>
+        end;
     _ ->
         Items = lists:map(
             fun({K, V}) -> assemble(Acc2, K, V) end,
