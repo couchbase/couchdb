@@ -873,10 +873,10 @@ start_copy_compact(#db{name=Name,filepath=Filepath}=Db) ->
         {error, enoent} -> % Initial compact
             case native_initial_compact(Db, CompactFile) of
                 {ok, CompactedDb} ->
-                    ?LOG_DEBUG("Native initial compact succeeded for \"~s\"", [Name]),
+                    ?LOG_INFO("Native initial compact succeeded for \"~s\"", [Name]),
                     CompactedDb;
                 {error, Reason} ->
-                    ?LOG_DEBUG("Native compact for \"~s\" failed due to error ~w. Falling back to erlang.",
+                    ?LOG_ERROR("Native compact for \"~s\" failed due to error ~w. Falling back to erlang.",
                                [Name, Reason]),
                     {ok, TargetDB} = make_target_db(Db, CompactFile),
                     copy_compact(Db, TargetDB, false)
