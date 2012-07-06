@@ -507,7 +507,9 @@ get_body_part(Pid) ->
 %% `{partial_download, PartialDownloadOptions}' is used.
 %% `Timeout' is the timeout for reading the next body part in milliseconds. 
 %% `http_eob' marks the end of the body. If there were Trailers in the
-%% response those are returned with `http_eob' as well. 
+%% response those are returned with `http_eob' as well.
+%% If it evers returns an error, no further calls to this function should
+%% be done.
 %% @end
 -spec get_body_part(pid(), timeout()) -> 
                            {ok, binary()} |
@@ -519,7 +521,9 @@ get_body_part(Pid, Timeout) ->
             Pid ! {ack, self()},
             {ok, Bin};
         {http_eob, Pid, Trailers} ->
-            {ok, {http_eob, Trailers}}
+            {ok, {http_eob, Trailers}};
+        {error, Pid, Reason} ->
+            {error, Reason}
     after Timeout ->
         kill_client(Pid)
     end.
