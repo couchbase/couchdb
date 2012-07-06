@@ -23,8 +23,8 @@ max_parallel_indexers = 4
 max_parallel_replica_indexers = 2
 ; BTree Implmentation to use (native or erlang)
 btree_implementation = native
-consistency_check_precompacted = true
-consistency_check_compacted = true
+consistency_check_precompacted = false
+consistency_check_compacted = false
 
 [database_compaction]
 ; larger buffer sizes can originate smaller files
