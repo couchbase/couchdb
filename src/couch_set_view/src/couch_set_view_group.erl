@@ -372,6 +372,9 @@ do_init({_, SetName, _} = InitArgs) ->
         throw(Error)
     end.
 
+handle_call(get_sig, _From, #state{group = Group} = State) ->
+    {reply, {ok, Group#set_view_group.sig}, State, ?TIMEOUT};
+
 handle_call({set_auto_cleanup, Enabled}, _From, State) ->
     % To be used only by unit tests.
     {reply, ok, State#state{auto_cleanup = Enabled}, ?TIMEOUT};
@@ -1221,7 +1224,7 @@ prepare_group({RootDir, SetName, #set_view_group{sig = Sig, type = Type} = Group
 
 -spec hex_sig(binary()) -> string().
 hex_sig(GroupSig) ->
-    couch_util:to_hex(?b2l(GroupSig)).
+    couch_util:to_hex(GroupSig).
 
 
 -spec base_index_file_name(#set_view_group{}, set_view_group_type()) -> string().

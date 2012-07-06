@@ -340,8 +340,9 @@ cleanup_index_files(SetName) ->
 
     % make unique list of group sigs
     Sigs = lists:map(fun(#doc{id = GroupId}) ->
-            {ok, Info} = get_group_info(SetName, GroupId),
-            ?b2l(couch_util:get_value(signature, Info))
+            GroupPid = get_group_pid(SetName, GroupId),
+            {ok, Sig} = gen_server:call(GroupPid, get_sig, infinity),
+            couch_util:to_hex(Sig)
         end,
         [DD || DD <- DesignDocs, not DD#doc.deleted]),
 
