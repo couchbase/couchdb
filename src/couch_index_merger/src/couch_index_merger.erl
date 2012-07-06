@@ -661,13 +661,15 @@ run_http_index_folder(Mod, IndexSpec, MergeParams, DDoc, Queue) ->
     {ok, {{200, _}, _RespHeaders, Pid}} when is_pid(Pid) ->
         put(streamer_pid, Pid),
         try
-            case os:type() of
-            {win32, _} ->
+            case (element(1, os:type()) =:= win32) orelse
+                    (Mod =/= couch_view_merger) of
+            true ->
                 % TODO: make couch_view_parser build and run on Windows
+                % TODO: make couch_view_parser work with spatial views
                 EventFun = Mod:make_event_fun(MergeParams#index_merge.http_params, Queue),
                 DataFun = fun() -> stream_data(Pid, Timeout) end,
                 json_stream_parse:events(DataFun, EventFun);
-            _ ->
+            false ->
                 DataFun = fun() -> next_chunk(Pid, Timeout) end,
                 ok = couch_http_view_streamer:parse(DataFun, Queue, get(from_url))
             end
