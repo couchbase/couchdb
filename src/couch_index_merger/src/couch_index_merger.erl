@@ -643,7 +643,7 @@ http_index_folder(Mod, IndexSpec, MergeParams, DDoc, Queue) ->
         Streamer = get(streamer_pid),
         case is_pid(Streamer) andalso is_process_alive(Streamer) of
         true ->
-            catch stream_all(Streamer, []);
+            catch stream_all(Streamer, MergeParams#index_merge.conn_timeout, []);
         false ->
             ok
         end
@@ -665,10 +665,10 @@ run_http_index_folder(Mod, IndexSpec, MergeParams, DDoc, Queue) ->
             {win32, _} ->
                 % TODO: make couch_view_parser build and run on Windows
                 EventFun = Mod:make_event_fun(MergeParams#index_merge.http_params, Queue),
-                DataFun = fun() -> stream_data(Pid) end,
+                DataFun = fun() -> stream_data(Pid, Timeout) end,
                 json_stream_parse:events(DataFun, EventFun);
             _ ->
-                DataFun = fun() -> next_chunk(Pid) end,
+                DataFun = fun() -> next_chunk(Pid, Timeout) end,
                 ok = couch_http_view_streamer:parse(DataFun, Queue, get(from_url))
             end
         catch throw:{error, Error} ->
@@ -679,7 +679,7 @@ run_http_index_folder(Mod, IndexSpec, MergeParams, DDoc, Queue) ->
     {ok, {{Code, _}, _RespHeaders, Pid}} when is_pid(Pid) ->
         put(streamer_pid, Pid),
         Error = try
-            stream_all(Pid, [])
+            stream_all(Pid, Timeout, [])
         catch throw:{error, _Error} ->
             <<"Error code ", (?l2b(integer_to_list(Code)))/binary>>
         end,
@@ -707,19 +707,19 @@ run_http_index_folder(Mod, IndexSpec, MergeParams, DDoc, Queue) ->
     end.
 
 
-stream_data(Pid) ->
-    case lhttpc:get_body_part(Pid) of
+stream_data(Pid, Timeout) ->
+    case lhttpc:get_body_part(Pid, Timeout) of
     {ok, {http_eob, _Trailers}} ->
          {<<>>, fun() -> throw({error, <<"more view data expected">>}) end};
     {ok, Data} ->
-         {Data, fun() -> stream_data(Pid) end};
+         {Data, fun() -> stream_data(Pid, Timeout) end};
     {error, _} = Error ->
          throw(Error)
     end.
 
 
-next_chunk(Pid) ->
-    case lhttpc:get_body_part(Pid) of
+next_chunk(Pid, Timeout) ->
+    case lhttpc:get_body_part(Pid, Timeout) of
     {ok, {http_eob, _Trailers}} ->
          eof;
     {ok, _Data} = Ok ->
@@ -729,12 +729,12 @@ next_chunk(Pid) ->
     end.
 
 
-stream_all(Pid, Acc) ->
-    case stream_data(Pid) of
+stream_all(Pid, Timeout, Acc) ->
+    case stream_data(Pid, Timeout) of
     {<<>>, _} ->
         iolist_to_binary(lists:reverse(Acc));
     {Data, _} ->
-        stream_all(Pid, [Data | Acc])
+        stream_all(Pid, Timeout, [Data | Acc])
     end.
 
 
