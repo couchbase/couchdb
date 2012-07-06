@@ -26,7 +26,7 @@
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(157),
+    etap:plan(161),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -59,6 +59,7 @@ test() ->
     test_debug_info_4_rows(),
     test_debug_info_4_rows_and_errors(),
     test_all_docs_rows(),
+    test_quotes_in_string(),
     ok.
 
 
@@ -955,4 +956,30 @@ test_all_docs_rows() ->
     etap:is(State2_2, ExpectedState2, "State2 has _all_docs rows"),
     State3_2 = couch_view_parser:next_state(Ctx2),
     etap:is(State3_2, {ok, done}, "State2 is {ok, done}"),
+    ok.
+
+
+test_quotes_in_string() ->
+    etap:diag("Testing double quotes inside strings are escaped"),
+    {ok, Ctx} = couch_view_parser:start_context(),
+    Json = [
+        <<"{">>,
+        <<"\"total_r">>, <<"ows\": 100,">>,
+        <<"\"rows\": [">>,
+            <<"{\"id\":\"doc_001\",\"key\":\"doc_001\",\"value\":1, \"doc\": {\"string\": \"foo \\\"bar\\\"\"}}">>,
+        <<"]}">>
+    ],
+    etap:is(couch_view_parser:parse_chunk(Ctx, Json),
+            ok,
+            "Success parsing row"),
+    State1 = couch_view_parser:next_state(Ctx),
+    etap:is(State1, {ok, row_count, "100"}, "State1 has row count"),
+    State2 = couch_view_parser:next_state(Ctx),
+    io:format("State2 is: ~p~n", [State2]),
+    ExpectedState2 = {ok, rows, [
+        {{<<"\"doc_001\"">>, <<"\"doc_001\"">>}, <<"1">>, <<"{\"string\":\"foo \\\"bar\\\"\"}">>}
+    ]},
+    etap:is(State2, ExpectedState2, "State2 has expected row"),
+    State3 = couch_view_parser:next_state(Ctx),
+    etap:is(State3, {ok, done}, "State3 is {ok, done}"),
     ok.

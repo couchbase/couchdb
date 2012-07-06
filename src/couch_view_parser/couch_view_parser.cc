@@ -117,6 +117,7 @@ void initContext(ctx_t *context)
 {
     context->handle = yajl_alloc(&callbacks, NULL, (void *) context);
     yajl_config(context->handle, yajl_dont_validate_strings, 1);
+    yajl_config(context->handle, yajl_dont_unescape_strings, 1);
 
     context->level = 0;
     context->row_count = NULL;
