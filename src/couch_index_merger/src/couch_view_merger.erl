@@ -280,7 +280,7 @@ view_row_obj_map({_KeyDocId, {row_json, RowJson}}, _Debug) ->
 % Row from local _all_docs, old couchdb
 view_row_obj_map({{Key, error}, Reason}, _DebugMode) ->
     <<"{\"key\":", (?JSON_ENCODE(Key))/binary,
-      ",\"error\":", (couch_util:to_binary(Reason))/binary, "}">>;
+      ",\"error\":", (?JSON_ENCODE(couch_util:to_binary(Reason)))/binary, "}">>;
 
 % Row from local node, query with ?debug=true
 view_row_obj_map({{Key, DocId}, {PartId, Value}}, true) when is_integer(PartId) ->
