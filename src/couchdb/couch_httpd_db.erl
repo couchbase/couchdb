@@ -139,13 +139,16 @@ handle_design_req(#httpd{
         design_url_handlers = DesignUrlHandlers,
         db_frontend = DbFrontend
     }=Req, Db) ->
-    % load ddoc
     DesignId = <<"_design/", DesignName/binary>>,
-    {ok, DDoc} = DbFrontend:open_doc(Db, DesignId, [ejson_body]),
-    Handler = couch_util:dict_find(Action, DesignUrlHandlers, fun(_, _, _) ->
+    case DbFrontend:open_doc(Db, DesignId, [ejson_body]) of
+    {ok, DDoc} ->
+        Handler = couch_util:dict_find(Action, DesignUrlHandlers, fun(_, _, _) ->
             throw({not_found, <<"missing handler: ", Action/binary>>})
         end),
-    Handler(Req, Db, DDoc);
+        Handler(Req, Db, DDoc);
+    {not_found, missing} ->
+        throw({not_found, <<"Design document ", DesignId/binary, " not found">>})
+    end;
 
 handle_design_req(Req, Db) ->
     db_req(Req, Db).
