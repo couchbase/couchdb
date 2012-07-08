@@ -158,6 +158,8 @@ handle_call({remove_partitions, PartList}, _From, State) ->
                     ok = couch_db:remove_update_listener(Db, self()),
                     ok = couch_db:close(Db);
                 {not_found, no_db_file} ->
+                    ok; % deleted, ignore
+                not_found ->
                     ok % deleted, ignore
                 end,
                 clean_update_messages(Id),
