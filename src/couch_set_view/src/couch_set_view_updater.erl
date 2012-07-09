@@ -180,6 +180,7 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime, NumChanges, LogFilePat
         couch_task_status:add_task([
             {type, indexer},
             {set, SetName},
+            {signature, ?l2b(couch_util:to_hex(GroupSig))},
             {design_documents, DDocIds},
             {indexer_type, Type},
             {progress, 0},

@@ -110,6 +110,7 @@ compact_group(Group0, EmptyGroup, LogFilePath, UpdaterPid, Owner) ->
     couch_task_status:add_task([
         {type, view_compaction},
         {set, SetName},
+        {signature, ?l2b(couch_util:to_hex(GroupSig))},
         {design_documents, DDocIds},
         {changes_done, 0},
         {total_changes, TotalChanges},

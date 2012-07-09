@@ -286,8 +286,9 @@ init({_, _, Group} = InitArgs) ->
         do_init(InitArgs)
     catch
     _:Error ->
-        ?LOG_ERROR("~s error opening set view group `~s` from set `~s`: ~p",
-            [?MODULE, Group#set_view_group.name, Group#set_view_group.set_name, Error]),
+        ?LOG_ERROR("~s error opening set view group `~s`, signature `~s', from set `~s`: ~p",
+                   [?MODULE, Group#set_view_group.name, hex_sig(Group),
+                    Group#set_view_group.set_name, Error]),
         exit(Error)
     end,
     proc_lib:init_ack({ok, self()}),
@@ -308,11 +309,13 @@ do_init({_, SetName, _} = InitArgs) ->
             maybe_fix_replica_group(ReplicaPid, Group),
             ReplicaParts = get_replica_partitions(ReplicaPid)
         end,
+        ViewCount = length(Group#set_view_group.views),
         case is_integer(Header#set_view_index_header.num_partitions) of
         false ->
             DbSet = nil,
-            ?LOG_INFO("Started undefined ~s set view group `~s`, group `~s`",
-                      [Type, SetName, Group#set_view_group.name]);
+            ?LOG_INFO("Started undefined ~s set view group `~s`, group `~s`,"
+                      " signature `~s', view count: ~p",
+                      [Type, SetName, Group#set_view_group.name, hex_sig(Group), ViewCount]);
         true ->
             DbSet = case (catch couch_db_set:open(SetName, ActiveList ++ PassiveList)) of
             {ok, SetPid} ->
@@ -320,7 +323,7 @@ do_init({_, SetName, _} = InitArgs) ->
             Error ->
                 throw(Error)
             end,
-            ?LOG_INFO("Started ~s set view group `~s`, group `~s`~n"
+            ?LOG_INFO("Started ~s set view group `~s`, group `~s`, signature `~s', view count ~p~n"
                       "active partitions:      ~w~n"
                       "passive partitions:     ~w~n"
                       "cleanup partitions:     ~w~n"
@@ -333,7 +336,7 @@ do_init({_, SetName, _} = InitArgs) ->
                       false ->
                           ""
                       end,
-                      [Type, SetName, Group#set_view_group.name,
+                      [Type, SetName, Group#set_view_group.name, hex_sig(Group), ViewCount,
                        couch_set_view_util:decode_bitmask(Header#set_view_index_header.abitmask),
                        couch_set_view_util:decode_bitmask(Header#set_view_index_header.pbitmask),
                        couch_set_view_util:decode_bitmask(Header#set_view_index_header.cbitmask),
@@ -416,12 +419,12 @@ handle_call({define_view, NumPartitions, ActiveList, ActiveBitmask,
         State3 = monitor_partitions(State2, ActiveList),
         State4 = monitor_partitions(State3, PassiveList),
         ok = commit_header(NewGroup),
-        ?LOG_INFO("Set view `~s`, ~s group `~s`, configured with:~n"
+        ?LOG_INFO("Set view `~s`, ~s group `~s`, signature `~s', configured with:~n"
             "~p partitions~n"
             "~sreplica support~n"
             "initial active partitions ~w~n"
             "initial passive partitions ~w",
-            [?set_name(State), ?type(State), DDocId, NumPartitions,
+            [?set_name(State), ?type(State), DDocId, hex_sig(Group), NumPartitions,
             case UseReplicaIndex of
             true ->  "";
             false -> "no "
@@ -800,12 +803,18 @@ handle_cast(ddoc_updated, State) ->
     {ok, Db} = couch_db:open_int(DbName, []),
     case couch_db:open_doc(Db, DDocId, [ejson_body]) of
     {not_found, deleted} ->
-        NewSig = nil;
+        NewSig = <<>>;
     {ok, DDoc} ->
         #set_view_group{sig = NewSig} =
             couch_set_view_util:design_doc_to_set_view_group(?set_name(State), DDoc)
     end,
     couch_db:close(Db),
+    ?LOG_INFO("Set view `~s`, ~s group `~s`, signature `~s', design document was updated~n"
+              "  new signature:   ~s~n"
+              "  shutdown flag:   ~s~n"
+              "  waiting clients: ~p~n",
+              [?set_name(State), ?type(State), ?group_id(State),
+               hex_sig(CurSig), hex_sig(NewSig), State#state.shutdown, length(Waiters)]),
     case NewSig of
     CurSig ->
         {noreply, State#state{shutdown = false}, ?TIMEOUT};
@@ -880,6 +889,9 @@ handle_cast({before_partition_delete, PartId}, #state{group = Group} = State) ->
             {noreply, State, ?TIMEOUT}
         end
     end;
+
+handle_cast({update, _MinNumChanges}, #state{group = #set_view_group{views = []}} = State) ->
+    {noreply, State};
 
 handle_cast({update, MinNumChanges}, #state{group = Group} = State) ->
     case is_pid(State#state.updater_pid) of
@@ -1222,7 +1234,9 @@ prepare_group({RootDir, SetName, #set_view_group{sig = Sig, type = Type} = Group
     end.
 
 
--spec hex_sig(binary()) -> string().
+-spec hex_sig(#set_view_group{} | binary()) -> string().
+hex_sig(#set_view_group{sig = Sig}) ->
+    hex_sig(Sig);
 hex_sig(GroupSig) ->
     couch_util:to_hex(GroupSig).
 
@@ -2301,6 +2315,8 @@ after_updater_stopped(State, Reason) ->
 -spec start_updater(#state{}) -> #state{}.
 start_updater(#state{updater_pid = Pid} = State) when is_pid(Pid) ->
     State;
+start_updater(#state{group = #set_view_group{views = []}} = State) ->
+    State;
 start_updater(#state{updater_pid = nil, updater_state = not_running} = State) ->
     #state{
         group = Group,
@@ -2376,6 +2392,8 @@ get_replica_partitions(ReplicaPid) ->
 
 -spec maybe_update_replica_index(#state{}) -> #state{}.
 maybe_update_replica_index(#state{updater_pid = Pid} = State) when is_pid(Pid) ->
+    State;
+maybe_update_replica_index(#state{group = #set_view_group{views = []}} = State) ->
     State;
 maybe_update_replica_index(#state{group = Group, updater_state = not_running} = State) ->
     IndexedSeqs = ?set_seqs(Group),
