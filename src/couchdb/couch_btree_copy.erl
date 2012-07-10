@@ -19,12 +19,16 @@
 -record(acc, {
     btree,
     fd,
-    before_kv_write = {fun(Item, Acc) -> {Item, Acc} end, []},
+    before_kv_write = nil,
+    user_acc = [],
     filter = fun(_) -> true end,
     chunk_threshold,
-    nodes = dict:from_list([{1, {0, []}}]),
+    nodes = array:new(),
     cur_level = 1,
-    max_level = 1
+    max_level = 1,
+    % only used while at bottom level (1)
+    values = [],
+    leaf_size = 0
 }).
 
 
@@ -42,10 +46,10 @@ copy(Btree, Fd, Options) ->
     },
     Acc = apply_options(Options, Acc0),
     {ok, _, #acc{cur_level = 1} = FinalAcc0} = couch_btree:fold(
-        Btree, fun fold_copy/3, Acc, []),
+        Btree, fun(Kv, _Reds, A) -> fold_copy(Kv, A) end, Acc, []),
     {ok, CopyRootState, FinalAcc} = finish_copy(FinalAcc0),
-    {_, LastUserAcc} = FinalAcc#acc.before_kv_write,
-    {ok, CopyRootState, LastUserAcc}.
+    {ok, CopyRootState, FinalAcc#acc.user_acc}.
+
 
 % this will create a function suitable for receiving the output of
 % Erlang file_sorter:sort/2.
@@ -63,18 +67,18 @@ file_sort_loop(close, Acc) ->
     {ok, CopyRootState, _FinalAcc} = finish_copy(Acc),
     {ok, CopyRootState};
 file_sort_loop(Binaries, Acc) ->
-    Items = [binary_to_term(Bin) || Bin <- Binaries],
-    Acc4 = lists:foldl(fun(Item, Acc2) ->
-        {ok, Acc3} = fold_copy(Item, ignored, Acc2),
+    Acc4 = lists:foldl(fun(Bin, Acc2) ->
+        Item = binary_to_term(Bin),
+        {ok, Acc3} = fold_copy(Item, byte_size(Bin), Acc2),
         Acc3
-        end, Acc, Items),
+        end, Acc, Binaries),
     fun(Item2) -> file_sort_loop(Item2, Acc4) end.
 
 
 apply_options([], Acc) ->
     Acc;
 apply_options([{before_kv_write, {Fun, UserAcc}} | Rest], Acc) ->
-    apply_options(Rest, Acc#acc{before_kv_write = {Fun, UserAcc}});
+    apply_options(Rest, Acc#acc{before_kv_write = Fun, user_acc = UserAcc});
 apply_options([{filter, Fun} | Rest], Acc) ->
     apply_options(Rest, Acc#acc{filter = Fun});
 apply_options([override | Rest], Acc) ->
@@ -91,7 +95,9 @@ assemble(#acc{btree = #btree{assemble_kv = Assemble}}, Key, Value) ->
     Assemble(Key, Value).
 
 
-before_leaf_write(#acc{before_kv_write = {Fun, UserAcc0}} = Acc, KVs) ->
+before_leaf_write(#acc{before_kv_write = nil} = Acc, KVs) ->
+    {KVs, Acc};
+before_leaf_write(#acc{before_kv_write = Fun, user_acc = UserAcc0} = Acc, KVs) ->
     {NewKVs, NewUserAcc} = lists:mapfoldl(
         fun({K, V}, UAcc) ->
             Item = assemble(Acc, K, V),
@@ -100,7 +106,7 @@ before_leaf_write(#acc{before_kv_write = {Fun, UserAcc0}} = Acc, KVs) ->
             {NewKV, UAcc2}
         end,
         UserAcc0, KVs),
-    {NewKVs, Acc#acc{before_kv_write = {Fun, NewUserAcc}}}.
+    {NewKVs, Acc#acc{user_acc = NewUserAcc}}.
 
 
 write_leaf(#acc{fd = Fd, btree = Bt}, {NodeType, NodeList}, Red) ->
@@ -133,25 +139,31 @@ write_kp_node(#acc{fd = Fd, btree = Bt}, NodeList) ->
     {ok, {Pos, Red, ChildrenSize + Size}}.
 
 
-fold_copy(Item, _Reds, #acc{nodes = Nodes, cur_level = 1, filter = Filter} = Acc) ->
+fold_copy(Item, #acc{filter = Filter} = Acc) ->
     case Filter(Item) of
-    false ->
-        {ok, Acc};
     true ->
-        {K, V} = extract(Acc, Item),
-        {Size, LevelNode} = dict:fetch(1, Nodes),
-        Kv = {K, V},
-        Size2 = Size + ?term_size(Kv),
-        LevelNodes2 = [Kv | LevelNode],
-        NextAcc = case Size2 >= Acc#acc.chunk_threshold of
-        true ->
-            {LeafState, Acc2} = flush_leaf(LevelNodes2, Acc),
-            bubble_up({K, LeafState}, Acc2);
-        false ->
-            Acc#acc{nodes = dict:store(1, {Size2, LevelNodes2}, Nodes)}
-        end,
-        {ok, NextAcc}
+        fold_copy(Item, ?term_size(Item), Acc);
+    false ->
+        {ok, Acc}
     end.
+
+fold_copy(Item, ItemSize, #acc{cur_level = 1} = Acc) ->
+    #acc{
+        values = Values,
+        leaf_size = LeafSize
+    } = Acc,
+    Kv = extract(Acc, Item),
+    LeafSize2 = LeafSize + ItemSize,
+    Values2 = [Kv | Values],
+    NextAcc = case LeafSize2 >= Acc#acc.chunk_threshold of
+    true ->
+        {LeafState, Acc2} = flush_leaf(Values2, Acc),
+        {K, _V} = Kv,
+        bubble_up({K, LeafState}, Acc2);
+    false ->
+        Acc#acc{values = Values2, leaf_size = LeafSize2}
+    end,
+    {ok, NextAcc}.
 
 
 bubble_up({Key, NodeState}, #acc{cur_level = Level} = Acc) ->
@@ -159,17 +171,22 @@ bubble_up({Key, NodeState}, #acc{cur_level = Level} = Acc) ->
 
 bubble_up({Key, NodeState}, Level, Acc) ->
     #acc{max_level = MaxLevel, nodes = Nodes} = Acc,
-    Acc2 = Acc#acc{nodes = dict:store(Level, {0, []}, Nodes)},
+    Acc2 = case Level of
+    1 ->
+        Acc#acc{values = [], leaf_size = 0};
+    _ ->
+        Acc#acc{nodes = array:set(Level, {0, []}, Nodes)}
+    end,
     Kp = {Key, NodeState},
     KpSize = ?term_size(Kp),
     case Level of
     MaxLevel ->
         Acc2#acc{
-            nodes = dict:store(Level + 1, {KpSize, [Kp]}, Acc2#acc.nodes),
+            nodes = array:set(Level + 1, {KpSize, [Kp]}, Acc2#acc.nodes),
             max_level = Level + 1
         };
     _ when Level < MaxLevel ->
-        {Size, NextLevelNodes} = dict:fetch(Level + 1, Acc2#acc.nodes),
+        {Size, NextLevelNodes} = array:get(Level + 1, Acc2#acc.nodes),
         NextLevelNodes2 = [Kp | NextLevelNodes],
         Size2 = Size + KpSize,
         case Size2 >= Acc#acc.chunk_threshold of
@@ -179,23 +196,29 @@ bubble_up({Key, NodeState}, Level, Acc) ->
             bubble_up({Key, NewNodeState}, Level + 1, Acc2);
         false ->
             Acc2#acc{
-                nodes = dict:store(Level + 1, {Size2, NextLevelNodes2}, Acc2#acc.nodes)
+                nodes = array:set(Level + 1, {Size2, NextLevelNodes2}, Acc2#acc.nodes)
             }
         end
     end.
 
 
-finish_copy(#acc{cur_level = 1, max_level = 1, nodes = Nodes} = Acc) ->
-    case dict:fetch(1, Nodes) of
-    {0, []} ->
+finish_copy(#acc{nodes = Nodes, values = LeafValues, leaf_size = LeafSize} = Acc) ->
+    Acc2 = Acc#acc{
+        nodes = array:set(1, {LeafSize, LeafValues}, Nodes)
+    },
+    finish_copy_loop(Acc2).
+
+finish_copy_loop(#acc{cur_level = 1, max_level = 1, values = LeafValues} = Acc) ->
+    case LeafValues of
+    [] ->
         {ok, nil, Acc};
-    {_Size, [{_Key, _Value} | _] = KvList} ->
+    [{_Key, _Value} | _] = KvList ->
         {RootState, Acc2} = flush_leaf(KvList, Acc),
         {ok, RootState, Acc2}
     end;
 
-finish_copy(#acc{cur_level = Level, max_level = Level, nodes = Nodes} = Acc) ->
-    case dict:fetch(Level, Nodes) of
+finish_copy_loop(#acc{cur_level = Level, max_level = Level, nodes = Nodes} = Acc) ->
+    case array:get(Level, Nodes) of
     {_Size, [{_Key, {Pos, Red, Size}}]} ->
         {ok, {Pos, Red, Size}, Acc};
     {_Size, NodeList} ->
@@ -203,11 +226,11 @@ finish_copy(#acc{cur_level = Level, max_level = Level, nodes = Nodes} = Acc) ->
         {ok, RootState, Acc}
     end;
 
-finish_copy(#acc{cur_level = Level, nodes = Nodes} = Acc) ->
-    case dict:fetch(Level, Nodes) of
+finish_copy_loop(#acc{cur_level = Level, nodes = Nodes} = Acc) ->
+    case array:get(Level, Nodes) of
     {0, []} ->
         Acc2 = Acc#acc{cur_level = Level + 1},
-        finish_copy(Acc2);
+        finish_copy_loop(Acc2);
     {_Size, [{LastKey, _} | _] = NodeList} ->
         {UpperNodeState, Acc2} = case Level of
         1 ->
@@ -217,13 +240,13 @@ finish_copy(#acc{cur_level = Level, nodes = Nodes} = Acc) ->
             {KpNodeState, Acc}
         end,
         Kp = {LastKey, UpperNodeState},
-        {ParentSize, ParentNode} = dict:fetch(Level + 1, Nodes),
+        {ParentSize, ParentNode} = array:get(Level + 1, Nodes),
         ParentSize2 = ParentSize + ?term_size(Kp),
         Acc3 = Acc2#acc{
-            nodes = dict:store(Level + 1, {ParentSize2, [Kp | ParentNode]}, Nodes),
+            nodes = array:set(Level + 1, {ParentSize2, [Kp | ParentNode]}, Nodes),
             cur_level = Level + 1
         },
-        finish_copy(Acc3)
+        finish_copy_loop(Acc3)
     end.
 
 
