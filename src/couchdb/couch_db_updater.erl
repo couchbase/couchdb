@@ -832,18 +832,30 @@ make_target_db(Db, CompactFile) ->
             {ok, fd_to_db(Db, CompactFile, Header, Fd)}
     end.
 
+compactor_message_loop(Port) ->
+    receive {Port, Message} ->
+            case Message of
+                {exit_status, Status} ->
+                    Status;
+                {data, {_, Line}} ->
+                    ?LOG_INFO("Native compactor output: ~s", [Line]),
+                    compactor_message_loop(Port);
+                _ -> compactor_message_loop(Port)
+            end
+    end.
+
 native_initial_compact(#db{filepath=Filepath}=Db, CompactFile) ->
     ok = couch_file:flush(Db#db.fd),
     CompactCmd = os:find_executable("couch_compact"),
     try
-        Compactor = open_port({spawn_executable, CompactCmd}, [{args, [Filepath, CompactFile]}, exit_status]),
-        receive {Compactor, {exit_status, Status}} ->
-                case Status of
-                    0 ->
-                        make_target_db(Db, CompactFile);
-                    Error ->
-                        {error, {exit_status, Error}}
-                end
+        Compactor = open_port({spawn_executable, CompactCmd},
+                              [{args, [Filepath, CompactFile]}, exit_status,
+                               use_stdio, stderr_to_stdout, {line, 80}]),
+        case compactor_message_loop(Compactor) of
+            0 ->
+                make_target_db(Db, CompactFile);
+            Error ->
+                {error, {exit_status, Error}}
         end
     catch
         T:E ->
