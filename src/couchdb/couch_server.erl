@@ -283,52 +283,66 @@ handle_call({set_max_dbs_open, Max}, _From, Server) ->
     {reply, ok, Server#server{max_dbs_open=Max}};
 handle_call(get_server, _From, Server) ->
     {reply, {ok, Server}, Server};
-handle_call({open_result, DbName, {ok, OpenedDbPid}, Options}, _From, Server) ->
-    link(OpenedDbPid),
-    [{DbName, {opening,Opener,Froms}}] = ets:lookup(couch_dbs_by_name, DbName),
-    lists:foreach(fun({FromPid,_}=From) ->
-        gen_server:reply(From,
-                catch couch_db:open_ref_counted(OpenedDbPid, FromPid))
-    end, Froms),
-    LruTime = now(),
-    true = ets:insert(couch_dbs_by_name,
-            {DbName, {opened, OpenedDbPid, LruTime}}),
-    true = ets:delete(couch_dbs_by_pid, Opener),
-    true = ets:insert(couch_dbs_by_pid, {OpenedDbPid, DbName}),
-    true = ets:insert(couch_dbs_by_lru, {LruTime, DbName}),
-    case lists:member(create, Options) of
-    true ->
-        couch_db_update_notifier:notify({created, DbName});
-    false ->
-        ok
-    end,
-    {reply, ok, Server};
-handle_call({open_result, DbName, Error, Options}, _From, Server) ->
-    [{DbName, {opening,Opener,Froms}}] = ets:lookup(couch_dbs_by_name, DbName),
+handle_call({open_result, DbName, {ok, OpenedDbPid}, Options}, From, Server) ->
+    case ets:lookup(couch_dbs_by_name, DbName) of
+    [{DbName, {opening, Opener, Froms}}] ->
+        link(OpenedDbPid),
+        lists:foreach(fun({FromPid, _} = From2) ->
+            gen_server:reply(From2,
+                    catch couch_db:open_ref_counted(OpenedDbPid, FromPid))
+        end, Froms),
+        LruTime = now(),
+        true = ets:insert(couch_dbs_by_name,
+                {DbName, {opened, OpenedDbPid, LruTime}}),
+        true = ets:delete(couch_dbs_by_pid, Opener),
+        true = ets:insert(couch_dbs_by_pid, {OpenedDbPid, DbName}),
+        true = ets:insert(couch_dbs_by_lru, {LruTime, DbName}),
+        case lists:member(create, Options) of
+        true ->
+            couch_db_update_notifier:notify({created, DbName});
+        false ->
+            ok
+        end,
+        {reply, ok, Server};
+    [] ->
+        {OpenerPid, _Ref} = From,
+        false = is_process_alive(OpenerPid),
+        % db file previously deleted
+        couch_util:shutdown_sync(OpenedDbPid),
+        {noreply, Server}
+    end;
+handle_call({open_result, DbName, Error, Options}, From, Server) ->
+    case ets:lookup(couch_dbs_by_name, DbName) of
+    [{DbName, {opening, Opener, Froms}}] ->
     % only notify the first openner, retry for all others since it's possible
     % that an external writer created the file after the first open request,
     % but before the subsequent open requests
-    {FromsNext, [FirstOpen]} = lists:split(length(Froms)-1, Froms),
-    gen_server:reply(FirstOpen, Error),
-    true = ets:delete(couch_dbs_by_name, DbName),
-    true = ets:delete(couch_dbs_by_pid, Opener),
-    DbsOpen = case lists:member(sys_db, Options) of
-    true ->
-        true = ets:delete(couch_sys_dbs, DbName),
-        Server#server.dbs_open;
-    false ->
-        Server#server.dbs_open - 1
-    end,
-    Server2 = Server#server{dbs_open = DbsOpen},
-    case FromsNext of
+        {FromsNext, [FirstOpen]} = lists:split(length(Froms) - 1, Froms),
+        gen_server:reply(FirstOpen, Error),
+        true = ets:delete(couch_dbs_by_name, DbName),
+        true = ets:delete(couch_dbs_by_pid, Opener),
+        DbsOpen = case lists:member(sys_db, Options) of
+        true ->
+            true = ets:delete(couch_sys_dbs, DbName),
+            Server#server.dbs_open;
+        false ->
+            Server#server.dbs_open - 1
+        end,
+        Server2 = Server#server{dbs_open = DbsOpen},
+        case FromsNext of
+        [] ->
+            Server3 = Server2;
+        _ ->
+            % Retry
+            Filepath = get_full_filename(Server, binary_to_list(DbName)),
+            Server3 = open_async(Server2, FromsNext, DbName, Filepath, Options)
+        end,
+        {reply, ok, Server3};
     [] ->
-        Server3 = Server2;
-    _ ->
-        % Retry
-        Filepath = get_full_filename(Server, binary_to_list(DbName)),
-        Server3 = open_async(Server2, FromsNext, DbName, Filepath, Options)
-    end,
-    {reply, ok, Server3};
+        {OpenerPid, _Ref} = From,
+        false = is_process_alive(OpenerPid),
+        {noreply, Server}
+    end;
 handle_call({open, DbName, Options}, {FromPid,_}=From, Server) ->
     LruTime = now(),
     case ets:lookup(couch_dbs_by_name, DbName) of
