@@ -270,7 +270,7 @@ to_raw_json_binary(Doc, IncludeMemcachedMeta) ->
     } = with_json_body(Doc),
     % TODO: if needed later, include the meta fields (like _local_seq)
     iolist_to_binary([
-        <<"{\"_id\":\"">>, Id, <<"\"">>,
+        <<"{\"_id\":">>, ?JSON_ENCODE(Id),
 
         case Start of
         0 ->
