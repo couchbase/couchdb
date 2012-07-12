@@ -18,7 +18,6 @@
 -export([start_compact/2, start_compact/3, cancel_compact/2, cancel_compact/3]).
 
 -record(acc, {
-   last_id = nil,
    changes = 0,
    total_changes
 }).
@@ -120,15 +119,7 @@ compact_group(Group0, EmptyGroup, LogFilePath, UpdaterPid, Owner) ->
 
     ok = couch_set_view_util:open_raw_read_fd(Group),
 
-    BeforeKVWriteFun = fun({DocId, _} = KV, #acc{last_id = LastDocId} = Acc) ->
-        if DocId =:= LastDocId -> % COUCHDB-999
-            ?LOG_ERROR("Duplicates of document `~s` detected in set view `~s`"
-                ", group `~s` - view rebuild, from scratch, is required",
-                [DocId, SetName, GroupId]),
-            exit({view_duplicated_id, DocId});
-        true ->
-            ok
-        end,
+    BeforeKVWriteFun = fun(KV, Acc) ->
         {KV, update_task(Acc, 1)}
     end,
 
