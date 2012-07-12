@@ -398,9 +398,9 @@ do_maps(Group, MapQueue, WriteQueue) ->
                         name = DDocId,
                         type = Type
                     } = Group,
-                    ?LOG_ERROR("Set view `~s`, ~s group `~s`, error mapping "
-                               "document `~s`: ~s~n",
-                               [SetName, Type, DDocId, Id, couch_util:to_binary(Reason)]),
+                    ErrorMsg = "Bucket `~s`, ~s group `~s`, error mapping document `~s`: ~s",
+                    Args = [SetName, Type, DDocId, Id, couch_util:to_binary(Reason)],
+                    ?LOG_MAPREDUCE_ERROR(ErrorMsg, Args),
                     Acc
                 end
             end,

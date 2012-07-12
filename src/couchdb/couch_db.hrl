@@ -53,6 +53,15 @@
 
 -define(LOG_ERROR(Format, Args), couch_log:error(Format, Args)).
 
+-define(LOG_MAPREDUCE_ERROR(Format, Args),
+    % On the full Couchbase stack the ale logger is available
+    try
+        {current_function, {_, FunName__, _}} = process_info(self(), current_function),
+        'ale_logger-mapreduce_errors':error(?MODULE, FunName__, ?LINE, Format, Args)
+    catch error:undef ->
+        ?LOG_ERROR(Format, Args)
+    end).
+
 -define(CONTENT_META_JSON, 0).
 -define(CONTENT_META_INVALID_JSON, 1).
 -define(CONTENT_META_INVALID_JSON_KEY, 2).

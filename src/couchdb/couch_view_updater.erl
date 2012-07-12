@@ -185,8 +185,9 @@ do_maps(Group, MapQueue, WriteQueue, AccItems, AccItemsSize) ->
                     Item = {Seq, Id, Result},
                     [Item | Acc]
                 catch _:{error, Reason} ->
-                    ?LOG_ERROR("View group `~s`, error mapping document `~s`: ~s~n",
-                        [Group#group.name, Id, couch_util:to_binary(Reason)]),
+                    ErrorMsg = "View group `~s`, error mapping document `~s`: ~s",
+                    Args = [Group#group.name, Id, couch_util:to_binary(Reason)],
+                    ?LOG_MAPREDUCE_ERROR(ErrorMsg, Args),
                     Acc
                 end
             end,
