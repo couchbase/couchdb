@@ -33,6 +33,9 @@
 
 -export([handle_db_event/1]).
 
+% for tests
+-export([get_map_view0/2, get_reduce_view0/2]).
+
 % gen_server callbacks
 -export([init/1, terminate/2, handle_call/3, handle_cast/2, handle_info/2, code_change/3]).
 
@@ -78,7 +81,7 @@
 -spec get_group(binary(),
                 binary() | #doc{},
                 #set_view_group_req{}) -> {'ok', #set_view_group{}}.
-get_group(SetName, DDoc, Req) ->
+get_group(SetName, DDoc, #set_view_group_req{type = main} = Req) ->
     GroupPid = get_group_pid(SetName, DDoc),
     case couch_set_view_group:request_group(GroupPid, Req) of
     {ok, Group} ->
@@ -88,6 +91,24 @@ get_group(SetName, DDoc, Req) ->
         throw(view_undefined);
     Error ->
         throw(Error)
+    end;
+get_group(SetName, DDoc, #set_view_group_req{type = replica} = Req) ->
+    {ok, MainGroup} = get_group(
+        SetName, DDoc, Req#set_view_group_req{type = main}),
+    release_group(MainGroup),
+    case MainGroup#set_view_group.replica_pid of
+    nil ->
+        throw(<<"Requested replica group doesn't exist">>);
+    ReplicaPid ->
+        case couch_set_view_group:request_group(ReplicaPid, Req) of
+        {ok, Group} ->
+            {ok, Group};
+        {error, view_undefined} ->
+            % caller must call ?MODULE:define_group/3
+            throw(view_undefined);
+        Error ->
+            throw(Error)
+        end
     end.
 
 
@@ -393,6 +414,9 @@ extract_map_view({reduce, _N, View}) ->
     View.
 
 
+% This case is triggered when at least one partition of the replica group is
+% active. This happens during failover, when a replica index is transferred
+% to the main index
 -spec fold_reduce(#set_view_group{},
                   {'reduce', non_neg_integer(), #set_view{}},
                   set_view_fold_reduce_fun(),
@@ -416,7 +440,8 @@ fold_reduce(#set_view_group{replica_group = #set_view_group{} = RepGroup} = Grou
             ddoc_id = RepGroup#set_view_group.name,
             view_name = ViewQueryArgs#view_query_args.view_name,
             partitions = [],  % not needed in this context
-            group = RepGroup,
+            % We want the partitions filtered like it would be a main group
+            group = RepGroup#set_view_group{type = main},
             view = RepView
         }
     ],
@@ -436,30 +461,36 @@ fold_reduce(#set_view_group{replica_group = #set_view_group{} = RepGroup} = Grou
 
 fold_reduce(Group, View, FoldFun, FoldAcc, KeyGroupFun, #view_query_args{keys = nil} = ViewQueryArgs) ->
     Options = [{key_group_fun, KeyGroupFun} | couch_set_view_util:make_key_options(ViewQueryArgs)],
-    do_fold_reduce(Group, View, FoldFun, FoldAcc, Options);
+    do_fold_reduce(Group, View, FoldFun, FoldAcc, Options, ViewQueryArgs);
 
 fold_reduce(Group, View, FoldFun, FoldAcc, KeyGroupFun, #view_query_args{keys = Keys} = ViewQueryArgs0) ->
     {_, FinalAcc} = lists:foldl(
         fun(Key, {_, Acc}) ->
             ViewQueryArgs = ViewQueryArgs0#view_query_args{start_key = Key, end_key = Key},
             Options = [{key_group_fun, KeyGroupFun} | couch_set_view_util:make_key_options(ViewQueryArgs)],
-            do_fold_reduce(Group, View, FoldFun, Acc, Options)
+            do_fold_reduce(Group, View, FoldFun, Acc, Options, ViewQueryArgs)
         end,
         {ok, FoldAcc},
         Keys),
     {ok, FinalAcc}.
 
 
-do_fold_reduce(Group, ViewInfo, Fun, Acc, Options0) ->
+do_fold_reduce(Group, ViewInfo, Fun, Acc, Options0, ViewQueryArgs) ->
     {reduce, NthRed, View} = ViewInfo,
     #set_view{btree = Bt, reduce_funs = RedFuns} = View,
-    Options = case (?set_pbitmask(Group) bor ?set_cbitmask(Group)) of
-    0 ->
+    Filter = case ViewQueryArgs#view_query_args.filter of
+        false ->
+            false;
+        true ->
+            filter(Group)
+    end,
+
+    Options = case Filter of
+    false ->
         Options0;
-    _ ->
-        ExcludeBitmask = ?set_pbitmask(Group) bor ?set_cbitmask(Group),
+    {true, ExcludeBitmask, IncludeBitmask} ->
         FilterFun = fun(value, {_K, {PartId, _}}) ->
-            ((1 bsl PartId) band ?set_abitmask(Group)) =/= 0;
+            ((1 bsl PartId) band IncludeBitmask) =/= 0;
         (branch, {_, _, PartsBitmap}) ->
             case PartsBitmap band ExcludeBitmask of
             0 ->
@@ -566,6 +597,9 @@ reduce_to_count(Reductions) ->
     Count.
 
 
+% This case is triggered when at least one partition of the replica group is
+% active. This happens during failover, when a replica index is transferred
+% to the main index
 -spec fold(#set_view_group{},
            #set_view{},
            set_view_fold_fun(),
@@ -587,7 +621,8 @@ fold(#set_view_group{replica_group = #set_view_group{} = RepGroup} = Group, View
             ddoc_id = RepGroup#set_view_group.name,
             view_name = ViewQueryArgs#view_query_args.view_name,
             partitions = [],  % not needed in this context
-            group = RepGroup,
+            % We want the partitions filtered like it would be a main group
+            group = RepGroup#set_view_group{type = main},
             view = RepView
         }
     ],
@@ -607,35 +642,41 @@ fold(#set_view_group{replica_group = #set_view_group{} = RepGroup} = Group, View
     {ok, nil, FinalAcc};
 
 fold(Group, View, Fun, Acc, #view_query_args{keys = nil} = ViewQueryArgs) ->
-    Options = couch_set_view_util:make_key_options(ViewQueryArgs),
-    do_fold(Group, View, Fun, Acc, Options);
+    do_fold(Group, View, Fun, Acc, ViewQueryArgs);
 
 fold(Group, View, Fun, Acc, #view_query_args{keys = Keys} = ViewQueryArgs0) ->
     lists:foldl(
         fun(Key, {ok, _, FoldAcc}) ->
             ViewQueryArgs = ViewQueryArgs0#view_query_args{start_key = Key, end_key = Key},
-            Options = couch_set_view_util:make_key_options(ViewQueryArgs),
-            do_fold(Group, View, Fun, FoldAcc, Options)
+            do_fold(Group, View, Fun, FoldAcc, ViewQueryArgs)
         end,
         {ok, {[], []}, Acc},
         Keys).
 
 
-do_fold(Group, #set_view{btree=Btree}, Fun, Acc, Options) ->
-    WrapperFun = case ?set_pbitmask(Group) bor ?set_cbitmask(Group) of
-    0 ->
+do_fold(Group, #set_view{btree=Btree}, Fun, Acc, ViewQueryArgs) ->
+    Filter = case ViewQueryArgs#view_query_args.filter of
+        false ->
+            false;
+        true ->
+            filter(Group)
+    end,
+
+    WrapperFun = case Filter of
+    false ->
         fun(KV, Reds, Acc2) ->
             ExpandedKVs = couch_set_view_util:expand_dups([KV], []),
             fold_fun(Fun, ExpandedKVs, Reds, Acc2)
         end;
-    _ ->
+    {true, _, IncludeBitmask} ->
         fun(KV, Reds, Acc2) ->
-            ExpandedKVs = couch_set_view_util:expand_dups([KV], ?set_abitmask(Group), []),
+            ExpandedKVs = couch_set_view_util:expand_dups([KV], IncludeBitmask, []),
             fold_fun(Fun, ExpandedKVs, Reds, Acc2)
         end
     end,
     couch_set_view_util:open_raw_read_fd(Group),
     try
+        Options = couch_set_view_util:make_key_options(ViewQueryArgs),
         {ok, _LastReduce, _AccResult} =
             couch_btree:fold(Btree, WrapperFun, Acc, Options)
     after
@@ -971,4 +1012,22 @@ is_set_db(DbName) ->
         end;
     _ ->
         false
+    end.
+
+
+% Returns whether the results should be filtered based on a bitmask or not
+-spec filter(#set_view_group{}) -> false | {true, bitmask(), bitmask()}.
+filter(#set_view_group{type = main} = Group) ->
+    case ?set_pbitmask(Group) bor ?set_cbitmask(Group) of
+    0 ->
+        false;
+    ExcludeBitmask ->
+        {true, ExcludeBitmask, ?set_abitmask(Group)}
+    end;
+filter(#set_view_group{type = replica} = Group) ->
+    case ?set_abitmask(Group) bor ?set_cbitmask(Group) of
+    0 ->
+        false;
+    ExcludeBitmask ->
+        {true, ExcludeBitmask, ?set_pbitmask(Group)}
     end.

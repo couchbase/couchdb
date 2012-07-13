@@ -40,7 +40,9 @@
     run_reduce = true,
     keys = nil,
     view_name = nil,
-    debug = false
+    debug = false,
+    filter = true,
+    type = main
 }).
 
 -define(etap_match(Got, Expected, Desc),

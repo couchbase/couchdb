@@ -99,7 +99,8 @@
     stale = updater_after   :: staleness(),
     update_stats = false    :: boolean(),
     wanted_partitions = []  :: [partition_id()],
-    debug = false           :: boolean()
+    debug = false           :: boolean(),
+    type = main             :: set_view_group_type()
 }).
 
 -record(set_view_transition, {

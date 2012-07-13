@@ -201,7 +201,11 @@
     keys = nil,
     view_name = nil,
 
-    debug = false
+    debug = false,
+    % Whether to filter the passive/cleanup partitions out
+    filter = true,
+    % Whether to query the main or the replica index
+    type = main
 }).
 
 -record(view_fold_helper_funs, {

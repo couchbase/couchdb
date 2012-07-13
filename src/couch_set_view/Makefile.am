@@ -55,7 +55,8 @@ test_files = \
     test/16-pending-transition.t \
     test/17-unindexable-partitions.t \
     test/18-monitor-partition-updates.t \
-    test/19-compaction-retry.t
+    test/19-compaction-retry.t \
+    test/20-debug-params.t
 
 compiled_files = \
     ebin/couch_set_view.app \

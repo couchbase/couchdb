@@ -46,7 +46,9 @@
     run_reduce = true,
     keys = nil,
     view_name = nil,
-    debug = false
+    debug = false,
+    filter = true,
+    type = main
 }).
 
 
