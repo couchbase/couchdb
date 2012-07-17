@@ -462,13 +462,23 @@ get_group_snapshot() ->
 
 
 wait_updater_finishes() ->
-    {ok, Info} = couch_set_view:get_group_info(test_set_name(), ddoc_id()),
-    case couch_util:get_value(updater_running, Info) of
-    true ->
-        ok = timer:sleep(50),
-        wait_updater_finishes();
-    false ->
-        get_group_snapshot()
+    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    {ok, UpPid} = gen_server:call(GroupPid, updater_pid, infinity),
+    case UpPid of
+    nil ->
+        ok;
+    _ when is_pid(UpPid) ->
+        Ref = erlang:monitor(process, UpPid),
+        receive
+        {'DOWN', Ref, process, UpPid, {updater_finished, _}} ->
+            ok;
+        {'DOWN', Ref, process, UpPid, noproc} ->
+            ok;
+        {'DOWN', Ref, process, UpPid, Reason} ->
+            etap:bail("Failure updating main group: " ++ couch_util:to_list(Reason))
+        after ?MAX_WAIT_TIME ->
+            etap:bail("Timeout waiting for main group update")
+        end
     end.
 
 

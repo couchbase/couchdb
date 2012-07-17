@@ -58,6 +58,7 @@
 -type update_seq()               :: non_neg_integer().
 -type btree_state()              :: 'nil' | tuple().
 -type partition_seq()            :: {partition_id(), update_seq()}.
+% Manipulate via ordsets or orddict, keep it ordered by partition id.
 -type partition_seqs()           :: ordsets:ordset(partition_seq()).
 -type view_state()               :: btree_state().
 -type set_view_group_type()      :: 'main' | 'replica'.
@@ -125,9 +126,7 @@
     replicas_on_transfer = []                       :: ordsets:ordset(partition_id()),
     % Pending partition states transition.
     pending_transition = nil                        :: 'nil' | #set_view_transition{},
-    % Type should be something like orddict(partition_seq()), but however the orddict
-    % module doesn't export yet a type spec (unlike ordsets for e.g.).
-    unindexable_seqs = []                           :: [partition_seq()]
+    unindexable_seqs = []                           :: partition_seqs()
 }).
 
 % Keep all stats values as valid EJSON (except ets key).

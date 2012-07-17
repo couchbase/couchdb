@@ -64,6 +64,13 @@
     seq
 }).
 
+-record(waiter, {
+    from,
+    debug = false :: boolean(),
+    % seqs for active partitions only
+    seqs = nil    :: partition_seqs() | 'nil'
+}).
+
 -record(state, {
     init_args                          :: init_args(),
     replica_group = nil                :: 'nil' | pid(),
@@ -74,7 +81,7 @@
     compactor_pid = nil                :: 'nil' | pid(),
     compactor_file = nil               :: 'nil' | pid(),
     compactor_fun = nil                :: 'nil' | compact_fun(),
-    waiting_list = []                  :: [{From::{pid(), reference()}, boolean()}],
+    waiting_list = []                  :: [#waiter{}],
     cleaner_pid = nil                  :: 'nil' | pid(),
     shutdown = false                   :: boolean(),
     auto_cleanup = true                :: boolean(),
@@ -587,6 +594,11 @@ handle_call(replica_pid, _From, #state{replica_group = Pid} = State) ->
     % To be used only by unit tests.
     {reply, {ok, Pid}, State, ?TIMEOUT};
 
+handle_call(start_updater, _From, State) ->
+    % To be used only by unit tests.
+    State2 = start_updater(State),
+    {reply, {ok, State2#state.updater_pid}, State2, ?TIMEOUT};
+
 handle_call(updater_pid, _From, #state{updater_pid = Pid} = State) ->
     % To be used only by unit tests.
     {reply, {ok, Pid}, State, ?TIMEOUT};
@@ -679,7 +691,7 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
 
         NewUpdaterPid =
         if is_pid(UpdaterPid) ->
-            {ok, CurSeqs} = couch_db_set:get_seqs(?db_set(State)),
+            CurSeqs = partition_seqs(State),
             spawn_link(couch_set_view_updater, update, [self(), NewGroup2, CurSeqs, nil]);
         true ->
             nil
@@ -898,7 +910,7 @@ handle_cast({update, MinNumChanges}, #state{group = Group} = State) ->
     true ->
         {noreply, State};
     false ->
-        CurSeqs = get_partition_seqs(State),
+        CurSeqs = partition_seqs(State),
         MissingCount = couch_set_view_util:missing_changes_count(CurSeqs, ?set_seqs(Group)),
         case MissingCount >= MinNumChanges of
         true ->
@@ -912,10 +924,12 @@ handle_cast({update, MinNumChanges}, #state{group = Group} = State) ->
 handle_info(timeout, State) when not ?is_defined(State) ->
     {noreply, State};
 
-handle_info(timeout, State) ->
+handle_info(timeout, #state{group = Group} = State) ->
     case ?type(State) of
-    main ->
+    main when ?set_replicas_on_transfer(Group) == [] ->
         {noreply, maybe_start_cleaner(State)};
+    main ->
+        {noreply, start_updater(State)};
     replica ->
         {noreply, maybe_update_replica_index(State)}
     end;
@@ -929,14 +943,15 @@ handle_info({updater_info, Pid, {state, UpdaterState}}, #state{updater_pid = Pid
     State2 = State#state{updater_state = UpdaterState},
     case UpdaterState of
     updating_passive ->
-        reply_with_group(Group, RepParts, WaitList),
+        WaitList2 = reply_with_group(Group, RepParts, WaitList),
+        State3 = State2#state{waiting_list = WaitList2},
         case State#state.shutdown of
         true ->
-            State3 = stop_updater(State2),
-            {stop, normal, State3};
+            State4 = stop_updater(State3),
+            {stop, normal, State4};
         false ->
-            State3 = maybe_apply_pending_transition(State2),
-            {noreply, State3#state{waiting_list = []}}
+            State4 = maybe_apply_pending_transition(State3),
+            {noreply, State4}
         end;
     _ ->
         {noreply, State2}
@@ -1014,7 +1029,7 @@ handle_info({'EXIT', Pid, {updater_finished, Result}}, #state{updater_pid = Pid}
         shutdown = Shutdown,
         group = NewGroup2
     } = State2,
-    reply_with_group(NewGroup2, ReplicaParts, WaitList),
+    WaitList2 = reply_with_group(NewGroup2, ReplicaParts, WaitList),
     inc_updates(NewGroup2, Result, false, false),
     ?LOG_INFO("Set view `~s`, ~s group `~s`, updater finished~n"
         "Indexing time: ~.3f seconds~n"
@@ -1026,7 +1041,7 @@ handle_info({'EXIT', Pid, {updater_finished, Result}}, #state{updater_pid = Pid}
         "Cleaned KVs:   ~p~n",
         [?set_name(State), ?type(State), ?group_id(State), IndexingTime, BlockedTime,
             InsertedIds, DeletedIds, InsertedKVs, DeletedKVs, CleanupKVCount]),
-    case Shutdown of
+    case Shutdown andalso (WaitList2 == []) of
     true ->
         {stop, normal, State2#state{waiting_list = []}};
     false ->
@@ -1034,11 +1049,17 @@ handle_info({'EXIT', Pid, {updater_finished, Result}}, #state{updater_pid = Pid}
             updater_pid = nil,
             initial_build = false,
             updater_state = not_running,
-            waiting_list = []
+            waiting_list = WaitList2
         },
         State4 = maybe_apply_pending_transition(State3),
-        State5 = maybe_start_cleaner(State4),
-        {noreply, State5, ?TIMEOUT}
+        State5 = case WaitList2 of
+        [] ->
+            State4;
+        _ ->
+            start_updater(State4)
+        end,
+        State6 = maybe_start_cleaner(State5),
+        {noreply, State6, ?TIMEOUT}
     end;
 
 handle_info({'EXIT', Pid, {updater_error, Error}}, #state{updater_pid = Pid} = State) ->
@@ -1145,21 +1166,26 @@ code_change(_OldVsn, State, _Extra) ->
 
 -spec reply_with_group(#set_view_group{},
                        ordsets:ordset(partition_id()),
-                       [{{pid(), reference()}, boolean()}]) -> no_return().
+                       [#waiter{}]) -> [#waiter{}].
 reply_with_group(_Group, _ReplicaPartitions, []) ->
-    ok;
+    [];
 reply_with_group(Group, ReplicaPartitions, WaitList) ->
-    #set_view_group{
-        ref_counter = RefCnt
-    } = Group,
     ActiveReplicasBitmask = couch_set_view_util:build_bitmask(
         ?set_replicas_on_transfer(Group)),
-    _ = lists:foldr(
-        fun({{Pid, _} = From, false}, DebugGroup) ->
-            couch_ref_counter:add(RefCnt, Pid),
-            gen_server:reply(From, {ok, Group, ActiveReplicasBitmask}),
-            DebugGroup;
-        ({{Pid, _} = From, true}, nil) ->
+    ActiveIndexable = [{P, S} || {P, S} <- ?set_seqs(Group),
+                          ((1 bsl P) band ?set_abitmask(Group) =/= 0)],
+    ActiveUnindexable = [{P, S} || {P, S} <- ?set_unindexable_seqs(Group),
+                          ((1 bsl P) band ?set_abitmask(Group) =/= 0)],
+    GroupSeqs = ordsets:union(ActiveIndexable, ActiveUnindexable),
+    {_, WaitList2} = lists:foldr(
+        fun(#waiter{debug = false} = Waiter, {DebugGroup, Acc}) ->
+            case maybe_reply_with_group(Waiter, Group, GroupSeqs, ActiveReplicasBitmask) of
+            true ->
+                {DebugGroup, Acc};
+            false ->
+                {DebugGroup, [Waiter | Acc]}
+            end;
+        (#waiter{debug = true} = Waiter, {nil, Acc}) ->
             [Stats] = ets:lookup(?SET_VIEW_STATS_ETS, ?set_view_group_stats_key(Group)),
             DebugGroup = Group#set_view_group{
                 debug_info = #set_view_debug_info{
@@ -1169,22 +1195,42 @@ reply_with_group(Group, ReplicaPartitions, WaitList) ->
                     replica_partitions = ReplicaPartitions
                 }
             },
-            couch_ref_counter:add(RefCnt, Pid),
-            gen_server:reply(From, {ok, DebugGroup, ActiveReplicasBitmask}),
-            DebugGroup;
-        ({{Pid, _} = From, true}, DebugGroup) ->
-            couch_ref_counter:add(RefCnt, Pid),
-            gen_server:reply(From, {ok, DebugGroup, ActiveReplicasBitmask}),
-            DebugGroup
+            case maybe_reply_with_group(Waiter, DebugGroup, GroupSeqs, ActiveReplicasBitmask) of
+            true ->
+                {DebugGroup, Acc};
+            false ->
+                {DebugGroup, [Waiter | Acc]}
+            end;
+        (#waiter{debug = true} = Waiter, {DebugGroup, Acc}) ->
+            case maybe_reply_with_group(Waiter, DebugGroup, GroupSeqs, ActiveReplicasBitmask) of
+            true ->
+                {DebugGroup, Acc};
+            false ->
+                {DebugGroup, [Waiter | Acc]}
+            end
         end,
-        nil, WaitList).
+        {nil, []}, WaitList),
+    WaitList2.
+
+
+-spec maybe_reply_with_group(#waiter{}, #set_view_group{}, partition_seqs(), bitmask()) -> boolean().
+maybe_reply_with_group(Waiter, Group, GroupSeqs, ActiveReplicasBitmask) ->
+    #waiter{from = {Pid, _} = From, seqs = ClientSeqs} = Waiter,
+    case (ClientSeqs == nil) orelse (GroupSeqs >= ClientSeqs) of
+    true ->
+        couch_ref_counter:add(Group#set_view_group.ref_counter, Pid),
+        gen_server:reply(From, {ok, Group, ActiveReplicasBitmask}),
+        true;
+    false ->
+        false
+    end.
 
 
 -spec reply_all(#state{}, term()) -> #state{}.
 reply_all(#state{waiting_list = []} = State, _Reply) ->
     State;
 reply_all(#state{waiting_list = WaitList} = State, Reply) ->
-    lists:foreach(fun({From, _Debug}) ->
+    lists:foreach(fun(#waiter{from = From}) ->
         catch gen_server:reply(From, Reply)
     end, WaitList),
     State#state{waiting_list = []}.
@@ -1687,7 +1733,7 @@ update_partition_states(ActiveList, PassiveList, CleanupList, State) ->
                                     ordsets:ordset(partition_id()),
                                     ordsets:ordset(partition_id()),
                                     ordsets:ordset(partition_id())) ->
-                                           #set_view_transition{}.
+                                           #set_view_transition{} | 'nil'.
 merge_into_pending_transition(Group, ActiveInCleanup, PassiveInCleanup, CleanupList) ->
     case ?set_pending_transition(Group) of
     nil ->
@@ -1743,11 +1789,14 @@ after_partition_states_updated(State, UpdaterWasRunning) ->
                                ordsets:ordset(partition_id()),
                                #set_view_transition{} | 'nil') -> #state{}.
 persist_partition_states(State, ActiveList, PassiveList, CleanupList, PendingTrans) ->
+    % There can never be intersection between given active, passive and cleanup lists.
+    % This check is performed elsewhere, outside the gen_server.
     #state{
         group = Group,
         replica_partitions = ReplicaParts,
         replica_group = ReplicaPid,
-        update_listeners = Listeners
+        update_listeners = Listeners,
+        waiting_list = WaitList
     } = State,
     case ordsets:intersection(ActiveList, ReplicaParts) of
     [] ->
@@ -1801,9 +1850,9 @@ persist_partition_states(State, ActiveList, PassiveList, CleanupList, PendingTra
             ?set_cbitmask(Group),
             NewSeqs2),
     ok = couch_db_set:remove_partitions(?db_set(State), CleanupList),
-    State0 = demonitor_partitions(State, CleanupList),
-    State2 = update_header(
-        State0,
+    State2 = demonitor_partitions(State, CleanupList),
+    State3 = update_header(
+        State2,
         NewAbitmask3,
         NewPbitmask3,
         NewCbitmask3,
@@ -1814,9 +1863,13 @@ persist_partition_states(State, ActiveList, PassiveList, CleanupList, PendingTra
     % A crash might happen between updating our header and updating the state of
     % replica view group. The init function must detect and correct this.
     ok = set_state(ReplicaPid, ReplicasToMarkActive, [], ReplicasToCleanup2),
-    Listeners2 = case (dict:size(Listeners) > 0) andalso (CleanupList /= []) of
+    % Need to update list of active partition sequence numbers for every blocked client.
+    WaitList2 = update_waiting_list(
+        WaitList, ?db_set(State), ActiveList2, PassiveList3, CleanupList),
+    State4 = State3#state{waiting_list = WaitList2},
+    case (dict:size(Listeners) > 0) andalso (CleanupList /= []) of
     true ->
-        dict:filter(
+        Listeners2 = dict:filter(
             fun(Ref, Listener) ->
                 #up_listener{
                     pid = Pid,
@@ -1832,11 +1885,45 @@ persist_partition_states(State, ActiveList, PassiveList, CleanupList, PendingTra
                     true
                 end
             end,
-            Listeners);
+            Listeners),
+        State4#state{update_listeners = Listeners2};
     false ->
-        Listeners
-    end,
-    State2#state{update_listeners = Listeners2}.
+        State4
+    end.
+
+
+-spec update_waiting_list([#waiter{}],
+                          pid(),
+                          [partition_id()],
+                          [partition_id()],
+                          [partition_id()]) -> [#waiter{}].
+update_waiting_list([], _DbSet, _AddActiveList, _AddPassiveList, _AddCleanupList) ->
+    [];
+update_waiting_list(WaitList, DbSet, AddActiveList, AddPassiveList, AddCleanupList) ->
+    {ok, AddActiveSeqs} = couch_db_set:get_seqs(DbSet, AddActiveList),
+    RemoveSet = ordsets:union(AddPassiveList, AddCleanupList),
+    MapFun = fun(W) -> update_waiter_seqs(W, AddActiveSeqs, RemoveSet) end,
+    [MapFun(W) || W <- WaitList].
+
+
+-spec update_waiter_seqs(#waiter{},
+                         partition_seqs(),
+                         ordsets:ordset(partition_id())) -> #waiter{}.
+update_waiter_seqs(Waiter, AddActiveSeqs, ToRemove) ->
+    Seqs2 = lists:foldl(
+        fun({PartId, Seq}, Acc) ->
+            case orddict:is_key(PartId, Acc) of
+            true ->
+                Acc;
+            false ->
+                orddict:store(PartId, Seq, Acc)
+            end
+        end,
+        Waiter#waiter.seqs, AddActiveSeqs),
+    Seqs3 = lists:foldl(
+        fun(PartId, Acc) -> orddict:erase(PartId, Acc) end,
+        Seqs2, ToRemove),
+    Waiter#waiter{seqs = Seqs3}.
 
 
 -spec maybe_apply_pending_transition(#state{}) -> #state{}.
@@ -1891,6 +1978,7 @@ notify_pending_transition_waiters(State) ->
         replica_partitions = RepParts,
         waiting_list = WaitList
     } = State,
+    CurSeqs = active_partition_seqs(State),
     {TransWaiters2, WaitList2, GroupReplyList, TriggerGroupUpdate} =
         lists:foldr(
             fun({From, Req} = TransWaiter, {AccTrans, AccWait, ReplyAcc, AccTriggerUp}) ->
@@ -1902,19 +1990,23 @@ notify_pending_transition_waiters(State) ->
                 true ->
                     {[TransWaiter | AccTrans], AccWait, ReplyAcc, AccTriggerUp};
                 false when Stale == ok ->
-                    {AccTrans, AccWait, [{From, Debug} | ReplyAcc], AccTriggerUp};
+                    Waiter = #waiter{from = From, debug = Debug},
+                    {AccTrans, AccWait, [Waiter | ReplyAcc], AccTriggerUp};
                 false when Stale == update_after ->
-                    {AccTrans, AccWait, [{From, Debug} | ReplyAcc], true};
+                    Waiter = #waiter{from = From, debug = Debug},
+                    {AccTrans, AccWait, [Waiter | ReplyAcc], true};
                 false when Stale == false ->
-                    {AccTrans, [{From, Debug} | AccWait], ReplyAcc, true}
+                    Waiter = #waiter{from = From, debug = Debug, seqs = CurSeqs},
+                    {AccTrans, [Waiter | AccWait], ReplyAcc, true}
                 end
             end,
             {[], WaitList, [], false},
             TransWaiters),
-    reply_with_group(Group, RepParts, GroupReplyList),
+    [] = reply_with_group(Group, RepParts, GroupReplyList),
+    WaitList3 = reply_with_group(Group, RepParts, WaitList2),
     State2 = State#state{
         pending_transition_waiters = TransWaiters2,
-        waiting_list = WaitList2
+        waiting_list = WaitList3
     },
     case TriggerGroupUpdate of
     true ->
@@ -2182,18 +2274,31 @@ cleaner(#state{group = Group}) ->
 
 -spec index_needs_update(#state{}) -> {boolean(), partition_seqs()}.
 index_needs_update(#state{group = Group} = State) ->
-    CurSeqs = get_partition_seqs(State),
+    CurSeqs = partition_seqs(State),
     {CurSeqs > ?set_seqs(Group), CurSeqs}.
 
 
--spec get_partition_seqs(#state{}) -> partition_seqs().
-get_partition_seqs(#state{group = Group} = State) ->
+-spec partition_seqs(#state{}) -> partition_seqs().
+partition_seqs(#state{group = Group} = State) ->
     {ok, CurSeqs} = case ?set_unindexable_seqs(Group) of
     [] ->
         couch_db_set:get_seqs(?db_set(State));
     _ ->
         couch_db_set:get_seqs(?db_set(State), [P || {P, _} <- ?set_seqs(Group)])
     end,
+    CurSeqs.
+
+
+-spec all_partition_seqs(#state{}) -> partition_seqs().
+all_partition_seqs(State) ->
+    {ok, CurSeqs} = couch_db_set:get_seqs(?db_set(State)),
+    CurSeqs.
+
+
+-spec active_partition_seqs(#state{}) -> partition_seqs().
+active_partition_seqs(#state{group = Group} = State) ->
+    ActiveParts = couch_set_view_util:decode_bitmask(?set_abitmask(Group)),
+    {ok, CurSeqs} = couch_db_set:get_seqs(?db_set(State), ActiveParts),
     CurSeqs.
 
 
@@ -2315,9 +2420,8 @@ after_updater_stopped(State, {updater_finished, Result}) ->
     updating_passive ->
         PartialUpdate = (?set_pbitmask(NewGroup) =/= 0),
         inc_updates(State2#state.group, Result, PartialUpdate, false),
-        reply_with_group(
-            NewGroup, State2#state.replica_partitions, State2#state.waiting_list),
-        WaitingList2 = []
+        WaitingList2 = reply_with_group(
+            NewGroup, State2#state.replica_partitions, State2#state.waiting_list)
     end,
     State2#state{
         updater_pid = nil,
@@ -2363,8 +2467,8 @@ start_updater(#state{updater_pid = nil, updater_state = not_running} = State) ->
         [] ->
             State;
         _ ->
-            reply_with_group(Group, ReplicaParts, WaitList),
-            State#state{waiting_list = []}
+            WaitList2 = reply_with_group(Group, ReplicaParts, WaitList),
+            State#state{waiting_list = WaitList2}
         end
     end.
 
@@ -2429,7 +2533,7 @@ maybe_update_replica_index(#state{group = #set_view_group{views = []}} = State) 
     State;
 maybe_update_replica_index(#state{group = Group, updater_state = not_running} = State) ->
     IndexedSeqs = ?set_seqs(Group),
-    {ok, CurSeqs} = couch_db_set:get_seqs(?db_set(State)),
+    CurSeqs = all_partition_seqs(State),
     ChangesCount = count_new_changes(CurSeqs, IndexedSeqs, 0),
     case (ChangesCount >= ?MIN_CHANGES_AUTO_UPDATE) orelse
         (ChangesCount > 0 andalso ?set_cbitmask(Group) =/= 0) of
@@ -2707,20 +2811,17 @@ is_any_partition_pending(Req, Group) ->
 process_view_group_request(#set_view_group_req{stale = false} = Req, From, State) ->
     #state{
         group = Group,
-        updater_pid = UpPid,
-        updater_state = UpState,
         waiting_list = WaitList,
         replica_partitions = ReplicaParts
     } = State,
     #set_view_group_req{debug = Debug} = Req,
-    case UpPid of
-    nil ->
-        start_updater(State#state{waiting_list = [{From, Debug} | WaitList]});
-    _ when is_pid(UpPid), UpState =:= updating_passive ->
-        reply_with_group(Group, ReplicaParts, [{From, Debug}]),
-        State;
-    _ when is_pid(UpPid) ->
-        State#state{waiting_list = [{From, Debug} | WaitList]}
+    CurSeqs = active_partition_seqs(State),
+    Waiter = #waiter{from = From, debug = Debug, seqs = CurSeqs},
+    case reply_with_group(Group, ReplicaParts, [Waiter]) of
+    [] ->
+        start_updater(State);
+    _ ->
+        start_updater(State#state{waiting_list = [Waiter | WaitList]})
     end;
 
 process_view_group_request(#set_view_group_req{stale = ok} = Req, From, State) ->
@@ -2729,7 +2830,7 @@ process_view_group_request(#set_view_group_req{stale = ok} = Req, From, State) -
         replica_partitions = ReplicaParts
     } = State,
     #set_view_group_req{debug = Debug} = Req,
-    reply_with_group(Group, ReplicaParts, [{From, Debug}]),
+    [] = reply_with_group(Group, ReplicaParts, [#waiter{from = From, debug = Debug}]),
     State;
 
 process_view_group_request(#set_view_group_req{stale = update_after} = Req, From, State) ->
@@ -2738,7 +2839,7 @@ process_view_group_request(#set_view_group_req{stale = update_after} = Req, From
         replica_partitions = ReplicaParts
     } = State,
     #set_view_group_req{debug = Debug} = Req,
-    reply_with_group(Group, ReplicaParts, [{From, Debug}]),
+    [] = reply_with_group(Group, ReplicaParts, [#waiter{from = From, debug = Debug}]),
     case State#state.updater_pid of
     Pid when is_pid(Pid) ->
         State;
@@ -2816,7 +2917,8 @@ process_mark_as_unindexable(State0, Partitions) ->
 -spec process_mark_as_indexable(#state{}, [partition_id()], boolean()) -> #state{}.
 process_mark_as_indexable(State0, Partitions, CommitHeader) ->
     #state{
-        group = #set_view_group{index_header = Header} = Group
+        group = #set_view_group{index_header = Header} = Group,
+        waiting_list = WaitList
     } = State = stop_updater(State0),
     UpdaterWasRunning = is_pid(State0#state.updater_pid),
     {Seqs2, UnindexableSeqs2} =
@@ -2864,7 +2966,7 @@ process_mark_as_indexable(State0, Partitions, CommitHeader) ->
         State#state{group = Group2}
     end,
     NewState2 = restart_compactor(NewState, "set of unindexable partitions updated"),
-    case UpdaterWasRunning of
+    case UpdaterWasRunning orelse (WaitList /= []) of
     true ->
         start_updater(NewState2);
     false ->

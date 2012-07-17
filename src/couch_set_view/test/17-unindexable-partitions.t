@@ -53,8 +53,7 @@ test() ->
     ValueGenFun1 = fun(I) -> I end,
     update_documents(0, num_docs(), ValueGenFun1),
 
-    % build index
-    _ = get_group_snapshot(),
+    trigger_update_and_wait(),
 
     ExpectedSeqs1 = couch_set_view_test_util:get_db_seqs(test_set_name(), ActiveParts),
     ExpectedUnindexableSeqs1 = [],
@@ -105,9 +104,19 @@ test() ->
 
     ValueGenFun2 = fun(I) -> I * 3 end,
     update_documents(0, num_docs(), ValueGenFun2),
-    % trigger index update
-    etap:diag("Triggering index update"),
-    _ = get_group_snapshot(),
+    % stale=false request should block caller until all active partitions are
+    % marked as indexable again (updates to them happened after being marked as
+    % unindexable).
+    {ClientPid, ClientMonRef} = spawn_monitor(fun() ->
+        Snapshot = get_group_snapshot(false),
+        exit({ok, Snapshot})
+    end),
+    receive
+    {'DOWN', ClientMonRef, process, ClientPid, Reason2} ->
+        etap:bail("Client was not blocked, exit reason: " ++ couch_util:to_list(Reason2))
+    after 10000 ->
+        etap:diag("Client is blocked")
+    end,
 
     ExpectedSeqs3 = [
         {P, S} ||
@@ -127,9 +136,17 @@ test() ->
         ok,
         "Marked indexable partitions"),
 
-    % trigger index update
-    etap:diag("Triggering index update"),
-    _ = get_group_snapshot(),
+    trigger_update_and_wait(),
+
+    % Client should have been unblocked already or is just about to be unblocked.
+    receive
+    {'DOWN', ClientMonRef, process, ClientPid, {ok, #set_view_group{}}} ->
+        etap:diag("Client was unblocked");
+    {'DOWN', ClientMonRef, process, ClientPid, Reason} ->
+        etap:bail("Client was not blocked, exit reason: " ++ couch_util:to_list(Reason))
+    after 10000 ->
+        etap:bail("Client is still blocked")
+    end,
 
     ExpectedSeqs4 = couch_set_view_test_util:get_db_seqs(test_set_name(), ActiveParts),
     ExpectedUnindexableSeqs4 = [],
@@ -144,11 +161,34 @@ test() ->
     ok.
 
 
-get_group_snapshot() ->
+get_group_snapshot(Staleness) ->
     GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
     {ok, Group, 0} = gen_server:call(
-        GroupPid, #set_view_group_req{stale = false}, infinity),
+        GroupPid, #set_view_group_req{stale = Staleness}, infinity),
     Group.
+
+
+trigger_update_and_wait() ->
+    etap:diag("Trigerring index update"),
+    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    {ok, UpPid} = gen_server:call(GroupPid, start_updater, infinity),
+    case is_pid(UpPid) of
+    true ->
+        ok;
+    false ->
+        etap:bail("Updater was not triggered~n")
+    end,
+    Ref = erlang:monitor(process, UpPid),
+    receive
+    {'DOWN', Ref, process, UpPid, {updater_finished, _}} ->
+        ok;
+    {'DOWN', Ref, process, UpPid, noproc} ->
+        ok;
+    {'DOWN', Ref, process, UpPid, Reason} ->
+        etap:bail("Failure updating main group: " ++ couch_util:to_list(Reason))
+    after ?MAX_WAIT_TIME ->
+        etap:bail("Timeout waiting for main group update")
+    end.
 
 
 create_set() ->
@@ -216,7 +256,7 @@ compact_view_group() ->
 
 
 verify_btrees_1(ExpectedSeqs, ExpectedUnindexableSeqs, ValueGenFun) ->
-    Group = get_group_snapshot(),
+    Group = get_group_snapshot(ok),
     #set_view_group{
         id_btree = IdBtree,
         views = Views,
@@ -298,7 +338,7 @@ verify_btrees_1(ExpectedSeqs, ExpectedUnindexableSeqs, ValueGenFun) ->
 
 
 verify_btrees_2(ExpectedSeqs, ExpectedUnindexableSeqs, ValueGenFun1, ValueGenFun2) ->
-    Group = get_group_snapshot(),
+    Group = get_group_snapshot(ok),
     #set_view_group{
         id_btree = IdBtree,
         views = Views,

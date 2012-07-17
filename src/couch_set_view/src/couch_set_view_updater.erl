@@ -401,7 +401,7 @@ do_maps(Group, MapQueue, WriteQueue) ->
                     ErrorMsg = "Bucket `~s`, ~s group `~s`, error mapping document `~s`: ~s",
                     Args = [SetName, Type, DDocId, Id, couch_util:to_binary(Reason)],
                     ?LOG_MAPREDUCE_ERROR(ErrorMsg, Args),
-                    Acc
+                    [{Seq, Id, PartitionId, []} | Acc]
                 end
             end,
             [], Queue),
