@@ -1496,7 +1496,13 @@ init_group(Fd, #set_view_group{views = Views} = Group, nil) ->
         view_states = [nil || _ <- Views]
     },
     init_group(Fd, Group, EmptyHeader);
-init_group(Fd, #set_view_group{views = Views0} = Group, IndexHeader) ->
+init_group(Fd, Group, IndexHeader) ->
+    #set_view_group{
+        views = Views0,
+        set_name = SetName,
+        name = DDocId,
+        type = Type
+    } = Group,
     Views = [V#set_view{ref = make_ref()} || V <- Views0],
     #set_view_index_header{
         id_btree_state = IdBtreeState,
@@ -1516,12 +1522,28 @@ init_group(Fd, #set_view_group{views = Views0} = Group, IndexHeader) ->
         IdBtreeState, Fd, [{reduce, IdTreeReduce} | BtreeOptions]),
     Views2 = lists:zipwith(
         fun(BTState, #set_view{options = Options} = View) ->
+            case View#set_view.reduce_funs of
+            [{ViewName, _} | _] ->
+                ok;
+            [] ->
+                [ViewName | _] = View#set_view.map_names
+            end,
             ReduceFun =
                 fun(reduce, KVs) ->
                     AllPartitionsBitMap = couch_set_view_util:partitions_map(KVs, 0),
                     KVs2 = couch_set_view_util:expand_dups(KVs, []),
-                    {ok, Reduced} = couch_set_view_mapreduce:reduce(View, KVs2),
-                    {length(KVs2), Reduced, AllPartitionsBitMap};
+                    try
+                        {ok, Reduced} = couch_set_view_mapreduce:reduce(View, KVs2),
+                        {length(KVs2), Reduced, AllPartitionsBitMap}
+                    catch throw:{error, Reason} = Error ->
+                        ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, error executing"
+                                             " reduce function for view `~s'~n"
+                                             "  reason:                ~s~n"
+                                             "  input key-value pairs: ~p~n",
+                                             [SetName, Type, DDocId, ViewName,
+                                              couch_util:to_binary(Reason), KVs]),
+                        throw(Error)
+                    end;
                 (rereduce, [{Count0, Red0, AllPartitionsBitMap0} | Reds]) ->
                     {Count, UserReds, AllPartitionsBitMap} = lists:foldl(
                         fun({C, R, Apbm}, {CountAcc, RedAcc, ApbmAcc}) ->
@@ -1529,8 +1551,18 @@ init_group(Fd, #set_view_group{views = Views0} = Group, IndexHeader) ->
                         end,
                         {Count0, [Red0], AllPartitionsBitMap0},
                         Reds),
-                    {ok, Reduced} = couch_set_view_mapreduce:rereduce(View, UserReds),
-                    {Count, Reduced, AllPartitionsBitMap}
+                    try
+                        {ok, Reduced} = couch_set_view_mapreduce:rereduce(View, UserReds),
+                        {Count, Reduced, AllPartitionsBitMap}
+                    catch throw:{error, Reason} = Error ->
+                        ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, error executing"
+                                             " rereduce function for view `~s'~n"
+                                             "  reason:           ~s~n"
+                                             "  input reductions: ~p~n",
+                                             [SetName, Type, DDocId, ViewName,
+                                              couch_util:to_binary(Reason), UserReds]),
+                        throw(Error)
+                    end
                 end,
             
             case couch_util:get_value(<<"collation">>, Options, <<"default">>) of
