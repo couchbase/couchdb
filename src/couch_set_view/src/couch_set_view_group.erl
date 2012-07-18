@@ -2233,6 +2233,11 @@ stop_cleaner(#state{cleaner_pid = Pid} = State) when is_pid(Pid) ->
     {'DOWN', MRef, process, Pid, Reason} ->
         receive {'EXIT', Pid, _} -> ok after 0 -> ok end,
         after_cleaner_stopped(State, Reason)
+    after 5000 ->
+        couch_util:shutdown_sync(Pid),
+        ?LOG_ERROR("Timeout stopping cleanup process ~p for set view `~s`, ~s group `~s`",
+                   [Pid, ?set_name(State), ?type(State), ?group_id(State)]),
+        State#state{cleaner_pid = nil}
     end,
     erlang:demonitor(MRef, [flush]),
     NewState.
