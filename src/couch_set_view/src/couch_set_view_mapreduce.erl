@@ -283,19 +283,19 @@ builtin_stats(reduce, [{_, First} | Rest]) when is_number(First) ->
             <<"builtin _stats function requires map values to be numbers">>})
     end, {First, 1, First, First, First * First}, Rest),
     {Sum, Cnt, Min, Max, Sqr} = Stats,
-    {[{sum, Sum}, {count, Cnt}, {min, Min}, {max, Max}, {sumsqr, Sqr}]};
+    {[{<<"sum">>, Sum}, {<<"count">>, Cnt}, {<<"min">>, Min}, {<<"max">>, Max}, {<<"sumsqr">>, Sqr}]};
 builtin_stats(reduce, KVs) when is_list(KVs) ->
     Msg = <<"builtin _stats function requires map values to be numbers">>,
     throw({invalid_value, Msg});
 
 builtin_stats(rereduce, [{_, First} | Rest]) ->
-    {[{sum, Sum0}, {count, Cnt0}, {min, Min0}, {max, Max0}, {sumsqr, Sqr0}]} = First,
+    {[{<<"sum">>, Sum0}, {<<"count">>, Cnt0}, {<<"min">>, Min0}, {<<"max">>, Max0}, {<<"sumsqr">>, Sqr0}]} = First,
     Stats = lists:foldl(fun({_K, Red}, {S, C, Mi, Ma, Sq}) ->
-        {[{sum, Sum}, {count, Cnt}, {min, Min}, {max, Max}, {sumsqr, Sqr}]} = Red,
+        {[{<<"sum">>, Sum}, {<<"count">>, Cnt}, {<<"min">>, Min}, {<<"max">>, Max}, {<<"sumsqr">>, Sqr}]} = Red,
         {Sum + S, Cnt + C, erlang:min(Min, Mi), erlang:max(Max, Ma), Sqr + Sq}
     end, {Sum0, Cnt0, Min0, Max0, Sqr0}, Rest),
     {Sum, Cnt, Min, Max, Sqr} = Stats,
-    {[{sum, Sum}, {count, Cnt}, {min, Min}, {max, Max}, {sumsqr, Sqr}]}.
+    {[{<<"sum">>, Sum}, {<<"count">>, Cnt}, {<<"min">>, Min}, {<<"max">>, Max}, {<<"sumsqr">>, Sqr}]}.
 
 
 contract_kvs([], Acc) ->
