@@ -2371,17 +2371,13 @@ stop_updater(#state{updater_pid = nil} = State) ->
     State;
 stop_updater(#state{updater_pid = Pid} = State) when is_pid(Pid) ->
     MRef = erlang:monitor(process, Pid),
-    Pid ! stop_immediately,
+    exit(Pid, shutdown),
     unlink(Pid),
     ?LOG_INFO("Stopping updater for set view `~s`, ~s group `~s`",
         [?set_name(State), ?type(State), ?group_id(State)]),
     NewState = receive
     {'EXIT', Pid, Reason} ->
         after_updater_stopped(State, Reason);
-    {'DOWN', MRef, process, Pid, noproc} ->
-        ?LOG_ERROR("Updater, set view `~s`, ~s group `~s`, was not alive",
-            [?set_name(State), ?type(State), ?group_id(State)]),
-        State#state{updater_pid = nil, updater_state = not_running};
     {'DOWN', MRef, process, Pid, Reason} ->
         receive {'EXIT', Pid, _} -> ok after 0 -> ok end,
         after_updater_stopped(State, Reason)
@@ -2430,22 +2426,13 @@ after_updater_stopped(State, {updater_finished, Result}) ->
         waiting_list = WaitingList2
      };
 after_updater_stopped(State, Reason) ->
-    Reply = case Reason of
-    {updater_error, _} ->
-        {error, element(2, Reason)};
-    _ ->
-        {error, Reason}
-    end,
-    ?LOG_ERROR("Updater, set view `~s`, ~s group `~s`, died with "
-               "unexpected reason: ~p",
-               [?set_name(State), ?type(State), ?group_id(State), Reason]),
-    State2 = State#state{
+    ?LOG_INFO("Updater, set view `~s`, ~s group `~s`, stopped with reason: ~p",
+              [?set_name(State), ?type(State), ?group_id(State), Reason]),
+    State#state{
         updater_pid = nil,
         initial_build = false,
         updater_state = not_running
-    },
-    ?inc_updater_errors(State2#state.group),
-    reply_all(State2, Reply).
+    }.
 
 
 -spec start_updater(#state{}) -> #state{}.

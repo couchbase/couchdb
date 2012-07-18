@@ -90,21 +90,7 @@ update(Owner, Group, CurSeqs, LogFilePath) ->
     {'EXIT', Pid, {done, Duration}} ->
         Duration;
     {'EXIT', _, Reason} ->
-        exit({updater_error, Reason});
-    stop_immediately ->
-        EmptyResult = #set_view_updater_result{
-            group = Group,
-            indexing_time = 0.0,
-            blocked_time = timer:now_diff(os:timestamp(), BeforeEnterTs) / 1000000,
-            state = updating_active,
-            cleanup_kv_count = 0,
-            cleanup_time = 0.0,
-            inserted_ids = 0,
-            deleted_ids = 0,
-            inserted_kvs = 0,
-            deleted_kvs = 0
-        },
-        exit({updater_finished, EmptyResult})
+        exit({updater_error, Reason})
     end,
 
     CleanupParts = couch_set_view_util:decode_bitmask(?set_cbitmask(Group)),
@@ -264,9 +250,6 @@ wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime) ->
             deleted_kvs = WriterAcc#writer_acc.deleted_kvs
         },
         {updater_finished, Result};
-    stop_immediately ->
-        DocLoader ! stop_immediately,
-        wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime);
     {log_new_changes, Pid, Ref, LogFilePath} ->
         Writer ! {log_new_changes, self(), LogFilePath},
         erlang:put(log_request, {Pid, Ref}),
@@ -305,12 +288,9 @@ load_changes(Owner, Updater, Group, MapQueue, Writer, ActiveParts, PassiveParts)
                 throw({error, iolist_to_binary(ErrorMsg)})
             end,
             try
-                maybe_stop(),
                 Since = couch_util:get_value(PartId, SinceSeqs),
                 ChangesWrapper = fun(DocInfo, _, Acc2) ->
-                    maybe_stop(),
                     load_doc(Db, PartId, DocInfo, MapQueue),
-                    maybe_stop(),
                     {ok, Acc2 + 1}
                 end,
                 {ok, _, Acc3} = couch_db:fast_reads(Db, fun() ->
@@ -350,14 +330,6 @@ load_changes(Owner, Updater, Group, MapQueue, Writer, ActiveParts, PassiveParts)
     end,
     couch_work_queue:close(MapQueue).
 
-
-maybe_stop() ->
-    receive
-    stop_immediately ->
-        throw(stop)
-    after 0 ->
-        ok
-    end.
 
 notify_owner(Owner, Msg, UpdaterPid) ->
     Owner ! {updater_info, UpdaterPid, Msg}.
@@ -488,7 +460,12 @@ flush_writes(Acc) ->
         checkpoint(Acc3, true),
         Acc3;
     false ->
-        maybe_checkpoint(Acc3),
+        case ?set_cbitmask(Acc3#writer_acc.group) /= ?set_cbitmask(Group) of
+        true ->
+            checkpoint(Acc3, false);
+        false ->
+            maybe_checkpoint(Acc3)
+        end,
         Acc3
     end.
 
@@ -613,15 +590,9 @@ write_changes(WriterAcc, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs) ->
             couch_btree:query_modify(IdBtree, LookupDocIds, AddDocIdViewIdKeys, RemoveDocIds);
     _ ->
         CleanupStart = os:timestamp(),
-        {ok, LookupResults, {Go, IdBtreePurgedKeyCount}, IdBtree2} =
+        {ok, LookupResults, {_Go, IdBtreePurgedKeyCount}, IdBtree2} =
             couch_btree:query_modify(
-                IdBtree, LookupDocIds, AddDocIdViewIdKeys, RemoveDocIds, CleanupFun, {go, 0}),
-        case Go of
-        stop ->
-            self() ! stop;
-        go ->
-            ok
-        end
+                IdBtree, LookupDocIds, AddDocIdViewIdKeys, RemoveDocIds, CleanupFun, {go, 0})
     end,
     KeysToRemoveByView = lists:foldl(
         fun(LookupResult, KeysToRemoveByViewAcc) ->
@@ -646,14 +617,8 @@ write_changes(WriterAcc, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs) ->
                 {ok, ViewBtree2} = couch_btree:add_remove(
                     View#set_view.btree, AddKeyValues, KeysToRemove);
             _ ->
-                {ok, {Go2, CleanupCount}, ViewBtree2} = couch_btree:add_remove(
-                    View#set_view.btree, AddKeyValues, KeysToRemove, CleanupFun, {go, 0}),
-                case Go2 of
-                stop ->
-                    self() ! stop;
-                go ->
-                    ok
-                end
+                {ok, {_Go2, CleanupCount}, ViewBtree2} = couch_btree:add_remove(
+                    View#set_view.btree, AddKeyValues, KeysToRemove, CleanupFun, {go, 0})
             end,
             NewView = View#set_view{btree = ViewBtree2},
             {NewView, {AccC + CleanupCount, AccI + length(AddKeyValues), AccD + length(KeysToRemove)}}
