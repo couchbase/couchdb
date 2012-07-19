@@ -1082,7 +1082,12 @@ handle_info({'EXIT', Pid, {updater_error, Error}}, #state{updater_pid = Pid} = S
             updater_state = not_running
         },
         ?inc_updater_errors(State#state.group),
-        State3 = reply_all(State2, {error, Error}),
+        case Error of
+        {error, _Reason} ->
+            State3 = reply_all(State2, Error);
+        _ ->
+            State3 = reply_all(State2, {error, Error})
+        end,
         {noreply, maybe_start_cleaner(State3), ?TIMEOUT}
     end;
 

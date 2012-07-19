@@ -696,6 +696,8 @@ run_http_index_folder(Mod, IndexSpec, MergeParams, DDoc, Queue) ->
                 ok = couch_view_merger_queue:queue(Queue, revision_mismatch);
             {<<"error">>, <<"set_view_outdated">>} ->
                 ok = couch_view_merger_queue:queue(Queue, set_view_outdated);
+            {<<"error">>, Reason} when is_binary(Reason) ->
+                ok = couch_view_merger_queue:queue(Queue, {error, Url, Reason});
             ErrorTuple ->
                 ok = couch_view_merger_queue:queue(Queue, {error, Url, to_binary(ErrorTuple)})
             end;

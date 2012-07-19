@@ -245,7 +245,7 @@ builtin_reduce(Re, [<<"_stats", _/binary>> | BuiltinReds], KVs, Acc) ->
     Stats = builtin_stats(Re, KVs2),
     builtin_reduce(Re, BuiltinReds, KVs, [Stats | Acc]);
 builtin_reduce(_Re, [InvalidBuiltin | _BuiltinReds], _KVs, _Acc) ->
-    throw({invalid_builtin_reduce_function, InvalidBuiltin}).
+    throw({error, <<"Invalid builtin reduce function: ", InvalidBuiltin/binary>>}).
 
 
 builtin_sum_rows(KVs) ->
@@ -259,7 +259,7 @@ builtin_sum_rows(KVs) ->
         ({_Key, Value}, Acc) when is_list(Value), is_number(Acc) ->
             sum_terms([Acc], Value);
         (_Else, _Acc) ->
-            throw({invalid_value, <<"builtin _sum function requires map values to be numbers or lists of numbers">>})
+            throw({error, <<"Builtin _sum function requires map values to be numbers or lists of numbers">>})
     end, 0, KVs).
 
 sum_terms([], []) ->
@@ -271,7 +271,7 @@ sum_terms([], [_ | _] = Ys) ->
 sum_terms([X | Xs], [Y | Ys]) when is_number(X), is_number(Y) ->
     [X + Y | sum_terms(Xs, Ys)];
 sum_terms(_, _) ->
-    throw({invalid_value, <<"builtin _sum function requires map values to be numbers or lists of numbers">>}).
+    throw({error, <<"Builtin _sum function requires map values to be numbers or lists of numbers">>}).
 
 builtin_stats(reduce, []) ->
     {[]};
@@ -279,14 +279,12 @@ builtin_stats(reduce, [{_, First} | Rest]) when is_number(First) ->
     Stats = lists:foldl(fun({_K, V}, {S, C , Mi, Ma, Sq}) when is_number(V) ->
         {S + V, C + 1, erlang:min(Mi, V), erlang:max(Ma, V), Sq + (V * V)};
     (_, _) ->
-        throw({invalid_value,
-            <<"builtin _stats function requires map values to be numbers">>})
+        throw({error, <<"Builtin _stats function requires map values to be numbers">>})
     end, {First, 1, First, First, First * First}, Rest),
     {Sum, Cnt, Min, Max, Sqr} = Stats,
     {[{<<"sum">>, Sum}, {<<"count">>, Cnt}, {<<"min">>, Min}, {<<"max">>, Max}, {<<"sumsqr">>, Sqr}]};
 builtin_stats(reduce, KVs) when is_list(KVs) ->
-    Msg = <<"builtin _stats function requires map values to be numbers">>,
-    throw({invalid_value, Msg});
+    throw({error, <<"Builtin _stats function requires map values to be numbers">>});
 
 builtin_stats(rereduce, [{_, First} | Rest]) ->
     {[{<<"sum">>, Sum0}, {<<"count">>, Cnt0}, {<<"min">>, Min0}, {<<"max">>, Max0}, {<<"sumsqr">>, Sqr0}]} = First,

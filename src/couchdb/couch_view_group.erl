@@ -633,7 +633,7 @@ init_group(Db, Fd, #group{views=Views}=Group, nil) ->
     init_group(Db, Fd, Group,
         #index_header{seq=0, purge_seq=couch_db:get_purge_seq(Db),
             id_btree_state=nil, view_states=[{nil, 0, 0} || _ <- Views]});
-init_group(_Db, Fd, #group{views=Views0} = Group, IndexHeader) ->
+init_group(Db, Fd, #group{views=Views0} = Group, IndexHeader) ->
     Views = [V#view{ref = make_ref()} || V <- Views0],
      #index_header{seq=Seq, purge_seq=PurgeSeq,
             id_btree_state=IdBtreeState, view_states=ViewStates} = IndexHeader,
@@ -642,20 +642,47 @@ init_group(_Db, Fd, #group{views=Views0} = Group, IndexHeader) ->
         (State) -> {State, 0, 0}
     end,
     ViewStates2 = lists:map(StateUpdate, ViewStates),
-    {ok, IdBtree} = couch_btree:open(
-        IdBtreeState, Fd, []),
+    {ok, IdBtree} = couch_btree:open(IdBtreeState, Fd, []),
+    DbName = Db#db.name,
+    DDocId = Group#group.name,
     Views2 = lists:zipwith(
         fun({BTState, USeq, PSeq}, #view{options=Options} = View) ->
+            case View#view.reduce_funs of
+            [{ViewName, _} | _] ->
+                ok;
+            [] ->
+                [ViewName | _] = View#view.map_names
+            end,
             ReduceFun =
                 fun(reduce, KVs) ->
                     KVs2 = couch_view:expand_dups(KVs,[]),
-                    {ok, Reduced} = couch_view_mapreduce:reduce(View, KVs2),
-                    {length(KVs2), Reduced};
+                    try
+                        {ok, Reduced} = couch_view_mapreduce:reduce(View, KVs2),
+                        {length(KVs2), Reduced}
+                    catch throw:{error, Reason} = Error ->
+                        ?LOG_MAPREDUCE_ERROR("VBucket `~s`, group `~s`, error executing"
+                                             " reduce function for view `~s'~n"
+                                             "  reason:                ~s~n"
+                                             "  input key-value pairs: ~p~n",
+                                             [DbName, DDocId, ViewName,
+                                              couch_util:to_binary(Reason), KVs]),
+                        throw(Error)
+                    end;
                 (rereduce, Reds) ->
                     Count = lists:sum([Count0 || {Count0, _} <- Reds]),
                     UserReds = [UserRedsList || {_, UserRedsList} <- Reds],
-                    {ok, Reduced} = couch_view_mapreduce:rereduce(View, UserReds),
-                    {Count, Reduced}
+                    try
+                        {ok, Reduced} = couch_view_mapreduce:rereduce(View, UserReds),
+                        {Count, Reduced}
+                    catch throw:{error, Reason} = Error ->
+                        ?LOG_MAPREDUCE_ERROR("VBucket `~s`, group `~s`, error executing"
+                                             " rereduce function for view `~s'~n"
+                                             "  reason:           ~s~n"
+                                             "  input reductions: ~p~n",
+                                             [DbName, DDocId, ViewName,
+                                              couch_util:to_binary(Reason), UserReds]),
+                        throw(Error)
+                    end
                 end,
             
             case couch_util:get_value(<<"collation">>, Options, <<"default">>) of

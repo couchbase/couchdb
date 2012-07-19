@@ -508,7 +508,7 @@ on_rereduce_error(Col, Error) ->
             Other
     end.
 
-reduce_error({invalid_value, Reason}) ->
+reduce_error({error, Reason}) ->
     {error, ?LOCAL, to_binary(Reason)};
 reduce_error(Error) ->
     {error, ?LOCAL, to_binary(Error)}.
@@ -616,8 +616,8 @@ prepare_set_view(ViewSpec, ViewGroupReq, DDoc, Queue, GetSetViewFn) ->
     end.
 
 
-queue_get_view_group_error({error, {invalid_value, Msg}}, _SetName, _DDocId) ->
-    {error, ?LOCAL, Msg};
+queue_get_view_group_error({error, {error, Reason}}, _SetName, _DDocId) ->
+    {error, ?LOCAL, Reason};
 queue_get_view_group_error({error, Reason}, _SetName, _DDocId) ->
     {error, ?LOCAL, Reason};
 queue_get_view_group_error(view_undefined, SetName, DDocId) ->
