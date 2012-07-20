@@ -139,7 +139,10 @@ design_doc_view(Req, SetName, DDocId, ViewName, FilteredPartitions, Keys) ->
         stale = Stale,
         update_stats = true,
         wanted_partitions = FilteredPartitions,
-        debug = parse_bool_param(couch_httpd:qs_value(Req, "debug", "false"))
+        debug = parse_bool_param(couch_httpd:qs_value(Req, "debug", "false")),
+        % Either "main" (for the normal index) or "replica"
+        type = list_to_existing_atom(
+            couch_httpd:qs_value(Req, "_type", "main"))
     },
     case couch_set_view:get_map_view(SetName, DDocId, ViewName, GroupReq) of
     {ok, View, Group, _} ->

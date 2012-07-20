@@ -59,7 +59,7 @@ num_docs() -> 1024.  % keep it a multiple of num_set_partitions()
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(8),
+    etap:plan(16),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -75,8 +75,10 @@ test() ->
     ok = couch_config:set("set_views", "update_interval", "0", false),
 
     etap:diag("Testing debug parameters"),
-    test_filter_parameter_main(),
-    test_filter_parameter_replica(),
+    test_filter_parameter_main(erlang),
+    test_filter_parameter_replica(erlang),
+    test_filter_parameter_main(http),
+    test_filter_parameter_replica(http),
 
     couch_set_view_test_util:stop_server(),
     ok.
@@ -102,26 +104,28 @@ setup_test() ->
     populate_set(DDoc).
 
 
-test_filter_parameter_main() ->
+test_filter_parameter_main(AccessType) ->
     setup_test(),
 
     % There are 75% active, 12.5% passive and 12.5% cleanup partitions
     ok = configure_view_group(ddoc_id(), lists:seq(0, 47), lists:seq(48, 55),
         lists:seq(56, 63)),
 
-    {ok, Rows} = (catch query_map_view(<<"test">>, main, true)),
+    {ok, Rows} = (catch query_map_view(AccessType, <<"test">>, main, true)),
     etap:is(length(Rows), (num_docs())*0.75,
             "Map view query returned all rows from active partitions"),
-    {ok, Rows2} = (catch query_map_view(<<"test">>, main, false)),
+    {ok, Rows2} = (catch query_map_view(AccessType, <<"test">>, main, false)),
     etap:is(length(Rows2), num_docs(),
             "Map view query queried with _filter=false returns all "
             "partitions"),
 
     % The same, but with a reduce function
-    {ok, RowsRed} = (catch query_reduce_view(<<"testred">>, main, true)),
+    {ok, RowsRed} = (catch query_reduce_view(
+        AccessType, <<"testred">>, main, true)),
     etap:is(RowsRed, (num_docs())*0.75,
             "Reduce view query returned all rows from active partitions"),
-    {ok, RowsRed2} = (catch query_reduce_view(<<"testred">>, main, false)),
+    {ok, RowsRed2} = (catch query_reduce_view(
+         AccessType, <<"testred">>, main, false)),
     etap:is(RowsRed2, num_docs(),
             "Reduce view query queried with _filter=false returns all "
             "partitions"),
@@ -129,7 +133,7 @@ test_filter_parameter_main() ->
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()).
 
 
-test_filter_parameter_replica() ->
+test_filter_parameter_replica(AccessType) ->
     setup_test(),
 
     ok = configure_view_group(ddoc_id(), lists:seq(0, 47), [], []),
@@ -141,22 +145,26 @@ test_filter_parameter_replica() ->
     ok = configure_replica_group(ddoc_id(), lists:seq(48, 61),
         lists:seq(62, 63)),
 
-    {ok, Rows} = (catch query_map_view(<<"test">>, replica, true)),
+    {ok, Rows} = (catch query_map_view(
+        AccessType, <<"test">>, replica, true)),
     etap:is(length(Rows), (num_docs()*0.25)*0.125,
             "Replica map view query returned all rows from "
             "passive partitions"),
 
-    {ok, Rows2} = (catch query_map_view(<<"test">>, replica, false)),
+    {ok, Rows2} = (catch query_map_view(
+        AccessType, <<"test">>, replica, false)),
     % There are 75% main and 25% replica partitions
     etap:is(length(Rows2), (num_docs())*0.25,
             "Replica map view query queried with _filter=false returns all "
             "partitions"),
 
     % The same, but with a reduce function
-    {ok, RowsRed} = (catch query_reduce_view(<<"testred">>, replica, true)),
+    {ok, RowsRed} = (catch query_reduce_view(
+        AccessType, <<"testred">>, replica, true)),
     etap:is(RowsRed, (num_docs()*0.25)*0.125,
         "Replica reduce view query returned all rows from passive partitions"),
-    {ok, RowsRed2} = (catch query_reduce_view(<<"testred">>, replica, false)),
+    {ok, RowsRed2} = (catch query_reduce_view(
+        AccessType, <<"testred">>, replica, false)),
     % There are 75% active and 25% replica partitions
     etap:is(RowsRed2, (num_docs())*0.25,
         "Replica reduce view query queried with _filter=false returns all "
@@ -165,7 +173,13 @@ test_filter_parameter_replica() ->
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()).
 
 
-query_map_view(ViewName, Type, Filter) ->
+query_map_view(erlang, ViewName, Type, Filter) ->
+    query_map_view_erlang(ViewName, Type, Filter);
+query_map_view(http, ViewName, Type, Filter) ->
+    query_map_view_http(ViewName, Type, Filter).
+
+
+query_map_view_erlang(ViewName, Type, Filter) ->
     etap:diag("Querying map view " ++ binary_to_list(ddoc_id()) ++ "/" ++
         binary_to_list(ViewName)),
     Req = #set_view_group_req{
@@ -188,7 +202,24 @@ query_map_view(ViewName, Type, Filter) ->
     {ok, Rows}.
 
 
-query_reduce_view(ViewName, Type, Filter) ->
+query_map_view_http(ViewName, Type, Filter) ->
+    etap:diag("Querying map view " ++ binary_to_list(ddoc_id()) ++ "/" ++
+        binary_to_list(ViewName) ++ " through HTTP"),
+    QueryString = "_filter=" ++ atom_to_list(Filter) ++
+                  "&_type=" ++ atom_to_list(Type),
+    {ok, {ViewResults}} = couch_set_view_test_util:query_view(
+        test_set_name(), ddoc_id(), ViewName, QueryString),
+    Rows = couch_util:get_value(<<"rows">>, ViewResults),
+    {ok, Rows}.
+
+
+query_reduce_view(erlang, ViewName, Type, Filter) ->
+    query_reduce_view_erlang(ViewName, Type, Filter);
+query_reduce_view(http, ViewName, Type, Filter) ->
+    query_reduce_view_http(ViewName, Type, Filter).
+
+
+query_reduce_view_erlang(ViewName, Type, Filter) ->
     etap:diag("Querying reduce view " ++ binary_to_list(ddoc_id()) ++ "/" ++
         binary_to_list(ViewName) ++ "with ?group=true"),
     Req = #set_view_group_req{
@@ -214,6 +245,18 @@ query_reduce_view(ViewName, Type, Filter) ->
     [] ->
         empty
     end.
+
+
+query_reduce_view_http(ViewName, Type, Filter) ->
+    etap:diag("Querying reduce view " ++ binary_to_list(ddoc_id()) ++ "/" ++
+        binary_to_list(ViewName) ++ "with through HTTP"),
+    QueryString = "_filter=" ++ atom_to_list(Filter) ++
+                  "&_type=" ++ atom_to_list(Type),
+    {ok, {ViewResults}} = couch_set_view_test_util:query_view(
+        test_set_name(), ddoc_id(), ViewName, QueryString),
+    Rows = couch_util:get_value(<<"rows">>, ViewResults),
+    [{[_Key, {<<"value">>, RedValue}]}] = Rows,
+    {ok, RedValue}.
 
 
 populate_set(DDoc) ->

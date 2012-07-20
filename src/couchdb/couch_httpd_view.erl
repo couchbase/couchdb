@@ -325,6 +325,18 @@ parse_view_param("callback", _) ->
     []; % Verified in the JSON response functions
 parse_view_param("debug", Value) ->
     [{debug, parse_bool_param(Value)}];
+parse_view_param("_filter", Value) ->
+    [{filter, parse_bool_param(Value)}];
+parse_view_param("_type", Value) ->
+    case string:to_lower(Value) of
+    "main" ->
+        [{type, main}];
+    "replica" ->
+        [{type, replica}];
+    _ ->
+        throw({query_parse_error,
+            <<"_type only available as _type=main or _type=replica">>})
+    end;
 parse_view_param(Key, Value) ->
     [{extra, {Key, Value}}].
 
@@ -440,6 +452,13 @@ validate_view_query(conflicts, true, Args) ->
     end;
 validate_view_query(debug, Value, Args) ->
     Args#view_query_args{debug = Value};
+validate_view_query(filter, Value, Args) ->
+    Args#view_query_args{filter = Value};
+validate_view_query(type, replica, Args) ->
+    Args#view_query_args{type = replica};
+% Use the view_query_args record's default value
+validate_view_query(type, _Value, Args) ->
+    Args;
 validate_view_query(extra, _Value, Args) ->
     Args.
 
