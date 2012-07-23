@@ -326,7 +326,12 @@ validate_ddoc_views(#doc{body = {Body}}) ->
         element(1, Views)).
 
 
+validate_view_definition(<<"">>, _) ->
+    throw({error, <<"View name cannot be an empty string">>});
 validate_view_definition(ViewName, {ViewProps}) when is_list(ViewProps) ->
+    validate_view_name(ViewName, iolist_to_binary(io_lib:format(
+        "View name `~s` cannot have leading or trailing whitespace",
+        [ViewName]))),
     MapDef = couch_util:get_value(<<"map">>, ViewProps),
     validate_view_map_function(ViewName, MapDef),
     ReduceDef = couch_util:get_value(<<"reduce">>, ViewProps),
@@ -335,6 +340,25 @@ validate_view_definition(ViewName, _) ->
     ErrorMsg = io_lib:format("Value for view `~s' is not "
                              "a json object.", [ViewName]),
     throw({error, iolist_to_binary(ErrorMsg)}).
+
+
+% Make sure the view name doesn't contain leading or trailing whitespace
+% (space, tab, newline or carriage return)
+validate_view_name(<<" ", _Rest/binary>>, ErrorMsg) ->
+    throw({error, ErrorMsg});
+validate_view_name(<<"\t", _Rest/binary>>, ErrorMsg) ->
+    throw({error, ErrorMsg});
+validate_view_name(<<"\n", _Rest/binary>>, ErrorMsg) ->
+    throw({error, ErrorMsg});
+validate_view_name(<<"\r", _Rest/binary>>, ErrorMsg) ->
+    throw({error, ErrorMsg});
+validate_view_name(Bin, ErrorMsg) when size(Bin) > 1 ->
+    Size = size(Bin) - 1 ,
+    <<_:Size/binary, Trailing/bits>> = Bin,
+    % Check for trailing whitespace
+    validate_view_name(Trailing, ErrorMsg);
+validate_view_name(_, _) ->
+    ok.
 
 
 validate_view_map_function(ViewName, undefined) ->
