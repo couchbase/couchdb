@@ -95,12 +95,6 @@ make_btree_purge_fun(Group) when ?set_cbitmask(Group) =/= 0 ->
     fun(branch, Value, {go, Acc}) ->
             receive
             stop ->
-                % Being stopped by main updater process or by the view group.
-                {stop, {stop, Acc}};
-            stop_immediately ->
-                % Updater performing full cleanup (current cleanup bitmask +
-                % pending transition cleanup bitmask) in order to apply
-                % pending transition asap.
                 {stop, {stop, Acc}}
             after 0 ->
                 btree_purge_fun(branch, Value, {go, Acc}, ?set_cbitmask(Group))
