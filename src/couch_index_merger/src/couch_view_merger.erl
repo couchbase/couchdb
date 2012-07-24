@@ -689,7 +689,7 @@ map_set_view_folder(ViewSpec, MergeParams, UserCtx, DDoc, Queue) ->
     #set_view_spec{
         name = SetName,
         ddoc_id = DDocId,
-        partitions = WantedPartitions
+        partitions = WantedPartitions0
     } = ViewSpec,
     #index_merge{
         http_params = ViewArgs
@@ -697,7 +697,9 @@ map_set_view_folder(ViewSpec, MergeParams, UserCtx, DDoc, Queue) ->
     #view_query_args{
         include_docs = IncludeDocs,
         conflicts = Conflicts,
-        stale = Stale
+        stale = Stale,
+        debug = Debug,
+        type = IndexType
     } = ViewArgs,
     DDocDbName = ?master_dbname(SetName),
 
@@ -706,11 +708,18 @@ map_set_view_folder(ViewSpec, MergeParams, UserCtx, DDoc, Queue) ->
     true ->
         {ViewSpec#set_view_spec.view, ViewSpec#set_view_spec.group};
     false ->
+        WantedPartitions = case IndexType of
+        main ->
+            WantedPartitions0;
+        replica ->
+            []
+        end,
         ViewGroupReq1 = #set_view_group_req{
             stale = Stale,
             update_stats = true,
             wanted_partitions = WantedPartitions,
-            debug = ViewArgs#view_query_args.debug
+            debug = Debug,
+            type = IndexType
         },
         case prepare_set_view(
             ViewSpec, ViewGroupReq1, DDoc, Queue, fun couch_set_view:get_map_view/4) of
@@ -1005,11 +1014,16 @@ reduce_set_view_folder(ViewSpec, MergeParams, DDoc, Queue) ->
     #set_view_spec{
         name = SetName,
         ddoc_id = DDocId,
-        partitions = WantedPartitions
+        partitions = WantedPartitions0
     } = ViewSpec,
     #index_merge{
         http_params = ViewArgs
     } = MergeParams,
+    #view_query_args{
+        stale = Stale,
+        debug = Debug,
+        type = IndexType
+    } = ViewArgs,
 
     DDocDbName = ?master_dbname(SetName),
     PrepareResult = case (ViewSpec#set_view_spec.view =/= nil) andalso
@@ -1017,11 +1031,18 @@ reduce_set_view_folder(ViewSpec, MergeParams, DDoc, Queue) ->
     true ->
         {ViewSpec#set_view_spec.view, ViewSpec#set_view_spec.group};
     false ->
+        WantedPartitions = case IndexType of
+        main ->
+            WantedPartitions0;
+        replica ->
+            []
+        end,
         ViewGroupReq = #set_view_group_req{
-            stale = ViewArgs#view_query_args.stale,
+            stale = Stale,
             update_stats = true,
             wanted_partitions = WantedPartitions,
-            debug = ViewArgs#view_query_args.debug
+            debug = Debug,
+            type = IndexType
         },
         prepare_set_view(ViewSpec, ViewGroupReq, DDoc, Queue, fun couch_set_view:get_reduce_view/4)
     end,
@@ -1177,7 +1198,9 @@ view_qs(ViewArgs, MergeParams) ->
         conflicts = Conflicts,
         stale = Stale,
         limit = Limit,
-        debug = Debug
+        debug = Debug,
+        filter = Filter,
+        type = IndexType
     } = ViewArgs,
     #index_merge{on_error = OnError} = MergeParams,
 
@@ -1284,7 +1307,20 @@ view_qs(ViewArgs, MergeParams) ->
         [];
     false ->
         ["debug=" ++ atom_to_list(Debug)]
+    end ++
+    case Filter =:= DefViewArgs#view_query_args.filter of
+    true ->
+        [];
+    false ->
+        ["_filter=" ++ atom_to_list(Filter)]
+    end ++
+    case IndexType =:= DefViewArgs#view_query_args.type of
+    true ->
+        [];
+    false ->
+        ["_type=" ++ atom_to_list(IndexType)]
     end,
+
     case QsList of
     [] ->
         [];
@@ -1416,7 +1452,7 @@ simple_set_view_query(Params, DDoc, Req) ->
     } = Params,
     #set_view_spec{
         name = SetName,
-        partitions = Partitions,
+        partitions = Partitions0,
         ddoc_id = DDocId,
         view_name = ViewName
     } = SetViewSpec,
@@ -1425,11 +1461,20 @@ simple_set_view_query(Params, DDoc, Req) ->
         couch_httpd:qs_value(Req, "stale", "update_after"))),
     Debug = couch_set_view_http:parse_bool_param(
         couch_httpd:qs_value(Req, "debug", "false")),
+    IndexType = list_to_existing_atom(
+        couch_httpd:qs_value(Req, "_type", "main")),
+    Partitions = case IndexType of
+    main ->
+        Partitions0;
+    replica ->
+        []
+    end,
     GroupReq = #set_view_group_req{
         stale = Stale,
         update_stats = true,
         wanted_partitions = Partitions,
-        debug = Debug
+        debug = Debug,
+        type = IndexType
     },
 
     case get_set_view(
