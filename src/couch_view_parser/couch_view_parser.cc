@@ -288,6 +288,7 @@ static int boolean_callback(void *ctx, int boolean)
         } else {
             add_boolean(context, context->tmp_row->doc, boolean);
         }
+        return 1;
     case parser_get_row_partition:
         context->error = new std::string(BAD_ROW_PARTITION_VALUE);
         return 0;
