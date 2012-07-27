@@ -257,6 +257,9 @@ handle_call({update_header_pos, FileVersion, NewPos}, _From, Db) ->
         {ok, NewHeaderBin} ->
             NewHeader = header_bin_to_db_header(NewHeaderBin),
             if Db#db.update_seq > NewHeader#db_header.update_seq ->
+                ?LOG_INFO("Database ~s, received pointer to header with a "
+                    "non-greater seq number (current ~p, new header ~p)",
+                    [Db#db.name, Db#db.update_seq, NewHeader#db_header.update_seq]),
                 {reply, update_behind_couchdb, Db};
             true ->
                 NewDb = populate_db_from_header(Db, NewHeader),
