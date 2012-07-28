@@ -254,6 +254,15 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime, NumChanges, LogFilePat
     replica ->
         ok = couch_index_barrier:leave(couch_replica_index_barrier)
     end,
+    case Result of
+    {updater_finished, #set_view_updater_result{group = NewGroup}} ->
+        ?LOG_DEBUG("Updater for ~s set view group `~s`, set `~s`, writer finished:~n"
+                   "  start seqs: ~w~n"
+                   "  end seqs:   ~w~n",
+                   [Type, DDocId, SetName, ?set_seqs(Group), ?set_seqs(NewGroup)]);
+    _ ->
+        ok
+    end,
     exit(Result).
 
 
@@ -298,10 +307,10 @@ load_changes(Owner, Updater, Group, MapQueue, Writer, ActiveParts, PassiveParts)
         index_header = #set_view_index_header{seqs = SinceSeqs}
     } = Group,
 
-    FoldFun = fun(PartId, Acc) ->
+    FoldFun = fun(PartId, {AccCount, AccSeqs}) ->
         case orddict:is_key(PartId, ?set_unindexable_seqs(Group)) of
         true ->
-            Acc;
+            {AccCount, AccSeqs};
         false ->
             Db = case couch_db:open_int(?dbname(SetName, PartId), []) of
             {ok, PartDb} ->
@@ -313,14 +322,14 @@ load_changes(Owner, Updater, Group, MapQueue, Writer, ActiveParts, PassiveParts)
             end,
             try
                 Since = couch_util:get_value(PartId, SinceSeqs),
-                ChangesWrapper = fun(DocInfo, _, Acc2) ->
+                ChangesWrapper = fun(DocInfo, _, AccCount2) ->
                     load_doc(Db, PartId, DocInfo, MapQueue),
-                    {ok, Acc2 + 1}
+                    {ok, AccCount2 + 1}
                 end,
-                {ok, _, Acc3} = couch_db:fast_reads(Db, fun() ->
-                    couch_db:enum_docs_since(Db, Since, ChangesWrapper, Acc, [])
+                {ok, _, AccCount3} = couch_db:fast_reads(Db, fun() ->
+                    couch_db:enum_docs_since(Db, Since, ChangesWrapper, AccCount, [])
                 end),
-                Acc3
+                {AccCount3, orddict:store(PartId, Db#db.update_seq, AccSeqs)}
             after
                 ok = couch_db:close(Db)
             end
@@ -331,24 +340,30 @@ load_changes(Owner, Updater, Group, MapQueue, Writer, ActiveParts, PassiveParts)
     try
         case ActiveParts of
         [] ->
-            ActiveChangesCount = 0;
+            ActiveChangesCount = 0,
+            MaxSeqs = orddict:new();
         _ ->
             ?LOG_INFO("Updater reading changes from active partitions to "
                       "update ~s set view group `~s` from set `~s`",
                       [GroupType, DDocId, SetName]),
-            ActiveChangesCount = lists:foldl(FoldFun, 0, ActiveParts)
+            {ActiveChangesCount, MaxSeqs} = lists:foldl(
+                FoldFun, {0, orddict:new()}, ActiveParts)
         end,
         case PassiveParts of
         [] ->
-            FinalChangesCount = ActiveChangesCount;
+            FinalChangesCount = ActiveChangesCount,
+            MaxSeqs2 = MaxSeqs;
         _ ->
             ?LOG_INFO("Updater reading changes from passive partitions to "
                       "update ~s set view group `~s` from set `~s`",
                       [GroupType, DDocId, SetName]),
-            FinalChangesCount = lists:foldl(FoldFun, ActiveChangesCount, PassiveParts)
+            {FinalChangesCount, MaxSeqs2} = lists:foldl(
+                FoldFun, {ActiveChangesCount, MaxSeqs}, PassiveParts)
         end,
         ?LOG_INFO("Updater for ~s set view group `~s`, set `~s`, read a total of ~p changes",
-                  [GroupType, DDocId, SetName, FinalChangesCount])
+                  [GroupType, DDocId, SetName, FinalChangesCount]),
+        ?LOG_DEBUG("Updater for ~s set view group `~s`, set `~s`, max partition seqs found:~n~w",
+                  [GroupType, DDocId, SetName, MaxSeqs2])
     catch throw:stop ->
         Writer ! stop
     end,
