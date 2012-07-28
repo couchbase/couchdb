@@ -15,7 +15,7 @@
 
 % public API
 -export([open/2, close/1]).
--export([get_seqs/1, get_seqs/2]).
+-export([get_seqs/2, get_seqs/3]).
 -export([add_partitions/2, remove_partitions/2]).
 
 % gen_server API
@@ -48,16 +48,21 @@ remove_partitions(_Pid, []) ->
 remove_partitions(Pid, Partitions) ->
     ok = gen_server:call(Pid, {remove_partitions, Partitions}, infinity).
 
-get_seqs(Pid) ->
-    get_seqs(Pid, nil).
+get_seqs(Pid, Sync) ->
+    get_seqs(Pid, nil, Sync).
 
-get_seqs(Pid, nil) ->
+get_seqs(Pid, nil, false) ->
     Tid = get_ets_id(Pid),
     [{seqs, Seqs}] = ets:lookup(Tid, seqs),
     {ok, Seqs};
-get_seqs(Pid, FilterSortedSet) ->
+get_seqs(Pid, nil, true) ->
+    {ok, _Seqs} = gen_server:call(Pid, get_seqs, infinity);
+get_seqs(Pid, FilterSortedSet, false) ->
     Tid = get_ets_id(Pid),
     [{seqs, Seqs}] = ets:lookup(Tid, seqs),
+    {ok, [{P, S} || {P, S} <- Seqs, ordsets:is_element(P, FilterSortedSet)]};
+get_seqs(Pid, FilterSortedSet, true) ->
+    {ok, Seqs} = gen_server:call(Pid, get_seqs, infinity),
     {ok, [{P, S} || {P, S} <- Seqs, ordsets:is_element(P, FilterSortedSet)]}.
 
 
@@ -125,6 +130,9 @@ handle_call(get_seqs_debug, _From, State) ->
         orddict:new(),
         State#state.db_seqs),
     {reply, {ok, State#state.db_seqs, RealSeqs}, State};
+
+handle_call(get_seqs, _From, State) ->
+    {reply, {ok, State#state.db_seqs}, State};
 
 handle_call({add_partitions, PartList}, _From, State) ->
     DbSeqs2 = lists:foldl(
