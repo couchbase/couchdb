@@ -1262,7 +1262,7 @@ prepare_group({RootDir, SetName, #set_view_group{sig = Sig, type = Type} = Group
     {ok, Fd} ->
         if ForceReset ->
             % this can happen if we missed a purge
-            {ok, reset_file(Fd, SetName, Group)};
+            {ok, reset_file(Fd, Group)};
         true ->
             case (catch couch_file:read_header(Fd)) of
             {ok, {Sig, HeaderInfo}} ->
@@ -1277,7 +1277,7 @@ prepare_group({RootDir, SetName, #set_view_group{sig = Sig, type = Type} = Group
                 false ->
                     ok
                 end,
-                {ok, reset_file(Fd, SetName, Group)}
+                {ok, reset_file(Fd, Group)}
             end
         end;
     {error, emfile} = Error ->
@@ -1542,10 +1542,8 @@ reset_group(#set_view_group{views = Views} = Group) ->
     }.
 
 
--spec reset_file(pid(), binary(), #set_view_group{}) -> #set_view_group{}.
-reset_file(Fd, SetName, #set_view_group{
-        sig = Sig, name = Name, index_header = Header} = Group) ->
-    ?LOG_DEBUG("Resetting group index `~s` in set `~s`", [Name, SetName]),
+-spec reset_file(pid(), #set_view_group{}) -> #set_view_group{}.
+reset_file(Fd, #set_view_group{sig = Sig, index_header = Header} = Group) ->
     ok = couch_file:truncate(Fd, 0),
     ok = couch_file:write_header(Fd, {Sig, nil}),
     init_group(Fd, reset_group(Group), Header).
@@ -2395,7 +2393,7 @@ restart_compactor(#state{compactor_pid = Pid, compactor_file = CompactFd} = Stat
 compact_group(#state{group = Group} = State) ->
     CompactFilepath = compact_file_name(State),
     {ok, Fd} = open_index_file(CompactFilepath),
-    reset_file(Fd, ?set_name(State), Group#set_view_group{filepath = CompactFilepath}).
+    reset_file(Fd, Group#set_view_group{filepath = CompactFilepath}).
 
 
 -spec stop_updater(#state{}) -> #state{}.
