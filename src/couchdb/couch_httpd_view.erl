@@ -690,7 +690,6 @@ view_row_with_doc(Db, {{Key, DocId}, Value}, IdRev, Conflicts) ->
 
 doc_member(Db, #doc_info{id = Id, rev = Rev} = Info,
         Options) ->
-    ?LOG_DEBUG("Include Doc: ~p ~p", [Id, Rev]),
     case couch_db:open_doc(Db, Info, [deleted | Options]) of
     {ok, Doc} ->
         [{doc, couch_doc:to_json_obj(Doc, [])}];
@@ -698,7 +697,6 @@ doc_member(Db, #doc_info{id = Id, rev = Rev} = Info,
         [{doc, null}]
     end;
 doc_member(Db, DocId, Options) ->
-    ?LOG_DEBUG("Include Doc: ~p", [DocId]),
     case (catch couch_db_frontend:open_doc(Db, DocId, Options)) of
     {ok, #doc{} = Doc} ->
         JsonDoc = couch_doc:to_json_obj(Doc, []),
