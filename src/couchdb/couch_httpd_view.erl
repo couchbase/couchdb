@@ -688,8 +688,7 @@ view_row_with_doc(Db, {{Key, DocId}, Value}, IdRev, Conflicts) ->
     {[{id, DocId}, {key, Key}, {value, Value}] ++
         doc_member(Db, IdRev, if Conflicts -> [conflicts]; true -> [] end)}.
 
-doc_member(Db, #doc_info{id = Id, rev = Rev} = Info,
-        Options) ->
+doc_member(Db, #doc_info{} = Info, Options) ->
     case couch_db:open_doc(Db, Info, [deleted | Options]) of
     {ok, Doc} ->
         [{doc, couch_doc:to_json_obj(Doc, [])}];
