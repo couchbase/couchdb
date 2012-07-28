@@ -14,7 +14,7 @@
 
 -module(couch_set_view_test_util).
 
--export([start_server/0, stop_server/0]).
+-export([start_server/0, start_server/1, stop_server/0]).
 -export([create_set_dbs/2, delete_set_dbs/2, doc_count/2]).
 -export([open_set_db/2, get_db_main_pid/1, delete_set_db/2]).
 -export([populate_set_alternated/3, populate_set_sequentially/3, update_ddoc/2, delete_ddoc/2]).
@@ -34,9 +34,36 @@
 
 start_server() ->
     couch_server_sup:start_link(test_util:config_files()),
-    timer:sleep(1000),
+    timer:sleep(500),
     put(addr, couch_config:get("httpd", "bind_address", "127.0.0.1")),
     put(port, integer_to_list(mochiweb_socket_server:get(couch_httpd, port))).
+
+
+start_server(SetName) ->
+    start_server(),
+    DbDir = couch_config:get("couchdb", "database_dir"),
+    IndexDir = couch_config:get("couchdb", "view_index_dir"),
+    NewDbDir = filename:join([DbDir, ?b2l(SetName)]),
+    NewIndexDir = filename:join([IndexDir, ?b2l(SetName)]),
+    case file:make_dir(NewDbDir) of
+    ok ->
+        ok;
+    {error, eexist} ->
+        ok;
+    Error ->
+        throw(Error)
+    end,
+    case file:make_dir(NewIndexDir) of
+    ok ->
+        ok;
+    {error, eexist} ->
+        ok;
+    Error2 ->
+        throw(Error2)
+    end,
+    ok = couch_config:set("couchdb", "database_dir", NewDbDir, false),
+    ok = couch_config:set("couchdb", "view_index_dir", NewIndexDir, false),
+    ok = timer:sleep(300).
 
 
 stop_server() ->
@@ -206,6 +233,7 @@ query_view(SetName, DDocId, ViewName, QueryString) ->
     200 ->
         ok;
     _ ->
+        io:format("View response body: ~p~n", [Body]),
         etap:bail("View response status is not 200 (got " ++
             integer_to_list(Code) ++ ")")
     end,

@@ -53,7 +53,7 @@
 test_set_name() -> <<"couch_test_set_index_replicas_transfer">>.
 num_set_partitions() -> 64.
 ddoc_id() -> <<"_design/test">>.
-num_docs() -> 92160.  % keep it a multiple of num_set_partitions()
+num_docs() -> 70848.  % keep it a multiple of num_set_partitions()
 
 
 main(_) ->
@@ -71,7 +71,7 @@ main(_) ->
 
 
 test() ->
-    couch_set_view_test_util:start_server(),
+    couch_set_view_test_util:start_server(test_set_name()),
     ok = couch_config:set("set_views", "update_interval", "0", false),
 
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),

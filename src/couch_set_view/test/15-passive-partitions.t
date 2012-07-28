@@ -51,7 +51,7 @@
 test_set_name() -> <<"couch_test_set_index_passive_parts">>.
 num_set_partitions() -> 64.
 ddoc_id() -> <<"_design/test">>.
-num_docs() -> 25856.  % keep it a multiple of num_set_partitions()
+num_docs() -> 16448.  % keep it a multiple of num_set_partitions()
 
 
 main(_) ->
@@ -69,7 +69,7 @@ main(_) ->
 
 
 test() ->
-    couch_set_view_test_util:start_server(),
+    couch_set_view_test_util:start_server(test_set_name()),
     ok = couch_config:set("set_views", "update_interval", "0", false),
 
     create_set(),

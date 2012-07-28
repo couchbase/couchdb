@@ -22,7 +22,7 @@
 test_set_name() -> <<"couch_test_set_index_compaction_retry">>.
 num_set_partitions() -> 64.
 ddoc_id() -> <<"_design/test">>.
-num_docs_0() -> 25856.
+num_docs_0() -> 16448.
 
 
 main(_) ->
@@ -40,7 +40,7 @@ main(_) ->
 
 
 test() ->
-    couch_set_view_test_util:start_server(),
+    couch_set_view_test_util:start_server(test_set_name()),
     ok = couch_config:set("set_views", "update_interval", "0", false),
 
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),

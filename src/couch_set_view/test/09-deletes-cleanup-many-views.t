@@ -55,7 +55,7 @@
 test_set_name() -> <<"couch_test_set_index_deletes_cleanup_many">>.
 num_set_partitions() -> 64.
 ddoc_id() -> <<"_design/test">>.
-initial_num_docs() -> 35520.  % must be multiple of num_set_partitions()
+initial_num_docs() -> 26048.  % must be multiple of num_set_partitions()
 
 
 main(_) ->
@@ -73,7 +73,7 @@ main(_) ->
 
 
 test() ->
-    couch_set_view_test_util:start_server(),
+    couch_set_view_test_util:start_server(test_set_name()),
     ok = couch_config:set("set_views", "update_interval", "0", false),
 
     create_set(),
