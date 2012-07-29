@@ -2546,9 +2546,8 @@ maybe_update_replica_index(#state{updater_pid = Pid} = State) when is_pid(Pid) -
 maybe_update_replica_index(#state{group = #set_view_group{views = []}} = State) ->
     State;
 maybe_update_replica_index(#state{group = Group, updater_state = not_running} = State) ->
-    IndexedSeqs = ?set_seqs(Group),
     {ok, CurSeqs} = couch_db_set:get_seqs(?db_set(State), true),
-    ChangesCount = count_new_rep_changes(CurSeqs, IndexedSeqs, State, 0),
+    ChangesCount = couch_set_view_util:missing_changes_count(CurSeqs, ?set_seqs(Group)),
     case (ChangesCount >= ?MIN_CHANGES_AUTO_UPDATE) orelse
         (ChangesCount > 0 andalso ?set_cbitmask(Group) =/= 0) of
     true ->
@@ -2556,32 +2555,6 @@ maybe_update_replica_index(#state{group = Group, updater_state = not_running} = 
     false ->
         maybe_start_cleaner(State)
     end.
-
-
-count_new_rep_changes([], [], _State, Count) ->
-    Count;
-
-count_new_rep_changes([{PartId, PartSeq} | RestPartSeqs],
-                      [{PartId, IndexedSeq} | RestIndexedSeqs],
-                      State, Count) when PartSeq >= IndexedSeq ->
-    count_new_rep_changes(RestPartSeqs, RestIndexedSeqs, State, Count + (PartSeq - IndexedSeq));
-
-count_new_rep_changes([{PartId, PartSeq} | _RestPartSeqs],
-                      [{PartId, IndexedSeq} | _RestIndexedSeqs],
-                      State, _Count) ->
-    LatestSeq = case couch_db:open_int(?dbname((?set_name(State)), PartId), []) of
-    {ok, Db} ->
-        ok = couch_db:close(Db),
-        Db#db.update_seq;
-    _ ->
-        deleted
-    end,
-    ?LOG_ERROR("~s set view group `~s`, signature `~s', from set `~s`, got lower "
-               "seq number (~p) for partition ~p then the one seen and indexed before (~p),"
-               " latest seq number for database is ~p (maybe it got recreated?)",
-               [?type(State), ?group_id(State), hex_sig(State#state.group),
-                ?set_name(State), PartSeq, PartId, IndexedSeq, LatestSeq]),
-    exit({lower_seq, PartId, {before, IndexedSeq}, {'after', PartSeq}}).
 
 
 -spec maybe_fix_replica_group(pid(), #set_view_group{}) -> 'ok'.

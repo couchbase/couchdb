@@ -68,12 +68,7 @@ update(Owner, Group, CurSeqs, LogFilePath, TmpDir) ->
     } = Group,
     ActiveParts = couch_set_view_util:decode_bitmask(?set_abitmask(Group)),
     PassiveParts = couch_set_view_util:decode_bitmask(?set_pbitmask(Group)),
-    SinceSeqs = ?set_seqs(Group),
-    NumChanges = lists:foldl(
-        fun({{PartId, NewSeq}, {PartId, OldSeq}}, Acc) when NewSeq >= OldSeq ->
-            Acc + (NewSeq - OldSeq)
-        end,
-        0, lists:zip(CurSeqs, SinceSeqs)),
+    NumChanges = couch_set_view_util:missing_changes_count(CurSeqs, ?set_seqs(Group)),
 
     case ?set_pending_transition(Group) of
     nil ->
