@@ -166,6 +166,7 @@ test_kvs(KeyValues) ->
     {ok, Btree7} = couch_btree:add_remove(Btree6, [], [K||{K,_}<-Rem2Keys1]),
     Size2 = couch_btree:size(Btree7),
     etap:is((Size2 < Size1), true, "Btree size decreased"),
+    ok = couch_file:flush(Fd),
     {ok, Btree8} = couch_btree:add_remove(Btree7, [], [K||{K,_}<-Rem2Keys0]),
     Size3 = couch_btree:size(Btree8),
     etap:is((Size3 < Size2), true, "Btree size decreased"),
@@ -193,6 +194,7 @@ test_add_remove(#btree{fd = Fd} = Btree, OutKeyValues, RemainingKeyValues) ->
     true = test_btree(Btree2, RemainingKeyValues),
 
     Btree3 = lists:foldl(fun(KV, BtAcc) ->
+        ok = couch_file:flush(Fd),
         {ok, BtAcc2} = couch_btree:add_remove(BtAcc, [KV], []),
         BtAcc2
     end, Btree2, OutKeyValues),
