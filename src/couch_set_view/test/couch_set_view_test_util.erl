@@ -233,7 +233,7 @@ query_view(SetName, DDocId, ViewName, QueryString) ->
     200 ->
         ok;
     _ ->
-        io:format("View response body: ~p~n", [Body]),
+        io:format(standard_error, "~nView response body: ~p~n~n", [Body]),
         etap:bail("View response status is not 200 (got " ++
             integer_to_list(Code) ++ ")")
     end,
