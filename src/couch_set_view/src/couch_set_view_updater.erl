@@ -583,6 +583,7 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
                }
             end,
             Group#set_view_group.views),
+        ok = couch_file:flush(GroupFd),
         Header = Group#set_view_group.index_header,
         NewHeader = Header#set_view_index_header{
             id_btree_state = couch_btree:get_state(NewIdBtree),
