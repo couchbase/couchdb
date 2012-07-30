@@ -22,6 +22,17 @@
 
 -include("couch_db.hrl").
 
+-define(KEY_BITS,       12).
+-define(VALUE_BITS,     28).
+-define(POINTER_BITS,   48).
+-define(TREE_SIZE_BITS, 48).
+-define(RED_BITS,       16).
+
+-define(MAX_KEY_SIZE,     ((1 bsl ?KEY_BITS) - 1)).
+-define(MAX_VALUE_SIZE,   ((1 bsl ?VALUE_BITS) - 1)).
+-define(MAX_RED_SIZE,     ((1 bsl ?RED_BITS) - 1)).
+
+
 extract(#btree{extract_kv=Extract}, Value) ->
     Extract(Value).
 
@@ -47,7 +58,8 @@ set_options(Bt, [{reduce, Reduce}|Rest]) ->
     set_options(Bt#btree{reduce=Reduce}, Rest);
 set_options(Bt, [{chunk_threshold, Threshold}|Rest]) ->
     set_options(Bt#btree{chunk_threshold = Threshold}, Rest);
-set_options(#btree{root = <<Pointer:48, Size:48, Red/binary>>} = Bt, [{binary_mode, true}|Rest]) ->
+set_options(#btree{root = Root} = Bt, [{binary_mode, true}|Rest]) when is_binary(Root) ->
+    <<Pointer:?POINTER_BITS, Size:?TREE_SIZE_BITS, Red/binary>> = Root,
     set_options(Bt#btree{root = {Pointer, Red, Size}, binary_mode = true}, Rest);
 set_options(Bt, [{binary_mode, Bool}|Rest]) ->
     set_options(Bt#btree{binary_mode = Bool}, Rest).
@@ -57,7 +69,7 @@ open(State, Fd, Options) ->
     {ok, set_options(#btree{root=State, fd=Fd}, Options)}.
 
 get_state(#btree{root={Pointer, Reduction, Size}, binary_mode=true}) ->
-    <<Pointer:48, Size:48, Reduction/binary>>;
+    <<Pointer:?POINTER_BITS, Size:?TREE_SIZE_BITS, Reduction/binary>>;
 get_state(#btree{root=Root}) ->
     Root.
 
@@ -406,15 +418,17 @@ get_node(#btree{fd = Fd,binary_mode=true}, NodePos) ->
 decode_node(Type, <<>>, Acc) ->
     {Type, lists:reverse(Acc)};
 decode_node(Type, Binary, Acc) ->
-    <<SizeK:12,SizeV:28,K:SizeK/binary,V:SizeV/binary,Rest/binary>> = Binary,
+    <<SizeK:?KEY_BITS, SizeV:?VALUE_BITS,
+      K:SizeK/binary, V:SizeV/binary,
+      Rest/binary>> = Binary,
     case Type of
     kv_node ->
         Val = V;
     kp_node ->
-        <<Pointer:48,
-            SubtreeSize:48,
-            RedSize:16,
-            Reduction:RedSize/binary>> = V,
+        <<Pointer:?POINTER_BITS,
+          SubtreeSize:?TREE_SIZE_BITS,
+          RedSize:?RED_BITS,
+          Reduction:RedSize/binary>> = V,
         Val = {Pointer, Reduction, SubtreeSize}
     end,
     decode_node(Type, Rest, [{K,Val}|Acc]).
@@ -425,7 +439,13 @@ encode_node(kp_node, Kvs) ->
     % convert the value to binary
     Kvs2 = lists:map(fun({K,{Pointer, Reduction, SubtreeSize}}) ->
         RedSize = iolist_size(Reduction),
-        {K, [<<Pointer:48, SubtreeSize:48, RedSize:16>>, Reduction]}
+        case RedSize > ?MAX_RED_SIZE of
+        true ->
+            throw({error, {reduction_too_long, Reduction}});
+        false ->
+            ok
+        end,
+        {K, [<<Pointer:?POINTER_BITS, SubtreeSize:?TREE_SIZE_BITS, RedSize:?RED_BITS>>, Reduction]}
     end, Kvs),
     couch_compress:compress(encode_node_iolist(Kvs2, [0])).
 
@@ -434,15 +454,15 @@ encode_node_iolist([], Acc) ->
 encode_node_iolist([{K, V}|RestKvs], Acc) ->
     SizeK = erlang:iolist_size(K),
     SizeV = erlang:iolist_size(V),
-    case SizeK < 4096 of
-    true -> ok;
-    false -> throw({error, key_too_long})
+    case SizeK > ?MAX_KEY_SIZE of
+    true -> throw({error, {key_too_long, K}});
+    false -> ok
     end,
-    case SizeV < 268435456 of
-    true -> ok;
-    false -> throw({error, value_too_long})
+    case SizeV > ?MAX_VALUE_SIZE of
+    true -> throw({error, {value_too_long, K, SizeV}});
+    false -> ok
     end,
-    Bin = [<<SizeK:12, SizeV:28>>, K, V],
+    Bin = [<<SizeK:?KEY_BITS, SizeV:?VALUE_BITS>>, K, V],
     encode_node_iolist(RestKvs, [Bin|Acc]).
 
 
