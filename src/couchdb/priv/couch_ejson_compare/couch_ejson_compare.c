@@ -13,46 +13,106 @@
  */
 
 #include <stdio.h>
+#include <assert.h>
 #include "erl_nif_compat.h"
 #include "unicode/ucol.h"
 #include "unicode/ucasemap.h"
 
-#define COMP_ERROR -128
+#define MAX_DEPTH 20
+
+#if (ERL_NIF_MAJOR_VERSION > 2) || \
+    (ERL_NIF_MAJOR_VERSION == 2 && ERL_NIF_MINOR_VERSION >= 3)
+/* OTP R15B or higher */
+#define term_is_number(env, t) enif_is_number(env, t)
+#else
+#define term_is_number(env, t)  \
+    (!enif_is_binary(env, t) && \
+     !enif_is_list(env, t) &&   \
+     !enif_is_tuple(env, t))
+#endif
 
 static ERL_NIF_TERM ATOM_TRUE;
 static ERL_NIF_TERM ATOM_FALSE;
 static ERL_NIF_TERM ATOM_NULL;
 
-static UCollator* coll = NULL;
+typedef struct {
+    ErlNifEnv* env;
+    int error;
+    UCollator* coll;
+} ctx_t;
+
+static UCollator** collators = NULL;
+static int collStackTop = 0;
+static int numCollators = 0;
 static ErlNifMutex* collMutex = NULL;
 
 static ERL_NIF_TERM less_json_nif(ErlNifEnv*, int, const ERL_NIF_TERM []);
 static int on_load(ErlNifEnv*, void**, ERL_NIF_TERM);
 static void on_unload(ErlNifEnv*, void*);
-static __inline int less_json(ErlNifEnv*, ERL_NIF_TERM, ERL_NIF_TERM);
+static __inline int less_json(int, ctx_t*, ERL_NIF_TERM, ERL_NIF_TERM);
 static __inline int atom_sort_order(ErlNifEnv*, ERL_NIF_TERM);
-static __inline int compare_strings(ErlNifBinary, ErlNifBinary);
-static __inline int compare_lists(ErlNifEnv*, ERL_NIF_TERM, ERL_NIF_TERM);
-static __inline int compare_props(ErlNifEnv*, ERL_NIF_TERM, ERL_NIF_TERM);
-static __inline int term_is_number(ErlNifEnv*, ERL_NIF_TERM);
+static __inline int compare_strings(ctx_t*, ErlNifBinary, ErlNifBinary);
+static __inline int compare_lists(int, ctx_t*, ERL_NIF_TERM, ERL_NIF_TERM);
+static __inline int compare_props(int, ctx_t*, ERL_NIF_TERM, ERL_NIF_TERM);
+static __inline void reserve_coll(ctx_t*);
+static __inline void release_coll(ctx_t*);
+
+
+void
+reserve_coll(ctx_t *ctx)
+{
+    if (ctx->coll == NULL) {
+        enif_mutex_lock(collMutex);
+        assert(collStackTop < numCollators);
+        ctx->coll = collators[collStackTop];
+        collStackTop += 1;
+        enif_mutex_unlock(collMutex);
+    }
+}
+
+
+void
+release_coll(ctx_t *ctx)
+{
+    if (ctx->coll != NULL) {
+        enif_mutex_lock(collMutex);
+        collStackTop -= 1;
+        assert(collStackTop >= 0);
+        enif_mutex_unlock(collMutex);
+    }
+}
 
 
 
 ERL_NIF_TERM
 less_json_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 {
-    int result = less_json(env, argv[0], argv[1]);
+    ctx_t ctx;
+    int result;
 
-    return result == COMP_ERROR ? enif_make_badarg(env) : enif_make_int(env, result);
+    ctx.env = env;
+    ctx.error = 0;
+    ctx.coll = NULL;
+
+    result = less_json(1, &ctx, argv[0], argv[1]);
+    release_coll(&ctx);
+
+    /*
+     * There are 2 possible failure reasons:
+     *
+     * 1) We got an invalid EJSON operand;
+     * 2) The EJSON structures are too deep - to avoid allocating too
+     *    many C stack frames (because less_json is a recursive function),
+     *    and running out of memory, we throw a badarg exception to Erlang
+     *    and do the comparison in Erlang land. In practice, views keys are
+     *    EJSON structures with very little nesting.
+     */
+    return ctx.error ? enif_make_badarg(env) : enif_make_int(env, result);
 }
 
 
-/**
- * TODO: eventually make this function non-recursive (use a stack).
- * Not an issue for now as view keys are normally not very deep structures.
- */
 int
-less_json(ErlNifEnv* env, ERL_NIF_TERM a, ERL_NIF_TERM b)
+less_json(int depth, ctx_t* ctx, ERL_NIF_TERM a, ERL_NIF_TERM b)
 {
     int aIsAtom, bIsAtom;
     int aIsBin, bIsBin;
@@ -61,19 +121,32 @@ less_json(ErlNifEnv* env, ERL_NIF_TERM a, ERL_NIF_TERM b)
     int aArity, bArity;
     const ERL_NIF_TERM *aProps, *bProps;
 
-    aIsAtom = enif_is_atom(env, a);
-    bIsAtom = enif_is_atom(env, b);
+    /*
+     * Avoid too much recursion. Normally there isn't more than a few levels
+     * of recursion, as in practice view keys do not go beyond 1 to 3 levels
+     * of nesting. In case of too much recursion, signal it to the Erlang land
+     * via an exception and do the EJSON comparison in Erlang land.
+     */
+    if (depth > MAX_DEPTH) {
+        ctx->error = 1;
+        return 0;
+    }
+
+    aIsAtom = enif_is_atom(ctx->env, a);
+    bIsAtom = enif_is_atom(ctx->env, b);
 
     if (aIsAtom) {
         if (bIsAtom) {
             int aSortOrd, bSortOrd;
 
-            if ((aSortOrd = atom_sort_order(env, a)) == -1) {
-                return COMP_ERROR;
+            if ((aSortOrd = atom_sort_order(ctx->env, a)) == -1) {
+                ctx->error = 1;
+                return 0;
             }
 
-            if ((bSortOrd = atom_sort_order(env, b)) == -1) {
-                return COMP_ERROR;
+            if ((bSortOrd = atom_sort_order(ctx->env, b)) == -1) {
+                ctx->error = 1;
+                return 0;
             }
 
             return aSortOrd - bSortOrd;
@@ -86,20 +159,12 @@ less_json(ErlNifEnv* env, ERL_NIF_TERM a, ERL_NIF_TERM b)
         return 1;
     }
 
-    aIsNumber = term_is_number(env, a);
-    bIsNumber = term_is_number(env, b);
+    aIsNumber = term_is_number(ctx->env, a);
+    bIsNumber = term_is_number(ctx->env, b);
 
     if (aIsNumber) {
         if (bIsNumber) {
-            int result = enif_compare_compat(env, a, b);
-
-            if (result < 0) {
-                return -1;
-            } else if (result > 0) {
-                return 1;
-            }
-
-            return 0;
+            return enif_compare_compat(ctx->env, a, b);
         }
 
         return -1;
@@ -109,17 +174,17 @@ less_json(ErlNifEnv* env, ERL_NIF_TERM a, ERL_NIF_TERM b)
         return 1;
     }
 
-    aIsBin = enif_is_binary(env, a);
-    bIsBin = enif_is_binary(env, b);
+    aIsBin = enif_is_binary(ctx->env, a);
+    bIsBin = enif_is_binary(ctx->env, b);
 
     if (aIsBin) {
         if (bIsBin) {
             ErlNifBinary binA, binB;
 
-            enif_inspect_binary(env, a, &binA);
-            enif_inspect_binary(env, b, &binB);
+            enif_inspect_binary(ctx->env, a, &binA);
+            enif_inspect_binary(ctx->env, b, &binB);
 
-            return compare_strings(binA, binB);
+            return compare_strings(ctx, binA, binB);
         }
 
         return -1;
@@ -129,12 +194,12 @@ less_json(ErlNifEnv* env, ERL_NIF_TERM a, ERL_NIF_TERM b)
         return 1;
     }
 
-    aIsList = enif_is_list(env, a);
-    bIsList = enif_is_list(env, b);
+    aIsList = enif_is_list(ctx->env, a);
+    bIsList = enif_is_list(ctx->env, b);
 
     if (aIsList) {
         if (bIsList) {
-            return compare_lists(env, a, b);
+            return compare_lists(depth, ctx, a, b);
         }
 
         return -1;
@@ -144,21 +209,25 @@ less_json(ErlNifEnv* env, ERL_NIF_TERM a, ERL_NIF_TERM b)
         return 1;
     }
 
-    if (!enif_get_tuple(env, a, &aArity, &aProps)) {
-        return COMP_ERROR;
+    if (!enif_get_tuple(ctx->env, a, &aArity, &aProps)) {
+        ctx->error = 1;
+        return 0;
     }
-    if ((aArity != 1) || !enif_is_list(env, aProps[0])) {
-        return COMP_ERROR;
-    }
-
-    if (!enif_get_tuple(env, b, &bArity, &bProps)) {
-        return COMP_ERROR;
-    }
-    if ((bArity != 1) || !enif_is_list(env, bProps[0])) {
-        return COMP_ERROR;
+    if ((aArity != 1) || !enif_is_list(ctx->env, aProps[0])) {
+        ctx->error = 1;
+        return 0;
     }
 
-    return compare_props(env, aProps[0], bProps[0]);
+    if (!enif_get_tuple(ctx->env, b, &bArity, &bProps)) {
+        ctx->error = 1;
+        return 0;
+    }
+    if ((bArity != 1) || !enif_is_list(ctx->env, bProps[0])) {
+        ctx->error = 1;
+        return 0;
+    }
+
+    return compare_props(depth, ctx, aProps[0], bProps[0]);
 }
 
 
@@ -178,53 +247,44 @@ atom_sort_order(ErlNifEnv* env, ERL_NIF_TERM a)
 
 
 int
-term_is_number(ErlNifEnv* env, ERL_NIF_TERM t)
-{
-#if (ERL_NIF_MAJOR_VERSION > 2) || \
-    (ERL_NIF_MAJOR_VERSION == 2 && ERL_NIF_MINOR_VERSION >= 3)
-    /* OTP R15B or higher */
-    return enif_is_number(env, t);
-#else
-    /* Determination by exclusion of parts. To be used only inside less_json! */
-    return !enif_is_binary(env, t) && !enif_is_list(env, t) &&
-        !enif_is_tuple(env, t);
-#endif
-}
-
-
-int
-compare_lists(ErlNifEnv* env, ERL_NIF_TERM a, ERL_NIF_TERM b)
+compare_lists(int depth, ctx_t* ctx, ERL_NIF_TERM a, ERL_NIF_TERM b)
 {
     ERL_NIF_TERM headA, tailA;
     ERL_NIF_TERM headB, tailB;
     int aIsEmpty, bIsEmpty;
     int result;
 
-    aIsEmpty = !enif_get_list_cell(env, a, &headA, &tailA);
-    bIsEmpty = !enif_get_list_cell(env, b, &headB, &tailB);
+    while (1) {
+        aIsEmpty = !enif_get_list_cell(ctx->env, a, &headA, &tailA);
+        bIsEmpty = !enif_get_list_cell(ctx->env, b, &headB, &tailB);
 
-    if (aIsEmpty) {
-        if (bIsEmpty) {
-            return 0;
+        if (aIsEmpty) {
+            if (bIsEmpty) {
+                return 0;
+            }
+            return -1;
         }
-        return -1;
+
+        if (bIsEmpty) {
+            return 1;
+        }
+
+        result = less_json(depth + 1, ctx, headA, headB);
+
+        if (ctx->error || result != 0) {
+            return result;
+        }
+
+        a = tailA;
+        b = tailB;
     }
 
-    if (bIsEmpty) {
-        return 1;
-    }
-
-    result = less_json(env, headA, headB);
-    if (result == COMP_ERROR || result != 0) {
-        return result;
-    }
-
-    return compare_lists(env, tailA, tailB);
+    return result;
 }
 
 
 int
-compare_props(ErlNifEnv* env, ERL_NIF_TERM a, ERL_NIF_TERM b)
+compare_props(int depth, ctx_t* ctx, ERL_NIF_TERM a, ERL_NIF_TERM b)
 {
     ERL_NIF_TERM headA, tailA;
     ERL_NIF_TERM headB, tailB;
@@ -234,52 +294,61 @@ compare_props(ErlNifEnv* env, ERL_NIF_TERM a, ERL_NIF_TERM b)
     int aIsEmpty, bIsEmpty;
     int keyCompResult, valueCompResult;
 
-    aIsEmpty = !enif_get_list_cell(env, a, &headA, &tailA);
-    bIsEmpty = !enif_get_list_cell(env, b, &headB, &tailB);
+    while (1) {
+        aIsEmpty = !enif_get_list_cell(ctx->env, a, &headA, &tailA);
+        bIsEmpty = !enif_get_list_cell(ctx->env, b, &headB, &tailB);
 
-    if (aIsEmpty) {
+        if (aIsEmpty) {
+            if (bIsEmpty) {
+                return 0;
+            }
+            return -1;
+        }
+
         if (bIsEmpty) {
+            return 1;
+        }
+
+        if (!enif_get_tuple(ctx->env, headA, &aArity, &aKV)) {
+            ctx->error = 1;
             return 0;
         }
-        return -1;
+        if ((aArity != 2) || !enif_inspect_binary(ctx->env, aKV[0], &keyA)) {
+            ctx->error = 1;
+            return 0;
+        }
+
+        if (!enif_get_tuple(ctx->env, headB, &bArity, &bKV)) {
+            ctx->error = 1;
+            return 0;
+        }
+        if ((bArity != 2) || !enif_inspect_binary(ctx->env, bKV[0], &keyB)) {
+            ctx->error = 1;
+            return 0;
+        }
+
+        keyCompResult = compare_strings(ctx, keyA, keyB);
+
+        if (ctx->error || keyCompResult != 0) {
+            return keyCompResult;
+        }
+
+        valueCompResult = less_json(depth + 1, ctx, aKV[1], bKV[1]);
+
+        if (ctx->error || valueCompResult != 0) {
+            return valueCompResult;
+        }
+
+        a = tailA;
+        b = tailB;
     }
 
-    if (bIsEmpty) {
-        return 1;
-    }
-
-    if (!enif_get_tuple(env, headA, &aArity, &aKV)) {
-        return COMP_ERROR;
-    }
-    if ((aArity != 2) || !enif_inspect_binary(env, aKV[0], &keyA)) {
-        return COMP_ERROR;
-    }
-
-    if (!enif_get_tuple(env, headB, &bArity, &bKV)) {
-        return COMP_ERROR;
-    }
-    if ((bArity != 2) || !enif_inspect_binary(env, bKV[0], &keyB)) {
-        return COMP_ERROR;
-    }
-
-    keyCompResult = compare_strings(keyA, keyB);
-
-    if (keyCompResult == COMP_ERROR || keyCompResult != 0) {
-        return keyCompResult;
-    }
-
-    valueCompResult = less_json(env, aKV[1], bKV[1]);
-
-    if (valueCompResult == COMP_ERROR || valueCompResult != 0) {
-        return valueCompResult;
-    }
-
-    return compare_props(env, tailA, tailB);
+    return 0;
 }
 
 
 int
-compare_strings(ErlNifBinary a, ErlNifBinary b)
+compare_strings(ctx_t* ctx, ErlNifBinary a, ErlNifBinary b)
 {
     UErrorCode status = U_ZERO_ERROR;
     UCharIterator iterA, iterB;
@@ -288,21 +357,18 @@ compare_strings(ErlNifBinary a, ErlNifBinary b)
     uiter_setUTF8(&iterA, (const char *) a.data, (uint32_t) a.size);
     uiter_setUTF8(&iterB, (const char *) b.data, (uint32_t) b.size);
 
-    enif_mutex_lock(collMutex);
-    result = ucol_strcollIter(coll, &iterA, &iterB, &status);
-    enif_mutex_unlock(collMutex);
+    reserve_coll(ctx);
+    result = ucol_strcollIter(ctx->coll, &iterA, &iterB, &status);
 
     if (U_FAILURE(status)) {
-        return COMP_ERROR;
+        ctx->error = 1;
+        return 0;
     }
 
-    if (result < 0) {
-       return -1;
-    } else if (result > 0) {
-       return 1;
-    }
+    /* ucol_strcollIter returns 0, -1 or 1
+     * (see type UCollationResult in unicode/ucol.h) */
 
-    return 0;
+    return result;
 }
 
 
@@ -310,18 +376,42 @@ int
 on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
 {
     UErrorCode status = U_ZERO_ERROR;
+    int i, j;
 
-    coll = ucol_open("", &status);
-
-    if (U_FAILURE(status)) {
+    if (!enif_get_int(env, info, &numCollators)) {
         return 1;
+    }
+
+    if (numCollators < 1) {
+        return 2;
     }
 
     collMutex = enif_mutex_create("coll_mutex");
 
     if (collMutex == NULL) {
-        ucol_close(coll);
-        return 2;
+        return 3;
+    }
+
+    collators = enif_alloc(sizeof(UCollator*) * numCollators);
+
+    if (collators == NULL) {
+        enif_mutex_destroy(collMutex);
+        return 4;
+    }
+
+    for (i = 0; i < numCollators; i++) {
+        collators[i] = ucol_open("", &status);
+
+        if (U_FAILURE(status)) {
+            for (j = 0; j < i; j++) {
+                ucol_close(collators[j]);
+            }
+
+            enif_free(collators);
+            enif_mutex_destroy(collMutex);
+
+            return 5;
+        }
     }
 
     ATOM_TRUE = enif_make_atom(env, "true");
@@ -335,11 +425,18 @@ on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
 void
 on_unload(ErlNifEnv* env, void* priv_data)
 {
+    if (collators != NULL) {
+        int i;
+
+        for (i = 0; i < numCollators; i++) {
+            ucol_close(collators[i]);
+        }
+
+        enif_free(collators);
+    }
+
     if (collMutex != NULL) {
         enif_mutex_destroy(collMutex);
-    }
-    if (coll != NULL) {
-        ucol_close(coll);
     }
 }
 

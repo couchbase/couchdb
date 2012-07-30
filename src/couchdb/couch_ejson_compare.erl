@@ -24,7 +24,8 @@ init() ->
     LibDir0 ->
         LibDir0
     end,
-    (catch erlang:load_nif(filename:join([LibDir, ?MODULE]), 0)),
+    NumScheds = erlang:system_info(schedulers),
+    (catch erlang:load_nif(filename:join([LibDir, ?MODULE]), NumScheds)),
     case erlang:system_info(otp_release) of
     "R13B03" -> true;
     _ -> ok
