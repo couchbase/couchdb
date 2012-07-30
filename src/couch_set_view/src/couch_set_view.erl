@@ -614,8 +614,7 @@ reduce_to_count(Reductions) ->
     <<Count:40, _/binary>> =
     couch_btree:final_reduce(
         fun(reduce, KVs) ->
-            Count = lists:sum(
-                [length(couch_set_view_util:parse_values(V)) || {_, V} <- KVs]),
+            Count = length(couch_set_view_util:expand_dups(KVs, [])),
             <<Count:40>>;
         (rereduce, Reds) ->
             Count = lists:foldl(fun(<<C:40, _/binary>>, Acc) -> Acc + C end, 0, Reds),
