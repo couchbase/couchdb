@@ -1195,7 +1195,8 @@ view_qs(ViewArgs, MergeParams) ->
         limit = Limit,
         debug = Debug,
         filter = Filter,
-        type = IndexType
+        type = IndexType,
+        skip = Skip
     } = ViewArgs,
     #index_merge{on_error = OnError} = MergeParams,
 
@@ -1295,7 +1296,7 @@ view_qs(ViewArgs, MergeParams) ->
     true ->
         [];
     false ->
-        ["limit=" ++ integer_to_list(Limit)]
+        ["limit=" ++ integer_to_list(Limit + Skip)]
     end ++
     case Debug =:= DefViewArgs#view_query_args.debug of
     true ->
