@@ -386,16 +386,15 @@ delete_sort_files(RootDir) ->
 
 
 -spec decode_key_docid(binary()) -> {term(), binary()}.
-decode_key_docid(<<KeyLen:16, KeyJson:KeyLen/binary, DocIdLen:16, DocId:DocIdLen/binary>>) ->
+decode_key_docid(<<KeyLen:16, KeyJson:KeyLen/binary, DocId/binary>>) ->
     {?JSON_DECODE(KeyJson), DocId}.
 
 
 -spec split_key_docid(binary()) -> {binary(), binary()}.
-split_key_docid(<<KeyLen:16, KeyJson:KeyLen/binary, DocIdLen:16, DocId:DocIdLen/binary>>) ->
+split_key_docid(<<KeyLen:16, KeyJson:KeyLen/binary, DocId/binary>>) ->
     {KeyJson, DocId}.
 
 
 -spec encode_key_docid(binary(), binary()) -> binary().
 encode_key_docid(JsonKey, DocId) ->
-    <<(byte_size(JsonKey)):16, JsonKey/binary,
-      (byte_size(DocId)):16, DocId/binary>>.
+    <<(byte_size(JsonKey)):16, JsonKey/binary, DocId/binary>>.

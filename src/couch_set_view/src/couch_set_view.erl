@@ -714,9 +714,7 @@ fold_fun(_Fun, [], _, Acc) ->
     {ok, Acc};
 fold_fun(Fun, [KV | Rest], {KVReds, Reds}, Acc) ->
     {KeyDocId, <<PartId:16, Value/binary>>} = KV,
-    <<KeyLen:16, KeyJson:KeyLen/binary,
-      DocIdLen:16, DocId:DocIdLen/binary>> = KeyDocId,
-    Key = ?JSON_DECODE(KeyJson),
+    {Key, DocId} = couch_set_view_util:decode_key_docid(KeyDocId),
     case Fun({{Key, DocId}, {PartId, {json, Value}}}, {KVReds, Reds}, Acc) of
     {ok, Acc2} ->
         fold_fun(Fun, Rest, {[KV | KVReds], Reds}, Acc2);
