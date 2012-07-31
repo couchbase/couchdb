@@ -12,7 +12,7 @@
 
 -module(couch_ejson_compare).
 
--export([less/2]).
+-export([less/2, less_json/2]).
 
 -on_load(init/0).
 
@@ -32,26 +32,46 @@ init() ->
     end.
 
 
+-spec less(EJsonKey1::term(), EJsonKey2::term()) -> -1 .. 1.
 less(A, B) ->
     try
-        less_nif(A, B)
+        case less_ejson_nif(A, B) of
+        {error, _Reason} = Error ->
+            throw(Error);
+        Else ->
+            Else
+        end
     catch
-    exit:{not_loaded, ?MODULE} ->
+    error:badarg ->
         less_erl(A, B)
     end.
 
 
-less_nif(_, _) ->
-    exit({not_loaded, ?MODULE}).
+-spec less_json(RawJsonKey1::iolist(), RawJsonKey2::iolist()) -> -1 .. 1.
+less_json(A, B) ->
+    case less_json_nif(A, B) of
+    {error, _Reason} = Error ->
+        throw(Error);
+    Else ->
+        Else
+    end.
+
+
+less_ejson_nif(_, _) ->
+    erlang:nif_error(ejson_compare_nif_not_loaded).
+
+
+less_json_nif(_, _) ->
+    erlang:nif_error(ejson_compare_nif_not_loaded).
 
 
 less_erl(A,A)                                 -> 0;
 
-less_erl(A,B) when is_atom(A), is_atom(B)     -> atom_sort(A) - atom_sort(B);
+less_erl(A,B) when is_atom(A), is_atom(B)     -> convert(atom_sort(A) - atom_sort(B));
 less_erl(A,_) when is_atom(A)                 -> -1;
 less_erl(_,B) when is_atom(B)                 -> 1;
 
-less_erl(A,B) when is_number(A), is_number(B) -> A - B;
+less_erl(A,B) when is_number(A), is_number(B) -> convert(A - B);
 less_erl(A,_) when is_number(A)               -> -1;
 less_erl(_,B) when is_number(B)               -> 1;
 
@@ -99,3 +119,7 @@ less_list([A|RestA], [B|RestB]) ->
     Result ->
         Result
     end.
+
+convert(N) when N < 0 -> -1;
+convert(N) when N > 0 ->  1;
+convert(_)            ->  0.

@@ -54,9 +54,12 @@ copy Release\couch_ejson_compare.lib .</Command>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="..\couch_ejson_compare.c" />
+    <ClCompile Include="..\couch_raw_json_compare.c" />
+    <ClCompile Include="..\couch_ejson_compare_utils.c" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\erl_nif_compat.h" />
+    <ClInclude Include="..\couch_ejson_compare.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

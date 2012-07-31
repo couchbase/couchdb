@@ -17,7 +17,8 @@ erlinterfaceldflags = $(ERL_INTERFACE_DIR_LIB) -lerl_interface -lei
 
 EXTRA_DIST = \
 	stat_descriptions.cfg.in \
-	couch_ejson_compare/erl_nif_compat.h
+	couch_ejson_compare/erl_nif_compat.h \
+	couch_ejson_compare/couch_ejson_compare.h
 
 CLEANFILES = stat_descriptions.cfg
 SNAPPY_SRC=../../snappy/snappy-$(SNAPPY_MAJOR).$(SNAPPY_MINOR).$(SNAPPY_PATCHLEVEL)
@@ -44,10 +45,15 @@ couchprivlib_LTLIBRARIES = couch_icu_driver.la
 if USE_OTP_NIFS
 couchprivlib_LTLIBRARIES += couch_ejson_compare.la
 
-couch_ejson_compare_la_SOURCES = couch_ejson_compare/couch_ejson_compare.c
+couch_ejson_compare_la_SOURCES = couch_ejson_compare/couch_ejson_compare.c \
+	couch_ejson_compare/couch_raw_json_compare.c \
+	couch_ejson_compare/couch_ejson_compare_utils.c
 couch_ejson_compare_la_CFLAGS = -D_BSD_SOURCE $(ICU_LOCAL_FLAGS)
 couch_ejson_compare_la_LDFLAGS = -module -avoid-version $(ICU_LOCAL_FLAGS)
 couch_ejson_compare_la_LIBADD = $(ICU_LOCAL_LIBS)
+if GCC
+couch_ejson_compare_la_CFLAGS += -ansi -Wall -Winline
+endif
 
 endif
 couch_icu_driver_la_SOURCES = icu_driver/couch_icu_driver.c
@@ -101,7 +107,7 @@ $(WIN_ICU_LIB_DIR):$(ICU_LIB_DIR)
 $(WIN_ERL_INCLUDE):$(ERLANG_INCLUDE)
 	echo $< | sed -e "s|^/cygdrive/\([a-zA-Z]\)|\1:|" > $@
 
-$(COUCH_EJSON_COMPARE) : couch_ejson_compare/couch_ejson_compare.c $(EJSON_COMPARE_MSBUILD) $(EJSON_COMPARE_VCPROJ)
+$(COUCH_EJSON_COMPARE) : couch_ejson_compare/couch_ejson_compare.c couch_ejson_compare/couch_raw_json_compare.c couch_ejson_compare/couch_ejson_compare_utils.c $(EJSON_COMPARE_MSBUILD) $(EJSON_COMPARE_VCPROJ)
 	$(MKDIR_P) "$(couchprivlibdir)" || true
 	(cd couch_ejson_compare/win32 && cmd /c msbuild.bat)
 	cp $(EJSON_COMPARE_DIR)/couch_ejson_compare.dll $(couchprivlibdir)

@@ -13,10 +13,7 @@
  */
 
 #include <stdio.h>
-#include <assert.h>
-#include "erl_nif_compat.h"
-#include "unicode/ucol.h"
-#include "unicode/ucasemap.h"
+#include "couch_ejson_compare.h"
 
 #define MAX_DEPTH 20
 
@@ -34,67 +31,39 @@
 static ERL_NIF_TERM ATOM_TRUE;
 static ERL_NIF_TERM ATOM_FALSE;
 static ERL_NIF_TERM ATOM_NULL;
+static ERL_NIF_TERM ATOM_ERROR;
 
-typedef struct {
-    ErlNifEnv* env;
-    int error;
-    UCollator* coll;
-} ctx_t;
 
-static UCollator** collators = NULL;
-static int collStackTop = 0;
-static int numCollators = 0;
-static ErlNifMutex* collMutex = NULL;
+/* TODO: move all ejson helpers into dedicate file and rename this one
+   to couch_ejson_compare_nif.c */
 
-static ERL_NIF_TERM less_json_nif(ErlNifEnv*, int, const ERL_NIF_TERM []);
+static ERL_NIF_TERM less_ejson_nif(ErlNifEnv*, int, const ERL_NIF_TERM []);
 static int on_load(ErlNifEnv*, void**, ERL_NIF_TERM);
 static void on_unload(ErlNifEnv*, void*);
-static __inline int less_json(int, ctx_t*, ERL_NIF_TERM, ERL_NIF_TERM);
+static __inline int less_ejson(int, couch_ejson_ctx_t*, ERL_NIF_TERM, ERL_NIF_TERM);
 static __inline int atom_sort_order(ErlNifEnv*, ERL_NIF_TERM);
-static __inline int compare_strings(ctx_t*, ErlNifBinary, ErlNifBinary);
-static __inline int compare_lists(int, ctx_t*, ERL_NIF_TERM, ERL_NIF_TERM);
-static __inline int compare_props(int, ctx_t*, ERL_NIF_TERM, ERL_NIF_TERM);
-static __inline void reserve_coll(ctx_t*);
-static __inline void release_coll(ctx_t*);
+static __inline int compare_strings(couch_ejson_ctx_t*, ErlNifBinary, ErlNifBinary);
+static __inline int compare_lists(int, couch_ejson_ctx_t*, ERL_NIF_TERM, ERL_NIF_TERM);
+static __inline int compare_props(int, couch_ejson_ctx_t*, ERL_NIF_TERM, ERL_NIF_TERM);
+static __inline ERL_NIF_TERM make_return_term(couch_ejson_ctx_t*, int);
 
-
-void
-reserve_coll(ctx_t *ctx)
-{
-    if (ctx->coll == NULL) {
-        enif_mutex_lock(collMutex);
-        assert(collStackTop < numCollators);
-        ctx->coll = collators[collStackTop];
-        collStackTop += 1;
-        enif_mutex_unlock(collMutex);
-    }
-}
-
-
-void
-release_coll(ctx_t *ctx)
-{
-    if (ctx->coll != NULL) {
-        enif_mutex_lock(collMutex);
-        collStackTop -= 1;
-        assert(collStackTop >= 0);
-        enif_mutex_unlock(collMutex);
-    }
-}
+static ERL_NIF_TERM less_json_nif(ErlNifEnv*, int, const ERL_NIF_TERM []);
 
 
 
 ERL_NIF_TERM
-less_json_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+less_ejson_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 {
-    ctx_t ctx;
+    couch_ejson_ctx_t ctx;
     int result;
 
     ctx.env = env;
     ctx.error = 0;
+    ctx.errorMsg = NULL;
     ctx.coll = NULL;
+    ctx.globalCtx = (couch_ejson_global_ctx_t *) enif_priv_data(env);
 
-    result = less_json(1, &ctx, argv[0], argv[1]);
+    result = less_ejson(1, &ctx, argv[0], argv[1]);
     release_coll(&ctx);
 
     /*
@@ -102,17 +71,56 @@ less_json_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
      *
      * 1) We got an invalid EJSON operand;
      * 2) The EJSON structures are too deep - to avoid allocating too
-     *    many C stack frames (because less_json is a recursive function),
+     *    many C stack frames (because less_ejson is a recursive function),
      *    and running out of memory, we throw a badarg exception to Erlang
      *    and do the comparison in Erlang land. In practice, views keys are
      *    EJSON structures with very little nesting.
      */
-    return ctx.error ? enif_make_badarg(env) : enif_make_int(env, result);
+    return make_return_term(&ctx, result);
+}
+
+
+ERL_NIF_TERM
+less_json_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+{
+    couch_ejson_ctx_t ctx;
+    int result;
+    ErlNifBinary key1Bin, key2Bin;
+    char *keys;
+
+    if (!enif_inspect_iolist_as_binary(env, argv[0], &key1Bin)) {
+        return enif_make_badarg(env);
+    }
+    if (!enif_inspect_iolist_as_binary(env, argv[1], &key2Bin)) {
+        return enif_make_badarg(env);
+    }
+
+    keys = (char *) enif_alloc(key1Bin.size + key2Bin.size + 2);
+    if (keys == NULL) {
+        return enif_make_tuple2(env, ATOM_ERROR, enif_make_atom(env, "Failed to allocate memory"));
+    }
+
+    memcpy(keys, key1Bin.data, key1Bin.size);
+    keys[key1Bin.size] = '\0';
+    memcpy(keys + key1Bin.size + 1, key2Bin.data, key2Bin.size);
+    keys[key1Bin.size + 1 + key2Bin.size] = '\0';
+
+    ctx.env = env;
+    ctx.error = 0;
+    ctx.errorMsg = NULL;
+    ctx.coll = NULL;
+    ctx.globalCtx = (couch_ejson_global_ctx_t *) enif_priv_data(env);
+
+    result = less_json(keys, keys + key1Bin.size + 1, &ctx);
+    release_coll(&ctx);
+    enif_free(keys);
+
+    return make_return_term(&ctx, result);
 }
 
 
 int
-less_json(int depth, ctx_t* ctx, ERL_NIF_TERM a, ERL_NIF_TERM b)
+less_ejson(int depth, couch_ejson_ctx_t* ctx, ERL_NIF_TERM a, ERL_NIF_TERM b)
 {
     int aIsAtom, bIsAtom;
     int aIsBin, bIsBin;
@@ -247,7 +255,7 @@ atom_sort_order(ErlNifEnv* env, ERL_NIF_TERM a)
 
 
 int
-compare_lists(int depth, ctx_t* ctx, ERL_NIF_TERM a, ERL_NIF_TERM b)
+compare_lists(int depth, couch_ejson_ctx_t* ctx, ERL_NIF_TERM a, ERL_NIF_TERM b)
 {
     ERL_NIF_TERM headA, tailA;
     ERL_NIF_TERM headB, tailB;
@@ -269,7 +277,7 @@ compare_lists(int depth, ctx_t* ctx, ERL_NIF_TERM a, ERL_NIF_TERM b)
             return 1;
         }
 
-        result = less_json(depth + 1, ctx, headA, headB);
+        result = less_ejson(depth + 1, ctx, headA, headB);
 
         if (ctx->error || result != 0) {
             return result;
@@ -284,7 +292,7 @@ compare_lists(int depth, ctx_t* ctx, ERL_NIF_TERM a, ERL_NIF_TERM b)
 
 
 int
-compare_props(int depth, ctx_t* ctx, ERL_NIF_TERM a, ERL_NIF_TERM b)
+compare_props(int depth, couch_ejson_ctx_t* ctx, ERL_NIF_TERM a, ERL_NIF_TERM b)
 {
     ERL_NIF_TERM headA, tailA;
     ERL_NIF_TERM headB, tailB;
@@ -333,7 +341,7 @@ compare_props(int depth, ctx_t* ctx, ERL_NIF_TERM a, ERL_NIF_TERM b)
             return keyCompResult;
         }
 
-        valueCompResult = less_json(depth + 1, ctx, aKV[1], bKV[1]);
+        valueCompResult = less_ejson(depth + 1, ctx, aKV[1], bKV[1]);
 
         if (ctx->error || valueCompResult != 0) {
             return valueCompResult;
@@ -348,7 +356,7 @@ compare_props(int depth, ctx_t* ctx, ERL_NIF_TERM a, ERL_NIF_TERM b)
 
 
 int
-compare_strings(ctx_t* ctx, ErlNifBinary a, ErlNifBinary b)
+compare_strings(couch_ejson_ctx_t* ctx, ErlNifBinary a, ErlNifBinary b)
 {
     UErrorCode status = U_ZERO_ERROR;
     UCharIterator iterA, iterB;
@@ -372,51 +380,83 @@ compare_strings(ctx_t* ctx, ErlNifBinary a, ErlNifBinary b)
 }
 
 
+ERL_NIF_TERM
+make_return_term(couch_ejson_ctx_t *ctx, int result)
+{
+    if (ctx->error != 0) {
+        if (ctx->errorMsg != NULL) {
+            /* Memory allocation errors, etc */
+            ERL_NIF_TERM reason = enif_make_string(ctx->env, ctx->errorMsg, ERL_NIF_LATIN1);
+
+            return enif_make_tuple2(ctx->env, ATOM_ERROR, reason);
+        } else {
+            /* Invalid EJSON operand */
+            return enif_make_badarg(ctx->env);
+        }
+    }
+
+    result = (result < 0) ? -1 : ((result > 0) ? 1 : 0);
+
+    return enif_make_int(ctx->env, result);
+}
+
+
 int
 on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
 {
     UErrorCode status = U_ZERO_ERROR;
     int i, j;
+    couch_ejson_global_ctx_t *globalCtx;
 
-    if (!enif_get_int(env, info, &numCollators)) {
+    globalCtx = (couch_ejson_global_ctx_t *) enif_alloc(sizeof(couch_ejson_global_ctx_t));
+
+    if (globalCtx == NULL) {
         return 1;
     }
 
-    if (numCollators < 1) {
+    if (!enif_get_int(env, info, &globalCtx->numCollators)) {
         return 2;
     }
 
-    collMutex = enif_mutex_create("coll_mutex");
-
-    if (collMutex == NULL) {
+    if (globalCtx->numCollators < 1) {
         return 3;
     }
 
-    collators = enif_alloc(sizeof(UCollator*) * numCollators);
+    globalCtx->collMutex = enif_mutex_create("coll_mutex");
 
-    if (collators == NULL) {
-        enif_mutex_destroy(collMutex);
+    if (globalCtx->collMutex == NULL) {
         return 4;
     }
 
-    for (i = 0; i < numCollators; i++) {
-        collators[i] = ucol_open("", &status);
+    globalCtx->collators = (UCollator **) enif_alloc(sizeof(UCollator *) * globalCtx->numCollators);
+
+    if (globalCtx->collators == NULL) {
+        enif_mutex_destroy(globalCtx->collMutex);
+        return 5;
+    }
+
+    for (i = 0; i < globalCtx->numCollators; i++) {
+        globalCtx->collators[i] = ucol_open("", &status);
 
         if (U_FAILURE(status)) {
             for (j = 0; j < i; j++) {
-                ucol_close(collators[j]);
+                ucol_close(globalCtx->collators[j]);
             }
 
-            enif_free(collators);
-            enif_mutex_destroy(collMutex);
+            enif_free(globalCtx->collators);
+            enif_mutex_destroy(globalCtx->collMutex);
 
             return 5;
         }
     }
 
+    globalCtx->collStackTop = 0;
+    *priv = globalCtx;
+
     ATOM_TRUE = enif_make_atom(env, "true");
     ATOM_FALSE = enif_make_atom(env, "false");
     ATOM_NULL = enif_make_atom(env, "null");
+    ATOM_ERROR = enif_make_atom(env, "error");
 
     return 0;
 }
@@ -425,24 +465,22 @@ on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
 void
 on_unload(ErlNifEnv* env, void* priv_data)
 {
-    if (collators != NULL) {
-        int i;
+    couch_ejson_global_ctx_t *globalCtx = (couch_ejson_global_ctx_t *) priv_data;
+    int i;
 
-        for (i = 0; i < numCollators; i++) {
-            ucol_close(collators[i]);
-        }
-
-        enif_free(collators);
+    for (i = 0; i < globalCtx->numCollators; i++) {
+        ucol_close(globalCtx->collators[i]);
     }
 
-    if (collMutex != NULL) {
-        enif_mutex_destroy(collMutex);
-    }
+    enif_free(globalCtx->collators);
+    enif_mutex_destroy(globalCtx->collMutex);
+    enif_free(globalCtx);
 }
 
 
 static ErlNifFunc nif_functions[] = {
-    {"less_nif", 2, less_json_nif}
+    {"less_ejson_nif", 2, less_ejson_nif},
+    {"less_json_nif", 2, less_json_nif}
 };
 
 

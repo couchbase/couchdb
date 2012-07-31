@@ -38,6 +38,7 @@ source_files = \
 test_files = \
     test/00-prepare.t \
     test/01-load.t \
+    test/01-collation.t \
     test/02-old-index-cleanup.t \
     test/03-db-compaction-file-leaks.t \
     test/04-handle-db-deletes.t \
