@@ -47,6 +47,23 @@ static const char *SUM_FUNCTION_STRING =
     "    return sum;"
     "})";
 
+static const char *DATE_FUNCTION_STRING =
+    // I wish it was on the prototype, but that will require bigger
+    // C changes as adding to the date prototype should be done on
+    // process launch. The code you see here may be faster, but it
+    // is less JavaScripty.
+    // "Date.prototype.toArray = (function() {"
+    "(function(date) {"
+    "    date = date.getUTCDate ? date : new Date(date);"
+    "    return isFinite(date.valueOf()) ?"
+    "      [date.getUTCFullYear(),"
+    "      (date.getUTCMonth() + 1),"
+    "       date.getUTCDate(),"
+    "       date.getUTCHours(),"
+    "       date.getUTCMinutes(),"
+    "       date.getUTCSeconds()] : null;"
+    "})";
+
 static const char *BASE64_FUNCTION_STRING =
     "(function(b64) {"
     "    var i, j, l, tmp, scratch, arr = [];"
@@ -366,6 +383,9 @@ Persistent<Context> createJsContext(map_reduce_ctx_t *ctx)
 
     Handle<Function> decodeBase64Fun = compileFunction(BASE64_FUNCTION_STRING);
     context->Global()->Set(String::New("decodeBase64"), decodeBase64Fun);
+
+    Handle<Function> dateToArrayFun = compileFunction(DATE_FUNCTION_STRING);
+    context->Global()->Set(String::New("dateToArray"), dateToArrayFun);
 
     return context;
 }

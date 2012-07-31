@@ -21,7 +21,7 @@
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(2),
+    etap:plan(3),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -35,6 +35,7 @@ main(_) ->
 test() ->
     test_sum_function(),
     test_base64decode_function(),
+    test_dateToArray_function(),
     ok.
 
 
@@ -51,3 +52,11 @@ test_base64decode_function() ->
     ]),
     Results = mapreduce:map_doc(Ctx, <<"{ \"_id\": \"counter\", \"_bin\": \"NQ==\" }">>, <<"{}">>),
     etap:is(Results, {ok,[[{<<"\"counter\"">>,<<"\"5\"">>}]]}, "decodeBase64() builtin function works").
+
+
+test_dateToArray_function() ->
+    {ok, Ctx} = mapreduce:start_map_context([
+        <<"function(doc, meta) { emit(dateToArray(doc.date), meta.id); }">>
+    ]),
+    Results = mapreduce:map_doc(Ctx, <<"{ \"date\":\"+033658-09-27T01:46:40.000Z\"}">>, <<"{\"id\":\"foo\"}">>),
+    etap:is(Results, {ok,[[{<<"[33658,9,27,1,46,40]">>,<<"\"foo\"">>}]]}, "dateToArray() builtin function works").
