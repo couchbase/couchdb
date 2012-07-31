@@ -1500,12 +1500,14 @@ get_data_size_info(State) ->
     #set_view_group{
         fd = Fd,
         id_btree = Btree,
+        sig = GroupSig,
         views = Views
     } = Group,
     {ok, FileSize} = couch_file:bytes(Fd),
     DataSize = view_group_data_size(Btree, Views),
     [Stats] = ets:lookup(?SET_VIEW_STATS_ETS, ?set_view_group_stats_key(Group)),
     Info = [
+        {signature, hex_sig(GroupSig)},
         {disk_size, FileSize},
         {data_size, DataSize},
         {accesses, Stats#set_view_group_stats.accesses},
