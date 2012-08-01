@@ -527,8 +527,7 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
             Acc;
         (Kv, AccBuf) ->
             [{KeyBin, ValBin}] = convert_back_index_kvs_to_binary([Kv], []),
-            KvBin = <<(byte_size(KeyBin)):16, KeyBin/binary,
-                      (byte_size(ValBin)):32, ValBin/binary>>,
+            KvBin = <<(byte_size(KeyBin)):16, KeyBin/binary, ValBin/binary>>,
             <<AccBuf/binary, (byte_size(KvBin)):32, KvBin/binary>>
         end,
         IdBuffer,
@@ -539,8 +538,7 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
             ViewLessFun = fun({A, _}, {B, _}) -> (Bt#btree.less)(A, B) end,
             {NewBuf, AccCount3} = lists:foldl(
                 fun({KeyBin, ValBin}, {AccBuf, AccCount2}) ->
-                    KvBin = <<(byte_size(KeyBin)):16, KeyBin/binary,
-                              (byte_size(ValBin)):32, ValBin/binary>>,
+                    KvBin = <<(byte_size(KeyBin)):16, KeyBin/binary, ValBin/binary>>,
                     AccBuf2 = <<AccBuf/binary, (byte_size(KvBin)):32, KvBin/binary>>,
                     {AccBuf2, AccCount2 + 1}
                 end,
@@ -1071,6 +1069,5 @@ convert_back_index_kvs_to_binary([{DocId, {PartId, ViewIdKeys}} | Rest], Acc) ->
     convert_back_index_kvs_to_binary(Rest, [KvBin | Acc]).
 
 
-file_sorter_format_function(Bin) ->
-    <<KeyLen:16, Key:KeyLen/binary, ValueLen:32, Value:ValueLen/binary>> = Bin,
+file_sorter_format_function(<<KeyLen:16, Key:KeyLen/binary, Value/binary>>) ->
     {Key, Value}.
