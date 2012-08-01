@@ -264,7 +264,7 @@ view_less_fun(Collation, Dir, ViewType) ->
             end
         end;
     <<"raw">> ->
-        fun(A, B) -> A < B end
+        fun(A, B) -> element(1, A) < element(1, B) end
     end,
     case Dir of
     fwd ->
