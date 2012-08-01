@@ -1639,10 +1639,14 @@ init_group(Fd, Group, IndexHeader) ->
                     iolist_to_binary([<<Count:40, AllPartitionsBitMap:?MAX_NUM_PARTITIONS>> | LenReductions])
                 end,
             Less = fun(A, B) ->
-                % TODO: more efficient collation, avoid full decoding of keys
-                Key1DocId1 = couch_set_view_util:decode_key_docid(A),
-                Key2DocId2 = couch_set_view_util:decode_key_docid(B),
-                couch_set_view:less_json_ids(Key1DocId1, Key2DocId2)
+                {Key1, DocId1} = couch_set_view_util:split_key_docid(A),
+                {Key2, DocId2} = couch_set_view_util:split_key_docid(B),
+                case couch_ejson_compare:less_json(Key1, Key2) of
+                0 ->
+                    DocId1 < DocId2;
+                LessResult ->
+                    LessResult < 0
+                end
             end,
             {ok, Btree} = couch_btree:open(
                 BTState, Fd, [{less, Less}, {reduce, ReduceFun} | BtreeOptions]),

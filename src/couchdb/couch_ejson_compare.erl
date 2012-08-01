@@ -47,7 +47,8 @@ less(A, B) ->
     end.
 
 
--spec less_json(RawJsonKey1::iolist(), RawJsonKey2::iolist()) -> -1 .. 1.
+-spec less_json(RawJsonKey1::iolist() | binary(),
+                RawJsonKey2::iolist() | binary()) -> -1 .. 1.
 less_json(A, B) ->
     case less_json_nif(A, B) of
     {error, _Reason} = Error ->
