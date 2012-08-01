@@ -124,10 +124,15 @@ cleanup_index_files(Db) ->
     DeleteFiles = [FilePath
            || FilePath <- FileList,
               re:run(FilePath, RegExp, [{capture, none}]) =:= nomatch],
-    % delete unused files
-    ?LOG_DEBUG("deleting unused view index files: ~p",[DeleteFiles]),
-    RootDir = couch_config:get("couchdb", "view_index_dir"),
-    [couch_file:delete(RootDir,File,false)||File <- DeleteFiles],
+
+    case DeleteFiles of
+    [] ->
+        ok;
+    _ ->
+        ?LOG_DEBUG("deleting unused view index files: ~p", [DeleteFiles]),
+        RootDir = couch_config:get("couchdb", "view_index_dir"),
+        [couch_file:delete(RootDir, File, false) || File <- DeleteFiles]
+    end,
     ok.
 
 list_index_files(Db) ->
