@@ -32,7 +32,6 @@ source_files = \
     src/couch_db_set.erl \
     src/couch_index_barrier.erl \
     src/couch_set_view_ddoc_cache.erl \
-    src/couch_set_view_update_daemon.erl \
     test/couch_set_view_test_util.erl
 
 test_files = \
@@ -71,7 +70,6 @@ compiled_files = \
     ebin/couch_db_set.beam \
     ebin/couch_index_barrier.beam \
     ebin/couch_set_view_ddoc_cache.beam \
-    ebin/couch_set_view_update_daemon.beam \
     test/couch_set_view_test_util.beam
 
 EXTRA_DIST = $(include_files) $(source_files) $(test_files) test/run.tpl

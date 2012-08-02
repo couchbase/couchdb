@@ -72,7 +72,6 @@ main(_) ->
 
 test() ->
     couch_set_view_test_util:start_server(test_set_name()),
-    ok = couch_config:set("set_views", "update_interval", "0", false),
 
     etap:diag("Testing debug parameters"),
     test_filter_parameter_main(erlang),

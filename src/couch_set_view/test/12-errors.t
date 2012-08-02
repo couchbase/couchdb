@@ -71,7 +71,6 @@ main(_) ->
 
 test() ->
     couch_set_view_test_util:start_server(test_set_name()),
-    ok = couch_config:set("set_views", "update_interval", "0", false),
 
     test_partition_not_found_when_group_is_configured(),
     test_partition_not_found_when_group_starts(),

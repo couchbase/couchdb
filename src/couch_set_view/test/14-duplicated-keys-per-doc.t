@@ -41,7 +41,6 @@ main(_) ->
 
 test() ->
     couch_set_view_test_util:start_server(test_set_name()),
-    ok = couch_config:set("set_views", "update_interval", "0", false),
 
     test_same_key_by_same_doc_multiple_times(),
     test_same_key_by_different_docs_multiple_times(),
