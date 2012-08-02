@@ -347,7 +347,7 @@ fold_view(ActiveParts, ValueGenFun) ->
     etap:diag("Folding the view with ?group=true"),
 
     PerKeyRedFoldFun = fun(Key, {json, Red}, {NextVal, I}) ->
-        ExpectedKey = doc_id(NextVal),
+        ExpectedKey = {json, ejson:encode(doc_id(NextVal))},
         ExpectedRed = ValueGenFun(NextVal),
         case {Key, ejson:decode(Red)} of
         {ExpectedKey, ExpectedRed} ->

@@ -16,6 +16,8 @@
 
 -on_load(init/0).
 
+-type raw_json() :: binary() | iolist() | {'json', binary()} | {'json', iolist()}.
+
 
 init() ->
     LibDir = case couch_config:get("couchdb", "util_driver_dir") of
@@ -47,10 +49,9 @@ less(A, B) ->
     end.
 
 
--spec less_json(RawJsonKey1::iolist() | binary(),
-                RawJsonKey2::iolist() | binary()) -> -1 .. 1.
+-spec less_json(raw_json(), raw_json()) -> -1 .. 1.
 less_json(A, B) ->
-    case less_json_nif(A, B) of
+    case less_json_nif(get_raw_json(A), get_raw_json(B)) of
     {error, _Reason} = Error ->
         throw(Error);
     Else ->
@@ -124,3 +125,9 @@ less_list([A|RestA], [B|RestB]) ->
 convert(N) when N < 0 -> -1;
 convert(N) when N > 0 ->  1;
 convert(_)            ->  0.
+
+
+get_raw_json({json, RawJson}) ->
+    RawJson;
+get_raw_json(RawJson) ->
+    RawJson.

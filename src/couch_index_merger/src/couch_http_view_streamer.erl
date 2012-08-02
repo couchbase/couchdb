@@ -76,36 +76,36 @@ next_streamer_state(Ctx, DataFun) ->
 % _all_docs error row
 transform_row({{Key, error}, Reason}, _Url) ->
     RowJson = <<"{\"key\":", Key/binary, ",\"error\":", Reason/binary, "}">>,
-    {{?JSON_DECODE(Key), error}, {row_json, RowJson}};
+    {{{json, Key}, error}, {row_json, RowJson}};
 
 % map view rows
 transform_row({{Key, DocId}, Value}, _Url) when is_binary(Value) ->
     RowJson = <<"{\"id\":", DocId/binary, ",\"key\":", Key/binary,
                 ",\"value\":", Value/binary, "}">>,
-    {{?JSON_DECODE(Key), ?JSON_DECODE(DocId)}, {row_json, RowJson}};
+    {{{json, Key}, ?JSON_DECODE(DocId)}, {row_json, RowJson}};
 
 transform_row({{Key, DocId}, Value, Doc}, _Url) when is_binary(Value) ->
     RowJson = <<"{\"id\":", DocId/binary, ",\"key\":", Key/binary,
                 ",\"value\":", Value/binary, ",\"doc\":", Doc/binary, "}">>,
-    {{?JSON_DECODE(Key), ?JSON_DECODE(DocId)}, {row_json, RowJson}};
+    {{{json, Key}, ?JSON_DECODE(DocId)}, {row_json, RowJson}};
 
 transform_row({{Key, DocId}, {PartId, _Node, Value}}, Url) ->
     RowJson = <<"{\"id\":", DocId/binary, ",\"key\":", Key/binary,
                 ",\"partition\":", PartId/binary, ",\"node\":", Url/binary,
                 ",\"value\":", Value/binary, "}">>,
-    {{?JSON_DECODE(Key), ?JSON_DECODE(DocId)}, {row_json, RowJson}};
+    {{{json, Key}, ?JSON_DECODE(DocId)}, {row_json, RowJson}};
 
 transform_row({{Key, DocId}, {PartId, _Node, Value}, Doc}, Url) ->
     RowJson = <<"{\"id\":", DocId/binary, ",\"key\":", Key/binary,
                 ",\"partition\":", PartId/binary, ",\"node\":", Url/binary,
                 ",\"value\":", Value/binary, ",\"doc\":", Doc/binary, "}">>,
-    {{?JSON_DECODE(Key), ?JSON_DECODE(DocId)}, {row_json, RowJson}};
+    {{{json, Key}, ?JSON_DECODE(DocId)}, {row_json, RowJson}};
 
 % reduce view rows
 transform_row({Key, Value}, _Url) when is_binary(Key) ->
     RowJson = <<"{\"key\":", Key/binary, ",\"value\":", Value/binary, "}">>,
     % value_json, in case rereduce needs to be done by the merger
-    {?JSON_DECODE(Key), {row_json, RowJson}, {value_json, Value}}.
+    {{json, Key}, {row_json, RowJson}, {value_json, Value}}.
 
 
 make_error_item({_Node, Reason}, Url) ->

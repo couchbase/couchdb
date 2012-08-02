@@ -38,7 +38,7 @@
 % callback!
 parse_http_params(Req, DDoc, ViewName, #view_merge{keys = Keys}) ->
     % view type =~ query type
-    {_Collation, ViewType0} = view_details(DDoc, ViewName),
+    ViewType0 = view_type(DDoc, ViewName),
     ViewType = case {ViewType0, couch_httpd:qs_value(Req, "reduce", "true")} of
     {reduce, "false"} ->
        red_map;
@@ -61,18 +61,23 @@ parse_http_params(Req, DDoc, ViewName, #view_merge{keys = Keys}) ->
 make_funs(DDoc, ViewName, IndexMergeParams) ->
     #index_merge{
        extra = Extra,
-       http_params = #view_query_args{debug = DebugMode} = ViewArgs
+       http_params = ViewArgs
     } = IndexMergeParams,
     #view_merge{
        rereduce_fun = InRedFun,
        make_row_fun = MakeRowFun0
     } = Extra,
-    {Collation, ViewType0} = view_details(DDoc, ViewName),
-    ViewType = case {ViewType0, ViewArgs#view_query_args.run_reduce} of
-    {reduce, false} ->
-       red_map;
-    _ ->
-       ViewType0
+    #view_query_args{
+        debug = DebugMode,
+        view_type = ViewType0,
+        direction = Dir
+    } = ViewArgs,
+    Collation = view_collation(ViewName),
+    ViewType = case ViewType0 of
+    nil ->
+        view_type(DDoc, ViewName);
+    _ when ViewType0 == map; ViewType0 == red_map; ViewType0 == reduce ->
+        ViewType0
     end,
     RedFun = case {ViewType, InRedFun} of
     {reduce, nil} ->
@@ -82,8 +87,7 @@ make_funs(DDoc, ViewName, IndexMergeParams) ->
     _ ->
         nil
     end,
-    LessFun = view_less_fun(Collation, ViewArgs#view_query_args.direction,
-        ViewType),
+    LessFun = view_less_fun(Collation, Dir, ViewType, view_class(IndexMergeParams)),
     {FoldFun, MergeFun} = case ViewType of
     reduce ->
         {fun reduce_view_folder/6, fun merge_reduce_views/1};
@@ -211,20 +215,31 @@ http_index_folder_req_details(#simple_index_spec{} = IndexSpec, MergeParams, _DD
     end.
 
 
-view_details(nil, <<"_all_docs">>) ->
-    {<<"raw">>, map};
-
-view_details(DDoc, ViewName) ->
+view_type(nil, <<"_all_docs">>) ->
+    map;
+view_type(DDoc, ViewName) ->
     {ViewDef} = get_view_def(DDoc, ViewName),
-    {ViewOptions} = get_value(<<"options">>, ViewDef, {[]}),
-    Collation = get_value(<<"collation">>, ViewOptions, <<"default">>),
-    ViewType = case get_value(<<"reduce">>, ViewDef) of
+    case get_value(<<"reduce">>, ViewDef) of
     undefined ->
         map;
     RedFun when is_binary(RedFun) ->
         reduce
-    end,
-    {Collation, ViewType}.
+    end.
+
+view_collation(<<"_all_docs">>) ->
+    raw;
+view_collation(_ViewName) ->
+    default.
+
+
+view_class(#index_merge{indexes = Specs}) ->
+    view_class(Specs);
+view_class([#set_view_spec{} | _]) ->
+    set_view;
+view_class([#simple_index_spec{} | _]) ->
+    normal;
+view_class([#merged_index_spec{} | Rest]) ->
+    view_class(Rest).
 
 
 reduce_function(#doc{id = DDocId} = DDoc, ViewName) ->
@@ -250,27 +265,30 @@ get_view_def(#doc{body = DDoc, id = DDocId}, ViewName) ->
     end.
 
 
-view_less_fun(Collation, Dir, ViewType) ->
-    LessFun = case Collation of
-    <<"default">> ->
-        case ViewType of
-        _ when ViewType =:= map; ViewType =:= red_map ->
-            fun(RowA, RowB) ->
-                couch_view:less_json_ids(element(1, RowA), element(1, RowB))
-            end;
-        reduce ->
-            fun(RowA, RowB) ->
-                couch_view:less_json(element(1, RowA), element(1, RowB))
-            end
+view_less_fun(Collation, Dir, ViewType, ViewClass) ->
+    LessFun = case ViewClass of
+    normal when ViewType == reduce, Collation == default ->
+        fun couch_view:less_json/2;
+    normal when (ViewType == map orelse ViewType == red_map), Collation == default ->
+        fun couch_view:less_json_ids/2;
+    normal when ViewType == map, Collation == raw ->
+        % _all_docs
+        fun({_Key1, Id1}, {_Key2, Id2}) when is_binary(Id1), is_binary(Id2) ->
+            Id1 < Id2;
+        ({{json, Key1}, _Id1}, {{json, Key2}, _Id2}) ->
+            % Id1/Id2 is 'error' (POST requests to _all_docs with keys parameter)
+            ?JSON_DECODE(Key1) < ?JSON_DECODE(Key2)
         end;
-    <<"raw">> ->
-        fun(A, B) -> element(1, A) < element(1, B) end
+    set_view when ViewType == reduce, Collation == default ->
+        fun couch_set_view:reduce_view_key_compare/2;
+    set_view when (ViewType == map orelse ViewType == red_map), Collation == default ->
+        fun couch_set_view:map_view_key_compare/2
     end,
     case Dir of
     fwd ->
-        LessFun;
+        fun(RowA, RowB) -> LessFun(element(1, RowA), element(1, RowB)) end;
     rev ->
-        fun(A, B) -> not LessFun(A, B) end
+        fun(RowA, RowB) -> not LessFun(element(1, RowA), element(1, RowB)) end
     end.
 
 % Optimized path, row assembled by couch_http_view_streamer
@@ -784,8 +802,7 @@ fold_local_all_docs(nil, Db, Queue, ViewArgs) ->
         end_docid = EndDocId,
         direction = Dir,
         inclusive_end = InclusiveEnd,
-        include_docs = IncludeDocs,
-        conflicts = Conflicts
+        include_docs = IncludeDocs
     } = ViewArgs,
     StartId = if is_binary(StartKey) -> StartKey;
         true -> StartDocId
@@ -802,7 +819,7 @@ fold_local_all_docs(nil, Db, Queue, ViewArgs) ->
         #doc_info{deleted = true} ->
             ok;
         _ ->
-            Row = all_docs_row(DocInfo, Db, IncludeDocs, Conflicts),
+            Row = all_docs_row(DocInfo, Db, IncludeDocs),
             ok = couch_view_merger_queue:queue(Queue, Row)
         end,
         {ok, Acc}
@@ -812,8 +829,7 @@ fold_local_all_docs(nil, Db, Queue, ViewArgs) ->
 fold_local_all_docs(Keys, Db, Queue, ViewArgs) ->
     #view_query_args{
         direction = Dir,
-        include_docs = IncludeDocs,
-        conflicts = Conflicts
+        include_docs = IncludeDocs
     } = ViewArgs,
     FoldFun = case Dir of
     fwd ->
@@ -825,15 +841,15 @@ fold_local_all_docs(Keys, Db, Queue, ViewArgs) ->
         fun(Key, _Acc) ->
             Row = case (catch couch_db:get_doc_info(Db, Key)) of
             {ok, #doc_info{} = DocInfo} ->
-                all_docs_row(DocInfo, Db, IncludeDocs, Conflicts);
+                all_docs_row(DocInfo, Db, IncludeDocs);
             not_found ->
-                {{Key, error}, not_found}
+                {{{json, ?JSON_ENCODE(Key)}, error}, not_found}
             end,
             ok = couch_view_merger_queue:queue(Queue, Row)
         end, [], Keys).
 
 
-all_docs_row(DocInfo, Db, IncludeDoc, Conflicts) ->
+all_docs_row(DocInfo, Db, IncludeDoc) ->
     #doc_info{id = Id, rev = Rev, deleted = Del} = DocInfo,
     Value = {[{<<"rev">>, couch_doc:rev_to_str(Rev)}] ++ case Del of
     true ->
@@ -841,18 +857,18 @@ all_docs_row(DocInfo, Db, IncludeDoc, Conflicts) ->
     false ->
         []
     end},
+    Key = {{json, ?JSON_ENCODE(Id)}, Id},
     case IncludeDoc of
     true ->
         case Del of
         true ->
             DocVal = null;
         false ->
-            DocOptions = if Conflicts -> [conflicts]; true -> [] end,
-            [{doc, DocVal}] = couch_httpd_view:doc_member(Db, DocInfo, DocOptions)
+            [{doc, DocVal}] = couch_httpd_view:doc_member(Db, DocInfo, [])
         end,
-        {{Id, Id}, Value, DocVal};
+        {Key, Value, DocVal};
     false ->
-        {{Id, Id}, Value}
+        {Key, Value}
     end.
 
 

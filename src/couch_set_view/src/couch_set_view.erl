@@ -29,7 +29,7 @@
 -export([fold/5, fold_reduce/5]).
 -export([get_row_count/2, reduce_to_count/1, extract_map_view/1]).
 
--export([less_json/2, less_json_ids/2]).
+-export([map_view_key_compare/2, reduce_view_key_compare/2]).
 
 -export([handle_db_event/1]).
 
@@ -532,23 +532,23 @@ do_fold_reduce(Group, ViewInfo, Fun, Acc, Options0, ViewQueryArgs) ->
     WrapperFun = fun(KeyDocId, PartialReds, Acc0) ->
             GroupedKey = case GroupLevel of
             0 ->
-                null;
+                <<"null">>;
             _ when is_integer(GroupLevel) ->
-                {Key, _DocId} = couch_set_view_util:decode_key_docid(KeyDocId),
-                case is_list(Key) of
+                {KeyJson, _DocId} = couch_set_view_util:split_key_docid(KeyDocId),
+                case is_array_key(KeyJson) of
                 true ->
-                    lists:sublist(Key, GroupLevel);
+                    ?JSON_ENCODE(lists:sublist(?JSON_DECODE(KeyJson), GroupLevel));
                 false ->
-                    Key
+                    KeyJson
                 end;
             _ ->
-                {Key, _DocId} = couch_set_view_util:decode_key_docid(KeyDocId),
-                Key
+                {KeyJson, _DocId} = couch_set_view_util:split_key_docid(KeyDocId),
+                KeyJson
             end,
             <<_Count:40, _BitMap:?MAX_NUM_PARTITIONS, Reds/binary>> =
                 couch_btree:final_reduce(ReduceFun, PartialReds),
             UserRed = lists:nth(NthRed, couch_set_view_util:parse_reductions(Reds)),
-            Fun(GroupedKey, {json, UserRed}, Acc0)
+            Fun({json, GroupedKey}, {json, UserRed}, Acc0)
         end,
     couch_set_view_util:open_raw_read_fd(Group),
     try
@@ -714,8 +714,8 @@ fold_fun(_Fun, [], _, Acc) ->
     {ok, Acc};
 fold_fun(Fun, [KV | Rest], {KVReds, Reds}, Acc) ->
     {KeyDocId, <<PartId:16, Value/binary>>} = KV,
-    {Key, DocId} = couch_set_view_util:decode_key_docid(KeyDocId),
-    case Fun({{Key, DocId}, {PartId, {json, Value}}}, {KVReds, Reds}, Acc) of
+    {JsonKey, DocId} = couch_set_view_util:split_key_docid(KeyDocId),
+    case Fun({{{json, JsonKey}, DocId}, {PartId, {json, Value}}}, {KVReds, Reds}, Acc) of
     {ok, Acc2} ->
         fold_fun(Fun, Rest, {[KV | KVReds], Reds}, Acc2);
     {stop, Acc2} ->
@@ -901,17 +901,17 @@ nuke_dir(RootDelDir, Dir) ->
     end.
 
 
-% keys come back in the language of btree - tuples.
-less_json_ids({JsonA, IdA}, {JsonB, IdB}) ->
-    case couch_ejson_compare:less(JsonA, JsonB) of
+map_view_key_compare({Key1, DocId1}, {Key2, DocId2}) ->
+    case couch_ejson_compare:less_json(Key1, Key2) of
     0 ->
-        IdA < IdB;
-    Result ->
-        Result < 0
+        DocId1 < DocId2;
+    LessResult ->
+        LessResult < 0
     end.
 
-less_json(A,B) ->
-    couch_ejson_compare:less(A, B) < 0.
+
+reduce_view_key_compare(A, B) ->
+    couch_ejson_compare:less_json(A, B) < 0.
 
 
 modify_bitmasks(Group, []) ->
@@ -1065,18 +1065,24 @@ make_reduce_group_keys_fun(0) ->
     fun(_, _) -> true end;
 make_reduce_group_keys_fun(GroupLevel) when is_integer(GroupLevel) ->
     fun(KeyDocId1, KeyDocId2) ->
-        {Key1, _DocId1} = couch_set_view_util:decode_key_docid(KeyDocId1),
-        {Key2, _DocId2} = couch_set_view_util:decode_key_docid(KeyDocId2),
-        case is_list(Key1) andalso is_list(Key2) of
+        {Key1, _DocId1} = couch_set_view_util:split_key_docid(KeyDocId1),
+        {Key2, _DocId2} = couch_set_view_util:split_key_docid(KeyDocId2),
+        case is_array_key(Key1) andalso is_array_key(Key2) of
         true ->
-            lists:sublist(Key1, GroupLevel) == lists:sublist(Key2, GroupLevel);
+            lists:sublist(?JSON_DECODE(Key1), GroupLevel) ==
+                    lists:sublist(?JSON_DECODE(Key2), GroupLevel);
         false ->
-            Key1 == Key2
+            couch_ejson_compare:less_json(Key1, Key2) == 0
         end
     end;
 make_reduce_group_keys_fun(_) ->
     fun(KeyDocId1, KeyDocId2) ->
-        {Key1, _DocId1} = couch_set_view_util:decode_key_docid(KeyDocId1),
-        {Key2, _DocId2} = couch_set_view_util:decode_key_docid(KeyDocId2),
-        Key1 == Key2
+        {Key1, _DocId1} = couch_set_view_util:split_key_docid(KeyDocId1),
+        {Key2, _DocId2} = couch_set_view_util:split_key_docid(KeyDocId2),
+        couch_ejson_compare:less_json(Key1, Key2) == 0
     end.
+
+is_array_key(<<"[", _/binary>>) ->
+    true;
+is_array_key(K) when is_binary(K) ->
+    false.
