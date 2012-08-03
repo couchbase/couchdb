@@ -68,7 +68,6 @@ handle_req(#httpd{method = 'GET'} = Req) ->
     couch_index_merger:query_index(couch_view_merger, MergeParams1, Req);
 
 handle_req(#httpd{method = 'POST'} = Req) ->
-    couch_httpd:validate_ctype(Req, "application/json"),
     {Props} = couch_httpd:json_body_obj(Req),
     Views = validate_views_param(get_value(<<"views">>, Props)),
     Keys = validate_keys_param(get_value(<<"keys">>, Props, nil)),

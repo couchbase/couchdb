@@ -155,10 +155,9 @@ http_index_folder_req_details(#merged_index_spec{} = IndexSpec, MergeParams, DDo
     #httpdb{
         url = Url,
         lhttpc_options = Options,
-        headers = BaseHeaders
+        headers = Headers
     } = HttpDb,
     MergeUrl = Url ++ view_qs(ViewArgs, MergeParams),
-    Headers = [{"Content-Type", "application/json"} | BaseHeaders],
 
     EJson1 = case Keys of
     nil ->
@@ -197,7 +196,7 @@ http_index_folder_req_details(#simple_index_spec{} = IndexSpec, MergeParams, _DD
     #httpdb{
         url = Url,
         lhttpc_options = Options,
-        headers = BaseHeaders
+        headers = Headers
     } = HttpDb,
     ViewUrl = Url ++ case ViewName of
     <<"_all_docs">> ->
@@ -205,7 +204,6 @@ http_index_folder_req_details(#simple_index_spec{} = IndexSpec, MergeParams, _DD
     _ ->
         ?b2l(DDocId) ++ "/_view/" ++ ?b2l(ViewName)
     end ++ view_qs(ViewArgs, MergeParams),
-    Headers = [{"Content-Type", "application/json"} | BaseHeaders],
     put(from_url, DbUrl),
     case Keys of
     nil ->
