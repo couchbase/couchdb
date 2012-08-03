@@ -15,7 +15,8 @@
 -include ("couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
 
--export([start_compact/2, start_compact/3, cancel_compact/2, cancel_compact/3]).
+-export([start_compact/2, start_compact/3, start_compact/4,
+         cancel_compact/2, cancel_compact/3]).
 
 -record(acc, {
    changes = 0,
@@ -28,8 +29,14 @@ start_compact(SetName, DDocId) ->
 
 -spec start_compact(binary(), binary(), set_view_group_type()) -> {'ok', pid()}.
 start_compact(SetName, DDocId, Type) ->
+    start_compact(SetName, DDocId, Type, []).
+
+-spec start_compact(binary(), binary(),
+                    set_view_group_type(), list()) -> {'ok', pid()}.
+start_compact(SetName, DDocId, Type, UserTaskStatus) ->
     {ok, Pid} = get_group_pid(SetName, DDocId, Type),
-    gen_server:call(Pid, {start_compact, fun compact_group/5}).
+    gen_server:call(Pid, {start_compact, mk_compact_group(UserTaskStatus)}).
+
 
 
 -spec cancel_compact(binary(), binary()) -> 'ok'.
@@ -46,12 +53,24 @@ cancel_compact(SetName, DDocId, Type) ->
 %% internal functions
 %%=============================================================================
 
+-spec mk_compact_group(list()) -> CompactGroupFun
+  when CompactGroupFun :: fun((#set_view_group{},
+                               #set_view_group{},
+                               string(),
+                               pid() | 'nil',
+                               pid()) -> no_return()).
+mk_compact_group(UserStatus) ->
+    fun (Group, EmptyGroup, LogFilePath, UpdaterPid, Owner) ->
+        compact_group(Group, EmptyGroup, LogFilePath, UpdaterPid, Owner, UserStatus)
+    end.
+
 -spec compact_group(#set_view_group{},
                     #set_view_group{},
                     string(),
                     pid() | 'nil',
-                    pid()) -> no_return().
-compact_group(Group0, EmptyGroup, LogFilePath, UpdaterPid, Owner) ->
+                    pid(),
+                    list()) -> no_return().
+compact_group(Group0, EmptyGroup, LogFilePath, UpdaterPid, Owner, UserStatus) ->
     #set_view_group{
         set_name = SetName,
         name = GroupId,
@@ -106,7 +125,8 @@ compact_group(Group0, EmptyGroup, LogFilePath, UpdaterPid, Owner) ->
     Acc0 = #acc{total_changes = TotalChanges},
 
     DDocIds = couch_set_view_util:get_ddoc_ids_with_sig(SetName, GroupSig),
-    couch_task_status:add_task([
+
+    Status = merge_statuses(UserStatus, [
         {type, view_compaction},
         {set, SetName},
         {signature, ?l2b(couch_util:to_hex(GroupSig))},
@@ -116,6 +136,8 @@ compact_group(Group0, EmptyGroup, LogFilePath, UpdaterPid, Owner) ->
         {indexer_type, Type},
         {progress, case TotalChanges of 0 -> 100; _ -> 0 end}
     ]),
+
+    couch_task_status:add_task(Status),
 
     ok = couch_set_view_util:open_raw_read_fd(Group),
 
@@ -159,6 +181,14 @@ compact_group(Group0, EmptyGroup, LogFilePath, UpdaterPid, Owner) ->
         cleanup_kv_count = CleanupKVCount
     },
     maybe_retry_compact(CompactResult, StartTime, LogFilePath, 0, Owner, 1).
+
+merge_statuses(UserStatus, OurStatus) ->
+    UserStatus0 =
+        lists:filter(
+            fun ({Key, _}) ->
+                not lists:keymember(Key, 1, OurStatus)
+            end, UserStatus),
+    UserStatus0 ++ OurStatus.
 
 maybe_retry_compact(CompactResult0, StartTime, LogFilePath, LogOffsetStart, Owner, Retries) ->
     NewGroup = CompactResult0#set_view_compactor_result.group,
