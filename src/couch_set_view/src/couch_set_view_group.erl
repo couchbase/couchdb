@@ -1173,6 +1173,7 @@ terminate(Reason, State) ->
     couch_util:shutdown_sync(State3#state.compactor_pid),
     couch_util:shutdown_sync(State3#state.compactor_file),
     couch_util:shutdown_sync(State3#state.replica_group),
+    true = ets:delete(?SET_VIEW_STATS_ETS, ?set_view_group_stats_key(State#state.group)),
     catch couch_file:only_snapshot_reads((State3#state.group)#set_view_group.fd),
     ok = couch_set_view_util:delete_sort_files(updater_tmp_dir(State)).
 
