@@ -179,7 +179,7 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime, NumChanges, LogFilePat
     Writer = spawn_link(fun() ->
         ok = couch_set_view_util:open_raw_read_fd(Group),
 
-        DDocIds = couch_set_view_util:get_ddoc_ids_with_sig(SetName, GroupSig),
+        DDocIds = couch_set_view_util:get_ddoc_ids_with_sig(SetName, Group),
         couch_task_status:add_task([
             {type, indexer},
             {set, SetName},

@@ -747,9 +747,11 @@ init([]) ->
         couch_config:get("mapreduce", "function_timeout", "10000"))),
 
     % {SetName, {DDocId, Signature}}
-    ets:new(couch_setview_name_to_sig, [bag, protected, named_table]),
+    ets:new(couch_setview_name_to_sig,
+            [bag, protected, named_table, {read_concurrency, true}]),
     % {{SetName, Signature}, Pid | WaitListPids}
-    ets:new(couch_sig_to_setview_pid, [set, protected, named_table, {read_concurrency, true}]),
+    ets:new(couch_sig_to_setview_pid,
+            [set, protected, named_table, {read_concurrency, true}]),
     % {Pid, {SetName, Sig}}
     ets:new(couch_pid_to_setview_sig, [set, private, named_table]),
 
@@ -818,9 +820,13 @@ handle_call({before_database_delete, DbName}, _From, Server) ->
     end,
     {reply, ok, Server}.
 
-
-handle_cast(Msg, Server) ->
-    {stop, {unexpected_cast, Msg}, Server}.
+handle_cast({ddoc_updated, SetName, DDocId}, Server) ->
+    {ok, Db} = couch_db:open_int(?master_dbname(SetName), []),
+    {ok, DDoc} = couch_db:open_doc(Db, DDocId, [ejson_body]),
+    ok = couch_db:close(Db),
+    #set_view_group{sig = Sig} = couch_set_view_util:design_doc_to_set_view_group(SetName, DDoc),
+    true = ets:insert(couch_setview_name_to_sig, {SetName, {DDocId, Sig}}),
+    {noreply, Server}.
 
 new_group(Root, SetName, #set_view_group{name = DDocId, sig = Sig} = Group) ->
     process_flag(trap_exit, true),
@@ -984,7 +990,13 @@ handle_db_event({Event, {DbName, DDocId}}) when Event == ddoc_updated; Event == 
                     ok
                 end
             end,
-            ets:match_object(couch_setview_name_to_sig, {SetName, {DDocId, '$1'}}));
+            ets:match_object(couch_setview_name_to_sig, {SetName, {DDocId, '$1'}})),
+        case Event of
+        ddoc_updated ->
+            ok = gen_server:cast(?MODULE, {ddoc_updated, SetName, DDocId});
+        _ ->
+            ok
+        end;
     _ ->
         ok
     end;

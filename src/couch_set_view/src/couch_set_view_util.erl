@@ -176,21 +176,15 @@ reverse_key_default(?MAX_STR) -> ?MIN_STR;
 reverse_key_default(Key) -> Key.
 
 
--spec get_ddoc_ids_with_sig(binary(), binary()) -> [binary()].
-get_ddoc_ids_with_sig(SetName, ViewGroupSig) ->
-    {ok, Db} = couch_db:open_int(?master_dbname(SetName), []),
-    {ok, DDocList} = couch_db:get_design_docs(Db, no_deletes),
-    ok = couch_db:close(Db),
-    lists:foldl(
-        fun(#doc{id = Id} = DDoc, Acc) ->
-            case design_doc_to_set_view_group(SetName, DDoc) of
-            #set_view_group{sig = ViewGroupSig} ->
-                [Id | Acc];
-            #set_view_group{sig = _OtherSig} ->
-                Acc
-            end
-        end,
-        [], DDocList).
+-spec get_ddoc_ids_with_sig(binary(), #set_view_group{}) -> [binary()].
+get_ddoc_ids_with_sig(SetName, #set_view_group{sig = Sig, name = FirstDDocId}) ->
+    case ets:match_object(couch_setview_name_to_sig, {SetName, {'$1', Sig}}) of
+    [] ->
+        % ets just got updated because view group died
+        [FirstDDocId];
+    Matching ->
+        [DDocId || {_SetName, {DDocId, _Sig}} <- Matching]
+    end.
 
 
 -spec design_doc_to_set_view_group(binary(), #doc{}) -> #set_view_group{}.

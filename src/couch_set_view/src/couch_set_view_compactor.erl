@@ -124,7 +124,7 @@ compact_group(Group0, EmptyGroup, LogFilePath, UpdaterPid, Owner, UserStatus) ->
     TotalChanges = total_kv_count(Group),
     Acc0 = #acc{total_changes = TotalChanges},
 
-    DDocIds = couch_set_view_util:get_ddoc_ids_with_sig(SetName, GroupSig),
+    DDocIds = couch_set_view_util:get_ddoc_ids_with_sig(SetName, Group),
 
     Status = merge_statuses(UserStatus, [
         {type, view_compaction},
