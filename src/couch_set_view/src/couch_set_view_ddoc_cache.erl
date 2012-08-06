@@ -190,16 +190,15 @@ handle_config_change("set_views", "ddoc_cache_size", NewSizeList) ->
 
 
 handle_db_event({deleted, DbName}) ->
-    case string:tokens(?b2l(DbName), "/") of
-    [SetNameList, "master"] ->
-        ok = gen_server:call(?MODULE, {set_deleted, ?l2b(SetNameList)}, infinity);
+    case couch_set_view_util:split_set_db_name(DbName) of
+    {ok, SetName, master} ->
+        ok = gen_server:call(?MODULE, {set_deleted, SetName}, infinity);
     _ ->
         ok
     end;
 handle_db_event({ddoc_updated, {DbName, Id}}) ->
-    case string:tokens(?b2l(DbName), "/") of
-    [SetNameList, "master"] ->
-        SetName = ?l2b(SetNameList),
+    case couch_set_view_util:split_set_db_name(DbName) of
+    {ok, SetName, master} ->
         case couch_db:open_int(DbName, []) of
         {ok, Db} ->
             try
@@ -225,9 +224,9 @@ handle_db_event({ddoc_updated, {DbName, Id}}) ->
         ok
     end;
 handle_db_event({ddoc_deleted, {DbName, Id}}) ->
-    case string:tokens(?b2l(DbName), "/") of
-    [SetNameList, "master"] ->
-        ok = gen_server:call(?MODULE, {delete_ddoc, ?l2b(SetNameList), Id}, infinity);
+    case couch_set_view_util:split_set_db_name(DbName) of
+    {ok, SetName, master} ->
+        ok = gen_server:call(?MODULE, {delete_ddoc, SetName, Id}, infinity);
     _ ->
         ok
     end;

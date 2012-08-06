@@ -25,6 +25,7 @@
 -export([new_sort_file_path/1, delete_sort_files/1]).
 -export([encode_key_docid/2, decode_key_docid/1, split_key_docid/1]).
 -export([parse_values/1, parse_reductions/1, parse_view_id_keys/1]).
+-export([split_set_db_name/1]).
 
 
 -include("couch_db.hrl").
@@ -392,3 +393,30 @@ split_key_docid(<<KeyLen:16, KeyJson:KeyLen/binary, DocId/binary>>) ->
 -spec encode_key_docid(binary(), binary()) -> binary().
 encode_key_docid(JsonKey, DocId) ->
     <<(byte_size(JsonKey)):16, JsonKey/binary, DocId/binary>>.
+
+
+-spec split_set_db_name(string() | binary()) ->
+                               {'ok', SetName::binary(), Partition::master} |
+                               {'ok', SetName::binary(), Partition::non_neg_integer()} |
+                               'error'.
+split_set_db_name(DbName) when is_binary(DbName) ->
+    split_set_db_name(?b2l(DbName));
+split_set_db_name(DbName) ->
+    Len = length(DbName),
+    case string:rchr(DbName, $/) of
+    Pos when (Pos > 0), (Pos < Len) ->
+        {SetName, [$/ | Partition]} = lists:split(Pos - 1, DbName),
+        case Partition of
+        "master" ->
+            {ok, ?l2b(SetName), master};
+        _ ->
+            case (catch list_to_integer(Partition)) of
+            Id when is_integer(Id), Id >= 0 ->
+                {ok, ?l2b(SetName), Id};
+            _ ->
+                error
+            end
+        end;
+    _ ->
+        error
+    end.

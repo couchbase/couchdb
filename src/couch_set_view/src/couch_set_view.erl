@@ -792,10 +792,10 @@ handle_call({get_group_server, SetName, Group}, From, Server) ->
 
 handle_call({before_database_delete, DbName}, _From, Server) ->
     #server{root_dir = RootDir} = Server,
-    case is_set_db(DbName) of
-    false ->
+    case couch_set_view_util:split_set_db_name(DbName) of
+    error ->
         ok;
-    {true, SetName, PartId} ->
+    {ok, SetName, PartId} ->
         lists:foreach(
             fun({_SetName, {_DDocId, Sig}}) ->
                 [{_, Pid}] = ets:lookup(couch_sig_to_setview_pid, {SetName, Sig}),
@@ -978,9 +978,8 @@ modify_bitmasks(#set_view_group{replica_group = RepGroup} = Group, Partitions) -
 handle_db_event({before_delete, DbName}) ->
     ok = gen_server:call(?MODULE, {before_database_delete, DbName}, infinity);
 handle_db_event({Event, {DbName, DDocId}}) when Event == ddoc_updated; Event == ddoc_deleted ->
-    case string:tokens(?b2l(DbName), "/") of
-    [SetNameStr, "master"] ->
-        SetName = ?l2b(SetNameStr),
+    case couch_set_view_util:split_set_db_name(DbName) of
+    {ok, SetName, master} ->
         lists:foreach(
             fun({_SetName, {_DDocId, Sig}}) ->
                 case ets:lookup(couch_sig_to_setview_pid, {SetName, Sig}) of
@@ -1045,23 +1044,6 @@ reduce_view_merge_callback({row, {Key, Red}}, #merge_acc{fold_fun = Fun, acc = A
 
 reduce_view_merge_callback({debug_info, _From, _Info}, Acc) ->
     {ok, Acc}.
-
-
-is_set_db(DbName) ->
-    case string:tokens(?b2l(DbName), "/") of
-    [SetName, "master"] ->
-        {true, ?l2b(SetName), master};
-    [SetName, Rest] ->
-        PartId = (catch list_to_integer(Rest)),
-        case is_integer(PartId) of
-        true ->
-            {true, ?l2b(SetName), PartId};
-        false ->
-            false
-        end;
-    _ ->
-        false
-    end.
 
 
 % Returns whether the results should be filtered based on a bitmask or not
