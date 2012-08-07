@@ -2938,16 +2938,13 @@ process_mark_as_indexable(State0, Partitions, CommitHeader) ->
         fun(PartId, {AccSeqs, AccUnSeqs}) ->
             case orddict:is_key(PartId, AccUnSeqs) of
             false ->
-                ErrorMsg = io_lib:format("Partition ~p is not currently "
-                    "marked as unindexable", [PartId]),
-                throw({error, iolist_to_binary(ErrorMsg)});
+                {AccSeqs, AccUnSeqs};
             true ->
-                ok
-            end,
-            Seq = orddict:fetch(PartId, AccUnSeqs),
-            AccUnSeqs2 = orddict:erase(PartId, AccUnSeqs),
-            AccSeqs2 = orddict:store(PartId, Seq, AccSeqs),
-            {AccSeqs2, AccUnSeqs2}
+                Seq = orddict:fetch(PartId, AccUnSeqs),
+                AccUnSeqs2 = orddict:erase(PartId, AccUnSeqs),
+                AccSeqs2 = orddict:store(PartId, Seq, AccSeqs),
+                {AccSeqs2, AccUnSeqs2}
+            end
         end,
         {?set_seqs(Group), ?set_unindexable_seqs(Group)},
         Partitions),
