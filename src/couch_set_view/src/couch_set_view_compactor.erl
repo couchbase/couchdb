@@ -198,8 +198,8 @@ maybe_retry_compact(CompactResult0, StartTime, LogFilePath, LogOffsetStart, Owne
         type = Type,
         fd = Fd
     } = NewGroup,
-    DiskHeader = couch_set_view_util:make_disk_header(NewGroup),
-    ok = couch_file:write_header(Fd, DiskHeader),
+    HeaderBin = couch_set_view_util:group_to_header_bin(NewGroup),
+    ok = couch_file:write_header_bin(Fd, HeaderBin),
     ok = couch_file:sync(Fd),
     CompactResult = CompactResult0#set_view_compactor_result{
         compact_time = timer:now_diff(os:timestamp(), StartTime) / 1000000

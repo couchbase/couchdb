@@ -955,8 +955,8 @@ checkpoint(#writer_acc{owner = Owner, parent = Parent, group = Group}, DoFsync) 
 
 
 write_header(#set_view_group{fd = Fd} = Group, DoFsync) ->
-    DiskHeader = couch_set_view_util:make_disk_header(Group),
-    ok = couch_file:write_header(Fd, DiskHeader),
+    HeaderBin = couch_set_view_util:group_to_header_bin(Group),
+    ok = couch_file:write_header_bin(Fd, HeaderBin),
     case DoFsync of
     true ->
         ok = couch_file:sync(Fd);

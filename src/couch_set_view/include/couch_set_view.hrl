@@ -57,7 +57,7 @@
 -type bitmask()                  :: non_neg_integer().
 -type bitmap()                   :: non_neg_integer().
 -type update_seq()               :: non_neg_integer().
--type btree_state()              :: 'nil' | tuple().
+-type btree_state()              :: 'nil' | binary().
 -type partition_seq()            :: {partition_id(), update_seq()}.
 % Manipulate via ordsets or orddict, keep it ordered by partition id.
 -type partition_seqs()           :: ordsets:ordset(partition_seq()).
@@ -113,7 +113,7 @@
 -record(set_view_index_header, {
     version = ?LATEST_COUCH_SET_VIEW_HEADER_VERSION :: non_neg_integer(),
     % Maximum number of partitions this set view supports, nil means not yet defined.
-    num_partitions = nil                            :: 'nil' | non_neg_integer(),
+    num_partitions = 0                              :: non_neg_integer(),
     % active partitions bitmap
     abitmask = 0                                    :: bitmask(),
     % passive partitions bitmap
@@ -175,21 +175,21 @@
 }).
 
 -record(set_view_group, {
-    sig = nil                           :: 'nil' | binary(),
-    fd = nil                            :: 'nil' | pid(),
-    set_name = <<>>                     :: binary(),
-    name = <<>>                         :: binary(),
-    design_options = []                 :: [any()],
-    views = []                          :: [#set_view{}],
-    id_btree = nil                      :: 'nil' | #btree{},
-    ref_counter = nil                   :: 'nil' | pid(),
-    index_header = nil                  :: 'nil' | #set_view_index_header{},
-    db_set = nil                        :: 'nil' | pid(),
-    type = main                         :: set_view_group_type(),
-    replica_group = nil                 :: 'nil' | #set_view_group{},
-    replica_pid = nil                   :: 'nil' | pid(),
-    debug_info = nil                    :: #set_view_debug_info{} | 'nil',
-    filepath = ""                       :: string()
+    sig = binary:copy(<<0>>, 16)            :: <<_:128>>,
+    fd = nil                                :: 'nil' | pid(),
+    set_name = <<>>                         :: binary(),
+    name = <<>>                             :: binary(),
+    design_options = []                     :: [any()],
+    views = []                              :: [#set_view{}],
+    id_btree = nil                          :: 'nil' | #btree{},
+    ref_counter = nil                       :: 'nil' | pid(),
+    index_header = #set_view_index_header{} :: #set_view_index_header{},
+    db_set = nil                            :: 'nil' | pid(),
+    type = main                             :: set_view_group_type(),
+    replica_group = nil                     :: 'nil' | #set_view_group{},
+    replica_pid = nil                       :: 'nil' | pid(),
+    debug_info = nil                        :: #set_view_debug_info{} | 'nil',
+    filepath = ""                           :: string()
 }).
 
 -record(set_view_updater_result, {

@@ -18,7 +18,6 @@
 -export([make_key_options/1]).
 -export([design_doc_to_set_view_group/2, get_ddoc_ids_with_sig/2]).
 -export([open_raw_read_fd/1, close_raw_read_fd/1]).
--export([make_disk_header/1]).
 -export([compute_indexed_bitmap/1, cleanup_group/1]).
 -export([missing_changes_count/2]).
 -export([is_group_empty/1]).
@@ -26,6 +25,7 @@
 -export([encode_key_docid/2, decode_key_docid/1, split_key_docid/1]).
 -export([parse_values/1, parse_reductions/1, parse_view_id_keys/1]).
 -export([split_set_db_name/1]).
+-export([group_to_header_bin/1, header_bin_sig/1, header_bin_to_term/1]).
 
 
 -include("couch_db.hrl").
@@ -268,23 +268,6 @@ close_raw_read_fd(#set_view_group{fd = FilePid}) ->
     end.
 
 
--spec make_disk_header(#set_view_group{}) ->
-                              {Signature::binary(), #set_view_index_header{}}.
-make_disk_header(Group) ->
-    #set_view_group{
-        sig = Sig,
-        id_btree = IdBtree,
-        views = Views,
-        index_header = Header
-    } = Group,
-    ViewStates = [couch_btree:get_state(V#set_view.btree) || V <- Views],
-    Header2 = Header#set_view_index_header{
-        id_btree_state = couch_btree:get_state(IdBtree),
-        view_states = ViewStates
-    },
-    {Sig, Header2}.
-
-
 -spec compute_indexed_bitmap(#set_view_group{}) -> bitmap().
 compute_indexed_bitmap(#set_view_group{id_btree = IdBtree, views = Views}) ->
     compute_indexed_bitmap(IdBtree, Views).
@@ -419,3 +402,174 @@ split_set_db_name(DbName) ->
     _ ->
         error
     end.
+
+
+-spec group_to_header_bin(#set_view_group{}) -> binary().
+group_to_header_bin(#set_view_group{index_header = Header, sig = Sig}) ->
+    #set_view_index_header{
+        version = Version,
+        num_partitions = NumParts,
+        abitmask = Abitmask,
+        pbitmask = Pbitmask,
+        cbitmask = Cbitmask,
+        seqs = Seqs,
+        id_btree_state = IdBtreeState,
+        view_states = ViewBtreeStates,
+        has_replica = HasReplica,
+        replicas_on_transfer = RepsOnTransfer,
+        pending_transition = PendingTrans,
+        unindexable_seqs = Unindexable
+    } = Header,
+    ViewBtreeStatesBin = lists:foldl(
+        fun(BtState, Acc) ->
+            <<Acc/binary, (btree_state_to_bin(BtState))/binary>>
+        end,
+        <<>>, ViewBtreeStates),
+    Base = <<
+             Version:8,
+             NumParts:16,
+             Abitmask:?MAX_NUM_PARTITIONS,
+             Pbitmask:?MAX_NUM_PARTITIONS,
+             Cbitmask:?MAX_NUM_PARTITIONS,
+             (length(Seqs)):16, (seqs_to_bin(Seqs, <<>>))/binary,
+             (btree_state_to_bin(IdBtreeState))/binary,
+             (length(ViewBtreeStates)):8, ViewBtreeStatesBin/binary,
+             (bool_to_bin(HasReplica))/binary,
+             (length(RepsOnTransfer)):16, (partitions_to_bin(RepsOnTransfer, <<>>))/binary,
+             (pending_trans_to_bin(PendingTrans))/binary,
+             (length(Unindexable)):16, (seqs_to_bin(Unindexable, <<>>))/binary
+           >>,
+    <<Sig/binary, (couch_compress:compress(Base))/binary>>.
+
+
+-spec header_bin_sig(binary()) -> binary().
+header_bin_sig(<<Sig:16/binary, _/binary>>) ->
+    % signature is a md5 digest, always 16 bytes
+    Sig.
+
+
+-spec header_bin_to_term(binary()) -> #set_view_index_header{}.
+header_bin_to_term(HeaderBin) ->
+    <<_Signature:16/binary, HeaderBaseCompressed/binary>> = HeaderBin,
+    Base = couch_compress:decompress(HeaderBaseCompressed),
+    <<
+      Version:8,
+      NumParts:16,
+      Abitmask:?MAX_NUM_PARTITIONS,
+      Pbitmask:?MAX_NUM_PARTITIONS,
+      Cbitmask:?MAX_NUM_PARTITIONS,
+      NumSeqs:16,
+      Rest/binary
+    >> = Base,
+    {Seqs, Rest2} = bin_to_seqs(NumSeqs, Rest, []),
+    <<
+      IdBtreeStateSize:16,
+      IdBtreeStateBin:IdBtreeStateSize/binary,
+      NumViewBtreeStates:8,
+      Rest3/binary
+    >> = Rest2,
+    IdBtreeState = case IdBtreeStateBin of
+    <<>> ->
+        nil;
+    _ ->
+        IdBtreeStateBin
+    end,
+    {ViewStates, Rest4} = bin_to_view_states(NumViewBtreeStates, Rest3, []),
+    <<
+      HasReplica:8,
+      NumReplicasOnTransfer:16,
+      Rest5/binary
+    >> = Rest4,
+    {ReplicasOnTransfer, Rest6} = bin_to_partitions(NumReplicasOnTransfer, Rest5, []),
+    {PendingTrans, Rest7} = bin_to_pending_trans(Rest6),
+    <<
+      UnindexableCount:16,
+      Rest8/binary
+    >> = Rest7,
+    {Unindexable, <<>>} = bin_to_seqs(UnindexableCount, Rest8, []),
+    #set_view_index_header{
+        version = Version,
+        num_partitions = NumParts,
+        abitmask = Abitmask,
+        pbitmask = Pbitmask,
+        cbitmask = Cbitmask,
+        seqs = Seqs,
+        id_btree_state = IdBtreeState,
+        view_states = ViewStates,
+        has_replica = case HasReplica of 1 -> true; 0 -> false end,
+        replicas_on_transfer = ReplicasOnTransfer,
+        pending_transition = PendingTrans,
+        unindexable_seqs = Unindexable
+    }.
+
+
+btree_state_to_bin(nil) ->
+    <<0:16>>;
+btree_state_to_bin(BinState) ->
+    StateSize = byte_size(BinState),
+    case StateSize >= (1 bsl 16) of
+    true ->
+        throw({too_large_btree_state, StateSize});
+    false ->
+        <<StateSize:16, BinState/binary>>
+    end.
+
+
+bool_to_bin(true) ->
+    <<1:8>>;
+bool_to_bin(false) ->
+    <<0:8>>.
+
+
+seqs_to_bin([], Acc) ->
+    Acc;
+seqs_to_bin([{P, S} | Rest], Acc) ->
+    seqs_to_bin(Rest, <<Acc/binary, P:16, S:48>>).
+
+
+partitions_to_bin([], Acc) ->
+    Acc;
+partitions_to_bin([P | Rest], Acc) ->
+    partitions_to_bin(Rest, <<Acc/binary, P:16>>).
+
+
+pending_trans_to_bin(nil) ->
+    <<0:16, 0:16>>;
+pending_trans_to_bin(#set_view_transition{active = A, passive = P}) ->
+    <<(length(A)):16, (partitions_to_bin(A, <<>>))/binary,
+      (length(P)):16, (partitions_to_bin(P, <<>>))/binary>>.
+
+
+bin_to_pending_trans(<<NumActive:16, Rest/binary>>) ->
+    {Active, Rest2} = bin_to_partitions(NumActive, Rest, []),
+    <<NumPassive:16, Rest3/binary>> = Rest2,
+    {Passive, Rest4} = bin_to_partitions(NumPassive, Rest3, []),
+    case (Active == []) andalso (Passive == []) of
+    true ->
+        {nil, Rest4};
+    false ->
+        {#set_view_transition{active = Active, passive = Passive}, Rest4}
+    end.
+
+
+bin_to_seqs(0, Rest, Acc) ->
+    {lists:reverse(Acc), Rest};
+bin_to_seqs(N, <<P:16, S:48, Rest/binary>>, Acc) ->
+    bin_to_seqs(N - 1, Rest, [{P, S} | Acc]).
+
+
+bin_to_view_states(0, Rest, Acc) ->
+    {lists:reverse(Acc), Rest};
+bin_to_view_states(NumViewBtreeStates, <<Sz:16, State:Sz/binary, Rest/binary>>, Acc) ->
+    case State of
+    <<>> ->
+        bin_to_view_states(NumViewBtreeStates - 1, Rest, [nil | Acc]);
+    _ ->
+        bin_to_view_states(NumViewBtreeStates - 1, Rest, [State | Acc])
+    end.
+
+
+bin_to_partitions(0, Rest, Acc) ->
+    {lists:reverse(Acc), Rest};
+bin_to_partitions(Count, <<P:16, Rest/binary>>, Acc) ->
+    bin_to_partitions(Count - 1, Rest, [P | Acc]).

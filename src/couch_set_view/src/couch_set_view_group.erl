@@ -48,7 +48,7 @@
 -define(group_id(State), (State#state.group)#set_view_group.name).
 -define(db_set(State), (State#state.group)#set_view_group.db_set).
 -define(is_defined(State),
-    is_integer(((State#state.group)#set_view_group.index_header)#set_view_index_header.num_partitions)).
+    (((State#state.group)#set_view_group.index_header)#set_view_index_header.num_partitions > 0)).
 -define(replicas_on_transfer(State),
         ((State#state.group)#set_view_group.index_header)#set_view_index_header.replicas_on_transfer).
 -define(have_pending_transition(State),
@@ -317,7 +317,7 @@ do_init({_, SetName, _} = InitArgs) ->
             ReplicaParts = get_replica_partitions(ReplicaPid)
         end,
         ViewCount = length(Group#set_view_group.views),
-        case is_integer(Header#set_view_index_header.num_partitions) of
+        case Header#set_view_index_header.num_partitions > 0 of
         false ->
             DbSet = nil,
             ?LOG_INFO("Started undefined ~s set view group `~s`, group `~s`,"
@@ -1266,9 +1266,16 @@ prepare_group({RootDir, SetName, #set_view_group{sig = Sig, type = Type} = Group
             % this can happen if we missed a purge
             {ok, reset_file(Fd, Group)};
         true ->
-            case (catch couch_file:read_header(Fd)) of
-            {ok, {Sig, HeaderInfo}} ->
-                % sigs match!
+            case (catch couch_file:read_header_bin(Fd)) of
+            {ok, HeaderBin} ->
+                HeaderSig = couch_set_view_util:header_bin_sig(HeaderBin);
+            _ ->
+                HeaderSig = <<>>,
+                HeaderBin = <<>>
+            end,
+            case HeaderSig == Sig of
+            true ->
+                HeaderInfo = couch_set_view_util:header_bin_to_term(HeaderBin),
                 {ok, init_group(Fd, Group, HeaderInfo)};
             _ ->
                 % this happens on a new file
@@ -1540,27 +1547,28 @@ reset_group(#set_view_group{views = Views} = Group) ->
     Views2 = [View#set_view{btree = nil} || View <- Views],
     Group#set_view_group{
         fd = nil,
-        index_header = nil,
+        index_header = #set_view_index_header{},
         id_btree = nil,
         views = Views2
     }.
 
 
 -spec reset_file(pid(), #set_view_group{}) -> #set_view_group{}.
-reset_file(Fd, #set_view_group{sig = Sig, index_header = Header} = Group) ->
+reset_file(Fd, #set_view_group{views = Views, index_header = Header} = Group) ->
     ok = couch_file:truncate(Fd, 0),
-    ok = couch_file:write_header(Fd, {Sig, nil}),
-    init_group(Fd, reset_group(Group), Header).
+    EmptyHeader = Header#set_view_index_header{
+        view_states = [nil || _ <- Views],
+        id_btree_state = nil
+    },
+    EmptyGroup = Group#set_view_group{index_header = EmptyHeader},
+    EmptyHeaderBin = couch_set_view_util:group_to_header_bin(EmptyGroup),
+    ok = couch_file:write_header_bin(Fd, EmptyHeaderBin),
+    init_group(Fd, reset_group(EmptyGroup), EmptyHeader).
 
 
 -spec init_group(pid(),
                  #set_view_group{},
-                 'nil' | #set_view_index_header{}) -> #set_view_group{}.
-init_group(Fd, #set_view_group{views = Views} = Group, nil) ->
-    EmptyHeader = #set_view_index_header{
-        view_states = [nil || _ <- Views]
-    },
-    init_group(Fd, Group, EmptyHeader);
+                 #set_view_index_header{}) -> #set_view_group{}.
 init_group(Fd, Group, IndexHeader) ->
     #set_view_group{
         views = Views0,
@@ -1665,8 +1673,8 @@ init_group(Fd, Group, IndexHeader) ->
 
 -spec commit_header(#set_view_group{}) -> 'ok'.
 commit_header(Group) ->
-    Header = couch_set_view_util:make_disk_header(Group),
-    ok = couch_file:write_header(Group#set_view_group.fd, Header),
+    HeaderBin = couch_set_view_util:group_to_header_bin(Group),
+    ok = couch_file:write_header_bin(Group#set_view_group.fd, HeaderBin),
     ok = couch_file:sync(Group#set_view_group.fd).
 
 -spec filter_out_bitmask_partitions(ordsets:ordset(partition_id()),
