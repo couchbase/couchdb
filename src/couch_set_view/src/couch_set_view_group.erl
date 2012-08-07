@@ -1668,13 +1668,21 @@ commit_header(Group) ->
     ok = couch_file:write_header(Group#set_view_group.fd, Header),
     ok = couch_file:sync(Group#set_view_group.fd).
 
+-spec filter_out_bitmask_partitions(ordsets:ordset(partition_id()),
+                                    bitmask()) -> ordsets:ordset(partition_id()).
+filter_out_bitmask_partitions(Partitions, BMask) ->
+    [P || P <- Partitions,
+          ((BMask bsr P) band 1) =/= 1].
 
 -spec maybe_update_partition_states(ordsets:ordset(partition_id()),
                                     ordsets:ordset(partition_id()),
                                     ordsets:ordset(partition_id()),
                                     #state{}) -> #state{}.
-maybe_update_partition_states(ActiveList, PassiveList, CleanupList, State) ->
+maybe_update_partition_states(ActiveList0, PassiveList0, CleanupList0, State) ->
     #state{group = Group} = State,
+    ActiveList = filter_out_bitmask_partitions(ActiveList0, ?set_abitmask(Group)),
+    PassiveList = filter_out_bitmask_partitions(PassiveList0, ?set_pbitmask(Group)),
+    CleanupList = filter_out_bitmask_partitions(CleanupList0, ?set_cbitmask(Group)),
     ActiveMarkedAsUnindexable = [
         P || P <- ActiveList, orddict:is_key(P, ?set_unindexable_seqs(Group))
     ],
