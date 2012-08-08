@@ -752,7 +752,7 @@ init([]) ->
     % {{SetName, Signature}, Pid | WaitListPids}
     ets:new(couch_sig_to_setview_pid,
             [set, protected, named_table, {read_concurrency, true}]),
-    % {Pid, {SetName, Sig}}
+    % {Pid, {SetName, Sig, DDocId}}
     ets:new(couch_pid_to_setview_sig, [set, private, named_table]),
 
     ets:new(
@@ -818,15 +818,23 @@ handle_call({before_database_delete, DbName}, _From, Server) ->
             ok
         end
     end,
-    {reply, ok, Server}.
+    {reply, ok, Server};
 
-handle_cast({ddoc_updated, SetName, DDocId}, Server) ->
+handle_call({ddoc_updated, SetName, DDocId}, _From, Server) ->
     {ok, Db} = couch_db:open_int(?master_dbname(SetName), []),
     {ok, DDoc} = couch_db:open_doc(Db, DDocId, [ejson_body]),
     ok = couch_db:close(Db),
     #set_view_group{sig = Sig} = couch_set_view_util:design_doc_to_set_view_group(SetName, DDoc),
     true = ets:insert(couch_setview_name_to_sig, {SetName, {DDocId, Sig}}),
-    {noreply, Server}.
+    {reply, ok, Server};
+
+handle_call({ddoc_deleted, SetName, DDocId}, _From, Server) ->
+    true = ets:match_delete(couch_setview_name_to_sig, {SetName, {DDocId, '$1'}}),
+    {reply, ok, Server}.
+
+
+handle_cast(Msg, Server) ->
+    {stop, {unexpected_cast, Msg}, Server}.
 
 new_group(Root, SetName, #set_view_group{name = DDocId, sig = Sig} = Group) ->
     process_flag(trap_exit, true),
@@ -854,11 +862,8 @@ handle_info({'EXIT', FromPid, Reason}, Server) ->
             exit(Reason);
         true -> ok
         end;
-    [{_, {SetName, Sig}}] ->
-        Entries = ets:match_object(couch_setview_name_to_sig, {SetName, {'$1', Sig}}),
-        lists:foreach(fun({_SetName, {DDocId, _Sig}}) ->
-            delete_from_ets(FromPid, SetName, DDocId, Sig)
-        end, Entries)
+    [{_, {SetName, Sig, DDocId}}] ->
+        delete_from_ets(FromPid, SetName, DDocId, Sig)
     end,
     {noreply, Server};
 
@@ -876,7 +881,7 @@ handle_info({'DOWN', _MonRef, _, _Pid, {SetName, DDocId, Sig, Reply}}, Server) -
     {noreply, Server}.
 
 add_to_ets(Pid, SetName, DDocId, Sig) ->
-    true = ets:insert(couch_pid_to_setview_sig, {Pid, {SetName, Sig}}),
+    true = ets:insert(couch_pid_to_setview_sig, {Pid, {SetName, Sig, DDocId}}),
     true = ets:insert(couch_sig_to_setview_pid, {{SetName, Sig}, Pid}),
     true = ets:insert(couch_setview_name_to_sig, {SetName, {DDocId, Sig}}).
 
@@ -990,12 +995,7 @@ handle_db_event({Event, {DbName, DDocId}}) when Event == ddoc_updated; Event == 
                 end
             end,
             ets:match_object(couch_setview_name_to_sig, {SetName, {DDocId, '$1'}})),
-        case Event of
-        ddoc_updated ->
-            ok = gen_server:cast(?MODULE, {ddoc_updated, SetName, DDocId});
-        _ ->
-            ok
-        end;
+        ok = gen_server:call(?MODULE, {Event, SetName, DDocId}, infinity);
     _ ->
         ok
     end;
