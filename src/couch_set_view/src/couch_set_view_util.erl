@@ -232,9 +232,8 @@ design_doc_to_set_view_group(SetName, #doc{id = Id, body = {Fields}}) ->
 
 -spec set_view_sig(#set_view_group{}) -> #set_view_group{}.
 set_view_sig(#set_view_group{
-            views = Views,
-            design_options = DesignOptions} = G) ->
-    Sig = couch_util:md5(term_to_binary({Views, DesignOptions})),
+            views = Views} = G) ->
+    Sig = couch_util:md5(term_to_binary(Views)),
     G#set_view_group{sig = Sig}.
 
 
