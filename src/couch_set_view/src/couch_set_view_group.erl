@@ -1671,8 +1671,7 @@ commit_header(Group) ->
 -spec filter_out_bitmask_partitions(ordsets:ordset(partition_id()),
                                     bitmask()) -> ordsets:ordset(partition_id()).
 filter_out_bitmask_partitions(Partitions, BMask) ->
-    [P || P <- Partitions,
-          ((BMask bsr P) band 1) =/= 1].
+    [P || P <- Partitions, ((BMask bsr P) band 1) =/= 1].
 
 -spec maybe_update_partition_states(ordsets:ordset(partition_id()),
                                     ordsets:ordset(partition_id()),
@@ -1680,41 +1679,48 @@ filter_out_bitmask_partitions(Partitions, BMask) ->
                                     #state{}) -> #state{}.
 maybe_update_partition_states(ActiveList0, PassiveList0, CleanupList0, State) ->
     #state{group = Group} = State,
-    ActiveList = filter_out_bitmask_partitions(ActiveList0, ?set_abitmask(Group)),
-    PassiveList = filter_out_bitmask_partitions(PassiveList0, ?set_pbitmask(Group)),
-    CleanupList = filter_out_bitmask_partitions(CleanupList0, ?set_cbitmask(Group)),
-    ActiveMarkedAsUnindexable = [
-        P || P <- ActiveList, orddict:is_key(P, ?set_unindexable_seqs(Group))
-    ],
-    case ActiveMarkedAsUnindexable of
+    case ?set_unindexable_seqs(Group) of
     [] ->
-        ok;
+        ActiveList = ActiveList0,
+        PassiveList = PassiveList0,
+        CleanupList = CleanupList0;
     _ ->
-        ErrorMsg1 = io_lib:format("Intersection between requested active list "
-            "and current unindexable partitions: ~w", [ActiveMarkedAsUnindexable]),
-        throw({error, iolist_to_binary(ErrorMsg1)})
-    end,
-    PassiveMarkedAsUnindexable = [
-        P || P <- PassiveList, orddict:is_key(P, ?set_unindexable_seqs(Group))
-    ],
-    case PassiveMarkedAsUnindexable of
-    [] ->
-        ok;
-    _ ->
-        ErrorMsg2 = io_lib:format("Intersection between requested passive list "
-            "and current unindexable partitions: ~w", [PassiveMarkedAsUnindexable]),
-        throw({error, iolist_to_binary(ErrorMsg2)})
-    end,
-    CleanupMarkedAsUnindexable = [
-        P || P <- CleanupList, orddict:is_key(P, ?set_unindexable_seqs(Group))
-    ],
-    case CleanupMarkedAsUnindexable of
-    [] ->
-        ok;
-    _ ->
-        ErrorMsg3 = io_lib:format("Intersection between requested cleanup list "
-            "and current unindexable partitions: ~w", [CleanupMarkedAsUnindexable]),
-        throw({error, iolist_to_binary(ErrorMsg3)})
+        ActiveList = filter_out_bitmask_partitions(ActiveList0, ?set_abitmask(Group)),
+        PassiveList = filter_out_bitmask_partitions(PassiveList0, ?set_pbitmask(Group)),
+        CleanupList = filter_out_bitmask_partitions(CleanupList0, ?set_cbitmask(Group)),
+        ActiveMarkedAsUnindexable = [
+            P || P <- ActiveList, orddict:is_key(P, ?set_unindexable_seqs(Group))
+        ],
+        case ActiveMarkedAsUnindexable of
+        [] ->
+            ok;
+        _ ->
+            ErrorMsg1 = io_lib:format("Intersection between requested active list "
+                "and current unindexable partitions: ~w", [ActiveMarkedAsUnindexable]),
+            throw({error, iolist_to_binary(ErrorMsg1)})
+        end,
+        PassiveMarkedAsUnindexable = [
+            P || P <- PassiveList, orddict:is_key(P, ?set_unindexable_seqs(Group))
+        ],
+        case PassiveMarkedAsUnindexable of
+        [] ->
+            ok;
+        _ ->
+            ErrorMsg2 = io_lib:format("Intersection between requested passive list "
+                "and current unindexable partitions: ~w", [PassiveMarkedAsUnindexable]),
+            throw({error, iolist_to_binary(ErrorMsg2)})
+        end,
+        CleanupMarkedAsUnindexable = [
+            P || P <- CleanupList, orddict:is_key(P, ?set_unindexable_seqs(Group))
+        ],
+        case CleanupMarkedAsUnindexable of
+        [] ->
+            ok;
+        _ ->
+            ErrorMsg3 = io_lib:format("Intersection between requested cleanup list "
+                "and current unindexable partitions: ~w", [CleanupMarkedAsUnindexable]),
+            throw({error, iolist_to_binary(ErrorMsg3)})
+        end
     end,
     ActiveMask = couch_set_view_util:build_bitmask(ActiveList),
     case ActiveMask >= (1 bsl ?set_num_partitions(Group)) of
