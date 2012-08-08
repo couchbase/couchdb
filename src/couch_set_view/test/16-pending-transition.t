@@ -22,7 +22,7 @@
 test_set_name() -> <<"couch_test_set_pending_transition">>.
 num_set_partitions() -> 64.
 ddoc_id() -> <<"_design/test">>.
-num_docs() -> 64000.  % keep it a multiple of num_set_partitions()
+num_docs() -> 20288.  % keep it a multiple of num_set_partitions()
 
 -record(user_ctx, {
     name = null,
@@ -84,7 +84,7 @@ test() ->
             ", currently marked for cleanup in the pending transition"),
         ok = couch_set_view_test_util:delete_set_db(test_set_name(), PartId)
     end, lists:seq(2, num_set_partitions() - 1, 2)),
-    ok = timer:sleep(6000),
+    ok = timer:sleep(5000),
     etap:is(is_process_alive(GroupPid), true, "Group process didn't die"),
 
     % Recreate database 1, populate new contents, verify that neither old
