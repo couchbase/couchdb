@@ -1038,7 +1038,8 @@ handle_info({'EXIT', Pid, {updater_finished, Result}}, #state{updater_pid = Pid}
         waiting_list = WaitList,
         replica_partitions = ReplicaParts,
         shutdown = Shutdown,
-        group = NewGroup2
+        group = NewGroup2,
+        update_listeners = UpdateListeners2
     } = State2,
     WaitList2 = reply_with_group(NewGroup2, ReplicaParts, WaitList),
     inc_updates(NewGroup2, Result, false, false),
@@ -1063,11 +1064,11 @@ handle_info({'EXIT', Pid, {updater_finished, Result}}, #state{updater_pid = Pid}
             waiting_list = WaitList2
         },
         State4 = maybe_apply_pending_transition(State3),
-        State5 = case WaitList2 of
-        [] ->
-            State4;
-        _ ->
-            start_updater(State4)
+        State5 = case (WaitList2 /= []) orelse (dict:size(UpdateListeners2) > 0) of
+        true ->
+            start_updater(State4);
+        false ->
+            State4
         end,
         State6 = maybe_start_cleaner(State5),
         {noreply, State6, ?TIMEOUT}
