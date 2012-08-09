@@ -2907,10 +2907,15 @@ process_mark_as_unindexable(State0, Partitions) ->
             false ->
                 ok
             end,
-            PartSeq = orddict:fetch(PartId, AccSeqs),
-            AccSeqs2 = orddict:erase(PartId, AccSeqs),
-            AccUnSeqs2 = orddict:store(PartId, PartSeq, AccUnSeqs),
-            {AccSeqs2, AccUnSeqs2}
+            case orddict:is_key(PartId, AccUnSeqs) of
+            true ->
+                {AccSeqs, AccUnSeqs};
+            false ->
+                PartSeq = orddict:fetch(PartId, AccSeqs),
+                AccSeqs2 = orddict:erase(PartId, AccSeqs),
+                AccUnSeqs2 = orddict:store(PartId, PartSeq, AccUnSeqs),
+                {AccSeqs2, AccUnSeqs2}
+            end
         end,
         {?set_seqs(Group), ?set_unindexable_seqs(Group)},
         Partitions),
