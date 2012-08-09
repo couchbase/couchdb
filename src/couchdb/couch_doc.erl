@@ -27,14 +27,14 @@ to_json_rev(0, _) ->
 to_json_rev(Start, RevId) ->
     [{<<"rev">>, ?l2b([integer_to_list(Start),"-",revid_to_str(RevId)])}].
 
-to_ejson_body(_ContentMeta, {Body}) ->
+to_ejson_body({Body}, _ContentMeta) ->
     {<<"json">>, {Body}};
-to_ejson_body(?CONTENT_META_JSON, <<"{}">>) ->
+to_ejson_body(<<"{}">>, ?CONTENT_META_JSON) ->
     {<<"json">>, {[]}};
-to_ejson_body(?CONTENT_META_JSON, Body) ->
-    {R} = ?JSON_DECODE(Body),
-    {<<"json">>, {R}};
-to_ejson_body(ContentMeta, Body)
+to_ejson_body(Body, ?CONTENT_META_JSON) ->
+    {_} = R = ?JSON_DECODE(Body),
+    {<<"json">>, R};
+to_ejson_body(Body, ContentMeta)
         when ContentMeta /= ?CONTENT_META_JSON ->
     {<<"base64">>, iolist_to_binary(base64:encode(iolist_to_binary(Body)))}.
 
@@ -255,7 +255,7 @@ transfer_fields([{Name, _} | _], _) ->
 with_ejson_body(Doc) ->
     Uncompressed = with_uncompressed_body(Doc),
     #doc{body = Body, content_meta=Meta} = Uncompressed,
-    {_Type, EJSONBody}= to_ejson_body(Meta, Body),
+    {_Type, EJSONBody}= to_ejson_body(Body, Meta),
     Uncompressed#doc{body = EJSONBody}.
 
 with_json_body(Doc) ->

@@ -48,7 +48,7 @@ init() ->
 
 
 start_map_context(MapFunSources) ->
-    Ref = erlang:md5(term_to_binary(make_ref())),
+    Ref = erlang:phash2(make_ref()),
     start_map_context(MapFunSources, Ref).
 
 start_map_context(_MapFunSources, _Ref) ->
@@ -60,7 +60,7 @@ map_doc(_Context, _Doc, _Meta) ->
 
 
 start_reduce_context(ReduceFunSources) ->
-    Ref = erlang:md5(term_to_binary(make_ref())),
+    Ref = erlang:phash2(make_ref()),
     start_reduce_context(ReduceFunSources, Ref).
 
 start_reduce_context(_ReduceFunSources, _Ref) ->

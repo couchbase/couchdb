@@ -460,9 +460,9 @@ split_iolist(List, 0, BeginAcc) ->
     {lists:reverse(BeginAcc), List};
 split_iolist([], SplitAt, _BeginAcc) ->
     SplitAt;
-split_iolist([<<Bin/binary>> | Rest], SplitAt, BeginAcc) when SplitAt > byte_size(Bin) ->
+split_iolist([Bin | Rest], SplitAt, BeginAcc) when is_binary(Bin), SplitAt > byte_size(Bin) ->
     split_iolist(Rest, SplitAt - byte_size(Bin), [Bin | BeginAcc]);
-split_iolist([<<Bin/binary>> | Rest], SplitAt, BeginAcc) ->
+split_iolist([Bin | Rest], SplitAt, BeginAcc) when is_binary(Bin) ->
     <<Begin:SplitAt/binary,End/binary>> = Bin,
     split_iolist([End | Rest], 0, [Begin | BeginAcc]);
 split_iolist([Sublist| Rest], SplitAt, BeginAcc) when is_list(Sublist) ->

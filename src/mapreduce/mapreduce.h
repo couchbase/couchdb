@@ -20,9 +20,12 @@
 #define _MAPREDUCE_H
 
 #include <iostream>
+#include <string>
 #include <list>
 #include <vector>
 #include <v8.h>
+
+#include "erl_nif_compat.h"
 
 class MapReduceError;
 
@@ -32,25 +35,56 @@ typedef struct json_bin_t {
     json_bin_t(char *bytes, size_t len) : data(bytes), length(len) { }
 } json_bin_t;
 
-typedef std::pair<json_bin_t, json_bin_t> map_result_t;
+template<class T> class NifStlAllocator;
+
+typedef std::pair<json_bin_t, json_bin_t>  map_result_t;
+typedef std::list< map_result_t, NifStlAllocator< map_result_t > >  map_results_list_t;
+typedef std::list< map_results_list_t,
+                   NifStlAllocator< map_results_list_t > >  map_results_list_list_t;
+
+typedef std::list<json_bin_t, NifStlAllocator<json_bin_t> >  json_results_list_t;
+
+typedef std::vector< v8::Persistent<v8::Function>,
+                     NifStlAllocator< v8::Persistent<v8::Function> > >  function_vector_t;
+
+typedef std::basic_string< char,
+                           std::char_traits<char>,
+                           NifStlAllocator<char> >  function_source_t;
+
+typedef std::list< function_source_t,
+                   NifStlAllocator< function_source_t > >  function_sources_list_t;
+
 
 typedef struct {
     v8::Persistent<v8::Context>                  jsContext;
     v8::Isolate                                  *isolate;
-    std::vector< v8::Persistent<v8::Function> >  *functions;
-    std::list< map_result_t >                    *mapFunResults;
-    std::string                                  *key;
+    function_vector_t                            *functions;
+    map_results_list_t                           *mapFunResults;
+    unsigned int                                 key;
     volatile int                                 taskId;
     volatile long                                taskStartTime;
 } map_reduce_ctx_t;
 
 
-void initContext(map_reduce_ctx_t *ctx, const std::list<std::string> &funs);
+void initContext(map_reduce_ctx_t *ctx, const function_sources_list_t &funs);
 void destroyContext(map_reduce_ctx_t *ctx);
-std::list< std::list< map_result_t > > mapDoc(map_reduce_ctx_t *ctx, const json_bin_t &doc, const json_bin_t &meta);
-std::list<json_bin_t> runReduce(map_reduce_ctx_t *ctx, const std::list<json_bin_t> &keys, const std::list<json_bin_t> &values);
-json_bin_t runReduce(map_reduce_ctx_t *ctx, int reduceFunNum, const std::list<json_bin_t> &keys, const std::list<json_bin_t> &values);
-json_bin_t runRereduce(map_reduce_ctx_t *ctx, int reduceFunNum, const std::list<json_bin_t> &reductions);
+
+map_results_list_list_t mapDoc(map_reduce_ctx_t *ctx,
+                               const json_bin_t &doc,
+                               const json_bin_t &meta);
+
+json_results_list_t runReduce(map_reduce_ctx_t *ctx,
+                              const json_results_list_t &keys,
+                              const json_results_list_t &values);
+
+json_bin_t runReduce(map_reduce_ctx_t *ctx, int reduceFunNum,
+                     const json_results_list_t &keys,
+                     const json_results_list_t &values);
+
+json_bin_t runRereduce(map_reduce_ctx_t *ctx,
+                       int reduceFunNum,
+                       const json_results_list_t &reductions);
+
 void terminateTask(map_reduce_ctx_t *ctx);
 
 
@@ -69,5 +103,81 @@ public:
 private:
     const std::string _msg;
 };
+
+
+// Some information about STL allocators:
+// http://www.cplusplus.com/reference/std/memory/allocator/
+//
+template<class T> class NifStlAllocator {
+public:
+    typedef size_t    size_type;
+    typedef ptrdiff_t difference_type;
+    typedef T*        pointer;
+    typedef const T*  const_pointer;
+    typedef T&        reference;
+    typedef const T&  const_reference;
+    typedef T         value_type;
+
+    NifStlAllocator() {}
+    NifStlAllocator(const NifStlAllocator&) {}
+
+    pointer allocate(size_type n, const void * = 0) {
+        pointer t = (pointer) enif_alloc(n * sizeof(value_type));
+        if (t == NULL) {
+            throw std::bad_alloc();
+        }
+        return t;
+    }
+
+    void deallocate(void *p, size_type) {
+        if (p) {
+            enif_free(p);
+        }
+    }
+
+    pointer address(reference x) const {
+        return &x;
+    }
+
+    const_pointer address(const_reference x) const {
+        return &x;
+    }
+
+    void construct(pointer p, const_reference val) {
+        new (p) value_type(val);
+    }
+
+    void destroy(pointer p) {
+        p->~T();
+    }
+
+    size_type max_size() const {
+        return size_t(-1);
+    }
+
+    template <class U>
+    struct rebind {
+        typedef NifStlAllocator<U> other;
+    };
+
+    template <class U>
+    NifStlAllocator(const NifStlAllocator<U>&) {}
+
+    template <class U>
+    NifStlAllocator& operator=(const NifStlAllocator<U>&) {
+        return *this;
+    }
+};
+
+template<typename T>
+inline bool operator==(const NifStlAllocator<T>&, const NifStlAllocator<T>&) {
+    return true;
+}
+
+template<typename T>
+inline bool operator!=(const NifStlAllocator<T>&, const NifStlAllocator<T>&) {
+    return false;
+}
+
 
 #endif

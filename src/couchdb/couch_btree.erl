@@ -59,7 +59,8 @@ set_options(Bt, [{reduce, Reduce}|Rest]) ->
 set_options(Bt, [{chunk_threshold, Threshold}|Rest]) ->
     set_options(Bt#btree{chunk_threshold = Threshold}, Rest);
 set_options(#btree{root = Root} = Bt, [{binary_mode, true}|Rest]) when is_binary(Root) ->
-    <<Pointer:?POINTER_BITS, Size:?TREE_SIZE_BITS, Red/binary>> = Root,
+    <<Pointer:?POINTER_BITS, Size:?TREE_SIZE_BITS, Red0/binary>> = Root,
+    Red = binary:copy(Red0),
     set_options(Bt#btree{root = {Pointer, Red, Size}, binary_mode = true}, Rest);
 set_options(Bt, [{binary_mode, Bool}|Rest]) ->
     set_options(Bt#btree{binary_mode = Bool}, Rest).
@@ -423,15 +424,15 @@ decode_node(Type, Binary, Acc) ->
       Rest/binary>> = Binary,
     case Type of
     kv_node ->
-        Val = V;
+        Val = binary:copy(V);
     kp_node ->
         <<Pointer:?POINTER_BITS,
           SubtreeSize:?TREE_SIZE_BITS,
           RedSize:?RED_BITS,
           Reduction:RedSize/binary>> = V,
-        Val = {Pointer, Reduction, SubtreeSize}
+        Val = {Pointer, binary:copy(Reduction), SubtreeSize}
     end,
-    decode_node(Type, Rest, [{K,Val}|Acc]).
+    decode_node(Type, Rest, [{binary:copy(K), Val} | Acc]).
 
 encode_node(kv_node, Kvs) ->
     couch_compress:compress(encode_node_iolist(Kvs, [1]));

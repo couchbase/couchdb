@@ -98,20 +98,20 @@ static const char *BASE64_FUNCTION_STRING =
 
 static Persistent<Context> createJsContext(map_reduce_ctx_t *ctx);
 static Handle<Value> emit(const Arguments& args);
-static void loadFunctions(map_reduce_ctx_t *ctx, const std::list<std::string> &funs);
-static void deleteJsonData(const std::list<json_bin_t> &data);
-static void deleteJsonData(const std::list< map_result_t > &data);
-static Handle<Function> compileFunction(const std::string &funSource);
+static void loadFunctions(map_reduce_ctx_t *ctx, const function_sources_list_t &funs);
+static void deleteJsonData(const json_results_list_t &data);
+static void deleteJsonData(const map_results_list_t &data);
+static Handle<Function> compileFunction(const function_source_t &funSource);
 static inline json_bin_t jsonStringify(const Handle<Value> &obj);
 static inline Handle<Value> jsonParse(const json_bin_t &thing);
-static inline Handle<Array> jsonListToJsArray(const std::list<json_bin_t> &list);
+static inline Handle<Array> jsonListToJsArray(const json_results_list_t &list);
 static inline isolate_data_t *getIsolateData();
 static inline void taskStarted(map_reduce_ctx_t *ctx);
 static inline void taskFinished(map_reduce_ctx_t *ctx);
 
 
 
-void initContext(map_reduce_ctx_t *ctx, const std::list<std::string> &funs)
+void initContext(map_reduce_ctx_t *ctx, const function_sources_list_t &funs)
 {
     ctx->isolate = Isolate::New();
     Locker locker(ctx->isolate);
@@ -126,7 +126,10 @@ void initContext(map_reduce_ctx_t *ctx, const std::list<std::string> &funs)
     Handle<Function> parseFun = Local<Function>::Cast(jsonObject->Get(String::New("parse")));
     Handle<Function> stringifyFun = Local<Function>::Cast(jsonObject->Get(String::New("stringify")));
 
-    isolate_data_t *isoData = new isolate_data_t();
+    isolate_data_t *isoData = (isolate_data_t *) enif_alloc(sizeof(isolate_data_t));
+    if (isoData == NULL) {
+        throw std::bad_alloc();
+    }
     isoData->jsonObject = Persistent<Object>::New(jsonObject);
     isoData->jsonParseFun = Persistent<Function>::New(parseFun);
     isoData->stringifyFun = Persistent<Function>::New(stringifyFun);
@@ -140,7 +143,7 @@ void initContext(map_reduce_ctx_t *ctx, const std::list<std::string> &funs)
 }
 
 
-std::list< std::list< map_result_t > > mapDoc(map_reduce_ctx_t *ctx, const json_bin_t &doc, const json_bin_t &meta)
+map_results_list_list_t mapDoc(map_reduce_ctx_t *ctx, const json_bin_t &doc, const json_bin_t &meta)
 {
     Locker locker(ctx->isolate);
     Isolate::Scope isolateScope(ctx->isolate);
@@ -153,13 +156,13 @@ std::list< std::list< map_result_t > > mapDoc(map_reduce_ctx_t *ctx, const json_
         throw MapReduceError("metadata is not a JSON object");
     }
 
-    std::list< std::list< map_result_t > > results;
+    map_results_list_list_t results;
     Handle<Value> funArgs[] = { docObject, metaObject };
 
     taskStarted(ctx);
 
     for (int i = 0; i < ctx->functions->size(); ++i) {
-        std::list< map_result_t > funResults;
+        map_results_list_t funResults;
         Handle<Function> fun = (*ctx->functions)[i];
         TryCatch trycatch;
 
@@ -167,7 +170,7 @@ std::list< std::list< map_result_t > > mapDoc(map_reduce_ctx_t *ctx, const json_
         Handle<Value> result = fun->Call(fun, 2, funArgs);
 
         if (result.IsEmpty()) {
-            std::list< std::list< map_result_t > >::iterator it = results.begin();
+            map_results_list_list_t::iterator it = results.begin();
             for ( ; it != results.end(); ++it) {
                 deleteJsonData(*it);
             }
@@ -192,7 +195,9 @@ std::list< std::list< map_result_t > > mapDoc(map_reduce_ctx_t *ctx, const json_
 }
 
 
-std::list<json_bin_t> runReduce(map_reduce_ctx_t *ctx, const std::list<json_bin_t> &keys, const std::list<json_bin_t> &values)
+json_results_list_t runReduce(map_reduce_ctx_t *ctx,
+                              const json_results_list_t &keys,
+                              const json_results_list_t &values)
 {
     Locker locker(ctx->isolate);
     Isolate::Scope isolateScope(ctx->isolate);
@@ -200,7 +205,7 @@ std::list<json_bin_t> runReduce(map_reduce_ctx_t *ctx, const std::list<json_bin_
     Context::Scope contextScope(ctx->jsContext);
     Handle<Array> keysArray = jsonListToJsArray(keys);
     Handle<Array> valuesArray = jsonListToJsArray(values);
-    std::list<json_bin_t> results;
+    json_results_list_t results;
 
     Handle<Value> args[] = { keysArray, valuesArray, Boolean::New(false) };
 
@@ -239,7 +244,10 @@ std::list<json_bin_t> runReduce(map_reduce_ctx_t *ctx, const std::list<json_bin_
 }
 
 
-json_bin_t runReduce(map_reduce_ctx_t *ctx, int reduceFunNum, const std::list<json_bin_t> &keys, const std::list<json_bin_t> &values)
+json_bin_t runReduce(map_reduce_ctx_t *ctx,
+                     int reduceFunNum,
+                     const json_results_list_t &keys,
+                     const json_results_list_t &values)
 {
     Locker locker(ctx->isolate);
     Isolate::Scope isolateScope(ctx->isolate);
@@ -278,7 +286,9 @@ json_bin_t runReduce(map_reduce_ctx_t *ctx, int reduceFunNum, const std::list<js
 }
 
 
-json_bin_t runRereduce(map_reduce_ctx_t *ctx, int reduceFunNum, const std::list<json_bin_t> &reductions)
+json_bin_t runRereduce(map_reduce_ctx_t *ctx,
+                       int reduceFunNum,
+                       const json_results_list_t &reductions)
 {
     Locker locker(ctx->isolate);
     Isolate::Scope isolateScope(ctx->isolate);
@@ -316,23 +326,23 @@ json_bin_t runRereduce(map_reduce_ctx_t *ctx, int reduceFunNum, const std::list<
 }
 
 
-void deleteJsonData(const std::list<json_bin_t> &data)
+void deleteJsonData(const json_results_list_t &data)
 {
-    std::list<json_bin_t>::const_iterator it = data.begin();
+    json_results_list_t::const_iterator it = data.begin();
     for ( ; it != data.end(); ++it) {
-        delete [] it->data;
+        enif_free((void *) it->data);
     }
 }
 
 
-void deleteJsonData(const std::list< map_result_t > &data)
+void deleteJsonData(const map_results_list_t &data)
 {
-    std::list< map_result_t >::const_iterator it = data.begin();
+    map_results_list_t::const_iterator it = data.begin();
     for ( ; it != data.end(); ++it) {
         json_bin_t key = it->first;
         json_bin_t value = it->second;
-        delete [] key.data;
-        delete [] value.data;
+        enif_free((void *) key.data);
+        enif_free((void *) value.data);
     }
 }
 
@@ -349,7 +359,8 @@ void destroyContext(map_reduce_ctx_t *ctx)
         for (int i = 0; i < ctx->functions->size(); ++i) {
             (*ctx->functions)[i].Dispose();
         }
-        delete ctx->functions;
+        ctx->functions->~function_vector_t();
+        enif_free(ctx->functions);
 
         isolate_data_t *isoData = getIsolateData();
         isoData->jsonObject.Dispose();
@@ -358,7 +369,7 @@ void destroyContext(map_reduce_ctx_t *ctx)
         isoData->jsonParseFun.Clear();
         isoData->stringifyFun.Dispose();
         isoData->stringifyFun.Clear();
-        delete isoData;
+        enif_free(isoData);
 
         ctx->jsContext.Dispose();
         ctx->jsContext.Clear();
@@ -425,12 +436,18 @@ json_bin_t jsonStringify(const Handle<Value> &obj)
 
     if (result->IsUndefined()) {
         len = static_cast<int>(sizeof("null") - 1);
-        data = new char[len];
+        data = (char *) enif_alloc(len);
+        if (data == NULL) {
+            throw std::bad_alloc();
+        }
         memcpy(data, "null", len);
     } else {
         Handle<String> str = Handle<String>::Cast(result);
         len = str->Utf8Length();
-        data = new char[len];
+        data = (char *) enif_alloc(len);
+        if (data == NULL) {
+            throw std::bad_alloc();
+        }
         str->WriteUtf8(data, len, NULL, String::NO_NULL_TERMINATION);
     }
 
@@ -457,11 +474,18 @@ Handle<Value> jsonParse(const json_bin_t &thing)
 }
 
 
-void loadFunctions(map_reduce_ctx_t *ctx, const std::list<std::string> &funStrings)
+void loadFunctions(map_reduce_ctx_t *ctx, const function_sources_list_t &funStrings)
 {
     HandleScope handleScope;
-    ctx->functions = new std::vector< v8::Persistent<v8::Function> >();
-    std::list<std::string>::const_iterator it = funStrings.begin();
+
+    ctx->functions = (function_vector_t *) enif_alloc(sizeof(function_vector_t));
+
+    if (ctx->functions == NULL) {
+        throw std::bad_alloc();
+    }
+
+    ctx->functions = new (ctx->functions) function_vector_t();
+    function_sources_list_t::const_iterator it = funStrings.begin();
 
     for ( ; it != funStrings.end(); ++it) {
         Handle<Function> fun = compileFunction(*it);
@@ -471,7 +495,7 @@ void loadFunctions(map_reduce_ctx_t *ctx, const std::list<std::string> &funStrin
 }
 
 
-Handle<Function> compileFunction(const std::string &funSource)
+Handle<Function> compileFunction(const function_source_t &funSource)
 {
     HandleScope handleScope;
     TryCatch trycatch;
@@ -495,17 +519,17 @@ Handle<Function> compileFunction(const std::string &funSource)
     }
 
     if (!result->IsFunction()) {
-        throw MapReduceError(std::string("Invalid function: ") + funSource);
+        throw MapReduceError(std::string("Invalid function: ") + funSource.c_str());
     }
 
     return handleScope.Close(Handle<Function>::Cast(result));
 }
 
 
-Handle<Array> jsonListToJsArray(const std::list<json_bin_t> &list)
+Handle<Array> jsonListToJsArray(const json_results_list_t &list)
 {
     Handle<Array> array = Array::New(list.size());
-    std::list<json_bin_t>::const_iterator it = list.begin();
+    json_results_list_t::const_iterator it = list.begin();
     int i = 0;
 
     for ( ; it != list.end(); ++it, ++i) {

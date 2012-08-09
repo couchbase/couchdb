@@ -37,8 +37,7 @@ parse_values(Values) ->
 
 parse_values(<<>>, Acc) ->
     lists:reverse(Acc);
-parse_values(Values, Acc) ->
-    <<ValLen:24, Val:ValLen/binary, ValueRest/binary>> = Values,
+parse_values(<<ValLen:24, Val:ValLen/binary, ValueRest/binary>>, Acc) ->
     parse_values(ValueRest, [Val | Acc]).
 
 
@@ -73,12 +72,11 @@ expand_dups([KV | Rest], Acc) ->
 expand_dups([], _Abitmask, Acc) ->
     lists:reverse(Acc);
 expand_dups([KV | Rest], Abitmask, Acc) ->
-    {_BinKeyDocId, <<PartId:16, ValuesBin/binary>>} = KV,
+    {BinKeyDocId, <<PartId:16, ValuesBin/binary>>} = KV,
     case (1 bsl PartId) band Abitmask of
     0 ->
         expand_dups(Rest, Abitmask, Acc);
     _ ->
-        {BinKeyDocId, <<_PartId:16, ValuesBin/binary>>} = KV,
         Values = parse_values(ValuesBin),
         Expanded = lists:map(fun(Val) ->
             {BinKeyDocId, <<PartId:16, Val/binary>>}

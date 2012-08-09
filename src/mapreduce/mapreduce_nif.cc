@@ -43,7 +43,7 @@ static ErlNifResourceType                          *MAP_REDUCE_CTX_RES;
 static ErlNifTid                                   terminatorThreadId;
 static ErlNifMutex                                 *terminatorMutex;
 static volatile int                                shutdownTerminator = 0;
-static std::map< std::string, map_reduce_ctx_t* >  contexts;
+static std::map< unsigned int, map_reduce_ctx_t* > contexts;
 
 
 // NIF API functions
@@ -60,8 +60,7 @@ static void onUnload(ErlNifEnv *env, void *priv_data);
 
 // Utilities
 static inline ERL_NIF_TERM makeError(ErlNifEnv *env, const std::string &msg);
-static bool parseFunctions(ErlNifEnv *env, ERL_NIF_TERM functionsArg, std::list<std::string> &result);
-static inline std::string binToFunctionString(const ErlNifBinary &bin);
+static bool parseFunctions(ErlNifEnv *env, ERL_NIF_TERM functionsArg, function_sources_list_t &result);
 
 // NIF resource functions
 static void free_map_reduce_context(ErlNifEnv *env, void *res);
@@ -74,7 +73,7 @@ static void *terminatorLoop(void *);
 
 ERL_NIF_TERM startMapContext(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
-    std::list<std::string> mapFunctions;
+    function_sources_list_t mapFunctions;
 
     if (!parseFunctions(env, argv[0], mapFunctions)) {
         return enif_make_badarg(env);
@@ -127,15 +126,15 @@ ERL_NIF_TERM doMapDoc(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     try {
         // Map results is a list of lists. An inner list is the list of key value
         // pairs emitted by a map function for the document.
-        std::list< std::list< map_result_t > > mapResults = mapDoc(ctx, doc, meta);
+        map_results_list_list_t mapResults = mapDoc(ctx, doc, meta);
         ERL_NIF_TERM outerList = enif_make_list(env, 0);
-        std::list< std::list< map_result_t > >::reverse_iterator i = mapResults.rbegin();
+        map_results_list_list_t::reverse_iterator i = mapResults.rbegin();
         bool allocError = false;
 
         for ( ; i != mapResults.rend(); ++i) {
-            std::list< map_result_t > funResults = *i;
+            map_results_list_t funResults = *i;
             ERL_NIF_TERM innerList = enif_make_list(env, 0);
-            std::list< map_result_t >::reverse_iterator j = funResults.rbegin();
+            map_results_list_t::reverse_iterator j = funResults.rbegin();
 
             for ( ; j != funResults.rend(); ++j) {
                 json_bin_t key = j->first;
@@ -166,8 +165,8 @@ ERL_NIF_TERM doMapDoc(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
                     }
                 }
 
-                delete [] key.data;
-                delete [] value.data;
+                enif_free((void *) key.data);
+                enif_free((void *) value.data);
             }
 
             if (!allocError) {
@@ -191,7 +190,7 @@ ERL_NIF_TERM doMapDoc(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
 ERL_NIF_TERM startReduceContext(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
-    std::list<std::string> reduceFunctions;
+    function_sources_list_t reduceFunctions;
 
     if (!parseFunctions(env, argv[0], reduceFunctions)) {
         return enif_make_badarg(env);
@@ -227,8 +226,8 @@ ERL_NIF_TERM doReduce(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     }
 
     int reduceFunNum = -1;
-    std::list<json_bin_t> keys;
-    std::list<json_bin_t> values;
+    json_results_list_t keys;
+    json_results_list_t values;
     ERL_NIF_TERM tail;
     ERL_NIF_TERM head;
 
@@ -274,10 +273,10 @@ ERL_NIF_TERM doReduce(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
     try {
         if (reduceFunNum == -1) {
-            std::list<json_bin_t> results = runReduce(ctx, keys, values);
+            json_results_list_t results = runReduce(ctx, keys, values);
 
             ERL_NIF_TERM list = enif_make_list(env, 0);
-            std::list<json_bin_t>::reverse_iterator it = results.rbegin();
+            json_results_list_t::reverse_iterator it = results.rbegin();
             bool allocError = false;
 
             for ( ; it != results.rend(); ++it) {
@@ -293,7 +292,7 @@ ERL_NIF_TERM doReduce(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
                         list = enif_make_list_cell(env, enif_make_binary(env, &reductionBin), list);
                     }
                 }
-                delete [] reduction.data;
+                enif_free((void *) reduction.data);
             }
 
             if (allocError) {
@@ -307,11 +306,11 @@ ERL_NIF_TERM doReduce(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
             ErlNifBinary reductionBin;
 
             if (!enif_alloc_binary_compat(env, result.length, &reductionBin)) {
-                delete [] result.data;
+                enif_free((void *) result.data);
                 return makeError(env, "memory allocation failure");
             }
             memcpy(reductionBin.data, result.data, result.length);
-            delete [] result.data;
+            enif_free((void *) result.data);
 
             return enif_make_tuple2(env, ATOM_OK, enif_make_binary(env, &reductionBin));
         }
@@ -342,7 +341,7 @@ ERL_NIF_TERM doRereduce(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         return enif_make_badarg(env);
     }
 
-    std::list<json_bin_t> reductions;
+    json_results_list_t reductions;
     ERL_NIF_TERM tail = argv[2];
     ERL_NIF_TERM head;
 
@@ -364,11 +363,11 @@ ERL_NIF_TERM doRereduce(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         ErlNifBinary finalReductionBin;
 
         if (!enif_alloc_binary_compat(env, result.length, &finalReductionBin)) {
-            delete [] result.data;
+            enif_free((void *) result.data);
             return makeError(env, "memory allocation failure");
         }
         memcpy(finalReductionBin.data, result.data, result.length);
-        delete [] result.data;
+        enif_free((void *) result.data);
 
         return enif_make_tuple2(env, ATOM_OK, enif_make_binary(env, &finalReductionBin));
 
@@ -439,7 +438,7 @@ void onUnload(ErlNifEnv *env, void *priv_data)
 }
 
 
-bool parseFunctions(ErlNifEnv *env, ERL_NIF_TERM functionsArg, std::list<std::string> &result)
+bool parseFunctions(ErlNifEnv *env, ERL_NIF_TERM functionsArg, function_sources_list_t &result)
 {
     if (!enif_is_list(env, functionsArg)) {
         return false;
@@ -455,21 +454,17 @@ bool parseFunctions(ErlNifEnv *env, ERL_NIF_TERM functionsArg, std::list<std::st
             return false;
         }
 
-        result.push_back(binToFunctionString(funBin));
+        function_source_t src;
+
+        src.reserve(funBin.size + 2);
+        src += '(';
+        src.append(reinterpret_cast<char *>(funBin.data), funBin.size);
+        src += ')';
+
+        result.push_back(src);
     }
 
     return true;
-}
-
-
-std::string binToFunctionString(const ErlNifBinary &bin)
-{
-    std::stringstream ss;
-    ss << "(";
-    ss.write((char *) bin.data, bin.size);
-    ss << ")";
-
-    return ss.str();
 }
 
 
@@ -496,7 +491,7 @@ void free_map_reduce_context(ErlNifEnv *env, void *res) {
 
 void *terminatorLoop(void *args)
 {
-    std::map< std::string, map_reduce_ctx_t* >::iterator it;
+    std::map< unsigned int, map_reduce_ctx_t* >::iterator it;
     long now;
 
     while (!shutdownTerminator) {
@@ -523,15 +518,12 @@ void *terminatorLoop(void *args)
 
 void registerContext(map_reduce_ctx_t *ctx, ErlNifEnv *env, const ERL_NIF_TERM &refTerm)
 {
-    ErlNifBinary ref;
-
-    if (!enif_inspect_iolist_as_binary(env, refTerm, &ref)) {
+    if (!enif_get_uint(env, refTerm, &ctx->key)) {
         throw MapReduceError("invalid context reference");
     }
 
-    ctx->key = new std::string(reinterpret_cast<char *>(ref.data), static_cast<size_t>(ref.size));
     enif_mutex_lock(terminatorMutex);
-    contexts[*ctx->key] = ctx;
+    contexts[ctx->key] = ctx;
     enif_mutex_unlock(terminatorMutex);
 }
 
@@ -539,9 +531,8 @@ void registerContext(map_reduce_ctx_t *ctx, ErlNifEnv *env, const ERL_NIF_TERM &
 void unregisterContext(map_reduce_ctx_t *ctx)
 {
     enif_mutex_lock(terminatorMutex);
-    contexts.erase(*ctx->key);
+    contexts.erase(ctx->key);
     enif_mutex_unlock(terminatorMutex);
-    delete ctx->key;
 }
 
 
