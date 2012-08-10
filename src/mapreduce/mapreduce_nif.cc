@@ -107,6 +107,7 @@ ERL_NIF_TERM doMapDoc(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     if (!enif_get_resource(env, argv[0], MAP_REDUCE_CTX_RES, reinterpret_cast<void **>(&ctx))) {
         return enif_make_badarg(env);
     }
+    ctx->env = env;
 
     ErlNifBinary docBin;
 
@@ -120,16 +121,12 @@ ERL_NIF_TERM doMapDoc(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         return enif_make_badarg(env);
     }
 
-    json_bin_t doc((char *) docBin.data, (size_t) docBin.size);
-    json_bin_t meta((char *) metaBin.data, (size_t) metaBin.size);
-
     try {
         // Map results is a list of lists. An inner list is the list of key value
         // pairs emitted by a map function for the document.
-        map_results_list_list_t mapResults = mapDoc(ctx, doc, meta);
+        map_results_list_list_t mapResults = mapDoc(ctx, docBin, metaBin);
         ERL_NIF_TERM outerList = enif_make_list(env, 0);
         map_results_list_list_t::reverse_iterator i = mapResults.rbegin();
-        bool allocError = false;
 
         for ( ; i != mapResults.rend(); ++i) {
             map_results_list_t funResults = *i;
@@ -137,45 +134,18 @@ ERL_NIF_TERM doMapDoc(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
             map_results_list_t::reverse_iterator j = funResults.rbegin();
 
             for ( ; j != funResults.rend(); ++j) {
-                json_bin_t key = j->first;
-                json_bin_t value = j->second;
+                ErlNifBinary key = j->first;
+                ErlNifBinary value = j->second;
+                ERL_NIF_TERM kvPair;
 
-                if (!allocError) {
-                    ErlNifBinary keyBin;
-                    ErlNifBinary valueBin;
-                    ERL_NIF_TERM kvPair;
+                kvPair = enif_make_tuple2(env,
+                                          enif_make_binary(env, &key),
+                                          enif_make_binary(env, &value));
 
-                    if (!enif_alloc_binary_compat(env, key.length, &keyBin)) {
-                        allocError = true;
-                    } else {
-                        if (!enif_alloc_binary_compat(env, value.length, &valueBin)) {
-                            enif_release_binary(&keyBin);
-                            allocError = true;
-                        } else {
-                            memcpy(keyBin.data, key.data, key.length);
-                            memcpy(valueBin.data, value.data, value.length);
-
-                            kvPair = enif_make_tuple2(
-                                env,
-                                enif_make_binary(env, &keyBin),
-                                enif_make_binary(env, &valueBin));
-
-                            innerList = enif_make_list_cell(env, kvPair, innerList);
-                        }
-                    }
-                }
-
-                enif_free((void *) key.data);
-                enif_free((void *) value.data);
+                innerList = enif_make_list_cell(env, kvPair, innerList);
             }
 
-            if (!allocError) {
-                outerList = enif_make_list_cell(env, innerList, outerList);
-            }
-        }
-
-        if (allocError) {
-            return makeError(env, "memory allocation failure");
+            outerList = enif_make_list_cell(env, innerList, outerList);
         }
 
         return enif_make_tuple2(env, ATOM_OK, outerList);
@@ -224,6 +194,7 @@ ERL_NIF_TERM doReduce(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     if (!enif_get_resource(env, argv[0], MAP_REDUCE_CTX_RES, reinterpret_cast<void **>(&ctx))) {
         return enif_make_badarg(env);
     }
+    ctx->env = env;
 
     int reduceFunNum = -1;
     json_results_list_t keys;
@@ -264,11 +235,8 @@ ERL_NIF_TERM doReduce(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
             return enif_make_badarg(env);
         }
 
-        json_bin_t key((char *) keyBin.data, (size_t) keyBin.size);
-        json_bin_t value((char *) valueBin.data, (size_t) valueBin.size);
-
-        keys.push_back(key);
-        values.push_back(value);
+        keys.push_back(keyBin);
+        values.push_back(valueBin);
     }
 
     try {
@@ -277,42 +245,18 @@ ERL_NIF_TERM doReduce(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
             ERL_NIF_TERM list = enif_make_list(env, 0);
             json_results_list_t::reverse_iterator it = results.rbegin();
-            bool allocError = false;
 
             for ( ; it != results.rend(); ++it) {
-                json_bin_t reduction = *it;
+                ErlNifBinary reduction = *it;
 
-                if (!allocError) {
-                    ErlNifBinary reductionBin;
-
-                    if (!enif_alloc_binary_compat(env, reduction.length, &reductionBin)) {
-                        allocError = true;
-                    } else {
-                        memcpy(reductionBin.data, reduction.data, reduction.length);
-                        list = enif_make_list_cell(env, enif_make_binary(env, &reductionBin), list);
-                    }
-                }
-                enif_free((void *) reduction.data);
-            }
-
-            if (allocError) {
-                return makeError(env, "memory allocation failure");
+                list = enif_make_list_cell(env, enif_make_binary(env, &reduction), list);
             }
 
             return enif_make_tuple2(env, ATOM_OK, list);
         } else {
-            json_bin_t result = runReduce(ctx, reduceFunNum, keys, values);
+            ErlNifBinary reduction = runReduce(ctx, reduceFunNum, keys, values);
 
-            ErlNifBinary reductionBin;
-
-            if (!enif_alloc_binary_compat(env, result.length, &reductionBin)) {
-                enif_free((void *) result.data);
-                return makeError(env, "memory allocation failure");
-            }
-            memcpy(reductionBin.data, result.data, result.length);
-            enif_free((void *) result.data);
-
-            return enif_make_tuple2(env, ATOM_OK, enif_make_binary(env, &reductionBin));
+            return enif_make_tuple2(env, ATOM_OK, enif_make_binary(env, &reduction));
         }
 
     } catch(MapReduceError &e) {
@@ -330,6 +274,7 @@ ERL_NIF_TERM doRereduce(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     if (!enif_get_resource(env, argv[0], MAP_REDUCE_CTX_RES, reinterpret_cast<void **>(&ctx))) {
         return enif_make_badarg(env);
     }
+    ctx->env = env;
 
     int reduceFunNum;
 
@@ -352,25 +297,13 @@ ERL_NIF_TERM doRereduce(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
             return enif_make_badarg(env);
         }
 
-        json_bin_t reduction((char *) reductionBin.data, (size_t) reductionBin.size);
-
-        reductions.push_back(reduction);
+        reductions.push_back(reductionBin);
     }
 
     try {
-        json_bin_t result = runRereduce(ctx, reduceFunNum, reductions);
+        ErlNifBinary result = runRereduce(ctx, reduceFunNum, reductions);
 
-        ErlNifBinary finalReductionBin;
-
-        if (!enif_alloc_binary_compat(env, result.length, &finalReductionBin)) {
-            enif_free((void *) result.data);
-            return makeError(env, "memory allocation failure");
-        }
-        memcpy(finalReductionBin.data, result.data, result.length);
-        enif_free((void *) result.data);
-
-        return enif_make_tuple2(env, ATOM_OK, enif_make_binary(env, &finalReductionBin));
-
+        return enif_make_tuple2(env, ATOM_OK, enif_make_binary(env, &result));
     } catch(MapReduceError &e) {
         return makeError(env, e.getMsg());
     } catch(std::bad_alloc &) {

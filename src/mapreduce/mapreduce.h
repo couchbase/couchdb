@@ -28,21 +28,14 @@
 #include "erl_nif_compat.h"
 
 class MapReduceError;
-
-typedef struct json_bin_t {
-    const char *data;
-    size_t length;
-    json_bin_t(char *bytes, size_t len) : data(bytes), length(len) { }
-} json_bin_t;
-
 template<class T> class NifStlAllocator;
 
-typedef std::pair<json_bin_t, json_bin_t>  map_result_t;
+typedef std::list<ErlNifBinary, NifStlAllocator<ErlNifBinary> >  json_results_list_t;
+
+typedef std::pair<ErlNifBinary, ErlNifBinary> map_result_t;
 typedef std::list< map_result_t, NifStlAllocator< map_result_t > >  map_results_list_t;
 typedef std::list< map_results_list_t,
                    NifStlAllocator< map_results_list_t > >  map_results_list_list_t;
-
-typedef std::list<json_bin_t, NifStlAllocator<json_bin_t> >  json_results_list_t;
 
 typedef std::vector< v8::Persistent<v8::Function>,
                      NifStlAllocator< v8::Persistent<v8::Function> > >  function_vector_t;
@@ -61,6 +54,7 @@ typedef struct {
     function_vector_t                            *functions;
     map_results_list_t                           *mapFunResults;
     unsigned int                                 key;
+    ErlNifEnv                                    *env;
     volatile int                                 taskId;
     volatile long                                taskStartTime;
 } map_reduce_ctx_t;
@@ -70,20 +64,20 @@ void initContext(map_reduce_ctx_t *ctx, const function_sources_list_t &funs);
 void destroyContext(map_reduce_ctx_t *ctx);
 
 map_results_list_list_t mapDoc(map_reduce_ctx_t *ctx,
-                               const json_bin_t &doc,
-                               const json_bin_t &meta);
+                               const ErlNifBinary &doc,
+                               const ErlNifBinary &meta);
 
 json_results_list_t runReduce(map_reduce_ctx_t *ctx,
                               const json_results_list_t &keys,
                               const json_results_list_t &values);
 
-json_bin_t runReduce(map_reduce_ctx_t *ctx, int reduceFunNum,
-                     const json_results_list_t &keys,
-                     const json_results_list_t &values);
+ErlNifBinary runReduce(map_reduce_ctx_t *ctx, int reduceFunNum,
+                       const json_results_list_t &keys,
+                       const json_results_list_t &values);
 
-json_bin_t runRereduce(map_reduce_ctx_t *ctx,
-                       int reduceFunNum,
-                       const json_results_list_t &reductions);
+ErlNifBinary runRereduce(map_reduce_ctx_t *ctx,
+                         int reduceFunNum,
+                         const json_results_list_t &reductions);
 
 void terminateTask(map_reduce_ctx_t *ctx);
 

@@ -26,8 +26,6 @@
 
 #include "mapreduce.h"
 
-// NOTE: keep this file clean (without knowledge) of any Erlang NIF APIs
-
 using namespace v8;
 
 typedef struct {
@@ -102,8 +100,8 @@ static void loadFunctions(map_reduce_ctx_t *ctx, const function_sources_list_t &
 static void deleteJsonData(const json_results_list_t &data);
 static void deleteJsonData(const map_results_list_t &data);
 static Handle<Function> compileFunction(const function_source_t &funSource);
-static inline json_bin_t jsonStringify(const Handle<Value> &obj);
-static inline Handle<Value> jsonParse(const json_bin_t &thing);
+static inline ErlNifBinary jsonStringify(const Handle<Value> &obj);
+static inline Handle<Value> jsonParse(const ErlNifBinary &thing);
 static inline Handle<Array> jsonListToJsArray(const json_results_list_t &list);
 static inline isolate_data_t *getIsolateData();
 static inline void taskStarted(map_reduce_ctx_t *ctx);
@@ -143,7 +141,7 @@ void initContext(map_reduce_ctx_t *ctx, const function_sources_list_t &funs)
 }
 
 
-map_results_list_list_t mapDoc(map_reduce_ctx_t *ctx, const json_bin_t &doc, const json_bin_t &meta)
+map_results_list_list_t mapDoc(map_reduce_ctx_t *ctx, const ErlNifBinary &doc, const ErlNifBinary &meta)
 {
     Locker locker(ctx->isolate);
     Isolate::Scope isolateScope(ctx->isolate);
@@ -230,7 +228,7 @@ json_results_list_t runReduce(map_reduce_ctx_t *ctx,
         }
 
         try {
-            json_bin_t jsonResult = jsonStringify(result);
+            ErlNifBinary jsonResult = jsonStringify(result);
             results.push_back(jsonResult);
         } catch(...) {
             deleteJsonData(results);
@@ -244,10 +242,10 @@ json_results_list_t runReduce(map_reduce_ctx_t *ctx,
 }
 
 
-json_bin_t runReduce(map_reduce_ctx_t *ctx,
-                     int reduceFunNum,
-                     const json_results_list_t &keys,
-                     const json_results_list_t &values)
+ErlNifBinary runReduce(map_reduce_ctx_t *ctx,
+                       int reduceFunNum,
+                       const json_results_list_t &keys,
+                       const json_results_list_t &values)
 {
     Locker locker(ctx->isolate);
     Isolate::Scope isolateScope(ctx->isolate);
@@ -286,7 +284,7 @@ json_bin_t runReduce(map_reduce_ctx_t *ctx,
 }
 
 
-json_bin_t runRereduce(map_reduce_ctx_t *ctx,
+ErlNifBinary runRereduce(map_reduce_ctx_t *ctx,
                        int reduceFunNum,
                        const json_results_list_t &reductions)
 {
@@ -330,7 +328,8 @@ void deleteJsonData(const json_results_list_t &data)
 {
     json_results_list_t::const_iterator it = data.begin();
     for ( ; it != data.end(); ++it) {
-        enif_free((void *) it->data);
+        ErlNifBinary bin = *it;
+        enif_release_binary(&bin);
     }
 }
 
@@ -339,10 +338,10 @@ void deleteJsonData(const map_results_list_t &data)
 {
     map_results_list_t::const_iterator it = data.begin();
     for ( ; it != data.end(); ++it) {
-        json_bin_t key = it->first;
-        json_bin_t value = it->second;
-        enif_free((void *) key.data);
-        enif_free((void *) value.data);
+        ErlNifBinary key = it->first;
+        ErlNifBinary value = it->second;
+        enif_release_binary(&key);
+        enif_release_binary(&value);
     }
 }
 
@@ -407,10 +406,10 @@ Handle<Value> emit(const Arguments& args)
     isolate_data_t *isoData = getIsolateData();
 
     try {
-        json_bin_t keyJson = jsonStringify(args[0]);
-        json_bin_t valueJson = jsonStringify(args[1]);
+        ErlNifBinary keyJson = jsonStringify(args[0]);
+        ErlNifBinary valueJson = jsonStringify(args[1]);
 
-        map_result_t result = std::pair<json_bin_t, json_bin_t>(keyJson, valueJson);
+        map_result_t result = map_result_t(keyJson, valueJson);
         isoData->ctx->mapFunResults->push_back(result);
 
         return Undefined();
@@ -420,7 +419,7 @@ Handle<Value> emit(const Arguments& args)
 }
 
 
-json_bin_t jsonStringify(const Handle<Value> &obj)
+ErlNifBinary jsonStringify(const Handle<Value> &obj)
 {
     isolate_data_t *isoData = getIsolateData();
     Handle<Value> args[] = { obj };
@@ -431,35 +430,34 @@ json_bin_t jsonStringify(const Handle<Value> &obj)
         throw trycatch.Exception();
     }
 
-    char *data;
-    int len;
+    unsigned len;
+    ErlNifBinary resultBin;
 
     if (result->IsUndefined()) {
-        len = static_cast<int>(sizeof("null") - 1);
-        data = (char *) enif_alloc(len);
-        if (data == NULL) {
+        len = static_cast<unsigned>(sizeof("null") - 1);
+        if (!enif_alloc_binary_compat(isoData->ctx->env, len, &resultBin)) {
             throw std::bad_alloc();
         }
-        memcpy(data, "null", len);
+        memcpy(resultBin.data, "null", len);
     } else {
         Handle<String> str = Handle<String>::Cast(result);
         len = str->Utf8Length();
-        data = (char *) enif_alloc(len);
-        if (data == NULL) {
+        if (!enif_alloc_binary_compat(isoData->ctx->env, len, &resultBin)) {
             throw std::bad_alloc();
         }
-        str->WriteUtf8(data, len, NULL, String::NO_NULL_TERMINATION);
+        str->WriteUtf8(reinterpret_cast<char *>(resultBin.data),
+                       len, NULL, String::NO_NULL_TERMINATION);
     }
 
-    // Caller responsible for deallocating data.
-    return json_bin_t(data, len);
+    // Caller responsible for invoking enif_make_binary() or enif_release_binary()
+    return resultBin;
 }
 
 
-Handle<Value> jsonParse(const json_bin_t &thing)
+Handle<Value> jsonParse(const ErlNifBinary &thing)
 {
     isolate_data_t *isoData = getIsolateData();
-    Handle<Value> args[] = { String::New(thing.data, thing.length) };
+    Handle<Value> args[] = { String::New(reinterpret_cast<char *>(thing.data), thing.size) };
     TryCatch trycatch;
     Handle<Value> result = isoData->jsonParseFun->Call(isoData->jsonObject, 1, args);
 
