@@ -336,7 +336,7 @@ static inline ERL_NIF_TERM make_rows_list(ErlNifEnv *env, ctx_t *ctx)
 {
     ERL_NIF_TERM result = enif_make_list(env, 0);
     bool isReduceView = (ctx->row_count == NULL);
-    std::list<row_t *>::reverse_iterator it = ctx->rows->rbegin();
+    row_list_t::reverse_iterator it = ctx->rows->rbegin();
 
     for ( ; it != ctx->rows->rend(); ++it) {
         ErlNifBinary keyBin;
@@ -446,7 +446,8 @@ static inline ERL_NIF_TERM make_rows_list(ErlNifEnv *env, ctx_t *ctx)
         }
 
         result = enif_make_list_cell(env, row, result);
-        delete *it;
+        (*it)->~row_t();
+        enif_free(*it);
     }
 
     ctx->rows->clear();
@@ -468,7 +469,7 @@ static inline ERL_NIF_TERM return_error_entries(ErlNifEnv *env, ctx_t *ctx)
 static inline ERL_NIF_TERM make_errors_list(ErlNifEnv *env, ctx_t *ctx)
 {
     ERL_NIF_TERM result = enif_make_list(env, 0);
-    std::list<error_entry_t *>::reverse_iterator it = ctx->error_entries->rbegin();
+    error_entry_list_t::reverse_iterator it = ctx->error_entries->rbegin();
 
     for ( ; it != ctx->error_entries->rend(); ++it) {
         ErlNifBinary fromBin;
@@ -489,7 +490,9 @@ static inline ERL_NIF_TERM make_errors_list(ErlNifEnv *env, ctx_t *ctx)
         ERL_NIF_TERM reasonTerm = enif_make_binary(env, &reasonBin);
 
         result = enif_make_list_cell(env, enif_make_tuple2(env, fromTerm, reasonTerm), result);
-        delete *it;
+
+        (*it)->~error_entry_t();
+        enif_free(*it);
     }
 
     ctx->error_entries->clear();
@@ -511,7 +514,7 @@ static inline ERL_NIF_TERM return_debug_entries(ErlNifEnv *env, ctx_t *ctx)
 static inline ERL_NIF_TERM make_debug_entries_list(ErlNifEnv *env, ctx_t *ctx)
 {
     ERL_NIF_TERM result = enif_make_list(env, 0);
-    std::list<debug_info_t *>::reverse_iterator it = ctx->debug_infos->rbegin();
+    debug_info_list_t::reverse_iterator it = ctx->debug_infos->rbegin();
 
     for ( ; it != ctx->debug_infos->rend(); ++it) {
         ErlNifBinary fromBin;
@@ -532,7 +535,9 @@ static inline ERL_NIF_TERM make_debug_entries_list(ErlNifEnv *env, ctx_t *ctx)
         ERL_NIF_TERM valueTerm = enif_make_binary(env, &valueBin);
 
         result = enif_make_list_cell(env, enif_make_tuple2(env, fromTerm, valueTerm), result);
-        delete *it;
+
+        (*it)->~debug_info_t();
+        enif_free(*it);
     }
 
     ctx->debug_infos->clear();

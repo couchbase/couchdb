@@ -73,25 +73,109 @@ typedef enum {
     parser_get_error_reason       // parsing value of the "reason" field of an error entry
 } parse_sub_state_t;
 
+
+// Some information about STL allocators:
+// http://www.cplusplus.com/reference/std/memory/allocator/
+//
+template<class T> class NifStlAllocator {
+public:
+    typedef size_t    size_type;
+    typedef ptrdiff_t difference_type;
+    typedef T*        pointer;
+    typedef const T*  const_pointer;
+    typedef T&        reference;
+    typedef const T&  const_reference;
+    typedef T         value_type;
+
+    NifStlAllocator() {}
+    NifStlAllocator(const NifStlAllocator&) {}
+
+    pointer allocate(size_type n, const void * = 0) {
+        pointer t = (pointer) enif_alloc(n * sizeof(value_type));
+        if (t == NULL) {
+            throw std::bad_alloc();
+        }
+        return t;
+    }
+
+    void deallocate(void *p, size_type) {
+        if (p) {
+            enif_free(p);
+        }
+    }
+
+    pointer address(reference x) const {
+        return &x;
+    }
+
+    const_pointer address(const_reference x) const {
+        return &x;
+    }
+
+    void construct(pointer p, const_reference val) {
+        new (p) value_type(val);
+    }
+
+    void destroy(pointer p) {
+        p->~T();
+    }
+
+    size_type max_size() const {
+        return size_t(-1);
+    }
+
+    template <class U>
+    struct rebind {
+        typedef NifStlAllocator<U> other;
+    };
+
+    template <class U>
+    NifStlAllocator(const NifStlAllocator<U>&) {}
+
+    template <class U>
+    NifStlAllocator& operator=(const NifStlAllocator<U>&) {
+        return *this;
+    }
+};
+
+template<typename T>
+inline bool operator==(const NifStlAllocator<T>&, const NifStlAllocator<T>&) {
+    return true;
+}
+
+template<typename T>
+inline bool operator!=(const NifStlAllocator<T>&, const NifStlAllocator<T>&) {
+    return false;
+}
+
+
+typedef std::basic_string< char,
+                           std::char_traits<char>,
+                           NifStlAllocator<char> >  parser_string_t;
+
 typedef struct {
-    std::string key;
-    std::string id;
-    std::string value;
-    std::string doc;
-    std::string partition;
-    std::string node;
-    std::string error;
+    parser_string_t key;
+    parser_string_t id;
+    parser_string_t value;
+    parser_string_t doc;
+    parser_string_t partition;
+    parser_string_t node;
+    parser_string_t error;
 } row_t;
 
 typedef struct {
-    std::string from;
-    std::string reason;
+    parser_string_t from;
+    parser_string_t reason;
 } error_entry_t;
 
 typedef struct {
-    std::string from;
-    std::string value;
+    parser_string_t from;
+    parser_string_t value;
 } debug_info_t;
+
+typedef std::list< row_t *, NifStlAllocator<row_t *> >                 row_list_t;
+typedef std::list< error_entry_t *, NifStlAllocator<error_entry_t *> > error_entry_list_t;
+typedef std::list< debug_info_t *, NifStlAllocator<debug_info_t *> >   debug_info_list_t;
 
 typedef struct {
     yajl_handle                 handle;
@@ -103,11 +187,11 @@ typedef struct {
     // parse error message
     std::string                 *error;
     char                        *row_count;
-    std::list<row_t *>          *rows;
+    row_list_t                  *rows;
     row_t                       *tmp_row;
-    std::list<error_entry_t *>  *error_entries;
+    error_entry_list_t          *error_entries;
     error_entry_t               *tmp_error_entry;
-    std::list<debug_info_t *>   *debug_infos;
+    debug_info_list_t           *debug_infos;
     debug_info_t                *tmp_debug_info;
     // nesting level of the object we're raw collecting
     // when > 0, we're inside an object or an array
