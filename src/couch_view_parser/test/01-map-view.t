@@ -23,10 +23,12 @@
             case XXXXXX of Expected -> true; _ -> false end
         end, Got, Desc)).
 
+num_iterations() -> 666.
+
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(164),
+    etap:plan(164 * num_iterations()),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -38,6 +40,13 @@ main(_) ->
 
 
 test() ->
+    ok = lists:foreach(fun(I) ->
+        etap:diag(">>>>>>>>>>>>>> Iteration " ++ integer_to_list(I)),
+        run_tests()
+    end, lists:seq(1, num_iterations())).
+
+
+run_tests() ->
     test_bad_json(),
     test_bad_total_rows_value(),
     test_duplicated_total_rows_value(),

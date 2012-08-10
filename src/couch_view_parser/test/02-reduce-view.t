@@ -18,10 +18,12 @@
 % License for the specific language governing permissions and limitations under
 % the License.
 
+num_iterations() -> 233.
+
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(33),
+    etap:plan(33 * num_iterations()),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -33,6 +35,13 @@ main(_) ->
 
 
 test() ->
+    ok = lists:foreach(fun(I) ->
+        etap:diag(">>>>>>>>>>>>>> Iteration " ++ integer_to_list(I)),
+        run_tests()
+    end, lists:seq(1, num_iterations())).
+
+
+run_tests() ->
     test_reduce_view_1_row(),
     test_reduce_view_3_rows(),
     test_reduce_view_4_rows_3_errors(),
