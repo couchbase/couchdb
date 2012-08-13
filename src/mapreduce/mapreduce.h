@@ -19,6 +19,7 @@
 #ifndef _MAPREDUCE_H
 #define _MAPREDUCE_H
 
+#include <cstddef>
 #include <iostream>
 #include <string>
 #include <list>
