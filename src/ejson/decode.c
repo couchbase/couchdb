@@ -42,6 +42,19 @@ typedef struct {
 #define ERR_MEMORY 1
 #define ERR_PRIVATE_MEMBER 2
 
+
+static void * yajl_internal_malloc(void *ctx, size_t sz);
+static void * yajl_internal_realloc(void *ctx, void *previous, size_t sz);
+static void yajl_internal_free(void *ctx, void *ptr);
+
+
+static yajl_alloc_funcs allocfuncs = {
+    yajl_internal_malloc,
+    yajl_internal_realloc,
+    yajl_internal_free
+};
+
+
 static ERL_NIF_TERM
 make_error(yajl_handle handle, ErlNifEnv* env)
 {
@@ -428,7 +441,7 @@ validate_doc(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
     ctx.fill_offset = 0;
     ctx.error = 0;
 
-    handle = yajl_alloc(&validate_callbacks, &conf, NULL, &ctx);
+    handle = yajl_alloc(&validate_callbacks, &conf, &allocfuncs, &ctx);
 
     if(!enif_inspect_iolist_as_binary(env, argv[0], &json))
     {
@@ -527,7 +540,7 @@ reverse_tokens(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 {
     decode_ctx ctx;
     yajl_parser_config conf = {0, 1}; // No comments, check utf8
-    yajl_handle handle = yajl_alloc(&decoder_callbacks, &conf, NULL, &ctx);
+    yajl_handle handle = yajl_alloc(&decoder_callbacks, &conf, &allocfuncs, &ctx);
     yajl_status status;
     unsigned int used;
     ErlNifBinary bin;
@@ -601,4 +614,20 @@ reverse_tokens(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 done:
     if(handle != NULL) yajl_free(handle);
     return ret;
+}
+
+
+static void * yajl_internal_malloc(void *ctx, size_t sz)
+{
+    return enif_alloc(sz);
+}
+
+static void * yajl_internal_realloc(void *ctx, void *previous, size_t sz)
+{
+    return enif_realloc(previous, sz);
+}
+
+static void yajl_internal_free(void *ctx, void *ptr)
+{
+    enif_free(ptr);
 }
