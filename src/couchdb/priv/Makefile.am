@@ -63,7 +63,7 @@ couch_icu_driver_la_LIBADD = $(ICU_LOCAL_LIBS)
 endif
 
 if WINDOWS
-couchpriv_DATA = stat_descriptions.cfg $(COUCH_ICU_DRIVER)
+couchpriv_DATA = stat_descriptions.cfg $(COUCH_ICU_DRIVER) $(COUCH_EJSON_COMPARE)
 endif
 
 locallibbin_PROGRAMS =

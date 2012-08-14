@@ -283,10 +283,11 @@ static __inline char ConvertJSONEscape(const char **in, couch_ejson_ctx_t *ctx)
     char c = *++(*in);
     switch (c) {
     case 'u': {
+        int uc;
         /* \u is a Unicode escape; 4 hex digits follow. */
         const char* digits = *in + 1;
         *in += 4;
-        int uc = (digitToInt(digits[0]) << 12) | (digitToInt(digits[1]) << 8) |
+        uc = (digitToInt(digits[0]) << 12) | (digitToInt(digits[1]) << 8) |
             (digitToInt(digits[2]) <<  4) | (digitToInt(digits[3]));
         if (uc > 127) {
             ctx->error = 1;

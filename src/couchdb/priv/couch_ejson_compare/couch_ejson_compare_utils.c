@@ -14,8 +14,13 @@
 
 #include "couch_ejson_compare.h"
 
+#ifdef WIN32
+#define INLINE_MODIFIER
+#else
+#define INLINE_MODIFIER __inline
+#endif
 
-__inline void reserve_coll(couch_ejson_ctx_t *ctx)
+INLINE_MODIFIER void reserve_coll(couch_ejson_ctx_t *ctx)
 {
     if (ctx->coll == NULL) {
         enif_mutex_lock(ctx->globalCtx->collMutex);
@@ -26,8 +31,7 @@ __inline void reserve_coll(couch_ejson_ctx_t *ctx)
     }
 }
 
-
-__inline void release_coll(couch_ejson_ctx_t *ctx)
+INLINE_MODIFIER void release_coll(couch_ejson_ctx_t *ctx)
 {
     if (ctx->coll != NULL) {
         enif_mutex_lock(ctx->globalCtx->collMutex);
