@@ -3026,15 +3026,20 @@ monitor_partitions([PartId | Rest], SetName, Dict) ->
     true ->
         monitor_partitions(Rest, SetName, Dict);
     false ->
-        {ok, Db} = case PartId of
+        DbName = case PartId of
         master ->
-            couch_db:open_int(?master_dbname(SetName), []);
+            ?master_dbname(SetName);
         _ when is_integer(PartId) ->
-            couch_db:open_int(?dbname(SetName, PartId), [])
+            ?dbname(SetName, PartId)
         end,
-        Ref = couch_db:monitor(Db),
-        ok = couch_db:close(Db),
-        monitor_partitions(Rest, SetName, dict:store(PartId, Ref, Dict))
+        case couch_db:open_int(DbName, []) of
+        {ok, Db} ->
+            Ref = couch_db:monitor(Db),
+            ok = couch_db:close(Db),
+            monitor_partitions(Rest, SetName, dict:store(PartId, Ref, Dict));
+        Error ->
+            throw({error, {db_open, DbName, Error}})
+        end
     end.
 
 
