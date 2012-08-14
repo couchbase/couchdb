@@ -16,7 +16,7 @@
 -export([from_json_obj/1,to_json_obj/2,to_json_obj/1,to_json_bin/1,from_binary/3]).
 -export([validate_docid/1,with_uncompressed_body/1]).
 -export([with_ejson_body/1,with_json_body/1]).
--export([to_raw_json_binary_views/1]).
+-export([to_raw_json_binary_views/1,to_json_base64/1]).
 
 -include("couch_db.hrl").
 
@@ -116,6 +116,16 @@ to_json_obj(Doc0)->
 to_json_obj(Doc0, _Options)->
     JSONBin = to_json_bin(Doc0),
     ?JSON_DECODE(JSONBin).
+
+to_json_base64(Doc)->
+    #doc{body = Body} = Doc2 = with_uncompressed_body(Doc),
+    DocMeta = ?JSON_ENCODE(to_full_ejson_meta(Doc2, false)),
+    Bin = base64:encode(iolist_to_binary(Body)),
+    iolist_to_binary([<<"{\"meta\":">>,
+                      DocMeta,
+                      <<",\"base64\":\"">>,
+                      Bin,
+                      <<"\"}">>]).
 
 to_json_bin(Doc0)->
     Doc = with_json_body(Doc0),
@@ -235,8 +245,8 @@ transfer_fields([], #doc{}=Doc) ->
     Doc;
 
 % if the body is nested we can transfer it without care for special fields.
-transfer_fields([{<<"json">>, {JsonProps}} | Rest], Doc) ->
-    transfer_fields(Rest, Doc#doc{body={JsonProps}, content_meta=?CONTENT_META_JSON});
+transfer_fields([{<<"json">>, Json} | Rest], Doc) ->
+    transfer_fields(Rest, Doc#doc{body=Json, content_meta=?CONTENT_META_JSON});
 
 % in case the body is a blob we transfer it as base64.
 transfer_fields([{<<"base64">>, Bin} | Rest], Doc) ->
