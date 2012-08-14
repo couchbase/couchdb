@@ -235,7 +235,6 @@ db_req(#httpd{method='POST',
               db_frontend=DbFrontend}=Req, Db) ->
     couch_httpd:validate_ctype(Req, "application/json"),
     {JsonProps} = couch_httpd:json_body_obj(Req),
-    ?LOG_INFO("_bulk_docs POST ~p", [JsonProps]),
     case couch_util:get_value(<<"docs">>, JsonProps) of
     undefined ->
         send_error(Req, 400, <<"bad_request">>, <<"Missing JSON list of 'docs'">>);
