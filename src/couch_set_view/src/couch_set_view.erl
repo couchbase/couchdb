@@ -813,7 +813,14 @@ handle_call({before_database_delete, DbName}, _From, Server) ->
         master ->
             ?LOG_INFO("Deleting index files for set `~s` because master database"
                       "is about to deleted", [SetName]),
-            delete_index_dir(RootDir, SetName);
+            try
+                delete_index_dir(RootDir, SetName)
+            catch _:Error ->
+                Stack = erlang:get_stacktrace(),
+                ?LOG_ERROR("Error deleting index files for set `~s`:~n"
+                           "  error: ~p~n  stacktrace: ~p~n",
+                           [SetName, Error, Stack])
+            end;
         _ ->
             ok
         end
@@ -863,7 +870,8 @@ handle_info({'EXIT', FromPid, Reason}, Server) ->
         true -> ok
         end;
     [{_, {SetName, Sig, DDocId}}] ->
-        delete_from_ets(FromPid, SetName, DDocId, Sig)
+        delete_from_ets(FromPid, SetName, DDocId, Sig),
+        true = ets:match_delete(couch_setview_name_to_sig, {SetName, {'$1', Sig}})
     end,
     {noreply, Server};
 

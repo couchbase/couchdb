@@ -25,7 +25,7 @@ num_docs() -> 1000.
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(53),
+    etap:plan(59),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -143,8 +143,8 @@ test() ->
         "Index file found after deleting original ddoc (because copy is not deleted)"),
 
     etap:is(ets:lookup(couch_setview_name_to_sig, test_set_name()),
-            [{test_set_name(), {ddoc_id_copy(), RawNewGroupSig}}],
-            "Correct group entry in couch_setview_name_to_sig ets table"),
+            [],
+            "No group entry in couch_setview_name_to_sig ets table"),
     etap:is(ets:lookup(couch_sig_to_setview_pid, {test_set_name(), RawNewGroupSig}),
             [],
             "No group entry in couch_sig_to_setview_pid ets table"),
@@ -246,6 +246,35 @@ test_recreate_ddoc_with_copy() ->
     etap:is(ets:lookup(couch_sig_to_setview_pid, {test_set_name(), RawGroupSig}),
             [],
             "No group entry in couch_sig_to_setview_pid ets table"),
+
+    couch_set_view:cleanup_index_files(test_set_name()),
+
+    etap:diag("Creating original ddoc again"),
+    update_ddoc(ddoc_id()),
+    GroupPid2 = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    query_view(ddoc_id(), num_docs(), []),
+
+    etap:diag("Creating ddoc copy again"),
+    ok = create_ddoc_copy(ddoc_id_copy()),
+
+    etap:is(ets:lookup(couch_setview_name_to_sig, test_set_name()),
+            [{test_set_name(), {ddoc_id(), RawGroupSig}},
+             {test_set_name(), {ddoc_id_copy(), RawGroupSig}}],
+            "Correct group entries in couch_setview_name_to_sig ets table"),
+    etap:is(ets:lookup(couch_sig_to_setview_pid, {test_set_name(), RawGroupSig}),
+            [{{test_set_name(), RawGroupSig}, GroupPid2}],
+            "Correct group entry in couch_sig_to_setview_pid ets table"),
+
+    etap:diag("Deleting master database"),
+    couch_set_view_test_util:delete_set_db(test_set_name(), master),
+    ok = timer:sleep(1000),
+
+    etap:is(ets:lookup(couch_setview_name_to_sig, test_set_name()),
+            [],
+            "couch_setview_name_to_sig ets table is empty"),
+    etap:is(ets:lookup(couch_sig_to_setview_pid, {test_set_name(), RawGroupSig}),
+            [],
+            "couch_sig_to_setview_pid ets table is empty"),
     ok.
 
 
