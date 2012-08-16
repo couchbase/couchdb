@@ -25,7 +25,7 @@ num_docs() -> 1000.
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(59),
+    etap:plan(64),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -263,6 +263,29 @@ test_recreate_ddoc_with_copy() ->
             "Correct group entries in couch_setview_name_to_sig ets table"),
     etap:is(ets:lookup(couch_sig_to_setview_pid, {test_set_name(), RawGroupSig}),
             [{{test_set_name(), RawGroupSig}, GroupPid2}],
+            "Correct group entry in couch_sig_to_setview_pid ets table"),
+
+    etap:diag("Killing view group process"),
+    couch_util:shutdown_sync(GroupPid2),
+    ok = timer:sleep(1000),
+
+    etap:is(ets:lookup(couch_setview_name_to_sig, test_set_name()),
+            [],
+            "couch_setview_name_to_sig ets table is empty"),
+    etap:is(ets:lookup(couch_sig_to_setview_pid, {test_set_name(), RawGroupSig}),
+            [],
+            "couch_sig_to_setview_pid ets table is empty"),
+
+    etap:diag("Starting again view group process"),
+    GroupPid3 = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    etap:isnt(GroupPid3, GroupPid2, "Got a different view group pid"),
+
+    etap:is(ets:lookup(couch_setview_name_to_sig, test_set_name()),
+            [{test_set_name(), {ddoc_id(), RawGroupSig}},
+             {test_set_name(), {ddoc_id_copy(), RawGroupSig}}],
+            "Correct group entries in couch_setview_name_to_sig ets table"),
+    etap:is(ets:lookup(couch_sig_to_setview_pid, {test_set_name(), RawGroupSig}),
+            [{{test_set_name(), RawGroupSig}, GroupPid3}],
             "Correct group entry in couch_sig_to_setview_pid ets table"),
 
     etap:diag("Deleting master database"),

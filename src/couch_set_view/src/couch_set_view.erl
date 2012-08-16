@@ -847,8 +847,9 @@ new_group(Root, SetName, #set_view_group{name = DDocId, sig = Sig} = Group) ->
     process_flag(trap_exit, true),
     Reply = case (catch couch_set_view_group:start_link({Root, SetName, Group})) of
     {ok, NewPid} ->
+        Aliases = get_ddoc_ids_with_sig(SetName, Sig),
         unlink(NewPid),
-        {ok, NewPid};
+        {ok, NewPid, Aliases};
     {error, Reason} ->
         Reason;
     Error ->
@@ -878,12 +879,16 @@ handle_info({'EXIT', FromPid, Reason}, Server) ->
 handle_info({'DOWN', _MonRef, _, _Pid, {SetName, DDocId, Sig, Reply}}, Server) ->
     Key = {SetName, Sig},
     [{_, WaitList}] = ets:lookup(couch_sig_to_setview_pid, Key),
-    lists:foreach(fun(From) -> gen_server:reply(From, Reply) end, WaitList),
     case Reply of
-    {ok, NewPid} ->
+    {ok, NewPid, Aliases} ->
+        lists:foreach(fun(From) -> gen_server:reply(From, {ok, NewPid}) end, WaitList),
         true = link(NewPid),
-        add_to_ets(NewPid, SetName, DDocId, Sig);
+        add_to_ets(NewPid, SetName, DDocId, Sig),
+        lists:foreach(fun(AliasDDocId) ->
+            true = ets:insert(couch_setview_name_to_sig, {SetName, {AliasDDocId, Sig}})
+        end, Aliases);
     _ ->
+        lists:foreach(fun(From) -> gen_server:reply(From, Reply) end, WaitList),
         ets:delete(couch_sig_to_setview_pid, Key)
     end,
     {noreply, Server}.
@@ -1097,3 +1102,20 @@ is_array_key(<<"[", _/binary>>) ->
     true;
 is_array_key(K) when is_binary(K) ->
     false.
+
+
+-spec get_ddoc_ids_with_sig(binary(), binary()) -> [binary()].
+get_ddoc_ids_with_sig(SetName, ViewGroupSig) ->
+    {ok, Db} = couch_db:open_int(?master_dbname(SetName), []),
+    {ok, DDocList} = couch_db:get_design_docs(Db, no_deletes),
+    ok = couch_db:close(Db),
+    lists:foldl(
+        fun(#doc{id = Id} = DDoc, Acc) ->
+            case couch_set_view_util:design_doc_to_set_view_group(SetName, DDoc) of
+            #set_view_group{sig = ViewGroupSig} ->
+                [Id | Acc];
+            #set_view_group{sig = _OtherSig} ->
+                Acc
+            end
+        end,
+        [], DDocList).
