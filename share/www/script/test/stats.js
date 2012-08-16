@@ -72,53 +72,7 @@ couchTests.stats = function(debug) {
       TEquals(before-1, after, "Deleting a db decrements open db count.");
     }
   });
-  
-  (function() {
-    restartServer();
-    var max = 5;
-    
-    var testFun = function() {
-      var pre_dbs = getStat("couchdb", "open_databases").current || 0;
-      var pre_files = getStat("couchdb", "open_os_files").current || 0;
-     
-      var triggered = false;
-      var db = null;
-      for(var i = 0; i < max*2; i++) {
-        while (true) {
-            try {
-              db = newDb("test_suite_db_" + i, true);
-              break;
-            } catch(e) {
-                // all_dbs_active error!
-              triggered = true;
-            }
-        }
 
-        // Trigger a delayed commit
-        db.save({_id: "" + i, "lang": "Awesome!"});
-      }
-      T(triggered, "We managed to force a all_dbs_active error.");
-      
-      var open_dbs = getStat("couchdb", "open_databases").current;
-      TEquals(open_dbs > 0, true, "We actually opened some dbs.");
-      TEquals(open_dbs, max, "We only have max db's open.");
-      
-      for(var i = 0; i < max * 2; i++) {
-        newDb("test_suite_db_" + i).deleteDb();
-      }
-      
-      var post_dbs = getStat("couchdb", "open_databases").current;
-      var post_files = getStat("couchdb", "open_os_files").current;
-      TEquals(pre_dbs, post_dbs, "We have the same number of open dbs.");
-      TEquals(pre_files, post_files, "We have the same number of open files.");
-    };
-    
-    run_on_modified_server(
-      [{section: "couchdb", key: "max_dbs_open", value: "5"}],
-      testFun
-    );
-  })();
-  
   // Just fetching the before value is the extra +1 in test
   runTest("httpd", "requests", {
     run: function() {CouchDB.request("GET", "/");},

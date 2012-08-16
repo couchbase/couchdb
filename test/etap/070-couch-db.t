@@ -40,7 +40,6 @@ test() ->
     etap:ok(not lists:member(<<"etap-test-db">>, AllDbs2),
         "Database was deleted."),
 
-    gen_server:call(couch_server, {set_max_dbs_open, 3}),
     MkDbName = fun(Int) -> list_to_binary("lru-" ++ integer_to_list(Int)) end,
 
     lists:foreach(fun(Int) ->

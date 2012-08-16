@@ -24,7 +24,6 @@
 -record(server,{
     root_dir = [],
     dbname_regexp,
-    max_dbs_open=100,
     dbs_open=0,
     start_time=""
     }).
@@ -121,17 +120,10 @@ init([]) ->
     % will restart us and then we will pick up the new settings.
 
     RootDir = couch_config:get("couchdb", "database_dir", "."),
-    MaxDbsOpen = list_to_integer(
-            couch_config:get("couchdb", "max_dbs_open")),
     Self = self(),
     ok = couch_config:register(
         fun("couchdb", "database_dir") ->
             exit(Self, config_change)
-        end),
-    ok = couch_config:register(
-        fun("couchdb", "max_dbs_open", Max) ->
-            gen_server:call(couch_server,
-                    {set_max_dbs_open, list_to_integer(Max)})
         end),
     ok = couch_file:init_delete_dir(RootDir),
     hash_admin_passwords(),
@@ -148,7 +140,6 @@ init([]) ->
     process_flag(trap_exit, true),
     {ok, #server{root_dir=RootDir,
                 dbname_regexp=RegExp,
-                max_dbs_open=MaxDbsOpen,
                 start_time=httpd_util:rfc1123_date()}}.
 
 terminate(_Reason, _Srv) ->
@@ -189,70 +180,6 @@ all_databases(Fun, Acc0) ->
     end,
     {ok, FinalAcc}.
 
-
-maybe_close_lru_db(#server{dbs_open=NumOpen, max_dbs_open=MaxOpen}=Server)
-        when NumOpen < MaxOpen ->
-    {ok, Server};
-maybe_close_lru_db(#server{dbs_open=NumOpen}=Server) ->
-    % must free up the lru db.
-    case try_close_lru(now()) of
-    ok ->
-        {ok, Server#server{dbs_open=NumOpen - 1}};
-    Error -> Error
-    end.
-
-try_close_lru(StartTime) ->
-    LruTime = get_lru(),
-    if LruTime > StartTime ->
-        % this means we've looped through all our opened dbs and found them
-        % all in use.
-        {error, all_dbs_active};
-    true ->
-        [{_, DbName}] = ets:lookup(couch_dbs_by_lru, LruTime),
-        [{_, {opened, MainPid, LruTime}}] = ets:lookup(couch_dbs_by_name, DbName),
-        case couch_db:is_idle(MainPid) of
-        true ->
-            ok = shutdown_idle_db(DbName, MainPid, LruTime);
-        false ->
-            % this still has referrers. Go ahead and give it a current lru time
-            % and try the next one in the table.
-            NewLruTime = now(),
-            true = ets:insert(couch_dbs_by_name, {DbName, {opened, MainPid, NewLruTime}}),
-            true = ets:insert(couch_dbs_by_pid, {MainPid, DbName}),
-            true = ets:delete(couch_dbs_by_lru, LruTime),
-            true = ets:insert(couch_dbs_by_lru, {NewLruTime, DbName}),
-            try_close_lru(StartTime)
-        end
-    end.
-
-get_lru() ->
-    get_lru(ets:first(couch_dbs_by_lru)).
-
-get_lru(LruTime) ->
-    [{LruTime, DbName}] = ets:lookup(couch_dbs_by_lru, LruTime),
-    case ets:member(couch_sys_dbs, DbName) of
-    false ->
-        LruTime;
-    true ->
-        [{_, {opened, MainPid, _}}] = ets:lookup(couch_dbs_by_name, DbName),
-        case couch_db:is_idle(MainPid) of
-        true ->
-            NextLru = ets:next(couch_dbs_by_lru, LruTime),
-            ok = shutdown_idle_db(DbName, MainPid, LruTime),
-            get_lru(NextLru);
-        false ->
-            get_lru(ets:next(couch_dbs_by_lru, LruTime))
-        end
-    end.
-
-shutdown_idle_db(DbName, MainPid, LruTime) ->
-    couch_util:shutdown_sync(MainPid),
-    true = ets:delete(couch_dbs_by_lru, LruTime),
-    true = ets:delete(couch_dbs_by_name, DbName),
-    true = ets:delete(couch_dbs_by_pid, MainPid),
-    true = ets:delete(couch_sys_dbs, DbName),
-    ok.
-
 open_async(Server, Froms, DbName, Filepath, Options) ->
     Parent = self(),
     Opener = spawn_link(fun() ->
@@ -279,8 +206,6 @@ open_async(Server, Froms, DbName, Filepath, Options) ->
     end,
     Server#server{dbs_open = DbsOpen}.
 
-handle_call({set_max_dbs_open, Max}, _From, Server) ->
-    {reply, ok, Server#server{max_dbs_open=Max}};
 handle_call(get_server, _From, Server) ->
     {reply, {ok, Server}, Server};
 handle_call({open_result, DbName, {ok, OpenedDbPid}, Options}, From, Server) ->
@@ -464,17 +389,7 @@ open_db(DbName, Server, Options, Froms) ->
     case check_dbname(Server, DbNameList) of
     ok ->
         Filepath = get_full_filename(Server, DbNameList),
-        case lists:member(sys_db, Options) of
-        true ->
-            {noreply, open_async(Server, Froms, DbName, Filepath, Options)};
-        false ->
-            case maybe_close_lru_db(Server) of
-            {ok, Server2} ->
-                {noreply, open_async(Server2, Froms, DbName, Filepath, Options)};
-            CloseError ->
-                {reply, CloseError, Server}
-            end
-        end;
+        {noreply, open_async(Server, Froms, DbName, Filepath, Options)};
      Error ->
         {reply, Error, Server}
      end.

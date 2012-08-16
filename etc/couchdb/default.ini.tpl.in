@@ -7,7 +7,6 @@ database_dir = %localstatelibdir%
 view_index_dir = %localstatelibdir%
 util_driver_dir = %couchprivlibdir%
 os_process_timeout = 30000 ; 5 seconds. for view and external servers.
-max_dbs_open = 100
 delayed_commits = true ; set this to false to ensure an fsync before 201 Created is returned
 uri_file = %localstaterundir%/couch.uri
 ; Method used to compress everything that is appended to database and view index files, except

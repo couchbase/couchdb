@@ -41,7 +41,7 @@ run_tests(IniFiles, Tests) ->
 
 main(_) ->
     test_util:init_code_path(),
-    etap:plan(17),
+    etap:plan(15),
 
     case (catch test()) of
         ok ->
@@ -58,12 +58,6 @@ test() ->
     run_tests([default_config()], CheckStartStop),
 
     CheckDefaults = fun() ->
-        etap:is(
-            couch_config:get("couchdb", "max_dbs_open"),
-            "100",
-            "{couchdb, max_dbs_open} is 100 by defualt."
-        ),
-
         etap:is(
             couch_config:get("httpd","port"),
             "5984",
@@ -83,12 +77,6 @@ test() ->
     % Check that subsequent files override values appropriately
 
     CheckOverride = fun() ->
-        etap:is(
-            couch_config:get("couchdb", "max_dbs_open"),
-            "10",
-            "{couchdb, max_dbs_open} was overriden with the value 10"
-        ),
-
         etap:is(
             couch_config:get("httpd", "port"),
             "4895",

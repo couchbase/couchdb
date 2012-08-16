@@ -49,7 +49,7 @@ main_db_name() -> <<"couch_test_view_group_shutdown">>.
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(15),
+    etap:plan(13),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -62,7 +62,6 @@ main(_) ->
 
 test() ->
     couch_server_sup:start_link(test_util:config_files()),
-    ok = couch_config:set("couchdb", "max_dbs_open", "3", false),
     ok = couch_config:set("couchdb", "delayed_commits", "false", false),
     crypto:start(),
 
@@ -118,13 +117,6 @@ test_view_group_compaction() ->
     {'DOWN', MonRef, process, CompactPid, _Reason} ->
          etap:bail("Failure compacting view group")
     end,
-
-    ok = timer:sleep(2000),
-
-    etap:is(writer_try_again(Writer3), ok,
-        "Told writer 3 to try open his database again"),
-    etap:is(get_writer_status(Writer3), ok,
-        "Writer 3 was able to open his database"),
 
     etap:is(is_process_alive(Writer1), true, "Writer 1 still alive"),
     etap:is(is_process_alive(Writer2), true, "Writer 2 still alive"),
