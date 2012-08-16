@@ -186,7 +186,7 @@ test() ->
         ExpectedView2Result1,
         "Reduce view 2 has value " ++ couch_util:to_list(ExpectedView2Result1)),
 
-    wait_for_replica_full_update(RepGroupInfo2),
+    wait_for_replica_full_update(),
 
     {View1QueryResult3, Group5} = query_reduce_view(<<"view_1">>, false),
     {View2QueryResult3, Group6} = query_reduce_view(<<"view_2">>, false),
@@ -381,23 +381,37 @@ verify_group_info_after_replicas_transfer(MainGroupInfo, RepGroupInfo) ->
         "Replica group has [ ] as cleanup partitions").
 
 
-wait_for_replica_full_update(RepGroupInfo) ->
+wait_for_replica_full_update() ->
     etap:diag("Waiting for a full replica group update"),
-    {Stats} = couch_util:get_value(stats, RepGroupInfo),
+    {Stats} = couch_util:get_value(stats, get_replica_group_info()),
     Updates = couch_util:get_value(full_updates, Stats),
-    Pid = spawn(fun() ->
-        wait_replica_update_loop(Updates)
-    end),
-    Ref = erlang:monitor(process, Pid),
+    MainGroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    {ok, ReplicaGroupPid} = gen_server:call(MainGroupPid, replica_pid, infinity),
+    {ok, UpPid} = gen_server:call(ReplicaGroupPid, start_updater, infinity),
+    case is_pid(UpPid) of
+    true ->
+        ok;
+    false ->
+        etap:bail("Updater was not triggered")
+    end,
+    Ref = erlang:monitor(process, UpPid),
     receive
-    {'DOWN', Ref, process, Pid, normal} ->
+    {'DOWN', Ref, process, UpPid, {updater_finished, _}} ->
         ok;
-    {'DOWN', Ref, process, Pid, noproc} ->
+    {'DOWN', Ref, process, UpPid, noproc} ->
         ok;
-    {'DOWN', Ref, process, Pid, Reason} ->
-        etap:bail("Failure waiting for full replica group update: " ++ couch_util:to_list(Reason))
+    {'DOWN', Ref, process, UpPid, Reason} ->
+        etap:bail("Failure updating replica group: " ++ couch_util:to_list(Reason))
     after ?MAX_WAIT_TIME ->
         etap:bail("Timeout waiting for replica group update")
+    end,
+    {Stats2} = couch_util:get_value(stats, get_replica_group_info()),
+    Updates2 = couch_util:get_value(full_updates, Stats2),
+    case Updates2 == (Updates + 1) of
+    true ->
+        ok;
+    false ->
+        etap:bail("Updater was not triggered")
     end.
 
 
@@ -435,19 +449,6 @@ wait_replica_cleanup_loop(GroupInfo) ->
         MainGroupInfo = get_group_info(),
         {NewRepGroupInfo} = couch_util:get_value(replica_group_info, MainGroupInfo),
         wait_replica_cleanup_loop(NewRepGroupInfo)
-    end.
-
-
-wait_replica_update_loop(Updates) ->
-    MainGroupInfo = get_group_info(),
-    {RepGroupInfo} = couch_util:get_value(replica_group_info, MainGroupInfo),
-    {Stats} = couch_util:get_value(stats, RepGroupInfo),
-    case couch_util:get_value(full_updates, Stats) > Updates of
-    true ->
-        ok;
-    false ->
-        ok = timer:sleep(1000),
-        wait_replica_update_loop(Updates)
     end.
 
 
@@ -518,6 +519,12 @@ wait_main_update_loop(Updates, ExpectedReduceValue1, ExpectedReduceValue2, Expec
 get_group_info() ->
     {ok, Info} = couch_set_view:get_group_info(test_set_name(), ddoc_id()),
     Info.
+
+
+get_replica_group_info() ->
+    MainGroupInfo = get_group_info(),
+    {RepGroupInfo} = couch_util:get_value(replica_group_info, MainGroupInfo),
+    RepGroupInfo.
 
 
 doc_id(I) ->

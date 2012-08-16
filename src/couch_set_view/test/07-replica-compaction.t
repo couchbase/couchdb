@@ -50,7 +50,7 @@ test() ->
     ok = couch_set_view:add_replica_partitions(test_set_name(), ddoc_id(), lists:seq(8, 63)),
 
     verify_group_info_before_replica_removal(),
-    wait_for_replica_full_update(get_replica_group_info()),
+    wait_for_replica_full_update(),
     verify_group_info_before_replica_removal(),
 
     etap:diag("Removing partitions [ 8 .. 63 ] from replica set"),
@@ -63,8 +63,8 @@ test() ->
 
     etap:diag("Trigerring replica group compaction"),
     {ok, CompactPid} = couch_set_view_compactor:start_compact(test_set_name(), ddoc_id(), replica),
-    etap:diag("Waiting for replica group compaction to finish"),
     Ref = erlang:monitor(process, CompactPid),
+    etap:diag("Waiting for replica group compaction to finish"),
     receive
     {'DOWN', Ref, process, CompactPid, normal} ->
         ok;
@@ -219,31 +219,35 @@ verify_group_info_after_replica_compact() ->
         "Replica group has [ ] as cleanup partitions").
 
 
-wait_for_replica_full_update(RepGroupInfo) ->
+wait_for_replica_full_update() ->
     etap:diag("Waiting for a full replica group update"),
-    Pid = spawn(fun() ->
-        wait_replica_update_loop(get_replica_updates_count(RepGroupInfo))
-    end),
-    Ref = erlang:monitor(process, Pid),
-    receive
-    {'DOWN', Ref, process, Pid, normal} ->
-        ok;
-    {'DOWN', Ref, process, Pid, noproc} ->
-        ok;
-    {'DOWN', Ref, process, Pid, Reason} ->
-        etap:bail("Failure waiting for full replica group update: " ++ couch_util:to_list(Reason))
-    after ?MAX_WAIT_TIME ->
-        etap:bail("Timeout waiting for replica group update")
-    end.
-
-
-wait_replica_update_loop(Updates) ->
-    case get_replica_updates_count() > Updates of
+    UpdateCountBefore = get_replica_updates_count(),
+    MainGroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    {ok, ReplicaGroupPid} = gen_server:call(MainGroupPid, replica_pid, infinity),
+    {ok, UpPid} = gen_server:call(ReplicaGroupPid, start_updater, infinity),
+    case is_pid(UpPid) of
     true ->
         ok;
     false ->
-        ok = timer:sleep(500),
-        wait_replica_update_loop(Updates)
+        etap:bail("Updater was not triggered")
+    end,
+    Ref = erlang:monitor(process, UpPid),
+    receive
+    {'DOWN', Ref, process, UpPid, {updater_finished, _}} ->
+        ok;
+    {'DOWN', Ref, process, UpPid, noproc} ->
+        ok;
+    {'DOWN', Ref, process, UpPid, Reason} ->
+        etap:bail("Failure updating replica group: " ++ couch_util:to_list(Reason))
+    after ?MAX_WAIT_TIME ->
+        etap:bail("Timeout waiting for replica group update")
+    end,
+    UpdateCountAfter = get_replica_updates_count(),
+    case UpdateCountAfter == (UpdateCountBefore + 1) of
+    true ->
+        ok;
+    false ->
+        etap:bail("Updater was not triggered")
     end.
 
 

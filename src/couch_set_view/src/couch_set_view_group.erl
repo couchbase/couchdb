@@ -38,7 +38,6 @@
                             pid()) -> no_return()).
 
 -define(TIMEOUT, 3000).
--define(MIN_CHANGES_AUTO_UPDATE, 20000).
 -define(BTREE_CHUNK_THRESHOLD, 5120).
 
 -define(root_dir(State), element(1, State#state.init_args)).
@@ -919,20 +918,28 @@ handle_cast({update, MinNumChanges}, #state{group = Group} = State) ->
         false ->
             {noreply, State}
         end
-    end.
+    end;
+
+handle_cast({update_replica, _MinNumChanges}, #state{group = #set_view_group{views = []}} = State) ->
+    {noreply, State};
+
+handle_cast({update_replica, _MinNumChanges}, #state{replica_group = nil} = State) ->
+    {noreply, State};
+
+handle_cast({update_replica, MinNumChanges}, #state{replica_group = Pid} = State) ->
+    ok = gen_server:cast(Pid, {update, MinNumChanges}),
+    {noreply, State}.
 
 
 handle_info(timeout, State) when not ?is_defined(State) ->
     {noreply, State};
 
 handle_info(timeout, #state{group = Group} = State) ->
-    case ?type(State) of
-    main when ?set_replicas_on_transfer(Group) == [] ->
+    case ?set_replicas_on_transfer(Group) of
+    [] ->
         {noreply, maybe_start_cleaner(State)};
-    main ->
-        {noreply, start_updater(State)};
-    replica ->
-        {noreply, maybe_update_replica_index(State)}
+    _ ->
+        {noreply, start_updater(State)}
     end;
 
 handle_info({updater_info, Pid, {state, UpdaterState}}, #state{updater_pid = Pid} = State) ->
@@ -1804,28 +1811,17 @@ merge_into_pending_transition(Group, ActiveInCleanup, PassiveInCleanup, CleanupL
 
 -spec after_partition_states_updated(#state{}, boolean()) -> #state{}.
 after_partition_states_updated(State, UpdaterWasRunning) ->
-    case ?type(State) of
-    main ->
-        State2 = case UpdaterWasRunning of
-        true ->
-            % Updater was running, we stopped it, updated the group we received
-            % from the updater, updated that group's bitmasks and update seqs,
-            % and now restart the updater with this modified group.
-            start_updater(State);
-        false ->
-            State
-        end,
-        State3 = restart_compactor(State2, "partition states were updated"),
-        maybe_start_cleaner(State3);
-    replica ->
-        State2 = restart_compactor(State, "partition states were updated"),
-        case is_pid(State2#state.compactor_pid) of
-        true ->
-            State2;
-        false ->
-            maybe_update_replica_index(State2)
-        end
-    end.
+    State2 = case UpdaterWasRunning of
+    true ->
+        % Updater was running, we stopped it, updated the group we received
+        % from the updater, updated that group's bitmasks and update seqs,
+        % and now restart the updater with this modified group.
+        start_updater(State);
+    false ->
+        State
+    end,
+    State3 = restart_compactor(State2, "partition states were updated"),
+    maybe_start_cleaner(State3).
 
 
 -spec persist_partition_states(#state{},
@@ -2555,23 +2551,6 @@ open_replica_group({RootDir, SetName, Group} = _InitArgs) ->
 get_replica_partitions(ReplicaPid) ->
     {ok, Group} = gen_server:call(ReplicaPid, request_group, infinity),
     couch_set_view_util:decode_bitmask(?set_abitmask(Group) bor ?set_pbitmask(Group)).
-
-
--spec maybe_update_replica_index(#state{}) -> #state{}.
-maybe_update_replica_index(#state{updater_pid = Pid} = State) when is_pid(Pid) ->
-    State;
-maybe_update_replica_index(#state{group = #set_view_group{views = []}} = State) ->
-    State;
-maybe_update_replica_index(#state{group = Group, updater_state = not_running} = State) ->
-    {ok, CurSeqs} = couch_db_set:get_seqs(?db_set(State), true),
-    ChangesCount = couch_set_view_util:missing_changes_count(CurSeqs, ?set_seqs(Group)),
-    case (ChangesCount >= ?MIN_CHANGES_AUTO_UPDATE) orelse
-        (ChangesCount > 0 andalso ?set_cbitmask(Group) =/= 0) of
-    true ->
-        do_start_updater(State, CurSeqs);
-    false ->
-        maybe_start_cleaner(State)
-    end.
 
 
 -spec maybe_fix_replica_group(pid(), #set_view_group{}) -> 'ok'.

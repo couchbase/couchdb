@@ -25,7 +25,7 @@
 -export([set_partition_states/5, add_replica_partitions/3, remove_replica_partitions/3]).
 -export([mark_partitions_unindexable/3, mark_partitions_indexable/3]).
 -export([monitor_partition_update/3, demonitor_partition_update/3]).
--export([trigger_update/3]).
+-export([trigger_update/3, trigger_replica_update/3]).
 
 -export([fold/5, fold_reduce/5]).
 -export([get_row_count/2, reduce_to_count/1, extract_map_view/1]).
@@ -321,6 +321,14 @@ demonitor_partition_update(SetName, DDocId, Ref) ->
 trigger_update(SetName, DDocId, MinNumChanges) ->
     Pid = get_group_pid(SetName, DDocId),
     ok = gen_server:cast(Pid, {update, MinNumChanges}).
+
+
+% Trigger a replica view group index update if there are at least N new
+% changes (from all the currently defined replica partitions) to index.
+-spec trigger_replica_update(binary(), binary(), non_neg_integer()) -> no_return().
+trigger_replica_update(SetName, DDocId, MinNumChanges) ->
+    Pid = get_group_pid(SetName, DDocId),
+    ok = gen_server:cast(Pid, {update_replica, MinNumChanges}).
 
 
 -spec get_group_server(binary(), #set_view_group{}) -> pid().
