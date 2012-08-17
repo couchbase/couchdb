@@ -1447,8 +1447,8 @@ get_group_info(State) ->
         {cleanup_history, Stats#set_view_group_stats.cleanup_history}
     ]},
     {ok, Size} = couch_file:bytes(Fd),
-    {ok, DbSeqs, ExpectedDbSeqs} = gen_server:call(?db_set(State), get_seqs_debug, infinity),
     {message_queue_len, DbSetMsgQueueLen} = process_info(?db_set(State), message_queue_len),
+    {ok, DbSeqs, ExpectedDbSeqs} = gen_server:call(?db_set(State), get_seqs_debug, infinity),
     DbSetPartitions = ordsets:from_list([P || {P, _S} <- DbSeqs]),
     GroupPartitions = ordsets:from_list(
         couch_set_view_util:decode_bitmask(?set_abitmask(Group) bor ?set_pbitmask(Group))),
@@ -1466,7 +1466,7 @@ get_group_info(State) ->
         {update_seqs, {[{couch_util:to_binary(P), S} || {P, S} <- ?set_seqs(Group)]}},
         {partition_seqs, {[{couch_util:to_binary(P), S} || {P, S} <- DbSeqs]}},
         {expected_partition_seqs, {[{couch_util:to_binary(P), S} || {P, S} <- ExpectedDbSeqs]}},
-        {partition_seqs_up_to_data, DbSeqs == ExpectedDbSeqs},
+        {partition_seqs_up_to_date, DbSeqs == ExpectedDbSeqs},
         {out_of_sync_db_set_partitions, DbSetPartitions /= GroupPartitions},
         {db_set_message_queue_len, DbSetMsgQueueLen},
         {active_partitions, couch_set_view_util:decode_bitmask(?set_abitmask(Group))},
