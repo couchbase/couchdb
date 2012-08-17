@@ -2418,11 +2418,9 @@ compact_group(#state{group = Group} = State) ->
 stop_updater(#state{updater_pid = nil} = State) ->
     State;
 stop_updater(#state{updater_pid = Pid, initial_build = true} = State) when is_pid(Pid) ->
-    #state{group = #set_view_group{fd = Fd}} = State,
     ?LOG_INFO("Stopping updater for set view `~s`, ~s group `~s` (doing initial index build)",
         [?set_name(State), ?type(State), ?group_id(State)]),
     couch_util:shutdown_sync(Pid),
-    ok = couch_file:truncate(Fd, 0),
     ok = couch_set_view_util:delete_sort_files(updater_tmp_dir(State)),
     State#state{
         updater_pid = nil,

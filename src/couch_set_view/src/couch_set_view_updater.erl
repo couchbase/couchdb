@@ -582,7 +582,6 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
                }
             end,
             Group#set_view_group.views),
-        ok = couch_file:flush(GroupFd),
         Header = Group#set_view_group.index_header,
         NewHeader = Header#set_view_index_header{
             id_btree_state = couch_btree:get_state(NewIdBtree),
@@ -590,7 +589,7 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
             seqs = MaxSeqs2
         },
         update_task(1),
-        WriterAcc#writer_acc{
+        FinalAcc = WriterAcc#writer_acc{
             sort_files = nil,
             sort_file_workers = [],
             max_seqs = MaxSeqs2,
@@ -601,7 +600,10 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
                 views = NewViews,
                 index_header = NewHeader
             }
-        }
+        },
+        write_header(FinalAcc#writer_acc.group, false),
+        ok = couch_file:flush(GroupFd),
+        FinalAcc
     end.
 
 
