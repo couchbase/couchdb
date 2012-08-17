@@ -14,7 +14,7 @@
 -behaviour(gen_server).
 
 -export([open/2,create/2,delete/2,get_version/0]).
--export([all_databases/0, all_databases/2]).
+-export([all_databases/0, all_databases/2, all_known_databases/0]).
 -export([init/1, handle_call/3,sup_start_link/0]).
 -export([handle_cast/2,code_change/3,handle_info/2,terminate/2]).
 -export([dev_start/0,is_admin/2,has_admins/0,get_stats/0]).
@@ -180,6 +180,10 @@ all_databases(Fun, Acc0) ->
     end,
     {ok, FinalAcc}.
 
+-spec all_known_databases() -> [binary()].
+all_known_databases() ->
+    gen_server:call(couch_server, get_known_databases, infinity).
+
 open_async(Server, Froms, DbName, Filepath, Options) ->
     Parent = self(),
     Opener = spawn_link(fun() ->
@@ -208,6 +212,9 @@ open_async(Server, Froms, DbName, Filepath, Options) ->
 
 handle_call(get_server, _From, Server) ->
     {reply, {ok, Server}, Server};
+handle_call(get_known_databases, _From, Server) ->
+    Names = ets:match(couch_dbs_by_name, {'$1', '_'}),
+    {reply, [N || [N] <- Names], Server};
 handle_call({open_result, DbName, {ok, OpenedDbPid}, Options}, From, Server) ->
     case ets:lookup(couch_dbs_by_name, DbName) of
     [{DbName, {opening, Opener, Froms}}] ->
