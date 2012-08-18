@@ -1148,9 +1148,9 @@ handle_info({'DOWN', Ref, process, Pid, Reason}, State) ->
     end.
 
 
-terminate(Reason, State) ->
-    ?LOG_INFO("Set view `~s`, ~s group `~s`, terminating with reason: ~p",
-        [?set_name(State), ?type(State), ?group_id(State), Reason]),
+terminate(Reason, #state{group = #set_view_group{sig = Sig}} = State) ->
+    ?LOG_INFO("Set view `~s`, ~s group `~s`, signature `~s`, terminating with reason: ~p",
+        [?set_name(State), ?type(State), ?group_id(State), hex_sig(Sig), Reason]),
     _ = dict:fold(
         fun(Ref, #up_listener{pid = Pid}, _Acc) ->
             Pid ! {Ref, {shutdown, Reason}}

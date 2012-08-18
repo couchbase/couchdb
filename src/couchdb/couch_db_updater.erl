@@ -311,6 +311,10 @@ handle_info({update_docs, Client, Docs, NonRepDocs, FullCommit}, Db) ->
         ok = notify_db_updated(Db2),
         lists:foreach(
             fun(#doc_update_info{id = <<?DESIGN_DOC_PREFIX, _/binary>> = Id} = DUI) ->
+                    #doc_update_info{deleted = Deleted, rev = NewRev} = DUI,
+                    ?LOG_INFO("Database `~s`, design document `~s` updated "
+                          "(new revision: ~s, deleted: ~s)",
+                          [Db#db.name, Id, couch_doc:rev_to_str(NewRev), Deleted]),
                     case DUI#doc_update_info.deleted of
                     true ->
                         DDocBody = {[]};
@@ -319,8 +323,8 @@ handle_info({update_docs, Client, Docs, NonRepDocs, FullCommit}, Db) ->
                     end,
                     DDoc = #doc{
                         id = Id,
-                        rev = DUI#doc_update_info.rev,
-                        deleted = DUI#doc_update_info.deleted,
+                        rev = NewRev,
+                        deleted = Deleted,
                         content_meta = DUI#doc_update_info.content_meta,
                         body = DDocBody
                     },
