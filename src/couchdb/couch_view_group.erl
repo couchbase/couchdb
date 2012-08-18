@@ -258,20 +258,11 @@ handle_cast({partial_update, Pid, NewGroup}, #group_state{updater_pid=Pid}
 handle_cast({partial_update, _, _}, State) ->
     %% message from an old (probably pre-compaction) updater; ignore
     {noreply, State};
-handle_cast(ddoc_updated, State) ->
+handle_cast({ddoc_updated, NewSig}, State) ->
     #group_state{
-        db_name = DbName,
         waiting_list = Waiters,
-        group = #group{name = DDocId, sig = CurSig}
+        group = #group{sig = CurSig}
     } = State,
-    {ok, Db} = couch_db:open_int(DbName, []),
-    case couch_db:open_doc(Db, DDocId, [ejson_body]) of
-    {not_found, deleted} ->
-        NewSig = nil;
-    {ok, DDoc} ->
-        #group{sig = NewSig} = design_doc_to_view_group(DDoc)
-    end,
-    couch_db:close(Db),
     case NewSig of
     CurSig ->
         {noreply, State#group_state{shutdown = false}};

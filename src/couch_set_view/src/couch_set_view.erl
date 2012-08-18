@@ -827,15 +827,13 @@ handle_call({before_database_delete, DbName}, _From, Server) ->
     end,
     {reply, ok, Server};
 
-handle_call({ddoc_updated, SetName, DDocId}, _From, Server) ->
-    {ok, Db} = couch_db:open_int(?master_dbname(SetName), []),
-    {ok, DDoc} = couch_db:open_doc(Db, DDocId, [ejson_body]),
-    ok = couch_db:close(Db),
+handle_call({ddoc_updated, SetName, #doc{deleted = false} = DDoc0}, _From, Server) ->
+    #doc{id = DDocId} = DDoc = couch_doc:with_ejson_body(DDoc0),
     #set_view_group{sig = Sig} = couch_set_view_util:design_doc_to_set_view_group(SetName, DDoc),
     true = ets:insert(couch_setview_name_to_sig, {SetName, {DDocId, Sig}}),
     {reply, ok, Server};
 
-handle_call({ddoc_deleted, SetName, DDocId}, _From, Server) ->
+handle_call({ddoc_updated, SetName, #doc{id = DDocId, deleted = true}}, _From, Server) ->
     true = ets:match_delete(couch_setview_name_to_sig, {SetName, {DDocId, '$1'}}),
     {reply, ok, Server}.
 
@@ -995,20 +993,27 @@ modify_bitmasks(#set_view_group{replica_group = RepGroup} = Group, Partitions) -
 
 handle_db_event({before_delete, DbName}) ->
     ok = gen_server:call(?MODULE, {before_database_delete, DbName}, infinity);
-handle_db_event({Event, {DbName, DDocId}}) when Event == ddoc_updated; Event == ddoc_deleted ->
+handle_db_event({ddoc_updated, {DbName, #doc{id = DDocId} = DDoc}}) ->
     case couch_set_view_util:split_set_db_name(DbName) of
     {ok, SetName, master} ->
+        case DDoc#doc.deleted of
+        false ->
+            DDoc2 = couch_doc:with_ejson_body(DDoc),
+            #set_view_group{sig = NewSig} = couch_set_view_util:design_doc_to_set_view_group(SetName, DDoc2);
+        true ->
+            NewSig = <<>>
+        end,
         lists:foreach(
             fun({_SetName, {_DDocId, Sig}}) ->
                 case ets:lookup(couch_sig_to_setview_pid, {SetName, Sig}) of
                 [{_, GroupPid}] ->
-                    (catch gen_server:cast(GroupPid, ddoc_updated));
+                    (catch gen_server:cast(GroupPid, {ddoc_updated, NewSig}));
                 [] ->
                     ok
                 end
             end,
             ets:match_object(couch_setview_name_to_sig, {SetName, {DDocId, '$1'}})),
-        ok = gen_server:call(?MODULE, {Event, SetName, DDocId}, infinity);
+        ok = gen_server:call(?MODULE, {ddoc_updated, SetName, DDoc}, infinity);
     _ ->
         ok
     end;

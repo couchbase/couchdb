@@ -196,37 +196,17 @@ handle_db_event({deleted, DbName}) ->
     _ ->
         ok
     end;
-handle_db_event({ddoc_updated, {DbName, Id}}) ->
+handle_db_event({ddoc_updated, {DbName, DDoc}}) ->
     case couch_set_view_util:split_set_db_name(DbName) of
     {ok, SetName, master} ->
-        case couch_db:open_int(DbName, []) of
-        {ok, Db} ->
-            try
-                case couch_db:open_doc(Db, Id, [ejson_body]) of
-                {ok, Doc} ->
-                    Size = erlang:external_size(Doc),
-                    ok = gen_server:call(?MODULE, {update_ddoc, SetName, Doc, Size}, infinity);
-                _ ->
-                    % Maybe ddoc got deleted in the meanwhile. If not a subsequent request
-                    % will add it again to the cache. This approach make code simpler.
-                    ok = gen_server:call(?MODULE, {delete_ddoc, SetName, Id}, infinity)
-                end
-            after
-                ok = couch_db:close(Db)
-            end;
-        _ ->
-            % Maybe db just got deleted, maybe we run out of file descriptors, etc.
-            % Just let future cache misses populate again the cache, this makes it
-            % simpler for an uncommon case.
-            ok = gen_server:call(?MODULE, {delete_set, SetName}, infinity)
+        case DDoc#doc.deleted of
+        false ->
+            DDoc2 = couch_doc:with_ejson_body(DDoc),
+            Size = erlang:external_size(DDoc2),
+            ok = gen_server:call(?MODULE, {update_ddoc, SetName, DDoc2, Size}, infinity);
+        true ->
+            ok = gen_server:call(?MODULE, {delete_ddoc, SetName, DDoc#doc.id}, infinity)
         end;
-    _ ->
-        ok
-    end;
-handle_db_event({ddoc_deleted, {DbName, Id}}) ->
-    case couch_set_view_util:split_set_db_name(DbName) of
-    {ok, SetName, master} ->
-        ok = gen_server:call(?MODULE, {delete_ddoc, SetName, Id}, infinity);
     _ ->
         ok
     end;

@@ -225,13 +225,14 @@ test_recreate_ddoc_with_copy() ->
 
     etap:diag("Deleting ddoc copy"),
     ok = couch_set_view_test_util:delete_ddoc(test_set_name(), ddoc_id_copy()),
+    ok = timer:sleep(1000),
 
     etap:is(ets:lookup(couch_setview_name_to_sig, test_set_name()),
-            [{test_set_name(), {ddoc_id(), RawGroupSig}}],
-            "Correct group entry in couch_setview_name_to_sig ets table"),
+            [],
+            "No group entry in couch_setview_name_to_sig ets table"),
     etap:is(ets:lookup(couch_sig_to_setview_pid, {test_set_name(), RawGroupSig}),
-            [{{test_set_name(), RawGroupSig}, GroupPid}],
-            "Correct group entry in couch_sig_to_setview_pid ets table"),
+            [],
+            "No group entry in couch_sig_to_setview_pid ets table"),
 
     query_view(ddoc_id(), num_docs(), "stale=ok"),
 

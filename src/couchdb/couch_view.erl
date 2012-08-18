@@ -307,14 +307,21 @@ init([]) ->
             gen_server:cast(couch_view, {reset_indexes, DbName});
         ({created, DbName}) ->
             gen_server:cast(couch_view, {reset_indexes, DbName});
-        ({ddoc_updated, {DbName, DDocId}}) ->
+        ({ddoc_updated, {DbName, #doc{id = DDocId} = DDoc}}) ->
             case ets:match_object(couch_groups_by_db, {DbName, {DDocId, '$1'}}) of
             [] ->
                 ok;
             [{DbName, {DDocId, Sig}}] ->
                 case ets:lookup(group_servers_by_sig, {DbName, Sig}) of
                 [{_, GroupPid}] ->
-                    (catch gen_server:cast(GroupPid, ddoc_updated));
+                    case DDoc#doc.deleted of
+                    true ->
+                        NewSig = <<>>;
+                    false ->
+                        DDoc2 = couch_doc:with_ejson_body(DDoc),
+                        #group{sig = NewSig} = couch_view_group:design_doc_to_view_group(DDoc2)
+                    end,
+                    (catch gen_server:cast(GroupPid, {ddoc_updated, NewSig}));
                 [] ->
                     ok
                 end

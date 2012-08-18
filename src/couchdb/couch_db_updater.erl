@@ -310,10 +310,21 @@ handle_info({update_docs, Client, Docs, NonRepDocs, FullCommit}, Db) ->
     {ok, Db2} ->
         ok = notify_db_updated(Db2),
         lists:foreach(
-            fun(#doc_update_info{id = <<?DESIGN_DOC_PREFIX, _/binary>> = Id, deleted = false}) ->
-                    couch_db_update_notifier:sync_notify({ddoc_updated, {Db#db.name, Id}});
-                (#doc_update_info{id = <<?DESIGN_DOC_PREFIX, _/binary>> = Id, deleted = true}) ->
-                    couch_db_update_notifier:sync_notify({ddoc_deleted, {Db#db.name, Id}});
+            fun(#doc_update_info{id = <<?DESIGN_DOC_PREFIX, _/binary>> = Id} = DUI) ->
+                    case DUI#doc_update_info.deleted of
+                    true ->
+                        DDocBody = {[]};
+                    false ->
+                        {ok, DDocBody} = couch_file:pread_iolist(Db2#db.fd, DUI#doc_update_info.body_ptr)
+                    end,
+                    DDoc = #doc{
+                        id = Id,
+                        rev = DUI#doc_update_info.rev,
+                        deleted = DUI#doc_update_info.deleted,
+                        content_meta = DUI#doc_update_info.content_meta,
+                        body = DDocBody
+                    },
+                    couch_db_update_notifier:sync_notify({ddoc_updated, {Db#db.name, DDoc}});
                 (_) ->
                     ok
             end, Docs),

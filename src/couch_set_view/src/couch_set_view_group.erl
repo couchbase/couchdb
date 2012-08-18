@@ -817,21 +817,11 @@ handle_cast({partial_update, _, _}, State) ->
     %% message from an old (probably pre-compaction) updater; ignore
     {noreply, State, ?TIMEOUT};
 
-handle_cast(ddoc_updated, State) ->
+handle_cast({ddoc_updated, NewSig}, State) ->
     #state{
         waiting_list = Waiters,
-        group = #set_view_group{name = DDocId, sig = CurSig}
+        group = #set_view_group{sig = CurSig}
     } = State,
-    DbName = ?master_dbname((?set_name(State))),
-    {ok, Db} = couch_db:open_int(DbName, []),
-    case couch_db:open_doc(Db, DDocId, [ejson_body]) of
-    {not_found, deleted} ->
-        NewSig = <<>>;
-    {ok, DDoc} ->
-        #set_view_group{sig = NewSig} =
-            couch_set_view_util:design_doc_to_set_view_group(?set_name(State), DDoc)
-    end,
-    couch_db:close(Db),
     ?LOG_INFO("Set view `~s`, ~s group `~s`, signature `~s', design document was updated~n"
               "  new signature:   ~s~n"
               "  shutdown flag:   ~s~n"
