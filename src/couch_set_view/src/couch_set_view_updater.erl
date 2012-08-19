@@ -1005,8 +1005,8 @@ init_view_merge_params(#writer_acc{group = Group} = WriterAcc) ->
     }.
 
 
-new_sort_file_name(#writer_acc{tmp_dir = TmpDir}) ->
-    couch_set_view_util:new_sort_file_path(TmpDir).
+new_sort_file_name(#writer_acc{tmp_dir = TmpDir, group = Group}) ->
+    couch_set_view_util:new_sort_file_path(TmpDir, Group#set_view_group.sig).
 
 
 shutdown_sort_workers(#writer_acc{sort_files = nil}) ->

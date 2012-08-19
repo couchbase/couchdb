@@ -369,12 +369,14 @@ cleanup_index_files(SetName) ->
     couch_db:close(Db),
 
     % make unique list of group sigs
-    Sigs = lists:map(fun(#doc{id = GroupId}) ->
+    Sigs0 = lists:map(fun(#doc{id = GroupId}) ->
             GroupPid = get_group_pid(SetName, GroupId),
             {ok, Sig} = gen_server:call(GroupPid, get_sig, infinity),
             couch_util:to_hex(Sig)
         end,
         [DD || DD <- DesignDocs, not DD#doc.deleted]),
+    SigsPrevRevs = ets:match(couch_sig_to_setview_pid, {{SetName, '$1'}, '$2'}),
+    Sigs = Sigs0 ++ [couch_util:to_hex(Sig) || {{_SetName, Sig}, _Pid} <- SigsPrevRevs],
 
     FileList = list_index_files(SetName),
 

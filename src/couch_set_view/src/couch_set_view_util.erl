@@ -21,7 +21,7 @@
 -export([compute_indexed_bitmap/1, cleanup_group/1]).
 -export([missing_changes_count/2]).
 -export([is_group_empty/1]).
--export([new_sort_file_path/1, delete_sort_files/1]).
+-export([new_sort_file_path/2, delete_sort_files/1]).
 -export([encode_key_docid/2, decode_key_docid/1, split_key_docid/1]).
 -export([parse_values/1, parse_reductions/1, parse_view_id_keys/1]).
 -export([split_set_db_name/1]).
@@ -344,9 +344,9 @@ is_group_empty(Group) ->
         lists:all(Predicate, ?set_unindexable_seqs(Group)).
 
 
--spec new_sort_file_path(string()) -> string().
-new_sort_file_path(RootDir) ->
-    Base = ?b2l(couch_uuids:new()) ++ ".sort",
+-spec new_sort_file_path(string(), binary()) -> string().
+new_sort_file_path(RootDir, GroupSig) ->
+    Base = couch_util:to_hex(GroupSig) ++ "_" ++ ?b2l(couch_uuids:new()) ++ ".sort",
     Path = filename:join([RootDir, Base]),
     ok = filelib:ensure_dir(Path),
     Path.
