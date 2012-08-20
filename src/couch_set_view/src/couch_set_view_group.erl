@@ -2411,7 +2411,6 @@ stop_updater(#state{updater_pid = Pid, initial_build = true} = State) when is_pi
     ?LOG_INFO("Stopping updater for set view `~s`, ~s group `~s` (doing initial index build)",
         [?set_name(State), ?type(State), ?group_id(State)]),
     couch_util:shutdown_sync(Pid),
-    ok = couch_set_view_util:delete_sort_files(updater_tmp_dir(State)),
     State#state{
         updater_pid = nil,
         initial_build = false,
