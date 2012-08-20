@@ -27,6 +27,10 @@
 -define(MAX_SORT_BUFFER_SIZE, 1048576).
 -define(MAX_SORT_NUM_FILES, 16).
 
+% Same as in couch_btree.erl
+-define(KEY_BITS,       12).
+-define(MAX_KEY_SIZE,   ((1 bsl ?KEY_BITS) - 1)).
+
 -define(replace(L, K, V), lists:keystore(K, 1, L, {K, V})).
 
 -record(writer_acc, {
@@ -544,7 +548,7 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
                     {AccBuf2, AccCount2 + 1}
                 end,
                 {Buf, AccCount},
-                lists:sort(ViewLessFun, convert_primary_index_kvs_to_binary(KvList, []))),
+                lists:sort(ViewLessFun, convert_primary_index_kvs_to_binary(KvList, Group, []))),
             {dict:store(Id, NewBuf, AccBuffers), AccCount3}
         end,
         {dict:store(ids_index, NewIdBuffer, Buffers), 0},
@@ -820,7 +824,7 @@ write_changes(WriterAcc, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs) ->
         dict:new(), LookupResults),
     ViewKeyValuesToAddBinary = lists:map(
         fun({View, AddKeyValues}) ->
-            {View, convert_primary_index_kvs_to_binary(AddKeyValues, [])}
+            {View, convert_primary_index_kvs_to_binary(AddKeyValues, Group, [])}
         end,
         ViewKeyValuesToAdd),
     {Views2, {CleanupKvCount, InsertedKvCount, DeletedKvCount}} =
@@ -1037,9 +1041,9 @@ wait_for_workers(Pids) ->
     end, ok, Pids).
 
 
-convert_primary_index_kvs_to_binary([], Acc)->
+convert_primary_index_kvs_to_binary([], _Group, Acc) ->
     lists:reverse(Acc);
-convert_primary_index_kvs_to_binary([{{Key, DocId}, {PartId, V0}} | Rest], Acc)->
+convert_primary_index_kvs_to_binary([{{Key, DocId}, {PartId, V0}} | Rest], Group, Acc)->
     V = case V0 of
     {dups, Values} ->
         ValueListBinary = lists:foldl(
@@ -1051,8 +1055,18 @@ convert_primary_index_kvs_to_binary([{{Key, DocId}, {PartId, V0}} | Rest], Acc)-
     _ ->
         <<PartId:16, (byte_size(V0)):24, V0/binary>>
     end,
-    KvBin = {couch_set_view_util:encode_key_docid(Key, DocId), V},
-    convert_primary_index_kvs_to_binary(Rest, [KvBin | Acc]).
+    KeyBin = couch_set_view_util:encode_key_docid(Key, DocId),
+    case byte_size(KeyBin) > ?MAX_KEY_SIZE of
+    true ->
+        #set_view_group{set_name = SetName, name = DDocId, type = Type} = Group,
+        KeyPrefix = lists:sublist(unicode:characters_to_list(Key), 100),
+        Error = iolist_to_binary(
+            io_lib:format("key emitted for document `~s` is too long: ~s...", [DocId, KeyPrefix])),
+        ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, ~s", [SetName, Type, DDocId, Error]),
+        throw({error, Error});
+    false ->
+        convert_primary_index_kvs_to_binary(Rest, Group, [{KeyBin, V} | Acc])
+    end.
 
 
 convert_back_index_kvs_to_binary([], Acc)->

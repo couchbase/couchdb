@@ -58,7 +58,7 @@ num_docs() -> 1000.
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(14),
+    etap:plan(16),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -79,6 +79,9 @@ test() ->
     test_map_runtime_error(),
     etap:diag("Testing map function with invalid syntax"),
     test_map_syntax_error(),
+
+    etap:diag("Testing case where map function emits a key that is too long"),
+    test_too_long_map_key(),
 
     etap:diag("Testing builtin reduce _sum function with a runtime error"),
     test_builtin_reduce_sum_runtime_error(),
@@ -246,6 +249,49 @@ test_map_syntax_error() ->
     {invalid_design_doc, Reason} = Result,
     etap:diag("Design document creation error reason: " ++ binary_to_list(Reason)),
 
+    couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()).
+
+
+test_too_long_map_key() ->
+    couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
+    couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
+
+    DDocId = <<"_design/test">>,
+    DDoc = {[
+        {<<"meta">>, {[{<<"id">>, DDocId}]}},
+        {<<"json">>, {[
+        {<<"views">>, {[
+            {<<"test">>, {[
+                {<<"map">>, <<"function(doc, meta) {\n"
+                              "var key = meta.id;\n"
+                              "while (key.length < 4096) {\n"
+                              "    key = key.concat(key);\n"
+                              "}\n"
+                              "emit(key, null);\n"
+                              "}">>}
+            ]}}
+        ]}}
+        ]}}
+    ]},
+    populate_set(DDoc, 1),
+
+    ok = configure_view_group(DDocId, [0, 1, 2, 3], []),
+    GroupPid = couch_set_view:get_group_pid(test_set_name(), DDocId),
+    MonRef = erlang:monitor(process, GroupPid),
+
+    QueryResult = (catch query_map_view(DDocId, <<"test">>, false)),
+    ExpectedResult = {error, <<"key emitted for document `doc1` is too long: "
+                               "\"doc1doc1doc1doc1doc1doc1doc1doc1doc1doc1doc1"
+                               "doc1doc1doc1doc1doc1doc1doc1doc1doc1doc1doc1doc1doc1doc...">>},
+    etap:is(QueryResult, ExpectedResult, "Got an error when a key is too long"),
+
+    receive
+    {'DOWN', MonRef, _, _, _} ->
+        etap:bail("view group died")
+    after 5000 ->
+        etap:is(is_process_alive(GroupPid), true, "View group is still alive")
+    end,
+    couch_util:shutdown_sync(GroupPid),
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()).
 
 
@@ -472,6 +518,9 @@ query_reduce_view(DDocId, ViewName, Stale) ->
 
 
 populate_set(DDoc) ->
+    populate_set(DDoc, num_docs()).
+
+populate_set(DDoc, NumDocs) ->
     etap:diag("Populating the " ++ integer_to_list(num_set_partitions()) ++
         " databases with " ++ integer_to_list(num_docs()) ++ " documents"),
     ok = couch_set_view_test_util:update_ddoc(test_set_name(), DDoc),
@@ -484,7 +533,7 @@ populate_set(DDoc) ->
                 ]}}
             ]}
         end,
-        lists:seq(1, num_docs())),
+        lists:seq(1, NumDocs)),
     ok = couch_set_view_test_util:populate_set_alternated(
         test_set_name(),
         lists:seq(0, num_set_partitions() - 1),
