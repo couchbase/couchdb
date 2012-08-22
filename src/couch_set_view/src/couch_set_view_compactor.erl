@@ -227,6 +227,14 @@ maybe_retry_compact(CompactResult0, StartTime, LogFilePath, LogOffsetStart, Owne
                   "log start offset ~p, log eof ~p",
                   [SetName, Type, DDocId, MissingCount, Retries,
                    LogOffsetStart, LogEof]),
+        [TotalChanges] = couch_task_status:get([total_changes]),
+        TotalChanges2 = TotalChanges + MissingCount,
+        couch_task_status:update([
+            {total_changes, TotalChanges2},
+            {changes_done, TotalChanges},
+            {progress, (TotalChanges * 100) div TotalChanges2},
+            {retry_number, Retries}
+        ]),
         {ok, LogFd} = file:open(LogFilePath, [read, raw, binary]),
         {ok, LogOffsetStart} = file:position(LogFd, LogOffsetStart),
         ok = couch_set_view_util:open_raw_read_fd(NewGroup),
@@ -326,6 +334,7 @@ apply_log_entry(Group, Entry) ->
         end,
         Views,
         LogViewsAddRemoveKvs),
+    couch_task_status:update([]),
     ok = couch_file:flush(Group#set_view_group.fd),
     Group#set_view_group{
         id_btree = NewIdBtree,
