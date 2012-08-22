@@ -23,16 +23,20 @@
    total_changes
 }).
 
--spec start_compact(binary(), binary()) -> {'ok', pid()}.
+-spec start_compact(binary(), binary()) -> {'ok', pid()} |
+                                           {'error', 'initial_build'}.
 start_compact(SetName, DDocId) ->
     start_compact(SetName, DDocId, main).
 
--spec start_compact(binary(), binary(), set_view_group_type()) -> {'ok', pid()}.
+-spec start_compact(binary(), binary(), set_view_group_type()) ->
+                           {'ok', pid()} |
+                           {'error', 'initial_build'}.
 start_compact(SetName, DDocId, Type) ->
     start_compact(SetName, DDocId, Type, []).
 
 -spec start_compact(binary(), binary(),
-                    set_view_group_type(), list()) -> {'ok', pid()}.
+                    set_view_group_type(), list()) -> {'ok', pid()} |
+                                                      {'error', 'initial_build'}.
 start_compact(SetName, DDocId, Type, UserTaskStatus) ->
     {ok, Pid} = get_group_pid(SetName, DDocId, Type),
     gen_server:call(Pid, {start_compact, mk_compact_group(UserTaskStatus)}).
