@@ -39,7 +39,7 @@ start_compact(SetName, DDocId, Type) ->
                                                       {'error', 'initial_build'}.
 start_compact(SetName, DDocId, Type, UserTaskStatus) ->
     {ok, Pid} = get_group_pid(SetName, DDocId, Type),
-    gen_server:call(Pid, {start_compact, mk_compact_group(UserTaskStatus)}).
+    gen_server:call(Pid, {start_compact, mk_compact_group(UserTaskStatus)}, infinity).
 
 
 
