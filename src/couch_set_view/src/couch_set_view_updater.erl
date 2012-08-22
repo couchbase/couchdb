@@ -86,18 +86,27 @@ update(Owner, Group, CurSeqs, LogFilePath, TmpDir) ->
 
     BeforeEnterTs = os:timestamp(),
     Parent = self(),
-    Pid = spawn_link(fun() ->
+    BarrierEntryPid = spawn_link(fun() ->
+        DDocIds = couch_set_view_util:get_ddoc_ids_with_sig(SetName, Group),
+        couch_task_status:add_task([
+            {type, blocked_indexer},
+            {set, SetName},
+            {signature, ?l2b(couch_util:to_hex(Group#set_view_group.sig))},
+            {design_documents, DDocIds},
+            {indexer_type, Type}
+        ]),
         case Type of
         main ->
             ok = couch_index_barrier:enter(couch_main_index_barrier, Parent);
         replica ->
             ok = couch_index_barrier:enter(couch_replica_index_barrier, Parent)
         end,
-        exit({done, (timer:now_diff(os:timestamp(), BeforeEnterTs) / 1000000)})
+        Parent ! {done, self(), (timer:now_diff(os:timestamp(), BeforeEnterTs) / 1000000)},
+        receive shutdown -> ok end
     end),
 
     BlockedTime = receive
-    {'EXIT', Pid, {done, Duration}} ->
+    {done, BarrierEntryPid, Duration} ->
         Duration;
     {'EXIT', _, Reason} ->
         exit({updater_error, Reason})
@@ -132,10 +141,10 @@ update(Owner, Group, CurSeqs, LogFilePath, TmpDir) ->
         max_seqs = CurSeqs,
         tmp_dir = TmpDir
     },
-    update(WriterAcc0, ActiveParts, PassiveParts, BlockedTime, NumChanges, LogFilePath).
+    update(WriterAcc0, ActiveParts, PassiveParts, BlockedTime, BarrierEntryPid, NumChanges, LogFilePath).
 
 
-update(WriterAcc, ActiveParts, PassiveParts, BlockedTime, NumChanges, LogFilePath) ->
+update(WriterAcc, ActiveParts, PassiveParts, BlockedTime, BarrierEntryPid, NumChanges, LogFilePath) ->
     #writer_acc{
         owner = Owner,
         group = Group
@@ -181,9 +190,8 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime, NumChanges, LogFilePat
     end),
 
     Parent = self(),
+    unlink(BarrierEntryPid),
     Writer = spawn_link(fun() ->
-        ok = couch_set_view_util:open_raw_read_fd(Group),
-
         DDocIds = couch_set_view_util:get_ddoc_ids_with_sig(SetName, Group),
         couch_task_status:add_task([
             {type, indexer},
@@ -196,6 +204,7 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime, NumChanges, LogFilePat
             {initial_build, WriterAcc#writer_acc.initial_build},
             {total_changes, NumChanges}
         ]),
+        BarrierEntryPid ! shutdown,
         couch_task_status:set_update_frequency(5000),
 
         ViewEmptyKVs = [{View, []} || View <- Group#set_view_group.views],
@@ -208,6 +217,7 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime, NumChanges, LogFilePat
             write_queue_size = couch_util:get_value(max_size, WriteQueueOptions)
         }),
         delete_prev_sort_files(WriterAcc2),
+        ok = couch_set_view_util:open_raw_read_fd(Group),
         try
             couch_set_view_mapreduce:start_reduce_context(Group),
             try

@@ -36,7 +36,7 @@
 
 
 start_link(Name, LimitParamName) ->
-    gen_server:start_link({local, Name}, ?MODULE, LimitParamName, []).
+    gen_server:start_link({local, Name}, ?MODULE, {Name, LimitParamName}, []).
 
 enter(Barrier) ->
     enter(Barrier, self()).
@@ -51,7 +51,7 @@ leave(Barrier, Pid) ->
     ok = gen_server:cast(Barrier, {leave, Pid}).
 
 
-init(LimitParamName) ->
+init({Name, LimitParamName}) ->
     State = #state{
         limit = list_to_integer(
             couch_config:get("couchdb", LimitParamName, "4"))
@@ -61,6 +61,12 @@ init(LimitParamName) ->
         fun("couchdb", ParamName, Limit) when ParamName =:= LimitParamName ->
             ok = gen_server:cast(Server, {limit, list_to_integer(Limit)})
         end),
+    couch_task_status:add_task([
+        {type, Name},
+        {limit, State#state.limit},
+        {waiting, 0},
+        {running, 0}
+    ]),
     {ok, State}.
 
 
@@ -74,9 +80,13 @@ handle_call({enter, Pid}, From, #state{current = Current, waiting = Waiting} = S
         State2 = State#state{mon_refs = MonRefs2},
         case length(Current) >= State#state.limit of
         true ->
-            {noreply, State2#state{waiting = queue:in({From, Pid}, Waiting)}};
+            Waiting2 = queue:in({From, Pid}, Waiting),
+            couch_task_status:update([{waiting, queue:len(Waiting2)}]),
+            {noreply, State2#state{waiting = Waiting2}};
         false ->
-            {reply, ok, State2#state{current = [Pid | Current]}}
+            Current2 = [Pid | Current],
+            couch_task_status:update([{running, length(Current2)}]),
+            {reply, ok, State2#state{current = Current2}}
         end
     end.
 
@@ -85,6 +95,7 @@ handle_cast({leave, Pid}, State) ->
     {noreply, handle_leave(Pid, State)};
 
 handle_cast({limit, Limit}, State) ->
+    couch_task_status:update([{limit, Limit}]),
     {noreply, State#state{limit = Limit}}.
 
 
@@ -99,6 +110,7 @@ handle_leave(Pid, #state{current = Current, waiting = Waiting} = State) ->
     case Current -- [Pid] of
     Current ->
         Waiting2 = queue:filter(fun({_, Pid0}) -> Pid0 =/= Pid end, Waiting),
+        couch_task_status:update([{waiting, queue:len(Waiting2)}]),
         State2#state{waiting = Waiting2};
     Current2 ->
         case queue:out(Waiting) of
@@ -108,6 +120,10 @@ handle_leave(Pid, #state{current = Current, waiting = Waiting} = State) ->
             gen_server:reply(From, ok),
             Current3 = [FromPid | Current2]
         end,
+        couch_task_status:update([
+            {waiting, queue:len(Waiting2)},
+            {running, length(Current3)}
+        ]),
         State2#state{current = Current3, waiting = Waiting2}
     end.
 
