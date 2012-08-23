@@ -257,7 +257,7 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime, BarrierEntryPid, NumCh
         end
     end),
 
-    Result = wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime),
+    Result = wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, Group),
     case Type of
     main ->
         ok = couch_index_barrier:leave(couch_main_index_barrier);
@@ -276,7 +276,8 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime, BarrierEntryPid, NumCh
     exit(Result).
 
 
-wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime) ->
+wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup) ->
+    #set_view_group{set_name = SetName, name = DDocId, type = Type} = OldGroup,
     receive
     {writer_finished, WriterAcc} ->
         shutdown_sort_workers(WriterAcc),
@@ -295,12 +296,17 @@ wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime) ->
         {updater_finished, Result};
     {log_new_changes, Pid, Ref, LogFilePath} ->
         Writer ! {log_new_changes, self(), LogFilePath},
+        ?LOG_INFO("Set view `~s`, ~s group `~s`, updater received log "
+                  "request from compactor ~p, ref ~p, writer ~p",
+                   [SetName, Type, DDocId, Pid, Ref, Writer]),
         erlang:put(log_request, {Pid, Ref}),
-        wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime);
+        wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup);
     {log_started, Writer, GroupSnapshot} ->
+        ?LOG_INFO("Set view `~s`, ~s group `~s`, updater received log started "
+                  "from writer ~p", [SetName, Type, DDocId, Writer]),
         {Pid, Ref} = erlang:erase(log_request),
         Pid ! {Ref, {ok, GroupSnapshot}},
-        wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime);
+        wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup);
     {'EXIT', _, Reason} when Reason =/= normal ->
         couch_util:shutdown_sync(DocLoader),
         couch_util:shutdown_sync(Mapper),

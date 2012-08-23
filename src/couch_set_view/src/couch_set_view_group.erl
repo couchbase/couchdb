@@ -604,6 +604,10 @@ handle_call(start_updater, _From, State) ->
     State2 = start_updater(State),
     {reply, {ok, State2#state.updater_pid}, State2, ?TIMEOUT};
 
+handle_call(get_log_file_path, _From, State) ->
+    % To be used only by unit tests.
+    {reply, {ok, index_file_log_path(State)}, State, ?TIMEOUT};
+
 handle_call(updater_pid, _From, #state{updater_pid = Pid} = State) ->
     % To be used only by unit tests.
     {reply, {ok, Pid}, State, ?TIMEOUT};
@@ -732,6 +736,8 @@ handle_call({compact_done, _Result}, _From, State) ->
 handle_call(cancel_compact, _From, #state{compactor_pid = nil} = State) ->
     {reply, ok, State, ?TIMEOUT};
 handle_call(cancel_compact, _From, #state{compactor_pid = Pid, compactor_file = CompactFd} = State) ->
+    ?LOG_INFO("Set view `~s`, ~s group `~s`, canceling compaction (pid ~p)",
+              [?set_name(State), ?type(State), ?group_id(State), Pid]),
     couch_util:shutdown_sync(Pid),
     couch_util:shutdown_sync(CompactFd),
     CompactFile = compact_file_name(State),

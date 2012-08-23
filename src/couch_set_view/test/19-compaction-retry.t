@@ -22,13 +22,13 @@
 test_set_name() -> <<"couch_test_set_index_compaction_retry">>.
 num_set_partitions() -> 64.
 ddoc_id() -> <<"_design/test">>.
-num_docs_0() -> 16448.
+num_docs_0() -> 51136.
 
 
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(36),
+    etap:plan(47),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -74,6 +74,12 @@ test() ->
     compact_2_retries_update_docs(num_docs_0() + 64, ValueGenFun3, ValueGenFun4),
 
     verify_btrees(ValueGenFun4, num_docs_0() + 64),
+
+    etap:diag("Testing compaction start after updater started"),
+    ValueGenFun5 = fun(I) -> I * 22 end,
+    test_start_compactor_after_updater(ValueGenFun5, num_docs_0() + 64),
+
+    verify_btrees(ValueGenFun5, num_docs_0() + 64),
 
     couch_util:shutdown_sync(GroupPid),
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
@@ -189,6 +195,50 @@ compact_2_retries_update_docs(DocCount, ValueGenFun1, ValueGenFun2) ->
         etap:bail("Compactor died with reason: " ++ lists:flatten(io_lib:format("~p", [Reason])))
     after ?MAX_WAIT_TIME ->
         etap:bail("Timeout waiting for compaction to finish")
+    end,
+    ok.
+
+
+test_start_compactor_after_updater(ValueGenFun, DocCount) ->
+    update_documents(0, DocCount, ValueGenFun),
+    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    {ok, UpPid} = gen_server:call(GroupPid, start_updater, infinity),
+    case is_pid(UpPid) of
+    true ->
+        ok;
+    false ->
+        etap:bail("Updater not started")
+    end,
+    {ok, CompactorPid} = couch_set_view_compactor:start_compact(test_set_name(), ddoc_id(), main),
+    CompactorPid ! pause,
+    UpRef = erlang:monitor(process, UpPid),
+    receive
+    {'DOWN', UpRef, process, UpPid, noproc} ->
+        etap:bail("Updater died before compactor started")
+    after 0 ->
+        ok
+    end,
+    receive
+    {'DOWN', UpRef, process, UpPid, {updater_finished, _}} ->
+        ok;
+    {'DOWN', UpRef, process, UpPid, Reason} ->
+        etap:bail("Updater died with unexpected reason: " ++ couch_util:to_list(Reason))
+    after ?MAX_WAIT_TIME ->
+        etap:bail("Timeout waiting for updater to finish")
+    end,
+    etap:is(is_process_alive(CompactorPid), true, "Compactor is still running"),
+    {ok, LogFilePath} = gen_server:call(GroupPid, get_log_file_path, infinity),
+    LogSize = filelib:file_size(LogFilePath),
+    etap:is(LogSize > 0, true, "Log file is not empty"),
+    CompactorRef = erlang:monitor(process, CompactorPid),
+    CompactorPid ! unpause,
+    receive
+    {'DOWN', CompactorRef, process, CompactorPid, normal} ->
+        ok;
+    {'DOWN', CompactorRef, process, CompactorPid, Reason2} ->
+        etap:bail("Compactor died with unexpected reason: " ++ couch_util:to_list(Reason2))
+    after ?MAX_WAIT_TIME ->
+        etap:bail("Timeout waiting for compactor to finish")
     end,
     ok.
 
