@@ -808,7 +808,6 @@ handle_call({before_database_delete, DbName}, _From, Server) ->
     {ok, SetName, PartId} ->
         lists:foreach(
             fun({_SetName, {_DDocId, Sig}}) ->
-                [{_, Pid}] = ets:lookup(couch_sig_to_setview_pid, {SetName, Sig}),
                 % Important: view group processes monitor database processes, and
                 % they must be notified that a database is about to be deleted
                 % before they receive the monitor DOWN messages, therefore the
@@ -816,11 +815,17 @@ handle_call({before_database_delete, DbName}, _From, Server) ->
                 % and happen before it shutdowns the database processes. However
                 % we must be sure here that we don't do any synchronous calls to
                 % couch_server in order to avoid deadlocks.
-                gen_server:cast(Pid, {before_partition_delete, PartId})
+                case ets:lookup(couch_sig_to_setview_pid, {SetName, Sig}) of
+                [{_, Pid}] when is_pid(Pid) ->
+                    gen_server:cast(Pid, {before_partition_delete, PartId});
+                _ ->
+                    ok
+                end
             end,
             ets:lookup(couch_setview_name_to_sig, SetName)),
         case PartId of
         master ->
+            true = ets:delete(couch_setview_name_to_sig, SetName),
             ?LOG_INFO("Deleting index files for set `~s` because master database"
                       "is about to deleted", [SetName]),
             try
