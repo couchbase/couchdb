@@ -95,11 +95,11 @@ get_group(SetName, DDoc, #set_view_group_req{type = main} = Req) ->
     end;
 get_group(SetName, DDoc, #set_view_group_req{type = replica} = Req) ->
     {ok, MainGroup} = get_group(
-        SetName, DDoc, Req#set_view_group_req{type = main}),
+        SetName, DDoc, Req#set_view_group_req{type = main, stale = ok}),
     release_group(MainGroup),
     case MainGroup#set_view_group.replica_pid of
     nil ->
-        throw(<<"Requested replica group doesn't exist">>);
+        throw({error, <<"Requested replica group doesn't exist">>});
     ReplicaPid ->
         case couch_set_view_group:request_group(ReplicaPid, Req) of
         {ok, Group} ->
