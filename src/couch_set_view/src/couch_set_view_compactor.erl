@@ -142,6 +142,7 @@ compact_group(Group0, EmptyGroup, LogFilePath, UpdaterPid, Owner, UserStatus) ->
     ]),
 
     couch_task_status:add_task(Status),
+    couch_task_status:set_update_frequency(5000),
 
     ok = couch_set_view_util:open_raw_read_fd(Group),
 
