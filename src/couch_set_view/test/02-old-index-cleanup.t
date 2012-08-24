@@ -25,7 +25,7 @@ num_docs() -> 1000.
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(64),
+    etap:plan(69),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -293,6 +293,34 @@ test_recreate_ddoc_with_copy() ->
     couch_set_view_test_util:delete_set_db(test_set_name(), master),
     ok = timer:sleep(1000),
 
+    etap:is(ets:lookup(couch_setview_name_to_sig, test_set_name()),
+            [],
+            "couch_setview_name_to_sig ets table is empty"),
+    etap:is(ets:lookup(couch_sig_to_setview_pid, {test_set_name(), RawGroupSig}),
+            [],
+            "couch_sig_to_setview_pid ets table is empty"),
+
+    etap:diag("Recreating database set"),
+    couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
+    couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
+
+    etap:diag("Adding design document again, but not opening its view group"),
+    ok = couch_set_view_test_util:update_ddoc(test_set_name(), ddoc(ddoc_id())),
+
+    etap:is(ets:lookup(couch_setview_name_to_sig, test_set_name()),
+            [{test_set_name(), {ddoc_id(), RawGroupSig}}],
+            "Correct alias in couch_setview_name_to_sig ets table"),
+    etap:is(ets:lookup(couch_sig_to_setview_pid, {test_set_name(), RawGroupSig}),
+            [],
+            "couch_sig_to_setview_pid ets table is empty"),
+
+    ViewManagerPid = whereis(couch_set_view),
+
+    etap:diag("Deleting master database"),
+    couch_set_view_test_util:delete_set_db(test_set_name(), master),
+    ok = timer:sleep(1000),
+
+    etap:is(is_process_alive(ViewManagerPid), true, "View manager didn't die"),
     etap:is(ets:lookup(couch_setview_name_to_sig, test_set_name()),
             [],
             "couch_setview_name_to_sig ets table is empty"),
