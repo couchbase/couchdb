@@ -377,9 +377,9 @@ cleanup_index_files(SetName) ->
     couch_db:close(Db),
 
     % make unique list of group sigs
-    Sigs0 = lists:map(fun(#doc{id = GroupId}) ->
-            GroupPid = get_group_pid(SetName, GroupId),
-            {ok, Sig} = gen_server:call(GroupPid, get_sig, infinity),
+    Sigs0 = lists:map(fun(DDoc) ->
+            #set_view_group{sig = Sig} =
+                couch_set_view_util:design_doc_to_set_view_group(SetName, DDoc),
             couch_util:to_hex(Sig)
         end,
         [DD || DD <- DesignDocs, not DD#doc.deleted]),

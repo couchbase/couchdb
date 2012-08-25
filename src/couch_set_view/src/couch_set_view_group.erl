@@ -839,7 +839,7 @@ handle_cast({ddoc_updated, NewSig}, State) ->
     _ ->
         case Waiters of
         [] ->
-            {stop, normal, State};
+            {stop, normal, State#state{shutdown = true}};
         _ ->
             {noreply, State#state{shutdown = true}}
         end
@@ -1161,7 +1161,7 @@ handle_info({'DOWN', Ref, process, Pid, Reason}, State) ->
     end.
 
 
-terminate(Reason, #state{group = #set_view_group{sig = Sig}} = State) ->
+terminate(Reason, #state{group = #set_view_group{sig = Sig} = Group} = State) ->
     ?LOG_INFO("Set view `~s`, ~s group `~s`, signature `~s`, terminating with reason: ~p",
         [?set_name(State), ?type(State), ?group_id(State), hex_sig(Sig), Reason]),
     _ = dict:fold(
@@ -1179,6 +1179,21 @@ terminate(Reason, #state{group = #set_view_group{sig = Sig}} = State) ->
     couch_util:shutdown_sync(State3#state.replica_group),
     true = ets:delete(?SET_VIEW_STATS_ETS, ?set_view_group_stats_key(State#state.group)),
     catch couch_file:only_snapshot_reads((State3#state.group)#set_view_group.fd),
+    case State#state.shutdown of
+    true when ?type(State) == main ->
+        % Important to delete files here. A quick succession of ddoc updates, updating
+        % the ddoc back to a previous version (while we're here in terminate), may lead
+        % us to a case where it should start clean but it doesn't, because
+        % couch_set_view:cleanup_index_files/1 was not invoked right before the last
+        % reverting ddoc update, or it was invoked but did not finish before the view
+        % group got spawned again. Problem here is during rebalance, where one of the
+        % databases might have been deleted after the last ddoc update and while or after
+        % we're here in terminate, so we must ensure we don't leave old index files around.
+        delete_index_file(?root_dir(State), Group, main),
+        delete_index_file(?root_dir(State), Group, replica);
+    _ ->
+        ok
+    end,
     ok = couch_set_view_util:delete_sort_files(updater_tmp_dir(State)).
 
 
