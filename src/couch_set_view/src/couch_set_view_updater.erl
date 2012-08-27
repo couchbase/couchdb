@@ -338,7 +338,7 @@ load_changes(Owner, Updater, Group, MapQueue, Writer, ActiveParts, PassiveParts)
             try
                 Since = couch_util:get_value(PartId, SinceSeqs),
                 ChangesWrapper = fun(DocInfo, _, AccCount2) ->
-                    load_doc(Db, PartId, DocInfo, MapQueue),
+                    load_doc(Db, PartId, DocInfo, MapQueue, Group),
                     {ok, AccCount2 + 1}
                 end,
                 {ok, _, AccCount3} = couch_db:fast_reads(Db, fun() ->
@@ -389,7 +389,7 @@ notify_owner(Owner, Msg, UpdaterPid) ->
     Owner ! {updater_info, UpdaterPid, Msg}.
 
 
-load_doc(Db, PartitionId, DocInfo, MapQueue) ->
+load_doc(Db, PartitionId, DocInfo, MapQueue, Group) ->
     #doc_info{id=DocId, local_seq=Seq, deleted=Deleted} = DocInfo,
     case DocId of
     <<?DESIGN_DOC_PREFIX, _/binary>> ->
@@ -398,8 +398,26 @@ load_doc(Db, PartitionId, DocInfo, MapQueue) ->
         if Deleted ->
             couch_work_queue:queue(MapQueue, {Seq, #doc{id=DocId, deleted=true}, PartitionId});
         true ->
-            {ok, Doc} = couch_db:open_doc_int(Db, DocInfo, []),
-            couch_work_queue:queue(MapQueue, {Seq, Doc, PartitionId})
+            case couch_util:validate_utf8(DocId) of
+            true ->
+                {ok, Doc} = couch_db:open_doc_int(Db, DocInfo, []),
+                couch_work_queue:queue(MapQueue, {Seq, Doc, PartitionId});
+            false ->
+                #set_view_group{
+                   set_name = SetName,
+                   name = DDocId,
+                   type = GroupType
+               } = Group,
+                % If the id isn't utf8 (memcached allows it), then log an error
+                % message and skip the doc. Send it through the queue anyway
+                % so we record the high seq num in case there are a bunch of
+                % these at the end, we want to keep track of the high seq and
+                % not reprocess again.
+                ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, skipping "
+                    "document with non-utf8 id. Doc id bytes: ~w",
+                    [SetName, GroupType, DDocId, ?b2l(DocId)]),
+                couch_work_queue:queue(MapQueue, {Seq, #doc{id=DocId, deleted=true}, PartitionId})
+            end
         end
     end.
 

@@ -102,36 +102,15 @@ simple_call(Pid, Message) ->
         erlang:demonitor(MRef, [flush])
     end.
 
-validate_utf8(Data) when is_list(Data) ->
-    validate_utf8(?l2b(Data));
-validate_utf8(Bin) when is_binary(Bin) ->
-    validate_utf8_fast(Bin, 0).
-
-validate_utf8_fast(B, O) ->
-    case B of
-        <<_:O/binary>> ->
-            true;
-        <<_:O/binary, C1, _/binary>> when
-                C1 < 128 ->
-            validate_utf8_fast(B, 1 + O);
-        <<_:O/binary, C1, C2, _/binary>> when
-                C1 >= 194, C1 =< 223,
-                C2 >= 128, C2 =< 191 ->
-            validate_utf8_fast(B, 2 + O);
-        <<_:O/binary, C1, C2, C3, _/binary>> when
-                C1 >= 224, C1 =< 239,
-                C2 >= 128, C2 =< 191,
-                C3 >= 128, C3 =< 191 ->
-            validate_utf8_fast(B, 3 + O);
-        <<_:O/binary, C1, C2, C3, C4, _/binary>> when
-                C1 >= 240, C1 =< 244,
-                C2 >= 128, C2 =< 191,
-                C3 >= 128, C3 =< 191,
-                C4 >= 128, C4 =< 191 ->
-            validate_utf8_fast(B, 4 + O);
-        _ ->
-            false
-    end.
+validate_utf8(Val) when is_binary(Val) ->
+    case unicode:characters_to_binary(Val, utf8, utf8) of
+    Bin when Val =:= Bin ->
+        true;
+    _ ->
+        false
+    end;
+validate_utf8(Val) when is_list(Val) ->
+    validate_utf8(?l2b(Val)).
 
 to_hex([]) ->
     [];
