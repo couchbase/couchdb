@@ -528,7 +528,7 @@ handle_call({remove_replicas, Partitions}, _From, #state{replica_group = Replica
                 ?set_seqs(Group3)),
         case NewCbitmask =/= ?set_cbitmask(Group3) of
         true ->
-             State4 = restart_compactor(State3, "partition states were updated");
+             State4 = stop_compactor(State3);
         false ->
              State4 = State3
         end,
@@ -735,15 +735,12 @@ handle_call({compact_done, _Result}, _From, State) ->
 
 handle_call(cancel_compact, _From, #state{compactor_pid = nil} = State) ->
     {reply, ok, State, ?TIMEOUT};
-handle_call(cancel_compact, _From, #state{compactor_pid = Pid, compactor_file = CompactFd} = State) ->
+handle_call(cancel_compact, _From, #state{compactor_pid = Pid} = State) ->
     ?LOG_INFO("Set view `~s`, ~s group `~s`, canceling compaction (pid ~p)",
               [?set_name(State), ?type(State), ?group_id(State), Pid]),
-    couch_util:shutdown_sync(Pid),
-    couch_util:shutdown_sync(CompactFd),
-    CompactFile = compact_file_name(State),
-    ok = couch_file:delete(?root_dir(State), CompactFile),
-    State2 = maybe_start_cleaner(State#state{compactor_pid = nil, compactor_file = nil}),
-    {reply, ok, State2, ?TIMEOUT};
+    State2 = stop_compactor(State),
+    State3 = maybe_start_cleaner(State2),
+    {reply, ok, State3, ?TIMEOUT};
 
 handle_call({monitor_partition_update, PartId, _Ref, _Pid}, _From, State)
         when PartId >= ?set_num_partitions(State#state.group) ->
@@ -1845,7 +1842,7 @@ after_partition_states_updated(State, UpdaterWasRunning) ->
     false ->
         State
     end,
-    State3 = restart_compactor(State2, "partition states were updated"),
+    State3 = stop_compactor(State2),
     maybe_start_cleaner(State3).
 
 
@@ -2401,21 +2398,21 @@ start_compactor(State, CompactFun) ->
     }.
 
 
--spec restart_compactor(#state{}, string()) -> #state{}.
-restart_compactor(#state{compactor_pid = nil} = State, _Reason) ->
+-spec stop_compactor(#state{}) -> #state{}.
+stop_compactor(#state{compactor_pid = nil} = State) ->
     State;
-restart_compactor(#state{compactor_pid = Pid, compactor_file = CompactFd} = State, Reason) ->
-    ?LOG_INFO("Restarting compaction for ~s group `~s`, set view `~s`. Reason: ~s",
-        [?type(State), ?group_id(State), ?set_name(State), Reason]),
+stop_compactor(#state{compactor_pid = Pid, compactor_file = CompactFd} = State) ->
     couch_util:shutdown_sync(Pid),
     couch_util:shutdown_sync(CompactFd),
+    CompactFile = compact_file_name(State),
+    ok = couch_file:delete(?root_dir(State), CompactFile),
     case ?set_cbitmask(State#state.group) of
     0 ->
         ok;
     _ ->
         ?inc_cleanup_stops(State#state.group)
     end,
-    start_compactor(State, State#state.compactor_fun).
+    State#state{compactor_pid = nil, compactor_file = nil}.
 
 
 -spec compact_group(#state{}) -> #set_view_group{}.
@@ -2936,7 +2933,7 @@ process_mark_as_unindexable(State0, Partitions) ->
                    ?set_unindexable_seqs(Group), UnindexableSeqs2]),
         State#state{group = Group2}
     end,
-    NewState2 = restart_compactor(NewState, "set of unindexable partitions updated"),
+    NewState2 = stop_compactor(NewState),
     case UpdaterWasRunning of
     true ->
         start_updater(NewState2);
@@ -2993,7 +2990,7 @@ process_mark_as_indexable(State0, Partitions, CommitHeader) ->
         },
         State#state{group = Group2}
     end,
-    NewState2 = restart_compactor(NewState, "set of unindexable partitions updated"),
+    NewState2 = stop_compactor(NewState),
     case UpdaterWasRunning orelse (WaitList /= []) of
     true ->
         start_updater(NewState2);
