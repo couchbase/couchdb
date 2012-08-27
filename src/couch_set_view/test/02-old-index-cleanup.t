@@ -25,7 +25,7 @@ num_docs() -> 1000.
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(69),
+    etap:plan(70),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -92,8 +92,14 @@ test() ->
     AllIndexFiles = all_index_files(),
     etap:is(lists:member(NewIndexFile, AllIndexFiles), true,
         "New index file found"),
-    etap:is(lists:member(IndexFile, AllIndexFiles), true,
-        "Old index file not deleted before cleanup"),
+    etap:is(lists:member(IndexFile, AllIndexFiles), false,
+        "Old index file deleted before cleanup because group was updated"),
+
+    couch_util:shutdown_sync(NewGroupPid),
+    NewGroupPid2 = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    AllIndexFiles2 = all_index_files(),
+    etap:is(lists:member(NewIndexFile, AllIndexFiles2), true,
+        "New index file found after group process restart"),
 
     etap:diag("Performing view cleanup"),
     couch_set_view:cleanup_index_files(test_set_name()),
@@ -104,11 +110,11 @@ test() ->
         "Old index file deleted after cleanup"),
 
     query_view(ddoc_id(), 0, "stale=ok"),
-    etap:is(is_process_alive(NewGroupPid), true,
+    etap:is(is_process_alive(NewGroupPid2), true,
         "New group alive after query with ?stale=ok"),
 
     query_view(ddoc_id(), num_docs(), []),
-    etap:is(is_process_alive(NewGroupPid), true,
+    etap:is(is_process_alive(NewGroupPid2), true,
         "New group alive after query without ?stale=ok"),
 
     etap:diag("Creating ddoc copy with different _id"),
@@ -122,13 +128,13 @@ test() ->
              {test_set_name(), {ddoc_id_copy(), RawNewGroupCopySig}}],
             "Correct group entries in couch_setview_name_to_sig ets table"),
     etap:is(ets:lookup(couch_sig_to_setview_pid, {test_set_name(), RawNewGroupSig}),
-            [{{test_set_name(), RawNewGroupSig}, NewGroupPid}],
+            [{{test_set_name(), RawNewGroupSig}, NewGroupPid2}],
             "Correct group entry in couch_sig_to_setview_pid ets table"),
 
     etap:diag("Deleting original ddoc"),
     ok = couch_set_view_test_util:delete_ddoc(test_set_name(), ddoc_id()),
 
-    GroupMon = erlang:monitor(process, NewGroupPid),
+    GroupMon = erlang:monitor(process, NewGroupPid2),
     receive
     {'DOWN', GroupMon, _, _, _} ->
         etap:diag("New group shutdown after ddoc deleted")
@@ -138,9 +144,9 @@ test() ->
     % Let couch_set_view have some time to process the group's down message
     ok = timer:sleep(1500),
 
-    AllIndexFiles2 = all_index_files(),
-    etap:is(lists:member(NewIndexFile, AllIndexFiles2), true,
-        "Index file found after deleting original ddoc (because copy is not deleted)"),
+    AllIndexFiles3 = all_index_files(),
+    etap:is(lists:member(NewIndexFile, AllIndexFiles3), false,
+        "Index file not found after deleting original ddoc"),
 
     etap:is(ets:lookup(couch_setview_name_to_sig, test_set_name()),
             [],
@@ -149,19 +155,25 @@ test() ->
             [],
             "No group entry in couch_sig_to_setview_pid ets table"),
 
-    NewGroupPid2 = couch_set_view:get_group_pid(test_set_name(), ddoc_id_copy()),
-    etap:isnt(NewGroupPid2, NewGroupPid, "New group pid after deleting original ddoc"),
-    query_view(ddoc_id_copy(), num_docs(), "stale=ok"),
-    etap:diag("Got same query results after deleting original ddoc and querying "
+    NewGroupPid3 = couch_set_view:get_group_pid(test_set_name(), ddoc_id_copy()),
+    etap:isnt(NewGroupPid3, NewGroupPid2, "New group pid after deleting original ddoc"),
+    ok = couch_set_view_test_util:define_set_view(
+        test_set_name(),
+        ddoc_id_copy(),
+        num_set_partitions(),
+        lists:seq(0, num_set_partitions() - 1),
+        []),
+    query_view(ddoc_id_copy(), 0, "stale=ok"),
+    etap:diag("Got empty results after deleting original ddoc and querying "
               "ddoc copy with ?stale=ok"),
-    etap:is(is_process_alive(NewGroupPid2), true,
+    etap:is(is_process_alive(NewGroupPid3), true,
         "New group copy alive after query with ?stale=ok"),
 
     etap:is(ets:lookup(couch_setview_name_to_sig, test_set_name()),
             [{test_set_name(), {ddoc_id_copy(), RawNewGroupSig}}],
             "New group entry in couch_setview_name_to_sig ets table"),
     etap:is(ets:lookup(couch_sig_to_setview_pid, {test_set_name(), RawNewGroupSig}),
-            [{{test_set_name(), RawNewGroupSig}, NewGroupPid2}],
+            [{{test_set_name(), RawNewGroupSig}, NewGroupPid3}],
             "New group entry in couch_sig_to_setview_pid ets table"),
 
     etap:diag("Deleting ddoc copy"),
@@ -234,7 +246,13 @@ test_recreate_ddoc_with_copy() ->
             [],
             "No group entry in couch_sig_to_setview_pid ets table"),
 
-    query_view(ddoc_id(), num_docs(), "stale=ok"),
+    ok = couch_set_view_test_util:define_set_view(
+        test_set_name(),
+        ddoc_id(),
+        num_set_partitions(),
+        lists:seq(0, num_set_partitions() - 1),
+        []),
+    query_view(ddoc_id(), 0, "stale=ok"),
 
     etap:diag("Deleting original ddoc"),
     ok = couch_set_view_test_util:delete_ddoc(test_set_name(), ddoc_id()),

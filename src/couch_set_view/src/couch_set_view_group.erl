@@ -1194,7 +1194,10 @@ terminate(Reason, #state{group = #set_view_group{sig = Sig} = Group} = State) ->
     _ ->
         ok
     end,
-    ok = couch_set_view_util:delete_sort_files(updater_tmp_dir(State)).
+    TmpDir = updater_tmp_dir(State),
+    ok = couch_set_view_util:delete_sort_files(TmpDir),
+    _ = file:del_dir(TmpDir),
+    ok.
 
 
 code_change(_OldVsn, State, _Extra) ->
@@ -1382,7 +1385,8 @@ find_index_file(RootDir, Group, Type) ->
 
 -spec delete_index_file(string(), #set_view_group{}, set_view_group_type()) -> no_return().
 delete_index_file(RootDir, Group, Type) ->
-    BaseName = base_index_file_name(Group, Type),
+    SetDir = couch_set_view:set_index_dir(RootDir, Group#set_view_group.set_name),
+    BaseName = filename:join([SetDir, base_index_file_name(Group, Type)]),
     lists:foreach(
         fun(F) -> couch_file:delete(RootDir, F) end,
         filelib:wildcard(BaseName ++ ".[0-9]*")).
