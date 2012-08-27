@@ -221,8 +221,11 @@ is_view_defined(Pid) ->
 set_state(_Pid, [], [], []) ->
     ok;
 set_state(Pid, Active, Passive, Cleanup) ->
+    ordsets:is_set(Active) orelse throw({error, <<"Active list is not an ordset">>}),
+    ordsets:is_set(Passive) orelse throw({error, <<"Passive list is not an ordset">>}),
     case ordsets:intersection(Active, Passive) of
     [] ->
+        ordsets:is_set(Cleanup) orelse throw({error, <<"Cleanup list is not an ordset">>}),
         case ordsets:intersection(Active, Cleanup) of
         [] ->
             case ordsets:intersection(Passive, Cleanup) of
@@ -253,18 +256,21 @@ add_replica_partitions(Pid, Partitions) ->
 remove_replica_partitions(_Pid, []) ->
     ok;
 remove_replica_partitions(Pid, Partitions) ->
-    gen_server:call(Pid, {remove_replicas, ordsets:from_list(Partitions)}, infinity).
+    ordsets:is_set(Partitions) orelse throw({error, <<"List is not an ordset">>}),
+    gen_server:call(Pid, {remove_replicas, Partitions}, infinity).
 
 
 -spec mark_as_unindexable(pid(), ordsets:ordset(partition_id())) ->
                                  'ok' | {'error', term()}.
 mark_as_unindexable(Pid, Partitions) ->
+    ordsets:is_set(Partitions) orelse throw({error, <<"List is not an ordset">>}),
     gen_server:call(Pid, {mark_as_unindexable, Partitions}, infinity).
 
 
 -spec mark_as_indexable(pid(), ordsets:ordset(partition_id())) ->
                                'ok' | {'error', term()}.
 mark_as_indexable(Pid, Partitions) ->
+    ordsets:is_set(Partitions) orelse throw({error, <<"List is not an ordset">>}),
     gen_server:call(Pid, {mark_as_indexable, Partitions}, infinity).
 
 
