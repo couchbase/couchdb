@@ -215,17 +215,14 @@ is_view_defined(Pid) ->
 
 
 -spec set_state(pid(),
-                [partition_id()],
-                [partition_id()],
-                [partition_id()]) -> 'ok' | {'error', term()}.
+                ordsets:ordset(partition_id()),
+                ordsets:ordset(partition_id()),
+                ordsets:ordset(partition_id())) -> 'ok' | {'error', term()}.
 set_state(_Pid, [], [], []) ->
     ok;
-set_state(Pid, ActivePartitions, PassivePartitions, CleanupPartitions) ->
-    Active = ordsets:from_list(ActivePartitions),
-    Passive = ordsets:from_list(PassivePartitions),
+set_state(Pid, Active, Passive, Cleanup) ->
     case ordsets:intersection(Active, Passive) of
     [] ->
-        Cleanup = ordsets:from_list(CleanupPartitions),
         case ordsets:intersection(Active, Cleanup) of
         [] ->
             case ordsets:intersection(Passive, Cleanup) of
@@ -244,7 +241,7 @@ set_state(Pid, ActivePartitions, PassivePartitions, CleanupPartitions) ->
     end.
 
 
--spec add_replica_partitions(pid(), [partition_id()]) -> 'ok' | {'error', term()}.
+-spec add_replica_partitions(pid(), ordsets:ordset(partition_id())) -> 'ok' | {'error', term()}.
 add_replica_partitions(_Pid, []) ->
     ok;
 add_replica_partitions(Pid, Partitions) ->
@@ -252,19 +249,21 @@ add_replica_partitions(Pid, Partitions) ->
     gen_server:call(Pid, {add_replicas, BitMask}, infinity).
 
 
--spec remove_replica_partitions(pid(), [partition_id()]) -> 'ok' | {'error', term()}.
+-spec remove_replica_partitions(pid(), ordsets:ordset(partition_id())) -> 'ok' | {'error', term()}.
 remove_replica_partitions(_Pid, []) ->
     ok;
 remove_replica_partitions(Pid, Partitions) ->
     gen_server:call(Pid, {remove_replicas, ordsets:from_list(Partitions)}, infinity).
 
 
--spec mark_as_unindexable(pid(), [partition_id()]) -> 'ok' | {'error', term()}.
+-spec mark_as_unindexable(pid(), ordsets:ordset(partition_id())) ->
+                                 'ok' | {'error', term()}.
 mark_as_unindexable(Pid, Partitions) ->
     gen_server:call(Pid, {mark_as_unindexable, Partitions}, infinity).
 
 
--spec mark_as_indexable(pid(), [partition_id()]) -> 'ok' | {'error', term()}.
+-spec mark_as_indexable(pid(), ordsets:ordset(partition_id())) ->
+                               'ok' | {'error', term()}.
 mark_as_indexable(Pid, Partitions) ->
     gen_server:call(Pid, {mark_as_indexable, Partitions}, infinity).
 

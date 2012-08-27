@@ -178,9 +178,9 @@ is_view_defined(SetName, DDocId) ->
 %
 -spec set_partition_states(binary(),
                            binary(),
-                           [partition_id()],
-                           [partition_id()],
-                           [partition_id()]) -> 'ok'.
+                           ordsets:ordset(partition_id()),
+                           ordsets:ordset(partition_id()),
+                           ordsets:ordset(partition_id())) -> 'ok'.
 set_partition_states(SetName, DDocId, ActivePartitions, PassivePartitions, CleanupPartitions) ->
     GroupPid = get_group_pid(SetName, DDocId),
     case couch_set_view_group:set_state(
@@ -198,7 +198,7 @@ set_partition_states(SetName, DDocId, ActivePartitions, PassivePartitions, Clean
 % All the given partitions must not be in the active nor passive state.
 % Like set_partition_states, this is an incremental operation.
 %
--spec add_replica_partitions(binary(), binary(), [partition_id()]) -> 'ok'.
+-spec add_replica_partitions(binary(), binary(), ordsets:ordset(partition_id())) -> 'ok'.
 add_replica_partitions(SetName, DDocId, Partitions) ->
     GroupPid = get_group_pid(SetName, DDocId),
     case couch_set_view_group:add_replica_partitions(
@@ -217,7 +217,7 @@ add_replica_partitions(SetName, DDocId, Partitions) ->
 % This is a no-op for partitions not currently marked as replicas.
 % Like set_partition_states, this is an incremental operation.
 %
--spec remove_replica_partitions(binary(), binary(), [partition_id()]) -> 'ok'.
+-spec remove_replica_partitions(binary(), binary(), ordsets:ordset(partition_id())) -> 'ok'.
 remove_replica_partitions(SetName, DDocId, Partitions) ->
     GroupPid = get_group_pid(SetName, DDocId),
     case couch_set_view_group:remove_replica_partitions(
@@ -234,7 +234,7 @@ remove_replica_partitions(SetName, DDocId, Partitions) ->
 % corresponding partition databases. This operation doesn't remove any data from
 % the index, nor does it start any cleanup operation. Queries will still see
 % and get data from the corresponding partitions.
--spec mark_partitions_unindexable(binary(), binary(), [partition_id()]) -> 'ok'.
+-spec mark_partitions_unindexable(binary(), binary(), ordsets:ordset(partition_id())) -> 'ok'.
 mark_partitions_unindexable(SetName, DDocId, Partitions) ->
     Pid = get_group_pid(SetName, DDocId),
     case couch_set_view_group:mark_as_unindexable(Pid, Partitions) of
@@ -250,7 +250,7 @@ mark_partitions_unindexable(SetName, DDocId, Partitions) ->
 % changes (changes that happened since the last index update prior to the
 % mark_partitions_unindexable/3 call). The given partitions are currently in either the
 % active or passive states and were marked as unindexable before.
--spec mark_partitions_indexable(binary(), binary(), [partition_id()]) -> 'ok'.
+-spec mark_partitions_indexable(binary(), binary(), ordsets:ordset(partition_id())) -> 'ok'.
 mark_partitions_indexable(SetName, DDocId, Partitions) ->
     Pid = get_group_pid(SetName, DDocId),
     case couch_set_view_group:mark_as_indexable(Pid, Partitions) of
