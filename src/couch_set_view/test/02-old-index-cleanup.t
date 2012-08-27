@@ -25,7 +25,7 @@ num_docs() -> 1000.
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(70),
+    etap:plan(71),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -96,7 +96,10 @@ test() ->
         "Old index file deleted before cleanup because group was updated"),
 
     couch_util:shutdown_sync(NewGroupPid),
+    % Let couch_set_view process group process EXIT message
+    ok = timer:sleep(1000),
     NewGroupPid2 = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    etap:isnt(NewGroupPid2, NewGroupPid, "Got different group pid"),
     AllIndexFiles2 = all_index_files(),
     etap:is(lists:member(NewIndexFile, AllIndexFiles2), true,
         "New index file found after group process restart"),
