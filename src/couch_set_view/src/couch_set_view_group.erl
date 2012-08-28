@@ -496,7 +496,7 @@ handle_call({add_replicas, BitMask}, _From, #state{replica_group = ReplicaPid} =
                    couch_set_view_util:decode_bitmask(Common2)]),
         BitMask2 bxor Common2
     end,
-    Parts = ordsets:from_list(couch_set_view_util:decode_bitmask(BitMask3)),
+    Parts = couch_set_view_util:decode_bitmask(BitMask3),
     ok = set_state(ReplicaPid, [], Parts, []),
     NewReplicaParts = ordsets:union(ReplicaParts, Parts),
     ?LOG_INFO("Set view `~s`, ~s group `~s`, defined new replica partitions: ~w~n"
