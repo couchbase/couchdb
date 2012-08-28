@@ -14,7 +14,7 @@
 -behaviour(gen_server).
 
 -export([open/2,create/2,delete/2,get_version/0]).
--export([all_databases/0, all_databases/2, all_known_databases/0]).
+-export([all_databases/0, all_databases/2, all_known_databases_with_prefix/1]).
 -export([init/1, handle_call/3,sup_start_link/0]).
 -export([handle_cast/2,code_change/3,handle_info/2,terminate/2]).
 -export([dev_start/0,is_admin/2,has_admins/0,get_stats/0]).
@@ -145,7 +145,7 @@ init([]) ->
             spawn(fun() -> hash_admin_passwords(Persist) end)
         end, false),
     {ok, RegExp} = re:compile("^[A-Za-z0-9\\_\\.\\%\\-\\/]*$"),
-    ets:new(couch_dbs_by_name, [set, private, named_table]),
+    ets:new(couch_dbs_by_name, [ordered_set, protected, named_table]),
     ets:new(couch_dbs_by_pid, [set, private, named_table]),
     ets:new(couch_dbs_by_lru, [ordered_set, private, named_table]),
     ets:new(couch_sys_dbs, [set, private, named_table]),
@@ -192,9 +192,24 @@ all_databases(Fun, Acc0) ->
     end,
     {ok, FinalAcc}.
 
--spec all_known_databases() -> [binary()].
-all_known_databases() ->
-    gen_server:call(couch_server, get_known_databases, infinity).
+all_known_databases_with_prefix(Prefix) ->
+    PreLen = erlang:size(Prefix),
+    Init = case ets:lookup(couch_dbs_by_name, Prefix) of
+    [] ->
+        [];
+    [_] ->
+        [Prefix]
+    end,
+    all_known_databases_with_prefix_loop(Prefix, PreLen, Prefix, Init).
+
+all_known_databases_with_prefix_loop(Prefix, PreLen, K, Acc) ->
+    K2 = ets:next(couch_dbs_by_name, K),
+    case K2 of
+    <<Prefix:PreLen/binary, _/binary>> ->
+        all_known_databases_with_prefix_loop(Prefix, PreLen, K2, [K2 | Acc]);
+    _ ->
+        Acc
+    end.
 
 open_async(Server, Froms, DbName, Filepath, Options) ->
     Parent = self(),
