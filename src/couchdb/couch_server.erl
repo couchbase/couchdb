@@ -48,7 +48,19 @@ get_stats() ->
     [{start_time, ?l2b(Time)}, {dbs_open, Open}].
 
 sup_start_link() ->
-    gen_server:start_link({local, couch_server}, couch_server, [], []).
+    case gen_server:start_link({local, couch_server}, couch_server, [], []) of
+    {ok, _} = RV ->
+        {ok, AllDBs} = all_databases(),
+        [case open(Name, []) of
+         {ok, DB} ->
+             couch_db:close(DB);
+         _ ->
+             ok
+         end || Name <- AllDBs],
+        RV;
+    Else ->
+        Else
+    end.
 
 open(DbName, Options) ->
     case gen_server:call(couch_server, {open, DbName, Options}, infinity) of
