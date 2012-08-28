@@ -1126,6 +1126,7 @@ handle_info({'EXIT', Pid, Reason}, #state{compactor_pid = Pid} = State) ->
                "unexpected reason: ~p",
                [?set_name(State), ?type(State), ?group_id(State), Pid, Reason]),
     couch_util:shutdown_sync(State#state.compactor_file),
+    _ = couch_file:delete(?root_dir(State), compact_file_name(State)),
     State2 = State#state{
         compactor_pid = nil,
         compactor_file = nil
