@@ -171,29 +171,16 @@ wait_db_compact_done(N) ->
     end.
 
 compact_view_group() ->
-    {ok, _} = couch_view_compactor:start_compact(test_db_name(), ddoc_name()),
-    wait_view_compact_done(10).
-
-wait_view_compact_done(0) ->
-    etap:bail("View group compaction failed to finish.");
-wait_view_compact_done(N) ->
-    {ok, Code, _Headers, Body} = test_util:request(
-        db_url() ++ "/_design/" ++ binary_to_list(ddoc_name()) ++ "/_info",
-        [],
-        get),
-    case Code of
-        200 -> ok;
-        _ -> etap:bail("Invalid view group info.")
-    end,
-    {Info} = ejson:decode(Body),
-    {IndexInfo} = couch_util:get_value(<<"view_index">>, Info),
-    CompactRunning = couch_util:get_value(<<"compact_running">>, IndexInfo),
-    case CompactRunning of
-    false ->
-        ok;
-    true ->
-        ok = timer:sleep(500),
-        wait_view_compact_done(N - 1)
+    {ok, Pid} = couch_view_compactor:start_compact(test_db_name(), ddoc_name()),
+    Ref = erlang:monitor(process, Pid),
+    receive
+    {'DOWN', Ref, _, _, normal} ->
+        etap:diag("View group compaction finished");
+    {'DOWN', Ref, _, _, Reason} ->
+        etap:diag("View group compaction finished with error: " ++
+            couch_util:to_list(Reason))
+    after 90000 ->
+        etap:bail("Timeout waiting for view group compaction")
     end.
 
 get_db_ref_counter() ->
