@@ -61,6 +61,33 @@ route_request(#httpd{method = 'GET'} = Req, SetName, DDocId, [<<"_info">>]) ->
     {ok, Info} = couch_set_view:get_group_info(SetName, DDocId),
     couch_httpd:send_json(Req, 200, {Info});
 
+route_request(#httpd{method = 'GET'} = Req, SetName, DDocId, [<<"_btree_stats">>]) ->
+    GroupReq = #set_view_group_req{
+        type = list_to_existing_atom(couch_httpd:qs_value(Req, "_type", "main")),
+        stale = ok,
+        update_stats = false
+    },
+    {ok, Group} = couch_set_view:get_group(SetName, DDocId, GroupReq),
+    #set_view_group{
+        id_btree = IdBtree,
+        views = Views
+    } = Group,
+    IdBtreeStats = couch_btree:stats(IdBtree),
+    ViewStats = lists:foldr(
+        fun(#set_view{btree = Bt, reduce_funs = RedFuns, map_names = MapNames}, Acc) ->
+            S = couch_btree:stats(Bt),
+            case RedFuns of
+            [{ViewName, _} | _] ->
+                ok;
+            [] ->
+                [ViewName | _] = MapNames
+            end,
+            [{ViewName, {S}} | Acc]
+        end,
+        [], Views),
+    Stats = {[{<<"id_btree">>, {IdBtreeStats}} | ViewStats]},
+    couch_httpd:send_json(Req, 200, Stats);
+
 route_request(#httpd{method = 'GET'} = Req, SetName, DDocId, [<<"_view">>, ViewName]) ->
     Keys = couch_httpd:qs_json_value(Req, "keys", nil),
     FilteredPartitions = couch_httpd:qs_json_value(Req, "partitions", []),
