@@ -938,6 +938,7 @@ nuke_dir(RootDelDir, Dir) ->
                 Full = Dir ++ "/" ++ File,
                 case couch_file:delete(RootDelDir, Full, false) of
                 ok -> ok;
+                {error, enoent} -> ok;
                 {error, eperm} ->
                     ok = nuke_dir(RootDelDir, Full)
                 end
