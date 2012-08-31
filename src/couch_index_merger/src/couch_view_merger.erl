@@ -949,9 +949,9 @@ http_view_fold_queue_error({Props}, Queue) ->
 
 
 http_view_fold_queue_row({Props}, Queue) ->
-    Key = get_value(<<"key">>, Props, null),
+    Key = {json, ?JSON_ENCODE(get_value(<<"key">>, Props, null))},
     Id = get_value(<<"id">>, Props, nil),
-    Val = get_value(<<"value">>, Props),
+    Val = {json, ?JSON_ENCODE(get_value(<<"value">>, Props))},
     Value = case get_value(<<"partition">>, Props, nil) of
     nil ->
         Val;
