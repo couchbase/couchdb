@@ -363,7 +363,7 @@ code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
     
 handle_info({'EXIT', _Pid, config_change}, Server) ->
-    {noreply, shutdown, Server};
+    {stop, shutdown, Server};
 handle_info({'EXIT', Pid, snappy_nif_not_loaded}, Server) ->
     Server2 = case ets:lookup(couch_dbs_by_pid, Pid) of
     [{Pid, Db}] ->

@@ -34,13 +34,12 @@
 
 start_server() ->
     couch_server_sup:start_link(test_util:config_files()),
-    timer:sleep(500),
     put(addr, couch_config:get("httpd", "bind_address", "127.0.0.1")),
     put(port, integer_to_list(mochiweb_socket_server:get(couch_httpd, port))).
 
 
 start_server(SetName) ->
-    start_server(),
+    couch_config:start_link(test_util:config_files()),
     DbDir = couch_config:get("couchdb", "database_dir"),
     IndexDir = couch_config:get("couchdb", "view_index_dir"),
     NewDbDir = filename:join([DbDir, ?b2l(SetName)]),
@@ -63,7 +62,8 @@ start_server(SetName) ->
     end,
     ok = couch_config:set("couchdb", "database_dir", NewDbDir, false),
     ok = couch_config:set("couchdb", "view_index_dir", NewIndexDir, false),
-    ok = timer:sleep(300).
+    start_server(),
+    ok.
 
 
 stop_server() ->
