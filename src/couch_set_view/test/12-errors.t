@@ -58,7 +58,7 @@ num_docs() -> 1000.
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(16),
+    etap:plan(17),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -155,13 +155,12 @@ test_partition_not_found_when_group_starts() ->
         [master, 0, 1, 2, 3]),
     GroupPid1 = couch_set_view:get_group_pid(test_set_name(), DDocId),
     couch_util:shutdown_sync(GroupPid1),
-    couch_util:shutdown_sync(whereis(couch_server)),
 
     etap:diag("Deleting database of active partition 1 after view group shutdown"),
-    DbFile = iolist_to_binary([test_set_name(), "/0.couch.1"]),
-    DbDir = couch_config:get("couchdb", "database_dir"),
-    ok = file:delete(filename:join([DbDir, DbFile])),
-    ok = timer:sleep(1000),
+    DbName = iolist_to_binary([test_set_name(), "/0"]),
+    ok = couch_server:delete(DbName, []),
+    {ok, AllDbs} = couch_server:all_databases(),
+    etap:is(lists:member(DbName, AllDbs), false, "Partition 0 database file deleted"),
 
     SetViewServerBefore = whereis(couch_set_view),
     MonRef = erlang:monitor(process, SetViewServerBefore),
@@ -170,7 +169,6 @@ test_partition_not_found_when_group_starts() ->
         couch_set_view:get_group_pid(test_set_name(), DDocId),
         etap:bail("No failure opening view group after deleting an active partition database")
     catch _:Error ->
-        DbName = iolist_to_binary([test_set_name(), "/0"]),
         ?etap_match(
             Error,
             {error, {db_open_error, DbName, {not_found, no_db_file}, _Text}},
