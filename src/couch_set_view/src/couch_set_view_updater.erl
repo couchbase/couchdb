@@ -280,7 +280,6 @@ wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup) ->
     #set_view_group{set_name = SetName, name = DDocId, type = Type} = OldGroup,
     receive
     {writer_finished, WriterAcc} ->
-        shutdown_sort_workers(WriterAcc),
         Result = #set_view_updater_result{
             group = WriterAcc#writer_acc.group,
             indexing_time = timer:now_diff(os:timestamp(), StartTime) / 1000000,
@@ -669,7 +668,7 @@ maybe_flush_merge_buffers(BuffersDict, WriterAcc) ->
                 LessFun = fun({A, _}, {B, _}) -> Less(A, B) end,
                 MergeSortFile = new_sort_file_name(WriterAcc),
                 wait_for_workers(AccWorkers),
-                MergeWorker = spawn_monitor(fun() ->
+                MergeWorker = spawn_opt(fun() ->
                     SortOptions = [
                         {order, LessFun},
                         {tmpdir, TmpDir},
@@ -679,10 +678,17 @@ maybe_flush_merge_buffers(BuffersDict, WriterAcc) ->
                     ok ->
                         ok;
                     {error, Reason} ->
-                        exit(Reason)
+                        exit({sort_worker_died, Reason})
                     end,
-                    lists:foreach(fun(F) -> ok = file:delete(F) end, InputFiles)
-                end),
+                    lists:foreach(fun(F) ->
+                        case file:delete(F) of
+                        ok ->
+                            ok;
+                        {error, Reason2} ->
+                            exit({sort_worker_died, Reason2})
+                        end
+                    end, InputFiles)
+                end, [link, monitor]),
                 {AccBuffers2, dict:store(Id, [MergeSortFile], AccFiles), [MergeWorker]};
             false ->
                 {AccBuffers2, dict:store(Id, InputFiles, AccFiles), AccWorkers}
@@ -1027,17 +1033,6 @@ init_view_merge_params(#writer_acc{group = Group} = WriterAcc) ->
 
 new_sort_file_name(#writer_acc{tmp_dir = TmpDir, group = Group}) ->
     couch_set_view_util:new_sort_file_path(TmpDir, Group#set_view_group.sig).
-
-
-shutdown_sort_workers(#writer_acc{sort_files = nil}) ->
-    ok;
-shutdown_sort_workers(#writer_acc{sort_files = SortFiles, sort_file_workers = Workers}) ->
-    lists:foreach(fun couch_util:shutdown_sync/1, Workers),
-    _ = dict:fold(
-        fun(_Key, Files, _) ->
-            lists:foreach(fun(F) -> ok = file:delete(F) end, Files)
-        end,
-        [], SortFiles).
 
 
 delete_prev_sort_files(#writer_acc{initial_build = false}) ->
