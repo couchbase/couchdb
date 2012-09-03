@@ -608,14 +608,14 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
         ?LOG_INFO("Updater for set view `~s`, ~s group `~s`, performing final "
                   "btree build phase", [SetName, Type, DDocId]),
         wait_for_workers(SortFileWorkers2),
-        [IdsSortedFile] = dict:fetch(ids_index, NewSortFiles2),
+        [{_, IdsSortedFile}] = dict:fetch(ids_index, NewSortFiles2),
         {ok, NewIdBtreeRoot} = couch_btree_copy:from_sorted_file(
             IdBtree, IdsSortedFile, GroupFd, fun file_sorter_format_function/1),
         NewIdBtree = IdBtree#btree{root = NewIdBtreeRoot},
         ok = file:delete(IdsSortedFile),
         NewViews = lists:map(
             fun(#set_view{id_num = Id, btree = Bt} = View) ->
-               [KvSortedFile] = dict:fetch(Id, NewSortFiles2),
+               [{_, KvSortedFile}] = dict:fetch(Id, NewSortFiles2),
                {ok, NewBtRoot} = couch_btree_copy:from_sorted_file(
                    Bt, KvSortedFile, GroupFd, fun file_sorter_format_function/1),
                ok = file:delete(KvSortedFile),
@@ -687,36 +687,44 @@ maybe_flush_merge_buffers(BuffersDict, WriterAcc) ->
                 ok = file:write(Fd, Buf),
                 ok = file:close(Fd),
                 AccBuffers2 = dict:store(Id, {[], 0}, AccBuffers),
-                InputFiles = [FileName | SortFiles],
-                case (length(InputFiles) >= ?MAX_SORT_NUM_FILES) orelse IsFinalBatch of
+                SortFiles2 = ordsets:add_element({0, FileName}, SortFiles),
+                case (ordsets:size(SortFiles2) >= ?MAX_SORT_NUM_FILES) orelse IsFinalBatch of
                 true ->
                     LessFun = fun({A, _}, {B, _}) -> Less(A, B) end,
                     MergeSortFile = new_sort_file_name(WriterAcc),
-                    wait_for_workers(AccWorkers),
-                    MergeWorker = spawn_opt(fun() ->
-                        SortOptions = [
-                            {order, LessFun},
-                            {tmpdir, TmpDir},
-                            {format, fun file_sorter_format_function/1}
-                        ],
-                        case file_sorter:merge(InputFiles, MergeSortFile, SortOptions) of
-                        ok ->
-                            ok;
-                        {error, Reason} ->
-                            exit({sort_worker_died, Reason})
-                        end,
-                        lists:foreach(fun(F) ->
-                            case file:delete(F) of
+                    {FilesToMerge, NextGen, RestSortFiles} =
+                        split_files_to_merge(SortFiles2, IsFinalBatch),
+                    case FilesToMerge of
+                    [_] ->
+                        {AccBuffers2, dict:store(Id, SortFiles2, AccFiles), AccWorkers};
+                    [_, _ | _] ->
+                        wait_for_workers(AccWorkers),
+                        MergeWorker = spawn_opt(fun() ->
+                            SortOptions = [
+                                {order, LessFun},
+                                {tmpdir, TmpDir},
+                                {format, fun file_sorter_format_function/1}
+                            ],
+                            case file_sorter:merge(FilesToMerge, MergeSortFile, SortOptions) of
                             ok ->
                                 ok;
-                            {error, Reason2} ->
-                                exit({sort_worker_died, Reason2})
-                            end
-                        end, InputFiles)
-                    end, [link, monitor]),
-                    {AccBuffers2, dict:store(Id, [MergeSortFile], AccFiles), [MergeWorker]};
+                            {error, Reason} ->
+                                exit({sort_worker_died, Reason})
+                            end,
+                            lists:foreach(fun(F) ->
+                                case file:delete(F) of
+                                ok ->
+                                    ok;
+                                {error, Reason2} ->
+                                    exit({sort_worker_died, Reason2})
+                                end
+                            end, FilesToMerge)
+                        end, [link, monitor]),
+                        SortFiles3 = ordsets:add_element({NextGen, MergeSortFile}, RestSortFiles),
+                        {AccBuffers2, dict:store(Id, SortFiles3, AccFiles), [MergeWorker]}
+                    end;
                 false ->
-                    {AccBuffers2, dict:store(Id, InputFiles, AccFiles), AccWorkers}
+                    {AccBuffers2, dict:store(Id, SortFiles2, AccFiles), AccWorkers}
                 end;
             false ->
                 {AccBuffers, AccFiles, AccWorkers}
@@ -1127,3 +1135,24 @@ convert_back_index_kvs_to_binary([{DocId, {PartId, ViewIdKeys}} | Rest], Acc) ->
 
 file_sorter_format_function(<<KeyLen:16, Key:KeyLen/binary, Value/binary>>) ->
     {Key, Value}.
+
+
+split_files_to_merge(SortFiles, true) ->
+    {LastGen, _} = lists:last(SortFiles),
+    {[F || {_, F} <- SortFiles], LastGen + 1, []};
+
+split_files_to_merge([{MinGen, FirstFile} | Rest], false) ->
+    {ChosenGen, ToMerge, NotToMerge} =
+        split_files_by_gen(MinGen, Rest, ordsets:new(), [FirstFile]),
+    {ToMerge, ChosenGen + 1, NotToMerge}.
+
+
+split_files_by_gen(Gen, [{Gen, F} | Rest], AccNot, Acc) ->
+    split_files_by_gen(Gen, Rest, AccNot, [F | Acc]);
+split_files_by_gen(Gen, [], AccNot, Acc) ->
+    {Gen, Acc, AccNot};
+split_files_by_gen(Gen, [{Gen2, F} | Rest], AccNot, [FAcc]) when Gen2 > Gen ->
+    split_files_by_gen(Gen2, Rest, ordsets:add_element({Gen, FAcc}, AccNot), [F]);
+split_files_by_gen(Gen, [{Gen2, _} | _] = Rest, AccNot, Acc) when Gen2 > Gen ->
+    {Gen, Acc, ordsets:union(AccNot, Rest)}.
+
