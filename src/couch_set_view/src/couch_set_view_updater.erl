@@ -540,34 +540,57 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
         fd = GroupFd
     } = Group,
     {ViewKVs, DocIdViewIdKeys, MaxSeqs2} = process_map_results(Kvs, ViewEmptyKVs, MaxSeqs),
-    IdBuffer = dict:fetch(ids_index, Buffers),
-    IdLessFun = fun({A, _}, {B, _}) -> (IdBtree#btree.less)(A, B) end,
-    NewIdBuffer = lists:foldr(
+    {IdBuffer, IdBufferSize} = dict:fetch(ids_index, Buffers),
+    {NewIdBuffer0, NewIdBufferSize} = lists:foldr(
         fun({_DocId, {_PartId, []}}, Acc) ->
             Acc;
-        (Kv, AccBuf) ->
+        (Kv, {AccBuf, AccSize}) ->
             [{KeyBin, ValBin}] = convert_back_index_kvs_to_binary([Kv], []),
             KvBin = [<<(byte_size(KeyBin)):16>>, KeyBin, ValBin],
-            [[<<(iolist_size(KvBin)):32>>, KvBin] | AccBuf]
+            KvBinSize = iolist_size(KvBin),
+            {[[<<KvBinSize:32>>, KvBin] | AccBuf], AccSize + KvBinSize}
         end,
-        IdBuffer,
-        lists:sort(IdLessFun, DocIdViewIdKeys)),
-    {NewBuffers, InsertKVCount} = lists:foldl(
-        fun({#set_view{id_num = Id, btree = Bt}, KvList}, {AccBuffers, AccCount}) ->
-            Buf = dict:fetch(Id, AccBuffers),
-            ViewLessFun = fun({A, _}, {B, _}) -> (Bt#btree.less)(A, B) end,
-            {NewBuf, AccCount3} = lists:foldr(
-                fun({KeyBin, ValBin}, {AccBuf, AccCount2}) ->
+        {IdBuffer, IdBufferSize},
+        DocIdViewIdKeys),
+    NewIdBuffer = case (NewIdBufferSize >= ?MAX_SORT_BUFFER_SIZE) orelse IsFinalBatch of
+    true ->
+        IdLessFun = fun([_, [_, A, _]], [_, [_, B, _]]) -> (IdBtree#btree.less)(A, B) end,
+        lists:sort(IdLessFun, NewIdBuffer0);
+    false ->
+        NewIdBuffer0
+    end,
+    {NewBuffers0, InsertKVCount} = lists:foldl(
+        fun({#set_view{id_num = Id}, KvList}, {AccBuffers, AccCount}) ->
+            {Buf, BufSize} = dict:fetch(Id, AccBuffers),
+            {NewBuf, NewBufSize, AccCount3} = lists:foldr(
+                fun({KeyBin, ValBin}, {AccBuf, AccBufSize, AccCount2}) ->
                     KvBin = [<<(byte_size(KeyBin)):16>>, KeyBin, ValBin],
-                    AccBuf2 = [[<<(iolist_size(KvBin)):32>>, KvBin] | AccBuf],
-                    {AccBuf2, AccCount2 + 1}
+                    KvBinSize = iolist_size(KvBin),
+                    AccBuf2 = [[<<KvBinSize:32>>, KvBin] | AccBuf],
+                    {AccBuf2, AccBufSize + KvBinSize, AccCount2 + 1}
                 end,
-                {Buf, AccCount},
-                lists:sort(ViewLessFun, convert_primary_index_kvs_to_binary(KvList, Group, []))),
-            {dict:store(Id, NewBuf, AccBuffers), AccCount3}
+                {Buf, BufSize, AccCount},
+                convert_primary_index_kvs_to_binary(KvList, Group, [])),
+            {dict:store(Id, {NewBuf, NewBufSize}, AccBuffers), AccCount3}
         end,
-        {dict:store(ids_index, NewIdBuffer, Buffers), 0},
+        {dict:store(ids_index, {NewIdBuffer, NewIdBufferSize}, Buffers), 0},
         ViewKVs),
+
+    NewBuffers = lists:foldl(
+        fun(#set_view{id_num = Id, btree = Bt}, AccBuffers) ->
+            {Buf, BufSize} = dict:fetch(Id, AccBuffers),
+            case (BufSize >= ?MAX_SORT_BUFFER_SIZE) orelse IsFinalBatch of
+            true ->
+                ViewLessFun = fun([_, [_, A, _]], [_, [_, B, _]]) -> (Bt#btree.less)(A, B) end,
+                Buf2 = lists:sort(ViewLessFun, Buf),
+                dict:store(Id, {Buf2, BufSize}, AccBuffers);
+            false ->
+                AccBuffers
+            end
+        end,
+        NewBuffers0,
+        Group#set_view_group.views),
+
     {NewBuffers2, NewSortFiles2, SortFileWorkers2} =
         maybe_flush_merge_buffers(NewBuffers, WriterAcc),
     update_task(KvsLength),
@@ -655,43 +678,48 @@ maybe_flush_merge_buffers(BuffersDict, WriterAcc) ->
     ],
     lists:foldl(
         fun({Id, Less}, {AccBuffers, AccFiles, AccWorkers}) ->
-            Buf = dict:fetch(Id, AccBuffers),
-            SortFiles = dict:fetch(Id, AccFiles),
-            FileName = new_sort_file_name(WriterAcc),
-            {ok, Fd} = file:open(FileName, [raw, append, binary]),
-            ok = file:write(Fd, Buf),
-            ok = file:close(Fd),
-            AccBuffers2 = dict:store(Id, [], AccBuffers),
-            InputFiles = [FileName | SortFiles],
-            case (length(InputFiles) >= ?MAX_SORT_NUM_FILES) orelse IsFinalBatch of
+            {Buf, BufSize} = dict:fetch(Id, AccBuffers),
+            case (BufSize >= ?MAX_SORT_BUFFER_SIZE) orelse IsFinalBatch of
             true ->
-                LessFun = fun({A, _}, {B, _}) -> Less(A, B) end,
-                MergeSortFile = new_sort_file_name(WriterAcc),
-                wait_for_workers(AccWorkers),
-                MergeWorker = spawn_opt(fun() ->
-                    SortOptions = [
-                        {order, LessFun},
-                        {tmpdir, TmpDir},
-                        {format, fun file_sorter_format_function/1}
-                    ],
-                    case file_sorter:merge(InputFiles, MergeSortFile, SortOptions) of
-                    ok ->
-                        ok;
-                    {error, Reason} ->
-                        exit({sort_worker_died, Reason})
-                    end,
-                    lists:foreach(fun(F) ->
-                        case file:delete(F) of
+                SortFiles = dict:fetch(Id, AccFiles),
+                FileName = new_sort_file_name(WriterAcc),
+                {ok, Fd} = file:open(FileName, [raw, append, binary]),
+                ok = file:write(Fd, Buf),
+                ok = file:close(Fd),
+                AccBuffers2 = dict:store(Id, {[], 0}, AccBuffers),
+                InputFiles = [FileName | SortFiles],
+                case (length(InputFiles) >= ?MAX_SORT_NUM_FILES) orelse IsFinalBatch of
+                true ->
+                    LessFun = fun({A, _}, {B, _}) -> Less(A, B) end,
+                    MergeSortFile = new_sort_file_name(WriterAcc),
+                    wait_for_workers(AccWorkers),
+                    MergeWorker = spawn_opt(fun() ->
+                        SortOptions = [
+                            {order, LessFun},
+                            {tmpdir, TmpDir},
+                            {format, fun file_sorter_format_function/1}
+                        ],
+                        case file_sorter:merge(InputFiles, MergeSortFile, SortOptions) of
                         ok ->
                             ok;
-                        {error, Reason2} ->
-                            exit({sort_worker_died, Reason2})
-                        end
-                    end, InputFiles)
-                end, [link, monitor]),
-                {AccBuffers2, dict:store(Id, [MergeSortFile], AccFiles), [MergeWorker]};
+                        {error, Reason} ->
+                            exit({sort_worker_died, Reason})
+                        end,
+                        lists:foreach(fun(F) ->
+                            case file:delete(F) of
+                            ok ->
+                                ok;
+                            {error, Reason2} ->
+                                exit({sort_worker_died, Reason2})
+                            end
+                        end, InputFiles)
+                    end, [link, monitor]),
+                    {AccBuffers2, dict:store(Id, [MergeSortFile], AccFiles), [MergeWorker]};
+                false ->
+                    {AccBuffers2, dict:store(Id, InputFiles, AccFiles), AccWorkers}
+                end;
             false ->
-                {AccBuffers2, dict:store(Id, InputFiles, AccFiles), AccWorkers}
+                {AccBuffers, AccFiles, AccWorkers}
             end
         end,
         {BuffersDict, SortFilesDict, Workers},
@@ -1024,9 +1052,9 @@ init_view_merge_params(#writer_acc{initial_build = false} = WriterAcc) ->
     WriterAcc;
 init_view_merge_params(#writer_acc{group = Group} = WriterAcc) ->
     SortFiles = [{View#set_view.id_num, []} || View <- Group#set_view_group.views],
-    Buffers = [{View#set_view.id_num, []} || View <- Group#set_view_group.views],
+    Buffers = [{View#set_view.id_num, {[], 0}} || View <- Group#set_view_group.views],
     WriterAcc#writer_acc{
-        merge_buffers = dict:from_list([{ids_index, []} | Buffers]),
+        merge_buffers = dict:from_list([{ids_index, {[], 0}} | Buffers]),
         sort_files = dict:from_list([{ids_index, []} | SortFiles])
     }.
 
