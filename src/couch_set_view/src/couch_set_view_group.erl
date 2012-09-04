@@ -83,6 +83,7 @@
     waiting_list = []                  :: [#waiter{}],
     cleaner_pid = nil                  :: 'nil' | pid(),
     shutdown = false                   :: boolean(),
+    shutdown_aliases                   :: [binary()],
     auto_cleanup = true                :: boolean(),
     replica_partitions = []            :: ordsets:ordset(partition_id()),
     pending_transition_waiters = []    :: [{From::{pid(), reference()}, #set_view_group_req{}}],
@@ -824,26 +825,29 @@ handle_cast({partial_update, _, _}, State) ->
     %% message from an old (probably pre-compaction) updater; ignore
     {noreply, State, ?TIMEOUT};
 
-handle_cast({ddoc_updated, NewSig}, State) ->
+handle_cast({ddoc_updated, NewSig, Aliases}, State) ->
     #state{
         waiting_list = Waiters,
         group = #set_view_group{sig = CurSig}
     } = State,
     ?LOG_INFO("Set view `~s`, ~s group `~s`, signature `~s', design document was updated~n"
               "  new signature:   ~s~n"
+              "  current aliases: ~p~n"
               "  shutdown flag:   ~s~n"
               "  waiting clients: ~p~n",
               [?set_name(State), ?type(State), ?group_id(State),
-               hex_sig(CurSig), hex_sig(NewSig), State#state.shutdown, length(Waiters)]),
+               hex_sig(CurSig), hex_sig(NewSig), Aliases,
+               State#state.shutdown, length(Waiters)]),
     case NewSig of
     CurSig ->
-        {noreply, State#state{shutdown = false}, ?TIMEOUT};
+        {noreply, State#state{shutdown = false, shutdown_aliases = undefined}, ?TIMEOUT};
     _ ->
+        State2 = State#state{shutdown = true, shutdown_aliases = Aliases},
         case Waiters of
         [] ->
-            {stop, normal, State#state{shutdown = true}};
+            {stop, normal, State2};
         _ ->
-            {noreply, State#state{shutdown = true}}
+            {noreply, State2}
         end
     end;
 
@@ -1192,8 +1196,14 @@ terminate(Reason, #state{group = #set_view_group{sig = Sig} = Group} = State) ->
         % group got spawned again. Problem here is during rebalance, where one of the
         % databases might have been deleted after the last ddoc update and while or after
         % we're here in terminate, so we must ensure we don't leave old index files around.
-        delete_index_file(?root_dir(State), Group, main),
-        delete_index_file(?root_dir(State), Group, replica);
+        % MB-6415 and MB-6517
+        case State#state.shutdown_aliases of
+        [] ->
+            delete_index_file(?root_dir(State), Group, main),
+            delete_index_file(?root_dir(State), Group, replica);
+        _ ->
+            ok
+        end;
     _ ->
         ok
     end,

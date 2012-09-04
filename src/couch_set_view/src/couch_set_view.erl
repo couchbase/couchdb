@@ -377,14 +377,12 @@ cleanup_index_files(SetName) ->
     couch_db:close(Db),
 
     % make unique list of group sigs
-    Sigs0 = lists:map(fun(DDoc) ->
+    Sigs = lists:map(fun(DDoc) ->
             #set_view_group{sig = Sig} =
                 couch_set_view_util:design_doc_to_set_view_group(SetName, DDoc),
             couch_util:to_hex(Sig)
         end,
         [DD || DD <- DesignDocs, not DD#doc.deleted]),
-    SigsPrevRevs = ets:match(couch_sig_to_setview_pid, {{SetName, '$1'}, '$2'}),
-    Sigs = Sigs0 ++ [couch_util:to_hex(Sig) || {{_SetName, Sig}, _Pid} <- SigsPrevRevs],
 
     FileList = list_index_files(SetName),
 
@@ -1022,9 +1020,14 @@ handle_db_event({ddoc_updated, {DbName, #doc{id = DDocId} = DDoc}}) ->
         lists:foreach(
             fun({_SetName, {_DDocId, Sig}}) ->
                 case ets:lookup(couch_sig_to_setview_pid, {SetName, Sig}) of
-                [{_, GroupPid}] ->
-                    (catch gen_server:cast(GroupPid, {ddoc_updated, NewSig}));
-                [] ->
+                [{_, GroupPid}] when is_pid(GroupPid), Sig =/= NewSig->
+                    Aliases = [
+                        AliasDDocId || {_SetName2, {AliasDDocId, _Sig2}} <-
+                            ets:match_object(couch_setview_name_to_sig, {SetName, {'$1', Sig}}),
+                            AliasDDocId =/= DDocId
+                    ],
+                    ok = gen_server:cast(GroupPid, {ddoc_updated, NewSig, Aliases});
+                _ ->
                     ok
                 end
             end,
