@@ -162,7 +162,7 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime, BarrierEntryPid, NumCh
     MapQueueOptions = [{max_size, ?QUEUE_BASE_SIZE}, {max_items, ?QUEUE_BASE_ITEMS}],
     WriteQueueOptions = case WriterAcc#writer_acc.initial_build of
     true ->
-        [{max_size, ?MAX_SORT_BUFFER_SIZE * (length(Views) + 1)},
+        [{max_size, ?MAX_SORT_BUFFER_SIZE div 2},
          {max_items, infinity}];
     false ->
         [{max_size, ?QUEUE_BASE_SIZE * (length(Views) + 1)},
@@ -676,6 +676,7 @@ maybe_flush_merge_buffers(BuffersDict, WriterAcc) ->
         {ids_index, IdBtree#btree.less} |
         [{V#set_view.id_num, (V#set_view.btree)#btree.less} || {V, _} <- ViewEmptyKVs]
     ],
+    NumBtrees = length(ViewEmptyKVs) + 1,
     lists:foldl(
         fun({Id, Less}, {AccBuffers, AccFiles, AccWorkers}) ->
             {Buf, BufSize} = dict:fetch(Id, AccBuffers),
@@ -698,30 +699,17 @@ maybe_flush_merge_buffers(BuffersDict, WriterAcc) ->
                     [_] ->
                         {AccBuffers2, dict:store(Id, SortFiles2, AccFiles), AccWorkers};
                     [_, _ | _] ->
-                        wait_for_workers(AccWorkers),
-                        MergeWorker = spawn_opt(fun() ->
-                            SortOptions = [
-                                {order, LessFun},
-                                {tmpdir, TmpDir},
-                                {format, fun file_sorter_format_function/1}
-                            ],
-                            case file_sorter:merge(FilesToMerge, MergeSortFile, SortOptions) of
-                            ok ->
-                                ok;
-                            {error, Reason} ->
-                                exit({sort_worker_died, Reason})
-                            end,
-                            lists:foreach(fun(F) ->
-                                case file:delete(F) of
-                                ok ->
-                                    ok;
-                                {error, Reason2} ->
-                                    exit({sort_worker_died, Reason2})
-                                end
-                            end, FilesToMerge)
-                        end, [link, monitor]),
+                        case length(AccWorkers) >= NumBtrees of
+                        true ->
+                            wait_for_workers([hd(AccWorkers)]),
+                            AccWorkers2 = [];
+                        false ->
+                            AccWorkers2 = AccWorkers
+                        end,
+                        MergeWorker = spawn_merge_worker(
+                            LessFun, TmpDir, AccWorkers2, FilesToMerge, MergeSortFile),
                         SortFiles3 = ordsets:add_element({NextGen, MergeSortFile}, RestSortFiles),
-                        {AccBuffers2, dict:store(Id, SortFiles3, AccFiles), [MergeWorker]}
+                        {AccBuffers2, dict:store(Id, SortFiles3, AccFiles), [MergeWorker | AccWorkers2]}
                     end;
                 false ->
                     {AccBuffers2, dict:store(Id, SortFiles2, AccFiles), AccWorkers}
@@ -1078,12 +1066,13 @@ delete_prev_sort_files(#writer_acc{tmp_dir = TmpDir}) ->
 
 
 wait_for_workers(Pids) ->
-    ok = lists:foldr(fun({W, Ref}, ok) ->
+    ok = lists:foldr(fun(W, ok) ->
+        Ref = erlang:monitor(process, W),
         receive
-        {'DOWN', Ref, process, W, normal} ->
-            ok;
-        {'DOWN', Ref, process, W, Reason} ->
-            exit({sort_worker_died, Reason})
+        {'DOWN', Ref, process, W, {sort_worker_died, _} = Reason} ->
+            exit(Reason);
+        {'DOWN', Ref, process, W, _Reason} ->
+            ok
         end
     end, ok, Pids).
 
@@ -1156,3 +1145,27 @@ split_files_by_gen(Gen, [{Gen2, F} | Rest], AccNot, [FAcc]) when Gen2 > Gen ->
 split_files_by_gen(Gen, [{Gen2, _} | _] = Rest, AccNot, Acc) when Gen2 > Gen ->
     {Gen, Acc, ordsets:union(AccNot, Rest)}.
 
+
+spawn_merge_worker(LessFun, TmpDir, Workers, FilesToMerge, DestFile) ->
+    spawn_link(fun() ->
+        SortOptions = [
+            {order, LessFun},
+            {tmpdir, TmpDir},
+            {format, fun file_sorter_format_function/1}
+        ],
+        wait_for_workers(Workers),
+        case file_sorter:merge(FilesToMerge, DestFile, SortOptions) of
+        ok ->
+            ok;
+        {error, Reason} ->
+            exit({sort_worker_died, Reason})
+        end,
+        lists:foreach(fun(F) ->
+            case file:delete(F) of
+            ok ->
+                ok;
+            {error, Reason2} ->
+                exit({sort_worker_died, Reason2})
+            end
+        end, FilesToMerge)
+    end).
