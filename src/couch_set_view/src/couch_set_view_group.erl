@@ -641,6 +641,7 @@ handle_call({start_compact, _}, _From, State) ->
 
 handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = State) ->
     #state{
+        update_listeners = Listeners,
         group = Group,
         updater_pid = UpdaterPid,
         compactor_pid = CompactorPid
@@ -716,7 +717,9 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
             nil
         end,
 
+        Listeners2 = notify_update_listeners(Listeners, NewGroup2),
         State2 = State#state{
+            update_listeners = Listeners2,
             compactor_pid = nil,
             compactor_file = nil,
             compactor_fun = nil,
@@ -2631,7 +2634,29 @@ process_partial_update(State, NewGroup) ->
         group = Group,
         update_listeners = Listeners
     } = State,
-    Listeners2 = case dict:size(Listeners) == 0 of
+    Listeners2 = notify_update_listeners(Listeners, NewGroup),
+    ReplicasTransferred = ordsets:subtract(
+        ?set_replicas_on_transfer(Group), ?set_replicas_on_transfer(NewGroup)),
+    case ReplicasTransferred of
+    [] ->
+        State#state{group = NewGroup, update_listeners = Listeners2};
+    _ ->
+        ?LOG_INFO("Set view `~s`, ~s group `~s`, completed transferral of replica partitions ~w~n"
+                  "New group of replica partitions to transfer is ~w~n",
+                  [?set_name(State), ?type(State), ?group_id(State),
+                   ReplicasTransferred, ?set_replicas_on_transfer(NewGroup)]),
+        ok = set_state(State#state.replica_group, [], [], ReplicasTransferred),
+        State#state{
+            group = NewGroup,
+            update_listeners = Listeners2,
+            replica_partitions = ordsets:subtract(State#state.replica_partitions, ReplicasTransferred)
+        }
+    end.
+
+
+-spec notify_update_listeners(dict(), #set_view_group{}) -> dict().
+notify_update_listeners(Listeners, NewGroup) ->
+    case dict:size(Listeners) == 0 of
     true ->
         Listeners;
     false ->
@@ -2653,23 +2678,6 @@ process_partial_update(State, NewGroup) ->
                 end
             end,
             Listeners)
-    end,
-    ReplicasTransferred = ordsets:subtract(
-        ?set_replicas_on_transfer(Group), ?set_replicas_on_transfer(NewGroup)),
-    case ReplicasTransferred of
-    [] ->
-        State#state{group = NewGroup, update_listeners = Listeners2};
-    _ ->
-        ?LOG_INFO("Set view `~s`, ~s group `~s`, completed transferral of replica partitions ~w~n"
-                  "New group of replica partitions to transfer is ~w~n",
-                  [?set_name(State), ?type(State), ?group_id(State),
-                   ReplicasTransferred, ?set_replicas_on_transfer(NewGroup)]),
-        ok = set_state(State#state.replica_group, [], [], ReplicasTransferred),
-        State#state{
-            group = NewGroup,
-            update_listeners = Listeners2,
-            replica_partitions = ordsets:subtract(State#state.replica_partitions, ReplicasTransferred)
-        }
     end.
 
 
