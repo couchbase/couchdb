@@ -104,6 +104,10 @@ compact_group(Group0, EmptyGroup, LogFilePath, UpdaterPid, Owner, UserStatus) ->
             Group2;
         {'DOWN', MonRef, _, _, {updater_finished, UpResult}} ->
             UpResult#set_view_updater_result.group;
+        {'DOWN', MonRef, _, _, noproc} ->
+            % updater just finished
+            {ok, Group2} = gen_server:call(Owner, request_group, infinity),
+            Group2;
         {'DOWN', MonRef, _, _, Reason2} ->
             exit({updater_died, Reason2})
         end;
@@ -216,8 +220,7 @@ maybe_retry_compact(CompactResult0, StartTime, LogFilePath, LogOffsetStart, Owne
     after 0 ->
         ok
     end,
-    {ok, Pid} = get_group_pid(SetName, DDocId, Type),
-    case gen_server:call(Pid, {compact_done, CompactResult}, infinity) of
+    case gen_server:call(Owner, {compact_done, CompactResult}, infinity) of
     ok ->
         _ = file:delete(LogFilePath),
         ok;
