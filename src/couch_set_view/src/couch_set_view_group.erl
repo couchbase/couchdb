@@ -311,7 +311,7 @@ do_init({_, SetName, _} = InitArgs) ->
     case prepare_group(InitArgs, false) of
     {ok, #set_view_group{fd = Fd, index_header = Header, type = Type} = Group} ->
         RefCounter = new_fd_ref_counter(Fd),
-        {ActiveList, PassiveList} = make_partition_lists(Group),
+        PartitionsList = make_partitions_list(Group),
         case Header#set_view_index_header.has_replica of
         false ->
             ReplicaPid = nil,
@@ -329,7 +329,7 @@ do_init({_, SetName, _} = InitArgs) ->
                       " signature `~s', view count: ~p",
                       [Type, SetName, Group#set_view_group.name, hex_sig(Group), ViewCount]);
         true ->
-            DbSet = case (catch couch_db_set:open(SetName, ActiveList ++ PassiveList)) of
+            DbSet = case (catch couch_db_set:open(SetName, PartitionsList)) of
             {ok, SetPid} ->
                 SetPid;
             Error ->
@@ -376,15 +376,14 @@ do_init({_, SetName, _} = InitArgs) ->
                 replica_pid = ReplicaPid
             }
         },
-        State2 = monitor_partitions(State, [master | ActiveList]),
-        State3 = monitor_partitions(State2, PassiveList),
-        State4 = monitor_partitions(State3, ReplicaParts),
+        State2 = monitor_partitions(State, [master | PartitionsList]),
+        State3 = monitor_partitions(State2, ReplicaParts),
         true = ets:insert(
              ?SET_VIEW_STATS_ETS,
              #set_view_group_stats{ets_key = ?set_view_group_stats_key(Group)}),
         TmpDir = updater_tmp_dir(State),
         ok = couch_set_view_util:delete_sort_files(TmpDir),
-        {ok, maybe_apply_pending_transition(State4)};
+        {ok, maybe_apply_pending_transition(State3)};
     Error ->
         throw(Error)
     end.
@@ -2219,14 +2218,13 @@ update_header(State, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs,
             pending_transition = NewPendingTrans
         }
     },
-    {ActiveList, PassiveList} = make_partition_lists(NewGroup),
-    ok = couch_db_set:add_partitions(?db_set(State), ActiveList ++ PassiveList),
+    PartitionsList = make_partitions_list(NewGroup),
+    ok = couch_db_set:add_partitions(?db_set(State), PartitionsList),
     NewState0 = State#state{
         group = NewGroup,
         replica_partitions = NewReplicaParts
     },
-    NewState1 = monitor_partitions(NewState0, ActiveList),
-    NewState = monitor_partitions(NewState1, PassiveList),
+    NewState = monitor_partitions(NewState0, PartitionsList),
     ok = commit_header(NewState#state.group),
     case PendingTrans of
     nil ->
@@ -2374,21 +2372,11 @@ active_partition_seqs(#state{group = Group} = State, Sync) ->
     CurSeqs.
 
 
--spec make_partition_lists(#set_view_group{}) -> {[partition_id()], [partition_id()]}.
-make_partition_lists(Group) ->
-    make_partition_lists(?set_seqs(Group), ?set_abitmask(Group), ?set_pbitmask(Group), [], []).
-
-make_partition_lists([], _Abitmask, _Pbitmask, Active, Passive) ->
-    {lists:reverse(Active), lists:reverse(Passive)};
-make_partition_lists([{PartId, _} | Rest], Abitmask, Pbitmask, Active, Passive) ->
-    Mask = 1 bsl PartId,
-    case Mask band Abitmask of
-    0 ->
-        Mask = Mask band Pbitmask,
-        make_partition_lists(Rest, Abitmask, Pbitmask, Active, [PartId | Passive]);
-    Mask ->
-        make_partition_lists(Rest, Abitmask, Pbitmask, [PartId | Active], Passive)
-    end.
+-spec make_partitions_list(#set_view_group{}) -> ordsets:ordset(partition_id()).
+make_partitions_list(Group) ->
+    Indexable = lists:map(fun({P, _S}) -> P end, ?set_seqs(Group)),
+    Unindexable = lists:map(fun({P, _S}) -> P end, ?set_unindexable_seqs(Group)),
+    ordsets:union(Indexable, Unindexable).
 
 
 -spec start_compactor(#state{}, compact_fun()) -> #state{}.
