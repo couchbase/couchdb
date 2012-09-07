@@ -1791,7 +1791,7 @@ maybe_update_partition_states(ActiveList0, PassiveList0, CleanupList0, State) ->
     end,
     case (ActiveMask bor ?set_abitmask(Group)) =:= ?set_abitmask(Group) andalso
         (PassiveMask bor ?set_pbitmask(Group)) =:= ?set_pbitmask(Group) andalso
-        (CleanupMask bor ?set_cbitmask(Group)) =:= ?set_cbitmask(Group) of
+        ((CleanupMask band (?set_abitmask(Group) bor ?set_pbitmask(Group))) =:= 0) of
     true ->
         State;
     false ->
