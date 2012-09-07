@@ -16,6 +16,8 @@
 
 -include("couch_db.hrl").
 
+-define(FLUSH_PAGE_CACHE_AFTER, 102400).
+
 -record(acc, {
     btree,
     fd,
@@ -60,7 +62,7 @@ from_sorted_file(EmptyBtree, SortedFileName, DestFd, BinToKvFun) ->
     },
     {ok, SourceFd} = file:open(SortedFileName, [read, raw, binary, read_ahead]),
     {ok, Acc2} = try
-        sorted_file_fold(SourceFd, SortedFileName, BinToKvFun, Acc)
+        sorted_file_fold(SourceFd, SortedFileName, BinToKvFun, 0, 0, Acc)
     after
         ok = file:close(SourceFd)
     end,
@@ -68,20 +70,29 @@ from_sorted_file(EmptyBtree, SortedFileName, DestFd, BinToKvFun) ->
     {ok, CopyRootState}.
 
 
-sorted_file_fold(Fd, FileName, BinToKvFun, Acc) ->
+sorted_file_fold(Fd, FileName, BinToKvFun, AdviseOffset, BytesRead, Acc) ->
     case file:read(Fd, 4) of
     {ok, <<Len:32>>} ->
         case file:read(Fd, Len) of
         {ok, KvBin} ->
+            BytesRead2 = BytesRead + 4 + Len,
+            case (BytesRead2 - AdviseOffset) >= ?FLUSH_PAGE_CACHE_AFTER of
+            true ->
+                AdviseOffset2 = BytesRead2,
+                (catch file:advise(Fd, AdviseOffset, BytesRead2, dont_need));
+            false ->
+                AdviseOffset2 = AdviseOffset
+            end,
             Kv = BinToKvFun(KvBin),
             {ok, Acc2} = fold_copy(Kv, Len, Acc),
-            sorted_file_fold(Fd, FileName, BinToKvFun, Acc2);
+            sorted_file_fold(Fd, FileName, BinToKvFun, AdviseOffset2, BytesRead2, Acc2);
         eof ->
             throw({unexpected_eof, FileName});
         {error, Error} ->
             throw({file_read_error, FileName, Error})
         end;
     eof ->
+        (catch file:advise(Fd, AdviseOffset, BytesRead, dont_need)),
         {ok, Acc};
     {error, Error} ->
         throw({file_read_error, FileName, Error})
