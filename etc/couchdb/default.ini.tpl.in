@@ -127,7 +127,7 @@ http_connections = 20
 ; database is too busy.
 connection_timeout = 30000
 ; If a request fails, the replicator will retry it up to N times.
-retries_per_request = 10
+retries_per_request = 2
 ; Some socket options that might boost performance in some scenarios:
 ;       {nodelay, boolean()}
 ;       {sndbuf, integer()}
