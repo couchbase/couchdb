@@ -701,8 +701,9 @@ maybe_flush_merge_buffers(BuffersDict, WriterAcc) ->
                     [_, _ | _] ->
                         case length(AccWorkers) >= NumBtrees of
                         true ->
-                            wait_for_workers([hd(AccWorkers)]),
-                            AccWorkers2 = [];
+                            [OldestWorker | RestWorkersRev] = lists:reverse(AccWorkers),
+                            wait_for_workers([OldestWorker]),
+                            AccWorkers2 = lists:reverse(RestWorkersRev);
                         false ->
                             AccWorkers2 = AccWorkers
                         end,
