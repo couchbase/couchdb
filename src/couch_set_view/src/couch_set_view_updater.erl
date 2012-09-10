@@ -1133,7 +1133,7 @@ split_files_to_merge(SortFiles, true) ->
 split_files_to_merge([{MinGen, FirstFile} | Rest], false) ->
     {ChosenGen, ToMerge, NotToMerge} =
         split_files_by_gen(MinGen, Rest, ordsets:new(), [FirstFile]),
-    {ToMerge, ChosenGen + 1, NotToMerge}.
+    {ToMerge, ChosenGen + length(ToMerge), NotToMerge}.
 
 
 split_files_by_gen(Gen, [{Gen, F} | Rest], AccNot, Acc) ->
