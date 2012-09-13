@@ -147,7 +147,6 @@ init([]) ->
     {ok, RegExp} = re:compile("^[A-Za-z0-9\\_\\.\\%\\-\\/]*$"),
     ets:new(couch_dbs_by_name, [ordered_set, protected, named_table]),
     ets:new(couch_dbs_by_pid, [set, private, named_table]),
-    ets:new(couch_dbs_by_lru, [ordered_set, private, named_table]),
     ets:new(couch_sys_dbs, [set, private, named_table]),
     process_flag(trap_exit, true),
     {ok, #server{root_dir=RootDir,
@@ -250,12 +249,10 @@ handle_call({open_result, DbName, {ok, OpenedDbPid}, Options}, From, Server) ->
             gen_server:reply(From2,
                     catch couch_db:open_ref_counted(OpenedDbPid, FromPid))
         end, Froms),
-        LruTime = now(),
         true = ets:insert(couch_dbs_by_name,
-                {DbName, {opened, OpenedDbPid, LruTime}}),
+                {DbName, {opened, OpenedDbPid}}),
         true = ets:delete(couch_dbs_by_pid, Opener),
         true = ets:insert(couch_dbs_by_pid, {OpenedDbPid, DbName}),
-        true = ets:insert(couch_dbs_by_lru, {LruTime, DbName}),
         case lists:member(create, Options) of
         true ->
             couch_db_update_notifier:notify({created, DbName});
@@ -303,17 +300,13 @@ handle_call({open_result, DbName, Error, Options}, From, Server) ->
         {noreply, Server}
     end;
 handle_call({open, DbName, Options}, {FromPid,_}=From, Server) ->
-    LruTime = now(),
     case ets:lookup(couch_dbs_by_name, DbName) of
     [] ->
         open_db(DbName, Server, Options, [From]);
     [{_, {opening, Opener, Froms}}] ->
         true = ets:insert(couch_dbs_by_name, {DbName, {opening, Opener, [From|Froms]}}),
         {noreply, Server};
-    [{_, {opened, MainPid, PrevLruTime}}] ->
-        true = ets:insert(couch_dbs_by_name, {DbName, {opened, MainPid, LruTime}}),
-        true = ets:delete(couch_dbs_by_lru, PrevLruTime),
-        true = ets:insert(couch_dbs_by_lru, {LruTime, DbName}),
+    [{_, {opened, MainPid}}] ->
         {reply, couch_db:open_ref_counted(MainPid, FromPid), Server}
     end;
 handle_call({create, DbName, Options}, From, Server) ->
@@ -345,11 +338,10 @@ handle_call({delete, DbName, _Options}, _From, Server) ->
             true = ets:delete(couch_dbs_by_pid, Pid),
             [gen_server:reply(F, not_found) || F <- Froms],
             true;
-        [{_, {opened, Pid, LruTime}}] ->
+        [{_, {opened, Pid}}] ->
             couch_util:shutdown_sync(Pid),
             true = ets:delete(couch_dbs_by_name, DbName),
             true = ets:delete(couch_dbs_by_pid, Pid),
-            true = ets:delete(couch_dbs_by_lru, LruTime),
             true
         end,
         Server2 = case UpdateState of
