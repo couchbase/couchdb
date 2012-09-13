@@ -217,7 +217,7 @@ do_open_db(DbName, Server, Options, {FromPid, _}) ->
         Filepath = get_full_filename(Server, DbNameList),
         case couch_db:start_link(DbName, Filepath, Options) of
         {ok, DbPid} ->
-            true = ets:insert(couch_dbs_by_name, {DbName, {opened, DbPid}}),
+            true = ets:insert(couch_dbs_by_name, {DbName, DbPid}),
             true = ets:insert(couch_dbs_by_pid, {DbPid, DbName}),
             case lists:member(create, Options) of
             true ->
@@ -245,7 +245,7 @@ handle_call({open, DbName, Options}, {FromPid,_}=From, Server) ->
     case ets:lookup(couch_dbs_by_name, DbName) of
     [] ->
         do_open_db(DbName, Server, Options, From);
-    [{_, {opened, MainPid}}] ->
+    [{_, MainPid}] ->
         {reply, couch_db:open_ref_counted(MainPid, FromPid), Server}
     end;
 handle_call({create, DbName, Options}, From, Server) ->
@@ -271,7 +271,7 @@ handle_call({delete, DbName, _Options}, _From, Server) ->
         UpdateState =
         case ets:lookup(couch_dbs_by_name, DbName) of
         [] -> false;
-        [{_, {opened, Pid}}] ->
+        [{_, Pid}] ->
             couch_util:shutdown_sync(Pid),
             true = ets:delete(couch_dbs_by_name, DbName),
             true = ets:delete(couch_dbs_by_pid, Pid),
