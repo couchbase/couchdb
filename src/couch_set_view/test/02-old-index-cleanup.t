@@ -25,7 +25,7 @@ num_docs() -> 1000.
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(71),
+    etap:plan(73),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -309,6 +309,8 @@ test_recreate_ddoc_with_copy() ->
             [],
             "couch_sig_to_setview_pid ets table is empty"),
 
+    etap:is(ets:tab2list(set_view_by_ddoc_id_ets), [], "ddoc cache is empty"),
+
     etap:diag("Recreating database set"),
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
     couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
@@ -336,6 +338,8 @@ test_recreate_ddoc_with_copy() ->
     etap:is(ets:lookup(couch_sig_to_setview_pid, {test_set_name(), RawGroupSig}),
             [],
             "couch_sig_to_setview_pid ets table is empty"),
+
+    etap:is(ets:tab2list(set_view_by_ddoc_id_ets), [], "ddoc cache is empty"),
     ok.
 
 

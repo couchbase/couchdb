@@ -110,7 +110,7 @@ handle_call({update_ddoc, SetName, DDoc, DDocSize}, From, State) ->
         {noreply, State};
     [{_, ATime, _OldDDoc, OldDDocSize}] ->
         % ddoc update, using current access time stamp
-        true = ets:update_element(?BY_ATIME, ATime, {3, DDocSize}),
+        true = ets:insert(?BY_ATIME, {ATime, Key, DDocSize}),
         true = ets:insert(?BY_DDOC_ID, {Key, ATime, DDoc, DDocSize}),
         NewSize = State#state.byte_size + DDocSize - OldDDocSize,
         CacheSize = free_old_entries(State#state.max_cache_size, NewSize),
@@ -132,7 +132,7 @@ handle_call({delete_ddoc, SetName, Id}, From, State) ->
 
 handle_call({set_deleted, SetName}, From, State) ->
     gen_server:reply(From, ok),
-    Entries = ets:match_object(?BY_DDOC_ID, {{SetName, '_'}, '_', '_'}),
+    Entries = ets:match_object(?BY_DDOC_ID, {{SetName, '_'}, '_', '_', '_'}),
     lists:foreach(fun({Key, ATime, _DDoc, _DDocSize}) ->
         true = ets:delete(?BY_DDOC_ID, Key),
         true = ets:delete(?BY_ATIME, ATime)
@@ -150,11 +150,11 @@ handle_cast({cache_hit, SetName, DDocId}, State) ->
     case ets:lookup(?BY_DDOC_ID, Key) of
     [] ->
         ok;
-    [{_, OldATime, _DDoc, DDocSize}] ->
+    [{_, OldATime, DDoc, DDocSize}] ->
         NewATime = os:timestamp(),
         true = ets:delete(?BY_ATIME, OldATime),
         true = ets:insert(?BY_ATIME, {NewATime, Key, DDocSize}),
-        true = ets:update_element(?BY_DDOC_ID, Key, {2, NewATime})
+        true = ets:insert(?BY_DDOC_ID, {Key, NewATime, DDoc, DDocSize})
     end,
     {noreply, State}.
 
