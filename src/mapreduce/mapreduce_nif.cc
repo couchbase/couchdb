@@ -24,10 +24,15 @@
 
 #if defined(WIN32) || defined(_WIN32)
 #include <windows.h>
-#define doSleep Sleep
+#define doSleep(Ms) Sleep(Ms)
 #else
-#include <unistd.h>
-#define doSleep usleep
+#define doSleep(Ms)                             \
+    do {                                        \
+        struct timespec ts;                     \
+        ts.tv_sec = Ms / 1000;                  \
+        ts.tv_nsec = (Ms % 1000) * 1000000;     \
+        nanosleep(&ts, NULL);                   \
+    } while(0)
 #endif
 
 #include "erl_nif_compat.h"
