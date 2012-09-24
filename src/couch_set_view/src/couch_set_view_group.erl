@@ -263,6 +263,8 @@ remove_replica_partitions(Pid, Partitions) ->
 
 -spec mark_as_unindexable(pid(), ordsets:ordset(partition_id())) ->
                                  'ok' | {'error', term()}.
+mark_as_unindexable(_Pid, []) ->
+    ok;
 mark_as_unindexable(Pid, Partitions) ->
     ordsets:is_set(Partitions) orelse throw({error, <<"List is not an ordset">>}),
     gen_server:call(Pid, {mark_as_unindexable, Partitions}, infinity).
@@ -270,6 +272,8 @@ mark_as_unindexable(Pid, Partitions) ->
 
 -spec mark_as_indexable(pid(), ordsets:ordset(partition_id())) ->
                                'ok' | {'error', term()}.
+mark_as_indexable(_Pid, []) ->
+    ok;
 mark_as_indexable(Pid, Partitions) ->
     ordsets:is_set(Partitions) orelse throw({error, <<"List is not an ordset">>}),
     gen_server:call(Pid, {mark_as_indexable, Partitions}, infinity).
