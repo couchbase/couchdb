@@ -2885,10 +2885,11 @@ process_view_group_request(#set_view_group_req{stale = update_after} = Req, From
 
 -spec process_mark_as_unindexable(#state{}, [partition_id()]) -> #state{}.
 process_mark_as_unindexable(State0, Partitions) ->
+    State1 = stop_cleaner(State0),
     #state{
         group = #set_view_group{index_header = Header} = Group,
         replica_partitions = ReplicaParts
-    } = State = stop_updater(State0),
+    } = State = stop_updater(State1),
     UpdaterWasRunning = is_pid(State0#state.updater_pid),
     ReplicasIntersection = [
         P || P <- Partitions, ordsets:is_element(P, ReplicaParts)
@@ -2956,10 +2957,11 @@ process_mark_as_unindexable(State0, Partitions) ->
 
 -spec process_mark_as_indexable(#state{}, [partition_id()], boolean()) -> #state{}.
 process_mark_as_indexable(State0, Partitions, CommitHeader) ->
+    State1 = stop_cleaner(State0),
     #state{
         group = #set_view_group{index_header = Header} = Group,
         waiting_list = WaitList
-    } = State = stop_updater(State0),
+    } = State = stop_updater(State1),
     UpdaterWasRunning = is_pid(State0#state.updater_pid),
     {Seqs2, UnindexableSeqs2} =
     lists:foldl(
