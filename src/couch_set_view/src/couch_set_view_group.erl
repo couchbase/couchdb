@@ -2964,7 +2964,8 @@ process_mark_as_indexable(State0, Partitions, CommitHeader) ->
     State1 = stop_cleaner(State0),
     #state{
         group = #set_view_group{index_header = Header} = Group,
-        waiting_list = WaitList
+        waiting_list = WaitList,
+        update_listeners = Listeners
     } = State = stop_updater(State1),
     UpdaterWasRunning = is_pid(State0#state.updater_pid),
     {Seqs2, UnindexableSeqs2} =
@@ -3009,7 +3010,7 @@ process_mark_as_indexable(State0, Partitions, CommitHeader) ->
         State#state{group = Group2}
     end,
     NewState2 = stop_compactor(NewState),
-    case UpdaterWasRunning orelse (WaitList /= []) of
+    case UpdaterWasRunning orelse (WaitList /= []) orelse (dict:size(Listeners) > 0) of
     true ->
         start_updater(NewState2);
     false ->
