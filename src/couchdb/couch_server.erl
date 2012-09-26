@@ -196,8 +196,6 @@ all_known_databases_with_prefix(Prefix) ->
     Init = case ets:lookup(couch_dbs_by_name, Prefix) of
     [] ->
         [];
-    [{_, {opening, _, _}}] ->
-        [];
     [_] ->
         [Prefix]
     end,
@@ -207,12 +205,7 @@ all_known_databases_with_prefix_loop(Prefix, PreLen, K, Acc) ->
     K2 = ets:next(couch_dbs_by_name, K),
     case K2 of
     <<Prefix:PreLen/binary, _/binary>> ->
-       case ets:lookup(couch_dbs_by_name, K2) of
-       [{_, {opened, _, _}}] ->
-            all_known_databases_with_prefix_loop(Prefix, PreLen, K2, [K2 | Acc]);
-       _ ->
-            all_known_databases_with_prefix_loop(Prefix, PreLen, K2, Acc)
-       end;
+        all_known_databases_with_prefix_loop(Prefix, PreLen, K2, [K2 | Acc]);
     _ ->
         Acc
     end.
