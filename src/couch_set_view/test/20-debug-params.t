@@ -130,7 +130,7 @@ test_filter_parameter_main(AccessType) ->
             "Reduce view query queried with _filter=false returns all "
             "partitions"),
 
-    couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()).
+    shutdown_group().
 
 
 test_filter_parameter_replica(AccessType) ->
@@ -170,7 +170,19 @@ test_filter_parameter_replica(AccessType) ->
         "Replica reduce view query queried with _filter=false returns all "
         "partitions"),
 
-    couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()).
+    shutdown_group().
+
+
+shutdown_group() ->
+    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
+    MonRef = erlang:monitor(process, GroupPid),
+    receive
+    {'DOWN', MonRef, _, _, _} ->
+        ok
+    after 10000 ->
+        etap:bail("Timeout waiting for group shutdown")
+    end.
 
 
 query_map_view(erlang, ViewName, Type, Filter) ->
