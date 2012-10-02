@@ -550,6 +550,7 @@ handle_call({remove_replicas, Partitions}, _From, #state{replica_group = Replica
             NewPbitmask,
             NewCbitmask,
             NewSeqs,
+            ?set_unindexable_seqs(State4#state.group),
             ReplicasOnTransfer2,
             ReplicaPartitions2,
             ?set_pending_transition(State4#state.group)),
@@ -1729,17 +1730,19 @@ filter_out_bitmask_partitions(Partitions, BMask) ->
                                     #state{}) -> #state{}.
 maybe_update_partition_states(ActiveList0, PassiveList0, CleanupList0, State) ->
     #state{group = Group} = State,
-    case ?set_unindexable_seqs(Group) of
-    [] ->
+    PendingTrans = ?set_pending_transition(Group),
+    PendingUnindexable = ?pending_transition_unindexable(PendingTrans),
+    case (?set_unindexable_seqs(Group) == []) andalso (PendingUnindexable == []) of
+    true ->
         ActiveList = ActiveList0,
         PassiveList = PassiveList0,
         CleanupList = CleanupList0;
-    _ ->
+    false ->
         ActiveList = filter_out_bitmask_partitions(ActiveList0, ?set_abitmask(Group)),
         PassiveList = filter_out_bitmask_partitions(PassiveList0, ?set_pbitmask(Group)),
         CleanupList = filter_out_bitmask_partitions(CleanupList0, ?set_cbitmask(Group)),
         ActiveMarkedAsUnindexable = [
-            P || P <- ActiveList, orddict:is_key(P, ?set_unindexable_seqs(Group))
+            P || P <- ActiveList, is_unindexable_part(P, Group)
         ],
         case ActiveMarkedAsUnindexable of
         [] ->
@@ -1750,7 +1753,7 @@ maybe_update_partition_states(ActiveList0, PassiveList0, CleanupList0, State) ->
             throw({error, iolist_to_binary(ErrorMsg1)})
         end,
         PassiveMarkedAsUnindexable = [
-            P || P <- PassiveList, orddict:is_key(P, ?set_unindexable_seqs(Group))
+            P || P <- PassiveList, is_unindexable_part(P, Group)
         ],
         case PassiveMarkedAsUnindexable of
         [] ->
@@ -1761,7 +1764,7 @@ maybe_update_partition_states(ActiveList0, PassiveList0, CleanupList0, State) ->
             throw({error, iolist_to_binary(ErrorMsg2)})
         end,
         CleanupMarkedAsUnindexable = [
-            P || P <- CleanupList, orddict:is_key(P, ?set_unindexable_seqs(Group))
+            P || P <- CleanupList, is_unindexable_part(P, Group)
         ],
         case CleanupMarkedAsUnindexable of
         [] ->
@@ -1793,9 +1796,17 @@ maybe_update_partition_states(ActiveList0, PassiveList0, CleanupList0, State) ->
     false ->
         ok
     end,
-    case (ActiveMask bor ?set_abitmask(Group)) =:= ?set_abitmask(Group) andalso
-        (PassiveMask bor ?set_pbitmask(Group)) =:= ?set_pbitmask(Group) andalso
-        ((CleanupMask band (?set_abitmask(Group) bor ?set_pbitmask(Group))) =:= 0) of
+
+    ActivePending = ?pending_transition_active(PendingTrans),
+    PassivePending = ?pending_transition_passive(PendingTrans),
+    IsEffectlessTransition =
+        (ActiveMask bor ?set_abitmask(Group)) == ?set_abitmask(Group) andalso
+        (PassiveMask bor ?set_pbitmask(Group)) == ?set_pbitmask(Group) andalso
+        ((CleanupMask band (?set_abitmask(Group) bor ?set_pbitmask(Group))) == 0) andalso
+        ordsets:is_disjoint(CleanupList, ActivePending) andalso
+        ordsets:is_disjoint(CleanupList, PassivePending),
+
+    case IsEffectlessTransition of
     true ->
         State;
     false ->
@@ -1820,7 +1831,7 @@ update_partition_states(ActiveList, PassiveList, CleanupList, State) ->
     ApplyCleanupList = CleanupList,
     State4 = persist_partition_states(
                State3, ApplyActiveList, ApplyPassiveList,
-               ApplyCleanupList, NewPendingTrans),
+               ApplyCleanupList, NewPendingTrans, []),
     State5 = notify_pending_transition_waiters(State4),
     after_partition_states_updated(State5, UpdaterWasRunning).
 
@@ -1831,13 +1842,9 @@ update_partition_states(ActiveList, PassiveList, CleanupList, State) ->
                                     ordsets:ordset(partition_id())) ->
                                            #set_view_transition{} | 'nil'.
 merge_into_pending_transition(Group, ActiveInCleanup, PassiveInCleanup, CleanupList) ->
-    case ?set_pending_transition(Group) of
-    nil ->
-        ActivePending = [],
-        PassivePending = [];
-    #set_view_transition{active = ActivePending, passive = PassivePending} ->
-        ok
-    end,
+    PendingTrans = ?set_pending_transition(Group),
+    ActivePending = ?pending_transition_active(PendingTrans),
+    PassivePending = ?pending_transition_passive(PendingTrans),
     ActivePending2 = ordsets:subtract(ActivePending, CleanupList),
     PassivePending2 = ordsets:subtract(PassivePending, CleanupList),
     ActivePending3 = ordsets:union(ActivePending2, ActiveInCleanup),
@@ -1872,8 +1879,9 @@ after_partition_states_updated(State, UpdaterWasRunning) ->
                                ordsets:ordset(partition_id()),
                                ordsets:ordset(partition_id()),
                                ordsets:ordset(partition_id()),
-                               #set_view_transition{} | 'nil') -> #state{}.
-persist_partition_states(State, ActiveList, PassiveList, CleanupList, PendingTrans) ->
+                               #set_view_transition{} | 'nil',
+                               ordsets:ordset(partition_id())) -> #state{}.
+persist_partition_states(State, ActiveList, PassiveList, CleanupList, PendingTrans, ToBeUnindexable) ->
     % There can never be intersection between given active, passive and cleanup lists.
     % This check is performed elsewhere, outside the gen_server.
     #state{
@@ -1934,6 +1942,15 @@ persist_partition_states(State, ActiveList, PassiveList, CleanupList, PendingTra
             NewPbitmask2,
             ?set_cbitmask(Group),
             NewSeqs2),
+    {NewSeqs4, NewUnindexableSeqs} = lists:foldl(
+        fun(PartId, {AccSeqs, AccUnSeqs}) ->
+            PartSeq = orddict:fetch(PartId, AccSeqs),
+            AccSeqs2 = orddict:erase(PartId, AccSeqs),
+            AccUnSeqs2 = orddict:store(PartId, PartSeq, AccUnSeqs),
+            {AccSeqs2, AccUnSeqs2}
+        end,
+        {NewSeqs3, ?set_unindexable_seqs(Group)},
+        ToBeUnindexable),
     ok = couch_db_set:remove_partitions(?db_set(State), CleanupList),
     State2 = demonitor_partitions(State, CleanupList),
     State3 = update_header(
@@ -1941,7 +1958,8 @@ persist_partition_states(State, ActiveList, PassiveList, CleanupList, PendingTra
         NewAbitmask3,
         NewPbitmask3,
         NewCbitmask3,
-        NewSeqs3,
+        NewSeqs4,
+        NewUnindexableSeqs,
         ReplicasOnTransfer4,
         ReplicaParts2,
         PendingTrans),
@@ -2020,32 +2038,41 @@ maybe_apply_pending_transition(State) ->
     UpdaterWasRunning = is_pid(State#state.updater_pid),
     #set_view_transition{
         active = ActivePending,
-        passive = PassivePending
+        passive = PassivePending,
+        unindexable = UnindexablePending
     } = get_pending_transition(State),
     ActiveInCleanup = partitions_still_in_cleanup(ActivePending, Group3),
     PassiveInCleanup = partitions_still_in_cleanup(PassivePending, Group3),
     ApplyActiveList = ordsets:subtract(ActivePending, ActiveInCleanup),
     ApplyPassiveList = ordsets:subtract(PassivePending, PassiveInCleanup),
+    {ApplyUnindexableList, NewUnindexablePending} = lists:partition(
+        fun(P) ->
+            ordsets:is_element(P, ApplyActiveList) orelse
+            ordsets:is_element(P, ApplyPassiveList)
+        end,
+        UnindexablePending),
     case (ApplyActiveList /= []) orelse (ApplyPassiveList /= []) of
     true ->
         ?LOG_INFO("Set view `~s`, ~s group `~s`, applying state transitions "
                   "from pending transition:~n"
                   "  Active partitions:  ~w~n"
-                  "  Passive partitions: ~w~n",
+                  "  Passive partitions: ~w~n"
+                  "  Unindexable:        ~w~n",
                   [?set_name(State), ?type(State), ?group_id(State),
-                   ApplyActiveList, ApplyPassiveList]),
+                   ApplyActiveList, ApplyPassiveList, ApplyUnindexableList]),
         case (ActiveInCleanup == []) andalso (PassiveInCleanup == []) of
         true ->
             NewPendingTrans = nil;
         false ->
             NewPendingTrans = #set_view_transition{
                 active = ActiveInCleanup,
-                passive = PassiveInCleanup
+                passive = PassiveInCleanup,
+                unindexable = NewUnindexablePending
             }
         end,
         State4 = set_pending_transition(State3, NewPendingTrans),
         State5 = persist_partition_states(
-            State4, ApplyActiveList, ApplyPassiveList, [], NewPendingTrans),
+            State4, ApplyActiveList, ApplyPassiveList, [], NewPendingTrans, ApplyUnindexableList),
         NewState = notify_pending_transition_waiters(State5);
     false ->
         NewState = State3
@@ -2196,10 +2223,11 @@ set_cleanup_partitions([PartId | Rest], Abitmask, Pbitmask, Cbitmask, Seqs) ->
                     bitmask(),
                     bitmask(),
                     partition_seqs(),
+                    partition_seqs(),
                     ordsets:ordset(partition_id()),
                     ordsets:ordset(partition_id()),
                     #set_view_transition{} | 'nil') -> #state{}.
-update_header(State, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs,
+update_header(State, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs, NewUnindexableSeqs,
               NewRelicasOnTransfer, NewReplicaParts, NewPendingTrans) ->
     #state{
         group = #set_view_group{
@@ -2221,6 +2249,7 @@ update_header(State, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs,
             pbitmask = NewPbitmask,
             cbitmask = NewCbitmask,
             seqs = NewSeqs,
+            unindexable_seqs = NewUnindexableSeqs,
             replicas_on_transfer = NewRelicasOnTransfer,
             pending_transition = NewPendingTrans
         }
@@ -2233,20 +2262,6 @@ update_header(State, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs,
     },
     NewState = monitor_partitions(NewState0, PartitionsList),
     ok = commit_header(NewState#state.group),
-    case PendingTrans of
-    nil ->
-        OldPendingActive = [],
-        OldPendingPassive = [];
-    #set_view_transition{active = OldPendingActive, passive = OldPendingPassive} ->
-        ok
-    end,
-    case NewPendingTrans of
-    nil ->
-        NewPendingActive = [],
-        NewPendingPassive = [];
-    #set_view_transition{active = NewPendingActive, passive = NewPendingPassive} ->
-        ok
-    end,
     ?LOG_INFO("Set view `~s`, ~s group `~s`, partition states updated~n"
               "active partitions before:    ~w~n"
               "active partitions after:     ~w~n"
@@ -2260,11 +2275,13 @@ update_header(State, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs,
               "replicas on transfer before: ~w~n"
               "replicas on transfer after:  ~w~n"
               "pending transition before:~n"
-              "  active:  ~w~n"
-              "  passive: ~w~n"
+              "  active:      ~w~n"
+              "  passive:     ~w~n"
+              "  unindexable: ~w~n"
               "pending transition after:~n"
-              "  active:  ~w~n"
-              "  passive: ~w~n",
+              "  active:      ~w~n"
+              "  passive:     ~w~n"
+              "  unindexable: ~w~n",
               [?set_name(State), ?type(State), ?group_id(State),
                couch_set_view_util:decode_bitmask(Abitmask),
                couch_set_view_util:decode_bitmask(NewAbitmask),
@@ -2277,10 +2294,12 @@ update_header(State, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs,
                NewReplicaParts,
                ReplicasOnTransfer,
                NewRelicasOnTransfer,
-               OldPendingActive,
-               OldPendingPassive,
-               NewPendingActive,
-               NewPendingPassive]),
+               ?pending_transition_active(PendingTrans),
+               ?pending_transition_passive(PendingTrans),
+               ?pending_transition_unindexable(PendingTrans),
+               ?pending_transition_active(NewPendingTrans),
+               ?pending_transition_passive(NewPendingTrans),
+               ?pending_transition_unindexable(NewPendingTrans)]),
     NewState.
 
 
@@ -2907,12 +2926,18 @@ process_mark_as_unindexable(State0, Partitions) ->
         throw({error, iolist_to_binary(ErrorMsg)})
     end,
 
-    {Seqs2, UnindexableSeqs2} =
+    PendingTrans = ?set_pending_transition(Group),
+    PendingActive = ?pending_transition_active(PendingTrans),
+    PendingPassive = ?pending_transition_passive(PendingTrans),
+    PendingUnindexable = ?pending_transition_unindexable(PendingTrans),
+    {Seqs2, UnindexableSeqs2, PendingUnindexable2} =
     lists:foldl(
-        fun(PartId, {AccSeqs, AccUnSeqs}) ->
+        fun(PartId, {AccSeqs, AccUnSeqs, AccPendingUn}) ->
             PartMask = 1 bsl PartId,
             case (?set_abitmask(Group) band PartMask) == 0 andalso
-                (?set_pbitmask(Group) band PartMask) == 0 of
+                (?set_pbitmask(Group) band PartMask) == 0 andalso
+                (not ordsets:is_element(PartId, PendingActive)) andalso
+                (not ordsets:is_element(PartId, PendingPassive)) of
             true ->
                 ErrorMsg2 = io_lib:format("Partition ~p is not in the active "
                     "nor passive state.", [PartId]),
@@ -2922,32 +2947,50 @@ process_mark_as_unindexable(State0, Partitions) ->
             end,
             case orddict:is_key(PartId, AccUnSeqs) of
             true ->
-                {AccSeqs, AccUnSeqs};
+                {AccSeqs, AccUnSeqs, AccPendingUn};
             false ->
-                PartSeq = orddict:fetch(PartId, AccSeqs),
-                AccSeqs2 = orddict:erase(PartId, AccSeqs),
-                AccUnSeqs2 = orddict:store(PartId, PartSeq, AccUnSeqs),
-                {AccSeqs2, AccUnSeqs2}
+                case ordsets:is_element(PartId, PendingActive) orelse
+                    ordsets:is_element(PartId, PendingPassive) of
+                false ->
+                    PartSeq = orddict:fetch(PartId, AccSeqs),
+                    AccSeqs2 = orddict:erase(PartId, AccSeqs),
+                    AccUnSeqs2 = orddict:store(PartId, PartSeq, AccUnSeqs),
+                    {AccSeqs2, AccUnSeqs2, AccPendingUn};
+                true ->
+                    AccPendingUn2 = ordsets:add_element(PartId, AccPendingUn),
+                    {AccSeqs, AccUnSeqs, AccPendingUn2}
+                end
             end
         end,
-        {?set_seqs(Group), ?set_unindexable_seqs(Group)},
+        {?set_seqs(Group), ?set_unindexable_seqs(Group), PendingUnindexable},
         Partitions),
-    NewState = case UnindexableSeqs2 == ?set_unindexable_seqs(Group) of
+    NewState = case (UnindexableSeqs2 == ?set_unindexable_seqs(Group)) andalso
+        (PendingUnindexable2 == PendingUnindexable) of
     true ->
         State;
     false ->
+        PendingTrans2 = case PendingTrans of
+        nil ->
+            nil;
+        _ ->
+            PendingTrans#set_view_transition{unindexable = PendingUnindexable2}
+        end,
         Group2 = Group#set_view_group{
             index_header = Header#set_view_index_header{
                 seqs = Seqs2,
-                unindexable_seqs = UnindexableSeqs2
+                unindexable_seqs = UnindexableSeqs2,
+                pending_transition = PendingTrans2
             }
         },
         ok = commit_header(Group2),
         ?LOG_INFO("Set view `~s`, ~s group `~s`, unindexable partitions added.~n"
-                  "Previous set: ~w~n"
-                  "New set:      ~w~n",
+                  "Previous set:         ~w~n"
+                  "New set:              ~w~n"
+                  "Previous pending set: ~w~n"
+                  "New pending set:      ~w~n",
                   [?set_name(State), ?type(State), ?group_id(State),
-                   ?set_unindexable_seqs(Group), UnindexableSeqs2]),
+                   ?set_unindexable_seqs(Group), UnindexableSeqs2,
+                   PendingUnindexable, PendingUnindexable2]),
         State#state{group = Group2}
     end,
     NewState2 = stop_compactor(NewState),
@@ -2968,45 +3011,57 @@ process_mark_as_indexable(State0, Partitions, CommitHeader) ->
         update_listeners = Listeners
     } = State = stop_updater(State1),
     UpdaterWasRunning = is_pid(State0#state.updater_pid),
-    {Seqs2, UnindexableSeqs2} =
+    PendingTrans = ?set_pending_transition(Group),
+    PendingUnindexable = ?pending_transition_unindexable(PendingTrans),
+    {Seqs2, UnindexableSeqs2, PendingUnindexable2} =
     lists:foldl(
-        fun(PartId, {AccSeqs, AccUnSeqs}) ->
+        fun(PartId, {AccSeqs, AccUnSeqs, AccPendingUn}) ->
             case orddict:is_key(PartId, AccUnSeqs) of
             false ->
-                {AccSeqs, AccUnSeqs};
+                case ordsets:is_element(PartId, AccPendingUn) of
+                false ->
+                    {AccSeqs, AccUnSeqs, AccPendingUn};
+                true ->
+                    {AccSeqs, AccUnSeqs, ordsets:del_element(PartId, AccPendingUn)}
+                end;
             true ->
                 Seq = orddict:fetch(PartId, AccUnSeqs),
                 AccUnSeqs2 = orddict:erase(PartId, AccUnSeqs),
                 AccSeqs2 = orddict:store(PartId, Seq, AccSeqs),
-                {AccSeqs2, AccUnSeqs2}
+                {AccSeqs2, AccUnSeqs2, AccPendingUn}
             end
         end,
-        {?set_seqs(Group), ?set_unindexable_seqs(Group)},
+        {?set_seqs(Group), ?set_unindexable_seqs(Group), PendingUnindexable},
         Partitions),
-    NewState = case UnindexableSeqs2 == ?set_unindexable_seqs(Group) of
+    PendingTrans2 = case PendingTrans of
+    nil ->
+        nil;
+    _ ->
+        PendingTrans#set_view_transition{unindexable = PendingUnindexable2}
+    end,
+    Group2 = Group#set_view_group{
+        index_header = Header#set_view_index_header{
+            seqs = Seqs2,
+            unindexable_seqs = UnindexableSeqs2,
+            pending_transition = PendingTrans2
+        }
+    },
+    NewState = case (UnindexableSeqs2 == ?set_unindexable_seqs(Group)) andalso
+        (PendingUnindexable2 == PendingUnindexable) of
     true ->
         State;
     false when CommitHeader ->
-        Group2 = Group#set_view_group{
-            index_header = Header#set_view_index_header{
-                seqs = Seqs2,
-                unindexable_seqs = UnindexableSeqs2
-            }
-        },
         ok = commit_header(Group2),
         ?LOG_INFO("Set view `~s`, ~s group `~s`, unindexable partitions removed.~n"
-                  "Previous set: ~w~n"
-                  "New set:      ~w~n",
+                  "Previous set:         ~w~n"
+                  "New set:              ~w~n"
+                  "Previous pending set: ~w~n"
+                  "New pending set:      ~w~n",
                   [?set_name(State), ?type(State), ?group_id(State),
-                   ?set_unindexable_seqs(Group), UnindexableSeqs2]),
+                   ?set_unindexable_seqs(Group), UnindexableSeqs2,
+                   PendingUnindexable, PendingUnindexable2]),
         State#state{group = Group2};
     false ->
-        Group2 = Group#set_view_group{
-            index_header = Header#set_view_index_header{
-                seqs = Seqs2,
-                unindexable_seqs = UnindexableSeqs2
-            }
-        },
         State#state{group = Group2}
     end,
     NewState2 = stop_compactor(NewState),
@@ -3075,3 +3130,10 @@ updater_tmp_dir(#state{group = Group} = State) ->
     Base = couch_set_view:set_index_dir(?root_dir(State), ?set_name(State)),
     filename:join(
         [Base, "tmp_" ++ couch_util:to_hex(Sig) ++ "_" ++ atom_to_list(Type)]).
+
+
+is_unindexable_part(PartId, Group) ->
+    PendingTrans = ?set_pending_transition(Group),
+    PendingUnindexable = ?pending_transition_unindexable(PendingTrans),
+    orddict:is_key(PartId, ?set_unindexable_seqs(Group)) orelse
+    ordsets:is_element(PartId, PendingUnindexable).

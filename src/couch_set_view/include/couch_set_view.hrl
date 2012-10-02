@@ -51,6 +51,28 @@
 -define(set_unindexable_seqs(SetViewGroup),
         (SetViewGroup#set_view_group.index_header)#set_view_index_header.unindexable_seqs).
 
+-define(pending_transition_active(Trans),
+        (case Trans of
+        nil ->
+            [];
+        _ ->
+            Trans#set_view_transition.active
+        end)).
+-define(pending_transition_passive(Trans),
+        (case Trans of
+        nil ->
+            [];
+        _ ->
+            Trans#set_view_transition.passive
+        end)).
+-define(pending_transition_unindexable(Trans),
+        (case Trans of
+        nil ->
+            [];
+        _ ->
+            Trans#set_view_transition.unindexable
+        end)).
+
 
 -type partition_id()             :: non_neg_integer().
 -type staleness()                :: 'update_after' | 'ok' | 'false'.
@@ -104,8 +126,9 @@
 }).
 
 -record(set_view_transition, {
-    active = []  :: ordsets:ordset(partition_id()),
-    passive = [] :: ordsets:ordset(partition_id())
+    active = []      :: ordsets:ordset(partition_id()),
+    passive = []     :: ordsets:ordset(partition_id()),
+    unindexable = [] :: ordsets:ordset(partition_id())
 }).
 
 -define(LATEST_COUCH_SET_VIEW_HEADER_VERSION, 1).

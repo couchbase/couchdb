@@ -37,7 +37,7 @@ admin_user_ctx() ->
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(47),
+    etap:plan(55),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -77,6 +77,8 @@ test() ->
         [1], [], lists:seq(2, num_set_partitions() - 1, 2)),
 
     verify_btrees_3(ValueGenFun1),
+
+    test_unindexable_partitions(),
 
     lists:foreach(fun(PartId) ->
         etap:diag("Deleting partition " ++ integer_to_list(PartId) ++
@@ -400,7 +402,8 @@ verify_btrees_3(ValueGenFun) ->
     ExpectedBtreeViewReduction = num_docs(),
     ExpectedPendingTrans = #set_view_transition{
         active = [1],
-        passive = []
+        passive = [],
+        unindexable = []
     },
 
     etap:is(
@@ -558,9 +561,12 @@ verify_btrees_4(ValueGenFun) ->
 
 
 get_group_snapshot() ->
+    get_group_snapshot(false).
+
+get_group_snapshot(Staleness) ->
     GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
     {ok, Group, 0} = gen_server:call(
-        GroupPid, #set_view_group_req{stale = false, debug = true}, infinity),
+        GroupPid, #set_view_group_req{stale = Staleness, debug = true}, infinity),
     Group.
 
 
@@ -578,3 +584,60 @@ compact_view_group() ->
     after ?MAX_WAIT_TIME ->
         etap:bail("Timeout waiting for main view group compaction to finish")
     end.
+
+
+test_unindexable_partitions() ->
+    % Verify that partitions in the pending transition can be marked
+    % as unindexable and indexable back again.
+    Group0 = get_group_snapshot(ok),
+    PrevPendingTrans = ?set_pending_transition(Group0),
+
+    NewActivePending = lists:seq(1, num_set_partitions() div 2, 2),
+    NewPassivePending = lists:seq(num_set_partitions() div 2, num_set_partitions() - 1, 2),
+    ok = couch_set_view:set_partition_states(
+        test_set_name(), ddoc_id(), NewActivePending, NewPassivePending, []),
+
+    PendingActiveUnindexable = lists:sublist(NewActivePending, length(NewActivePending) div 2),
+    PendingPassiveUnindexable = lists:sublist(NewPassivePending, length(NewPassivePending) div 2),
+    Unindexable = ordsets:union(PendingActiveUnindexable, PendingPassiveUnindexable),
+    ok = couch_set_view:mark_partitions_unindexable(test_set_name(), ddoc_id(), Unindexable),
+
+    Group1 = get_group_snapshot(ok),
+    PendingTrans = ?set_pending_transition(Group1),
+    etap:is(?pending_transition_unindexable(PendingTrans),
+            Unindexable,
+            "Right set of unindexable partitions in pending transition"),
+    etap:is(?pending_transition_active(PendingTrans),
+            NewActivePending,
+            "Right set of active partitions in pending transition"),
+    etap:is(?pending_transition_passive(PendingTrans),
+            NewPassivePending,
+            "Right set of passive partitions in pending transition"),
+    etap:is(?set_unindexable_seqs(Group1),
+            [],
+            "Right set of unindexable partitions"),
+
+    ok = couch_set_view:mark_partitions_indexable(test_set_name(), ddoc_id(), Unindexable),
+
+    Group2 = get_group_snapshot(ok),
+    PendingTrans2 = ?set_pending_transition(Group2),
+    etap:is(?pending_transition_unindexable(PendingTrans2),
+            [],
+            "Empty set of unindexable partitions in pending transition"),
+    etap:is(?pending_transition_active(PendingTrans2),
+            NewActivePending,
+            "Right set of active partitions in pending transition"),
+    etap:is(?pending_transition_passive(PendingTrans2),
+            NewPassivePending,
+            "Right set of passive partitions in pending transition"),
+    etap:is(?set_unindexable_seqs(Group2),
+            [],
+            "Right set of unindexable partitions"),
+
+    % Restore to previous state
+    PrevActivePending = ?pending_transition_active(PrevPendingTrans),
+    PrevPassivePending = ?pending_transition_passive(PrevPendingTrans),
+    ok = couch_set_view:set_partition_states(
+        test_set_name(), ddoc_id(), [], [], ordsets:union(NewActivePending, NewPassivePending)),
+    ok = couch_set_view:set_partition_states(
+        test_set_name(), ddoc_id(), PrevActivePending, PrevPassivePending, []).

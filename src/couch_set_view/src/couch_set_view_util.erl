@@ -532,21 +532,30 @@ partitions_to_bin([P | Rest], Acc) ->
 
 
 pending_trans_to_bin(nil) ->
-    <<0:16, 0:16>>;
-pending_trans_to_bin(#set_view_transition{active = A, passive = P}) ->
+    <<0:16, 0:16, 0:16>>;
+pending_trans_to_bin(#set_view_transition{active = A, passive = P, unindexable = U}) ->
     <<(length(A)):16, (partitions_to_bin(A, <<>>))/binary,
-      (length(P)):16, (partitions_to_bin(P, <<>>))/binary>>.
+      (length(P)):16, (partitions_to_bin(P, <<>>))/binary,
+      (length(U)):16, (partitions_to_bin(U, <<>>))/binary>>.
 
 
 bin_to_pending_trans(<<NumActive:16, Rest/binary>>) ->
     {Active, Rest2} = bin_to_partitions(NumActive, Rest, []),
     <<NumPassive:16, Rest3/binary>> = Rest2,
     {Passive, Rest4} = bin_to_partitions(NumPassive, Rest3, []),
+    <<NumUnindexable:16, Rest5/binary>> = Rest4,
+    {Unindexable, Rest6} = bin_to_partitions(NumUnindexable, Rest5, []),
     case (Active == []) andalso (Passive == []) of
     true ->
-        {nil, Rest4};
+        0 = NumUnindexable,
+        {nil, Rest6};
     false ->
-        {#set_view_transition{active = Active, passive = Passive}, Rest4}
+        Trans = #set_view_transition{
+            active = Active,
+            passive = Passive,
+            unindexable = Unindexable
+        },
+        {Trans, Rest6}
     end.
 
 

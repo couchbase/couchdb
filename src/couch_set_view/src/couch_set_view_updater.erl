@@ -74,14 +74,6 @@ update(Owner, Group, CurSeqs, LogFilePath, TmpDir) ->
     PassiveParts = couch_set_view_util:decode_bitmask(?set_pbitmask(Group)),
     NumChanges = couch_set_view_util:missing_changes_count(CurSeqs, ?set_seqs(Group)),
 
-    case ?set_pending_transition(Group) of
-    nil ->
-        PendingActive = [],
-        PendingPassive = [];
-    #set_view_transition{active = PendingActive, passive = PendingPassive} ->
-        ok
-    end,
-
     process_flag(trap_exit, true),
 
     BeforeEnterTs = os:timestamp(),
@@ -122,14 +114,16 @@ update(Owner, Group, CurSeqs, LogFilePath, TmpDir) ->
               "Pending transition:   ~n"
               "    active:           ~w~n"
               "    passive:          ~w~n"
+              "    unindexable:      ~w~n"
               "Initial build:        ~s~n",
               [SetName, Type, DDocId,
                ActiveParts,
                PassiveParts,
                CleanupParts,
                ?set_replicas_on_transfer(Group),
-               PendingActive,
-               PendingPassive,
+               ?pending_transition_active(?set_pending_transition(Group)),
+               ?pending_transition_passive(?set_pending_transition(Group)),
+               ?pending_transition_unindexable(?set_pending_transition(Group)),
                InitialBuild
               ]),
 
