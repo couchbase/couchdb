@@ -66,8 +66,6 @@ content_meta_to_memcached_meta(?CONTENT_META_JSON) ->
     nil;
 content_meta_to_memcached_meta(?CONTENT_META_INVALID_JSON) ->
     <<"invalid_json">>;
-content_meta_to_memcached_meta(?CONTENT_META_INVALID_JSON_KEY) ->
-    <<"invalid_key">>;
 content_meta_to_memcached_meta(?CONTENT_META_NON_JSON_MODE) ->
     <<"non-JSON mode">>;
 content_meta_to_memcached_meta(_Other) ->
@@ -141,26 +139,25 @@ to_json_bin(Doc0)->
 
 
 mk_json_doc_from_binary(<<?LOCAL_DOC_PREFIX, _/binary>> = Id, Value) ->
-    case ejson:validate(Value, <<"_$">>) of
-    {ok, JsonBinary} ->
-        #doc{id=Id, body = JsonBinary};
+    case ejson:validate(Value) of
+    ok ->
+        #doc{id=Id, body = Value};
     Error ->
         throw(Error)
     end;
 mk_json_doc_from_binary(Id, Value) ->
-    case ejson:validate(Value, <<"_$">>) of
+    % Docs should accept any JSON value, not just objs and arrays
+    % (this would be anything that is acceptable as a value in an array
+    case ejson:validate([<<"[">>, Value, <<"]">>]) of
     {error, invalid_json} ->
         #doc{id=Id, body = Value,
             content_meta = ?CONTENT_META_INVALID_JSON};
-    {error, private_field_set} ->
-        #doc{id=Id, body = Value,
-            content_meta = ?CONTENT_META_INVALID_JSON_KEY};
     {error, garbage_after_value} ->
         #doc{id=Id, body = Value,
             content_meta = ?CONTENT_META_INVALID_JSON};
-    {ok, JsonBinary} ->
-        #doc{id=Id, body = couch_compress:compress(JsonBinary),
-            content_meta = ?CONTENT_META_JSON bor ?CONTENT_META_SNAPPY_COMPRESSED}
+    ok ->
+        #doc{id=Id, body = Value,
+            content_meta = ?CONTENT_META_JSON}
     end.
 
 from_binary(Id, Value, _WantJson=true) ->

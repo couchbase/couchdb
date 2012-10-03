@@ -26,7 +26,7 @@ static ErlNifFunc nif_funcs[] =
 {
     {"final_encode", 1, final_encode},
     {"reverse_tokens", 1, reverse_tokens},
-    {"validate", 2, validate_doc}
+    {"validate", 1, validate_doc}
 };
 
 ERL_NIF_INIT(ejson, nif_funcs, &on_load, &on_reload, &on_upgrade, NULL);

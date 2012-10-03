@@ -25,14 +25,6 @@ typedef struct {
     ErlNifEnv* env;
 } decode_ctx;
 
-typedef struct {
-    unsigned int depth;
-    ErlNifBinary private;
-    ErlNifBinary bin;
-    size_t fill_offset;
-    int error;
-} validate_ctx;
-
 #define ENV(ctx) ((decode_ctx*)ctx)->env
 
 #define CONTINUE 1
@@ -40,7 +32,6 @@ typedef struct {
 
 #define NOERROR 0
 #define ERR_MEMORY 1
-#define ERR_PRIVATE_MEMBER 2
 
 
 static void * yajl_internal_malloc(void *ctx, size_t sz);
@@ -230,181 +221,6 @@ decoder_callbacks = {
 };
 
 
-/****** validate/normalization functions ******/
-
-static int
-ensure_buffer(validate_ctx* vctx, unsigned int len) {
-    validate_ctx* ctx = (validate_ctx*)vctx;
-    if ((ctx->bin.size - ctx->fill_offset) < len)
-    {
-        if(!enif_realloc_binary_compat(ctx->env, &(ctx->bin),
-                (ctx->bin.size * 2) + len))
-        {
-            return ERR_MEMORY;
-        }
-    }
-    return NOERROR;
-}
-
-/* on success, always ensures one extra char available in out bin */
-static int
-fill_buffer(validate_ctx* ctx, const char* str, unsigned int len)
-{
-    if (ctx->error || (ctx->error = ensure_buffer(ctx, len + 1)))
-        return CANCEL;
-    memcpy(ctx->bin.data + ctx->fill_offset, str, len);
-    ctx->fill_offset += len;
-    return CONTINUE;
-}
-
-static int
-validate_start_array(void* vctx)
-{
-    validate_ctx* ctx = (validate_ctx*)vctx;
-    ctx->depth++;
-    if (ctx->error || (ctx->error = ensure_buffer(ctx, 1)))
-        return CANCEL;
-    ctx->bin.data[ctx->fill_offset++] = '[';
-    return CONTINUE;
-}
-
-static int
-validate_end_array(void* vctx)
-{
-    validate_ctx* ctx = (validate_ctx*)vctx;
-    ctx->depth--;
-    if (ctx->bin.data[ctx->fill_offset - 1] == ',')
-        ctx->fill_offset--;
-    if (ctx->error || (ctx->error = ensure_buffer(ctx, 2)))
-        return CANCEL;
-    ctx->bin.data[ctx->fill_offset++] = ']';
-    ctx->bin.data[ctx->fill_offset++] = ',';
-    return CONTINUE;
-}
-
-static int
-validate_start_map(void* vctx)
-{
-    validate_ctx* ctx = (validate_ctx*)vctx;
-    ctx->depth++;
-    if (ctx->error || (ctx->error = ensure_buffer(ctx, 1)))
-        return CANCEL;
-    ctx->bin.data[ctx->fill_offset++] = '{';
-    return CONTINUE;
-}
-
-static int
-validate_end_map(void* vctx)
-{
-    validate_ctx* ctx = (validate_ctx*)vctx;
-    ctx->depth--;
-    if (ctx->bin.data[ctx->fill_offset - 1] == ',')
-        ctx->fill_offset--;
-    if (ctx->error || (ctx->error = ensure_buffer(ctx, 2)))
-        return CANCEL;
-    ctx->bin.data[ctx->fill_offset++] = '}';
-    ctx->bin.data[ctx->fill_offset++] = ',';
-    return CONTINUE;
-}
-
-static int
-validate_map_key(void* vctx, const unsigned char* data, unsigned int size)
-{
-    validate_ctx* ctx = (validate_ctx*)vctx;
-    if(size != 0 && ctx->depth == 1)
-    {
-        int i = ctx->private.size;
-        while(i--)
-        {
-            if(data[0] == ctx->private.data[i])
-            {
-                ctx->error = ERR_PRIVATE_MEMBER;
-                return CANCEL;
-            }
-        }
-    }
-    if (ctx->error || (ctx->error = ensure_buffer(ctx, 1)))
-        return CANCEL;
-    ctx->bin.data[ctx->fill_offset++] = '"';
-    yajl_string_encode2(fill_buffer, vctx, data, size);
-    if (ctx->error || (ctx->error = ensure_buffer(ctx, 2)))
-        return CANCEL;
-    ctx->bin.data[ctx->fill_offset++] = '"';
-    ctx->bin.data[ctx->fill_offset++] = ':';
-    return CONTINUE;
-}
-
-static int
-validate_number(void* vctx, const char* numstr, unsigned int size)
-{
-    validate_ctx* ctx = (validate_ctx*)vctx;
-    if (CANCEL == fill_buffer(vctx, numstr, size))
-        return CANCEL;
-    ctx->bin.data[ctx->fill_offset++] = ',';
-    return CONTINUE;
-}
-
-static int
-validate_bool(void* vctx, int boolValue)
-{
-    int ret;
-    validate_ctx* ctx = (validate_ctx*)vctx;
-    if (boolValue)
-    {
-        ret = fill_buffer(vctx, "true", 4);
-    }
-    else
-    {
-        ret = fill_buffer(vctx, "false", 5);
-    }
-    if (CANCEL == ret)
-        return CANCEL;
-    ctx->bin.data[ctx->fill_offset++] = ',';
-    return CONTINUE;
-}
-
-static int
-validate_null(void* vctx)
-{
-    validate_ctx* ctx = (validate_ctx*)vctx;
-    if (CANCEL == fill_buffer(vctx, "null", 4))
-    {
-        return CANCEL;
-    }
-    ctx->bin.data[ctx->fill_offset++] = ',';
-    return CONTINUE;
-}
-
-static int
-validate_string(void* vctx, const unsigned char* str, unsigned int size)
-{
-    validate_ctx* ctx = (validate_ctx*)vctx;
-    if (ctx->error || (ctx->error = ensure_buffer(ctx, 1)))
-        return;
-    ctx->bin.data[ctx->fill_offset++] = '"';
-    yajl_string_encode2(fill_buffer, vctx, str, size);
-    if (ctx->error || (ctx->error = ensure_buffer(ctx, 2)))
-        return;
-    ctx->bin.data[ctx->fill_offset++] = '"';
-    ctx->bin.data[ctx->fill_offset++] = ',';
-    return CONTINUE;
-}
-
-static yajl_callbacks
-validate_callbacks = {
-    validate_null,
-    validate_bool,
-    NULL,
-    NULL,
-    validate_number,
-    validate_string,
-    validate_start_map,
-    validate_map_key,
-    validate_end_map,
-    validate_start_array,
-    validate_end_array
-};
-
 static int
 check_rest(unsigned char* data, unsigned int size, unsigned int used)
 {
@@ -436,12 +252,7 @@ validate_doc(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
     ErlNifBinary json;
     ERL_NIF_TERM ret;
 
-    validate_ctx ctx;
-    ctx.depth = 0;
-    ctx.fill_offset = 0;
-    ctx.error = 0;
-
-    handle = yajl_alloc(&validate_callbacks, &conf, &allocfuncs, &ctx);
+    handle = yajl_alloc(NULL, &conf, &allocfuncs, NULL);
 
     if(!enif_inspect_iolist_as_binary(env, argv[0], &json))
     {
@@ -449,24 +260,10 @@ validate_doc(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
         goto done;
     }
 
-    if(!enif_inspect_iolist_as_binary(env, argv[1], &ctx.private))
-    {
-        ret = enif_make_badarg(env);
-        goto done;
-    }
-    /* normalized json will usually be no bigger than input */
-    if (!enif_alloc_binary_compat(env, json.size, &ctx.bin))
-    {
-        ret = enif_make_tuple(env, 2,
-                    enif_make_atom(env, "error"),
-                    enif_make_atom(env, "insufficient_memory"));
-        goto done;
-    }
-
     status = yajl_parse(handle, json.data, json.size);
 
     if(status == yajl_status_insufficient_data &&
-        handle->bytesConsumed == json.size)
+       handle->bytesConsumed == json.size)
     {
         status = yajl_parse_complete(handle);
     }
@@ -476,7 +273,6 @@ validate_doc(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
         if(handle->bytesConsumed != json.size &&
             check_rest(json.data, json.size, handle->bytesConsumed) == CANCEL)
         {
-            enif_release_binary_compat(env, &ctx.bin);
             ret = enif_make_tuple(env, 2,
                 enif_make_atom(env, "error"),
                 enif_make_atom(env, "garbage_after_value")
@@ -484,50 +280,15 @@ validate_doc(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
         }
         else
         {
-            assert(ctx.error == NOERROR);
-            if (ctx.fill_offset && ctx.bin.data[ctx.fill_offset - 1] == ',')
-            {
-                ctx.fill_offset--;
-            }
-            enif_realloc_binary_compat(env, &(ctx.bin), ctx.fill_offset);
-            ret = enif_make_tuple(env, 2,
-                    enif_make_atom(env, "ok"),
-                    // make the binary term which transfers ownership
-                    enif_make_binary(env, &ctx.bin)
-                    );
+            ret = enif_make_atom(env, "ok");
         }
     }
     else
     {
-        enif_release_binary_compat(env, &ctx.bin);
-        if(status == yajl_status_client_canceled)
-        {
-            if (ctx.error == ERR_MEMORY)
-            {
-                ret = enif_make_tuple(env, 2,
-                        enif_make_atom(env, "error"),
-                        enif_make_atom(env, "insufficient_memory"));
-            }
-            else if (ctx.error == ERR_PRIVATE_MEMBER)
-            {
-                ret = enif_make_tuple(env, 2,
-                        enif_make_atom(env, "error"),
-                        enif_make_atom(env, "private_field_set")
-                        );
-            }
-            else
-            {
-                //wtf!
-                abort();
-            }
-        }
-        else
-        {
-            ret = enif_make_tuple(env, 2,
-                    enif_make_atom(env, "error"),
-                    enif_make_atom(env, "invalid_json")
-                    );
-        }
+        ret = enif_make_tuple(env, 2,
+                enif_make_atom(env, "error"),
+                enif_make_atom(env, "invalid_json")
+                );
     }
 
 done:
