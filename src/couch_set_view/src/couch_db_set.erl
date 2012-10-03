@@ -94,15 +94,10 @@ do_init({SetName, Partitions}) ->
     % to monitor databases here.
     DbSeqs = lists:foldl(
         fun(PartId, Acc) ->
-            Name = ?dbname(SetName, PartId),
-            case couch_db:open_int(Name, []) of
-            {ok, Db} ->
-                ok = couch_db:add_update_listener(Db, self(), PartId),
-                ok = couch_db:close(Db),
-                orddict:store(PartId, Db#db.update_seq, Acc);
-            Error2 ->
-                raise_db_open_error(Name, Error2)
-            end
+            Db = couch_set_view_util:open_db(SetName, PartId),
+            ok = couch_db:add_update_listener(Db, self(), PartId),
+            ok = couch_db:close(Db),
+            orddict:store(PartId, Db#db.update_seq, Acc)
         end,
         orddict:new(), Partitions),
     Ets = ets:new(db_set_update_seqs_ets, [set, protected]),
@@ -202,11 +197,6 @@ code_change(_OldVsn, State, _Extra) ->
 
 terminate(_Reason, _State) ->
     ok.
-
-
-raise_db_open_error(DbName, Error) ->
-    Msg = io_lib:format("Couldn't open database `~s`, reason: ~w", [DbName, Error]),
-    throw({db_open_error, DbName, Error, iolist_to_binary(Msg)}).
 
 
 clean_update_messages(PartId) ->

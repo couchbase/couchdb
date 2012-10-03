@@ -37,7 +37,7 @@ admin_user_ctx() ->
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(55),
+    etap:plan(64),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -92,7 +92,7 @@ test() ->
     % contents nor new contents are in the index after a stale=false request.
     etap:diag("Recreating partition 1 database, currenly marked as active in the"
               " pending transition - shouldn't cause the group process to die"),
-    recreate_db(1),
+    recreate_db(1, 9000009),
     ok = timer:sleep(6000),
     etap:is(is_process_alive(GroupPid), true, "Group process didn't die"),
 
@@ -113,21 +113,23 @@ test() ->
     compact_view_group(),
     verify_btrees_4(ValueGenFun1),
 
+    test_monitor_pending_partition(),
+
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions() - 1),
     ok = timer:sleep(1000),
     couch_set_view_test_util:stop_server(),
     ok.
 
 
-recreate_db(PartId) ->
+recreate_db(PartId, Value) ->
     DbName = iolist_to_binary([test_set_name(), $/, integer_to_list(PartId)]),
     ok = couch_server:delete(DbName, [admin_user_ctx()]),
     ok = timer:sleep(300),
     {ok, Db} = couch_db:create(DbName, [admin_user_ctx()]),
     Doc = couch_doc:from_json_obj({[
-        {<<"meta">>, {[{<<"id">>, doc_id(9000009)}]}},
+        {<<"meta">>, {[{<<"id">>, doc_id(Value)}]}},
         {<<"json">>, {[
-            {<<"value">>, 9000009}
+            {<<"value">>, Value}
         ]}}
     ]}),
     ok = couch_db:update_doc(Db, Doc, []),
@@ -641,3 +643,98 @@ test_unindexable_partitions() ->
         test_set_name(), ddoc_id(), [], [], ordsets:union(NewActivePending, NewPassivePending)),
     ok = couch_set_view:set_partition_states(
         test_set_name(), ddoc_id(), PrevActivePending, PrevPassivePending, []).
+
+
+test_monitor_pending_partition() ->
+    % Mark partition 0 for cleanup, recreate it (1 doc), add it to pending transition,
+    % ask to monitor partition 0, perform cleanup/update and check an update message
+    % is received after.
+    etap:diag("Marking partition 0 for cleanup"),
+    ok = couch_set_view:set_partition_states(
+        test_set_name(), ddoc_id(), [], [], [0]),
+
+    Group0 = get_group_snapshot(ok),
+    etap:is(?set_seqs(Group0), [], "Empty list of seqs in group snapshot"),
+    etap:is(?set_cbitmask(Group0), 1, "Partition 0 in cleanup bitmask"),
+
+    etap:diag("Recreating partition 0 database"),
+    recreate_db(0, 9000011),
+
+    etap:diag("Marking partition 0 as active while it's still in cleanup"),
+    ok = couch_set_view:set_partition_states(
+        test_set_name(), ddoc_id(), [0], [], []),
+
+    Group1 = get_group_snapshot(ok),
+    PendingTrans1 = ?set_pending_transition(Group1),
+    etap:is(?set_cbitmask(Group1), 1, "Partition 0 in cleanup bitmask"),
+    etap:is(?pending_transition_active(PendingTrans1), [0],
+            "Partition 0 in pending transition"),
+
+    Parent = self(),
+    {ListenerPid, ListenerRef} = spawn_monitor(fun() ->
+        etap:diag("Asking view group to monitor partition 0 (in pending transition)"),
+        Ref1 = couch_set_view:monitor_partition_update(test_set_name(), ddoc_id(), 0),
+        Parent ! {self(), ok},
+        receive
+        {Ref1, Reason} ->
+            exit(Reason)
+        end
+    end),
+
+    receive
+    {ListenerPid, ok} ->
+        etap:diag("Received ack from listener child");
+    {'DOWN', ListenerRef, _, _, Reason} ->
+        etap:bail("Child terminated with reason: " ++ couch_util:to_list(Reason))
+    after 10000 ->
+        etap:bail("Timeout waiting for child listener ack")
+    end,
+
+    % Perform cleanup + apply pending transition + update + notify listener
+    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    {ok, CleanerPid} = gen_server:call(GroupPid, start_cleaner, infinity),
+    CleanerRef = erlang:monitor(process, CleanerPid),
+    receive
+    {'DOWN', CleanerRef, _, _, _} ->
+        ok
+    after 60000 ->
+        etap:bail("Timeout waiting for cleaner to finish")
+    end,
+
+    Group2 = get_group_snapshot(false),
+    #set_view_group{
+        id_btree = IdBtree,
+        views = [#set_view{btree = View1Btree}]
+    } = Group2,
+
+    etap:is(?set_cbitmask(Group2), 0, "Cleanup bitmask is 0"),
+    etap:is(?set_abitmask(Group2), 1, "Active bitmask is 1"),
+    etap:is(?set_pending_transition(Group2), nil, "Pending transition is nil"),
+
+    receive
+    {'DOWN', ListenerRef, _, _, updated} ->
+        etap:diag("Child got notified partition was updated in index");
+    {'DOWN', ListenerRef, _, _, Reason2} ->
+        etap:bail("Child terminated with reason: " ++ couch_util:to_list(Reason2))
+    after 30000 ->
+        etap:bail("Child didn't terminate after pending transition was applied")
+    end,
+
+    etap:diag("Verifying the Id Btree"),
+    {ok, _, IdBtreeFoldResult} = couch_set_view_test_util:fold_id_btree(
+        Group2,
+        IdBtree,
+        fun(Kv, _, Acc) -> {ok, [Kv | Acc]} end,
+        [], []),
+    etap:is(IdBtreeFoldResult, [{doc_id(9000011), {0, [{0, doc_id(9000011)}]}}],
+            "Id Btree has 1 entry"),
+
+    etap:diag("Verifying the View1 Btree"),
+    {ok, _, View1BtreeFoldResult} = couch_set_view_test_util:fold_view_btree(
+        Group2,
+        View1Btree,
+        fun(Kv, _, Acc) -> {ok, [Kv | Acc]} end,
+        [], []),
+    etap:is(View1BtreeFoldResult, [{{doc_id(9000011), doc_id(9000011)}, {0, 9000011}}],
+            "View1 Btree has 1 entry"),
+    ok.

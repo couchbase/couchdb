@@ -614,6 +614,12 @@ handle_call(start_updater, _From, State) ->
     State2 = start_updater(State),
     {reply, {ok, State2#state.updater_pid}, State2, ?TIMEOUT};
 
+handle_call(start_cleaner, _From, State) ->
+    % To be used only by unit tests.
+    State2 = maybe_start_cleaner(State#state{auto_cleanup = true}),
+    State3 = State2#state{auto_cleanup = State#state.auto_cleanup},
+    {reply, {ok, State2#state.cleaner_pid}, State3, ?TIMEOUT};
+
 handle_call(get_log_file_path, _From, State) ->
     % To be used only by unit tests.
     {reply, {ok, index_file_log_path(State)}, State, ?TIMEOUT};
@@ -761,38 +767,12 @@ handle_call({monitor_partition_update, PartId, _Ref, _Pid}, _From, State)
     {reply, {error, iolist_to_binary(Msg)}, State, ?TIMEOUT};
 
 handle_call({monitor_partition_update, PartId, Ref, Pid}, _From, State) ->
-    #state{
-        group = Group,
-        update_listeners = UpdateListeners
-    } = State,
-    case ((1 bsl PartId) band (?set_abitmask(Group) bor ?set_pbitmask(Group))) of
-    0 ->
-        Msg = io_lib:format("Partition ~p not in active nor passive set", [PartId]),
-        {reply, {error, iolist_to_binary(Msg)}, State, ?TIMEOUT};
-    _ ->
-        {ok, [{PartId, CurSeq}]} = couch_db_set:get_seqs(?db_set(State), [PartId], true),
-        case orddict:find(PartId, ?set_seqs(Group)) of
-        error ->
-            Seq = orddict:fetch(PartId, ?set_unindexable_seqs(Group));
-        {ok, Seq} ->
-            ok
-        end,
-        case CurSeq > Seq of
-        true ->
-             Listener = #up_listener{
-                 pid = Pid,
-                 monref = erlang:monitor(process, Pid),
-                 partition = PartId,
-                 seq = CurSeq
-             },
-             State2 = State#state{
-                 update_listeners = dict:store(Ref, Listener, UpdateListeners)
-             };
-        false ->
-             Pid ! {Ref, updated},
-             State2 = State
-        end,
+    try
+        State2 = process_monitor_partition_update(State, PartId, Ref, Pid),
         {reply, ok, State2, ?TIMEOUT}
+    catch
+    throw:Error ->
+        {reply, Error, State, ?TIMEOUT}
     end;
 
 handle_call({demonitor_partition_update, Ref}, _From, State) ->
@@ -2073,7 +2053,13 @@ maybe_apply_pending_transition(State) ->
         State4 = set_pending_transition(State3, NewPendingTrans),
         State5 = persist_partition_states(
             State4, ApplyActiveList, ApplyPassiveList, [], NewPendingTrans, ApplyUnindexableList),
-        NewState = notify_pending_transition_waiters(State5);
+        State6 = notify_pending_transition_waiters(State5),
+        NewState = case dict:size(State6#state.update_listeners) > 0 of
+        true ->
+            start_updater(State6);
+        false ->
+            State6
+        end;
     false ->
         NewState = State3
     end,
@@ -3136,4 +3122,53 @@ is_unindexable_part(PartId, Group) ->
     PendingTrans = ?set_pending_transition(Group),
     PendingUnindexable = ?pending_transition_unindexable(PendingTrans),
     orddict:is_key(PartId, ?set_unindexable_seqs(Group)) orelse
-    ordsets:is_element(PartId, PendingUnindexable).
+        ordsets:is_element(PartId, PendingUnindexable).
+
+
+process_monitor_partition_update(#state{group = Group} = State, PartId, Ref, Pid) ->
+    PendingTrans = ?set_pending_transition(Group),
+    ActivePending = ?pending_transition_active(PendingTrans),
+    PassivePending = ?pending_transition_passive(PendingTrans),
+    IsPending = ordsets:is_element(PartId, ActivePending) orelse
+        ordsets:is_element(PartId, PassivePending),
+    Mask = 1 bsl PartId,
+    IsDefined = (Mask band (?set_abitmask(Group) bor ?set_pbitmask(Group))) == Mask,
+    case (not IsDefined) andalso (not IsPending) of
+    true ->
+        Msg = io_lib:format("Partition ~p not in active nor passive set", [PartId]),
+        throw({error, iolist_to_binary(Msg)});
+    false ->
+        ok
+    end,
+    case IsPending of
+    true ->
+        State2 = monitor_partitions(State, [PartId]),
+        Db = couch_set_view_util:open_db(?set_name(State2), PartId),
+        ok = couch_db:close(Db),
+        CurSeq = Db#db.update_seq,
+        Seq = 0;
+    false ->
+        {ok, [{PartId, CurSeq}]} = couch_db_set:get_seqs(?db_set(State), [PartId], true),
+        case orddict:find(PartId, ?set_seqs(Group)) of
+        error ->
+            Seq = orddict:fetch(PartId, ?set_unindexable_seqs(Group));
+        {ok, Seq} ->
+            ok
+        end,
+        State2 = State
+    end,
+    case CurSeq > Seq of
+    true ->
+        Listener = #up_listener{
+            pid = Pid,
+            monref = erlang:monitor(process, Pid),
+            partition = PartId,
+            seq = CurSeq
+        },
+        State2#state{
+            update_listeners = dict:store(Ref, Listener, State2#state.update_listeners)
+        };
+    false ->
+        Pid ! {Ref, updated},
+        State2
+    end.
