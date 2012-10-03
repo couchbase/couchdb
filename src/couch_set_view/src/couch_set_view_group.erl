@@ -2892,8 +2892,27 @@ process_view_group_request(#set_view_group_req{stale = update_after} = Req, From
     end.
 
 
--spec process_mark_as_unindexable(#state{}, [partition_id()]) -> #state{}.
-process_mark_as_unindexable(State0, Partitions) ->
+-spec process_mark_as_unindexable(#state{},
+                                  ordsets:ordset(partition_id())) -> #state{}.
+process_mark_as_unindexable(#state{group = Group} = State, Partitions0) ->
+    PendingTrans = ?set_pending_transition(Group),
+    PendingActive = ?pending_transition_active(PendingTrans),
+    PendingPassive = ?pending_transition_passive(PendingTrans),
+    Partitions = lists:filter(
+        fun(PartId) ->
+            orddict:is_key(PartId, ?set_seqs(Group)) orelse
+            ordsets:is_element(PartId, PendingActive) orelse
+            ordsets:is_element(PartId, PendingPassive)
+        end,
+        Partitions0),
+    do_process_mark_as_unindexable(State, Partitions).
+
+
+-spec do_process_mark_as_unindexable(#state{},
+                                     ordsets:ordset(partition_id())) -> #state{}.
+do_process_mark_as_unindexable(State, []) ->
+    State;
+do_process_mark_as_unindexable(State0, Partitions) ->
     State1 = stop_cleaner(State0),
     #state{
         group = #set_view_group{index_header = Header} = Group,
@@ -2950,35 +2969,30 @@ process_mark_as_unindexable(State0, Partitions) ->
         end,
         {?set_seqs(Group), ?set_unindexable_seqs(Group), PendingUnindexable},
         Partitions),
-    NewState = case (UnindexableSeqs2 == ?set_unindexable_seqs(Group)) andalso
-        (PendingUnindexable2 == PendingUnindexable) of
-    true ->
-        State;
-    false ->
-        PendingTrans2 = case PendingTrans of
-        nil ->
-            nil;
-        _ ->
-            PendingTrans#set_view_transition{unindexable = PendingUnindexable2}
-        end,
-        Group2 = Group#set_view_group{
-            index_header = Header#set_view_index_header{
-                seqs = Seqs2,
-                unindexable_seqs = UnindexableSeqs2,
-                pending_transition = PendingTrans2
-            }
-        },
-        ok = commit_header(Group2),
-        ?LOG_INFO("Set view `~s`, ~s group `~s`, unindexable partitions added.~n"
-                  "Previous set:         ~w~n"
-                  "New set:              ~w~n"
-                  "Previous pending set: ~w~n"
-                  "New pending set:      ~w~n",
-                  [?set_name(State), ?type(State), ?group_id(State),
-                   ?set_unindexable_seqs(Group), UnindexableSeqs2,
-                   PendingUnindexable, PendingUnindexable2]),
-        State#state{group = Group2}
+
+    PendingTrans2 = case PendingTrans of
+    nil ->
+        nil;
+    _ ->
+        PendingTrans#set_view_transition{unindexable = PendingUnindexable2}
     end,
+    Group2 = Group#set_view_group{
+        index_header = Header#set_view_index_header{
+            seqs = Seqs2,
+            unindexable_seqs = UnindexableSeqs2,
+            pending_transition = PendingTrans2
+        }
+    },
+    ok = commit_header(Group2),
+    ?LOG_INFO("Set view `~s`, ~s group `~s`, unindexable partitions added.~n"
+              "Previous set:         ~w~n"
+              "New set:              ~w~n"
+              "Previous pending set: ~w~n"
+              "New pending set:      ~w~n",
+              [?set_name(State), ?type(State), ?group_id(State),
+               ?set_unindexable_seqs(Group), UnindexableSeqs2,
+               PendingUnindexable, PendingUnindexable2]),
+    NewState = State#state{group = Group2},
     NewState2 = stop_compactor(NewState),
     case UpdaterWasRunning of
     true ->
@@ -2988,8 +3002,27 @@ process_mark_as_unindexable(State0, Partitions) ->
     end.
 
 
--spec process_mark_as_indexable(#state{}, [partition_id()], boolean()) -> #state{}.
-process_mark_as_indexable(State0, Partitions, CommitHeader) ->
+-spec process_mark_as_indexable(#state{},
+                                ordsets:ordset(partition_id()),
+                                boolean()) -> #state{}.
+process_mark_as_indexable(#state{group = Group} = State, Partitions0, CommitHeader) ->
+    PendingTrans = ?set_pending_transition(Group),
+    PendingUnindexable = ?pending_transition_unindexable(PendingTrans),
+    Partitions = lists:filter(
+        fun(PartId) ->
+            orddict:is_key(PartId, ?set_unindexable_seqs(Group)) orelse
+            ordsets:is_element(PartId, PendingUnindexable)
+        end,
+        Partitions0),
+    do_process_mark_as_indexable(State, Partitions, CommitHeader).
+
+
+-spec do_process_mark_as_indexable(#state{},
+                                   ordsets:ordset(partition_id()),
+                                   boolean()) -> #state{}.
+do_process_mark_as_indexable(State, [], _CommitHeader) ->
+    State;
+do_process_mark_as_indexable(State0, Partitions, CommitHeader) ->
     State1 = stop_cleaner(State0),
     #state{
         group = #set_view_group{index_header = Header} = Group,
@@ -3032,11 +3065,8 @@ process_mark_as_indexable(State0, Partitions, CommitHeader) ->
             pending_transition = PendingTrans2
         }
     },
-    NewState = case (UnindexableSeqs2 == ?set_unindexable_seqs(Group)) andalso
-        (PendingUnindexable2 == PendingUnindexable) of
+    NewState = case CommitHeader of
     true ->
-        State;
-    false when CommitHeader ->
         ok = commit_header(Group2),
         ?LOG_INFO("Set view `~s`, ~s group `~s`, unindexable partitions removed.~n"
                   "Previous set:         ~w~n"
