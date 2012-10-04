@@ -37,7 +37,7 @@ admin_user_ctx() ->
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(64),
+    etap:plan(73),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -79,6 +79,8 @@ test() ->
     verify_btrees_3(ValueGenFun1),
 
     test_unindexable_partitions(),
+
+    test_pending_transition_changes(),
 
     lists:foreach(fun(PartId) ->
         etap:diag("Deleting partition " ++ integer_to_list(PartId) ++
@@ -737,4 +739,40 @@ test_monitor_pending_partition() ->
         [], []),
     etap:is(View1BtreeFoldResult, [{{doc_id(9000011), doc_id(9000011)}, {0, 9000011}}],
             "View1 Btree has 1 entry"),
+    ok.
+
+
+test_pending_transition_changes() ->
+    Group0 = get_group_snapshot(ok),
+    PendingTrans0 = ?set_pending_transition(Group0),
+    etap:is(?pending_transition_active(PendingTrans0), [1],
+            "Partition 1 in pending transition active set"),
+    etap:is(?pending_transition_passive(PendingTrans0), [],
+            "Empty pending transition passive set"),
+    etap:is(?pending_transition_unindexable(PendingTrans0), [],
+            "Empty pending transition unindexable set"),
+
+    ok = couch_set_view:set_partition_states(
+        test_set_name(), ddoc_id(), [], [1], []),
+
+    Group1 = get_group_snapshot(ok),
+    PendingTrans1 = ?set_pending_transition(Group1),
+    etap:is(?pending_transition_active(PendingTrans1), [],
+            "Empty pending transition active set"),
+    etap:is(?pending_transition_passive(PendingTrans1), [1],
+            "Partition 1 in pending transition passive set"),
+    etap:is(?pending_transition_unindexable(PendingTrans1), [],
+            "Empty pending transition unindexable set"),
+
+    ok = couch_set_view:set_partition_states(
+        test_set_name(), ddoc_id(), [1], [], []),
+
+    Group2 = get_group_snapshot(ok),
+    PendingTrans2 = ?set_pending_transition(Group2),
+    etap:is(?pending_transition_active(PendingTrans2), [1],
+            "Partition 1 in pending transition active set"),
+    etap:is(?pending_transition_passive(PendingTrans2), [],
+            "Empty pending transition passive set"),
+    etap:is(?pending_transition_unindexable(PendingTrans2), [],
+            "Empty pending transition unindexable set"),
     ok.

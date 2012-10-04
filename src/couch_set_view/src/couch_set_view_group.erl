@@ -1784,7 +1784,9 @@ maybe_update_partition_states(ActiveList0, PassiveList0, CleanupList0, State) ->
         (PassiveMask bor ?set_pbitmask(Group)) == ?set_pbitmask(Group) andalso
         ((CleanupMask band (?set_abitmask(Group) bor ?set_pbitmask(Group))) == 0) andalso
         ordsets:is_disjoint(CleanupList, ActivePending) andalso
-        ordsets:is_disjoint(CleanupList, PassivePending),
+        ordsets:is_disjoint(CleanupList, PassivePending) andalso
+        ordsets:is_disjoint(ActiveList, PassivePending) andalso
+        ordsets:is_disjoint(PassiveList, ActivePending),
 
     case IsEffectlessTransition of
     true ->
@@ -1825,17 +1827,29 @@ merge_into_pending_transition(Group, ActiveInCleanup, PassiveInCleanup, CleanupL
     PendingTrans = ?set_pending_transition(Group),
     ActivePending = ?pending_transition_active(PendingTrans),
     PassivePending = ?pending_transition_passive(PendingTrans),
-    ActivePending2 = ordsets:subtract(ActivePending, CleanupList),
-    PassivePending2 = ordsets:subtract(PassivePending, CleanupList),
-    ActivePending3 = ordsets:union(ActivePending2, ActiveInCleanup),
-    PassivePending3 = ordsets:union(PassivePending2, PassiveInCleanup),
-    case (ActivePending3 == []) andalso (PassivePending3 == []) of
+    case ordsets:intersection(PassivePending, ActiveInCleanup) of
+    [] ->
+        PassivePending2 = PassivePending;
+    Int ->
+        PassivePending2 = ordsets:subtract(PassivePending, Int)
+    end,
+    case ordsets:intersection(ActivePending, PassiveInCleanup) of
+    [] ->
+        ActivePending2 = ActivePending;
+    Int2 ->
+        ActivePending2 = ordsets:subtract(ActivePending, Int2)
+    end,
+    ActivePending3 = ordsets:subtract(ActivePending2, CleanupList),
+    PassivePending3 = ordsets:subtract(PassivePending2, CleanupList),
+    ActivePending4 = ordsets:union(ActivePending3, ActiveInCleanup),
+    PassivePending4 = ordsets:union(PassivePending3, PassiveInCleanup),
+    case (ActivePending4 == []) andalso (PassivePending4 == []) of
     true ->
         nil;
     false ->
         #set_view_transition{
-            active = ActivePending3,
-            passive = PassivePending3
+            active = ActivePending4,
+            passive = PassivePending4
         }
     end.
 
@@ -2558,14 +2572,16 @@ do_start_updater(State, CurSeqs) ->
     }.
 
 
--spec partitions_still_in_cleanup([partition_id()],
-                                  #set_view_group{}) -> [partition_id()].
+-spec partitions_still_in_cleanup(ordsets:ordset(partition_id()),
+                                  #set_view_group{}) ->
+                                         ordsets:ordset(partition_id()).
 partitions_still_in_cleanup(Parts, Group) ->
     partitions_still_in_cleanup(Parts, Group, []).
 
--spec partitions_still_in_cleanup([partition_id()],
+-spec partitions_still_in_cleanup(ordsets:ordset(partition_id()),
                                   #set_view_group{},
-                                  [partition_id()]) -> [partition_id()].
+                                  [partition_id()]) ->
+                                         ordsets:ordset(partition_id()).
 partitions_still_in_cleanup([], _Group, Acc) ->
     lists:reverse(Acc);
 partitions_still_in_cleanup([PartId | Rest], Group, Acc) ->
