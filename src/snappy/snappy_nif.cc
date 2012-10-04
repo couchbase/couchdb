@@ -100,6 +100,7 @@ SnappyNifSink::getBin()
             throw std::bad_alloc();
         }
     }
+    env = NULL;
     return bin;
 }
 
