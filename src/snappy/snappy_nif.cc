@@ -54,7 +54,7 @@ class SnappyNifSink : public snappy::Sink
 
 SnappyNifSink::SnappyNifSink(ErlNifEnv* e) : env(e), length(0)
 {
-    if(!enif_alloc_binary_compat(env, 0, &bin)) {
+    if(!enif_alloc_binary_compat(env, 4096, &bin)) {
         env = NULL;
         throw std::bad_alloc();
     }
