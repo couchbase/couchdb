@@ -68,6 +68,9 @@ if !WINDOWS
 if USE_OTP_NIFS
 mapreducepriv_LTLIBRARIES = mapreduce_nif.la
 mapreduce_nif_la_AM_CPPFLAGS = $(AM_CPPFLAGS) -Imapreduce-$(MAPREDUCE_VERSION) $(V8_FLAGS) -Wall
+if GCC
+mapreduce_nif_la_CPPFLAGS = -Wall -Winline
+endif
 mapreduce_nif_la_SOURCES = $(mapreduce_cxx_srcs)
 mapreduce_nif_la_LDFLAGS = -module -avoid-version $(V8_LIB_FLAGS)
 

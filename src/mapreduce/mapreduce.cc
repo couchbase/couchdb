@@ -160,7 +160,7 @@ map_results_list_list_t mapDoc(map_reduce_ctx_t *ctx, const ErlNifBinary &doc, c
 
     taskStarted(ctx);
 
-    for (int i = 0; i < ctx->functions->size(); ++i) {
+    for (unsigned int i = 0; i < ctx->functions->size(); ++i) {
         map_results_list_t funResults;
         Handle<Function> fun = (*ctx->functions)[i];
         TryCatch trycatch;
@@ -207,7 +207,7 @@ json_results_list_t runReduce(map_reduce_ctx_t *ctx,
 
     taskStarted(ctx);
 
-    for (int i = 0; i < ctx->functions->size(); ++i) {
+    for (unsigned int i = 0; i < ctx->functions->size(); ++i) {
         Handle<Function> fun = (*ctx->functions)[i];
         TryCatch trycatch;
         Handle<Value> result = fun->Call(fun, 3, args);
@@ -248,7 +248,8 @@ ErlNifBinary runReduce(map_reduce_ctx_t *ctx,
     Context::Scope contextScope(ctx->jsContext);
 
     reduceFunNum -= 1;
-    if (reduceFunNum < 0 || reduceFunNum >= ctx->functions->size()) {
+    if (reduceFunNum < 0 ||
+        static_cast<unsigned int>(reduceFunNum) >= ctx->functions->size()) {
         throw MapReduceError("invalid reduce function number");
     }
 
@@ -286,7 +287,8 @@ ErlNifBinary runRereduce(map_reduce_ctx_t *ctx,
     Context::Scope contextScope(ctx->jsContext);
 
     reduceFunNum -= 1;
-    if (reduceFunNum < 0 || reduceFunNum >= ctx->functions->size()) {
+    if (reduceFunNum < 0 ||
+        static_cast<unsigned int>(reduceFunNum) >= ctx->functions->size()) {
         throw MapReduceError("invalid reduce function number");
     }
 
@@ -344,7 +346,7 @@ void destroyContext(map_reduce_ctx_t *ctx)
         HandleScope handleScope;
         Context::Scope contextScope(ctx->jsContext);
 
-        for (int i = 0; i < ctx->functions->size(); ++i) {
+        for (unsigned int i = 0; i < ctx->functions->size(); ++i) {
             (*ctx->functions)[i].Dispose();
         }
         ctx->functions->~function_vector_t();
