@@ -21,7 +21,7 @@
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(83),
+    etap:plan(84),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -81,7 +81,14 @@ test_map_function_runtime_error() ->
     Results = mapreduce:map_doc(Ctx, <<"{\"_id\": \"doc1\", \"value\": 1}">>, <<"{}">>),
     % {error,<<"TypeError: Cannot read property 'bar' of undefined">>}
     etap:is(element(1, Results), error, "Got an error when map function applied over doc"),
-    etap:is(is_binary(element(2, Results)), true, "Error reason is a binary").
+    etap:is(is_binary(element(2, Results)), true, "Error reason is a binary"),
+
+    {ok, Ctx2} = mapreduce:start_map_context([
+        <<"function(doc, meta) { if (jsonType == 'player') { emit(meta.id, doc); } }">>
+    ]),
+    Results2 = mapreduce:map_doc(Ctx2, <<"{\"value\": 1}">>, <<"{}">>),
+    etap:is(Results2, {error, <<"ReferenceError: jsonType is not defined">>},
+            "Got error mapping document").
 
 
 test_empty_results_single_function() ->

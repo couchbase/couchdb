@@ -106,6 +106,7 @@ static inline Handle<Array> jsonListToJsArray(const json_results_list_t &list);
 static inline isolate_data_t *getIsolateData();
 static inline void taskStarted(map_reduce_ctx_t *ctx);
 static inline void taskFinished(map_reduce_ctx_t *ctx);
+static std::string exceptionString(const TryCatch &tryCatch);
 
 
 
@@ -178,10 +179,7 @@ map_results_list_list_t mapDoc(map_reduce_ctx_t *ctx, const ErlNifBinary &doc, c
                 throw MapReduceError("timeout");
             }
 
-            Handle<Value> exception = trycatch.Exception();
-            String::AsciiValue exceptionStr(exception);
-
-            throw MapReduceError(*exceptionStr);
+            throw MapReduceError(exceptionString(trycatch));
         }
 
         results.push_back(funResults);
@@ -221,10 +219,7 @@ json_results_list_t runReduce(map_reduce_ctx_t *ctx,
                 throw MapReduceError("timeout");
             }
 
-            Handle<Value> exception = trycatch.Exception();
-            String::AsciiValue exceptionStr(exception);
-
-            throw MapReduceError(*exceptionStr);
+            throw MapReduceError(exceptionString(trycatch));
         }
 
         try {
@@ -274,10 +269,7 @@ ErlNifBinary runReduce(map_reduce_ctx_t *ctx,
             throw MapReduceError("timeout");
         }
 
-        Handle<Value> exception = trycatch.Exception();
-        String::AsciiValue exceptionStr(exception);
-
-        throw MapReduceError(*exceptionStr);
+        throw MapReduceError(exceptionString(trycatch));
     }
 
     return jsonStringify(result);
@@ -314,10 +306,7 @@ ErlNifBinary runRereduce(map_reduce_ctx_t *ctx,
             throw MapReduceError("timeout");
         }
 
-        Handle<Value> exception = trycatch.Exception();
-        String::AsciiValue exceptionStr(exception);
-
-        throw MapReduceError(*exceptionStr);
+        throw MapReduceError(exceptionString(trycatch));
     }
 
     return jsonStringify(result);
@@ -462,10 +451,7 @@ Handle<Value> jsonParse(const ErlNifBinary &thing)
     Handle<Value> result = isoData->jsonParseFun->Call(isoData->jsonObject, 1, args);
 
     if (result.IsEmpty()) {
-        Handle<Value> exception = trycatch.Exception();
-        String::AsciiValue exceptionStr(exception);
-
-        throw MapReduceError(*exceptionStr);
+        throw MapReduceError(exceptionString(trycatch));
     }
 
     return result;
@@ -501,19 +487,13 @@ Handle<Function> compileFunction(const function_source_t &funSource)
     Handle<Script> script = Script::Compile(source);
 
     if (script.IsEmpty()) {
-        Handle<Value> exception = trycatch.Exception();
-        String::AsciiValue exceptionStr(exception);
-
-        throw MapReduceError(*exceptionStr);
+        throw MapReduceError(exceptionString(trycatch));
     }
 
     Handle<Value> result = script->Run();
 
     if (result.IsEmpty()) {
-        Handle<Value> exception = trycatch.Exception();
-        String::AsciiValue exceptionStr(exception);
-
-        throw MapReduceError(*exceptionStr);
+        throw MapReduceError(exceptionString(trycatch));
     }
 
     if (!result->IsFunction()) {
@@ -569,4 +549,18 @@ void terminateTask(map_reduce_ctx_t *ctx)
         V8::TerminateExecution(ctx->taskId);
         taskFinished(ctx);
     }
+}
+
+
+std::string exceptionString(const TryCatch &tryCatch)
+{
+    HandleScope handleScope;
+    String::Utf8Value exception(tryCatch.Exception());
+    const char *exceptionString = (*exception);
+
+    if (exceptionString) {
+        return std::string(exceptionString);
+    }
+
+    return std::string("runtime error");
 }
