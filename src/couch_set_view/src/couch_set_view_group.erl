@@ -1073,16 +1073,22 @@ handle_info({'EXIT', Pid, {updater_finished, Result}}, #state{updater_pid = Pid}
 handle_info({'EXIT', Pid, {updater_error, Error}}, #state{updater_pid = Pid} = State) ->
     ?LOG_ERROR("Set view `~s`, ~s group `~s`, received error from updater: ~p",
         [?set_name(State), ?type(State), ?group_id(State), Error]),
+    _ = dict:fold(
+        fun(Ref, #up_listener{pid = ListPid}, _Acc) ->
+            ListPid ! {Ref, {updater_error, Error}}
+        end,
+        ok, State#state.update_listeners),
+    State2 = State#state{
+        updater_pid = nil,
+        initial_build = false,
+        updater_state = not_running,
+        update_listeners = dict:new()
+    },
+    ?inc_updater_errors(State2#state.group),
     case State#state.shutdown of
     true ->
-        {stop, normal, reply_all(State, {error, Error})};
+        {stop, normal, reply_all(State2, {error, Error})};
     false ->
-        State2 = State#state{
-            updater_pid = nil,
-            initial_build = false,
-            updater_state = not_running
-        },
-        ?inc_updater_errors(State#state.group),
         case Error of
         {error, _Reason} ->
             State3 = reply_all(State2, Error);

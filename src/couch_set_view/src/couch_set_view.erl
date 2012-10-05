@@ -281,6 +281,11 @@ mark_partitions_indexable(SetName, DDocId, Partitions) ->
 %
 %    {Ref::reference(), marked_for_cleanup}
 %
+% If an error happens in the index updater, preventing the caller from ever getting
+% a notification, the caller will receive a message with the following shape:
+%
+%    {Ref::reference(), {updater_error, Reason::term()}}
+%
 % The target partition must be either an active or passive partition.
 % Replica partitions are not supported at the moment.
 -spec monitor_partition_update(binary(), binary(), partition_id()) -> reference().
