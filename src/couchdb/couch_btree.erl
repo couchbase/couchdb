@@ -86,8 +86,10 @@ set_options(Bt, [{less, Less}|Rest]) ->
     set_options(Bt#btree{less=Less}, Rest);
 set_options(Bt, [{reduce, Reduce}|Rest]) ->
     set_options(Bt#btree{reduce=Reduce}, Rest);
-set_options(Bt, [{chunk_threshold, Threshold}|Rest]) ->
-    set_options(Bt#btree{chunk_threshold = Threshold}, Rest);
+set_options(Bt, [{kv_chunk_threshold, Threshold}|Rest]) ->
+    set_options(Bt#btree{kv_chunk_threshold = Threshold}, Rest);
+set_options(Bt, [{kp_chunk_threshold, Threshold}|Rest]) ->
+    set_options(Bt#btree{kp_chunk_threshold = Threshold}, Rest);
 set_options(#btree{root = Root} = Bt, [{binary_mode, true}|Rest]) when is_binary(Root) ->
     <<Pointer:?POINTER_BITS, Size:?TREE_SIZE_BITS, Red0/binary>> = Root,
     Red = binary:copy(Red0),
@@ -362,12 +364,12 @@ complete_root(Bt, KPs) ->
     {ok, ResultKeyPointers, Bt2} = write_node(Bt, kp_node, KPs),
     complete_root(Bt2, ResultKeyPointers).
 
-%%%%%%%%%%%%% The chunkify function sucks! %%%%%%%%%%%%%
-% It is inaccurate as it does not account for compression when blocks are
-% written. Plus with the "case byte_size(term_to_binary(InList)) of" code
-% it's probably really inefficient.
+chunkify(#btree{kp_chunk_threshold = T}, kp_node, InList) ->
+    chunkify(T, InList);
+chunkify(#btree{kv_chunk_threshold = T}, kv_node, InList) ->
+    chunkify(T, InList).
 
-chunkify(#btree{chunk_threshold = ChunkThreshold0}, InList) ->
+chunkify(ChunkThreshold0, InList) ->
     case ?term_size(InList) of
     Size when Size > ChunkThreshold0 ->
         NumberOfChunksLikely = ((Size div ChunkThreshold0) + 1),
@@ -499,7 +501,7 @@ encode_node_iolist([{K, V}|RestKvs], Acc) ->
 
 write_node(#btree{fd = Fd, binary_mode = BinMode} = Bt, NodeType, NodeList) ->
     % split up nodes into smaller sizes
-    NodeListList = chunkify(Bt, NodeList),
+    NodeListList = chunkify(Bt, NodeType, NodeList),
     % now write out each chunk and return the KeyPointer pairs for those nodes
     ResultList = [
         begin
@@ -1104,7 +1106,8 @@ stats(#btree{root = Root, fd = Fd} = Bt) ->
         {btree_size, TreeSize},
         {file_size, FileSize},
         {fragmentation, Frag},
-        {chunk_threshold, Bt#btree.chunk_threshold} | Stats
+        {kv_chunk_threshold, Bt#btree.kv_chunk_threshold},
+        {kp_chunk_threshold, Bt#btree.kp_chunk_threshold} | Stats
     ].
 
 collect_stats(nil, _Bt, 0, 0, 0, 0, 0, 0) ->

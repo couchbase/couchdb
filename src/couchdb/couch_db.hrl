@@ -286,6 +286,7 @@
     assemble_kv = fun(Key, Value) -> {Key, Value} end,
     less = fun(A, B) -> A < B end,
     reduce = nil,
-    chunk_threshold = 16#4ff,
+    kv_chunk_threshold = 16#4ff,
+    kp_chunk_threshold = 2 * 16#4ff,
     binary_mode = false
 }).

@@ -48,7 +48,11 @@ no_purged_items_test() ->
     end,
 
     {ok, Fd} = couch_file:open(filename(), [create, overwrite]),
-    {ok, Btree} = couch_btree:open(nil, Fd, [{reduce, ReduceFun}, {chunk_threshold, 6 * 1024}]),
+    {ok, Btree} = couch_btree:open(nil, Fd, [
+        {reduce, ReduceFun},
+        {kv_chunk_threshold, 6 * 1024},
+        {kp_chunk_threshold, 6 * 1024}
+    ]),
 
     N = 211341,
     KVs = [{I, I} || I <- lists:seq(1, N)],
@@ -86,7 +90,11 @@ all_purged_items_test() ->
     end,
 
     {ok, Fd} = couch_file:open(filename(), [create, overwrite]),
-    {ok, Btree} = couch_btree:open(nil, Fd, [{reduce, ReduceFun}, {chunk_threshold, 6 * 1024}]),
+    {ok, Btree} = couch_btree:open(nil, Fd, [
+        {reduce, ReduceFun},
+        {kv_chunk_threshold, 6 * 1024},
+        {kp_chunk_threshold, 6 * 1024}
+    ]),
 
     N = 211341,
     KVs = [{I, I} || I <- lists:seq(1, N)],
@@ -128,7 +136,11 @@ partial_purges_test() ->
     end,
 
     {ok, Fd} = couch_file:open(filename(), [create, overwrite]),
-    {ok, Btree} = couch_btree:open(nil, Fd, [{reduce, ReduceFun}, {chunk_threshold, 6 * 1024}]),
+    {ok, Btree} = couch_btree:open(nil, Fd, [
+        {reduce, ReduceFun},
+        {kv_chunk_threshold, 6 * 1024},
+        {kp_chunk_threshold, 6 * 1024}
+    ]),
 
     N = 211341,
     KVs = [{I, I} || I <- lists:seq(1, N)],
@@ -190,7 +202,11 @@ partial_purges_test_2() ->
     end,
 
     {ok, Fd} = couch_file:open(filename(), [create, overwrite]),
-    {ok, Btree} = couch_btree:open(nil, Fd, [{reduce, ReduceFun}, {chunk_threshold, 6 * 1024}]),
+    {ok, Btree} = couch_btree:open(nil, Fd, [
+        {reduce, ReduceFun},
+        {kv_chunk_threshold, 6 * 1024},
+        {kp_chunk_threshold, 6 * 1024}
+    ]),
 
     N = 320000,
     KVs = [{iolist_to_binary(io_lib:format("doc_~6..0b", [I])), {I rem 64, I}} || I <- lists:seq(1, N)],
@@ -257,7 +273,11 @@ partial_purges_test_with_stop() ->
     end,
 
     {ok, Fd} = couch_file:open(filename(), [create, overwrite]),
-    {ok, Btree} = couch_btree:open(nil, Fd, [{reduce, ReduceFun}, {chunk_threshold, 6 * 1024}]),
+    {ok, Btree} = couch_btree:open(nil, Fd, [
+        {reduce, ReduceFun},
+        {kv_chunk_threshold, 6 * 1024},
+        {kp_chunk_threshold, 6 * 1024}
+    ]),
 
     N = 211341,
     KVs = [{I, I} || I <- lists:seq(1, N)],
@@ -323,7 +343,11 @@ add_remove_and_purge_test() ->
     end,
 
     {ok, Fd} = couch_file:open(filename(), [create, overwrite]),
-    {ok, Btree} = couch_btree:open(nil, Fd, [{reduce, ReduceFun}, {chunk_threshold, 6 * 1024}]),
+    {ok, Btree} = couch_btree:open(nil, Fd, [
+        {reduce, ReduceFun},
+        {kv_chunk_threshold, 6 * 1024},
+        {kp_chunk_threshold, 6 * 1024}
+    ]),
 
     N = 211341,
     KVs = [{I, I} || I <- lists:seq(1, N)],

@@ -38,7 +38,8 @@
                             pid()) -> no_return()).
 
 -define(TIMEOUT, 3000).
--define(BTREE_CHUNK_THRESHOLD, 5120).
+-define(BTREE_KV_CHUNK_THRESHOLD, 7168).
+-define(BTREE_KP_CHUNK_THRESHOLD, 6144).
 
 -define(root_dir(State), element(1, State#state.init_args)).
 -define(set_name(State), element(2, State#state.init_args)).
@@ -1619,7 +1620,8 @@ init_group(Fd, Group, IndexHeader) ->
             First, Rest)
     end,
     BtreeOptions = [
-        {chunk_threshold, ?BTREE_CHUNK_THRESHOLD},
+        {kv_chunk_threshold, ?BTREE_KV_CHUNK_THRESHOLD},
+        {kp_chunk_threshold, ?BTREE_KP_CHUNK_THRESHOLD},
         {binary_mode, true}
     ],
     {ok, IdBtree} = couch_btree:open(

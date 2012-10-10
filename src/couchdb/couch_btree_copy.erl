@@ -24,7 +24,8 @@
     before_kv_write = nil,
     user_acc = [],
     filter = fun(_) -> true end,
-    chunk_threshold,
+    kv_chunk_threshold,
+    kp_chunk_threshold,
     nodes = array:new(),
     cur_level = 1,
     max_level = 1,
@@ -44,7 +45,8 @@ copy(Btree, Fd, Options) ->
     Acc0 = #acc{
         btree = Btree,
         fd = Fd,
-        chunk_threshold = Btree#btree.chunk_threshold
+        kv_chunk_threshold = Btree#btree.kv_chunk_threshold,
+        kp_chunk_threshold = Btree#btree.kp_chunk_threshold
     },
     Acc = apply_options(Options, Acc0),
     {ok, _, #acc{cur_level = 1} = FinalAcc0} = couch_btree:fold(
@@ -58,7 +60,8 @@ from_sorted_file(EmptyBtree, SortedFileName, DestFd, BinToKvFun) ->
     Acc = #acc{
         btree = EmptyBtree,
         fd = DestFd,
-        chunk_threshold = EmptyBtree#btree.chunk_threshold
+        kv_chunk_threshold = EmptyBtree#btree.kv_chunk_threshold,
+        kp_chunk_threshold = EmptyBtree#btree.kp_chunk_threshold
     },
     {ok, SourceFd} = file:open(SortedFileName, [read, raw, binary, read_ahead]),
     {ok, Acc2} = try
@@ -105,7 +108,8 @@ file_sort_output_fun(OrigBtree, Fd, Options) ->
     Acc0 = #acc{
         btree = OrigBtree,
         fd = Fd,
-        chunk_threshold = OrigBtree#btree.chunk_threshold
+        kv_chunk_threshold = OrigBtree#btree.kv_chunk_threshold,
+        kp_chunk_threshold = OrigBtree#btree.kp_chunk_threshold
     },
     Acc = apply_options(Options, Acc0),
     fun(Item) -> file_sort_loop(Item, Acc) end.
@@ -131,8 +135,10 @@ apply_options([{filter, Fun} | Rest], Acc) ->
     apply_options(Rest, Acc#acc{filter = Fun});
 apply_options([override | Rest], Acc) ->
     apply_options(Rest, Acc);
-apply_options([{chunk_threshold, Threshold} | Rest], Acc) ->
-    apply_options(Rest, Acc#acc{chunk_threshold = Threshold}).
+apply_options([{kv_chunk_threshold, Threshold} | Rest], Acc) ->
+    apply_options(Rest, Acc#acc{kv_chunk_threshold = Threshold});
+apply_options([{kp_chunk_threshold, Threshold} | Rest], Acc) ->
+    apply_options(Rest, Acc#acc{kp_chunk_threshold = Threshold}).
 
 
 extract(#acc{btree = #btree{extract_kv = Extract}}, Value) ->
@@ -207,7 +213,7 @@ fold_copy(Item, ItemSize, #acc{cur_level = 1} = Acc) ->
     Kv = extract(Acc, Item),
     LeafSize2 = LeafSize + ItemSize,
     Values2 = [Kv | Values],
-    NextAcc = case LeafSize2 >= Acc#acc.chunk_threshold of
+    NextAcc = case LeafSize2 >= Acc#acc.kv_chunk_threshold of
     true ->
         {LeafState, Acc2} = flush_leaf(Values2, Acc),
         {K, _V} = Kv,
@@ -241,7 +247,7 @@ bubble_up({Key, NodeState}, Level, Acc) ->
         {Size, NextLevelNodes} = array:get(Level + 1, Acc2#acc.nodes),
         NextLevelNodes2 = [Kp | NextLevelNodes],
         Size2 = Size + KpSize,
-        case Size2 >= Acc#acc.chunk_threshold of
+        case Size2 >= Acc#acc.kp_chunk_threshold of
         true ->
             {ok, NewNodeState} = write_kp_node(
                 Acc2, lists:reverse(NextLevelNodes2)),
