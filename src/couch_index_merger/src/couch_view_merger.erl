@@ -1543,11 +1543,15 @@ simple_set_view_query(Params, DDoc, Req) ->
         }
     end,
 
-    case ViewType of
-    reduce ->
-        simple_set_view_reduce_query(Params2, Group, View, QueryArgs2);
-    _ ->
-        simple_set_view_map_query(Params2, Group, View, QueryArgs2)
+    try
+        case ViewType of
+        reduce ->
+            simple_set_view_reduce_query(Params2, Group, View, QueryArgs2);
+        _ ->
+            simple_set_view_map_query(Params2, Group, View, QueryArgs2)
+        end
+    after
+        couch_set_view:release_group(Group)
     end.
 
 
