@@ -803,8 +803,9 @@ handle_cast({partial_update, Pid, NewGroup}, #state{updater_pid = Pid} = State) 
         (?set_cbitmask(State#state.group) =/= 0) andalso
         (State#state.waiting_list =:= []) of
     true ->
-        State2 = stop_updater(State),
-        NewState = maybe_apply_pending_transition(State2);
+        State2 = process_partial_update(State, NewGroup),
+        State3 = stop_updater(State2),
+        NewState = maybe_apply_pending_transition(State3);
     false ->
         NewState = process_partial_update(State, NewGroup)
     end,
