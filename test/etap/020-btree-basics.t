@@ -189,6 +189,7 @@ test_add_remove(#btree{fd = Fd} = Btree, OutKeyValues, RemainingKeyValues) ->
     ok = couch_file:flush(Fd),
     Btree2 = lists:foldl(fun({K, _}, BtAcc) ->
         {ok, BtAcc2} = couch_btree:add_remove(BtAcc, [], [K]),
+        ok = couch_file:flush(Fd),
         BtAcc2
     end, Btree, OutKeyValues),
     true = test_btree(Btree2, RemainingKeyValues),
