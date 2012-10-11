@@ -225,12 +225,11 @@ maybe_retry_compact(CompactResult0, StartTime, LogFilePath, LogOffsetStart, Owne
         _ = file:delete(LogFilePath),
         ok;
     {update, MissingCount} ->
-        {ok, LogEof} = gen_server:call(Owner, log_eof, infinity),
         ?LOG_INFO("Compactor for set view `~s`, ~s group `~s`, "
                   "applying delta of ~p changes (retry number ~p), "
-                  "log start offset ~p, log eof ~p",
+                  "log start offset ~p",
                   [SetName, Type, DDocId, MissingCount, Retries,
-                   LogOffsetStart, LogEof]),
+                   LogOffsetStart]),
         [TotalChanges] = couch_task_status:get([total_changes]),
         TotalChanges2 = TotalChanges + MissingCount,
         couch_task_status:update([
@@ -242,7 +241,7 @@ maybe_retry_compact(CompactResult0, StartTime, LogFilePath, LogOffsetStart, Owne
         {ok, LogFd} = file:open(LogFilePath, [read, raw, binary]),
         {ok, LogOffsetStart} = file:position(LogFd, LogOffsetStart),
         ok = couch_set_view_util:open_raw_read_fd(NewGroup),
-        NewGroup2 = apply_log(NewGroup, LogFd, LogOffsetStart, LogEof),
+        {NewGroup2, LogEof} = apply_log(NewGroup, LogFd, LogOffsetStart),
         ok = file:close(LogFd),
         ok = couch_set_view_util:close_raw_read_fd(NewGroup),
         CompactResult2 = CompactResult0#set_view_compactor_result{
@@ -313,14 +312,16 @@ total_kv_count(#set_view_group{id_btree = IdBtree, views = Views}) ->
         IdCount, Views).
 
 
-apply_log(Group, _LogFd, LogOffset, LogEof) when LogOffset == LogEof ->
-    Group;
-apply_log(Group, LogFd, LogOffset, LogEof) when LogOffset < LogEof ->
-    {ok, <<EntrySize:32>>} = file:read(LogFd, 4),
-    {ok, <<EntryBin:EntrySize/binary>>} = file:read(LogFd, EntrySize),
-    Entry = binary_to_term(couch_compress:decompress(EntryBin)),
-    Group2 = apply_log_entry(Group, Entry),
-    apply_log(Group2, LogFd, LogOffset + 4 + EntrySize, LogEof).
+apply_log(Group, LogFd, LogOffset) ->
+    case file:read(LogFd, 4) of
+    {ok, <<EntrySize:32>>} ->
+        {ok, <<EntryBin:EntrySize/binary>>} = file:read(LogFd, EntrySize),
+        Entry = binary_to_term(couch_compress:decompress(EntryBin)),
+        Group2 = apply_log_entry(Group, Entry),
+        apply_log(Group2, LogFd, LogOffset + 4 + EntrySize);
+    eof ->
+        {Group, LogOffset}
+    end.
 
 
 apply_log_entry(Group, Entry) ->

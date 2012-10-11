@@ -89,7 +89,6 @@
     replica_partitions = []            :: ordsets:ordset(partition_id()),
     pending_transition_waiters = []    :: [{From::{pid(), reference()}, #set_view_group_req{}}],
     update_listeners = dict:new()      :: dict(),
-    log_eof = 0                        :: non_neg_integer(),
     % Monitor references for active, passive and replica partitions.
     % Applies to main group only, replica group must always have an empty dict.
     db_refs = dict:new()               :: dict()
@@ -785,17 +784,11 @@ handle_call({demonitor_partition_update, Ref}, _From, State) ->
         erlang:demonitor(MonRef, [flush]),
         State2 = State#state{update_listeners = dict:erase(Ref, Listeners)},
         {reply, ok, State2, ?TIMEOUT}
-    end;
-
-handle_call(log_eof, _From, State) ->
-    {reply, {ok, State#state.log_eof}, State, ?TIMEOUT}.
+    end.
 
 
 handle_cast(_Msg, State) when not ?is_defined(State) ->
     {noreply, State};
-
-handle_cast({log_eof, LogEof}, State) ->
-    {noreply, State#state{log_eof = LogEof}, ?TIMEOUT};
 
 handle_cast({partial_update, Pid, NewGroup}, #state{updater_pid = Pid} = State) ->
     case ?have_pending_transition(State) andalso
