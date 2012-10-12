@@ -91,8 +91,11 @@ public:
     NifStlAllocator(const NifStlAllocator&) {}
 
     pointer allocate(size_type n, const void * = 0) {
-        pointer t = (pointer) enif_alloc(n * sizeof(value_type));
-        if (t == NULL) {
+        if (n > this->max_size()) {
+            throw std::bad_alloc();
+        }
+        pointer t = static_cast<pointer>(enif_alloc(n * sizeof(value_type)));
+        if (!t) {
             throw std::bad_alloc();
         }
         return t;
