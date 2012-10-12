@@ -44,7 +44,7 @@ EXTRA_DIST = \
     024-btree-guided-fold.t \
     030-doc-from-json.t \
     031-doc-to-json.t \
-    031-doc-from-binary.t \
+    033-doc-from-binary.t \
     040-util.t \
     041-uuid-gen-seq.ini \
     041-uuid-gen-utc.ini \
