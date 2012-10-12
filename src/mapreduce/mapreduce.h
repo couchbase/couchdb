@@ -147,7 +147,7 @@ public:
     }
 
     size_type max_size() const {
-        return size_t(-1);
+        return size_t(-1) / sizeof(value_type);
     }
 
     template <class U>
