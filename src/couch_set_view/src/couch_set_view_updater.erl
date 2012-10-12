@@ -825,6 +825,7 @@ view_insert_doc_query_results(DocId, PartitionId, [ResultKVs | RestResults],
 write_changes(WriterAcc, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs) ->
     #writer_acc{
         log_fd = LogFd,
+        owner = Owner,
         group = Group,
         initial_build = false,
         cleanup_kv_count = CleanupKvCount0,
@@ -933,7 +934,9 @@ write_changes(WriterAcc, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs) ->
             ViewKeyValuesToAddBinary),
         LogEntry = {NewSeqs, AddDocIdViewIdKeys, RemoveDocIds, LogViewsAddRemoveKvs},
         LogEntryBin = couch_compress:compress(?term_to_bin(LogEntry)),
-        ok = file:write(LogFd, [<<(byte_size(LogEntryBin)):32>>, LogEntryBin])
+        ok = file:write(LogFd, [<<(byte_size(LogEntryBin)):32>>, LogEntryBin]),
+        {ok, LogEof} = file:position(LogFd, eof),
+        ok = gen_server:cast(Owner, {log_eof, LogEof})
     end,
     Header = Group#set_view_group.index_header,
     NewHeader = Header#set_view_index_header{
