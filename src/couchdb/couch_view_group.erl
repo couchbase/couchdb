@@ -14,7 +14,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/1, request_group/2, request_group_info/1]).
+-export([start_link/1, request_group/2, request_group_info/1, get_signature/1]).
 -export([open_db_group/2, open_temp_group/5, design_doc_to_view_group/1,design_root/2]).
 
 %% gen_server callbacks
@@ -524,6 +524,12 @@ open_db_group(DbName, GroupId) ->
     Else ->
         Else
     end.
+
+-spec get_signature(#doc{}) -> string().
+get_signature(DDoc) ->
+    #group{sig = Sig} = design_doc_to_view_group(DDoc),
+    couch_util:to_hex(Sig).
+
 
 get_group_info(State) ->
     #group_state{

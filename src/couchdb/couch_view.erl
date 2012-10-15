@@ -107,14 +107,8 @@ get_group_info(DbName, GroupId) ->
 
 cleanup_index_files(Db) ->
     % load all ddocs
-    {ok, DesignDocs} = couch_db:get_design_docs(Db),
-
-    % make unique list of group sigs
-    Sigs = lists:map(fun(#doc{id = GroupId}) ->
-        {ok, Info} = get_group_info(Db, GroupId),
-        ?b2l(couch_util:get_value(signature, Info))
-    end, [DD||DD <- DesignDocs, DD#doc.deleted == false]),
-
+    {ok, DesignDocs} = couch_db:get_design_docs(Db, no_deletes),
+    Sigs = lists:map(fun couch_view_group:get_signature/1, DesignDocs),
     FileList = list_index_files(Db),
 
     % regex that matches all ddocs
