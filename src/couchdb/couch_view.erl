@@ -448,12 +448,19 @@ nuke_dir(RootDelDir, Dir) ->
                 Full = Dir ++ "/" ++ File,
                 case couch_file:delete(RootDelDir, Full, false) of
                 ok -> ok;
+                % Directory doesn't exist
+                {error, enoent} -> ok;
                 {error, eperm} ->
                     ok = nuke_dir(RootDelDir, Full)
                 end
             end,
             Files),
-        ok = file:del_dir(Dir)
+        case file:del_dir(Dir) of
+        ok -> ok;
+        % Directory doesn't exist (might have been deleted by some other
+        % process already)
+        {error, enoent} -> ok
+        end
     end.
 
 
