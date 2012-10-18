@@ -111,13 +111,16 @@ cleanup_index_files(Db) ->
     Sigs = lists:map(fun couch_view_group:get_signature/1, DesignDocs),
     FileList = list_index_files(Db),
 
-    % regex that matches all ddocs
-    RegExp = "("++ string:join(Sigs, "|") ++")",
-
-    % filter out the ones in use
-    DeleteFiles = [FilePath
-           || FilePath <- FileList,
-              re:run(FilePath, RegExp, [{capture, none}]) =:= nomatch],
+    DeleteFiles = case Sigs of
+    [] ->
+        FileList;
+    _ ->
+        % regex that matches all ddocs
+        {ok, RegExp} = re:compile(["(", string:join(Sigs, "|"), ")"]),
+        % filter out the ones in use
+        [FilePath || FilePath <- FileList,
+            re:run(FilePath, RegExp, [{capture, none}]) =:= nomatch]
+    end,
 
     case DeleteFiles of
     [] ->
