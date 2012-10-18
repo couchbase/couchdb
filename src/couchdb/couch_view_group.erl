@@ -88,6 +88,10 @@ init({{_, DbName, _} = InitArgs, ReturnPid, Ref}) ->
             couch_db:monitor(Db),
             couch_db:close(Db),
             {ok, RefCounter} = couch_ref_counter:start([Fd]),
+            ?LOG_INFO("Started view group `~s`, signature `~s`, "
+                      "database `~s`, ddoc database `~s`",
+                      [Group#group.name, couch_util:to_hex(Group#group.sig),
+                       DbName, Group#group.ddoc_db_name]),
             {ok, #group_state{
                     db_name=DbName,
                     init_args=InitArgs,
@@ -157,12 +161,12 @@ handle_call(request_group_info, _From, State) ->
 handle_call({start_compact, CompactFun}, _From, #group_state{compactor_pid=nil}
         = State) ->
     #group_state{
-        group = #group{name = GroupId, sig = GroupSig} = Group,
+        group = #group{name = GroupId, sig = GroupSig, ddoc_db_name = DDocDbName} = Group,
         init_args = {RootDir, DbName, _}
     } = State,
     ?LOG_INFO("View index compaction starting for ~s ~s", [DbName, GroupId]),
     {ok, Db} = couch_db:open_int(DbName, []),
-    {ok, Fd} = open_index_file(compact, RootDir, DbName, GroupSig),
+    {ok, Fd} = open_index_file(compact, RootDir, DDocDbName, GroupSig),
     NewGroup = reset_file(Db, Fd, DbName, Group),
     couch_db:close(Db),
     Pid = spawn_link(fun() -> CompactFun(Group, NewGroup, DbName) end),
@@ -175,7 +179,7 @@ handle_call({compact_done, #group{current_seq=NewSeq} = NewGroup}, _From,
         #group_state{group = #group{current_seq=OldSeq}} = State)
         when NewSeq >= OldSeq ->
     #group_state{
-        group = #group{name=GroupId, fd=OldFd, sig=GroupSig},
+        group = #group{name=GroupId, fd=OldFd, sig=GroupSig, ddoc_db_name=DDocDbName},
         init_args = {RootDir, DbName, _},
         updater_pid = UpdaterPid,
         compactor_pid = CompactorPid,
@@ -183,7 +187,7 @@ handle_call({compact_done, #group{current_seq=NewSeq} = NewGroup}, _From,
     } = State,
 
     ?LOG_INFO("View index compaction complete for ~s ~s", [DbName, GroupId]),
-    FileName = index_file_name(RootDir, DbName, GroupSig),
+    FileName = index_file_name(RootDir, DDocDbName, GroupSig),
     ok = couch_file:only_snapshot_reads(OldFd),
     ok = couch_file:delete(RootDir, FileName),
     ok = couch_file:rename(NewGroup#group.fd, FileName),
@@ -227,10 +231,10 @@ handle_call(cancel_compact, _From, #group_state{compactor_pid = Pid} = State) ->
     unlink(Pid),
     exit(Pid, kill),
     #group_state{
-        group = #group{sig=GroupSig},
-        init_args = {RootDir, DbName, _}
+        group = #group{sig=GroupSig, ddoc_db_name=DDocDbName},
+        init_args = {RootDir, _DbName, _}
     } = State,
-    CompactFile = index_file_name(compact, RootDir, DbName, GroupSig),
+    CompactFile = index_file_name(compact, RootDir, DDocDbName, GroupSig),
     ok = couch_file:delete(RootDir, CompactFile),
     {reply, ok, State#group_state{compactor_pid = nil}}.
 
@@ -261,8 +265,16 @@ handle_cast({partial_update, _, _}, State) ->
 handle_cast({ddoc_updated, NewSig}, State) ->
     #group_state{
         waiting_list = Waiters,
-        group = #group{sig = CurSig}
+        db_name = DbName,
+        group = #group{sig = CurSig, name = DDocId, ddoc_db_name = DDocDbName}
     } = State,
+    ?LOG_INFO("View group `~s`, signature `~s`, database `~s`, ddoc database `~s`, "
+              "design document updated~n"
+              "  new signature:   ~s~n"
+              "  shutdown flag:   ~s~n"
+              "  waiting clients: ~p~n",
+              [DDocId, couch_util:to_hex(CurSig), DbName, DDocDbName,
+               couch_util:to_hex(NewSig), State#group_state.shutdown, length(Waiters)]),
     case NewSig of
     CurSig ->
         {noreply, State#group_state{shutdown = false}};
@@ -353,13 +365,26 @@ handle_info({'EXIT', FromPid, Reason}, State) ->
     ?LOG_DEBUG("Exit from linked pid: ~p", [{FromPid, Reason}]),
     {stop, Reason, State};
 
-handle_info({'DOWN',_,_,_,_}, State) ->
-    ?LOG_INFO("Shutting down view group server, monitored db is closing.", []),
+handle_info({'DOWN', _, _, _, _}, #group_state{group = Group, db_name = DbName} = State) ->
+    ?LOG_INFO("View group `~s`, signature `~s`, database `~s`, ddoc database `~s`,"
+              " stopping because database was shutdown",
+              [Group#group.name, couch_util:to_hex(Group#group.sig),
+               DbName, Group#group.ddoc_db_name]),
     {stop, normal, reply_all(State, shutdown)}.
 
 
-terminate(Reason, #group_state{updater_pid=Update, compactor_pid=Compact}=S) ->
-    reply_all(S, Reason),
+terminate(Reason, State) ->
+    #group_state{
+        updater_pid = Update,
+        compactor_pid = Compact,
+        db_name = DbName,
+        group = Group
+    } = State,
+    ?LOG_INFO("View group `~s`, signature `~s`, database `~s`, ddoc database `~s`,"
+              " terminating with reason: ~p",
+              [Group#group.name, couch_util:to_hex(Group#group.sig),
+               DbName, Group#group.ddoc_db_name, Reason]),
+    reply_all(State, Reason),
     couch_util:shutdown_sync(Update),
     couch_util:shutdown_sync(Compact),
     ok.
@@ -391,13 +416,14 @@ reply_all(#group_state{waiting_list=WaitList}=State, Reply) ->
     State#group_state{waiting_list=[]}.
 
 prepare_group({RootDir, DbName, #group{sig=Sig}=Group}, ForceReset)->
+    DDocDbName = Group#group.ddoc_db_name,
     case couch_db:open_int(DbName, []) of
     {ok, Db} ->
-        case open_index_file(RootDir, DbName, Sig) of
+        case open_index_file(RootDir, DDocDbName, Sig) of
         {ok, Fd} ->
             if ForceReset ->
                 % this can happen if we missed a purge
-                {ok, Db, reset_file(Db, Fd, DbName, Group)};
+                {ok, Db, reset_file(Db, Fd, DDocDbName, Group)};
             true ->
                 case (catch couch_file:read_header(Fd)) of
                 {ok, {Sig, HeaderInfo}} ->
@@ -405,11 +431,11 @@ prepare_group({RootDir, DbName, #group{sig=Sig}=Group}, ForceReset)->
                     {ok, Db, init_group(Db, Fd, Group, HeaderInfo)};
                 _ ->
                     % this happens on a new file
-                    {ok, Db, reset_file(Db, Fd, DbName, Group)}
+                    {ok, Db, reset_file(Db, Fd, DDocDbName, Group)}
                 end
             end;
         Error ->
-            catch delete_index_file(RootDir, DbName, Sig),
+            catch delete_index_file(RootDir, DDocDbName, Sig),
             Error
         end;
     Else ->
@@ -516,7 +542,8 @@ open_db_group(DbName, GroupId) ->
         case couch_db:open_doc(Db, GroupId, [ejson_body]) of
         {ok, Doc} ->
             couch_db:close(Db),
-            {ok, design_doc_to_view_group(Doc)};
+            Group = design_doc_to_view_group(Doc),
+            {ok, Group#group{ddoc_db_name = DbName}};
         Else ->
             couch_db:close(Db),
             Else

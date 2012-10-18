@@ -305,11 +305,10 @@ init([]) ->
         ({created, DbName}) ->
             gen_server:cast(couch_view, {reset_indexes, DbName});
         ({ddoc_updated, {DbName, #doc{id = DDocId} = DDoc}}) ->
-            case ets:match_object(couch_groups_by_db, {DbName, {DDocId, '$1'}}) of
-            [] ->
-                ok;
-            [{DbName, {DDocId, Sig}}] ->
-                case ets:lookup(group_servers_by_sig, {DbName, Sig}) of
+            EntriesWhereIsDataDb = ets:match_object(couch_groups_by_db, {{DbName, '_'}, {DDocId, '_'}}),
+            EntriesWhereIsDDocDb = ets:match_object(couch_groups_by_db, {{'_', DbName}, {DDocId, '_'}}),
+            DDocUpdateNotifyFun = fun({{DataDbName, DDocDbName}, {DDocId0, Sig}}) when DDocId0 == DDocId ->
+                case ets:lookup(group_servers_by_sig, {DataDbName, DDocDbName, Sig}) of
                 [{_, GroupPid}] ->
                     case DDoc#doc.deleted of
                     true ->
@@ -322,7 +321,9 @@ init([]) ->
                 [] ->
                     ok
                 end
-            end;
+            end,
+            ok = lists:foreach(DDocUpdateNotifyFun, EntriesWhereIsDataDb),
+            ok = lists:foreach(DDocUpdateNotifyFun, EntriesWhereIsDDocDb);
         (_Else) ->
             ok
         end),
@@ -337,15 +338,15 @@ terminate(_Reason, _Srv) ->
     ok.
 
 
-handle_call({get_group_server, DbName, #group{sig=Sig}=Group}, From,
-    #server{root_dir=Root}=Server) ->
-    case ets:lookup(group_servers_by_sig, {DbName, Sig}) of
+handle_call({get_group_server, DbName, Group}, From, #server{root_dir = Root} = Server) ->
+    Key = {DbName, Group#group.ddoc_db_name, Group#group.sig},
+    case ets:lookup(group_servers_by_sig, Key) of
     [] ->
         spawn_monitor(fun() -> new_group(Root, DbName, Group) end),
-        ets:insert(group_servers_by_sig, {{DbName, Sig}, [From]}),
+        ets:insert(group_servers_by_sig, {Key, [From]}),
         {noreply, Server};
     [{_, WaitList}] when is_list(WaitList) ->
-        ets:insert(group_servers_by_sig, {{DbName, Sig}, [From | WaitList]}),
+        ets:insert(group_servers_by_sig, {Key, [From | WaitList]}),
         {noreply, Server};
     [{_, ExistingPid}] ->
         {reply, {ok, ExistingPid}, Server}
@@ -359,13 +360,13 @@ handle_cast({reset_indexes, DbName}, #server{root_dir=Root}=Server) ->
     do_reset_indexes(DbName, Root),
     {noreply, Server}.
 
-new_group(Root, DbName, #group{name=GroupId, sig=Sig} = Group) ->
+new_group(Root, DbName, #group{name=GroupId, sig=Sig, ddoc_db_name=DDocDbName} = Group) ->
     ?LOG_DEBUG("Spawning new group server for view group ~s in database ~s.",
         [GroupId, DbName]),
     case (catch couch_view_group:start_link({Root, DbName, Group})) of
     {ok, NewPid} ->
         unlink(NewPid),
-        exit({DbName, GroupId, Sig, {ok, NewPid}});
+        exit({DbName, DDocDbName, GroupId, Sig, {ok, NewPid}});
     {error, invalid_view_seq} ->
         ok = gen_server:call(couch_view, {reset_indexes, DbName}),
         new_group(Root, DbName, Group);
@@ -375,15 +376,24 @@ new_group(Root, DbName, #group{name=GroupId, sig=Sig} = Group) ->
 
 do_reset_indexes(DbName, Root) ->
     % shutdown all the updaters and clear the files, the db got changed
-    Names = ets:lookup(couch_groups_by_db, DbName),
-    lists:foreach(
-        fun({_DbName, {DDocId, Sig}}) ->
-            ?LOG_DEBUG("Killing update process for view group ~s. in database ~s.", [Sig, DbName]),
-            [{_, Pid}] = ets:lookup(group_servers_by_sig, {DbName, Sig}),
+    NamesWhereIsDataDb = ets:match_object(couch_groups_by_db, {{DbName, '_'}, '_'}),
+    NamesWhereIsDDocDb = ets:match_object(couch_groups_by_db, {{'_', DbName}, '_'}),
+    Fun = fun({{DataDbName, DDocDbName}, {DDocId, Sig}}) ->
+        ?LOG_DEBUG("Killing update process for view group `~s`, signature `~s`, "
+                   "data database `~s`, ddoc database `~s`",
+                   [DDocId, couch_util:to_hex(Sig), DataDbName, DDocDbName]),
+        case ets:lookup(group_servers_by_sig, {DataDbName, DDocDbName, Sig}) of
+        [{_, Pid}] when is_pid(Pid) ->
             couch_util:shutdown_sync(Pid),
-            delete_from_ets(Pid, DbName, DDocId, Sig)
-        end, Names),
-    delete_index_dir(Root, DbName),
+            delete_from_ets(Pid, DataDbName, DDocDbName, DDocId, Sig);
+        _ ->
+            % Already shutdown in a previous iteration
+            ok
+        end,
+        delete_index_dir(Root, DDocDbName)
+    end,
+    ok = lists:foreach(Fun, NamesWhereIsDataDb),
+    ok = lists:foreach(Fun, NamesWhereIsDDocDb),
     RootDelDir = couch_config:get("couchdb", "view_index_dir"),
     couch_file:delete(RootDelDir, Root ++ "/." ++ ?b2l(DbName) ++ "_temp").
 
@@ -396,31 +406,31 @@ handle_info({'EXIT', FromPid, Reason}, Server) ->
             exit(Reason);
         true -> ok
         end;
-    [{_, {DbName, Sig}}] ->
-        [{DbName, {DDocId, Sig}}] = ets:match_object(
-            couch_groups_by_db, {DbName, {'$1', Sig}}),
-        delete_from_ets(FromPid, DbName, DDocId, Sig)
+    [{_, {DbName, DDocDbName, Sig}}] ->
+        [{{DbName, DDocDbName}, {DDocId, Sig}}] = ets:match_object(
+            couch_groups_by_db, {{DbName, DDocDbName}, {'_', Sig}}),
+        delete_from_ets(FromPid, DbName, DDocDbName, DDocId, Sig)
     end,
     {noreply, Server};
 
-handle_info({'DOWN', _, _, _, {DbName, DDocId, Sig, Reply}}, Server) ->
-    [{_, WaitList}] = ets:lookup(group_servers_by_sig, {DbName, Sig}),
+handle_info({'DOWN', _, _, _, {DbName, DDocDbName, DDocId, Sig, Reply}}, Server) ->
+    [{_, WaitList}] = ets:lookup(group_servers_by_sig, {DbName, DDocDbName, Sig}),
     [gen_server:reply(From, Reply) || From <- WaitList],
     case Reply of {ok, NewPid} ->
         link(NewPid),
-        add_to_ets(NewPid, DbName, DDocId, Sig);
+        add_to_ets(NewPid, DbName, DDocDbName, DDocId, Sig);
      _ -> ok end,
     {noreply, Server}.
 
-add_to_ets(Pid, DbName, DDocId, Sig) ->
-    true = ets:insert(couch_groups_by_updater, {Pid, {DbName, Sig}}),
-    true = ets:insert(group_servers_by_sig, {{DbName, Sig}, Pid}),
-    true = ets:insert(couch_groups_by_db, {DbName, {DDocId, Sig}}).
+add_to_ets(Pid, DbName, DDocDbName, DDocId, Sig) ->
+    true = ets:insert(couch_groups_by_updater, {Pid, {DbName, DDocDbName, Sig}}),
+    true = ets:insert(group_servers_by_sig, {{DbName, DDocDbName, Sig}, Pid}),
+    true = ets:insert(couch_groups_by_db, {{DbName, DDocDbName}, {DDocId, Sig}}).
 
-delete_from_ets(Pid, DbName, DDocId, Sig) ->
+delete_from_ets(Pid, DbName, DDocDbName, DDocId, Sig) ->
     true = ets:delete(couch_groups_by_updater, Pid),
-    true = ets:delete(group_servers_by_sig, {DbName, Sig}),
-    true = ets:delete_object(couch_groups_by_db, {DbName, {DDocId, Sig}}).
+    true = ets:delete(group_servers_by_sig, {DbName, DDocDbName, Sig}),
+    true = ets:delete_object(couch_groups_by_db, {{DbName, DDocDbName}, {DDocId, Sig}}).
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.

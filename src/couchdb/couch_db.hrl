@@ -238,7 +238,8 @@
     id_btree=nil,
     current_seq=0,
     purge_seq=0,
-    waiting_delayed_commit=nil
+    waiting_delayed_commit=nil,
+    ddoc_db_name=nil
     }).
 
 -record(view,
