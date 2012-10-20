@@ -49,6 +49,7 @@ source_files = \
     couch_ejson_compare.erl \
     couch_event_sup.erl \
     couch_file.erl \
+    couch_file_write_guard.erl \
     couch_db_frontend.erl \
     couch_httpd.erl \
     couch_httpd_db.erl \
