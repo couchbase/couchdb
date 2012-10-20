@@ -33,6 +33,7 @@ snappy_cxx_hdrs = \
 	snappy-$(SNAPPY_VERSION)/snappy-internal.h \
 	snappy-$(SNAPPY_VERSION)/snappy-sinksource.h \
 	snappy-$(SNAPPY_VERSION)/snappy-stubs-internal.h \
+        snappy-$(SNAPPY_VERSION)/snappy-stubs-public.h.in \
 	snappy-$(SNAPPY_VERSION)/snappy-stubs-public.h
 endif
 snappy_file_collection = \
