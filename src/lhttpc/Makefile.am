@@ -35,7 +35,8 @@ lhttpcebin_DATA = \
 
 EXTRA_DIST =  \
     $(lhttpc_file_collection) \
-    lhttpc_types.hrl
+    lhttpc_types.hrl \
+    lhttpc.hrl
 
 CLEANFILES = \
     $(lhttpcebin_make_generated_file_list)
