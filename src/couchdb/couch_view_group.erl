@@ -85,7 +85,6 @@ init({{_, DbName, _} = InitArgs, ReturnPid, Ref}) ->
             ReturnPid ! {Ref, self(), {error, invalid_view_seq}},
             ignore;
         _ ->
-            couch_db:monitor(Db),
             couch_db:close(Db),
             {ok, RefCounter} = couch_ref_counter:start([Fd]),
             ?LOG_INFO("Started view group `~s`, signature `~s`, "
@@ -363,14 +362,7 @@ handle_info({'EXIT', FromPid, {{nocatch, Reason}, _Trace}}, State) ->
 
 handle_info({'EXIT', FromPid, Reason}, State) ->
     ?LOG_DEBUG("Exit from linked pid: ~p", [{FromPid, Reason}]),
-    {stop, Reason, State};
-
-handle_info({'DOWN', _, _, _, _}, #group_state{group = Group, db_name = DbName} = State) ->
-    ?LOG_INFO("View group `~s`, signature `~s`, database `~s`, ddoc database `~s`,"
-              " stopping because database was shutdown",
-              [Group#group.name, couch_util:to_hex(Group#group.sig),
-               DbName, Group#group.ddoc_db_name]),
-    {stop, normal, reply_all(State, shutdown)}.
+    {stop, Reason, State}.
 
 
 terminate(Reason, State) ->

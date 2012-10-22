@@ -122,7 +122,7 @@ test() ->
     delete_db(data_db_name()),
 
     receive
-    {'DOWN', MonRef3, process, GroupPid3, normal} ->
+    {'DOWN', MonRef3, process, GroupPid3, shutdown} ->
          etap:diag("View group shutdown after data database deleted");
     {'DOWN', MonRef3, process, GroupPid3, _Reason3} ->
          etap:bail("View group shutdown after data database  deleted with unexpected reason")
@@ -130,10 +130,9 @@ test() ->
          etap:bail("Timeout waiting for view group shutdown")
     end,
 
-    cleanup_index_files(),
     etap:is(list_index_files(),
             [],
-            "No index files after data database deleted and after cleanup"),
+            "No index files after data database deleted"),
 
     delete_db(master_db_name()),
     couch_server_sup:stop(),

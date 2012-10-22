@@ -382,6 +382,7 @@ do_reset_indexes(DbName, Root) ->
         ?LOG_DEBUG("Killing update process for view group `~s`, signature `~s`, "
                    "data database `~s`, ddoc database `~s`",
                    [DDocId, couch_util:to_hex(Sig), DataDbName, DDocDbName]),
+        delete_index_dir(Root, DDocDbName),
         case ets:lookup(group_servers_by_sig, {DataDbName, DDocDbName, Sig}) of
         [{_, Pid}] when is_pid(Pid) ->
             couch_util:shutdown_sync(Pid),
@@ -389,8 +390,7 @@ do_reset_indexes(DbName, Root) ->
         _ ->
             % Already shutdown in a previous iteration
             ok
-        end,
-        delete_index_dir(Root, DDocDbName)
+        end
     end,
     ok = lists:foreach(Fun, NamesWhereIsDataDb),
     ok = lists:foreach(Fun, NamesWhereIsDDocDb),
