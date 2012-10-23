@@ -184,7 +184,8 @@
     original_abitmask = 0             :: bitmask(),
     original_pbitmask = 0             :: bitmask(),
     stats = #set_view_group_stats{}   :: #set_view_group_stats{},
-    replica_partitions = []           :: ordsets:ordset(partition_id())
+    replica_partitions = []           :: ordsets:ordset(partition_id()),
+    wanted_seqs = []                  :: partition_seqs()
 }).
 
 -record(set_view, {

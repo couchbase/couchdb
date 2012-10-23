@@ -68,7 +68,7 @@
     from,
     debug = false :: boolean(),
     % seqs for active partitions only
-    seqs = nil    :: partition_seqs() | 'nil'
+    seqs = []     :: partition_seqs()
 }).
 
 -record(state, {
@@ -1225,46 +1225,40 @@ reply_with_group(Group, ReplicaPartitions, WaitList) ->
     ActiveUnindexable = [{P, S} || {P, S} <- ?set_unindexable_seqs(Group),
                           ((1 bsl P) band ?set_abitmask(Group) =/= 0)],
     GroupSeqs = ordsets:union(ActiveIndexable, ActiveUnindexable),
-    {_, WaitList2} = lists:foldr(
-        fun(#waiter{debug = false} = Waiter, {DebugGroup, Acc}) ->
+    WaitList2 = lists:foldr(
+        fun(#waiter{debug = false} = Waiter, Acc) ->
             case maybe_reply_with_group(Waiter, Group, GroupSeqs, ActiveReplicasBitmask) of
             true ->
-                {DebugGroup, Acc};
+                Acc;
             false ->
-                {DebugGroup, [Waiter | Acc]}
+                [Waiter | Acc]
             end;
-        (#waiter{debug = true} = Waiter, {nil, Acc}) ->
+        (#waiter{debug = true} = Waiter, Acc) ->
             [Stats] = ets:lookup(?SET_VIEW_STATS_ETS, ?set_view_group_stats_key(Group)),
             DebugGroup = Group#set_view_group{
                 debug_info = #set_view_debug_info{
                     stats = Stats,
                     original_abitmask = ?set_abitmask(Group),
                     original_pbitmask = ?set_pbitmask(Group),
-                    replica_partitions = ReplicaPartitions
+                    replica_partitions = ReplicaPartitions,
+                    wanted_seqs = Waiter#waiter.seqs
                 }
             },
             case maybe_reply_with_group(Waiter, DebugGroup, GroupSeqs, ActiveReplicasBitmask) of
             true ->
-                {DebugGroup, Acc};
+                Acc;
             false ->
-                {DebugGroup, [Waiter | Acc]}
-            end;
-        (#waiter{debug = true} = Waiter, {DebugGroup, Acc}) ->
-            case maybe_reply_with_group(Waiter, DebugGroup, GroupSeqs, ActiveReplicasBitmask) of
-            true ->
-                {DebugGroup, Acc};
-            false ->
-                {DebugGroup, [Waiter | Acc]}
+                [Waiter | Acc]
             end
         end,
-        {nil, []}, WaitList),
+        [], WaitList),
     WaitList2.
 
 
 -spec maybe_reply_with_group(#waiter{}, #set_view_group{}, partition_seqs(), bitmask()) -> boolean().
 maybe_reply_with_group(Waiter, Group, GroupSeqs, ActiveReplicasBitmask) ->
     #waiter{from = {Pid, _} = From, seqs = ClientSeqs} = Waiter,
-    case (ClientSeqs == nil) orelse (GroupSeqs >= ClientSeqs) of
+    case (ClientSeqs == []) orelse (GroupSeqs >= ClientSeqs) of
     true ->
         couch_ref_counter:add(Group#set_view_group.ref_counter, Pid),
         gen_server:reply(From, {ok, Group, ActiveReplicasBitmask}),
@@ -2000,9 +1994,9 @@ persist_partition_states(State, ActiveList, PassiveList, CleanupList, PendingTra
 
 -spec update_waiting_list([#waiter{}],
                           pid(),
-                          [partition_id()],
-                          [partition_id()],
-                          [partition_id()]) -> [#waiter{}].
+                          ordsets:ordset(partition_id()),
+                          ordsets:ordset(partition_id()),
+                          ordsets:ordset(partition_id())) -> [#waiter{}].
 update_waiting_list([], _DbSet, _AddActiveList, _AddPassiveList, _AddCleanupList) ->
     [];
 update_waiting_list(WaitList, DbSet, AddActiveList, AddPassiveList, AddCleanupList) ->

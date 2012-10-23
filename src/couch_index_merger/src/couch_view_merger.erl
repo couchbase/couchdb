@@ -730,6 +730,7 @@ map_set_view_folder(ViewSpec, MergeParams, UserCtx, DDoc, Queue) ->
     PrepareResult = case (ViewSpec#set_view_spec.view =/= nil) andalso
         (ViewSpec#set_view_spec.group =/= nil) of
     true ->
+        ViewGroupReq2 = nil,
         {ViewSpec#set_view_spec.view, ViewSpec#set_view_spec.group};
     false ->
         WantedPartitions = case IndexType of
@@ -759,6 +760,7 @@ map_set_view_folder(ViewSpec, MergeParams, UserCtx, DDoc, Queue) ->
                 Else
             end;
         Else ->
+            ViewGroupReq2 = ViewGroupReq1,
             Else
         end
     end,
@@ -768,7 +770,7 @@ map_set_view_folder(ViewSpec, MergeParams, UserCtx, DDoc, Queue) ->
         %%  handled by prepare_set_view
         ok;
     {View, Group} ->
-        queue_debug_info(ViewArgs, Group, Queue),
+        queue_debug_info(ViewArgs, Group, ViewGroupReq2, Queue),
         try
             FoldFun = make_map_set_fold_fun(IncludeDocs, SetName, UserCtx, Queue),
 
@@ -885,6 +887,12 @@ http_view_fold(object_start, reduce, Queue) ->
 
 http_view_fold_rc_1({key, <<"total_rows">>}, Queue) ->
     fun(Ev) -> http_view_fold_rc_2(Ev, Queue) end;
+http_view_fold_rc_1({key, <<"debug_info">>}, Queue) ->
+    fun(object_start) ->
+        fun(Ev) ->
+            http_view_fold_debug_info(Ev, Queue, [], fun http_view_fold_rc_1/2)
+        end
+    end;
 http_view_fold_rc_1(_Ev, Queue) ->
     fun(Ev) -> http_view_fold_rc_1(Ev, Queue) end.
 
@@ -894,6 +902,12 @@ http_view_fold_rc_2(RowCount, Queue) when is_number(RowCount) ->
 
 http_view_fold_rows_1({key, <<"rows">>}, Queue) ->
     fun(array_start) -> fun(Ev) -> http_view_fold_rows_2(Ev, Queue) end end;
+http_view_fold_rows_1({key, <<"debug_info">>}, Queue) ->
+    fun(object_start) ->
+        fun(Ev) ->
+            http_view_fold_debug_info(Ev, Queue, [], fun http_view_fold_rows_1/2)
+        end
+    end;
 http_view_fold_rows_1(_Ev, Queue) ->
     fun(Ev) -> http_view_fold_rows_1(Ev, Queue) end.
 
@@ -911,8 +925,6 @@ http_view_fold_rows_2(object_start, Queue) ->
 
 http_view_fold_extra({key, <<"errors">>}, Queue) ->
     fun(array_start) -> fun(Ev) -> http_view_fold_errors(Ev, Queue) end end;
-http_view_fold_extra({key, <<"debug_info">>}, Queue) ->
-    fun(object_start) -> fun(Ev) -> http_view_fold_debug_info(Ev, Queue, []) end end;
 http_view_fold_extra(_Ev, _Queue) ->
     fun couch_index_merger:void_event/1.
 
@@ -928,17 +940,18 @@ http_view_fold_errors(object_start, Queue) ->
             end)
     end.
 
-http_view_fold_debug_info({key, Key}, Queue, Acc) ->
+http_view_fold_debug_info({key, Key}, Queue, Acc, RetFun) ->
     fun(object_start) ->
         fun(Ev) ->
             json_stream_parse:collect_object(
                 Ev,
                 fun(DebugInfo) ->
-                    fun(Ev2) -> http_view_fold_debug_info(Ev2, Queue, [{Key, DebugInfo} | Acc]) end
+                    Acc2 = [{Key, DebugInfo} | Acc],
+                    fun(Ev2) -> http_view_fold_debug_info(Ev2, Queue, Acc2, RetFun) end
                 end)
         end
     end;
-http_view_fold_debug_info(object_end, Queue, Acc) ->
+http_view_fold_debug_info(object_end, Queue, Acc, RetFun) ->
     case Acc of
     [{?LOCAL, Info}] ->
         ok;
@@ -946,7 +959,7 @@ http_view_fold_debug_info(object_end, Queue, Acc) ->
         Info = {lists:reverse(Acc)}
     end,
     ok = couch_view_merger_queue:queue(Queue, {debug_info, get(from_url), Info}),
-    fun(Ev2) -> http_view_fold_extra(Ev2, Queue) end.
+    fun(Ev2) -> RetFun(Ev2, Queue) end.
 
 
 http_view_fold_queue_error({Props}, Queue) ->
@@ -1050,6 +1063,7 @@ reduce_set_view_folder(ViewSpec, MergeParams, DDoc, Queue) ->
     PrepareResult = case (ViewSpec#set_view_spec.view =/= nil) andalso
         (ViewSpec#set_view_spec.group =/= nil) of
     true ->
+        ViewGroupReq = nil,
         {ViewSpec#set_view_spec.view, ViewSpec#set_view_spec.group};
     false ->
         WantedPartitions = case IndexType of
@@ -1073,7 +1087,7 @@ reduce_set_view_folder(ViewSpec, MergeParams, DDoc, Queue) ->
         %%  handled by prepare_set_view
         ok;
     {View, Group} ->
-        queue_debug_info(ViewArgs, Group, Queue),
+        queue_debug_info(ViewArgs, Group, ViewGroupReq, Queue),
         try
             FoldFun = fun(GroupedKey, Red, Acc) ->
                 ok = couch_view_merger_queue:queue(Queue, {GroupedKey, Red}),
@@ -1355,22 +1369,23 @@ reverse_key_default(?MAX_STR) -> ?MIN_STR;
 reverse_key_default(Key) -> Key.
 
 
-queue_debug_info(ViewArgs, Group, Queue) ->
-    case debug_info(ViewArgs, Group) of
+queue_debug_info(ViewArgs, Group, GroupReq, Queue) ->
+    case debug_info(ViewArgs, Group, GroupReq) of
     nil ->
         ok;
     DebugInfo ->
         ok = couch_view_merger_queue:queue(Queue, DebugInfo)
     end.
 
-debug_info(#view_query_args{debug = false}, _Group) ->
+debug_info(#view_query_args{debug = false}, _Group, _GroupReq) ->
     nil;
-debug_info(_QueryArgs, #set_view_group{} = Group) ->
+debug_info(_QueryArgs, #set_view_group{} = Group, GroupReq) ->
     #set_view_debug_info{
         original_abitmask = OrigMainAbitmask,
         original_pbitmask = OrigMainPbitmask,
         stats = Stats,
-        replica_partitions = ReplicaPartitions
+        replica_partitions = ReplicaPartitions,
+        wanted_seqs = WantedSeqs0
     } = Group#set_view_group.debug_info,
     OrigMainActive = couch_set_view_util:decode_bitmask(OrigMainAbitmask),
     ModMainActive = couch_set_view_util:decode_bitmask(?set_abitmask(Group)),
@@ -1378,7 +1393,10 @@ debug_info(_QueryArgs, #set_view_group{} = Group) ->
     ModMainPassive = couch_set_view_util:decode_bitmask(?set_pbitmask(Group)),
     MainCleanup = couch_set_view_util:decode_bitmask(?set_cbitmask(Group)),
     % 0 padded so that a pretty print JSON can sanely sort the keys (partition IDs)
-    IndexedSeqs = [{?l2b(io_lib:format("~4..0b", [P])), S} || {P, S} <- ?set_seqs(Group)],
+    IndexableSeqs = [{?l2b(io_lib:format("~4..0b", [P])), S} || {P, S} <- ?set_seqs(Group)],
+    UnindexableSeqs = [{?l2b(io_lib:format("~4..0b", [P])), S} ||
+        {P, S} <- ?set_unindexable_seqs(Group)],
+    WantedSeqs = [{?l2b(io_lib:format("~4..0b", [P])), S} || {P, S} <- WantedSeqs0],
     MainInfo = [
         {<<"active_partitions">>, ordsets:from_list(ModMainActive)},
         {<<"original_active_partitions">>, ordsets:from_list(OrigMainActive)},
@@ -1387,7 +1405,15 @@ debug_info(_QueryArgs, #set_view_group{} = Group) ->
         {<<"cleanup_partitions">>, ordsets:from_list(MainCleanup)},
         {<<"replica_partitions">>, ordsets:from_list(ReplicaPartitions)},
         {<<"replicas_on_transfer">>, ?set_replicas_on_transfer(Group)},
-        {<<"indexed_seqs">>, {IndexedSeqs}},
+        {<<"indexable_seqs">>, {IndexableSeqs}},
+        {<<"unindexeable_seqs">>, {UnindexableSeqs}},
+        {<<"wanted_seqs">>, {WantedSeqs}},
+        case GroupReq of
+        nil ->
+            {<<"wanted_partitions">>, null};
+        #set_view_group_req{wanted_partitions = WantedPartitions} ->
+            {<<"wanted_partitions">>, WantedPartitions}
+        end,
         pending_transition_debug_info(Group),
         {<<"stats">>, set_view_group_stats_ejson(Stats)}
     ],
@@ -1407,7 +1433,8 @@ replica_group_debug_info(#set_view_group{replica_group = RepGroup}) ->
         debug_info = #set_view_debug_info{
             original_abitmask = OrigRepAbitmask,
             original_pbitmask = OrigRepPbitmask,
-            stats = Stats
+            stats = Stats,
+            wanted_seqs = WantedSeqs0
         }
     } = RepGroup,
     OrigRepActive = couch_set_view_util:decode_bitmask(OrigRepAbitmask),
@@ -1416,14 +1443,19 @@ replica_group_debug_info(#set_view_group{replica_group = RepGroup}) ->
     ModRepPassive = couch_set_view_util:decode_bitmask(?set_pbitmask(RepGroup)),
     RepCleanup = couch_set_view_util:decode_bitmask(?set_cbitmask(RepGroup)),
     % 0 padded so that a pretty print JSON can sanely sort the keys (partition IDs)
-    IndexedSeqs = [{?l2b(io_lib:format("~4..0b", [P])), S} || {P, S} <- ?set_seqs(RepGroup)],
+    IndexableSeqs = [{?l2b(io_lib:format("~4..0b", [P])), S} || {P, S} <- ?set_seqs(RepGroup)],
+    UnindexableSeqs = [{?l2b(io_lib:format("~4..0b", [P])), S} ||
+        {P, S} <- ?set_unindexable_seqs(RepGroup)],
+    WantedSeqs = [{?l2b(io_lib:format("~4..0b", [P])), S} || {P, S} <- WantedSeqs0],
     [
         {<<"replica_active_partitions">>, ordsets:from_list(ModRepActive)},
         {<<"replica_original_active_partitions">>, ordsets:from_list(OrigRepActive)},
         {<<"replica_passive_partitions">>, ordsets:from_list(ModRepPassive)},
         {<<"replica_original_passive_partitions">>, ordsets:from_list(OrigRepPassive)},
         {<<"replica_cleanup_partitions">>, ordsets:from_list(RepCleanup)},
-        {<<"replica_indexed_seqs">>, {IndexedSeqs}},
+        {<<"replica_indexable_seqs">>, {IndexableSeqs}},
+        {<<"replica_unindexable_seqs">>, {UnindexableSeqs}},
+        {<<"replica_wanted_seqs">>, {WantedSeqs}},
         pending_transition_debug_info(RepGroup),
         {<<"replica_stats">>, set_view_group_stats_ejson(Stats)}
     ].
@@ -1438,7 +1470,8 @@ pending_transition_debug_info(#set_view_group{index_header = Header}) ->
         {<<"pending_transition">>,
             {[
                 {<<"active">>, Pt#set_view_transition.active},
-                {<<"passive">>, Pt#set_view_transition.passive}
+                {<<"passive">>, Pt#set_view_transition.passive},
+                {<<"unindexable">>, Pt#set_view_transition.unindexable}
             ]}
         }
     end.
@@ -1540,7 +1573,7 @@ simple_set_view_query(Params, DDoc, Req) ->
         stale = Stale
      },
 
-    case debug_info(QueryArgs2, Group) of
+    case debug_info(QueryArgs2, Group, GroupReq) of
     nil ->
         Params2 = Params#index_merge{user_ctx = Req#httpd.user_ctx};
     DebugInfo ->

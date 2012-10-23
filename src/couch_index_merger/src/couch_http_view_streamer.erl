@@ -25,9 +25,14 @@ parse(DataFun, Queue, FromUrl) ->
 
 stream_loop(Ctx, Queue, DataFun, Url) ->
     case next_streamer_state(Ctx, DataFun) of
-    {ok, debug_infos, _DebugInfos} ->
-        % TODO, currently broken for reduce views.
-        % View response only gets the debug_info for the merger (local) node.
+    {ok, debug_infos, DebugInfos} ->
+        UrlEjson = ?JSON_DECODE(Url),
+        lists:foreach(
+           fun({_From, Info}) ->
+               Item = {debug_info, UrlEjson, {json, Info}},
+               ok = couch_view_merger_queue:queue(Queue, Item)
+           end,
+           DebugInfos),
         stream_loop(Ctx, Queue, DataFun, Url);
     {ok, row_count, TotalRowsList} ->
         TotalRows = list_to_integer(TotalRowsList),

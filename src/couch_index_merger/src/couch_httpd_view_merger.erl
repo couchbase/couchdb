@@ -37,7 +37,9 @@
     error_acc = [],
     debug_info_acc = [],
     rows_acc = [],
-    rows_acc_size = 0
+    rows_acc_size = 0,
+    first_row_sent = false,
+    total_rows = nil
 }).
 
 -define(MAX_ROWS_ACC_SIZE, 4096).
@@ -118,15 +120,13 @@ http_sender(start, #sender_acc{req = Req} = SAcc) ->
     #httpd{mochi_req = MReq} = Req,
     ok = mochiweb_socket:setopts(MReq:get(socket), [{nodelay, true}]),
     {ok, Resp} = couch_httpd:start_json_response(Req, 200, []),
-    Start = <<"{\"rows\":[">>,
-    {ok, SAcc#sender_acc{resp = Resp, rows_acc = [Start], acc = <<"\r\n">>}};
+    {ok, SAcc#sender_acc{resp = Resp, acc = <<"\r\n">>}};
 
 http_sender({start, RowCount}, #sender_acc{req = Req} = SAcc) ->
     #httpd{mochi_req = MReq} = Req,
     ok = mochiweb_socket:setopts(MReq:get(socket), [{nodelay, true}]),
     {ok, Resp} = couch_httpd:start_json_response(Req, 200, []),
-    Start = [<<"{\"total_rows\":">>, integer_to_list(RowCount), <<",\"rows\":[">>],
-    {ok, SAcc#sender_acc{resp = Resp, rows_acc = [Start], acc = <<"\r\n">>}};
+    {ok, SAcc#sender_acc{resp = Resp, total_rows = RowCount, acc = <<"\r\n">>}};
 
 http_sender({row, Row}, SAcc) when is_binary(Row) ->
     SAcc2 = maybe_flush_rows(Row, SAcc),
@@ -134,7 +134,6 @@ http_sender({row, Row}, SAcc) when is_binary(Row) ->
 
 http_sender(stop, SAcc) ->
     #sender_acc{
-        rows_acc = RowsAcc,
         error_acc = ErrorAcc,
         resp = Resp
     }= SAcc,
@@ -149,7 +148,7 @@ http_sender(stop, SAcc) ->
             {<<"\r\n">>, []}, ErrorAcc),
         Buffer1 = [<<"\r\n],\r\n\"errors\":[">> | lists:reverse(Buffer0, [<<"\r\n]">>])]
     end,
-    Buffer2 = [lists:reverse(RowsAcc), Buffer1, debug_info_buffer(SAcc), <<"\r\n}">>],
+    Buffer2 = [make_rows_buffer(SAcc), Buffer1, <<"\r\n}">>],
     couch_httpd:send_chunk(Resp, Buffer2),
     {ok, couch_httpd:end_json_response(Resp)};
 
@@ -176,7 +175,7 @@ http_sender({error, _, _} = Error, #sender_acc{on_error = stop} = SAcc) ->
        Resp2 = Resp,
        Buffer1 = [<<"\r\n],\"errors\":[">>, ErrorRow, <<"]">>]
     end,
-    Buffer2 = [lists:reverse(RowsAcc), Buffer1, debug_info_buffer(SAcc), <<"\r\n}">>],
+    Buffer2 = [lists:reverse(RowsAcc), Buffer1, <<"\r\n}">>],
     couch_httpd:send_chunk(Resp2, Buffer2),
     couch_httpd:end_json_response(Resp2),
     {stop, Resp2}.
@@ -199,15 +198,41 @@ maybe_flush_rows(JsonRow, SAcc) ->
         SAcc2
     end.
 
-flush_rows(#sender_acc{rows_acc = RowsAcc, resp = Resp} = SAcc) ->
-    couch_httpd:send_chunk(Resp, lists:reverse(RowsAcc)),
-    SAcc#sender_acc{rows_acc = [], rows_acc_size = 0}.
+flush_rows(SAcc) ->
+    Buffer = make_rows_buffer(SAcc),
+    couch_httpd:send_chunk(SAcc#sender_acc.resp, Buffer),
+    SAcc#sender_acc{
+        rows_acc = [],
+        rows_acc_size = 0,
+        first_row_sent = true
+    }.
+
+make_rows_buffer(#sender_acc{rows_acc = RowsAcc, total_rows = TotalRows} = SAcc) ->
+    case SAcc#sender_acc.first_row_sent of
+    true ->
+        lists:reverse(RowsAcc);
+    false ->
+        DebugInfo = debug_info_buffer(SAcc),
+        Buffer0 = case DebugInfo of
+        <<>> ->
+            <<"{">>;
+        _ ->
+            [<<"{">>, DebugInfo, <<",">>]
+        end,
+        Buffer1 = case TotalRows of
+        nil ->
+            Buffer0;
+        _ ->
+            [Buffer0, <<"\"total_rows\":">>, integer_to_list(TotalRows), <<",">>]
+        end,
+        [Buffer1, <<"\"rows\":[">>, lists:reverse(RowsAcc)]
+    end.
 
 debug_info_buffer(#sender_acc{debug_info_acc = []}) ->
     <<>>;
 debug_info_buffer(#sender_acc{debug_info_acc = DebugInfoAcc}) ->
     DebugInfo = ?JSON_ENCODE({lists:reverse(DebugInfoAcc)}),
-    [<<",\r\n">>, <<"\"debug_info\":">>, DebugInfo].
+    [<<"\"debug_info\":">>, DebugInfo].
 
 
 %% Valid `views` example:
