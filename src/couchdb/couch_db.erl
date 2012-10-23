@@ -712,7 +712,8 @@ doc_meta_info(#doc_info{local_seq=Seq}, Options) ->
 validate_ddoc(#doc{content_meta = ?CONTENT_META_JSON} = DDoc0) ->
     DDoc = couch_doc:with_ejson_body(DDoc0),
     try
-        couch_set_view_mapreduce:validate_ddoc_views(DDoc)
+        couch_set_view_mapreduce:validate_ddoc_views(DDoc),
+        couch_spatial_validation:validate_ddoc_spatial(DDoc)
     catch throw:{error, Reason} ->
         throw({invalid_design_doc, Reason})
     end;
