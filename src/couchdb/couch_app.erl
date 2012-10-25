@@ -20,16 +20,11 @@
 
 start(_Type, DefaultIniFiles) ->
     IniFiles = get_ini_files(DefaultIniFiles),
-    Apps0 = [
+    Apps = [
         crypto, public_key, sasl, inets, oauth, ssl, lhttpc,
-        mochiweb, os_mon, couch_set_view, couch_index_merger, mapreduce
-    ],
-    Apps = case os:type() of
-    {win32, _} ->
-        Apps0;
-    _ ->
-        [couch_view_parser | Apps0]
-    end,
+        mochiweb, os_mon
+    ] ++ couch_apps(),
+
     case start_apps(Apps) of
     ok ->
         couch_server_sup:start_link(IniFiles);
@@ -38,7 +33,16 @@ start(_Type, DefaultIniFiles) ->
     end.
 
 stop(_) ->
-    ok.
+    stop_apps(couch_apps()).
+
+couch_apps() ->
+    Apps0 = [couch_set_view, couch_index_merger, mapreduce],
+    case os:type() of
+    {win32, _} ->
+        Apps0;
+    _ ->
+        [couch_view_parser | Apps0]
+    end.
 
 get_ini_files(Default) ->
     case init:get_argument(couch_ini) of
@@ -63,4 +67,19 @@ start_apps([App|Rest]) ->
        start_apps(Rest);
     {error, _Reason} ->
        {error, {app_would_not_start, App}}
+    end.
+
+stop_apps(Apps) ->
+    do_stop_apps(lists:reverse(Apps)).
+
+do_stop_apps([]) ->
+    ok;
+do_stop_apps([App|Rest]) ->
+    case application:stop(App) of
+    ok ->
+       stop_apps(Rest);
+    {error, {not_running, App}} ->
+       stop_apps(Rest);
+    {error, Reason} ->
+       error_logger:error_msg("Could not stop app ~p: ~p~n", [App, Reason])
     end.
