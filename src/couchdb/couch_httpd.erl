@@ -240,6 +240,9 @@ handle_request(MochiReq, DbFrontendModule, DefaultFun,
                 " must be built with Erlang OTP R13B04 or higher.",
             ?LOG_ERROR("~s", [ErrorReason]),
             send_error(HttpReq, {bad_otp_release, ErrorReason});
+        throw:{error, set_view_outdated} = Error ->
+            % More details logged by the view merger with INFO level
+            send_error(HttpReq, Error);
         Tag:Error ->
             Stack = erlang:get_stacktrace(),
             ?LOG_ERROR("Uncaught error in HTTP request: ~p~n~n"
