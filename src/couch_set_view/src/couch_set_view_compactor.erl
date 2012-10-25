@@ -18,6 +18,8 @@
 -export([start_compact/2, start_compact/3, start_compact/4,
          cancel_compact/2, cancel_compact/3]).
 
+-define(MIN_RETRY_BATCH_SIZE, 524288).
+
 -record(acc, {
    changes = 0,
    total_changes
@@ -242,7 +244,7 @@ maybe_retry_compact(CompactResult0, StartTime, LogFilePath, LogOffsetStart, Owne
         {ok, LogFd} = file:open(LogFilePath, [read, raw, binary]),
         {ok, LogOffsetStart} = file:position(LogFd, LogOffsetStart),
         ok = couch_set_view_util:open_raw_read_fd(NewGroup),
-        NewGroup2 = apply_log(NewGroup, LogFd, LogOffsetStart, LogEof),
+        NewGroup2 = apply_log(NewGroup, LogFd, 0, nil,LogOffsetStart, LogEof),
         ok = file:close(LogFd),
         ok = couch_set_view_util:close_raw_read_fd(NewGroup),
         CompactResult2 = CompactResult0#set_view_compactor_result{
@@ -313,15 +315,42 @@ total_kv_count(#set_view_group{id_btree = IdBtree, views = Views}) ->
         IdCount, Views).
 
 
-apply_log(Group, _LogFd, LogOffset, LogEof) when LogOffset == LogEof ->
+apply_log(Group, _LogFd, 0, nil, LogOffset, LogEof) when LogOffset == LogEof ->
     Group;
-apply_log(Group, LogFd, LogOffset, LogEof) when LogOffset < LogEof ->
+apply_log(Group, _LogFd, _BatchSize, Batch, LogOffset, LogEof) when LogOffset == LogEof ->
+    ok = couch_file:flush(Group#set_view_group.fd),
+    apply_log_entry(Group, Batch);
+apply_log(Group, LogFd, BatchSize, Batch, LogOffset, LogEof) when LogOffset < LogEof ->
     {ok, <<EntrySize:32>>} = file:read(LogFd, 4),
     {ok, <<EntryBin:EntrySize/binary>>} = file:read(LogFd, EntrySize),
-    Entry = binary_to_term(couch_compress:decompress(EntryBin)),
-    ok = couch_file:flush(Group#set_view_group.fd),
-    Group2 = apply_log_entry(Group, Entry),
-    apply_log(Group2, LogFd, LogOffset + 4 + EntrySize, LogEof).
+    EntryBin2 = couch_compress:decompress(EntryBin),
+    Entry = binary_to_term(EntryBin2),
+    Batch2 = merge_to_batch(Entry, Batch),
+    case (byte_size(EntryBin2) + BatchSize) of
+    Size when Size >= ?MIN_RETRY_BATCH_SIZE ->
+        ok = couch_file:flush(Group#set_view_group.fd),
+        Group2 = apply_log_entry(Group, Batch2),
+        apply_log(Group2, LogFd, 0, nil, LogOffset + 4 + EntrySize, LogEof);
+    Size ->
+        apply_log(Group, LogFd, Size, Batch2, LogOffset + 4 + EntrySize, LogEof)
+    end.
+
+
+merge_to_batch(Entry, nil) ->
+    Entry;
+merge_to_batch(Entry, Batch) ->
+    {NewSeqs, AddDocIdViewIdKeys, RemoveDocIds, LogViewsAddRemoveKvs} = Entry,
+    {_, BatchAddDocIdViewIdKeys, BatchRemoveDocIds, BatchLogViewsAddRemoveKvs} = Batch,
+    BatchLogViewsAddRemoveKvs2 = lists:zipwith(
+        fun({AddKeyValues, KeysToRemove}, {BatchAddKeyValues, BatchKeysToRemove}) ->
+            {AddKeyValues ++ BatchAddKeyValues, KeysToRemove ++ BatchKeysToRemove}
+        end,
+        LogViewsAddRemoveKvs,
+        BatchLogViewsAddRemoveKvs),
+    {NewSeqs,
+     AddDocIdViewIdKeys ++ BatchAddDocIdViewIdKeys,
+     RemoveDocIds ++ BatchRemoveDocIds,
+     BatchLogViewsAddRemoveKvs2}.
 
 
 apply_log_entry(Group, Entry) ->
