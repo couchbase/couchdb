@@ -38,8 +38,6 @@
                             pid()) -> no_return()).
 
 -define(TIMEOUT, 3000).
--define(BTREE_KV_CHUNK_THRESHOLD, 7168).
--define(BTREE_KP_CHUNK_THRESHOLD, 6144).
 
 -define(root_dir(State), element(1, State#state.init_args)).
 -define(set_name(State), element(2, State#state.init_args)).
@@ -1614,9 +1612,11 @@ init_group(Fd, Group, IndexHeader) ->
             end,
             First, Rest)
     end,
+    KvChunkThreshold = couch_config:get("set_views", "btree_kv_node_threshold", "7168"),
+    KpChunkThreshold = couch_config:get("set_views", "btree_kp_node_threshold", "6144"),
     BtreeOptions = [
-        {kv_chunk_threshold, ?BTREE_KV_CHUNK_THRESHOLD},
-        {kp_chunk_threshold, ?BTREE_KP_CHUNK_THRESHOLD},
+        {kv_chunk_threshold, list_to_integer(KvChunkThreshold)},
+        {kp_chunk_threshold, list_to_integer(KpChunkThreshold)},
         {binary_mode, true}
     ],
     {ok, IdBtree} = couch_btree:open(

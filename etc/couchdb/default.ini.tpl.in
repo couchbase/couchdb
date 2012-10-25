@@ -242,3 +242,5 @@ function_timeout = 10000
 
 [set_views]
 ddoc_cache_size = 1048576
+btree_kv_node_threshold = 7168
+btree_kp_node_threshold = 6144
