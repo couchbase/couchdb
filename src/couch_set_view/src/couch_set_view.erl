@@ -760,11 +760,8 @@ fold_fun(Fun, [KV | Rest], {KVReds, Reds}, Acc) ->
 init([]) ->
     % read configuration settings and register for configuration changes
     RootDir = couch_config:get("couchdb", "view_index_dir"),
-    Self = self(),
     ok = couch_config:register(
-        fun("couchdb", "view_index_dir", _NewIndexDir)->
-            exit(Self, config_change);
-        ("mapreduce", "function_timeout", NewTimeout) ->
+        fun("mapreduce", "function_timeout", NewTimeout) ->
             ok = mapreduce:set_timeout(list_to_integer(NewTimeout))
         end),
 

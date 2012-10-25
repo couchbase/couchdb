@@ -132,11 +132,6 @@ init([]) ->
     % will restart us and then we will pick up the new settings.
 
     RootDir = couch_config:get("couchdb", "database_dir", "."),
-    Self = self(),
-    ok = couch_config:register(
-        fun("couchdb", "database_dir") ->
-            exit(Self, config_change)
-        end),
     ok = couch_file:init_delete_dir(RootDir),
     hash_admin_passwords(),
     ok = couch_config:register(
@@ -313,9 +308,7 @@ handle_cast(Msg, _Server) ->
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
-    
-handle_info({'EXIT', _Pid, config_change}, Server) ->
-    {stop, shutdown, Server};
+
 handle_info(Error, _Server) ->
     ?LOG_ERROR("Unexpected message, restarting couch_server: ~p", [Error]),
     exit(kill).

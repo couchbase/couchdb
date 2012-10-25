@@ -289,11 +289,6 @@ fold(#view{btree=Btree}, Fun, Acc, Options) ->
 init([]) ->
     % read configuration settings and register for configuration changes
     RootDir = couch_config:get("couchdb", "view_index_dir"),
-    Self = self(),
-    ok = couch_config:register(
-        fun("couchdb", "view_index_dir")->
-            exit(Self, config_change)
-        end),
 
     ets:new(couch_groups_by_db, [bag, protected, named_table]),
     ets:new(group_servers_by_sig, [set, protected, named_table]),
