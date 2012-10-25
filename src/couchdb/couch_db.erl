@@ -713,7 +713,12 @@ validate_ddoc(#doc{content_meta = ?CONTENT_META_JSON} = DDoc0) ->
     DDoc = couch_doc:with_ejson_body(DDoc0),
     try
         couch_set_view_mapreduce:validate_ddoc_views(DDoc),
-        couch_spatial_validation:validate_ddoc_spatial(DDoc)
+        try
+            couch_spatial_validation:validate_ddoc_spatial(DDoc)
+        catch error:undef ->
+            % Ignore, happens during make check or standalone CouchDB
+            ok
+        end
     catch throw:{error, Reason} ->
         throw({invalid_design_doc, Reason})
     end;
