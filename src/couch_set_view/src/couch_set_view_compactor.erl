@@ -209,7 +209,6 @@ maybe_retry_compact(CompactResult0, StartTime, LogFilePath, LogOffsetStart, Owne
     } = NewGroup,
     HeaderBin = couch_set_view_util:group_to_header_bin(NewGroup),
     ok = couch_file:write_header_bin(Fd, HeaderBin),
-    ok = couch_file:sync(Fd),
     CompactResult = CompactResult0#set_view_compactor_result{
         compact_time = timer:now_diff(os:timestamp(), StartTime) / 1000000
     },
@@ -220,10 +219,11 @@ maybe_retry_compact(CompactResult0, StartTime, LogFilePath, LogOffsetStart, Owne
     after 0 ->
         ok
     end,
+    ok = couch_file:flush(Fd),
     case gen_server:call(Owner, {compact_done, CompactResult}, infinity) of
     ok ->
         _ = file:delete(LogFilePath),
-        ok;
+        ok = couch_file:sync(Fd);
     {update, MissingCount} ->
         {ok, LogEof} = gen_server:call(Owner, log_eof, infinity),
         ?LOG_INFO("Compactor for set view `~s`, ~s group `~s`, "
@@ -319,6 +319,7 @@ apply_log(Group, LogFd, LogOffset, LogEof) when LogOffset < LogEof ->
     {ok, <<EntrySize:32>>} = file:read(LogFd, 4),
     {ok, <<EntryBin:EntrySize/binary>>} = file:read(LogFd, EntrySize),
     Entry = binary_to_term(couch_compress:decompress(EntryBin)),
+    ok = couch_file:flush(Group#set_view_group.fd),
     Group2 = apply_log_entry(Group, Entry),
     apply_log(Group2, LogFd, LogOffset + 4 + EntrySize, LogEof).
 
@@ -339,7 +340,6 @@ apply_log_entry(Group, Entry) ->
         Views,
         LogViewsAddRemoveKvs),
     couch_task_status:update([]),
-    ok = couch_file:flush(Group#set_view_group.fd),
     Group#set_view_group{
         id_btree = NewIdBtree,
         views = NewViews,
