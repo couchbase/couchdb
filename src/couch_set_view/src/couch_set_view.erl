@@ -235,6 +235,8 @@ remove_replica_partitions(SetName, DDocId, Partitions) ->
 % the index, nor does it start any cleanup operation. Queries will still see
 % and get data from the corresponding partitions.
 -spec mark_partitions_unindexable(binary(), binary(), ordsets:ordset(partition_id())) -> 'ok'.
+mark_partitions_unindexable(_SetName, _DDocId, []) ->
+    ok;
 mark_partitions_unindexable(SetName, DDocId, Partitions) ->
     Pid = get_group_pid(SetName, DDocId),
     case couch_set_view_group:mark_as_unindexable(Pid, Partitions) of
@@ -251,6 +253,8 @@ mark_partitions_unindexable(SetName, DDocId, Partitions) ->
 % mark_partitions_unindexable/3 call). The given partitions are currently in either the
 % active or passive states and were marked as unindexable before.
 -spec mark_partitions_indexable(binary(), binary(), ordsets:ordset(partition_id())) -> 'ok'.
+mark_partitions_indexable(_SetName, _DDocId, []) ->
+    ok;
 mark_partitions_indexable(SetName, DDocId, Partitions) ->
     Pid = get_group_pid(SetName, DDocId),
     case couch_set_view_group:mark_as_indexable(Pid, Partitions) of
