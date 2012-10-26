@@ -150,7 +150,7 @@ init([]) ->
 
 terminate(_Reason, _Srv) ->
     lists:foreach(
-        fun({_DbName, {_Status, Pid, _LruTime}}) ->
+        fun({_DbName, Pid}) ->
             couch_util:shutdown_sync(Pid)
         end,
         ets:tab2list(couch_dbs_by_name)).
