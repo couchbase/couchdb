@@ -1005,7 +1005,7 @@ maybe_checkpoint(WriterAcc) ->
         put(last_header_commit_ts, Now);
     false ->
         #writer_acc{owner = Owner, parent = Parent, group = Group} = WriterAcc,
-        ok = gen_server:cast(Owner, {partial_update, Parent, Group})
+        Owner ! {partial_update, Parent, Group}
     end.
 
 
@@ -1018,7 +1018,7 @@ checkpoint(#writer_acc{owner = Owner, parent = Parent, group = Group}, DoFsync) 
     ?LOG_INFO("Updater checkpointing set view `~s` update for ~s group `~s`",
               [SetName, Type, DDocId]),
     write_header(Group, DoFsync),
-    ok = gen_server:cast(Owner, {partial_update, Parent, Group}).
+    Owner ! {partial_update, Parent, Group}.
 
 
 write_header(#set_view_group{fd = Fd} = Group, DoFsync) ->

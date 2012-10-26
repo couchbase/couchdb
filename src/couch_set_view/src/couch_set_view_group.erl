@@ -795,23 +795,6 @@ handle_cast(_Msg, State) when not ?is_defined(State) ->
 handle_cast({log_eof, LogEof}, State) ->
     {noreply, State#state{log_eof = LogEof}, ?TIMEOUT};
 
-handle_cast({partial_update, Pid, NewGroup}, #state{updater_pid = Pid} = State) ->
-    case ?have_pending_transition(State) andalso
-        (?set_cbitmask(NewGroup) =:= 0) andalso
-        (?set_cbitmask(State#state.group) =/= 0) andalso
-        (State#state.waiting_list =:= []) of
-    true ->
-        State2 = process_partial_update(State, NewGroup),
-        State3 = stop_updater(State2),
-        NewState = maybe_apply_pending_transition(State3);
-    false ->
-        NewState = process_partial_update(State, NewGroup)
-    end,
-    {noreply, NewState};
-handle_cast({partial_update, _, _}, State) ->
-    %% message from an old (probably pre-compaction) updater; ignore
-    {noreply, State, ?TIMEOUT};
-
 handle_cast({ddoc_updated, NewSig, Aliases}, State) ->
     #state{
         waiting_list = Waiters,
@@ -940,6 +923,23 @@ handle_info(timeout, #state{group = Group} = State) ->
     _ ->
         {noreply, start_updater(State)}
     end;
+
+handle_info({partial_update, Pid, NewGroup}, #state{updater_pid = Pid} = State) ->
+    case ?have_pending_transition(State) andalso
+        (?set_cbitmask(NewGroup) =:= 0) andalso
+        (?set_cbitmask(State#state.group) =/= 0) andalso
+        (State#state.waiting_list =:= []) of
+    true ->
+        State2 = process_partial_update(State, NewGroup),
+        State3 = stop_updater(State2),
+        NewState = maybe_apply_pending_transition(State3);
+    false ->
+        NewState = process_partial_update(State, NewGroup)
+    end,
+    {noreply, NewState};
+handle_info({partial_update, _, _}, State) ->
+    %% message from an old (probably pre-compaction) updater; ignore
+    {noreply, State, ?TIMEOUT};
 
 handle_info({updater_info, Pid, {state, UpdaterState}}, #state{updater_pid = Pid} = State) ->
     #state{
@@ -2473,12 +2473,13 @@ stop_updater(#state{updater_pid = Pid} = State) when is_pid(Pid) ->
     unlink(Pid),
     ?LOG_INFO("Stopping updater for set view `~s`, ~s group `~s`",
         [?set_name(State), ?type(State), ?group_id(State)]),
+    State2 = process_last_updater_group(State, nil),
     NewState = receive
     {'EXIT', Pid, Reason} ->
-        after_updater_stopped(State, Reason);
+        after_updater_stopped(State2, Reason);
     {'DOWN', MRef, process, Pid, Reason} ->
         receive {'EXIT', Pid, _} -> ok after 0 -> ok end,
-        after_updater_stopped(State, Reason)
+        after_updater_stopped(State2, Reason)
     end,
     erlang:demonitor(MRef, [flush]),
     NewState.
@@ -2531,6 +2532,21 @@ after_updater_stopped(State, Reason) ->
         initial_build = false,
         updater_state = not_running
     }.
+
+
+-spec process_last_updater_group(#state{}, 'nil' | #set_view_group{}) -> #state{}.
+process_last_updater_group(#state{updater_pid = Pid} = State, Group) ->
+    receive
+    {partial_update, Pid, NewGroup} ->
+         process_last_updater_group(State, NewGroup)
+    after 0 ->
+         case Group of
+         nil ->
+             State;
+         _ ->
+             process_partial_update(State, Group)
+         end
+    end.
 
 
 -spec start_updater(#state{}) -> #state{}.
