@@ -1696,11 +1696,19 @@ init_group(Fd, Group, IndexHeader) ->
     }.
 
 
--spec commit_header(#set_view_group{}) -> 'ok'.
 commit_header(Group) ->
+    commit_header(Group, true).
+
+-spec commit_header(#set_view_group{}, boolean()) -> 'ok'.
+commit_header(Group, Fsync) ->
     HeaderBin = couch_set_view_util:group_to_header_bin(Group),
     ok = couch_file:write_header_bin(Group#set_view_group.fd, HeaderBin),
-    ok = couch_file:sync(Group#set_view_group.fd).
+    case Fsync of
+    true ->
+        ok = couch_file:sync(Group#set_view_group.fd);
+    false ->
+        ok = couch_file:flush(Group#set_view_group.fd)
+    end.
 
 -spec filter_out_bitmask_partitions(ordsets:ordset(partition_id()),
                                     bitmask()) -> ordsets:ordset(partition_id()).
@@ -2264,7 +2272,8 @@ update_header(State, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs, NewUnindexa
         replica_partitions = NewReplicaParts
     },
     NewState = monitor_partitions(NewState0, PartitionsList),
-    ok = commit_header(NewState#state.group),
+    FsyncHeader = (NewCbitmask /= Cbitmask),
+    ok = commit_header(NewState#state.group, FsyncHeader),
     ?LOG_INFO("Set view `~s`, ~s group `~s`, partition states updated~n"
               "active partitions before:    ~w~n"
               "active partitions after:     ~w~n"
