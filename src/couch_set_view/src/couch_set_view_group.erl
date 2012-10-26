@@ -3018,7 +3018,6 @@ do_process_mark_as_unindexable(State0, Partitions) ->
             pending_transition = PendingTrans2
         }
     },
-    ok = commit_header(Group2),
     ?LOG_INFO("Set view `~s`, ~s group `~s`, unindexable partitions added.~n"
               "Previous set:         ~w~n"
               "New set:              ~w~n"
@@ -3055,9 +3054,9 @@ process_mark_as_indexable(#state{group = Group} = State, Partitions0, CommitHead
 -spec do_process_mark_as_indexable(#state{},
                                    ordsets:ordset(partition_id()),
                                    boolean()) -> #state{}.
-do_process_mark_as_indexable(State, [], _CommitHeader) ->
+do_process_mark_as_indexable(State, [], _LogTransition) ->
     State;
-do_process_mark_as_indexable(State0, Partitions, CommitHeader) ->
+do_process_mark_as_indexable(State0, Partitions, LogTransition) ->
     State1 = stop_cleaner(State0),
     #state{
         group = #set_view_group{index_header = Header} = Group,
@@ -3100,9 +3099,8 @@ do_process_mark_as_indexable(State0, Partitions, CommitHeader) ->
             pending_transition = PendingTrans2
         }
     },
-    NewState = case CommitHeader of
+    case LogTransition of
     true ->
-        ok = commit_header(Group2),
         ?LOG_INFO("Set view `~s`, ~s group `~s`, unindexable partitions removed.~n"
                   "Previous set:         ~w~n"
                   "New set:              ~w~n"
@@ -3110,12 +3108,11 @@ do_process_mark_as_indexable(State0, Partitions, CommitHeader) ->
                   "New pending set:      ~w~n",
                   [?set_name(State), ?type(State), ?group_id(State),
                    ?set_unindexable_seqs(Group), UnindexableSeqs2,
-                   PendingUnindexable, PendingUnindexable2]),
-        State#state{group = Group2};
+                   PendingUnindexable, PendingUnindexable2]);
     false ->
-        State#state{group = Group2}
+        ok
     end,
-    NewState2 = stop_compactor(NewState),
+    NewState2 = stop_compactor(State#state{group = Group2}),
     case UpdaterWasRunning orelse (WaitList /= []) orelse (dict:size(Listeners) > 0) of
     true ->
         start_updater(NewState2);
