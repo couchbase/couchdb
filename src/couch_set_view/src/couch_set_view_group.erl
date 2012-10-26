@@ -868,13 +868,13 @@ handle_cast({before_partition_delete, PartId}, #state{group = Group} = State) ->
     Mask = 1 bsl PartId,
     case ((?set_abitmask(Group) band Mask) /= 0) orelse
         ((?set_pbitmask(Group) band Mask) /= 0) orelse
-        ordsets:is_element(PartId, ActivePending) orelse
-        ordsets:is_element(PartId, PassivePending) of
+        lists:member(PartId, ActivePending) orelse
+        lists:member(PartId, PassivePending) of
     true ->
         ?LOG_INFO("Set view `~s`, ~s group `~s`, marking partition ~p for "
                   "cleanup because it's about to be deleted",
                   [?set_name(State), ?type(State), ?group_id(State), PartId]),
-        case orddict:is_key(PartId, ?set_unindexable_seqs(State#state.group)) of
+        case couch_set_view_util:has_part_seq(PartId, ?set_unindexable_seqs(State#state.group)) of
         true ->
             State2 = process_mark_as_indexable(State, [PartId], false);
         false ->
@@ -883,7 +883,7 @@ handle_cast({before_partition_delete, PartId}, #state{group = Group} = State) ->
         State3 = update_partition_states([], [], [PartId], State2),
         {noreply, State3, ?TIMEOUT};
     false ->
-        case ordsets:is_element(PartId, ReplicaParts) of
+        case lists:member(PartId, ReplicaParts) of
         true ->
             % Can't be a replica on transfer, otherwise it would be part of the
             % set of passive partitions.
@@ -1941,7 +1941,7 @@ persist_partition_states(State, ActiveList, PassiveList, CleanupList, PendingTra
             NewSeqs2),
     {NewSeqs4, NewUnindexableSeqs} = lists:foldl(
         fun(PartId, {AccSeqs, AccUnSeqs}) ->
-            PartSeq = orddict:fetch(PartId, AccSeqs),
+            PartSeq = couch_set_view_util:get_part_seq(PartId, AccSeqs),
             AccSeqs2 = orddict:erase(PartId, AccSeqs),
             AccUnSeqs2 = orddict:store(PartId, PartSeq, AccUnSeqs),
             {AccSeqs2, AccUnSeqs2}
@@ -1976,7 +1976,7 @@ persist_partition_states(State, ActiveList, PassiveList, CleanupList, PendingTra
                     monref = MonRef,
                     partition = PartId
                 } = Listener,
-                case ordsets:is_element(PartId, CleanupList) of
+                case lists:member(PartId, CleanupList) of
                 true ->
                     Pid ! {Ref, marked_for_cleanup},
                     erlang:demonitor(MonRef, [flush]),
@@ -2012,7 +2012,7 @@ update_waiting_list(WaitList, DbSet, AddActiveList, AddPassiveList, AddCleanupLi
 update_waiter_seqs(Waiter, AddActiveSeqs, ToRemove) ->
     Seqs2 = lists:foldl(
         fun({PartId, Seq}, Acc) ->
-            case orddict:is_key(PartId, Acc) of
+            case couch_set_view_util:has_part_seq(PartId, Acc) of
             true ->
                 Acc;
             false ->
@@ -2044,8 +2044,8 @@ maybe_apply_pending_transition(State) ->
     ApplyPassiveList = ordsets:subtract(PassivePending, PassiveInCleanup),
     {ApplyUnindexableList, NewUnindexablePending} = lists:partition(
         fun(P) ->
-            ordsets:is_element(P, ApplyActiveList) orelse
-            ordsets:is_element(P, ApplyPassiveList)
+            lists:member(P, ApplyActiveList) orelse
+            lists:member(P, ApplyPassiveList)
         end,
         UnindexablePending),
     case (ApplyActiveList /= []) orelse (ApplyPassiveList /= []) of
@@ -2617,7 +2617,7 @@ maybe_fix_replica_group(ReplicaPid, Group) ->
     RepGroupPassive = couch_set_view_util:decode_bitmask(?set_pbitmask(RepGroup)),
     CleanupList = lists:foldl(
         fun(PartId, Acc) ->
-            case ordsets:is_element(PartId, ?set_replicas_on_transfer(Group)) of
+            case lists:member(PartId, ?set_replicas_on_transfer(Group)) of
             true ->
                 Acc;
             false ->
@@ -2627,7 +2627,7 @@ maybe_fix_replica_group(ReplicaPid, Group) ->
         [], RepGroupActive),
     ActiveList = lists:foldl(
         fun(PartId, Acc) ->
-            case ordsets:is_element(PartId, ?set_replicas_on_transfer(Group)) of
+            case lists:member(PartId, ?set_replicas_on_transfer(Group)) of
             true ->
                 [PartId | Acc];
             false ->
@@ -2696,7 +2696,7 @@ notify_update_listeners(Listeners, NewGroup) ->
                     seq = Seq,
                     partition = PartId
                 } = Listener,
-                case orddict:find(PartId, ?set_seqs(NewGroup)) of
+                case couch_set_view_util:find_part_seq(PartId, ?set_seqs(NewGroup)) of
                 {ok, IndexedSeq} when IndexedSeq >= Seq ->
                     Pid ! {Ref, updated},
                     erlang:demonitor(MonRef, [flush]),
@@ -2919,9 +2919,9 @@ process_mark_as_unindexable(#state{group = Group} = State, Partitions0) ->
     PendingPassive = ?pending_transition_passive(PendingTrans),
     Partitions = lists:filter(
         fun(PartId) ->
-            orddict:is_key(PartId, ?set_seqs(Group)) orelse
-            ordsets:is_element(PartId, PendingActive) orelse
-            ordsets:is_element(PartId, PendingPassive)
+            couch_set_view_util:has_part_seq(PartId, ?set_seqs(Group)) orelse
+            lists:member(PartId, PendingActive) orelse
+            lists:member(PartId, PendingPassive)
         end,
         Partitions0),
     do_process_mark_as_unindexable(State, Partitions).
@@ -2939,7 +2939,7 @@ do_process_mark_as_unindexable(State0, Partitions) ->
     } = State = stop_updater(State1),
     UpdaterWasRunning = is_pid(State0#state.updater_pid),
     ReplicasIntersection = [
-        P || P <- Partitions, ordsets:is_element(P, ReplicaParts)
+        P || P <- Partitions, lists:member(P, ReplicaParts)
     ],
     case ReplicasIntersection of
     [] ->
@@ -2960,8 +2960,8 @@ do_process_mark_as_unindexable(State0, Partitions) ->
             PartMask = 1 bsl PartId,
             case (?set_abitmask(Group) band PartMask) == 0 andalso
                 (?set_pbitmask(Group) band PartMask) == 0 andalso
-                (not ordsets:is_element(PartId, PendingActive)) andalso
-                (not ordsets:is_element(PartId, PendingPassive)) of
+                (not lists:member(PartId, PendingActive)) andalso
+                (not lists:member(PartId, PendingPassive)) of
             true ->
                 ErrorMsg2 = io_lib:format("Partition ~p is not in the active "
                     "nor passive state.", [PartId]),
@@ -2969,14 +2969,14 @@ do_process_mark_as_unindexable(State0, Partitions) ->
             false ->
                 ok
             end,
-            case orddict:is_key(PartId, AccUnSeqs) of
+            case couch_set_view_util:has_part_seq(PartId, AccUnSeqs) of
             true ->
                 {AccSeqs, AccUnSeqs, AccPendingUn};
             false ->
-                case ordsets:is_element(PartId, PendingActive) orelse
-                    ordsets:is_element(PartId, PendingPassive) of
+                case lists:member(PartId, PendingActive) orelse
+                    lists:member(PartId, PendingPassive) of
                 false ->
-                    PartSeq = orddict:fetch(PartId, AccSeqs),
+                    PartSeq = couch_set_view_util:get_part_seq(PartId, AccSeqs),
                     AccSeqs2 = orddict:erase(PartId, AccSeqs),
                     AccUnSeqs2 = orddict:store(PartId, PartSeq, AccUnSeqs),
                     {AccSeqs2, AccUnSeqs2, AccPendingUn};
@@ -3029,8 +3029,8 @@ process_mark_as_indexable(#state{group = Group} = State, Partitions0, CommitHead
     PendingUnindexable = ?pending_transition_unindexable(PendingTrans),
     Partitions = lists:filter(
         fun(PartId) ->
-            orddict:is_key(PartId, ?set_unindexable_seqs(Group)) orelse
-            ordsets:is_element(PartId, PendingUnindexable)
+            couch_set_view_util:has_part_seq(PartId, ?set_unindexable_seqs(Group)) orelse
+            lists:member(PartId, PendingUnindexable)
         end,
         Partitions0),
     do_process_mark_as_indexable(State, Partitions, CommitHeader).
@@ -3054,16 +3054,16 @@ do_process_mark_as_indexable(State0, Partitions, CommitHeader) ->
     {Seqs2, UnindexableSeqs2, PendingUnindexable2} =
     lists:foldl(
         fun(PartId, {AccSeqs, AccUnSeqs, AccPendingUn}) ->
-            case orddict:is_key(PartId, AccUnSeqs) of
+            case couch_set_view_util:has_part_seq(PartId, AccUnSeqs) of
             false ->
-                case ordsets:is_element(PartId, AccPendingUn) of
+                case lists:member(PartId, AccPendingUn) of
                 false ->
                     {AccSeqs, AccUnSeqs, AccPendingUn};
                 true ->
                     {AccSeqs, AccUnSeqs, ordsets:del_element(PartId, AccPendingUn)}
                 end;
             true ->
-                Seq = orddict:fetch(PartId, AccUnSeqs),
+                Seq = couch_set_view_util:get_part_seq(PartId, AccUnSeqs),
                 AccUnSeqs2 = orddict:erase(PartId, AccUnSeqs),
                 AccSeqs2 = orddict:store(PartId, Seq, AccSeqs),
                 {AccSeqs2, AccUnSeqs2, AccPendingUn}
@@ -3170,16 +3170,16 @@ updater_tmp_dir(#state{group = Group} = State) ->
 is_unindexable_part(PartId, Group) ->
     PendingTrans = ?set_pending_transition(Group),
     PendingUnindexable = ?pending_transition_unindexable(PendingTrans),
-    orddict:is_key(PartId, ?set_unindexable_seqs(Group)) orelse
-        ordsets:is_element(PartId, PendingUnindexable).
+    couch_set_view_util:has_part_seq(PartId, ?set_unindexable_seqs(Group)) orelse
+        lists:member(PartId, PendingUnindexable).
 
 
 process_monitor_partition_update(#state{group = Group} = State, PartId, Ref, Pid) ->
     PendingTrans = ?set_pending_transition(Group),
     ActivePending = ?pending_transition_active(PendingTrans),
     PassivePending = ?pending_transition_passive(PendingTrans),
-    IsPending = ordsets:is_element(PartId, ActivePending) orelse
-        ordsets:is_element(PartId, PassivePending),
+    IsPending = lists:member(PartId, ActivePending) orelse
+        lists:member(PartId, PassivePending),
     Mask = 1 bsl PartId,
     IsDefined = (Mask band (?set_abitmask(Group) bor ?set_pbitmask(Group))) == Mask,
     case (not IsDefined) andalso (not IsPending) of
@@ -3198,9 +3198,9 @@ process_monitor_partition_update(#state{group = Group} = State, PartId, Ref, Pid
         Seq = 0;
     false ->
         {ok, [{PartId, CurSeq}]} = couch_db_set:get_seqs(?db_set(State), [PartId], true),
-        case orddict:find(PartId, ?set_seqs(Group)) of
-        error ->
-            Seq = orddict:fetch(PartId, ?set_unindexable_seqs(Group));
+        case couch_set_view_util:find_part_seq(PartId, ?set_seqs(Group)) of
+        not_found ->
+            Seq = couch_set_view_util:get_part_seq(PartId, ?set_unindexable_seqs(Group));
         {ok, Seq} ->
             ok
         end,

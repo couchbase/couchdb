@@ -317,7 +317,7 @@ load_changes(Owner, Updater, Group, MapQueue, Writer, ActiveParts, PassiveParts)
     } = Group,
 
     FoldFun = fun(PartId, {AccCount, AccSeqs}) ->
-        case orddict:is_key(PartId, ?set_unindexable_seqs(Group)) of
+        case couch_set_view_util:has_part_seq(PartId, ?set_unindexable_seqs(Group)) of
         true ->
             {AccCount, AccSeqs};
         false ->
@@ -746,8 +746,8 @@ update_transferred_replicas(Acc, PartIdSeqs) ->
     } = Acc,
     RepsTransferred2 = lists:foldl(
         fun({PartId, Seq}, A) ->
-            case ordsets:is_element(PartId, ?set_replicas_on_transfer(Group))
-                andalso (Seq >= orddict:fetch(PartId, MaxSeqs)) of
+            case lists:member(PartId, ?set_replicas_on_transfer(Group))
+                andalso (Seq >= couch_set_view_util:get_part_seq(PartId, MaxSeqs)) of
             true ->
                 ordsets:add_element(PartId, A);
             false ->
@@ -785,7 +785,7 @@ update_transferred_replicas(Acc, PartIdSeqs) ->
 
 
 update_part_seq(Seq, PartId, Acc) ->
-    case orddict:find(PartId, Acc) of
+    case couch_set_view_util:find_part_seq(PartId, Acc) of
     {ok, Max} when Max >= Seq ->
         Acc;
     _ ->

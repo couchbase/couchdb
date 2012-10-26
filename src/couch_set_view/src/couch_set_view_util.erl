@@ -27,6 +27,7 @@
 -export([split_set_db_name/1]).
 -export([group_to_header_bin/1, header_bin_sig/1, header_bin_to_term/1]).
 -export([open_db/2]).
+-export([get_part_seq/2, has_part_seq/2, find_part_seq/2]).
 
 
 -include("couch_db.hrl").
@@ -597,4 +598,35 @@ open_db(SetName, PartId) ->
     Error ->
         Msg = io_lib:format("Couldn't open database `~s`, reason: ~w", [DbName, Error]),
         throw({db_open_error, DbName, Error, iolist_to_binary(Msg)})
+    end.
+
+
+-spec get_part_seq(partition_id(), partition_seqs()) -> update_seq().
+get_part_seq(PartId, Seqs) ->
+    case lists:keyfind(PartId, 1, Seqs) of
+    {PartId, Seq} ->
+        Seq;
+    false ->
+        throw({missing_partition, PartId})
+    end.
+
+
+-spec has_part_seq(partition_id(), partition_seqs()) -> boolean().
+has_part_seq(PartId, Seqs) ->
+    case lists:keyfind(PartId, 1, Seqs) of
+    {PartId, _} ->
+        true;
+    false ->
+        false
+    end.
+
+
+-spec find_part_seq(partition_id(), partition_seqs()) ->
+                           {'ok', update_seq()} | 'not_found'.
+find_part_seq(PartId, Seqs) ->
+    case lists:keyfind(PartId, 1, Seqs) of
+    {PartId, Seq} ->
+        {ok, Seq};
+    false ->
+        not_found
     end.
