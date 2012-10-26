@@ -968,8 +968,9 @@ handle_info({updater_info, _Pid, {state, _UpdaterState}}, State) ->
     % Message from an old updater, ignore.
     {noreply, State, ?TIMEOUT};
 
-handle_info({'EXIT', Pid, {clean_group, NewGroup, Count, Time}}, #state{cleaner_pid = Pid} = State) ->
+handle_info({'EXIT', Pid, {clean_group, NewGroup0, Count, Time}}, #state{cleaner_pid = Pid} = State) ->
     #state{group = OldGroup} = State,
+    NewGroup = update_clean_group_seqs(OldGroup, NewGroup0),
     ?LOG_INFO("Cleanup finished for set view `~s`, ~s group `~s`~n"
               "Removed ~p values from the index in ~.3f seconds~n"
               "active partitions before:  ~w~n"
@@ -2358,8 +2359,9 @@ stop_cleaner(#state{cleaner_pid = Pid} = State) when is_pid(Pid) ->
     NewState.
 
 
-after_cleaner_stopped(State, {clean_group, NewGroup, Count, Time}) ->
+after_cleaner_stopped(State, {clean_group, NewGroup0, Count, Time}) ->
     #state{group = OldGroup} = State,
+    NewGroup = update_clean_group_seqs(OldGroup, NewGroup0),
     ?LOG_INFO("Stopped cleanup process for set view `~s`, ~s group `~s`.~n"
               "Removed ~p values from the index in ~.3f seconds~n"
               "New set of partitions to cleanup: ~w~n"
@@ -2957,11 +2959,10 @@ process_mark_as_unindexable(#state{group = Group} = State, Partitions0) ->
 do_process_mark_as_unindexable(State, []) ->
     State;
 do_process_mark_as_unindexable(State0, Partitions) ->
-    State1 = stop_cleaner(State0),
     #state{
         group = #set_view_group{index_header = Header} = Group,
         replica_partitions = ReplicaParts
-    } = State = stop_updater(State1),
+    } = State = stop_updater(State0),
     UpdaterWasRunning = is_pid(State0#state.updater_pid),
     ReplicasIntersection = [
         P || P <- Partitions, lists:member(P, ReplicaParts)
@@ -3066,12 +3067,11 @@ process_mark_as_indexable(#state{group = Group} = State, Partitions0, CommitHead
 do_process_mark_as_indexable(State, [], _LogTransition) ->
     State;
 do_process_mark_as_indexable(State0, Partitions, LogTransition) ->
-    State1 = stop_cleaner(State0),
     #state{
         group = #set_view_group{index_header = Header} = Group,
         waiting_list = WaitList,
         update_listeners = Listeners
-    } = State = stop_updater(State1),
+    } = State = stop_updater(State0),
     UpdaterWasRunning = is_pid(State0#state.updater_pid),
     PendingTrans = ?set_pending_transition(Group),
     PendingUnindexable = ?pending_transition_unindexable(PendingTrans),
@@ -3243,3 +3243,18 @@ process_monitor_partition_update(#state{group = Group} = State, PartId, Ref, Pid
         Pid ! {Ref, updated},
         State2
     end.
+
+
+-spec update_clean_group_seqs(#set_view_group{}, #set_view_group{}) -> #set_view_group{}.
+update_clean_group_seqs(OldGroup, CleanGroup) ->
+    % When toggling partitions between the indexable and unindexable states,
+    % we don't restart the cleanup process. Therefore, when it finishes, set
+    % the correct values for seqs (indexable) and unindexable_seqs. Whenever
+    % the updater is started, the cleanup process is stopped, so all seqs are
+    % correct always.
+    CleanHeader = CleanGroup#set_view_group.index_header,
+    NewCleanHeader = CleanHeader#set_view_index_header{
+        seqs = ?set_seqs(OldGroup),
+        unindexable_seqs = ?set_unindexable_seqs(OldGroup)
+    },
+    CleanGroup#set_view_group{index_header = NewCleanHeader}.
