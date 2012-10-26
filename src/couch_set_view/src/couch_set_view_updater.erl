@@ -1004,7 +1004,8 @@ maybe_checkpoint(WriterAcc) ->
         checkpoint(WriterAcc, false),
         put(last_header_commit_ts, Now);
     false ->
-        ok
+        #writer_acc{owner = Owner, parent = Parent, group = Group} = WriterAcc,
+        ok = gen_server:cast(Owner, {partial_update, Parent, Group})
     end.
 
 
