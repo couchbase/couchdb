@@ -676,32 +676,10 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
         end,
         NewFilepath = increment_filepath(Group),
         NewRefCounter = new_fd_ref_counter(NewGroup#set_view_group.fd),
-        case ?set_replicas_on_transfer(Group) /= ?set_replicas_on_transfer(NewGroup) of
-        true ->
-            % Set of replicas on transfer changed while compaction was running.
-            % Just write a new header with the new set of replicas on transfer and all the
-            % metadata that is updated when that set changes (active and passive bitmasks).
-            % This happens only during (or after, for a short period) a cluster rebalance or
-            % failover. This shouldn't take too long, as we are writing and fsync'ing only
-            % one header, all data was already fsync'ed by the compactor process.
-            NewGroup2 = NewGroup#set_view_group{
-                ref_counter = NewRefCounter,
-                filepath = NewFilepath,
-                index_header = (NewGroup#set_view_group.index_header)#set_view_index_header{
-                    replicas_on_transfer = ?set_replicas_on_transfer(Group),
-                    abitmask = ?set_abitmask(Group),
-                    pbitmask = ?set_pbitmask(Group)
-                }
-            },
-            ok = commit_header(NewGroup2);
-        false ->
-            % The compactor process committed an header with up to date state information and
-            % did an fsync before calling us. No need to commit a new header here (and fsync).
-            NewGroup2 = NewGroup#set_view_group{
-                ref_counter = NewRefCounter,
-                filepath = NewFilepath
-            }
-        end,
+        NewGroup2 = NewGroup#set_view_group{
+            ref_counter = NewRefCounter,
+            filepath = NewFilepath
+        },
         ?LOG_INFO("Set view `~s`, ~s group `~s`, compaction complete in ~.3f seconds,"
             " filtered ~p key-value pairs",
             [?set_name(State), ?type(State), ?group_id(State), Duration, CleanupKVCount]),
