@@ -163,12 +163,12 @@ before_leaf_write(#acc{before_kv_write = Fun, user_acc = UserAcc0} = Acc, KVs) -
     {NewKVs, Acc#acc{user_acc = NewUserAcc}}.
 
 
-write_leaf(#acc{fd = Fd, btree = Bt}, {NodeType, NodeList}, Red) ->
+write_leaf(#acc{fd = Fd, btree = Bt}, NodeList, Red) ->
     if Bt#btree.binary_mode ->
-        Bin = couch_btree:encode_node(NodeType, NodeList),
+        Bin = couch_btree:encode_node(kv_node, NodeList),
         {ok, Pos, Size} = couch_file:append_binary_crc32(Fd, Bin);
     true ->
-        {ok, Pos, Size} = couch_file:append_term(Fd, {NodeType, NodeList})
+        {ok, Pos, Size} = couch_file:append_term(Fd, {kv_node, NodeList})
     end,
     {ok, {Pos, Red, Size}}.
 
@@ -322,5 +322,5 @@ flush_leaf(KVs, #acc{btree = Btree} = Acc) ->
             NewKVs),
         couch_btree:final_reduce(Btree, {Items, []})
     end,
-    {ok, LeafState} = write_leaf(Acc2, {kv_node, NewKVs}, Red),
+    {ok, LeafState} = write_leaf(Acc2, NewKVs, Red),
     {LeafState, Acc2}.
