@@ -225,7 +225,7 @@ maybe_retry_compact(CompactResult0, StartTime, LogFilePath, LogOffsetStart, Owne
     case gen_server:call(Owner, {compact_done, CompactResult}, infinity) of
     ok ->
         _ = file2:delete(LogFilePath),
-        ok = couch_file:sync(Fd);
+        ok;
     {update, MissingCount} ->
         {ok, LogEof} = gen_server:call(Owner, log_eof, infinity),
         ?LOG_INFO("Compactor for set view `~s`, ~s group `~s`, "
