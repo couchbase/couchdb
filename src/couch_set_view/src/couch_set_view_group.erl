@@ -454,8 +454,8 @@ handle_call({define_view, NumPartitions, ActiveList, ActiveBitmask,
 handle_call({define_view, _, _, _, _, _, _}, _From, State) ->
     {reply, view_already_defined, State, ?TIMEOUT};
 
-handle_call(is_view_defined, _From, #state{group = Group} = State) ->
-    {reply, is_integer(?set_num_partitions(Group)), State, ?TIMEOUT};
+handle_call(is_view_defined, _From, State) ->
+    {reply, ?is_defined(State), State, ?TIMEOUT};
 
 handle_call(_Msg, _From, State) when not ?is_defined(State) ->
     {reply, {error, view_undefined}, State};
@@ -2635,6 +2635,16 @@ get_replica_partitions(ReplicaPid) ->
 
 -spec maybe_fix_replica_group(pid(), #set_view_group{}) -> 'ok'.
 maybe_fix_replica_group(ReplicaPid, Group) ->
+    case is_view_defined(ReplicaPid) of
+    true ->
+        ok;
+    false ->
+        Params = #set_view_params{
+            max_partitions = ?set_num_partitions(Group),
+            use_replica_index = false
+        },
+        ok = define_view(ReplicaPid, Params)
+    end,
     {ok, RepGroup} = gen_server:call(ReplicaPid, request_group, infinity),
     RepGroupActive = couch_set_view_util:decode_bitmask(?set_abitmask(RepGroup)),
     RepGroupPassive = couch_set_view_util:decode_bitmask(?set_pbitmask(RepGroup)),

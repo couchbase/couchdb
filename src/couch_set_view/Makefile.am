@@ -59,7 +59,8 @@ test_files = \
     test/19-compaction-retry.t \
     test/20-debug-params.t \
     test/21-updater-cleanup.t \
-    test/22-compactor-cleanup.t
+    test/22-compactor-cleanup.t \
+    test/23-replica-group-missing.t
 
 compiled_files = \
     ebin/couch_set_view.app \
