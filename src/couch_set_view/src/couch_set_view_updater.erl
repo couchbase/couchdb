@@ -624,13 +624,13 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
         {ok, NewIdBtreeRoot} = couch_btree_copy:from_sorted_file(
             IdBtree, IdsSortedFile, GroupFd, fun file_sorter_format_function/1),
         NewIdBtree = IdBtree#btree{root = NewIdBtreeRoot},
-        ok = file:delete(IdsSortedFile),
+        ok = file2:delete(IdsSortedFile),
         NewViews = lists:map(
             fun(#set_view{id_num = Id, btree = Bt} = View) ->
                [{_, KvSortedFile}] = dict:fetch(Id, NewSortFiles2),
                {ok, NewBtRoot} = couch_btree_copy:from_sorted_file(
                    Bt, KvSortedFile, GroupFd, fun file_sorter_format_function/1),
-               ok = file:delete(KvSortedFile),
+               ok = file2:delete(KvSortedFile),
                View#set_view{
                    btree = Bt#btree{root = NewBtRoot}
                }
@@ -696,7 +696,7 @@ maybe_flush_merge_buffers(BuffersDict, WriterAcc) ->
             true ->
                 SortFiles = dict:fetch(Id, AccFiles),
                 FileName = new_sort_file_name(WriterAcc),
-                {ok, Fd} = file:open(FileName, [raw, append, binary]),
+                {ok, Fd} = file2:open(FileName, [raw, append, binary]),
                 ok = file:write(Fd, Buf),
                 ok = file:close(Fd),
                 AccBuffers2 = dict:store(Id, {[], 0}, AccBuffers),
@@ -1035,7 +1035,7 @@ write_header(#set_view_group{fd = Fd} = Group, DoFsync) ->
 open_log_file(nil) ->
     nil;
 open_log_file(Path) when is_list(Path) ->
-    {ok, LogFd} = file:open(Path, [raw, binary, append]),
+    {ok, LogFd} = file2:open(Path, [raw, binary, append]),
     LogFd.
 
 
@@ -1175,7 +1175,7 @@ spawn_merge_worker(LessFun, TmpDir, Workers, FilesToMerge, DestFile) ->
             exit({sort_worker_died, Reason})
         end,
         lists:foreach(fun(F) ->
-            case file:delete(F) of
+            case file2:delete(F) of
             ok ->
                 ok;
             {error, Reason2} ->

@@ -24,6 +24,8 @@ max_parallel_replica_indexers = 2
 btree_implementation = native
 consistency_check_precompacted = false
 consistency_check_compacted = false
+; Maximum period for which we attempt to retry file operations on Windows.
+windows_file_op_retry_period = 5000
 
 [database_compaction]
 ; larger buffer sizes can originate smaller files

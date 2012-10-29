@@ -71,7 +71,7 @@ open_db_file(Filepath, Options) ->
                 end, MatchingFiles),
         case MatchingFiles2 of
         [] ->
-            [file:delete(F) || F <- CompactFiles],
+            [file2:delete(F) || F <- CompactFiles],
             case lists:member(create, Options) of
             true ->
                 % we had some compaction files hanging around, now retry
@@ -88,7 +88,7 @@ open_db_file(Filepath, Options) ->
                     [{fd_close_after, ?FD_CLOSE_TIMEOUT_MS} | Options]) of
             {ok, Fd} ->
                 % delete the old files
-                [file:delete(F) || F <- RestOld ++ CompactFiles],
+                [file2:delete(F) || F <- RestOld ++ CompactFiles],
                 {ok, Fd, NewestFile};
             Error ->
                 Error
@@ -435,7 +435,7 @@ update_docs(Db, Docs) ->
 % docs_since or enum_docs, it's often faster as it avoids the messaging
 % overhead with couch_file.
 fast_reads(Db, Fun) ->
-    case file:open(Db#db.filepath, [binary, read, raw]) of
+    case file2:open(Db#db.filepath, [binary, read, raw]) of
     {ok, FastReadFd} ->
         put({Db#db.fd, fast_fd_read}, FastReadFd),
         try

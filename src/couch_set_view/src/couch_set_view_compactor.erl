@@ -83,7 +83,7 @@ compact_group(Group0, EmptyGroup, LogFilePath, UpdaterPid, Owner, UserStatus) ->
         type = Type
     } = Group0,
 
-    case file:delete(LogFilePath) of
+    case file2:delete(LogFilePath) of
     ok ->
        ok;
     {error, enoent} ->
@@ -224,7 +224,7 @@ maybe_retry_compact(CompactResult0, StartTime, LogFilePath, LogOffsetStart, Owne
     ok = couch_file:flush(Fd),
     case gen_server:call(Owner, {compact_done, CompactResult}, infinity) of
     ok ->
-        _ = file:delete(LogFilePath),
+        _ = file2:delete(LogFilePath),
         ok = couch_file:sync(Fd);
     {update, MissingCount} ->
         {ok, LogEof} = gen_server:call(Owner, log_eof, infinity),
@@ -241,7 +241,7 @@ maybe_retry_compact(CompactResult0, StartTime, LogFilePath, LogOffsetStart, Owne
             {progress, (TotalChanges * 100) div TotalChanges2},
             {retry_number, Retries}
         ]),
-        {ok, LogFd} = file:open(LogFilePath, [read, raw, binary]),
+        {ok, LogFd} = file2:open(LogFilePath, [read, raw, binary]),
         {ok, LogOffsetStart} = file:position(LogFd, LogOffsetStart),
         ok = couch_set_view_util:open_raw_read_fd(NewGroup),
         NewGroup2 = apply_log(NewGroup, LogFd, 0, nil,LogOffsetStart, LogEof),

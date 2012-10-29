@@ -63,7 +63,7 @@ from_sorted_file(EmptyBtree, SortedFileName, DestFd, BinToKvFun) ->
         kv_chunk_threshold = EmptyBtree#btree.kv_chunk_threshold,
         kp_chunk_threshold = EmptyBtree#btree.kp_chunk_threshold
     },
-    {ok, SourceFd} = file:open(SortedFileName, [read, raw, binary, read_ahead]),
+    {ok, SourceFd} = file2:open(SortedFileName, [read, raw, binary, read_ahead]),
     {ok, Acc2} = try
         sorted_file_fold(SourceFd, SortedFileName, BinToKvFun, 0, 0, Acc)
     after

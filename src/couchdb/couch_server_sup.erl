@@ -44,7 +44,7 @@ couch_config_start_link_wrapper(IniFiles, FirstConfigPid) ->
 start_server(IniFiles) ->
     case init:get_argument(pidfile) of
     {ok, [PidFile]} ->
-        case file:write_file(PidFile, os:getpid()) of
+        case file2:write_file(PidFile, os:getpid()) of
         ok -> ok;
         Error -> io:format("Failed to write PID file ~s, error: ~p", [PidFile, Error])
         end;
@@ -125,7 +125,7 @@ start_server(IniFiles) ->
             undefined -> [];
             Uri -> io_lib:format("~s~n", [Uri])
             end end || Uri <- Uris],
-        file:write_file(UriFile, Lines)
+        file2:write_file(UriFile, Lines)
     end,
 
     {ok, Pid}.

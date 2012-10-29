@@ -223,13 +223,13 @@ delete(RootDir, Filepath) ->
 
 delete(RootDir, Filepath, Async) ->
     DelFile = filename:join([RootDir,".delete", ?b2l(couch_uuids:random())]),
-    case file:rename(Filepath, DelFile) of
+    case file2:rename(Filepath, DelFile) of
     ok ->
         if (Async) ->
-            spawn(file, delete, [DelFile]),
+            spawn(file2, delete, [DelFile]),
             ok;
         true ->
-            file:delete(DelFile)
+            file2:delete(DelFile)
         end;
     Error ->
         Error
@@ -246,7 +246,7 @@ init_delete_dir(RootDir) ->
     filelib:ensure_dir(filename:join(Dir,"foo")),
     filelib:fold_files(Dir, ".*", true,
         fun(Filename, _) ->
-            ok = file:delete(Filename)
+            ok = file2:delete(Filename)
         end, ok).
 
 
@@ -320,7 +320,7 @@ maybe_create_file(Filepath, Options) ->
     case lists:member(create, Options) of
     true ->
         filelib:ensure_dir(Filepath),
-        case file:open(Filepath, [read, write, binary]) of
+        case file2:open(Filepath, [read, write, binary]) of
         {ok, Fd} ->
             {ok, Length} = file:position(Fd, eof),
             case Length > 0 of
@@ -596,9 +596,9 @@ try_open_fd(FilePath, Options, _Timewait, TotalTimeRemain)
         when TotalTimeRemain < 0 ->
     % Out of retry time.
     % Try one last time and whatever we get is the returned result.
-    file:open(FilePath, Options);
+    file2:open(FilePath, Options);
 try_open_fd(FilePath, Options, Timewait, TotalTimeRemain) ->
-    case file:open(FilePath, Options) of
+    case file2:open(FilePath, Options) of
     {ok, Fd} ->
         {ok, Fd};
     {error, emfile} ->
@@ -689,7 +689,7 @@ handle_write_message(Msg, Fd, FilePath, Eof, CloseTimeout) ->
         From ! {ok, self()},
         writer_loop(Fd, FilePath, Eof, NewCloseTimeout);
     {rename, NewFilepath, From} ->
-        ok = file:rename(FilePath, NewFilepath),
+        ok = file2:rename(FilePath, NewFilepath),
         ok = couch_file_write_guard:remove(self()),
         ok = couch_file_write_guard:add(NewFilepath, self()),
         From ! {ok, self()},

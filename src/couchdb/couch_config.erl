@@ -184,7 +184,7 @@ code_change(_OldVsn, State, _Extra) ->
 parse_ini_file(IniFile) ->
     IniFilename = couch_util:abs_pathname(IniFile),
     IniBin =
-    case file:read_file(IniFilename) of
+    case file2:read_file(IniFilename) of
         {ok, IniBin0} ->
             IniBin0;
         {error, eacces} ->

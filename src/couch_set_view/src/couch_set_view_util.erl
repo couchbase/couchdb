@@ -246,7 +246,7 @@ open_raw_read_fd(Group) ->
         type = Type,
         name = DDocId
     } = Group,
-    case file:open(FileName, [read, raw, binary]) of
+    case file2:open(FileName, [read, raw, binary]) of
     {ok, RawReadFd} ->
         erlang:put({FilePid, fast_fd_read}, RawReadFd),
         ok;
@@ -358,7 +358,7 @@ new_sort_file_path(RootDir, GroupSig) ->
 delete_sort_files(RootDir) ->
     WildCard = filename:join([RootDir, "*"]),
     lists:foreach(
-        fun(F) -> _ = file:delete(F) end,
+        fun(F) -> _ = file2:delete(F) end,
         filelib:wildcard(WildCard)).
 
 

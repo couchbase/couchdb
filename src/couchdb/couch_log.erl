@@ -176,7 +176,7 @@ read(Bytes, Offset) ->
     LogFileName = couch_config:get("log", "file"),
     LogFileSize = filelib:file_size(LogFileName),
 
-    {ok, Fd} = file:open(LogFileName, [read]),
+    {ok, Fd} = file2:open(LogFileName, [read]),
     Start = lists:max([LogFileSize - Bytes, 0]) + Offset,
 
     % TODO: truncate chopped first line

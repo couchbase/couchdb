@@ -43,7 +43,7 @@ init({MainPid, DbName, Filepath, Fd, Options}) ->
             ok = couch_file:write_header_bin(Fd,
                     db_header_to_header_bin(Header)),
             % delete any old compaction files that might be hanging around
-            file:delete(Filepath ++ ".compact")
+            file2:delete(Filepath ++ ".compact")
         end
     end,
 
@@ -896,7 +896,7 @@ start_copy_compact(#db{name=Name,filepath=Filepath}=Db) ->
         ok
     end,
     % Compact it
-    NewDb = case file:read_file_info(CompactFile) of
+    NewDb = case file2:read_file_info(CompactFile) of
         {ok, _} -> % Catch up
             {ok, TargetDB} = make_target_db(Db, CompactFile),
             copy_compact(Db, TargetDB, true);

@@ -1300,7 +1300,7 @@ prepare_group({RootDir, SetName, #set_view_group{sig = Sig, type = Type} = Group
                 case (not ForceReset) andalso (Type =:= main) of
                 true ->
                     % initializing main view group
-                    catch delete_index_file(RootDir, Group, replica);
+                    ok = delete_index_file(RootDir, Group, replica);
                 false ->
                     ok
                 end,
@@ -1312,11 +1312,11 @@ prepare_group({RootDir, SetName, #set_view_group{sig = Sig, type = Type} = Group
             [SetName, Type, Group#set_view_group.name]),
         Error;
     Error ->
-        catch delete_index_file(RootDir, Group, Type),
+        ok = delete_index_file(RootDir, Group, Type),
         case (not ForceReset) andalso (Type =:= main) of
         true ->
             % initializing main view group
-            catch delete_index_file(RootDir, Group, replica);
+            ok = delete_index_file(RootDir, Group, replica);
         false ->
             ok
         end,
@@ -1385,7 +1385,7 @@ delete_index_file(RootDir, Group, Type) ->
     SetDir = couch_set_view:set_index_dir(RootDir, Group#set_view_group.set_name),
     BaseName = filename:join([SetDir, base_index_file_name(Group, Type)]),
     lists:foreach(
-        fun(F) -> couch_file:delete(RootDir, F) end,
+        fun(F) -> ok = couch_file:delete(RootDir, F) end,
         filelib:wildcard(BaseName ++ ".[0-9]*")).
 
 

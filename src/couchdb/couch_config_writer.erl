@@ -27,7 +27,7 @@
 %%           File::filename()) -> ok
 %% @doc Saves a Section/Key/Value triple to the ini file File::filename()
 save_to_file({{Section, Key}, Value}, File) ->
-    {ok, OldFileContents} = file:read_file(File),
+    {ok, OldFileContents} = file2:read_file(File),
     Lines = re:split(OldFileContents, "\r\n|\n|\r|\032", [{return, list}]),
 
     SectionLine = "[" ++ Section ++ "]",
@@ -35,7 +35,7 @@ save_to_file({{Section, Key}, Value}, File) ->
 
     NewLines = process_file_lines(Lines, [], SectionLine, Pattern, Key, Value),
     NewFileContents = reverse_and_add_newline(strip_empty_lines(NewLines), []),
-    case file:write_file(File, NewFileContents) of
+    case file2:write_file(File, NewFileContents) of
     ok ->
         ok;
     {error, eacces} ->
