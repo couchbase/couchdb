@@ -438,13 +438,19 @@ list_index_files(SetName) ->
 
 
 -spec get_row_count(#set_view_group{}, #set_view{}) -> non_neg_integer().
-get_row_count(#set_view_group{replica_group = nil}, #set_view{btree = Bt}) ->
+get_row_count(#set_view_group{replica_group = nil}, #set_view{btree = Bt} = View) ->
+    ok = couch_set_view_mapreduce:start_reduce_context(View),
     {ok, <<Count:40, _/binary>>} = couch_btree:full_reduce(Bt),
+    ok = couch_set_view_mapreduce:end_reduce_context(View),
     Count;
 get_row_count(#set_view_group{replica_group = RepGroup}, View) ->
     RepView = lists:nth(View#set_view.id_num + 1, RepGroup#set_view_group.views),
+    ok = couch_set_view_mapreduce:start_reduce_context(View),
     {ok, <<CountMain:40, _/binary>>} = couch_btree:full_reduce(View#set_view.btree),
+    ok = couch_set_view_mapreduce:end_reduce_context(View),
+    ok = couch_set_view_mapreduce:start_reduce_context(RepView),
     {ok, <<CountRep:40, _/binary>>} = couch_btree:full_reduce(RepView#set_view.btree),
+    ok = couch_set_view_mapreduce:end_reduce_context(RepView),
     CountMain + CountRep.
 
 

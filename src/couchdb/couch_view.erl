@@ -138,8 +138,10 @@ list_index_files(Db) ->
     filelib:wildcard(
         RootDir ++ "/." ++ ?b2l(couch_db:name(Db)) ++ "_design" ++ "/*.view").
 
-get_row_count(#view{btree=Bt}) ->
+get_row_count(#view{btree=Bt} = View) ->
+    ok = couch_view_mapreduce:start_reduce_context(View),
     {ok, {Count, _Reds}} = couch_btree:full_reduce(Bt),
+    ok = couch_view_mapreduce:end_reduce_context(View),
     {ok, Count}.
 
 get_temp_reduce_view(Db, Language, DesignOptions, MapSrc, RedSrc) ->
