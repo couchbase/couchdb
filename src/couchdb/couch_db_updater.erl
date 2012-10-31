@@ -389,12 +389,12 @@ increment_filepath(FilePath) ->
 btree_by_seq_split(#doc_info{id=Id, local_seq=Seq, rev={RevPos, RevId},
         deleted=Deleted, body_ptr=Bp, content_meta=Meta, size=Size}) ->
     DeletedBit = if Deleted -> 1; true -> 0 end,
-    Val = <<(size(Id)):12,Size:28,DeletedBit:1,Bp:47,Meta:8,RevPos:32,
+    Val = <<(size(Id)):12,Size:28,DeletedBit:1,Bp:47,RevPos:48,Meta:8,
                 Id/binary,RevId/binary>>,
     {<<Seq:48>>, Val}.
 
 btree_by_seq_join(<<Seq:48>>, Val) ->
-    <<SizeId:12,SizeBody:28,Deleted:1,Bp:47,Meta:8,RevPos:32,
+    <<SizeId:12,SizeBody:28,Deleted:1,Bp:47,RevPos:48,Meta:8,
         Id:SizeId/binary,RevId/binary>> = Val,
     #doc_info{
         id = binary:copy(Id),
@@ -408,11 +408,11 @@ btree_by_seq_join(<<Seq:48>>, Val) ->
 btree_by_id_split(#doc_info{id=Id, local_seq=Seq, rev={RevPos,RevId},
         deleted=Deleted, body_ptr=Bp, content_meta=Meta, size=Size}) ->
     DeletedBit = if Deleted -> 1; true -> 0 end,
-    Val = <<Seq:48,0:4,Size:28,DeletedBit:1,Bp:47,Meta:8,RevPos:32,RevId/binary>>,
+    Val = <<Seq:48,0:4,Size:28,DeletedBit:1,Bp:47,RevPos:48,Meta:8,RevId/binary>>,
     {Id, Val}.
 
 btree_by_id_join(Id, Bin) ->
-    <<Seq:48,Size:32,DeletedBit:1,Bp:47,Meta:8,RevPos:32,RevId/binary>> = Bin,
+    <<Seq:48,Size:32,DeletedBit:1,Bp:47,RevPos:48,Meta:8,RevId/binary>> = Bin,
     #doc_info{
         id = Id,
         local_seq = Seq,

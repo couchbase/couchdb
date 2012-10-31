@@ -136,7 +136,7 @@
 % if the disk revision is incremented, then new upgrade logic will need to be
 % added to couch_db_updater:init_db.
 
--define(LATEST_DISK_VERSION, 10).
+-define(LATEST_DISK_VERSION, 11).
 
 -record(db_header,
     {disk_version = ?LATEST_DISK_VERSION,
