@@ -667,6 +667,8 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
         ?set_seqs(Group), ?set_seqs(NewGroup)),
     case MissingChangesCount == 0 of
     true ->
+        HeaderBin = couch_set_view_util:group_to_header_bin(NewGroup),
+        ok = couch_file:write_header_bin(NewGroup#set_view_group.fd, HeaderBin),
         if is_pid(UpdaterPid) ->
             ?LOG_INFO("Set view `~s`, ~s group `~s`, compact group up to date - restarting updater",
                       [?set_name(State), ?type(State), ?group_id(State)]),
@@ -685,6 +687,8 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
             [?set_name(State), ?type(State), ?group_id(State), Duration, CleanupKVCount]),
         ok = couch_file:only_snapshot_reads(OldFd),
         ok = couch_file:delete(?root_dir(State), OldFilepath),
+        %% After rename call we're sure the header was written to the file
+        %% (no need for couch_file:flush/1 call).
         ok = couch_file:rename(NewGroup#set_view_group.fd, NewFilepath),
 
         %% cleanup old group
