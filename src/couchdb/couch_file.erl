@@ -16,6 +16,7 @@
 -include("couch_db.hrl").
 
 -define(SIZE_BLOCK, 4096).
+-define(RETRY_TIME_MS, 1000).
 -define(MAX_RETRY_TIME_MS, 10000).
 
 -record(file, {
@@ -621,7 +622,7 @@ try_open_fd(FilePath, Options, Timewait, TotalTimeRemain) ->
 
 
 spawn_writer(Filepath, CloseTimeout) ->
-    case try_open_fd(Filepath, [binary, append, raw], CloseTimeout,
+    case try_open_fd(Filepath, [binary, append, raw], ?RETRY_TIME_MS,
         ?MAX_RETRY_TIME_MS) of
     {ok, Fd} ->
         {ok, Eof} = file:position(Fd, eof),
@@ -634,7 +635,7 @@ spawn_writer(Filepath, CloseTimeout) ->
 
 
 spawn_reader(Filepath, CloseTimeout) ->
-    case try_open_fd(Filepath, [binary, read, raw], CloseTimeout,
+    case try_open_fd(Filepath, [binary, read, raw], ?RETRY_TIME_MS,
         ?MAX_RETRY_TIME_MS) of
     {ok, Fd} ->
         proc_lib:init_ack({ok, self()}),
@@ -656,7 +657,7 @@ writer_loop(Fd, FilePath, Eof, CloseTimeout) ->
             ok = couch_file_write_guard:remove(self()),
             exit(Reason);
         Msg ->
-            case try_open_fd(FilePath, [binary, append, raw], CloseTimeout,
+            case try_open_fd(FilePath, [binary, append, raw], ?RETRY_TIME_MS,
                 ?MAX_RETRY_TIME_MS) of
             {ok, Fd2} ->
                 handle_write_message(Msg, Fd2, FilePath, Eof, CloseTimeout);
@@ -744,7 +745,7 @@ reader_loop(Fd, FilePath, CloseTimeout) ->
         {'EXIT', _From, Reason} ->
             exit(Reason);
         Msg ->
-            case try_open_fd(FilePath, [binary, read, raw], CloseTimeout,
+            case try_open_fd(FilePath, [binary, read, raw], ?RETRY_TIME_MS,
                 ?MAX_RETRY_TIME_MS) of
             {ok, Fd2} ->
                 handle_reader_message(Msg, Fd2, FilePath, CloseTimeout);
