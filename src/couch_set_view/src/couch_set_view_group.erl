@@ -36,6 +36,9 @@
                             string(),
                             pid() | 'nil',
                             pid()) -> no_return()).
+-type monitor_error() :: {'shutdown', any()} |
+                         'marked_for_cleanup' |
+                         {'updater_error', any()}.
 
 -define(TIMEOUT, 3000).
 
@@ -705,7 +708,7 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
             nil
         end,
 
-        Listeners2 = notify_update_listeners(Listeners, NewGroup2),
+        Listeners2 = notify_update_listeners(State, Listeners, NewGroup2),
         State2 = State#state{
             update_listeners = Listeners2,
             compactor_pid = nil,
@@ -757,7 +760,11 @@ handle_call({demonitor_partition_update, Ref}, _From, State) ->
     case dict:find(Ref, Listeners) of
     error ->
         {reply, ok, State, ?TIMEOUT};
-    {ok, #up_listener{monref = MonRef}}  ->
+    {ok, #up_listener{monref = MonRef, partition = PartId}} ->
+        ?LOG_DEBUG("Set view `~s`, ~s group `~s`, removing partition ~p"
+                   "update monitor, reference ~p",
+                   [?set_name(State), ?type(State), ?group_id(State),
+                    PartId, Ref]),
         erlang:demonitor(MonRef, [flush]),
         State2 = State#state{update_listeners = dict:erase(Ref, Listeners)},
         {reply, ok, State2, ?TIMEOUT}
@@ -1052,16 +1059,13 @@ handle_info({'EXIT', Pid, {updater_finished, Result}}, #state{updater_pid = Pid}
 handle_info({'EXIT', Pid, {updater_error, Error}}, #state{updater_pid = Pid} = State) ->
     ?LOG_ERROR("Set view `~s`, ~s group `~s`, received error from updater: ~p",
         [?set_name(State), ?type(State), ?group_id(State), Error]),
-    _ = dict:fold(
-        fun(Ref, #up_listener{pid = ListPid}, _Acc) ->
-            ListPid ! {Ref, {updater_error, Error}}
-        end,
-        ok, State#state.update_listeners),
+    Listeners2 = error_notify_update_listeners(
+        State, State#state.update_listeners, {updater_error, Error}),
     State2 = State#state{
         updater_pid = nil,
         initial_build = false,
         updater_state = not_running,
-        update_listeners = dict:new()
+        update_listeners = Listeners2
     },
     ?inc_updater_errors(State2#state.group),
     case State#state.shutdown of
@@ -1129,7 +1133,15 @@ handle_info({'DOWN', Ref, process, Pid, Reason}, State) ->
             undefined,
             State#state.db_refs),
         UpdateListeners2 = dict:filter(
-            fun(_, #up_listener{pid = Pid0}) -> Pid0 /= Pid end,
+            fun(RefList, #up_listener{pid = Pid0, partition = PartId}) when Pid0 == Pid ->
+                ?LOG_DEBUG("Set view `~s`, ~s group `~s`, removing partition ~p"
+                           "update monitor, reference ~p (it died)",
+                           [?set_name(State), ?type(State), ?group_id(State),
+                            PartId, RefList]),
+                false;
+            (_ , _) ->
+                true
+            end,
             State#state.update_listeners),
         {noreply, State#state{update_listeners = UpdateListeners2}}
     catch throw:{found, PartId} ->
@@ -1143,12 +1155,9 @@ handle_info({'DOWN', Ref, process, Pid, Reason}, State) ->
 terminate(Reason, #state{group = #set_view_group{sig = Sig} = Group} = State) ->
     ?LOG_INFO("Set view `~s`, ~s group `~s`, signature `~s`, terminating with reason: ~p",
         [?set_name(State), ?type(State), ?group_id(State), hex_sig(Sig), Reason]),
-    _ = dict:fold(
-        fun(Ref, #up_listener{pid = Pid}, _Acc) ->
-            Pid ! {Ref, {shutdown, Reason}}
-        end,
-        ok, State#state.update_listeners),
-    State2 = reply_all(State#state{update_listeners = dict:new()}, Reason),
+    Listeners2 = error_notify_update_listeners(
+        State, State#state.update_listeners, {shutdown, Reason}),
+    State2 = reply_all(State#state{update_listeners = Listeners2}, Reason),
     State3 = notify_pending_transition_waiters(State2, {shutdown, Reason}),
     catch couch_db_set:close(?db_set(State3)),
     couch_util:shutdown_sync(State3#state.cleaner_pid),
@@ -1965,6 +1974,10 @@ persist_partition_states(State, ActiveList, PassiveList, CleanupList, PendingTra
                 } = Listener,
                 case lists:member(PartId, CleanupList) of
                 true ->
+                    ?LOG_DEBUG("Set view `~s`, ~s group `~s`, replying to partition ~p"
+                               "update monitor, reference ~p, error: marked_for_cleanup",
+                               [?set_name(State), ?type(State), ?group_id(State),
+                                Ref, PartId]),
                     Pid ! {Ref, marked_for_cleanup},
                     erlang:demonitor(MonRef, [flush]),
                     false;
@@ -2677,7 +2690,7 @@ process_partial_update(State, NewGroup) ->
         group = Group,
         update_listeners = Listeners
     } = State,
-    Listeners2 = notify_update_listeners(Listeners, NewGroup),
+    Listeners2 = notify_update_listeners(State, Listeners, NewGroup),
     ReplicasTransferred = ordsets:subtract(
         ?set_replicas_on_transfer(Group), ?set_replicas_on_transfer(NewGroup)),
     case ReplicasTransferred of
@@ -2697,8 +2710,8 @@ process_partial_update(State, NewGroup) ->
     end.
 
 
--spec notify_update_listeners(dict(), #set_view_group{}) -> dict().
-notify_update_listeners(Listeners, NewGroup) ->
+-spec notify_update_listeners(#state{}, dict(), #set_view_group{}) -> dict().
+notify_update_listeners(State, Listeners, NewGroup) ->
     case dict:size(Listeners) == 0 of
     true ->
         Listeners;
@@ -2713,6 +2726,11 @@ notify_update_listeners(Listeners, NewGroup) ->
                 } = Listener,
                 case couch_set_view_util:find_part_seq(PartId, ?set_seqs(NewGroup)) of
                 {ok, IndexedSeq} when IndexedSeq >= Seq ->
+                   ?LOG_DEBUG("Set view `~s`, ~s group `~s`, replying to partition ~p"
+                              " update monitor, reference ~p, desired indexed seq ~p,"
+                              " indexed seq ~p",
+                              [?set_name(State), ?type(State), ?group_id(State),
+                               PartId, Ref, Seq, IndexedSeq]),
                     Pid ! {Ref, updated},
                     erlang:demonitor(MonRef, [flush]),
                     false;
@@ -2722,6 +2740,20 @@ notify_update_listeners(Listeners, NewGroup) ->
             end,
             Listeners)
     end.
+
+
+-spec error_notify_update_listeners(#state{}, dict(), monitor_error()) -> dict().
+error_notify_update_listeners(State, Listeners, Error) ->
+    _ = dict:fold(
+        fun(Ref, #up_listener{pid = ListPid, partition = PartId}, _Acc) ->
+            ?LOG_DEBUG("Set view `~s`, ~s group `~s`, replying to partition ~p"
+                       "update monitor, reference ~p, error: ~p",
+                       [?set_name(State), ?type(State), ?group_id(State),
+                        Ref, PartId, Error]),
+            ListPid ! {Ref, Error}
+        end,
+        ok, Listeners),
+    dict:new().
 
 
 -spec inc_updates(#set_view_group{},
@@ -3224,10 +3256,18 @@ process_monitor_partition_update(#state{group = Group} = State, PartId, Ref, Pid
             partition = PartId,
             seq = CurSeq
         },
+        ?LOG_DEBUG("Set view `~s`, ~s group `~s`, blocking partition ~p update monitor,"
+                   " reference ~p, desired indexed seq ~p, indexed seq ~p",
+                   [?set_name(State), ?type(State), ?group_id(State),
+                    PartId, Ref, CurSeq, Seq]),
         State2#state{
             update_listeners = dict:store(Ref, Listener, State2#state.update_listeners)
         };
     false ->
+        ?LOG_DEBUG("Set view `~s`, ~s group `~s`, replying to partition ~p update monitor,"
+                   " reference ~p, desired indexed seq ~p, indexed seq ~p",
+                   [?set_name(State), ?type(State), ?group_id(State),
+                    PartId, Ref, CurSeq, Seq]),
         Pid ! {Ref, updated},
         State2
     end.
