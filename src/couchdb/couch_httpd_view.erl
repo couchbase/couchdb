@@ -326,7 +326,7 @@ parse_view_param("stale", Value) ->
 parse_view_param("descending", Value) ->
     [{descending, parse_bool_param(Value)}];
 parse_view_param("skip", Value) ->
-    [{skip, parse_int_param(Value)}];
+    [{skip, parse_positive_int_param(Value)}];
 parse_view_param("group", Value) ->
     case parse_bool_param(Value) of
         true -> [{group_level, exact}];
