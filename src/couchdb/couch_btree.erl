@@ -343,7 +343,8 @@ chunkify(#btree{kv_chunk_threshold = T}, kv_node, InList) ->
 chunkify(ChunkThreshold0, InList) ->
     case ?term_size(InList) of
     Size when Size > ChunkThreshold0 ->
-        NumberOfChunksLikely = ((Size div ChunkThreshold0) + 1),
+        ChunkThreshold1 = ChunkThreshold0 div 2,
+        NumberOfChunksLikely = ((Size div ChunkThreshold1) + 1),
         ChunkThreshold = Size div NumberOfChunksLikely,
         chunkify(InList, ChunkThreshold, [], 0, []);
     _Else ->
