@@ -253,23 +253,34 @@ verify_btrees_1(ValueGenFun) ->
     etap:is(PendingTrans, nil, "Header has nil pending transition"),
 
     etap:diag("Verifying the Id Btree"),
-    {ok, _, IdBtreeFoldResult} = couch_set_view_test_util:fold_id_btree(
+    MaxPerPart = num_docs() div num_set_partitions(),
+    {ok, _, {_, _, _, IdBtreeFoldResult}} = couch_set_view_test_util:fold_id_btree(
         Group,
         IdBtree,
-        fun(Kv, _, I) ->
-            PartId = I rem num_set_partitions(),
+        fun(Kv, _, {P0, I0, C0, It}) ->
+            case C0 >= MaxPerPart of
+            true ->
+                P = P0 + 1,
+                I = P,
+                C = 1;
+            false ->
+                P = P0,
+                I = I0,
+                C = C0 + 1
+            end,
+            true = (P < num_set_partitions()),
             DocId = doc_id(I),
             Value = [{View1#set_view.id_num, DocId}],
-            ExpectedKv = {DocId, {PartId, Value}},
+            ExpectedKv = {<<P:16, DocId/binary>>, {P, Value}},
             case ExpectedKv =:= Kv of
             true ->
                 ok;
             false ->
-                etap:bail("Id Btree has an unexpected KV at iteration " ++ integer_to_list(I))
+                etap:bail("Id Btree has an unexpected KV at iteration " ++ integer_to_list(It))
             end,
-            {ok, I + 1}
+            {ok, {P, I + num_set_partitions(), C, It + 1}}
         end,
-        0, []),
+        {0, 0, 0, 0}, []),
     etap:is(IdBtreeFoldResult, ExpectedKVCount,
         "Id Btree has " ++ integer_to_list(ExpectedKVCount) ++ " entries"),
 
@@ -337,23 +348,34 @@ verify_btrees_2(ValueGenFun) ->
     etap:is(PendingTrans, nil, "Header has nil pending transition"),
 
     etap:diag("Verifying the Id Btree"),
-    {ok, _, IdBtreeFoldResult} = couch_set_view_test_util:fold_id_btree(
+    MaxPerPart = num_docs() div num_set_partitions(),
+    {ok, _, {_, _, _, IdBtreeFoldResult}} = couch_set_view_test_util:fold_id_btree(
         Group,
         IdBtree,
-        fun(Kv, _, I) ->
-            PartId = I rem num_set_partitions(),
+        fun(Kv, _, {P0, I0, C0, It}) ->
+            case C0 >= MaxPerPart of
+            true ->
+                P = P0 + 1,
+                I = P,
+                C = 1;
+            false ->
+                P = P0,
+                I = I0,
+                C = C0 + 1
+            end,
+            true = (P < num_set_partitions()),
             DocId = doc_id(I),
             Value = [{View1#set_view.id_num, DocId}],
-            ExpectedKv = {DocId, {PartId, Value}},
+            ExpectedKv = {<<P:16, DocId/binary>>, {P, Value}},
             case ExpectedKv =:= Kv of
             true ->
                 ok;
             false ->
-                etap:bail("Id Btree has an unexpected KV at iteration " ++ integer_to_list(I))
+                etap:bail("Id Btree has an unexpected KV at iteration " ++ integer_to_list(It))
             end,
-            {ok, I + 1}
+            {ok, {P, I + num_set_partitions(), C, It + 1}}
         end,
-        0, []),
+        {0, 0, 0, 0}, []),
     etap:is(IdBtreeFoldResult, ExpectedKVCount,
         "Id Btree has " ++ integer_to_list(ExpectedKVCount) ++ " entries"),
 
@@ -426,23 +448,34 @@ verify_btrees_3(ValueGenFun) ->
     etap:is(PendingTrans, ExpectedPendingTrans, "Header has expected pending transition"),
 
     etap:diag("Verifying the Id Btree"),
-    {ok, _, IdBtreeFoldResult} = couch_set_view_test_util:fold_id_btree(
+    MaxPerPart = num_docs() div num_set_partitions(),
+    {ok, _, {_, _, _, IdBtreeFoldResult}} = couch_set_view_test_util:fold_id_btree(
         Group,
         IdBtree,
-        fun(Kv, _, I) ->
-            PartId = I rem num_set_partitions(),
+        fun(Kv, _, {P0, I0, C0, It}) ->
+            case C0 >= MaxPerPart of
+            true ->
+                P = P0 + 1,
+                I = P,
+                C = 1;
+            false ->
+                P = P0,
+                I = I0,
+                C = C0 + 1
+            end,
+            true = (P < num_set_partitions()),
             DocId = doc_id(I),
             Value = [{View1#set_view.id_num, DocId}],
-            ExpectedKv = {DocId, {PartId, Value}},
+            ExpectedKv = {<<P:16, DocId/binary>>, {P, Value}},
             case ExpectedKv =:= Kv of
             true ->
                 ok;
             false ->
-                etap:bail("Id Btree has an unexpected KV at iteration " ++ integer_to_list(I))
+                etap:bail("Id Btree has an unexpected KV at iteration " ++ integer_to_list(It))
             end,
-            {ok, I + 1}
+            {ok, {P, I + num_set_partitions(), C, It + 1}}
         end,
-        0, []),
+        {0, 0, 0, 0}, []),
     etap:is(IdBtreeFoldResult, ExpectedKVCount,
         "Id Btree has " ++ integer_to_list(ExpectedKVCount) ++ " entries"),
 
@@ -512,16 +545,15 @@ verify_btrees_4(ValueGenFun) ->
         Group,
         IdBtree,
         fun(Kv, _, {I, Count}) ->
+            PartId = 0,
             case Count == (ExpectedKVCount - 1) of
             true ->
-                DocId = doc_id(9000010),
-                PartId = 0;
+                DocId = doc_id(9000010);
             false ->
-                DocId = doc_id(I),
-                PartId = I rem num_set_partitions()
+                DocId = doc_id(I)
             end,
             Value = [{View1#set_view.id_num, DocId}],
-            ExpectedKv = {DocId, {PartId, Value}},
+            ExpectedKv = {<<PartId:16, DocId/binary>>, {PartId, Value}},
             case ExpectedKv =:= Kv of
             true ->
                 ok;
@@ -728,7 +760,7 @@ test_monitor_pending_partition() ->
         IdBtree,
         fun(Kv, _, Acc) -> {ok, [Kv | Acc]} end,
         [], []),
-    etap:is(IdBtreeFoldResult, [{doc_id(9000011), {0, [{0, doc_id(9000011)}]}}],
+    etap:is(IdBtreeFoldResult, [{<<0:16, (doc_id(9000011))/binary>>, {0, [{0, doc_id(9000011)}]}}],
             "Id Btree has 1 entry"),
 
     etap:diag("Verifying the View1 Btree"),

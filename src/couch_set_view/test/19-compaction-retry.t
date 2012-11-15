@@ -378,23 +378,34 @@ verify_btrees(ValueGenFun, NumDocs) ->
     etap:is(Cbitmask, 0, "Header has right cleanup bitmask"),
 
     etap:diag("Verifying the Id Btree"),
-    {ok, _, IdBtreeFoldResult} = couch_set_view_test_util:fold_id_btree(
+    MaxPerPart = NumDocs div num_set_partitions(),
+    {ok, _, {_, _, _, IdBtreeFoldResult}} = couch_set_view_test_util:fold_id_btree(
         Group,
         IdBtree,
-        fun(Kv, _, I) ->
-            PartId = I rem num_set_partitions(),
+        fun(Kv, _, {P0, I0, C0, It}) ->
+            case C0 >= MaxPerPart of
+            true ->
+                P = P0 + 1,
+                I = P,
+                C = 1;
+            false ->
+                P = P0,
+                I = I0,
+                C = C0 + 1
+            end,
+            true = (P < num_set_partitions()),
             DocId = doc_id(I),
             Value = [{View1#set_view.id_num, DocId}, {View2#set_view.id_num, DocId}],
-            ExpectedKv = {DocId, {PartId, Value}},
+            ExpectedKv = {<<P:16, DocId/binary>>, {P, Value}},
             case ExpectedKv =:= Kv of
             true ->
                 ok;
             false ->
-                etap:bail("Id Btree has an unexpected KV at iteration " ++ integer_to_list(I))
+                etap:bail("Id Btree has an unexpected KV at iteration " ++ integer_to_list(It))
             end,
-            {ok, I + 1}
+            {ok, {P, I + num_set_partitions(), C, It + 1}}
         end,
-        0, []),
+        {0, 0, 0, 0}, []),
     etap:is(IdBtreeFoldResult, ExpectedKVCount,
         "Id Btree has " ++ integer_to_list(ExpectedKVCount) ++ " entries"),
 

@@ -840,10 +840,12 @@ write_changes(WriterAcc, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs) ->
     } = Group,
 
     {AddDocIdViewIdKeys0, RemoveDocIds, LookupDocIds} = lists:foldr(
-        fun({DocId, {_PartId, [] = _ViewIdKeys}}, {A, B, C}) ->
-                {A, [DocId | B], [DocId | C]};
-            ({DocId, {_PartId, _ViewIdKeys}} = KvPairs, {A, B, C}) ->
-                {[KvPairs | A], B, [DocId | C]}
+        fun({DocId, {PartId, [] = _ViewIdKeys}}, {A, B, C}) ->
+                BackKey = make_back_index_key(DocId, PartId),
+                {A, [BackKey | B], [BackKey | C]};
+            ({DocId, {PartId, _ViewIdKeys}} = KvPairs, {A, B, C}) ->
+                BackKey = make_back_index_key(DocId, PartId),
+                {[KvPairs | A], B, [BackKey | C]}
         end,
         {[], [], []}, DocIdViewIdKeys),
     AddDocIdViewIdKeys = convert_back_index_kvs_to_binary(AddDocIdViewIdKeys0, []),
@@ -869,7 +871,7 @@ write_changes(WriterAcc, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs) ->
     KeysToRemoveByView = lists:foldl(
         fun(LookupResult, KeysToRemoveByViewAcc) ->
             case LookupResult of
-            {ok, {DocId, <<_Part:16, ViewIdKeys/binary>>}} ->
+            {ok, {<<_Part:16, DocId/binary>>, <<_Part:16, ViewIdKeys/binary>>}} ->
                 lists:foldl(
                     fun({ViewId, Keys}, KeysToRemoveByViewAcc2) ->
                         EncodedKeys = [couch_set_view_util:encode_key_docid(Key, DocId) || Key <- Keys],
@@ -1132,8 +1134,12 @@ convert_back_index_kvs_to_binary([{DocId, {PartId, ViewIdKeys}} | Rest], Acc) ->
             <<Acc2/binary, ViewId:8, (length(Keys)):16, KeyListBinary/binary>>
         end,
         <<>>, ViewIdKeys),
-    KvBin = {DocId, <<PartId:16, ViewIdKeysBinary/binary>>},
+    KvBin = {make_back_index_key(DocId, PartId), <<PartId:16, ViewIdKeysBinary/binary>>},
     convert_back_index_kvs_to_binary(Rest, [KvBin | Acc]).
+
+
+make_back_index_key(DocId, PartId) ->
+    <<PartId:16, DocId/binary>>.
 
 
 file_sorter_format_function(<<KeyLen:16, Key:KeyLen/binary, Value/binary>>) ->
