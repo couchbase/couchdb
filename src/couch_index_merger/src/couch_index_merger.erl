@@ -644,7 +644,7 @@ http_index_folder(Mod, IndexSpec, MergeParams, DDoc, Queue) ->
         Streamer = get(streamer_pid),
         case is_pid(Streamer) andalso is_process_alive(Streamer) of
         true ->
-            catch stream_all(Streamer, MergeParams#index_merge.conn_timeout, []);
+            catch empty_socket(Streamer, MergeParams#index_merge.conn_timeout);
         false ->
             ok
         end
@@ -740,6 +740,15 @@ stream_all(Pid, Timeout, Acc) ->
         iolist_to_binary(lists:reverse(Acc));
     {Data, _} ->
         stream_all(Pid, Timeout, [Data | Acc])
+    end.
+
+
+empty_socket(Pid, Timeout) ->
+    case stream_data(Pid, Timeout) of
+    {<<>>, _} ->
+        ok;
+    {_Data, _} ->
+        empty_socket(Pid, Timeout)
     end.
 
 
