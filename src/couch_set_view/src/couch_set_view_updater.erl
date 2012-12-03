@@ -910,10 +910,10 @@ write_changes(WriterAcc, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs) ->
         NewCbitmask = 0,
         CleanupTime = 0;
     _ ->
-        {ok, <<_Count:40, IdBitmap:?MAX_NUM_PARTITIONS>>} = couch_btree:full_reduce(IdBtree2),
+        {ok, <<_IdCount:40, IdBitmap:?MAX_NUM_PARTITIONS>>} = couch_btree:full_reduce(IdBtree2),
         CombinedBitmap = lists:foldl(
             fun(#set_view{btree = Bt}, AccMap) ->
-                {ok, <<_Count:40, Bm:?MAX_NUM_PARTITIONS, _/binary>>} = couch_btree:full_reduce(Bt),
+                {ok, <<_ViewCount:40, Bm:?MAX_NUM_PARTITIONS, _/binary>>} = couch_btree:full_reduce(Bt),
                 AccMap bor Bm
             end,
             IdBitmap, Views2),
