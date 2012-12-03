@@ -157,14 +157,12 @@ http_sender({error, _, _} = Error, #sender_acc{on_error = continue, error_acc = 
     {ok, SAcc#sender_acc{error_acc = ErrorAcc2}};
 
 http_sender({error, _, _} = Error, #sender_acc{on_error = stop} = SAcc) ->
-    #sender_acc{rows_acc = RowsAcc, req = Req, resp = Resp} = SAcc,
+    #sender_acc{req = Req, resp = Resp} = SAcc,
     ErrorRow = make_error_row(Error),
     case Resp of
     nil ->
         % we haven't started the response yet
-        Start = <<"{\"total_rows\":0,\"rows\":[]\r\n">>,
         {ok, Resp2} = couch_httpd:start_json_response(Req, 200, []),
-        couch_httpd:send_chunk(Resp2, Start),
         Buffer1 = [
             <<"{\"total_rows\":0,\"rows\":[]\r\n">>,
             <<",\r\n\"errors\":[">>,
@@ -173,9 +171,9 @@ http_sender({error, _, _} = Error, #sender_acc{on_error = stop} = SAcc) ->
         ];
     _ ->
        Resp2 = Resp,
-       Buffer1 = [<<"\r\n],\"errors\":[">>, ErrorRow, <<"]">>]
+       Buffer1 = [make_rows_buffer(SAcc), <<"\r\n],\"errors\":[">>, ErrorRow, <<"]">>]
     end,
-    Buffer2 = [lists:reverse(RowsAcc), Buffer1, <<"\r\n}">>],
+    Buffer2 = [Buffer1, <<"\r\n}">>],
     couch_httpd:send_chunk(Resp2, Buffer2),
     couch_httpd:end_json_response(Resp2),
     {stop, Resp2}.
