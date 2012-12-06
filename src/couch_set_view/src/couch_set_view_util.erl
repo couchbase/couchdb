@@ -350,7 +350,7 @@ is_group_empty(Group) ->
 new_sort_file_path(RootDir, GroupSig) ->
     Base = couch_util:to_hex(GroupSig) ++ "_" ++ ?b2l(couch_uuids:new()) ++ ".sort",
     Path = filename:join([RootDir, Base]),
-    ok = filelib:ensure_dir(Path),
+    ok = file2:ensure_dir(Path),
     Path.
 
 

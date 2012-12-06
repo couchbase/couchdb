@@ -168,7 +168,7 @@ all_databases(Fun, Acc0) ->
     {ok, #server{root_dir=Root}} = gen_server:call(couch_server, get_server),
     NormRoot = couch_util:normpath(Root),
     FinalAcc = try
-        filelib:fold_files(Root, "^[a-z0-9\\_\\$()\\+\\-]*[\\.]couch[\\.][0-9]*$", true,
+        file2:fold_files(Root, "^[a-z0-9\\_\\$()\\+\\-]*[\\.]couch[\\.][0-9]*$", true,
             fun(Filename, AccIn) ->
                 NormFilename = couch_util:normpath(Filename),
                 case NormFilename -- NormRoot of

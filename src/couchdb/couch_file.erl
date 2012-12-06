@@ -244,8 +244,8 @@ init_delete_dir(RootDir) ->
     Dir = get_delete_dir(RootDir),
     % note: ensure_dir requires an actual filename companent, which is the
     % reason for "foo".
-    filelib:ensure_dir(filename:join(Dir,"foo")),
-    filelib:fold_files(Dir, ".*", true,
+    file2:ensure_dir(filename:join(Dir,"foo")),
+    file2:fold_files(Dir, ".*", true,
         fun(Filename, _) ->
             ok = file2:delete(Filename)
         end, ok).
@@ -320,7 +320,7 @@ init({Filepath, Options}) ->
 maybe_create_file(Filepath, Options) ->
     case lists:member(create, Options) of
     true ->
-        filelib:ensure_dir(Filepath),
+        file2:ensure_dir(Filepath),
         case file2:open(Filepath, [read, write, binary]) of
         {ok, Fd} ->
             {ok, Length} = file:position(Fd, eof),
