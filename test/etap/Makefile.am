@@ -63,6 +63,5 @@ EXTRA_DIST = \
     100-ref-counter.t \
     150-invalid-view-seq.t \
     190-json-stream-parse.t \
-    200-view-group-no-db-leaks.t \
     201-view-group-shutdown.t \
     202-dev-view-group-shutdown.t
