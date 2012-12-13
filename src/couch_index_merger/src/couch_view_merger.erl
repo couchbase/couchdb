@@ -208,7 +208,7 @@ http_index_folder_req_details(#simple_index_spec{} = IndexSpec, MergeParams, _DD
     <<"_all_docs">> ->
         "_all_docs";
     _ ->
-        ?b2l(DDocId) ++ "/_view/" ++ ?b2l(ViewName)
+        couch_httpd:quote(DDocId) ++ "/_view/" ++ couch_httpd:quote(ViewName)
     end ++ view_qs(ViewArgs, MergeParams),
     put(from_url, DbUrl),
     case Keys of
