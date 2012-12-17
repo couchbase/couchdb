@@ -94,6 +94,7 @@ static const char *BASE64_FUNCTION_STRING =
     "    return arr;"
     "})";
 
+static void doInitContext(map_reduce_ctx_t *ctx, const function_sources_list_t &funs);
 static Persistent<Context> createJsContext(map_reduce_ctx_t *ctx);
 static Handle<Value> emit(const Arguments& args);
 static void loadFunctions(map_reduce_ctx_t *ctx, const function_sources_list_t &funs);
@@ -111,6 +112,24 @@ static std::string exceptionString(const TryCatch &tryCatch);
 
 
 void initContext(map_reduce_ctx_t *ctx, const function_sources_list_t &funs)
+{
+    doInitContext(ctx, funs);
+
+    try {
+        Locker locker(ctx->isolate);
+        Isolate::Scope isolateScope(ctx->isolate);
+        HandleScope handleScope;
+        Context::Scope contextScope(ctx->jsContext);
+
+        loadFunctions(ctx, funs);
+    } catch (...) {
+        destroyContext(ctx);
+        throw;
+    }
+}
+
+
+void doInitContext(map_reduce_ctx_t *ctx, const function_sources_list_t &funs)
 {
     ctx->isolate = Isolate::New();
     Locker locker(ctx->isolate);
@@ -137,8 +156,6 @@ void initContext(map_reduce_ctx_t *ctx, const function_sources_list_t &funs)
     ctx->isolate->SetData(isoData);
     ctx->taskStartTime = -1;
     ctx->taskId = -1;
-
-    loadFunctions(ctx, funs);
 }
 
 

@@ -37,43 +37,52 @@
 
 -export([open/2, rename/2, delete/1]).
 -export([read_file/1, write_file/2, read_file_info/1]).
+-export([ensure_dir/1, fold_files/5]).
 
 -define(INIT_SLEEP, 10).
 -define(MAX_SLEEP,  200).
 
 
 open(Filepath, Options) ->
-    do_file_op(open, [Filepath, Options]).
+    do_file_op(file, open, [Filepath, Options]).
 
 
 rename(Source, Dest) ->
-    do_file_op(rename, [Source, Dest]).
+    do_file_op(file, rename, [Source, Dest]).
 
 
 delete(Filepath) ->
-    do_file_op(delete, [Filepath]).
+    do_file_op(file, delete, [Filepath]).
 
 
 read_file(Filepath) ->
-    do_file_op(read_file, [Filepath]).
+    do_file_op(file, read_file, [Filepath]).
 
 
 write_file(Filepath, Bytes) ->
-    do_file_op(write_file, [Filepath, Bytes]).
+    do_file_op(file, write_file, [Filepath, Bytes]).
 
 
 read_file_info(Filepath) ->
-    do_file_op(read_file_info, [Filepath]).
+    do_file_op(file, read_file_info, [Filepath]).
 
 
-do_file_op(Fun, Args) ->
-    case erlang:apply(file, Fun, Args) of
+ensure_dir(Path) ->
+    do_file_op(filelib, ensure_dir, [Path]).
+
+
+fold_files(Dir, RegExp, Recursive, Fun, Acc) ->
+    do_file_op(filelib, fold_files, [Dir, RegExp, Recursive, Fun, Acc]).
+
+
+do_file_op(Mod, Fun, Args) ->
+    case erlang:apply(Mod, Fun, Args) of
     {error, eacces} = Error ->
         case os:type() of
         {win32, _} ->
             RetryPeriod = couch_config:get(
                 "couchdb", "windows_file_op_retry_period", "5000"),
-            do_file_op_loop(Fun, Args, ?INIT_SLEEP, list_to_integer(RetryPeriod));
+            do_file_op_loop(Mod, Fun, Args, ?INIT_SLEEP, list_to_integer(RetryPeriod));
         _ ->
             Error
         end;
@@ -82,14 +91,14 @@ do_file_op(Fun, Args) ->
     end.
 
 
-do_file_op_loop(_Fun, _Args, _Sleep, Left) when Left =< 0 ->
+do_file_op_loop(_Mod, _Fun, _Args, _Sleep, Left) when Left =< 0 ->
     {error, eacces};
-do_file_op_loop(Fun, Args, Sleep, Left) ->
+do_file_op_loop(Mod, Fun, Args, Sleep, Left) ->
     ok = timer:sleep(Sleep),
-    case erlang:apply(file, Fun, Args) of
+    case erlang:apply(Mod, Fun, Args) of
     {error, eacces} ->
         Sleep2 = erlang:min(Sleep * 2, ?MAX_SLEEP),
-        do_file_op_loop(Fun, Args, Sleep2, Left - Sleep);
+        do_file_op_loop(Mod, Fun, Args, Sleep2, Left - Sleep);
     Else ->
         Else
     end.

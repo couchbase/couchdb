@@ -68,6 +68,8 @@ test() ->
     receive
     {'DOWN', Ref, process, CompactPid, normal} ->
         ok;
+    {'DOWN', Ref, process, CompactPid, noproc} ->
+        ok;
     {'DOWN', Ref, process, CompactPid, Reason} ->
         etap:bail("Failure compacting replica group: " ++ couch_util:to_list(Reason))
     after ?MAX_WAIT_TIME ->
