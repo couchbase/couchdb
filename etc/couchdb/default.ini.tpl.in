@@ -20,6 +20,7 @@ file_compression = snappy
 ; Maximum number of distinct view update/building processes at any point in time.
 max_parallel_indexers = 4
 max_parallel_replica_indexers = 2
+max_parallel_spatial_indexers = 4
 ; BTree Implmentation to use (native or erlang)
 btree_implementation = native
 consistency_check_precompacted = false
