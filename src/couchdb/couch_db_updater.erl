@@ -812,7 +812,7 @@ initial_copy_compact(#db{docinfo_by_seq_btree=SrcBySeq,
             SrcById, DestFd, []),
     % no need to specify a sort function, the built in erlang sort will
     % sort the terms by the first differing slot, which is id
-    {ok, NewByIdRoot} = file_sorter:sort([TempFilepath],
+    {ok, NewByIdRoot} = file_sorter_2:sort([TempFilepath],
             BtreeOutputFun,[{tmpdir, TempDir}]),
     ok = file:delete(TempFilepath),
     ok = couch_file:flush(DestFd),

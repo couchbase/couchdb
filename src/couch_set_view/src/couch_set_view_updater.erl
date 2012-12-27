@@ -1174,7 +1174,7 @@ spawn_merge_worker(LessFun, TmpDir, Workers, FilesToMerge, DestFile) ->
             {format, fun file_sorter_format_function/1}
         ],
         wait_for_workers(Workers),
-        case file_sorter:merge(FilesToMerge, DestFile, SortOptions) of
+        case file_sorter_2:merge(FilesToMerge, DestFile, SortOptions) of
         ok ->
             ok;
         {error, Reason} ->

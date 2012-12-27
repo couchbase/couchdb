@@ -29,6 +29,7 @@ CLEANFILES = $(compiled_files) $(doc_base)
 source_files = \
     erl_diag.erl \
     file2.erl \
+    file_sorter_2.erl \
     couch.erl \
     couch_api_wrap.erl \
     couch_api_wrap_httpc.erl \
@@ -94,6 +95,7 @@ EXTRA_DIST = $(source_files) couch_api_wrap.hrl couch_db.hrl couch_js_functions.
 compiled_files = \
     erl_diag.beam \
     file2.beam \
+    file_sorter_2.beam \
     couch.app \
     couch.beam \
     couch_api_wrap.beam \

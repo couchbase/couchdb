@@ -198,6 +198,7 @@ rebuild_plt:
 dialyzer: all $(COUCHDB_PLT)
 	dialyzer --plt $(COUCHDB_PLT) \
 		--verbose \
+                -Wno_improper_lists \
 		-pa src/couchdb \
 		-pa src/couch_set_view \
 		-pa src/couch_index_merger \
