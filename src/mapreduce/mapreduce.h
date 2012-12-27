@@ -69,7 +69,6 @@ typedef struct {
     kv_pair_list_t                               *kvs;
     unsigned int                                 key;
     ErlNifEnv                                    *env;
-    volatile int                                 taskId;
     volatile long                                taskStartTime;
 } map_reduce_ctx_t;
 

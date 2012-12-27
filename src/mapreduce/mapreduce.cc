@@ -135,7 +135,6 @@ void doInitContext(map_reduce_ctx_t *ctx, const function_sources_list_t &funs)
     ctx->isolate = Isolate::New();
     Locker locker(ctx->isolate);
     Isolate::Scope isolateScope(ctx->isolate);
-    Locker::StartPreemption(20);
     HandleScope handleScope;
 
     ctx->jsContext = createJsContext(ctx);
@@ -156,7 +155,6 @@ void doInitContext(map_reduce_ctx_t *ctx, const function_sources_list_t &funs)
 
     ctx->isolate->SetData(isoData);
     ctx->taskStartTime = -1;
-    ctx->taskId = -1;
 }
 
 
@@ -360,7 +358,6 @@ void destroyContext(map_reduce_ctx_t *ctx)
     {
         Locker locker(ctx->isolate);
         Isolate::Scope isolateScope(ctx->isolate);
-        Locker::StopPreemption();
         HandleScope handleScope;
         Context::Scope contextScope(ctx->jsContext);
 
@@ -552,7 +549,6 @@ isolate_data_t *getIsolateData()
 
 void taskStarted(map_reduce_ctx_t *ctx)
 {
-    ctx->taskId = V8::GetCurrentThreadId();
     ctx->taskStartTime = static_cast<long>((clock() / CLOCKS_PER_SEC) * 1000);
     ctx->kvs = NULL;
 }
@@ -561,19 +557,12 @@ void taskStarted(map_reduce_ctx_t *ctx)
 void taskFinished(map_reduce_ctx_t *ctx)
 {
     ctx->taskStartTime = -1;
-    ctx->taskId = -1;
 }
 
 
 void terminateTask(map_reduce_ctx_t *ctx)
 {
-    Locker locker(ctx->isolate);
-    Isolate::Scope isolateScope(ctx->isolate);
-
-    if (ctx->taskId != -1) {
-        V8::TerminateExecution(ctx->taskId);
-        taskFinished(ctx);
-    }
+    V8::TerminateExecution(ctx->isolate);
 }
 
 
