@@ -21,7 +21,7 @@
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(84),
+    etap:plan(114),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -52,6 +52,7 @@ test() ->
     test_parallel_burst_maps(25000, 10),
     test_parallel_burst_maps(25000, 20),
     ok = mapreduce:set_timeout(1000),
+    test_context_is_usable_after_timeout(),
     test_many_timeouts(1),
     test_many_timeouts(5),
     test_many_timeouts(10),
@@ -261,6 +262,35 @@ test_many_timeouts(NumProcesses) ->
             receive
             {'DOWN', Ref, process, Pid, {ok, Value}} ->
                 etap:is(Value, {error, <<"timeout">>}, "Worker got timeout error");
+            {'DOWN', Ref, process, Pid, _Reason} ->
+                etap:bail("Worker died unexpectedly")
+            after 120000 ->
+                etap:bail("Timeout waiting for worker result")
+            end
+        end,
+        Pids).
+
+test_context_is_usable_after_timeout() ->
+    Doc1 = <<"{\"_id\": \"doc1\", \"value\": 1}">>,
+    Doc2 = <<"{\"_id\": \"doc2\", \"value\": 1}">>,
+    NumProcesses = 30,
+    Pids = lists:map(
+        fun(_) ->
+            spawn_monitor(fun() ->
+                {ok, Ctx} = mapreduce:start_map_context([
+                    <<"function(doc) { if (doc._id == \"doc1\") {while (true) { };} else {emit(doc._id, null)} }">>
+                ]),
+                erlang:bump_reductions(100000),
+                RVs = [mapreduce:map_doc(Ctx, D, <<"{}">>) || D <- [Doc1, Doc2]],
+                exit({ok, RVs})
+            end)
+        end,
+        lists:seq(1, NumProcesses)),
+    lists:foreach(
+        fun({Pid, Ref}) ->
+            receive
+            {'DOWN', Ref, process, Pid, {ok, Value}} ->
+                etap:is(Value, [{error, <<"timeout">>}, {ok, [[{<<"\"doc2\"">>, <<"null">>}]]}], "Worker got timeout error and value");
             {'DOWN', Ref, process, Pid, _Reason} ->
                 etap:bail("Worker died unexpectedly")
             after 120000 ->
