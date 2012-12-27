@@ -56,7 +56,6 @@ typedef struct {
     map_results_list_t                           *mapFunResults;
     unsigned int                                 key;
     ErlNifEnv                                    *env;
-    volatile int                                 taskId;
     volatile long                                taskStartTime;
 } map_reduce_ctx_t;
 
