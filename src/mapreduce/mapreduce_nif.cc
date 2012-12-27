@@ -440,7 +440,7 @@ void *terminatorLoop(void *args)
         for (it = contexts.begin(); it != contexts.end(); ++it) {
             map_reduce_ctx_t *ctx = (*it).second;
 
-            if (ctx->taskStartTime > 0) {
+            if (ctx->taskStartTime >= 0) {
                 if ((now - ctx->taskStartTime) >= maxTaskDuration) {
                     terminateTask(ctx);
                 }
