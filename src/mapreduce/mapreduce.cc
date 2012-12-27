@@ -544,7 +544,7 @@ isolate_data_t *getIsolateData()
 
 void taskStarted(map_reduce_ctx_t *ctx)
 {
-    ctx->taskStartTime = static_cast<long>((clock() / CLOCKS_PER_SEC) * 1000);
+    ctx->taskStartTime = time(NULL);
 }
 
 

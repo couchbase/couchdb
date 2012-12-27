@@ -44,7 +44,8 @@
 static ERL_NIF_TERM ATOM_OK;
 static ERL_NIF_TERM ATOM_ERROR;
 
-static volatile int                                maxTaskDuration = 5000;
+// maxTaskDuration is in seconds
+static volatile int                                maxTaskDuration = 5;
 static ErlNifResourceType                          *MAP_REDUCE_CTX_RES;
 static ErlNifTid                                   terminatorThreadId;
 static ErlNifMutex                                 *terminatorMutex;
@@ -326,7 +327,7 @@ ERL_NIF_TERM setTimeout(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         return enif_make_badarg(env);
     }
 
-    maxTaskDuration = timeout;
+    maxTaskDuration = (timeout + 999) / 1000;
 
     return ATOM_OK;
 }
@@ -431,24 +432,25 @@ void free_map_reduce_context(ErlNifEnv *env, void *res) {
 void *terminatorLoop(void *args)
 {
     std::map< unsigned int, map_reduce_ctx_t* >::iterator it;
-    long now;
+    time_t now;
 
     while (!shutdownTerminator) {
-        now = static_cast<long>((clock() / CLOCKS_PER_SEC) * 1000);
         enif_mutex_lock(terminatorMutex);
+        // due to truncation of second's fraction lets pretend we're one second before
+        now = time(NULL) - 1;
 
         for (it = contexts.begin(); it != contexts.end(); ++it) {
             map_reduce_ctx_t *ctx = (*it).second;
 
             if (ctx->taskStartTime >= 0) {
-                if ((now - ctx->taskStartTime) >= maxTaskDuration) {
+                if (ctx->taskStartTime + maxTaskDuration < now) {
                     terminateTask(ctx);
                 }
             }
         }
 
         enif_mutex_unlock(terminatorMutex);
-        doSleep(maxTaskDuration);
+        doSleep(maxTaskDuration * 1000);
     }
 
     return NULL;
