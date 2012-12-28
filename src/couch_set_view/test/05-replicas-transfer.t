@@ -594,6 +594,8 @@ compact_view_group(Type) ->
     receive
     {'DOWN', Ref, process, CompactPid, normal} ->
         ok;
+    {'DOWN', Ref, process, CompactPid, noproc} ->
+        ok;
     {'DOWN', Ref, process, CompactPid, Reason} ->
         etap:bail("Failure compacting " ++ atom_to_list(Type) ++ " group: " ++ couch_util:to_list(Reason))
     after ?MAX_WAIT_TIME ->
