@@ -90,7 +90,7 @@
     replica_partitions = []            :: ordsets:ordset(partition_id()),
     pending_transition_waiters = []    :: [{From::{pid(), reference()}, #set_view_group_req{}}],
     update_listeners = dict:new()      :: dict(),
-    log_eof = 0                        :: non_neg_integer(),
+    compact_log_files = nil            :: 'nil' | {[[string()]], partition_seqs()},
     % Monitor references for active, passive and replica partitions.
     % Applies to main group only, replica group must always have an empty dict.
     db_refs = dict:new()               :: dict()
@@ -384,7 +384,7 @@ do_init({_, SetName, _} = InitArgs) ->
              ?SET_VIEW_STATS_ETS,
              #set_view_group_stats{ets_key = ?set_view_group_stats_key(Group)}),
         TmpDir = updater_tmp_dir(State),
-        ok = couch_set_view_util:delete_sort_files(TmpDir),
+        ok = couch_set_view_util:delete_sort_files(TmpDir, all),
         {ok, maybe_apply_pending_transition(State3)};
     Error ->
         throw(Error)
@@ -618,10 +618,6 @@ handle_call(start_cleaner, _From, State) ->
     State3 = State2#state{auto_cleanup = State#state.auto_cleanup},
     {reply, {ok, State2#state.cleaner_pid}, State3, ?TIMEOUT};
 
-handle_call(get_log_file_path, _From, State) ->
-    % To be used only by unit tests.
-    {reply, {ok, index_file_log_path(State)}, State, ?TIMEOUT};
-
 handle_call(updater_pid, _From, #state{updater_pid = Pid} = State) ->
     % To be used only by unit tests.
     {reply, {ok, Pid}, State, ?TIMEOUT};
@@ -725,7 +721,7 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
             CurSeqs = indexable_partition_seqs(State),
             spawn_link(couch_set_view_updater,
                        update,
-                       [self(), NewGroup2, CurSeqs, nil, updater_tmp_dir(State)]);
+                       [self(), NewGroup2, CurSeqs, false, updater_tmp_dir(State)]);
         true ->
             nil
         end,
@@ -792,15 +788,24 @@ handle_call({demonitor_partition_update, Ref}, _From, State) ->
         {reply, ok, State2, ?TIMEOUT}
     end;
 
-handle_call(log_eof, _From, State) ->
-    {reply, {ok, State#state.log_eof}, State, ?TIMEOUT}.
+handle_call(compact_log_files, _From, State) ->
+    NewState = State#state{compact_log_files = nil},
+    {reply, {ok, State#state.compact_log_files}, NewState, ?TIMEOUT}.
 
 
 handle_cast(_Msg, State) when not ?is_defined(State) ->
     {noreply, State};
 
-handle_cast({log_eof, LogEof}, State) ->
-    {noreply, State#state{log_eof = LogEof}, ?TIMEOUT};
+handle_cast({compact_log_files, Files, Seqs}, #state{compact_log_files = nil} = State) ->
+    L = lists:map(fun(F) -> [F] end, Files),
+    {noreply, State#state{compact_log_files = {L, Seqs}}, ?TIMEOUT};
+
+handle_cast({compact_log_files, Files, NewSeqs}, State) ->
+    {OldL, _OldSeqs} = State#state.compact_log_files,
+    L = lists:zipwith(
+        fun(F, Current) -> [F | Current] end,
+        Files, OldL),
+    {noreply, State#state{compact_log_files = {L, NewSeqs}}, ?TIMEOUT};
 
 handle_cast({ddoc_updated, NewSig, Aliases}, State) ->
     #state{
@@ -901,7 +906,7 @@ handle_cast({update, MinNumChanges}, #state{group = Group} = State) ->
     false ->
         CurSeqs = indexable_partition_seqs(State),
         MissingCount = couch_set_view_util:missing_changes_count(CurSeqs, ?set_seqs(Group)),
-        case MissingCount >= MinNumChanges of
+        case (MissingCount >= MinNumChanges) andalso (MissingCount > 0) of
         true ->
             {noreply, do_start_updater(State, CurSeqs)};
         false ->
@@ -1028,15 +1033,19 @@ handle_info({'EXIT', Pid, Reason},
 
 handle_info({'EXIT', Pid, {updater_finished, Result}}, #state{updater_pid = Pid} = State) ->
     #set_view_updater_result{
+        stats = Stats,
+        group = NewGroup
+    } = Result,
+    #set_view_updater_stats{
         indexing_time = IndexingTime,
         blocked_time = BlockedTime,
-        group = NewGroup,
         inserted_ids = InsertedIds,
         deleted_ids = DeletedIds,
         inserted_kvs = InsertedKVs,
         deleted_kvs = DeletedKVs,
-        cleanup_kv_count = CleanupKVCount
-    } = Result,
+        cleanup_kv_count = CleanupKVCount,
+        seqs = SeqsDone
+    } = Stats,
     State2 = process_partial_update(State, NewGroup),
     #state{
         waiting_list = WaitList,
@@ -1054,9 +1063,10 @@ handle_info({'EXIT', Pid, {updater_finished, Result}}, #state{updater_pid = Pid}
         "Deleted IDs:   ~p~n"
         "Inserted KVs:  ~p~n"
         "Deleted KVs:   ~p~n"
-        "Cleaned KVs:   ~p~n",
+        "Cleaned KVs:   ~p~n"
+        "# seqs done:   ~p~n",
         [?set_name(State), ?type(State), ?group_id(State), IndexingTime, BlockedTime,
-            InsertedIds, DeletedIds, InsertedKVs, DeletedKVs, CleanupKVCount]),
+            InsertedIds, DeletedIds, InsertedKVs, DeletedKVs, CleanupKVCount, SeqsDone]),
     case Shutdown andalso (WaitList2 == []) of
     true ->
         {stop, normal, State2#state{waiting_list = []}};
@@ -1129,6 +1139,8 @@ handle_info({'EXIT', Pid, Reason}, #state{compactor_pid = Pid} = State) ->
                [?set_name(State), ?type(State), ?group_id(State), Pid, Reason]),
     couch_util:shutdown_sync(State#state.compactor_file),
     _ = couch_file:delete(?root_dir(State), compact_file_name(State)),
+    TmpDir = updater_tmp_dir(State),
+    ok = couch_set_view_util:delete_sort_files(TmpDir, compactor),
     State2 = State#state{
         compactor_pid = nil,
         compactor_file = nil
@@ -1211,7 +1223,7 @@ terminate(Reason, #state{group = #set_view_group{sig = Sig} = Group} = State) ->
         ok
     end,
     TmpDir = updater_tmp_dir(State),
-    ok = couch_set_view_util:delete_sort_files(TmpDir),
+    ok = couch_set_view_util:delete_sort_files(TmpDir, all),
     _ = file:del_dir(TmpDir),
     ok.
 
@@ -1347,13 +1359,6 @@ hex_sig(GroupSig) ->
 -spec base_index_file_name(#set_view_group{}, set_view_group_type()) -> string().
 base_index_file_name(Group, Type) ->
     atom_to_list(Type) ++ "_" ++ hex_sig(Group#set_view_group.sig) ++ ".view".
-
-
--spec index_file_log_path(#state{}) -> string().
-index_file_log_path(#state{group = Group} = State) ->
-    DesignRoot = couch_set_view:set_index_dir(?root_dir(State), ?set_name(State)),
-    BaseName = base_index_file_name(Group, Group#set_view_group.type),
-    filename:join([DesignRoot, BaseName ++ ".log"]).
 
 
 -spec find_index_file(string(), #set_view_group{}) -> string().
@@ -2441,10 +2446,11 @@ start_compactor(State, CompactFun) ->
         fd = CompactFd
     } = NewGroup = compact_group(State2),
     Owner = self(),
+    TmpDir = updater_tmp_dir(State2),
     Pid = spawn_link(fun() ->
         CompactFun(Group,
                    NewGroup,
-                   index_file_log_path(State),
+                   TmpDir,
                    State#state.updater_pid,
                    Owner)
     end),
@@ -2483,8 +2489,10 @@ compact_group(#state{group = Group} = State) ->
 stop_updater(#state{updater_pid = nil} = State) ->
     State;
 stop_updater(#state{updater_pid = Pid, initial_build = true} = State) when is_pid(Pid) ->
-    ?LOG_INFO("Stopping updater for set view `~s`, ~s group `~s` (doing initial index build)",
-        [?set_name(State), ?type(State), ?group_id(State)]),
+    LostTime = updater_lost_time(),
+    ?LOG_INFO("Stopping updater for set view `~s`, ~s group `~s` "
+              "(doing initial index build), discarded indexing time ~.3f seconds.",
+        [?set_name(State), ?type(State), ?group_id(State), LostTime]),
     couch_util:shutdown_sync(Pid),
     State#state{
         updater_pid = nil,
@@ -2511,16 +2519,20 @@ stop_updater(#state{updater_pid = Pid} = State) when is_pid(Pid) ->
 
 after_updater_stopped(State, {updater_finished, Result}) ->
     #set_view_updater_result{
+        stats = Stats,
         group = NewGroup,
-        state = UpdaterFinishState,
+        state = UpdaterFinishState
+    } = Result,
+    #set_view_updater_stats{
         indexing_time = IndexingTime,
         blocked_time = BlockedTime,
         inserted_ids = InsertedIds,
         deleted_ids = DeletedIds,
         inserted_kvs = InsertedKVs,
         deleted_kvs = DeletedKVs,
-        cleanup_kv_count = CleanupKVCount
-    } = Result,
+        cleanup_kv_count = CleanupKVCount,
+        seqs = SeqsDone
+    } = Stats,
     ?LOG_INFO("Set view `~s`, ~s group `~s`, updater stopped~n"
               "Indexing time: ~.3f seconds~n"
               "Blocked time:  ~.3f seconds~n"
@@ -2528,9 +2540,10 @@ after_updater_stopped(State, {updater_finished, Result}) ->
               "Deleted IDs:   ~p~n"
               "Inserted KVs:  ~p~n"
               "Deleted KVs:   ~p~n"
-              "Cleaned KVs:   ~p~n",
+              "Cleaned KVs:   ~p~n"
+              "# seqs done:   ~p~n",
               [?set_name(State), ?type(State), ?group_id(State), IndexingTime, BlockedTime,
-               InsertedIds, DeletedIds, InsertedKVs, DeletedKVs, CleanupKVCount]),
+               InsertedIds, DeletedIds, InsertedKVs, DeletedKVs, CleanupKVCount, SeqsDone]),
     State2 = process_partial_update(State, NewGroup),
     case UpdaterFinishState of
     updating_active ->
@@ -2548,9 +2561,13 @@ after_updater_stopped(State, {updater_finished, Result}) ->
         updater_state = not_running,
         waiting_list = WaitingList2
      };
-after_updater_stopped(State, Reason) ->
-    ?LOG_INFO("Updater, set view `~s`, ~s group `~s`, stopped with reason: ~p",
-              [?set_name(State), ?type(State), ?group_id(State), Reason]),
+after_updater_stopped(State, _Reason) ->
+    IndexingTime = updater_indexing_time(),
+    LostTime = updater_lost_time(),
+    ?LOG_INFO("Stopped updater, set view `~s`, ~s group `~s`, "
+              "useful indexing time of ~.3f seconds, "
+              "discarded indexing time of ~.3f seconds.",
+              [?set_name(State), ?type(State), ?group_id(State), IndexingTime, LostTime]),
     State#state{
         updater_pid = nil,
         initial_build = false,
@@ -2596,18 +2613,17 @@ start_updater(#state{updater_pid = nil, updater_state = not_running} = State) ->
 
 -spec do_start_updater(#state{}, partition_seqs()) -> #state{}.
 do_start_updater(State, CurSeqs) ->
-    #state{group = Group} = State2 = stop_cleaner(State),
+    #state{
+        group = Group,
+        compactor_pid = CompactPid
+    } = State2 = stop_cleaner(State),
     ?LOG_INFO("Starting updater for set view `~s`, ~s group `~s`",
         [?set_name(State), ?type(State), ?group_id(State)]),
-    IndexLogFilePath = case is_pid(State#state.compactor_pid) of
-    true ->
-        index_file_log_path(State);
-    false ->
-        nil
-    end,
     TmpDir = updater_tmp_dir(State),
+    CompactRunning = is_pid(CompactPid) andalso is_process_alive(CompactPid),
+    reset_updater_start_time(),
     Pid = spawn_link(couch_set_view_updater, update,
-                     [self(), Group, CurSeqs, IndexLogFilePath, TmpDir]),
+                     [self(), Group, CurSeqs, CompactRunning, TmpDir]),
     State2#state{
         updater_pid = Pid,
         initial_build = couch_set_view_util:is_group_empty(Group),
@@ -2712,6 +2728,7 @@ process_partial_update(State, NewGroup) ->
         group = Group,
         update_listeners = Listeners
     } = State,
+    set_last_updater_checkpoint_ts(),
     Listeners2 = notify_update_listeners(State, Listeners, NewGroup),
     ReplicasTransferred = ordsets:subtract(
         ?set_replicas_on_transfer(Group), ?set_replicas_on_transfer(NewGroup)),
@@ -2785,7 +2802,7 @@ error_notify_update_listeners(State, Listeners, Error) ->
 inc_updates(Group, UpdaterResult, PartialUpdate, ForcedStop) ->
     [Stats] = ets:lookup(?SET_VIEW_STATS_ETS, ?set_view_group_stats_key(Group)),
     #set_view_group_stats{update_history = Hist} = Stats,
-    #set_view_updater_result{
+    #set_view_updater_stats{
         indexing_time = IndexingTime,
         blocked_time = BlockedTime,
         cleanup_kv_count = CleanupKvCount,
@@ -2794,7 +2811,7 @@ inc_updates(Group, UpdaterResult, PartialUpdate, ForcedStop) ->
         deleted_ids = DeletedIds,
         inserted_kvs = InsertedKvs,
         deleted_kvs = DeletedKvs
-    } = UpdaterResult,
+    } = UpdaterResult#set_view_updater_result.stats,
     Entry = {
         case PartialUpdate of
         true ->
@@ -3308,3 +3325,36 @@ update_clean_group_seqs(OldGroup, CleanGroup) ->
         unindexable_seqs = ?set_unindexable_seqs(OldGroup)
     },
     CleanGroup#set_view_group{index_header = NewCleanHeader}.
+
+
+get_updater_start_time() ->
+    erlang:get(updater_start_ts).
+
+
+reset_updater_start_time() ->
+    Now = os:timestamp(),
+    set_last_updater_checkpoint_ts(Now),
+    erlang:put(updater_start_ts, Now).
+
+
+get_last_updater_checkpoint_ts() ->
+    erlang:get(last_updater_checkpoint_ts).
+
+
+set_last_updater_checkpoint_ts() ->
+    set_last_updater_checkpoint_ts(os:timestamp()).
+
+
+set_last_updater_checkpoint_ts(Ts) ->
+    erlang:put(last_updater_checkpoint_ts, Ts).
+
+
+updater_lost_time() ->
+    Now = os:timestamp(),
+    timer:now_diff(Now, get_last_updater_checkpoint_ts()) / 1000000.
+
+
+updater_indexing_time() ->
+    StartTs = get_updater_start_time(),
+    LastCpTs = get_last_updater_checkpoint_ts(),
+    timer:now_diff(LastCpTs, StartTs) / 1000000.

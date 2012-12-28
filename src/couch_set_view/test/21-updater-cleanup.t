@@ -22,13 +22,13 @@
 test_set_name() -> <<"couch_test_set_index_updater_cleanup">>.
 num_set_partitions() -> 64.
 ddoc_id() -> <<"_design/test">>.
-num_docs_0() -> 14208.  % keep it a multiple of num_set_partitions()
+num_docs_0() -> 42624.  % keep it a multiple of num_set_partitions()
 
 
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(22),
+    etap:plan(31),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -58,7 +58,9 @@ test() ->
     verify_btrees(ValueGenFun1, num_docs_0(), []),
 
     % Add a few new documents
-    update_documents(num_docs_0(), 128, ValueGenFun1),
+    update_documents(num_docs_0(), 8192, ValueGenFun1),
+
+    verify_btrees(ValueGenFun1, num_docs_0() + 8192, []),
 
     % Mark some partitions for cleanup
     etap:diag("Marking partitions for cleanup"),
@@ -78,10 +80,7 @@ test() ->
 
     [StatsBefore] = ets:lookup(?SET_VIEW_STATS_ETS, ?set_view_group_stats_key(Group0)),
 
-    % update index
-    _ = get_group_snapshot(),
-
-    verify_btrees(ValueGenFun2, num_docs_0() + 128, CleanupPartitions),
+    verify_btrees(ValueGenFun2, num_docs_0() + 8192, CleanupPartitions),
 
     [StatsAfter] = ets:lookup(?SET_VIEW_STATS_ETS, ?set_view_group_stats_key(Group0)),
 
@@ -102,9 +101,16 @@ test() ->
 
 get_group_snapshot() ->
     GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
-    {ok, Group, 0} = gen_server:call(
-        GroupPid, #set_view_group_req{stale = false, debug = true}, infinity),
-    Group.
+    {ok, UpPid} = gen_server:call(GroupPid, start_updater, infinity),
+    Ref = erlang:monitor(process, UpPid),
+    receive
+    {'DOWN', Ref, _, _, _} ->
+        {ok, Group, 0} = gen_server:call(
+        GroupPid, #set_view_group_req{stale = ok, debug = true}, infinity),
+        Group
+    after 600000 ->
+        etap:bail("Timeout waiting for updater to finish")
+    end.
 
 
 create_set() ->
@@ -133,7 +139,7 @@ create_set() ->
     etap:diag("Configuring set view with partitions [0 .. 63] as active"),
     Params = #set_view_params{
         max_partitions = num_set_partitions(),
-        active_partitions = lists:seq(0, 63),
+        active_partitions = lists:seq(0, num_set_partitions() - 1),
         passive_partitions = [],
         use_replica_index = false
     },
@@ -247,8 +253,7 @@ verify_btrees(ValueGenFun, NumDocs, CleanupParts) ->
             true ->
                 ok;
             false ->
-                etap:bail(io_lib:format("View1 Btree has an unexpected KV at iteration " ++ integer_to_list(I)
-                    ++ ": ExpectedKv ~w Kv ~w", [ExpectedKv, Kv]))
+                etap:bail("View1 Btree has an unexpected KV at iteration " ++ integer_to_list(Count + 1))
             end,
             {ok, {next_i(I, ActiveParts), Count + 1}}
         end,
@@ -268,7 +273,7 @@ verify_btrees(ValueGenFun, NumDocs, CleanupParts) ->
             true ->
                 ok;
             false ->
-                etap:bail("View2 Btree has an unexpected KV at iteration " ++ integer_to_list(I))
+                etap:bail("View2 Btree has an unexpected KV at iteration " ++ integer_to_list(Count + 1))
             end,
             {ok, {next_i(I, ActiveParts), Count + 1}}
         end,

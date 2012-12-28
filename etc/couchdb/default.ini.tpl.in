@@ -246,3 +246,9 @@ function_timeout = 10000
 ddoc_cache_size = 1048576
 btree_kv_node_threshold = 7168
 btree_kp_node_threshold = 6144
+; Initial build and incremental updates.
+indexer_max_tmp_files = 20
+; For incremental updates (value in bytes).
+indexer_max_insert_batch_size = 1048576
+; For incremental updates (value in bytes).
+indexer_min_batch_size_per_view = 1048576

@@ -28,7 +28,7 @@ num_docs_0() -> 51136.
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(47),
+    etap:plan(46),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -227,9 +227,6 @@ test_start_compactor_after_updater(ValueGenFun, DocCount) ->
         etap:bail("Timeout waiting for updater to finish")
     end,
     etap:is(is_process_alive(CompactorPid), true, "Compactor is still running"),
-    {ok, LogFilePath} = gen_server:call(GroupPid, get_log_file_path, infinity),
-    LogSize = filelib:file_size(LogFilePath),
-    etap:is(LogSize > 0, true, "Log file is not empty"),
     CompactorRef = erlang:monitor(process, CompactorPid),
     CompactorPid ! unpause,
     receive
