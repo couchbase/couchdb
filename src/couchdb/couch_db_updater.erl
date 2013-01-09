@@ -175,11 +175,11 @@ handle_call({purge_docs, IdRevs}, _From, Db) ->
     ok = notify_db_updated(Db2),
     couch_db_update_notifier:notify({updated, {Db2#db.name, Db2#db.update_seq}}),
     {reply, {ok, (Db2#db.header)#db_header.purge_seq, IdRevsPurged}, Db2};
-handle_call(start_compact, _From, Db) ->
+handle_call({start_compact, Options}, _From, Db) ->
     case Db#db.compactor_info of
     nil ->
-        ?LOG_INFO("Starting compaction for db \"~s\"", [Db#db.name]),
-        Pid = spawn_link(fun() -> start_copy_compact(Db) end),
+        ?LOG_INFO("Starting compaction for db \"~s\", options: ~w", [Db#db.name, Options]),
+        Pid = spawn_link(fun() -> start_copy_compact(Db, Options) end),
         Db2 = Db#db{compactor_info=Pid},
         ok = notify_db_updated(Db2),
         {reply, {ok, Pid}, Db2};
@@ -862,12 +862,13 @@ compactor_message_loop(Port) ->
             end
     end.
 
-native_initial_compact(#db{filepath=Filepath}=Db, CompactFile) ->
+native_initial_compact(#db{filepath=Filepath}=Db, CompactFile, PrefixOpts) ->
     ok = couch_file:flush(Db#db.fd),
     CompactCmd = os:find_executable("couch_compact"),
+    Opts = PrefixOpts ++ [Filepath, CompactFile],
     try
         Compactor = open_port({spawn_executable, CompactCmd},
-                              [{args, [Filepath, CompactFile]}, exit_status,
+                              [{args, Opts}, exit_status,
                                use_stdio, stderr_to_stdout, {line, 80}]),
         case compactor_message_loop(Compactor) of
             0 ->
@@ -880,7 +881,11 @@ native_initial_compact(#db{filepath=Filepath}=Db, CompactFile) ->
             {error, {T, E}}
     end.
 
-start_copy_compact(#db{name=Name,filepath=Filepath}=Db) ->
+start_copy_compact(#db{name=Name,filepath=Filepath}=Db, Options) ->
+    PrefixOpts = case lists:member(dropdeletes, Options) of
+        true -> ["--dropdeletes"];
+        _ -> []
+    end,
     CompactFile = Filepath ++ ".compact",
     ?LOG_DEBUG("Compaction process spawned for db \"~s\"", [Name]),
     % we don't want to consistency every time, so get the ratio
@@ -901,7 +906,7 @@ start_copy_compact(#db{name=Name,filepath=Filepath}=Db) ->
             {ok, TargetDB} = make_target_db(Db, CompactFile),
             copy_compact(Db, TargetDB, true);
         {error, enoent} -> % Initial compact
-            case native_initial_compact(Db, CompactFile) of
+            case native_initial_compact(Db, CompactFile, PrefixOpts) of
                 {ok, CompactedDb} ->
                     ?LOG_INFO("Native initial compact succeeded for \"~s\"", [Name]),
                     CompactedDb;
@@ -924,7 +929,7 @@ start_copy_compact(#db{name=Name,filepath=Filepath}=Db) ->
     ok ->
         ok;
     {retry, CurrentDb} ->
-        start_copy_compact(CurrentDb)
+        start_copy_compact(CurrentDb, PrefixOpts)
     end.
 
 update_compact_task(NumChanges) ->
