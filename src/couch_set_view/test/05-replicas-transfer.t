@@ -387,7 +387,7 @@ wait_for_replica_full_update() ->
     Updates = couch_util:get_value(full_updates, Stats),
     MainGroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
     {ok, ReplicaGroupPid} = gen_server:call(MainGroupPid, replica_pid, infinity),
-    {ok, UpPid} = gen_server:call(ReplicaGroupPid, start_updater, infinity),
+    {ok, UpPid} = gen_server:call(ReplicaGroupPid, {start_updater, []}, infinity),
     case is_pid(UpPid) of
     true ->
         ok;

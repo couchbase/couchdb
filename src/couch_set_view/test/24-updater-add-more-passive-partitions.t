@@ -19,16 +19,16 @@
 
 -include_lib("couch_set_view/include/couch_set_view.hrl").
 
-test_set_name() -> <<"couch_test_set_index_updater_cleanup">>.
+test_set_name() -> <<"couch_test_set_index_updater_add_more_passive_partitions">>.
 num_set_partitions() -> 64.
 ddoc_id() -> <<"_design/test">>.
-num_docs_0() -> 42624.  % keep it a multiple of num_set_partitions()
+num_docs_0() -> 78144.  % keep it a multiple of num_set_partitions()
 
 
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(31),
+    etap:plan(18),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -47,51 +47,39 @@ test() ->
 
     create_set(),
     GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
-    ok = gen_server:call(GroupPid, {set_auto_cleanup, false}, infinity),
 
     ValueGenFun1 = fun(I) -> I end,
     update_documents(0, num_docs_0(), ValueGenFun1),
 
-    % build index
-    Group0 = get_group_snapshot(),
+    NewPassiveParts = lists:seq(num_set_partitions() div 2, num_set_partitions() - 1),
 
-    verify_btrees(ValueGenFun1, num_docs_0(), []),
+    % Trigger index update
+    {ok, UpdaterPid} = gen_server:call(GroupPid, {start_updater, [pause]}, infinity),
+    Ref = erlang:monitor(process, UpdaterPid),
 
-    % Add a few new documents
-    update_documents(num_docs_0(), 8192, ValueGenFun1),
+    lists:foreach(
+        fun(PartId) ->
+            ok = couch_set_view:set_partition_states(
+                test_set_name(), ddoc_id(), [], [PartId], [])
+        end,
+        NewPassiveParts),
 
-    verify_btrees(ValueGenFun1, num_docs_0() + 8192, []),
-
-    % Mark some partitions for cleanup
-    etap:diag("Marking partitions for cleanup"),
-    CleanupPartitions = lists:seq(1, num_set_partitions() - 1, 2),
-    ok = couch_set_view:set_partition_states(
-        test_set_name(), ddoc_id(), [], [], CleanupPartitions),
-
-    ValueGenFun2 = fun(I) ->
-        case I < num_docs_0() of
-        true ->
-            I * 3;
-        false ->
-            I
-        end
+    etap:diag("Added more passive partitions while updater is/was running"),
+    UpdaterPid ! continue,
+    etap:diag("Waiting for updater to finish"),
+    receive
+    {'DOWN', Ref, _, _, _} ->
+        etap:diag("Updater finished")
+    after ?MAX_WAIT_TIME ->
+        etap:bail("Timeout waiting for updater to finish")
     end,
-    update_documents(0, num_docs_0(), ValueGenFun2),
 
-    [StatsBefore] = ets:lookup(?SET_VIEW_STATS_ETS, ?set_view_group_stats_key(Group0)),
+    verify_btrees(ValueGenFun1, num_docs_0()),
 
-    verify_btrees(ValueGenFun2, num_docs_0() + 8192, CleanupPartitions),
+    etap:diag("Shutting down group pid, and verifying last written header is good"),
+    couch_util:shutdown_sync(GroupPid),
 
-    [StatsAfter] = ets:lookup(?SET_VIEW_STATS_ETS, ?set_view_group_stats_key(Group0)),
-
-    etap:is(StatsBefore#set_view_group_stats.cleanups, 0,
-            "# of cleanups before was 0"),
-    etap:is(StatsAfter#set_view_group_stats.cleanups, 1,
-            "# of cleanups after is 1"),
-    etap:is(StatsBefore#set_view_group_stats.updater_cleanups, 0,
-            "# of updater_cleanups before is 0"),
-    etap:is(StatsAfter#set_view_group_stats.updater_cleanups, 1,
-            "# of updater_cleanups after is 1"),
+    verify_btrees(ValueGenFun1, num_docs_0()),
 
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
     ok = timer:sleep(1000),
@@ -101,16 +89,8 @@ test() ->
 
 get_group_snapshot() ->
     GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
-    {ok, UpPid} = gen_server:call(GroupPid, {start_updater, []}, infinity),
-    Ref = erlang:monitor(process, UpPid),
-    receive
-    {'DOWN', Ref, _, _, _} ->
-        {ok, Group, 0} = gen_server:call(
-        GroupPid, #set_view_group_req{stale = ok, debug = true}, infinity),
-        Group
-    after 600000 ->
-        etap:bail("Timeout waiting for updater to finish")
-    end.
+    {ok, Group} = gen_server:call(GroupPid, request_group, infinity),
+    Group.
 
 
 create_set() ->
@@ -136,11 +116,11 @@ create_set() ->
         ]}}
     ]},
     ok = couch_set_view_test_util:update_ddoc(test_set_name(), DDoc),
-    etap:diag("Configuring set view with partitions [0 .. 63] as active"),
+    etap:diag("Configuring set view with partitions [0 .. 31] as passive"),
     Params = #set_view_params{
         max_partitions = num_set_partitions(),
-        active_partitions = lists:seq(0, num_set_partitions() - 1),
-        passive_partitions = [],
+        active_partitions = [],
+        passive_partitions = lists:seq(0, (num_set_partitions() div 2) - 1),
         use_replica_index = false
     },
     ok = couch_set_view:define_group(test_set_name(), ddoc_id(), Params).
@@ -169,7 +149,7 @@ doc_id(I) ->
     iolist_to_binary(io_lib:format("doc_~8..0b", [I])).
 
 
-verify_btrees(ValueGenFun, NumDocs, CleanupParts) ->
+verify_btrees(ValueGenFun, NumDocs) ->
     Group = get_group_snapshot(),
     #set_view_group{
         id_btree = IdBtree,
@@ -187,11 +167,11 @@ verify_btrees(ValueGenFun, NumDocs, CleanupParts) ->
     #set_view{
         btree = View2Btree
     } = View2,
-    ActiveParts = ordsets:subtract(lists:seq(0, num_set_partitions() - 1), CleanupParts),
-    ExpectedBitmask = couch_set_view_util:build_bitmask(ActiveParts),
-    DbSeqs = couch_set_view_test_util:get_db_seqs(test_set_name(), ActiveParts),
+    PassiveParts = lists:seq(0, num_set_partitions() - 1),
+    ExpectedBitmask = couch_set_view_util:build_bitmask(PassiveParts),
+    DbSeqs = couch_set_view_test_util:get_db_seqs(test_set_name(), PassiveParts),
     ExpectedKVCount = length([I || I <- lists:seq(0, NumDocs - 1),
-        ordsets:is_element((I rem num_set_partitions()), ActiveParts)]),
+        ordsets:is_element((I rem num_set_partitions()), PassiveParts)]),
 
     etap:is(
         couch_set_view_test_util:full_reduce_id_btree(Group, IdBtree),
@@ -203,8 +183,8 @@ verify_btrees(ValueGenFun, NumDocs, CleanupParts) ->
         "View1 Btree has the right reduce value"),
 
     etap:is(HeaderUpdateSeqs, DbSeqs, "Header has right update seqs list"),
-    etap:is(Abitmask, ExpectedBitmask, "Header has right active bitmask"),
-    etap:is(Pbitmask, 0, "Header has right passive bitmask"),
+    etap:is(Abitmask, 0, "Header has right active bitmask"),
+    etap:is(Pbitmask, ExpectedBitmask, "Header has right passive bitmask"),
     etap:is(Cbitmask, 0, "Header has right cleanup bitmask"),
 
     etap:diag("Verifying the Id Btree"),
@@ -237,7 +217,7 @@ verify_btrees(ValueGenFun, NumDocs, CleanupParts) ->
             end,
             {ok, {RestParts, I + num_set_partitions(), C, It + 1}}
         end,
-        {ActiveParts, hd(ActiveParts), 0, 0}, []),
+        {PassiveParts, hd(PassiveParts), 0, 0}, []),
     etap:is(IdBtreeFoldResult, ExpectedKVCount,
         "Id Btree has " ++ integer_to_list(ExpectedKVCount) ++ " entries"),
 
@@ -255,9 +235,9 @@ verify_btrees(ValueGenFun, NumDocs, CleanupParts) ->
             false ->
                 etap:bail("View1 Btree has an unexpected KV at iteration " ++ integer_to_list(Count + 1))
             end,
-            {ok, {next_i(I, ActiveParts), Count + 1}}
+            {ok, {next_i(I, PassiveParts), Count + 1}}
         end,
-        {hd(ActiveParts), 0}, []),
+        {hd(PassiveParts), 0}, []),
     etap:is(View1BtreeFoldResult, ExpectedKVCount,
         "View1 Btree has " ++ integer_to_list(ExpectedKVCount) ++ " entries"),
 
@@ -275,18 +255,18 @@ verify_btrees(ValueGenFun, NumDocs, CleanupParts) ->
             false ->
                 etap:bail("View2 Btree has an unexpected KV at iteration " ++ integer_to_list(Count + 1))
             end,
-            {ok, {next_i(I, ActiveParts), Count + 1}}
+            {ok, {next_i(I, PassiveParts), Count + 1}}
         end,
-        {hd(ActiveParts), 0}, []),
+        {hd(PassiveParts), 0}, []),
     etap:is(View2BtreeFoldResult, ExpectedKVCount,
         "View2 Btree has " ++ integer_to_list(ExpectedKVCount) ++ " entries"),
     ok.
 
 
-next_i(I, ActiveParts) ->
-    case ordsets:is_element((I + 1) rem num_set_partitions(), ActiveParts) of
+next_i(I, PassiveParts) ->
+    case ordsets:is_element((I + 1) rem num_set_partitions(), PassiveParts) of
     true ->
         I + 1;
     false ->
-        next_i(I + 1, ActiveParts)
+        next_i(I + 1, PassiveParts)
     end.

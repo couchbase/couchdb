@@ -607,9 +607,9 @@ handle_call(replica_pid, _From, #state{replica_group = Pid} = State) ->
     % To be used only by unit tests.
     {reply, {ok, Pid}, State, ?TIMEOUT};
 
-handle_call(start_updater, _From, State) ->
+handle_call({start_updater, Options}, _From, State) ->
     % To be used only by unit tests.
-    State2 = start_updater(State),
+    State2 = start_updater(State, Options),
     {reply, {ok, State2#state.updater_pid}, State2, ?TIMEOUT};
 
 handle_call(start_cleaner, _From, State) ->
@@ -721,7 +721,7 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
             CurSeqs = indexable_partition_seqs(State),
             spawn_link(couch_set_view_updater,
                        update,
-                       [self(), NewGroup2, CurSeqs, false, updater_tmp_dir(State)]);
+                       [self(), NewGroup2, CurSeqs, false, updater_tmp_dir(State), []]);
         true ->
             nil
         end,
@@ -875,7 +875,7 @@ handle_cast({before_partition_delete, PartId}, #state{group = Group} = State) ->
         false ->
             State2 = State
         end,
-        State3 = update_partition_states([], [], [PartId], State2),
+        State3 = update_partition_states([], [], [PartId], State2, true),
         {noreply, State3, ?TIMEOUT};
     false ->
         case lists:member(PartId, ReplicaParts) of
@@ -908,7 +908,7 @@ handle_cast({update, MinNumChanges}, #state{group = Group} = State) ->
         MissingCount = couch_set_view_util:missing_changes_count(CurSeqs, ?set_seqs(Group)),
         case (MissingCount >= MinNumChanges) andalso (MissingCount > 0) of
         true ->
-            {noreply, do_start_updater(State, CurSeqs)};
+            {noreply, do_start_updater(State, CurSeqs, [])};
         false ->
             {noreply, State}
         end
@@ -1818,17 +1818,39 @@ maybe_update_partition_states(ActiveList0, PassiveList0, CleanupList0, State) ->
     true ->
         State;
     false ->
-        update_partition_states(ActiveList, PassiveList, CleanupList, State)
+        RestartUpdater = updater_needs_restart(
+            Group, ActiveMask, PassiveMask, CleanupMask),
+        NewState = update_partition_states(
+            ActiveList, PassiveList, CleanupList, State, RestartUpdater),
+        #state{group = NewGroup, updater_pid = UpdaterPid} = NewState,
+        case RestartUpdater of
+        false when is_pid(UpdaterPid) ->
+            case missing_partitions(Group, NewGroup) of
+            [] ->
+                ok;
+            MissingPassive ->
+                UpdaterPid ! {new_passive_partitions, MissingPassive}
+            end;
+        _ ->
+            ok
+        end,
+        NewState
     end.
 
 
 -spec update_partition_states(ordsets:ordset(partition_id()),
                               ordsets:ordset(partition_id()),
                               ordsets:ordset(partition_id()),
-                              #state{}) -> #state{}.
-update_partition_states(ActiveList, PassiveList, CleanupList, State) ->
+                              #state{},
+                              boolean()) -> #state{}.
+update_partition_states(ActiveList, PassiveList, CleanupList, State, RestartUpdater) ->
     State2 = stop_cleaner(State),
-    #state{group = Group3} = State3 = stop_updater(State2),
+    case RestartUpdater of
+    true ->
+        #state{group = Group3} = State3 = stop_updater(State2);
+    false ->
+        #state{group = Group3} = State3 = State2
+    end,
     UpdaterWasRunning = is_pid(State#state.updater_pid),
     ActiveInCleanup = partitions_still_in_cleanup(ActiveList, Group3),
     PassiveInCleanup = partitions_still_in_cleanup(PassiveList, Group3),
@@ -2590,12 +2612,15 @@ process_last_updater_group(#state{updater_pid = Pid} = State, Group) ->
     end.
 
 
--spec start_updater(#state{}) -> #state{}.
-start_updater(#state{updater_pid = Pid} = State) when is_pid(Pid) ->
+start_updater(State) ->
+    start_updater(State, []).
+
+-spec start_updater(#state{}, [term()]) -> #state{}.
+start_updater(#state{updater_pid = Pid} = State, _Options) when is_pid(Pid) ->
     State;
-start_updater(#state{group = #set_view_group{views = []}} = State) ->
+start_updater(#state{group = #set_view_group{views = []}} = State, _Options) ->
     State;
-start_updater(#state{updater_pid = nil, updater_state = not_running} = State) ->
+start_updater(#state{updater_pid = nil, updater_state = not_running} = State, Options) ->
     #state{
         group = Group,
         replica_partitions = ReplicaParts,
@@ -2604,26 +2629,26 @@ start_updater(#state{updater_pid = nil, updater_state = not_running} = State) ->
     CurSeqs = indexable_partition_seqs(State),
     case CurSeqs > ?set_seqs(Group) of
     true ->
-        do_start_updater(State, CurSeqs);
+        do_start_updater(State, CurSeqs, Options);
     false ->
         WaitList2 = reply_with_group(Group, ReplicaParts, WaitList),
         State#state{waiting_list = WaitList2}
     end.
 
 
--spec do_start_updater(#state{}, partition_seqs()) -> #state{}.
-do_start_updater(State, CurSeqs) ->
+-spec do_start_updater(#state{}, partition_seqs(), [term()]) -> #state{}.
+do_start_updater(State, CurSeqs, Options) ->
     #state{
         group = Group,
         compactor_pid = CompactPid
     } = State2 = stop_cleaner(State),
     ?LOG_INFO("Starting updater for set view `~s`, ~s group `~s`",
-        [?set_name(State), ?type(State), ?group_id(State)]),
+              [?set_name(State), ?type(State), ?group_id(State)]),
     TmpDir = updater_tmp_dir(State),
     CompactRunning = is_pid(CompactPid) andalso is_process_alive(CompactPid),
     reset_updater_start_time(),
     Pid = spawn_link(couch_set_view_updater, update,
-                     [self(), Group, CurSeqs, CompactRunning, TmpDir]),
+                     [self(), Group, CurSeqs, CompactRunning, TmpDir, Options]),
     State2#state{
         updater_pid = Pid,
         initial_build = couch_set_view_util:is_group_empty(Group),
@@ -2723,30 +2748,34 @@ maybe_fix_replica_group(ReplicaPid, Group) ->
 
 
 -spec process_partial_update(#state{}, #set_view_group{}) -> #state{}.
-process_partial_update(State, NewGroup) ->
+process_partial_update(State, NewGroup0) ->
     #state{
-        group = Group,
+        group = #set_view_group{fd = Fd} = Group,
         update_listeners = Listeners
     } = State,
     set_last_updater_checkpoint_ts(),
-    Listeners2 = notify_update_listeners(State, Listeners, NewGroup),
     ReplicasTransferred = ordsets:subtract(
-        ?set_replicas_on_transfer(Group), ?set_replicas_on_transfer(NewGroup)),
-    case ReplicasTransferred of
+        ?set_replicas_on_transfer(Group), ?set_replicas_on_transfer(NewGroup0)),
+    NewState = case ReplicasTransferred of
     [] ->
-        State#state{group = NewGroup, update_listeners = Listeners2};
+        NewGroup1 = fix_updater_group(NewGroup0, Group),
+        State#state{group = NewGroup1};
     _ ->
         ?LOG_INFO("Set view `~s`, ~s group `~s`, completed transferral of replica partitions ~w~n"
                   "New group of replica partitions to transfer is ~w~n",
                   [?set_name(State), ?type(State), ?group_id(State),
-                   ReplicasTransferred, ?set_replicas_on_transfer(NewGroup)]),
+                   ReplicasTransferred, ?set_replicas_on_transfer(NewGroup0)]),
         ok = set_state(State#state.replica_group, [], [], ReplicasTransferred),
         State#state{
-            group = NewGroup,
-            update_listeners = Listeners2,
+            group = NewGroup0,
             replica_partitions = ordsets:subtract(State#state.replica_partitions, ReplicasTransferred)
         }
-    end.
+    end,
+    HeaderBin = couch_set_view_util:group_to_header_bin(NewState#state.group),
+    ok = couch_file:write_header_bin(Fd, HeaderBin),
+    Listeners2 = notify_update_listeners(NewState, Listeners, NewState#state.group),
+    ok = couch_file:flush(Fd),
+    NewState#state{update_listeners = Listeners2}.
 
 
 -spec notify_update_listeners(#state{}, dict(), #set_view_group{}) -> dict().
@@ -3358,3 +3387,61 @@ updater_indexing_time() ->
     StartTs = get_updater_start_time(),
     LastCpTs = get_last_updater_checkpoint_ts(),
     timer:now_diff(LastCpTs, StartTs) / 1000000.
+
+
+-spec updater_needs_restart(#set_view_group{}, bitmask(),
+                            bitmask(), bitmask()) -> boolean().
+updater_needs_restart(Group, _, _, _) when ?set_replicas_on_transfer(Group) /= [] ->
+    true;
+updater_needs_restart(Group, ActiveMask, PassiveMask, CleanupMask) ->
+    BeforeIndexable = ?set_abitmask(Group) bor ?set_pbitmask(Group),
+    AfterActive = (?set_abitmask(Group) bor ActiveMask) band (bnot CleanupMask),
+    case AfterActive == ?set_abitmask(Group) of
+    true ->
+        NewCleanup = CleanupMask band BeforeIndexable,
+        AfterCleanup = ?set_cbitmask(Group) bor NewCleanup,
+        % If this state transition only adds new passive partitions, don't restart
+        % the updater. Send the updater the new set of passive partitions, and
+        % hopefully it will still be on time to index them, otherwise it will see
+        % them the next time it's started.
+        AfterCleanup =/= ?set_cbitmask(Group);
+    false ->
+        AfterIndexable = (BeforeIndexable bor ActiveMask bor PassiveMask) band (bnot CleanupMask),
+        % Don't restart updater when a state change request only transitions
+        % partitions from passive to active state (or vice-versa). This speeds
+        % up rebalance with consistent views enabled.
+        AfterIndexable =/= BeforeIndexable
+    end.
+
+
+-spec missing_partitions(#set_view_group{}, #set_view_group{}) ->
+                                        ordsets:ordset(partition_id()).
+missing_partitions(UpdaterGroup, OurGroup) ->
+    MissingMask = (?set_pbitmask(OurGroup) bor ?set_abitmask(OurGroup)) bxor
+        (?set_pbitmask(UpdaterGroup) bor ?set_abitmask(UpdaterGroup)),
+    couch_set_view_util:decode_bitmask(MissingMask).
+
+
+-spec fix_updater_group(#set_view_group{}, #set_view_group{}) ->
+                               #set_view_group{}.
+fix_updater_group(UpdaterGroup, OurGroup) ->
+    % Confront with logic in ?MODULE:updater_needs_restart/4.
+    Missing = missing_partitions(UpdaterGroup, OurGroup),
+    UpdaterHeader = UpdaterGroup#set_view_group.index_header,
+    Seqs2 = lists:foldl(
+        fun(PartId, Acc) ->
+            case couch_set_view_util:has_part_seq(PartId, Acc) of
+            true ->
+                Acc;
+            false ->
+                ordsets:add_element({PartId, 0}, Acc)
+            end
+        end,
+        ?set_seqs(UpdaterGroup), Missing),
+    UpdaterGroup#set_view_group{
+        index_header = UpdaterHeader#set_view_index_header{
+            abitmask = ?set_abitmask(OurGroup),
+            pbitmask = ?set_pbitmask(OurGroup),
+            seqs = Seqs2
+        }
+    }.

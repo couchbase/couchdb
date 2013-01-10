@@ -12,7 +12,7 @@
 
 -module(couch_set_view_updater).
 
--export([update/5]).
+-export([update/6]).
 % Exported for unit tests only.
 -export([convert_back_index_kvs_to_binary/2]).
 
@@ -31,8 +31,6 @@
 % Same as in couch_btree.erl
 -define(KEY_BITS,       12).
 -define(MAX_KEY_SIZE,   ((1 bsl ?KEY_BITS) - 1)).
-
--define(replace(L, K, V), lists:keystore(K, 1, L, {K, V})).
 
 -record(writer_acc, {
     parent,
@@ -63,8 +61,8 @@
 
 
 -spec update(pid(), #set_view_group{},
-             partition_seqs(), boolean(), string()) -> no_return().
-update(Owner, Group, CurSeqs, CompactorRunning, TmpDir) ->
+             partition_seqs(), boolean(), string(), [term()]) -> no_return().
+update(Owner, Group, CurSeqs, CompactorRunning, TmpDir, Options) ->
     #set_view_group{
         set_name = SetName,
         type = Type,
@@ -146,10 +144,11 @@ update(Owner, Group, CurSeqs, CompactorRunning, TmpDir) ->
             couch_config:get("set_views", "indexer_min_batch_size_per_view", "1048576"))
     },
     update(WriterAcc0, ActiveParts, PassiveParts,
-            BlockedTime, BarrierEntryPid, NumChanges, CompactorRunning).
+            BlockedTime, BarrierEntryPid, NumChanges, CompactorRunning, Options).
 
 
-update(WriterAcc, ActiveParts, PassiveParts, BlockedTime, BarrierEntryPid, NumChanges, CompactorRunning) ->
+update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
+       BarrierEntryPid, NumChanges, CompactorRunning, Options) ->
     #writer_acc{
         owner = Owner,
         group = Group
@@ -242,6 +241,15 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime, BarrierEntryPid, NumCh
     end),
 
     DocLoader = spawn_link(fun() ->
+        case lists:member(pause, Options) of
+        true ->
+            % For reliable unit testing, to verify that adding new partitions
+            % to the passive state doesn't restart the updater and the updater
+            % can be aware of it and index these new partitions in the same run.
+            receive continue -> ok end;
+        false ->
+            ok
+        end,
         try
             load_changes(Owner, Parent, Group, MapQueue,
                          ActiveParts, PassiveParts,
@@ -278,6 +286,14 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime, BarrierEntryPid, NumCh
 wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup) ->
     #set_view_group{set_name = SetName, name = DDocId, type = Type} = OldGroup,
     receive
+    {new_passive_partitions, _} = NewPassivePartitions ->
+        Writer ! NewPassivePartitions,
+        DocLoader ! NewPassivePartitions,
+        wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup);
+    continue ->
+        % Used by unit tests.
+        DocLoader ! continue,
+        wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup);
     {writer_finished, WriterAcc} ->
         Stats0 = WriterAcc#writer_acc.stats,
         Result = #set_view_updater_result{
@@ -332,7 +348,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts, Initial
                 throw({error, iolist_to_binary(ErrorMsg)})
             end,
             try
-                Since = couch_util:get_value(PartId, SinceSeqs),
+                Since = couch_util:get_value(PartId, SinceSeqs, 0),
                 ChangesWrapper = fun(DocInfo, _, AccCount2) ->
                     load_doc(Db, PartId, DocInfo, MapQueue, Group, InitialBuild),
                     {ok, AccCount2 + 1}
@@ -370,11 +386,41 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts, Initial
         {FinalChangesCount, MaxSeqs2} = lists:foldl(
             FoldFun, {ActiveChangesCount, MaxSeqs}, PassiveParts)
     end,
+    {FinalChangesCount3, MaxSeqs3} = load_changes_from_passive_parts_in_mailbox(
+        Group, FoldFun, FinalChangesCount, MaxSeqs2),
     couch_work_queue:close(MapQueue),
     ?LOG_INFO("Updater for ~s set view group `~s`, set `~s`, read a total of ~p changes",
-              [GroupType, DDocId, SetName, FinalChangesCount]),
+              [GroupType, DDocId, SetName, FinalChangesCount3]),
     ?LOG_DEBUG("Updater for ~s set view group `~s`, set `~s`, max partition seqs found:~n~w",
-               [GroupType, DDocId, SetName, MaxSeqs2]).
+               [GroupType, DDocId, SetName, MaxSeqs3]).
+
+
+load_changes_from_passive_parts_in_mailbox(Group, FoldFun, ChangesCount, MaxSeqs) ->
+    #set_view_group{
+        set_name = SetName,
+        name = DDocId,
+        type = GroupType
+    } = Group,
+    receive
+    {new_passive_partitions, Parts0} ->
+        Parts = get_more_passive_partitions(Parts0),
+        ?LOG_INFO("Updater reading changes from new passive partitions ~w to "
+                  "update ~s set view group `~s` from set `~s`",
+                  [Parts, GroupType, DDocId, SetName]),
+        {ChangesCount2, MaxSeqs2} = lists:foldl(FoldFun, {ChangesCount, MaxSeqs}, Parts),
+        load_changes_from_passive_parts_in_mailbox(Group, FoldFun, ChangesCount2, MaxSeqs2)
+    after 0 ->
+        {ChangesCount, MaxSeqs}
+    end.
+
+
+get_more_passive_partitions(Parts) ->
+    receive
+    {new_passive_partitions, Parts2} ->
+        get_more_passive_partitions(Parts ++ Parts2)
+    after 0 ->
+        Parts
+    end.
 
 
 notify_owner(Owner, Msg, UpdaterPid) ->
@@ -460,10 +506,7 @@ do_writes(Acc) ->
     } = Acc,
     case couch_work_queue:dequeue(WriteQueue) of
     closed ->
-        FinalAcc = flush_writes(Acc#writer_acc{final_batch = true}),
-        write_header(FinalAcc#writer_acc.group),
-        ok = couch_file:flush((FinalAcc#writer_acc.group)#set_view_group.fd),
-        FinalAcc;
+        flush_writes(Acc#writer_acc{final_batch = true});
     {ok, Queue0, QueueSize} ->
         Queue = lists:flatten(Queue0),
         Kvs2 = Kvs ++ Queue,
@@ -499,8 +542,7 @@ should_flush_writes(#writer_acc{initial_build = false} = Acc) ->
 
 flush_writes(#writer_acc{kvs = [], initial_build = false} = Acc) ->
     Acc2 = maybe_update_btrees(Acc),
-    checkpoint(Acc2),
-    Acc2;
+    checkpoint(Acc2);
 
 flush_writes(#writer_acc{initial_build = false} = Acc0) ->
     #writer_acc{
@@ -527,9 +569,9 @@ flush_writes(#writer_acc{initial_build = false} = Acc0) ->
             ((1 bsl PartId) band ?set_pbitmask(Group) =/= 0)
         end, NewLastSeqs) of
         true ->
-            checkpoint(Acc),
+            Acc2 = checkpoint(Acc),
             notify_owner(Owner, {state, updating_passive}, Parent),
-            Acc#writer_acc{state = updating_passive};
+            Acc2#writer_acc{state = updating_passive};
         false ->
             case Acc#writer_acc.final_batch orelse
                 (?set_cbitmask(Acc#writer_acc.group) /= ?set_cbitmask(Group)) of
@@ -537,8 +579,7 @@ flush_writes(#writer_acc{initial_build = false} = Acc0) ->
                 checkpoint(Acc);
             false ->
                 maybe_checkpoint(Acc)
-            end,
-            Acc
+            end
         end;
     false ->
         Acc
@@ -1030,9 +1071,9 @@ maybe_update_btrees(WriterAcc0) ->
     },
     case (not IsFinalBatch) andalso (NewGroup =/= Group0) of
     true ->
-        maybe_checkpoint(NewWriterAcc);
+        NewWriterAcc2 = maybe_checkpoint(NewWriterAcc);
     false ->
-        ok
+        NewWriterAcc2 = NewWriterAcc
     end,
     SeqsDone = NewStats#set_view_updater_stats.seqs - SeqsDoneBefore,
     case SeqsDone of
@@ -1041,7 +1082,7 @@ maybe_update_btrees(WriterAcc0) ->
     0 ->
         ok
     end,
-    NewWriterAcc.
+    NewWriterAcc2.
 
 
 send_log_compact_files(_Owner, [], _Seqs) ->
@@ -1108,7 +1149,7 @@ spawn_updater_worker(WriterAcc, PartIdSeqs) ->
             index_header = NewHeader
         },
         NewGroup = update_transferred_replicas(NewGroup0, MaxSeqs, PartIdSeqs),
-        NumChanges = couch_set_view_util:missing_changes_count(NewSeqs, ?set_seqs(Group)),
+        NumChanges = count_seqs_done(Group, NewSeqs),
         NewStats2 = NewStats#set_view_updater_stats{
            seqs = NewStats#set_view_updater_stats.seqs + NumChanges,
            cleanup_time = NewStats#set_view_updater_stats.seqs + CleanupTime,
@@ -1204,20 +1245,14 @@ merge_files(Files, #btree{less = Less}, TmpDir, CompactorRunning) ->
 update_seqs(PartIdSeqs, Seqs) ->
     orddict:fold(
         fun(PartId, NewSeq, Acc) ->
-            OldSeq = couch_util:get_value(PartId, Acc),
-            case is_integer(OldSeq) of
-            true ->
-                ok;
-            false ->
-                exit({error, <<"Old seq is not an integer.">>, PartId, OldSeq, NewSeq})
-            end,
+            OldSeq = couch_util:get_value(PartId, Acc, 0),
             case NewSeq > OldSeq of
             true ->
                 ok;
             false ->
                 exit({error, <<"New seq smaller or equal than old seq.">>, PartId, OldSeq, NewSeq})
             end,
-            ?replace(Acc, PartId, NewSeq)
+            orddict:store(PartId, NewSeq, Acc)
         end,
         Seqs, PartIdSeqs).
 
@@ -1240,15 +1275,18 @@ maybe_checkpoint(WriterAcc) ->
     case (Before == undefined) orelse
         (timer:now_diff(Now, Before) >= ?CHECKPOINT_WRITE_INTERVAL) of
     true ->
-        checkpoint(WriterAcc),
-        put(last_header_commit_ts, Now);
+        NewWriterAcc = checkpoint(WriterAcc),
+        put(last_header_commit_ts, Now),
+        NewWriterAcc;
     false ->
-        #writer_acc{owner = Owner, parent = Parent, group = Group} = WriterAcc,
-        Owner ! {partial_update, Parent, Group}
+        NewWriterAcc = maybe_fix_group(WriterAcc),
+        #writer_acc{owner = Owner, parent = Parent, group = Group} = NewWriterAcc,
+        Owner ! {partial_update, Parent, Group},
+        NewWriterAcc
     end.
 
 
-checkpoint(#writer_acc{owner = Owner, parent = Parent, group = Group}) ->
+checkpoint(#writer_acc{owner = Owner, parent = Parent, group = Group} = Acc) ->
     #set_view_group{
         set_name = SetName,
         name = DDocId,
@@ -1256,13 +1294,37 @@ checkpoint(#writer_acc{owner = Owner, parent = Parent, group = Group}) ->
     } = Group,
     ?LOG_INFO("Updater checkpointing set view `~s` update for ~s group `~s`",
               [SetName, Type, DDocId]),
-    write_header(Group),
-    Owner ! {partial_update, Parent, Group}.
+    NewGroup = maybe_fix_group(Group),
+    Owner ! {partial_update, Parent, NewGroup},
+    Acc#writer_acc{group = NewGroup}.
 
 
-write_header(#set_view_group{fd = Fd} = Group) ->
-    HeaderBin = couch_set_view_util:group_to_header_bin(Group),
-    ok = couch_file:write_header_bin(Fd, HeaderBin).
+maybe_fix_group(#writer_acc{group = Group} = Acc) ->
+    NewGroup = maybe_fix_group(Group),
+    Acc#writer_acc{group = NewGroup};
+maybe_fix_group(#set_view_group{index_header = Header} = Group) ->
+    receive
+    {new_passive_partitions, Parts} ->
+        Bitmask = couch_set_view_util:build_bitmask(Parts),
+        Seqs2 = lists:foldl(
+            fun(PartId, Acc) ->
+                case couch_set_view_util:has_part_seq(PartId, Acc) of
+                true ->
+                    Acc;
+                false ->
+                    ordsets:add_element({PartId, 0}, Acc)
+                end
+            end,
+            ?set_seqs(Group), Parts),
+        Group#set_view_group{
+            index_header = Header#set_view_index_header{
+                seqs = Seqs2,
+                pbitmask = ?set_pbitmask(Group) bor Bitmask
+            }
+        }
+    after 0 ->
+        Group
+    end.
 
 
 check_if_compactor_started(Acc) ->
@@ -1411,3 +1473,14 @@ spawn_merge_worker(LessFun, TmpDir, Workers, FilesToMerge, DestFile) ->
             end
         end, FilesToMerge)
     end).
+
+
+count_seqs_done(Group, NewSeqs) ->
+    % NewSeqs might have new passive partitions that Group's seqs doesn't
+    % have yet (will get them after a checkpoint period).
+    lists:foldl(
+        fun({PartId, SeqDone}, Acc) ->
+            SeqBefore = couch_util:get_value(PartId, ?set_seqs(Group), 0),
+            Acc + (SeqDone - SeqBefore)
+        end,
+        0, NewSeqs).

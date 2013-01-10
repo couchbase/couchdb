@@ -170,7 +170,7 @@ get_group_snapshot(Staleness) ->
 trigger_update_and_wait() ->
     etap:diag("Trigerring index update"),
     GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
-    {ok, UpPid} = gen_server:call(GroupPid, start_updater, infinity),
+    {ok, UpPid} = gen_server:call(GroupPid, {start_updater, []}, infinity),
     case is_pid(UpPid) of
     true ->
         ok;

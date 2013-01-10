@@ -327,15 +327,16 @@ clean_views(go, PurgeFun, [#set_view{btree = Btree} = View | Rest], Count, Acc) 
 missing_changes_count(CurSeqs, NewSeqs) ->
     missing_changes_count(CurSeqs, NewSeqs, 0).
 
-missing_changes_count([], [], MissingCount) ->
+missing_changes_count([], _NewSeqs, MissingCount) ->
     MissingCount;
-missing_changes_count([{Part, CurSeq} | RestCur], [{Part, NewSeq} | RestNew], Acc) ->
+missing_changes_count([{Part, CurSeq} | RestCur], NewSeqs, Acc) ->
+    NewSeq = couch_util:get_value(Part, NewSeqs, 0),
     Diff = CurSeq - NewSeq,
     case Diff > 0 of
     true ->
-        missing_changes_count(RestCur, RestNew, Acc + Diff);
+        missing_changes_count(RestCur, NewSeqs, Acc + Diff);
     false ->
-        missing_changes_count(RestCur, RestNew, Acc)
+        missing_changes_count(RestCur, NewSeqs, Acc)
     end.
 
 
