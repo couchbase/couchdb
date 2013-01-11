@@ -12,32 +12,32 @@
 
 -module(couch_set_view_updater).
 
--export([update/5]).
+-export([update/6]).
 % Exported for unit tests only.
 -export([convert_back_index_kvs_to_binary/2]).
 
 -include("couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
 
--define(QUEUE_BASE_ITEMS, 2000).
--define(QUEUE_BASE_SIZE, 256 * 1024).
--define(MIN_WRITER_NUM_ITEMS, 1000).
--define(MIN_WRITER_BATCH_SIZE, 100 * 1024).
--define(CHECKPOINT_WRITE_INTERVAL, 5000000).
+-define(MAP_QUEUE_SIZE, 256 * 1024).
+-define(WRITE_QUEUE_SIZE, 512 * 1024).
+
+% initial index build
 -define(MAX_SORT_BUFFER_SIZE, 1048576).
--define(MAX_SORT_NUM_FILES, 16).
+
+% incremental updates
+-define(CHECKPOINT_WRITE_INTERVAL, 60000000).
 
 % Same as in couch_btree.erl
 -define(KEY_BITS,       12).
 -define(MAX_KEY_SIZE,   ((1 bsl ?KEY_BITS) - 1)).
 
--define(replace(L, K, V), lists:keystore(K, 1, L, {K, V})).
-
 -record(writer_acc, {
     parent,
     owner,
     group,
-    log_fd = nil,
+    last_seqs = orddict:new(),
+    compactor_running,
     write_queue,
     initial_build,
     view_empty_kvs,
@@ -47,24 +47,22 @@
     state = updating_active,
     final_batch = false,
     max_seqs,
-    replicas_transferred = [],
-    cleanup_kv_count = 0,
-    cleanup_time = 0,
-    inserted_kvs = 0,
-    deleted_kvs = 0,
-    inserted_ids = 0,
-    deleted_ids = 0,
+    stats = #set_view_updater_stats{},
     merge_buffers = nil,
     tmp_dir = nil,
     sort_files = nil,
     sort_file_workers = [],
-    write_queue_size
+    new_partitions = [],
+    write_queue_size,
+    max_tmp_files,
+    max_insert_batch_size,
+    min_batch_size_per_view
 }).
 
 
 -spec update(pid(), #set_view_group{},
-             partition_seqs(), string() | 'nil', string()) -> no_return().
-update(Owner, Group, CurSeqs, LogFilePath, TmpDir) ->
+             partition_seqs(), boolean(), string(), [term()]) -> no_return().
+update(Owner, Group, CurSeqs, CompactorRunning, TmpDir, Options) ->
     #set_view_group{
         set_name = SetName,
         type = Type,
@@ -115,7 +113,9 @@ update(Owner, Group, CurSeqs, LogFilePath, TmpDir) ->
               "    active:           ~w~n"
               "    passive:          ~w~n"
               "    unindexable:      ~w~n"
-              "Initial build:        ~s~n",
+              "Initial build:        ~s~n"
+              "Compactor running:    ~s~n"
+              "Min # changes:        ~p~n",
               [SetName, Type, DDocId,
                ActiveParts,
                PassiveParts,
@@ -124,7 +124,9 @@ update(Owner, Group, CurSeqs, LogFilePath, TmpDir) ->
                ?pending_transition_active(?set_pending_transition(Group)),
                ?pending_transition_passive(?set_pending_transition(Group)),
                ?pending_transition_unindexable(?set_pending_transition(Group)),
-               InitialBuild
+               InitialBuild,
+               CompactorRunning,
+               NumChanges
               ]),
 
     WriterAcc0 = #writer_acc{
@@ -133,12 +135,20 @@ update(Owner, Group, CurSeqs, LogFilePath, TmpDir) ->
         group = Group,
         initial_build = InitialBuild,
         max_seqs = CurSeqs,
-        tmp_dir = TmpDir
+        tmp_dir = TmpDir,
+        max_tmp_files = list_to_integer(
+            couch_config:get("set_views", "indexer_max_tmp_files", "16")),
+        max_insert_batch_size = list_to_integer(
+            couch_config:get("set_views", "indexer_max_insert_batch_size", "1048576")),
+        min_batch_size_per_view = list_to_integer(
+            couch_config:get("set_views", "indexer_min_batch_size_per_view", "1048576"))
     },
-    update(WriterAcc0, ActiveParts, PassiveParts, BlockedTime, BarrierEntryPid, NumChanges, LogFilePath).
+    update(WriterAcc0, ActiveParts, PassiveParts,
+            BlockedTime, BarrierEntryPid, NumChanges, CompactorRunning, Options).
 
 
-update(WriterAcc, ActiveParts, PassiveParts, BlockedTime, BarrierEntryPid, NumChanges, LogFilePath) ->
+update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
+       BarrierEntryPid, NumChanges, CompactorRunning, Options) ->
     #writer_acc{
         owner = Owner,
         group = Group
@@ -147,20 +157,17 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime, BarrierEntryPid, NumCh
         set_name = SetName,
         type = Type,
         name = DDocId,
-        sig = GroupSig,
-        views = Views
+        sig = GroupSig
     } = Group,
 
     StartTime = os:timestamp(),
 
-    MapQueueOptions = [{max_size, ?QUEUE_BASE_SIZE}, {max_items, ?QUEUE_BASE_ITEMS}],
+    MapQueueOptions = [{max_size, ?MAP_QUEUE_SIZE}, {max_items, infinity}],
     WriteQueueOptions = case WriterAcc#writer_acc.initial_build of
     true ->
-        [{max_size, ?MAX_SORT_BUFFER_SIZE div 2},
-         {max_items, infinity}];
+        [{max_size, ?MAX_SORT_BUFFER_SIZE div 2}, {max_items, infinity}];
     false ->
-        [{max_size, ?QUEUE_BASE_SIZE * (length(Views) + 1)},
-         {max_items, ?QUEUE_BASE_ITEMS * (length(Views) + 1)}]
+        [{max_size, ?WRITE_QUEUE_SIZE}, {max_items, infinity}]
     end,
     {ok, MapQueue} = couch_work_queue:new(MapQueueOptions),
     {ok, WriteQueue} = couch_work_queue:new(WriteQueueOptions),
@@ -207,8 +214,9 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime, BarrierEntryPid, NumCh
             group = Group,
             write_queue = WriteQueue,
             view_empty_kvs = ViewEmptyKVs,
-            log_fd = open_log_file(LogFilePath),
-            write_queue_size = couch_util:get_value(max_size, WriteQueueOptions)
+            compactor_running = CompactorRunning,
+            write_queue_size = couch_util:get_value(max_size, WriteQueueOptions),
+            new_partitions = [P || {P, Seq} <- ?set_seqs(Group), Seq == 0]
         }),
         delete_prev_sort_files(WriterAcc2),
         ok = couch_set_view_util:open_raw_read_fd(Group),
@@ -216,12 +224,6 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime, BarrierEntryPid, NumCh
             couch_set_view_mapreduce:start_reduce_context(Group),
             try
                 FinalWriterAcc = do_writes(WriterAcc2),
-                case FinalWriterAcc#writer_acc.log_fd of
-                nil ->
-                    ok;
-                _ ->
-                    ok = file:close(FinalWriterAcc#writer_acc.log_fd)
-                end,
                 Parent ! {writer_finished, FinalWriterAcc}
             after
                 couch_set_view_mapreduce:end_reduce_context(Group)
@@ -239,8 +241,19 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime, BarrierEntryPid, NumCh
     end),
 
     DocLoader = spawn_link(fun() ->
+        case lists:member(pause, Options) of
+        true ->
+            % For reliable unit testing, to verify that adding new partitions
+            % to the passive state doesn't restart the updater and the updater
+            % can be aware of it and index these new partitions in the same run.
+            receive continue -> ok end;
+        false ->
+            ok
+        end,
         try
-            load_changes(Owner, Parent, Group, MapQueue, Writer, ActiveParts, PassiveParts)
+            load_changes(Owner, Parent, Group, MapQueue,
+                         ActiveParts, PassiveParts,
+                         WriterAcc#writer_acc.initial_build)
         catch _:Error ->
             Stacktrace = erlang:get_stacktrace(),
             ?LOG_ERROR("Set view `~s`, ~s group `~s`, doc loader error~n"
@@ -273,31 +286,36 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime, BarrierEntryPid, NumCh
 wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup) ->
     #set_view_group{set_name = SetName, name = DDocId, type = Type} = OldGroup,
     receive
+    {new_passive_partitions, _} = NewPassivePartitions ->
+        Writer ! NewPassivePartitions,
+        DocLoader ! NewPassivePartitions,
+        wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup);
+    continue ->
+        % Used by unit tests.
+        DocLoader ! continue,
+        wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup);
     {writer_finished, WriterAcc} ->
+        Stats0 = WriterAcc#writer_acc.stats,
         Result = #set_view_updater_result{
             group = WriterAcc#writer_acc.group,
-            indexing_time = timer:now_diff(os:timestamp(), StartTime) / 1000000,
-            blocked_time = BlockedTime,
             state = WriterAcc#writer_acc.state,
-            cleanup_kv_count = WriterAcc#writer_acc.cleanup_kv_count,
-            cleanup_time = WriterAcc#writer_acc.cleanup_time,
-            inserted_ids = WriterAcc#writer_acc.inserted_ids,
-            deleted_ids = WriterAcc#writer_acc.deleted_ids,
-            inserted_kvs = WriterAcc#writer_acc.inserted_kvs,
-            deleted_kvs = WriterAcc#writer_acc.deleted_kvs
+            stats = Stats0#set_view_updater_stats{
+                indexing_time = timer:now_diff(os:timestamp(), StartTime) / 1000000,
+                blocked_time = BlockedTime
+            }
         },
         {updater_finished, Result};
-    {log_new_changes, Pid, Ref, LogFilePath} ->
-        Writer ! {log_new_changes, self(), LogFilePath},
-        ?LOG_INFO("Set view `~s`, ~s group `~s`, updater received log "
-                  "request from compactor ~p, ref ~p, writer ~p",
+    {compactor_started, Pid, Ref} ->
+        ?LOG_INFO("Set view `~s`, ~s group `~s`, updater received "
+                  "compactor ~p notification, ref ~p, writer ~p",
                    [SetName, Type, DDocId, Pid, Ref, Writer]),
-        erlang:put(log_request, {Pid, Ref}),
+        Writer ! {compactor_started, self()},
+        erlang:put(compactor_pid, {Pid, Ref}),
         wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup);
-    {log_started, Writer, GroupSnapshot} ->
-        ?LOG_INFO("Set view `~s`, ~s group `~s`, updater received log started "
-                  "from writer ~p", [SetName, Type, DDocId, Writer]),
-        {Pid, Ref} = erlang:erase(log_request),
+    {compactor_started_ack, Writer, GroupSnapshot} ->
+        ?LOG_INFO("Set view `~s`, ~s group `~s`, updater received compaction ack"
+                  " from writer ~p", [SetName, Type, DDocId, Writer]),
+        {Pid, Ref} = erlang:erase(compactor_pid),
         Pid ! {Ref, {ok, GroupSnapshot}},
         wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup);
     {'EXIT', _, Reason} when Reason =/= normal ->
@@ -308,7 +326,7 @@ wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup) ->
     end.
 
 
-load_changes(Owner, Updater, Group, MapQueue, Writer, ActiveParts, PassiveParts) ->
+load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts, InitialBuild) ->
     #set_view_group{
         set_name = SetName,
         name = DDocId,
@@ -330,9 +348,9 @@ load_changes(Owner, Updater, Group, MapQueue, Writer, ActiveParts, PassiveParts)
                 throw({error, iolist_to_binary(ErrorMsg)})
             end,
             try
-                Since = couch_util:get_value(PartId, SinceSeqs),
+                Since = couch_util:get_value(PartId, SinceSeqs, 0),
                 ChangesWrapper = fun(DocInfo, _, AccCount2) ->
-                    load_doc(Db, PartId, DocInfo, MapQueue, Group),
+                    load_doc(Db, PartId, DocInfo, MapQueue, Group, InitialBuild),
                     {ok, AccCount2 + 1}
                 end,
                 {ok, _, AccCount3} = couch_db:fast_reads(Db, fun() ->
@@ -346,52 +364,82 @@ load_changes(Owner, Updater, Group, MapQueue, Writer, ActiveParts, PassiveParts)
     end,
 
     notify_owner(Owner, {state, updating_active}, Updater),
-    try
-        case ActiveParts of
-        [] ->
-            ActiveChangesCount = 0,
-            MaxSeqs = orddict:new();
-        _ ->
-            ?LOG_INFO("Updater reading changes from active partitions to "
-                      "update ~s set view group `~s` from set `~s`",
-                      [GroupType, DDocId, SetName]),
-            {ActiveChangesCount, MaxSeqs} = lists:foldl(
-                FoldFun, {0, orddict:new()}, ActiveParts)
-        end,
-        case PassiveParts of
-        [] ->
-            FinalChangesCount = ActiveChangesCount,
-            MaxSeqs2 = MaxSeqs;
-        _ ->
-            ?LOG_INFO("Updater reading changes from passive partitions to "
-                      "update ~s set view group `~s` from set `~s`",
-                      [GroupType, DDocId, SetName]),
-            {FinalChangesCount, MaxSeqs2} = lists:foldl(
-                FoldFun, {ActiveChangesCount, MaxSeqs}, PassiveParts)
-        end,
-        ?LOG_INFO("Updater for ~s set view group `~s`, set `~s`, read a total of ~p changes",
-                  [GroupType, DDocId, SetName, FinalChangesCount]),
-        ?LOG_DEBUG("Updater for ~s set view group `~s`, set `~s`, max partition seqs found:~n~w",
-                  [GroupType, DDocId, SetName, MaxSeqs2])
-    catch throw:stop ->
-        Writer ! stop
+    case ActiveParts of
+    [] ->
+        ActiveChangesCount = 0,
+        MaxSeqs = orddict:new();
+    _ ->
+        ?LOG_INFO("Updater reading changes from active partitions to "
+                  "update ~s set view group `~s` from set `~s`",
+                  [GroupType, DDocId, SetName]),
+        {ActiveChangesCount, MaxSeqs} = lists:foldl(
+            FoldFun, {0, orddict:new()}, ActiveParts)
     end,
-    couch_work_queue:close(MapQueue).
+    case PassiveParts of
+    [] ->
+        FinalChangesCount = ActiveChangesCount,
+        MaxSeqs2 = MaxSeqs;
+    _ ->
+        ?LOG_INFO("Updater reading changes from passive partitions to "
+                  "update ~s set view group `~s` from set `~s`",
+                  [GroupType, DDocId, SetName]),
+        {FinalChangesCount, MaxSeqs2} = lists:foldl(
+            FoldFun, {ActiveChangesCount, MaxSeqs}, PassiveParts)
+    end,
+    {FinalChangesCount3, MaxSeqs3} = load_changes_from_passive_parts_in_mailbox(
+        Group, FoldFun, FinalChangesCount, MaxSeqs2),
+    couch_work_queue:close(MapQueue),
+    ?LOG_INFO("Updater for ~s set view group `~s`, set `~s`, read a total of ~p changes",
+              [GroupType, DDocId, SetName, FinalChangesCount3]),
+    ?LOG_DEBUG("Updater for ~s set view group `~s`, set `~s`, max partition seqs found:~n~w",
+               [GroupType, DDocId, SetName, MaxSeqs3]).
+
+
+load_changes_from_passive_parts_in_mailbox(Group, FoldFun, ChangesCount, MaxSeqs) ->
+    #set_view_group{
+        set_name = SetName,
+        name = DDocId,
+        type = GroupType
+    } = Group,
+    receive
+    {new_passive_partitions, Parts0} ->
+        Parts = get_more_passive_partitions(Parts0),
+        ?LOG_INFO("Updater reading changes from new passive partitions ~w to "
+                  "update ~s set view group `~s` from set `~s`",
+                  [Parts, GroupType, DDocId, SetName]),
+        {ChangesCount2, MaxSeqs2} = lists:foldl(FoldFun, {ChangesCount, MaxSeqs}, Parts),
+        load_changes_from_passive_parts_in_mailbox(Group, FoldFun, ChangesCount2, MaxSeqs2)
+    after 0 ->
+        {ChangesCount, MaxSeqs}
+    end.
+
+
+get_more_passive_partitions(Parts) ->
+    receive
+    {new_passive_partitions, Parts2} ->
+        get_more_passive_partitions(Parts ++ Parts2)
+    after 0 ->
+        Parts
+    end.
 
 
 notify_owner(Owner, Msg, UpdaterPid) ->
     Owner ! {updater_info, UpdaterPid, Msg}.
 
 
-load_doc(Db, PartitionId, DocInfo, MapQueue, Group) ->
+load_doc(Db, PartitionId, DocInfo, MapQueue, Group, InitialBuild) ->
     #doc_info{id=DocId, local_seq=Seq, deleted=Deleted} = DocInfo,
     case DocId of
     <<?DESIGN_DOC_PREFIX, _/binary>> ->
         ok;
     _ ->
-        if Deleted ->
-            couch_work_queue:queue(MapQueue, {Seq, #doc{id=DocId, deleted=true}, PartitionId});
+        case Deleted of
+        true when InitialBuild ->
+            ok;
         true ->
+            Entry = {Seq, #doc{id = DocId, deleted = true}, PartitionId},
+            couch_work_queue:queue(MapQueue, Entry);
+        false ->
             case couch_util:validate_utf8(DocId) of
             true ->
                 {ok, Doc} = couch_db:open_doc_int(Db, DocInfo, []),
@@ -410,7 +458,8 @@ load_doc(Db, PartitionId, DocInfo, MapQueue, Group) ->
                 ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, skipping "
                     "document with non-utf8 id. Doc id bytes: ~w",
                     [SetName, GroupType, DDocId, ?b2l(DocId)]),
-                couch_work_queue:queue(MapQueue, {Seq, #doc{id=DocId, deleted=true}, PartitionId})
+                Entry = {Seq, #doc{id = DocId, deleted = true}, PartitionId},
+                couch_work_queue:queue(MapQueue, Entry)
             end
         end
     end.
@@ -455,31 +504,27 @@ do_writes(Acc) ->
         kvs_length = KvsLength,
         write_queue = WriteQueue
     } = Acc,
-    Acc2 = maybe_open_log_file(Acc),
     case couch_work_queue:dequeue(WriteQueue) of
     closed ->
-        FinalAcc = flush_writes(Acc2#writer_acc{final_batch = true}),
-        write_header(FinalAcc#writer_acc.group, false),
-        FinalAcc;
+        flush_writes(Acc#writer_acc{final_batch = true});
     {ok, Queue0, QueueSize} ->
         Queue = lists:flatten(Queue0),
-        Acc3 = maybe_open_log_file(Acc2),
         Kvs2 = Kvs ++ Queue,
         KvsSize2 = KvsSize + QueueSize,
         KvsLength2 = KvsLength + length(Queue),
-        Acc4 = Acc3#writer_acc{
+        Acc2 = Acc#writer_acc{
             kvs = Kvs2,
             kvs_size = KvsSize2,
             kvs_length = KvsLength2
         },
-        case should_flush_writes(Acc4) of
+        case should_flush_writes(Acc2) of
         true ->
-            Acc5 = flush_writes(Acc4),
-            Acc6 = Acc5#writer_acc{kvs = [], kvs_size = 0, kvs_length = 0};
+            Acc3 = flush_writes(Acc2),
+            Acc4 = Acc3#writer_acc{kvs = [], kvs_size = 0, kvs_length = 0};
         false ->
-            Acc6 = Acc4
+            Acc4 = Acc2
         end,
-        do_writes(Acc6)
+        do_writes(Acc4)
     end.
 
 
@@ -487,51 +532,57 @@ should_flush_writes(#writer_acc{initial_build = true} = Acc) ->
     #writer_acc{kvs_size = KvsSize, write_queue_size = Wqsz} = Acc,
     KvsSize >= Wqsz;
 should_flush_writes(#writer_acc{initial_build = false} = Acc) ->
-    #writer_acc{kvs_size = KvsSize, kvs_length = KvsLength} = Acc,
-    (KvsSize >= ?MIN_WRITER_BATCH_SIZE) orelse (KvsLength >= ?MIN_WRITER_NUM_ITEMS).
+    #writer_acc{
+        view_empty_kvs = ViewEmptyKvs,
+        kvs_size = KvsSize,
+       min_batch_size_per_view = MinBatchSizePerView
+    } = Acc,
+    KvsSize >= (MinBatchSizePerView * length(ViewEmptyKvs)).
 
 
 flush_writes(#writer_acc{kvs = [], initial_build = false} = Acc) ->
-    {Acc2, ReplicasTransferred} = update_transferred_replicas(Acc, []),
-    case ReplicasTransferred of
-    true ->
-        checkpoint(Acc2, true);
-    false ->
-        ok
-    end,
-    Acc2;
+    Acc2 = maybe_update_btrees(Acc),
+    checkpoint(Acc2);
 
-flush_writes(#writer_acc{initial_build = false} = Acc) ->
+flush_writes(#writer_acc{initial_build = false} = Acc0) ->
     #writer_acc{
         kvs = Kvs,
         view_empty_kvs = ViewEmptyKVs,
         group = Group,
         parent = Parent,
-        owner = Owner
-    } = Acc,
-    {ViewKVs, DocIdViewIdKeys, PartIdSeqs} = process_map_results(Kvs, ViewEmptyKVs, orddict:new()),
-    Acc2 = write_changes(Acc, ViewKVs, DocIdViewIdKeys, PartIdSeqs),
-    {Acc3, ReplicasTransferred} = update_transferred_replicas(Acc2, PartIdSeqs),
-    update_task(Acc#writer_acc.kvs_length),
-    case (Acc3#writer_acc.state =:= updating_active) andalso
+        owner = Owner,
+        last_seqs = LastSeqs
+    } = Acc0,
+    {ViewKVs, DocIdViewIdKeys, NewPartIdSeqs} =
+        process_map_results(Kvs, ViewEmptyKVs, orddict:new()),
+    NewLastSeqs = orddict:merge(
+        fun(_, S1, S2) -> erlang:max(S1, S2) end,
+        LastSeqs,
+        NewPartIdSeqs),
+    Acc1 = Acc0#writer_acc{last_seqs = NewLastSeqs},
+    Acc = write_to_tmp_batch_files(ViewKVs, DocIdViewIdKeys, Acc1),
+    #writer_acc{group = NewGroup} = Acc,
+    case ?set_seqs(NewGroup) =/= ?set_seqs(Group) of
+    true ->
+        case (Acc#writer_acc.state =:= updating_active) andalso
         lists:any(fun({PartId, _}) ->
             ((1 bsl PartId) band ?set_pbitmask(Group) =/= 0)
-        end, PartIdSeqs) of
-    true ->
-        checkpoint(Acc3, false),
-        notify_owner(Owner, {state, updating_passive}, Parent),
-        Acc3#writer_acc{state = updating_passive};
-    false when ReplicasTransferred ->
-        checkpoint(Acc3, true),
-        Acc3;
-    false ->
-        case ?set_cbitmask(Acc3#writer_acc.group) /= ?set_cbitmask(Group) of
+        end, NewLastSeqs) of
         true ->
-            checkpoint(Acc3, false);
+            Acc2 = checkpoint(Acc),
+            notify_owner(Owner, {state, updating_passive}, Parent),
+            Acc2#writer_acc{state = updating_passive};
         false ->
-            maybe_checkpoint(Acc3)
-        end,
-        Acc3
+            case Acc#writer_acc.final_batch orelse
+                (?set_cbitmask(Acc#writer_acc.group) /= ?set_cbitmask(Group)) of
+            true ->
+                checkpoint(Acc);
+            false ->
+                maybe_checkpoint(Acc)
+            end
+        end;
+    false ->
+        Acc
     end;
 
 flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
@@ -542,7 +593,8 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
         merge_buffers = Buffers,
         group = Group,
         final_batch = IsFinalBatch,
-        max_seqs = MaxSeqs
+        max_seqs = MaxSeqs,
+        stats = Stats
     } = WriterAcc,
     #set_view_group{
         id_btree = IdBtree,
@@ -613,8 +665,10 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
             sort_files = NewSortFiles2,
             sort_file_workers = SortFileWorkers2,
             max_seqs = MaxSeqs2,
-            inserted_kvs = WriterAcc#writer_acc.inserted_kvs + InsertKVCount,
-            inserted_ids = WriterAcc#writer_acc.inserted_ids + length(DocIdViewIdKeys)
+            stats = Stats#set_view_updater_stats{
+                inserted_kvs = Stats#set_view_updater_stats.inserted_kvs + InsertKVCount,
+                inserted_ids = Stats#set_view_updater_stats.inserted_ids + length(DocIdViewIdKeys)
+            }
         };
     true ->
         ?LOG_INFO("Updater for set view `~s`, ~s group `~s`, performing final "
@@ -622,14 +676,14 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
         wait_for_workers(SortFileWorkers2),
         [{_, IdsSortedFile}] = dict:fetch(ids_index, NewSortFiles2),
         {ok, NewIdBtreeRoot} = couch_btree_copy:from_sorted_file(
-            IdBtree, IdsSortedFile, GroupFd, fun file_sorter_format_function/1),
+            IdBtree, IdsSortedFile, GroupFd, fun file_sorter_initial_build_format_fun/1),
         NewIdBtree = IdBtree#btree{root = NewIdBtreeRoot},
         ok = file2:delete(IdsSortedFile),
         NewViews = lists:map(
             fun(#set_view{id_num = Id, btree = Bt} = View) ->
                [{_, KvSortedFile}] = dict:fetch(Id, NewSortFiles2),
                {ok, NewBtRoot} = couch_btree_copy:from_sorted_file(
-                   Bt, KvSortedFile, GroupFd, fun file_sorter_format_function/1),
+                   Bt, KvSortedFile, GroupFd, fun file_sorter_initial_build_format_fun/1),
                ok = file2:delete(KvSortedFile),
                View#set_view{
                    btree = Bt#btree{root = NewBtRoot}
@@ -643,21 +697,20 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
             seqs = MaxSeqs2
         },
         update_task(1),
-        FinalAcc = WriterAcc#writer_acc{
+        WriterAcc#writer_acc{
             sort_files = nil,
             sort_file_workers = [],
             max_seqs = MaxSeqs2,
-            inserted_kvs = WriterAcc#writer_acc.inserted_kvs + InsertKVCount,
-            inserted_ids = WriterAcc#writer_acc.inserted_ids + length(DocIdViewIdKeys),
+            stats = Stats#set_view_updater_stats{
+                inserted_kvs = Stats#set_view_updater_stats.inserted_kvs + InsertKVCount,
+                inserted_ids = Stats#set_view_updater_stats.inserted_ids + length(DocIdViewIdKeys)
+            },
             group = Group#set_view_group{
                 id_btree = NewIdBtree,
                 views = NewViews,
                 index_header = NewHeader
             }
-        },
-        write_header(FinalAcc#writer_acc.group, false),
-        ok = couch_file:flush(GroupFd),
-        FinalAcc
+        }
     end.
 
 
@@ -675,6 +728,7 @@ process_map_results(Kvs, ViewEmptyKVs, PartSeqs) ->
         {ViewEmptyKVs, [], PartSeqs}, Kvs).
 
 
+% initial build
 maybe_flush_merge_buffers(BuffersDict, WriterAcc) ->
     #writer_acc{
         view_empty_kvs = ViewEmptyKVs,
@@ -682,7 +736,8 @@ maybe_flush_merge_buffers(BuffersDict, WriterAcc) ->
         sort_file_workers = Workers,
         tmp_dir = TmpDir,
         group = #set_view_group{id_btree = IdBtree},
-        final_batch = IsFinalBatch
+        final_batch = IsFinalBatch,
+        max_tmp_files = MaxTmpFiles
     } = WriterAcc,
     ViewInfos = [
         {ids_index, IdBtree#btree.less} |
@@ -701,7 +756,7 @@ maybe_flush_merge_buffers(BuffersDict, WriterAcc) ->
                 ok = file:close(Fd),
                 AccBuffers2 = dict:store(Id, {[], 0}, AccBuffers),
                 SortFiles2 = ordsets:add_element({0, FileName}, SortFiles),
-                case (ordsets:size(SortFiles2) >= ?MAX_SORT_NUM_FILES) orelse IsFinalBatch of
+                case (ordsets:size(SortFiles2) >= MaxTmpFiles) orelse IsFinalBatch of
                 true ->
                     LessFun = fun({A, _}, {B, _}) -> Less(A, B) end,
                     MergeSortFile = new_sort_file_name(WriterAcc),
@@ -735,16 +790,11 @@ maybe_flush_merge_buffers(BuffersDict, WriterAcc) ->
         ViewInfos).
 
 
-update_transferred_replicas(#writer_acc{group = Group} = Acc, _PartIdSeqs) when ?set_replicas_on_transfer(Group) =:= [] ->
-    {Acc, false};
-update_transferred_replicas(Acc, PartIdSeqs) ->
-    #writer_acc{
-        group = #set_view_group{index_header = Header} = Group,
-        max_seqs = MaxSeqs,
-        replicas_transferred = RepsTransferred,
-        final_batch = FinalBatch
-    } = Acc,
-    RepsTransferred2 = lists:foldl(
+update_transferred_replicas(Group, _MaxSeqs, _PartIdSeqs) when ?set_replicas_on_transfer(Group) =:= [] ->
+    Group;
+update_transferred_replicas(Group, MaxSeqs, PartIdSeqs) ->
+    #set_view_group{index_header = Header} = Group,
+    RepsTransferred = lists:foldl(
         fun({PartId, Seq}, A) ->
             case lists:member(PartId, ?set_replicas_on_transfer(Group))
                 andalso (Seq >= couch_set_view_util:get_part_seq(PartId, MaxSeqs)) of
@@ -754,34 +804,24 @@ update_transferred_replicas(Acc, PartIdSeqs) ->
                 A
             end
         end,
-        RepsTransferred, PartIdSeqs),
-    % Only update the group's list of replicas on transfer when the updater is finishing
-    % or when all the replicas were transferred (indexed). This is to make the cleanup
-    % of the replica index much more efficient (less partition state transitions, less
-    % cleanup process interruptions/restarts).
-    ReplicasOnTransfer = ordsets:subtract(?set_replicas_on_transfer(Group), RepsTransferred2),
-    case FinalBatch orelse (ReplicasOnTransfer =:= []) of
-    false ->
-        {Acc#writer_acc{replicas_transferred = RepsTransferred2}, false};
-    true ->
-        {Abitmask2, Pbitmask2} = lists:foldl(
-            fun(Id, {A, P}) ->
-                Mask = 1 bsl Id,
-                Mask = ?set_pbitmask(Group) band Mask,
-                0 = ?set_abitmask(Group) band Mask,
-                {A bor Mask, P bxor Mask}
-            end,
-            {?set_abitmask(Group), ?set_pbitmask(Group)},
-            RepsTransferred2),
-        Group2 = Group#set_view_group{
-            index_header = Header#set_view_index_header{
-                abitmask = Abitmask2,
-                pbitmask = Pbitmask2,
-                replicas_on_transfer = ReplicasOnTransfer
-            }
-        },
-        {Acc#writer_acc{group = Group2}, ReplicasOnTransfer /= []}
-    end.
+        ordsets:new(), PartIdSeqs),
+    ReplicasOnTransfer2 = ordsets:subtract(?set_replicas_on_transfer(Group), RepsTransferred),
+    {Abitmask2, Pbitmask2} = lists:foldl(
+        fun(Id, {A, P}) ->
+            Mask = 1 bsl Id,
+            Mask = ?set_pbitmask(Group) band Mask,
+            0 = ?set_abitmask(Group) band Mask,
+            {A bor Mask, P bxor Mask}
+        end,
+        {?set_abitmask(Group), ?set_pbitmask(Group)},
+        RepsTransferred),
+    Group#set_view_group{
+        index_header = Header#set_view_index_header{
+            abitmask = Abitmask2,
+            pbitmask = Pbitmask2,
+            replicas_on_transfer = ReplicasOnTransfer2
+        }
+    }.
 
 
 update_part_seq(Seq, PartId, Acc) ->
@@ -822,51 +862,66 @@ view_insert_doc_query_results(DocId, PartitionId, [ResultKVs | RestResults],
         DocId, PartitionId, RestResults, RestViewKVs, NewViewKVsAcc, NewViewIdKeysAcc2).
 
 
-write_changes(WriterAcc, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs) ->
+% Incremental updates.
+write_to_tmp_batch_files(ViewKeyValuesToAdd, DocIdViewIdKeys, WriterAcc) ->
     #writer_acc{
-        log_fd = LogFd,
-        owner = Owner,
-        group = Group,
-        initial_build = false,
-        cleanup_kv_count = CleanupKvCount0,
-        cleanup_time = CleanupTime0
+        sort_files = SortFiles,
+        group = #set_view_group{id_btree = IdBtree} = Group,
+        new_partitions = NewParts
     } = WriterAcc,
-    #set_view_group{
-        id_btree = IdBtree,
-        fd = Fd,
-        set_name = SetName,
-        name = GroupName,
-        type = GroupType
-    } = Group,
 
     {AddDocIdViewIdKeys0, RemoveDocIds, LookupDocIds} = lists:foldr(
         fun({DocId, {PartId, [] = _ViewIdKeys}}, {A, B, C}) ->
                 BackKey = make_back_index_key(DocId, PartId),
-                {A, [BackKey | B], [BackKey | C]};
+                case lists:member(PartId, NewParts) of
+                true ->
+                    {A, [BackKey | B], C};
+                false ->
+                    {A, [BackKey | B], [BackKey | C]}
+                end;
             ({DocId, {PartId, _ViewIdKeys}} = KvPairs, {A, B, C}) ->
                 BackKey = make_back_index_key(DocId, PartId),
-                {[KvPairs | A], B, [BackKey | C]}
+                case lists:member(PartId, NewParts) of
+                true ->
+                    {[KvPairs | A], B, C};
+                false ->
+                    {[KvPairs | A], B, [BackKey | C]}
+                end
         end,
         {[], [], []}, DocIdViewIdKeys),
+
     AddDocIdViewIdKeys = convert_back_index_kvs_to_binary(AddDocIdViewIdKeys0, []),
 
-    CleanupFun = case ?set_cbitmask(Group) of
-    0 ->
-        nil;
+    IdsData1 = lists:map(
+        fun(K) -> couch_set_view_updater_helper:encode_btree_op(remove, K) end,
+        RemoveDocIds),
+
+    IdsData2 = lists:foldl(
+        fun({K, V}, Acc) ->
+            Bin = couch_set_view_updater_helper:encode_btree_op(insert, K, V),
+            [Bin | Acc]
+        end,
+        IdsData1,
+        AddDocIdViewIdKeys),
+
+    BaseIdLess = couch_set_view_updater_helper:batch_sort_fun(IdBtree#btree.less),
+    IdsData3 = lists:sort(
+       fun(<<_:32, A/binary>>, <<_:32, B/binary>>) -> BaseIdLess(A, B) end,
+       IdsData2),
+    NewIdsIndexFile = new_sort_file_name(WriterAcc),
+    {ok, IdsIndexFd} = file2:open(NewIdsIndexFile, [raw, append, binary]),
+    ok = file:write(IdsIndexFd, IdsData3),
+    ok = file:close(IdsIndexFd),
+
+    IdsIndexFiles = dict:fetch(ids_index, SortFiles),
+    SortFiles2 = dict:store(ids_index, [NewIdsIndexFile | IdsIndexFiles], SortFiles),
+
+    case LookupDocIds of
+    [] ->
+        LookupResults = [];
     _ ->
-        couch_set_view_util:make_btree_purge_fun(Group)
-    end,
-    case ?set_cbitmask(Group) of
-    0 ->
-        IdBtreePurgedKeyCount = 0,
-        CleanupStart = 0,
-        {ok, LookupResults, IdBtree2} =
-            couch_btree:query_modify(IdBtree, LookupDocIds, AddDocIdViewIdKeys, RemoveDocIds);
-    _ ->
-        CleanupStart = os:timestamp(),
-        {ok, LookupResults, {_Go, IdBtreePurgedKeyCount}, IdBtree2} =
-            couch_btree:query_modify(
-                IdBtree, LookupDocIds, AddDocIdViewIdKeys, RemoveDocIds, CleanupFun, {go, 0})
+        {ok, LookupResults, IdBtree} =
+            couch_btree:query_modify(IdBtree, LookupDocIds, [], [])
     end,
     KeysToRemoveByView = lists:foldl(
         fun(LookupResult, KeysToRemoveByViewAcc) ->
@@ -883,104 +938,321 @@ write_changes(WriterAcc, ViewKeyValuesToAdd, DocIdViewIdKeys, PartIdSeqs) ->
             end
         end,
         dict:new(), LookupResults),
-    ViewKeyValuesToAddBinary = lists:map(
-        fun({View, AddKeyValues}) ->
-            {View, convert_primary_index_kvs_to_binary(AddKeyValues, Group, [])}
-        end,
-        ViewKeyValuesToAdd),
-    {Views2, {CleanupKvCount, InsertedKvCount, DeletedKvCount}} =
-        lists:mapfoldl(fun({View, {_View, AddKeyValues}}, {AccC, AccI, AccD}) ->
-            KeysToRemove = couch_util:dict_find(View#set_view.id_num, KeysToRemoveByView, []),
-            case ?set_cbitmask(Group) of
-            0 ->
-                CleanupCount = 0,
-                {ok, ViewBtree2} = couch_btree:add_remove(
-                    View#set_view.btree, AddKeyValues, KeysToRemove);
-            _ ->
-                {ok, {_Go2, CleanupCount}, ViewBtree2} = couch_btree:add_remove(
-                    View#set_view.btree, AddKeyValues, KeysToRemove, CleanupFun, {go, 0})
-            end,
-            NewView = View#set_view{btree = ViewBtree2},
-            {NewView, {AccC + CleanupCount, AccI + length(AddKeyValues), AccD + length(KeysToRemove)}}
-        end,
-        {IdBtreePurgedKeyCount, 0, 0}, lists:zip(Group#set_view_group.views, ViewKeyValuesToAddBinary)),
 
+    SortFiles3 = lists:foldl(
+        fun({#set_view{id_num = ViewId, btree = Bt}, AddKeyValues}, AccSortFiles) ->
+            AddKeyValuesBinaries = convert_primary_index_kvs_to_binary(AddKeyValues, Group, []),
+            KeysToRemove = couch_util:dict_find(ViewId, KeysToRemoveByView, []),
+            BatchData = lists:map(
+                fun(K) -> couch_set_view_updater_helper:encode_btree_op(remove, K) end,
+                KeysToRemove),
+            BatchData2 = lists:foldl(
+                fun({K, V}, Acc) ->
+                    Bin = couch_set_view_updater_helper:encode_btree_op(insert, K, V),
+                    [Bin | Acc]
+                end,
+                BatchData, AddKeyValuesBinaries),
+            BaseLess = couch_set_view_updater_helper:batch_sort_fun(Bt#btree.less),
+            BatchData3 = lists:sort(
+                fun(<<_:32, A/binary>>, <<_:32, B/binary>>) -> BaseLess(A, B) end,
+                BatchData2),
+            NewBatchFile = new_sort_file_name(WriterAcc),
+            {ok, Fd} = file2:open(NewBatchFile, [raw, append, binary]),
+            ok = file:write(Fd, BatchData3),
+            ok = file:close(Fd),
+            ViewBatchFiles = dict:fetch(ViewId, AccSortFiles),
+            dict:store(ViewId, [NewBatchFile | ViewBatchFiles], AccSortFiles)
+        end,
+        SortFiles2,
+        ViewKeyValuesToAdd),
+
+    WriterAcc2 = WriterAcc#writer_acc{
+        sort_files = SortFiles3
+    },
+    maybe_update_btrees(WriterAcc2).
+
+
+maybe_update_btrees(WriterAcc0) ->
+    #writer_acc{
+        view_empty_kvs = ViewEmptyKVs,
+        sort_files = SortFiles,
+        group = Group0,
+        stats = #set_view_updater_stats{seqs = SeqsDoneBefore},
+        final_batch = IsFinalBatch,
+        owner = Owner,
+        last_seqs = LastSeqs,
+        max_tmp_files = MaxTmpFiles,
+        tmp_dir = TmpDir,
+        compactor_running = CompactorRunning
+    } = WriterAcc0,
+    ShouldFlush = IsFinalBatch orelse
+        length(dict:fetch(ids_index, SortFiles)) >= MaxTmpFiles orelse
+        lists:any(
+            fun({#set_view{id_num = Id}, _}) ->
+                length(dict:fetch(Id, SortFiles)) >= MaxTmpFiles
+            end, ViewEmptyKVs),
+    case ShouldFlush of
+    false ->
+        NewLastSeqs1 = LastSeqs,
+        case erlang:get(updater_worker) of
+        undefined ->
+            WriterAcc = WriterAcc0;
+        UpdaterWorker when is_reference(UpdaterWorker) ->
+            receive
+            {UpdaterWorker, UpGroup, UpStats, CompactFiles} ->
+                send_log_compact_files(Owner, CompactFiles, ?set_seqs(UpGroup)),
+                erlang:erase(updater_worker),
+                WriterAcc = check_if_compactor_started(
+                    WriterAcc0#writer_acc{group = UpGroup, stats = UpStats})
+            after 0 ->
+                WriterAcc = WriterAcc0
+            end
+        end;
+    true ->
+        ViewInfos = [
+            {ids_index, Group0#set_view_group.id_btree} |
+            [{V#set_view.id_num, V#set_view.btree} || V <- Group0#set_view_group.views]
+        ],
+        SortFiles1 = lists:foldl(
+            fun({Id, Bt}, A) ->
+                Files = dict:fetch(Id, SortFiles),
+                SortedFile = merge_files(Files, Bt, TmpDir, CompactorRunning),
+                dict:store(Id, [SortedFile], A)
+            end,
+            SortFiles, ViewInfos),
+        case erlang:erase(updater_worker) of
+        undefined ->
+            WriterAcc1 = WriterAcc0#writer_acc{sort_files = SortFiles1};
+        UpdaterWorker when is_reference(UpdaterWorker) ->
+            receive
+            {UpdaterWorker, UpGroup2, UpStats2, CompactFiles2} ->
+                send_log_compact_files(Owner, CompactFiles2, ?set_seqs(UpGroup2)),
+                WriterAcc1 = check_if_compactor_started(
+                    WriterAcc0#writer_acc{
+                        group = UpGroup2,
+                        stats = UpStats2,
+                        sort_files = SortFiles1
+                    })
+            end
+        end,
+        WriterAcc2 = check_if_compactor_started(WriterAcc1),
+        NewUpdaterWorker = spawn_updater_worker(WriterAcc2, LastSeqs),
+        NewLastSeqs1 = orddict:new(),
+        erlang:put(updater_worker, NewUpdaterWorker),
+        SortFiles2 = dict:map(fun(_, _) -> [] end, SortFiles),
+        WriterAcc = WriterAcc2#writer_acc{sort_files = SortFiles2}
+    end,
+    #writer_acc{
+        stats = NewStats0,
+        group = NewGroup0
+    } = WriterAcc,
+    case IsFinalBatch of
+    true ->
+        case erlang:erase(updater_worker) of
+        undefined ->
+            NewGroup = NewGroup0,
+            NewStats = NewStats0;
+        UpdaterWorker2 when is_reference(UpdaterWorker2) ->
+            receive
+            {UpdaterWorker2, NewGroup, NewStats, CompactFiles3} ->
+                send_log_compact_files(Owner, CompactFiles3, ?set_seqs(NewGroup))
+            end
+        end,
+        NewLastSeqs = orddict:new();
+    false ->
+        NewGroup = NewGroup0,
+        NewStats = NewStats0,
+        NewLastSeqs = NewLastSeqs1
+    end,
+    NewWriterAcc = WriterAcc#writer_acc{
+        stats = NewStats,
+        group = NewGroup,
+        last_seqs = NewLastSeqs
+    },
+    case (not IsFinalBatch) andalso (NewGroup =/= Group0) of
+    true ->
+        NewWriterAcc2 = maybe_checkpoint(NewWriterAcc);
+    false ->
+        NewWriterAcc2 = NewWriterAcc
+    end,
+    SeqsDone = NewStats#set_view_updater_stats.seqs - SeqsDoneBefore,
+    case SeqsDone of
+    _ when SeqsDone > 0 ->
+        update_task(SeqsDone);
+    0 ->
+        ok
+    end,
+    NewWriterAcc2.
+
+
+send_log_compact_files(_Owner, [], _Seqs) ->
+    ok;
+send_log_compact_files(Owner, Files, Seqs) ->
+    ok = gen_server:cast(Owner, {compact_log_files, Files, Seqs}).
+
+
+spawn_updater_worker(WriterAcc, PartIdSeqs) ->
+    Parent = self(),
+    Ref = make_ref(),
+    #writer_acc{
+        group = Group,
+        max_seqs = MaxSeqs
+    } = WriterAcc,
+    _Pid = spawn_link(fun() ->
+        case ?set_cbitmask(Group) of
+        0 ->
+            CleanupStart = 0;
+        _ ->
+            CleanupStart = os:timestamp()
+        end,
+        couch_set_view_mapreduce:start_reduce_context(Group),
+        {ok, NewBtrees, CleanupCount, NewStats, NewCompactFiles} = update_btrees(WriterAcc),
+        couch_set_view_mapreduce:end_reduce_context(Group),
+        [IdBtree2 | ViewBtrees2] = NewBtrees,
+        case ?set_cbitmask(Group) of
+        0 ->
+            NewCbitmask = 0,
+            CleanupTime = 0.0;
+        _ ->
+            {ok, <<_:40, IdBitmap:?MAX_NUM_PARTITIONS>>} = couch_btree:full_reduce(IdBtree2),
+            CombinedBitmap = lists:foldl(
+                fun(Bt, AccMap) ->
+                    {ok, <<_:40, Bm:?MAX_NUM_PARTITIONS, _/binary>>} = couch_btree:full_reduce(Bt),
+                    AccMap bor Bm
+                end,
+                IdBitmap, ViewBtrees2),
+            NewCbitmask = ?set_cbitmask(Group) band CombinedBitmap,
+            CleanupTime = timer:now_diff(os:timestamp(), CleanupStart) / 1000000,
+            #set_view_group{
+                set_name = SetName,
+                name = DDocId,
+                type = GroupType
+            } = Group,
+            ?LOG_INFO("Updater for set view `~s`, ~s group `~s`, performed cleanup "
+                      "of ~p key/value pairs in ~.3f seconds",
+                      [SetName, GroupType, DDocId, CleanupCount, CleanupTime])
+        end,
+        NewSeqs = update_seqs(PartIdSeqs, ?set_seqs(Group)),
+        Header = Group#set_view_group.index_header,
+        NewHeader = Header#set_view_index_header{
+            id_btree_state = couch_btree:get_state(IdBtree2),
+            view_states = lists:map(fun couch_btree:get_state/1, ViewBtrees2),
+            seqs = NewSeqs,
+            cbitmask = NewCbitmask
+        },
+        NewGroup0 = Group#set_view_group{
+            views = lists:zipwith(
+                fun(V, Bt) -> V#set_view{btree = Bt} end,
+                Group#set_view_group.views,
+                ViewBtrees2),
+            id_btree = IdBtree2,
+            index_header = NewHeader
+        },
+        NewGroup = update_transferred_replicas(NewGroup0, MaxSeqs, PartIdSeqs),
+        NumChanges = count_seqs_done(Group, NewSeqs),
+        NewStats2 = NewStats#set_view_updater_stats{
+           seqs = NewStats#set_view_updater_stats.seqs + NumChanges,
+           cleanup_time = NewStats#set_view_updater_stats.seqs + CleanupTime,
+           cleanup_kv_count = NewStats#set_view_updater_stats.cleanup_kv_count + CleanupCount
+        },
+        Parent ! {Ref, NewGroup, NewStats2, NewCompactFiles}
+    end),
+    Ref.
+
+
+update_btrees(WriterAcc) ->
+    #writer_acc{
+        stats = Stats,
+        group = Group,
+        tmp_dir = TmpDir,
+        sort_files = SortFiles,
+        compactor_running = CompactorRunning,
+        max_insert_batch_size = MaxBatchSize
+    } = WriterAcc,
+    ViewInfos = [
+        {ids_index, Group#set_view_group.id_btree} |
+        [{V#set_view.id_num, V#set_view.btree} || V <- Group#set_view_group.views]
+    ],
+    CleanupAcc0 = {go, 0},
     case ?set_cbitmask(Group) of
     0 ->
-        NewCbitmask = 0,
-        CleanupTime = 0;
+        CleanupFun = nil;
     _ ->
-        {ok, <<_IdCount:40, IdBitmap:?MAX_NUM_PARTITIONS>>} = couch_btree:full_reduce(IdBtree2),
-        CombinedBitmap = lists:foldl(
-            fun(#set_view{btree = Bt}, AccMap) ->
-                {ok, <<_ViewCount:40, Bm:?MAX_NUM_PARTITIONS, _/binary>>} = couch_btree:full_reduce(Bt),
-                AccMap bor Bm
-            end,
-            IdBitmap, Views2),
-        NewCbitmask = ?set_cbitmask(Group) band CombinedBitmap,
-        CleanupTime = timer:now_diff(os:timestamp(), CleanupStart) / 1000000,
-        ?LOG_INFO("Updater for set view `~s`, ~s group `~s`, performed cleanup "
-            "of ~p key/value pairs in ~.3f seconds",
-            [SetName, GroupType, GroupName, CleanupKvCount, CleanupTime])
+        CleanupFun = couch_set_view_util:make_btree_purge_fun(Group)
     end,
-    NewSeqs = update_seqs(PartIdSeqs, ?set_seqs(Group)),
-    case LogFd of
-    nil ->
+    ok = couch_set_view_util:open_raw_read_fd(Group),
+    {NewBtrees, {{_, CleanupCount}, NewStats, CompactFiles}} = lists:mapfoldl(
+        fun({ViewId, Bt}, {CleanupAcc, StatsAcc, AccCompactFiles}) ->
+            [SortedFile] = dict:fetch(ViewId, SortFiles),
+            {ok, CleanupAcc2, Bt2, Inserted, Deleted} =
+                couch_set_view_updater_helper:update_btree(
+                    Bt, SortedFile, MaxBatchSize, CleanupFun, CleanupAcc),
+            StatsAcc2 = case ViewId of
+            ids_index ->
+                StatsAcc#set_view_updater_stats{
+                    inserted_ids = StatsAcc#set_view_updater_stats.inserted_ids + Inserted,
+                    deleted_ids = StatsAcc#set_view_updater_stats.deleted_ids + Deleted
+                };
+            _ ->
+                StatsAcc#set_view_updater_stats{
+                    inserted_kvs = StatsAcc#set_view_updater_stats.inserted_kvs + Inserted,
+                    deleted_kvs = StatsAcc#set_view_updater_stats.deleted_kvs + Deleted
+                }
+            end,
+            case CompactorRunning of
+            true ->
+                SortedFile2 = merge_files([SortedFile], Bt, TmpDir, true),
+                AccCompactFiles2 = [SortedFile2 | AccCompactFiles];
+            false ->
+                ok = file2:delete(SortedFile),
+                AccCompactFiles2 = AccCompactFiles
+            end,
+            {Bt2, {CleanupAcc2, StatsAcc2, AccCompactFiles2}}
+        end,
+        {CleanupAcc0, Stats, []}, ViewInfos),
+    ok = couch_set_view_util:close_raw_read_fd(Group),
+    {ok, NewBtrees, CleanupCount, NewStats, lists:reverse(CompactFiles)}.
+
+
+merge_files([F], _Bt, _TmpDir, false) ->
+    F;
+merge_files([F], _Bt, TmpDir, true) ->
+    case filename:extension(F) of
+    ".compact" ->
+        F;
+    _ ->
+        NewName = new_sort_file_name(TmpDir, true),
+        ok = file2:rename(F, NewName),
+        NewName
+    end;
+merge_files(Files, #btree{less = Less}, TmpDir, CompactorRunning) ->
+    NewFile = new_sort_file_name(TmpDir, CompactorRunning),
+    SortOptions = [
+        {order, couch_set_view_updater_helper:batch_sort_fun(Less)},
+        {tmpdir, TmpDir},
+        {format, binary}
+    ],
+    case file_sorter_2:merge(Files, NewFile, SortOptions) of
+    ok ->
         ok;
-    _ ->
-        LogViewsAddRemoveKvs = lists:map(
-            fun({#set_view{id_num = ViewId}, AddKeyValues}) ->
-                KeysToRemove = couch_util:dict_find(ViewId, KeysToRemoveByView, []),
-                {AddKeyValues, KeysToRemove}
-            end,
-            ViewKeyValuesToAddBinary),
-        LogEntry = {NewSeqs, AddDocIdViewIdKeys, RemoveDocIds, LogViewsAddRemoveKvs},
-        LogEntryBin = couch_compress:compress(?term_to_bin(LogEntry)),
-        ok = file:write(LogFd, [<<(byte_size(LogEntryBin)):32>>, LogEntryBin]),
-        {ok, LogEof} = file:position(LogFd, eof),
-        ok = gen_server:cast(Owner, {log_eof, LogEof})
+    {error, Reason} ->
+        exit({batch_sort_failed, Reason})
     end,
-    Header = Group#set_view_group.index_header,
-    NewHeader = Header#set_view_index_header{
-        id_btree_state = couch_btree:get_state(IdBtree2),
-        view_states = [couch_btree:get_state(V#set_view.btree) || V <- Views2],
-        seqs = NewSeqs,
-        cbitmask = NewCbitmask
-    },
-    NewGroup = Group#set_view_group{
-        views = Views2,
-        id_btree = IdBtree2,
-        index_header = NewHeader
-    },
-    couch_file:flush(Fd),
-    WriterAcc#writer_acc{
-        group = NewGroup,
-        cleanup_kv_count = CleanupKvCount0 + CleanupKvCount,
-        cleanup_time = CleanupTime0 + CleanupTime,
-        inserted_kvs = WriterAcc#writer_acc.inserted_kvs + InsertedKvCount,
-        deleted_kvs = WriterAcc#writer_acc.deleted_kvs + DeletedKvCount,
-        inserted_ids = WriterAcc#writer_acc.inserted_ids + length(AddDocIdViewIdKeys),
-        deleted_ids = WriterAcc#writer_acc.deleted_ids + length(RemoveDocIds)
-    }.
+    ok = lists:foreach(fun(F) -> ok = file2:delete(F) end, Files),
+    NewFile.
 
 
 update_seqs(PartIdSeqs, Seqs) ->
     orddict:fold(
         fun(PartId, NewSeq, Acc) ->
-            OldSeq = couch_util:get_value(PartId, Acc),
-            case is_integer(OldSeq) of
-            true ->
-                ok;
-            false ->
-                exit({error, <<"Old seq is not an integer.">>, PartId, OldSeq, NewSeq})
-            end,
+            OldSeq = couch_util:get_value(PartId, Acc, 0),
             case NewSeq > OldSeq of
             true ->
                 ok;
             false ->
                 exit({error, <<"New seq smaller or equal than old seq.">>, PartId, OldSeq, NewSeq})
             end,
-            ?replace(Acc, PartId, NewSeq)
+            orddict:store(PartId, NewSeq, Acc)
         end,
         Seqs, PartIdSeqs).
 
@@ -1003,15 +1275,18 @@ maybe_checkpoint(WriterAcc) ->
     case (Before == undefined) orelse
         (timer:now_diff(Now, Before) >= ?CHECKPOINT_WRITE_INTERVAL) of
     true ->
-        checkpoint(WriterAcc, false),
-        put(last_header_commit_ts, Now);
+        NewWriterAcc = checkpoint(WriterAcc),
+        put(last_header_commit_ts, Now),
+        NewWriterAcc;
     false ->
-        #writer_acc{owner = Owner, parent = Parent, group = Group} = WriterAcc,
-        Owner ! {partial_update, Parent, Group}
+        NewWriterAcc = maybe_fix_group(WriterAcc),
+        #writer_acc{owner = Owner, parent = Parent, group = Group} = NewWriterAcc,
+        Owner ! {partial_update, Parent, Group},
+        NewWriterAcc
     end.
 
 
-checkpoint(#writer_acc{owner = Owner, parent = Parent, group = Group}, DoFsync) ->
+checkpoint(#writer_acc{owner = Owner, parent = Parent, group = Group} = Acc) ->
     #set_view_group{
         set_name = SetName,
         name = DDocId,
@@ -1019,49 +1294,54 @@ checkpoint(#writer_acc{owner = Owner, parent = Parent, group = Group}, DoFsync) 
     } = Group,
     ?LOG_INFO("Updater checkpointing set view `~s` update for ~s group `~s`",
               [SetName, Type, DDocId]),
-    write_header(Group, DoFsync),
-    Owner ! {partial_update, Parent, Group}.
+    NewGroup = maybe_fix_group(Group),
+    Owner ! {partial_update, Parent, NewGroup},
+    Acc#writer_acc{group = NewGroup}.
 
 
-write_header(#set_view_group{fd = Fd} = Group, DoFsync) ->
-    HeaderBin = couch_set_view_util:group_to_header_bin(Group),
-    ok = couch_file:write_header_bin(Fd, HeaderBin),
-    case DoFsync of
-    true ->
-        ok = couch_file:sync(Fd);
-    false ->
-        ok
+maybe_fix_group(#writer_acc{group = Group} = Acc) ->
+    NewGroup = maybe_fix_group(Group),
+    Acc#writer_acc{group = NewGroup};
+maybe_fix_group(#set_view_group{index_header = Header} = Group) ->
+    receive
+    {new_passive_partitions, Parts} ->
+        Bitmask = couch_set_view_util:build_bitmask(Parts),
+        Seqs2 = lists:foldl(
+            fun(PartId, Acc) ->
+                case couch_set_view_util:has_part_seq(PartId, Acc) of
+                true ->
+                    Acc;
+                false ->
+                    ordsets:add_element({PartId, 0}, Acc)
+                end
+            end,
+            ?set_seqs(Group), Parts),
+        Group#set_view_group{
+            index_header = Header#set_view_index_header{
+                seqs = Seqs2,
+                pbitmask = ?set_pbitmask(Group) bor Bitmask
+            }
+        }
+    after 0 ->
+        Group
     end.
 
 
-open_log_file(nil) ->
-    nil;
-open_log_file(Path) when is_list(Path) ->
-    {ok, LogFd} = file2:open(Path, [raw, binary, append]),
-    LogFd.
-
-
-maybe_open_log_file(Acc) ->
+check_if_compactor_started(Acc) ->
     receive
-    {log_new_changes, Pid, LogFilePath} ->
-        case Acc#writer_acc.log_fd of
-        nil ->
-            ok;
-        OldLogFd ->
-            % Compactor died and just restarted, close the current
-            % log and open a new one.
-            file:close(OldLogFd)
-        end,
-        LogFd = open_log_file(LogFilePath),
-        Pid ! {log_started, self(), Acc#writer_acc.group},
-        Acc#writer_acc{log_fd = LogFd}
+    {compactor_started, Pid} ->
+        Pid ! {compactor_started_ack, self(), Acc#writer_acc.group},
+        Acc#writer_acc{compactor_running = true}
     after 0 ->
         Acc
     end.
 
 
-init_view_merge_params(#writer_acc{initial_build = false} = WriterAcc) ->
-    WriterAcc;
+init_view_merge_params(#writer_acc{group = Group, initial_build = false} = WriterAcc) ->
+    SortFiles = [{View#set_view.id_num, []} || View <- Group#set_view_group.views],
+    WriterAcc#writer_acc{
+        sort_files = dict:from_list([{ids_index, []} | SortFiles])
+    };
 init_view_merge_params(#writer_acc{group = Group} = WriterAcc) ->
     SortFiles = [{View#set_view.id_num, []} || View <- Group#set_view_group.views],
     Buffers = [{View#set_view.id_num, {[], 0}} || View <- Group#set_view_group.views],
@@ -1071,14 +1351,17 @@ init_view_merge_params(#writer_acc{group = Group} = WriterAcc) ->
     }.
 
 
-new_sort_file_name(#writer_acc{tmp_dir = TmpDir, group = Group}) ->
-    couch_set_view_util:new_sort_file_path(TmpDir, Group#set_view_group.sig).
+new_sort_file_name(#writer_acc{tmp_dir = TmpDir, compactor_running = Cr}) ->
+    new_sort_file_name(TmpDir, Cr).
+
+new_sort_file_name(TmpDir, true) ->
+    couch_set_view_util:new_sort_file_path(TmpDir, compactor);
+new_sort_file_name(TmpDir, false) ->
+    couch_set_view_util:new_sort_file_path(TmpDir, updater).
 
 
-delete_prev_sort_files(#writer_acc{initial_build = false}) ->
-    ok;
 delete_prev_sort_files(#writer_acc{tmp_dir = TmpDir}) ->
-    ok = couch_set_view_util:delete_sort_files(TmpDir).
+    ok = couch_set_view_util:delete_sort_files(TmpDir, updater).
 
 
 wait_for_workers(Pids) ->
@@ -1142,7 +1425,8 @@ make_back_index_key(DocId, PartId) ->
     <<PartId:16, DocId/binary>>.
 
 
-file_sorter_format_function(<<KeyLen:16, Key:KeyLen/binary, Value/binary>>) ->
+% initial build
+file_sorter_initial_build_format_fun(<<KeyLen:16, Key:KeyLen/binary, Value/binary>>) ->
     {Key, Value}.
 
 
@@ -1171,7 +1455,7 @@ spawn_merge_worker(LessFun, TmpDir, Workers, FilesToMerge, DestFile) ->
         SortOptions = [
             {order, LessFun},
             {tmpdir, TmpDir},
-            {format, fun file_sorter_format_function/1}
+            {format, fun file_sorter_initial_build_format_fun/1}
         ],
         wait_for_workers(Workers),
         case file_sorter_2:merge(FilesToMerge, DestFile, SortOptions) of
@@ -1189,3 +1473,14 @@ spawn_merge_worker(LessFun, TmpDir, Workers, FilesToMerge, DestFile) ->
             end
         end, FilesToMerge)
     end).
+
+
+count_seqs_done(Group, NewSeqs) ->
+    % NewSeqs might have new passive partitions that Group's seqs doesn't
+    % have yet (will get them after a checkpoint period).
+    lists:foldl(
+        fun({PartId, SeqDone}, Acc) ->
+            SeqBefore = couch_util:get_value(PartId, ?set_seqs(Group), 0),
+            Acc + (SeqDone - SeqBefore)
+        end,
+        0, NewSeqs).

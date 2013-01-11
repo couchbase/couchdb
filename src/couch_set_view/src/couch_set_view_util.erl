@@ -21,7 +21,7 @@
 -export([compute_indexed_bitmap/1, cleanup_group/1]).
 -export([missing_changes_count/2]).
 -export([is_group_empty/1]).
--export([new_sort_file_path/2, delete_sort_files/1]).
+-export([new_sort_file_path/2, delete_sort_files/2]).
 -export([encode_key_docid/2, decode_key_docid/1, split_key_docid/1]).
 -export([parse_values/1, parse_reductions/1, parse_view_id_keys/1]).
 -export([split_set_db_name/1]).
@@ -327,15 +327,16 @@ clean_views(go, PurgeFun, [#set_view{btree = Btree} = View | Rest], Count, Acc) 
 missing_changes_count(CurSeqs, NewSeqs) ->
     missing_changes_count(CurSeqs, NewSeqs, 0).
 
-missing_changes_count([], [], MissingCount) ->
+missing_changes_count([], _NewSeqs, MissingCount) ->
     MissingCount;
-missing_changes_count([{Part, CurSeq} | RestCur], [{Part, NewSeq} | RestNew], Acc) ->
+missing_changes_count([{Part, CurSeq} | RestCur], NewSeqs, Acc) ->
+    NewSeq = couch_util:get_value(Part, NewSeqs, 0),
     Diff = CurSeq - NewSeq,
     case Diff > 0 of
     true ->
-        missing_changes_count(RestCur, RestNew, Acc + Diff);
+        missing_changes_count(RestCur, NewSeqs, Acc + Diff);
     false ->
-        missing_changes_count(RestCur, RestNew, Acc)
+        missing_changes_count(RestCur, NewSeqs, Acc)
     end.
 
 
@@ -346,17 +347,29 @@ is_group_empty(Group) ->
         lists:all(Predicate, ?set_unindexable_seqs(Group)).
 
 
--spec new_sort_file_path(string(), binary()) -> string().
-new_sort_file_path(RootDir, GroupSig) ->
-    Base = couch_util:to_hex(GroupSig) ++ "_" ++ ?b2l(couch_uuids:new()) ++ ".sort",
+-spec new_sort_file_path(string(), 'updater' | 'compactor') -> string().
+new_sort_file_path(RootDir, updater) ->
+    do_new_sort_file_path(RootDir, ".sort");
+new_sort_file_path(RootDir, compactor) ->
+    do_new_sort_file_path(RootDir, ".compact").
+
+do_new_sort_file_path(RootDir, Type) ->
+    Base = ?b2l(couch_uuids:new()) ++ Type,
     Path = filename:join([RootDir, Base]),
     ok = file2:ensure_dir(Path),
     Path.
 
 
--spec delete_sort_files(string()) -> 'ok'.
-delete_sort_files(RootDir) ->
-    WildCard = filename:join([RootDir, "*"]),
+-spec delete_sort_files(string(), 'all' | 'updater' | 'compactor') -> 'ok'.
+delete_sort_files(RootDir, all) ->
+    do_delete_sort_files(RootDir, "");
+delete_sort_files(RootDir, updater) ->
+    do_delete_sort_files(RootDir, ".sort");
+delete_sort_files(RootDir, compactor) ->
+    do_delete_sort_files(RootDir, ".compact").
+
+do_delete_sort_files(RootDir, Suffix) ->
+    WildCard = filename:join([RootDir, "*" ++ Suffix]),
     lists:foreach(
         fun(F) -> _ = file2:delete(F) end,
         filelib:wildcard(WildCard)).

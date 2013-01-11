@@ -18,7 +18,7 @@
 -export([start_compact/2, start_compact/3, start_compact/4,
          cancel_compact/2, cancel_compact/3]).
 
--define(MIN_RETRY_BATCH_SIZE, 524288).
+-define(SORTED_CHUNK_SIZE, 1024 * 1024).
 
 -record(acc, {
    changes = 0,
@@ -66,8 +66,8 @@ cancel_compact(SetName, DDocId, Type) ->
                                pid() | 'nil',
                                pid()) -> no_return()).
 mk_compact_group(UserStatus) ->
-    fun (Group, EmptyGroup, LogFilePath, UpdaterPid, Owner) ->
-        compact_group(Group, EmptyGroup, LogFilePath, UpdaterPid, Owner, UserStatus)
+    fun(Group, EmptyGroup, TmpDir, UpdaterPid, Owner) ->
+        compact_group(Group, EmptyGroup, TmpDir, UpdaterPid, Owner, UserStatus)
     end.
 
 -spec compact_group(#set_view_group{},
@@ -76,30 +76,19 @@ mk_compact_group(UserStatus) ->
                     pid() | 'nil',
                     pid(),
                     list()) -> no_return().
-compact_group(Group0, EmptyGroup, LogFilePath, UpdaterPid, Owner, UserStatus) ->
+compact_group(Group0, EmptyGroup, TmpDir, UpdaterPid, Owner, UserStatus) ->
     #set_view_group{
         set_name = SetName,
-        name = GroupId,
         type = Type
     } = Group0,
 
-    case file2:delete(LogFilePath) of
-    ok ->
-       ok;
-    {error, enoent} ->
-       ok;
-    {error, Reason} ->
-       ?LOG_ERROR("Set view `~s` compactor, ~s group `~s`, error deleting log "
-                  "file `~s`: ~s",
-                  [SetName, Type, GroupId, LogFilePath, file:format_error(Reason)]),
-       exit({error, Reason})
-    end,
+    ok = couch_set_view_util:delete_sort_files(TmpDir, compactor),
 
     case is_pid(UpdaterPid) of
     true ->
         MonRef = erlang:monitor(process, UpdaterPid),
         Ref = make_ref(),
-        UpdaterPid ! {log_new_changes, self(), Ref, LogFilePath},
+        UpdaterPid ! {compactor_started, self(), Ref},
         Group = receive
         {Ref, {ok, Group2}} ->
             erlang:demonitor(MonRef, [flush]),
@@ -191,7 +180,7 @@ compact_group(Group0, EmptyGroup, LogFilePath, UpdaterPid, Owner, UserStatus) ->
         group = NewGroup,
         cleanup_kv_count = CleanupKVCount
     },
-    maybe_retry_compact(CompactResult, StartTime, LogFilePath, 0, Owner, 1).
+    maybe_retry_compact(CompactResult, StartTime, TmpDir, Owner, 1).
 
 merge_statuses(UserStatus, OurStatus) ->
     UserStatus0 =
@@ -201,7 +190,7 @@ merge_statuses(UserStatus, OurStatus) ->
             end, UserStatus),
     UserStatus0 ++ OurStatus.
 
-maybe_retry_compact(CompactResult0, StartTime, LogFilePath, LogOffsetStart, Owner, Retries) ->
+maybe_retry_compact(CompactResult0, StartTime, TmpDir, Owner, Retries) ->
     NewGroup = CompactResult0#set_view_compactor_result.group,
     #set_view_group{
         set_name = SetName,
@@ -222,15 +211,13 @@ maybe_retry_compact(CompactResult0, StartTime, LogFilePath, LogOffsetStart, Owne
     ok = couch_file:flush(Fd),
     case gen_server:call(Owner, {compact_done, CompactResult}, infinity) of
     ok ->
-        _ = file2:delete(LogFilePath),
         ok;
     {update, MissingCount} ->
-        {ok, LogEof} = gen_server:call(Owner, log_eof, infinity),
+        {ok, {LogFiles, NewSeqs}} = gen_server:call(
+            Owner, compact_log_files, infinity),
         ?LOG_INFO("Compactor for set view `~s`, ~s group `~s`, "
-                  "applying delta of ~p changes (retry number ~p), "
-                  "log start offset ~p, log eof ~p",
-                  [SetName, Type, DDocId, MissingCount, Retries,
-                   LogOffsetStart, LogEof]),
+                  "applying delta of ~p changes (retry number ~p)",
+                  [SetName, Type, DDocId, MissingCount, Retries]),
         [TotalChanges] = couch_task_status:get([total_changes]),
         TotalChanges2 = TotalChanges + MissingCount,
         couch_task_status:update([
@@ -239,17 +226,13 @@ maybe_retry_compact(CompactResult0, StartTime, LogFilePath, LogOffsetStart, Owne
             {progress, (TotalChanges * 100) div TotalChanges2},
             {retry_number, Retries}
         ]),
-        {ok, LogFd} = file2:open(LogFilePath, [read, raw, binary]),
-        {ok, LogOffsetStart} = file:position(LogFd, LogOffsetStart),
         ok = couch_set_view_util:open_raw_read_fd(NewGroup),
-        NewGroup2 = apply_log(NewGroup, LogFd, 0, nil,LogOffsetStart, LogEof),
-        ok = file:close(LogFd),
+        NewGroup2 = apply_log(NewGroup, LogFiles, NewSeqs, TmpDir),
         ok = couch_set_view_util:close_raw_read_fd(NewGroup),
         CompactResult2 = CompactResult0#set_view_compactor_result{
             group = NewGroup2
         },
-        maybe_retry_compact(CompactResult2, StartTime, LogFilePath,
-                            LogEof, Owner, Retries + 1)
+        maybe_retry_compact(CompactResult2, StartTime, TmpDir, Owner, Retries + 1)
     end.
 
 
@@ -313,60 +296,28 @@ total_kv_count(#set_view_group{id_btree = IdBtree, views = Views}) ->
         IdCount, Views).
 
 
-apply_log(Group, _LogFd, 0, nil, LogOffset, LogEof) when LogOffset == LogEof ->
-    Group;
-apply_log(Group, _LogFd, _BatchSize, Batch, LogOffset, LogEof) when LogOffset == LogEof ->
-    ok = couch_file:flush(Group#set_view_group.fd),
-    apply_log_entry(Group, Batch);
-apply_log(Group, LogFd, BatchSize, Batch, LogOffset, LogEof) when LogOffset < LogEof ->
-    {ok, <<EntrySize:32>>} = file:read(LogFd, 4),
-    {ok, <<EntryBin:EntrySize/binary>>} = file:read(LogFd, EntrySize),
-    EntryBin2 = couch_compress:decompress(EntryBin),
-    Entry = binary_to_term(EntryBin2),
-    Batch2 = merge_to_batch(Entry, Batch),
-    case (byte_size(EntryBin2) + BatchSize) of
-    Size when Size >= ?MIN_RETRY_BATCH_SIZE ->
-        ok = couch_file:flush(Group#set_view_group.fd),
-        Group2 = apply_log_entry(Group, Batch2),
-        apply_log(Group2, LogFd, 0, nil, LogOffset + 4 + EntrySize, LogEof);
-    Size ->
-        apply_log(Group, LogFd, Size, Batch2, LogOffset + 4 + EntrySize, LogEof)
-    end.
-
-
-merge_to_batch(Entry, nil) ->
-    Entry;
-merge_to_batch(Entry, Batch) ->
-    {NewSeqs, AddDocIdViewIdKeys, RemoveDocIds, LogViewsAddRemoveKvs} = Entry,
-    {_, BatchAddDocIdViewIdKeys, BatchRemoveDocIds, BatchLogViewsAddRemoveKvs} = Batch,
-    BatchLogViewsAddRemoveKvs2 = lists:zipwith(
-        fun({AddKeyValues, KeysToRemove}, {BatchAddKeyValues, BatchKeysToRemove}) ->
-            {AddKeyValues ++ BatchAddKeyValues, KeysToRemove ++ BatchKeysToRemove}
-        end,
-        LogViewsAddRemoveKvs,
-        BatchLogViewsAddRemoveKvs),
-    {NewSeqs,
-     AddDocIdViewIdKeys ++ BatchAddDocIdViewIdKeys,
-     RemoveDocIds ++ BatchRemoveDocIds,
-     BatchLogViewsAddRemoveKvs2}.
-
-
-apply_log_entry(Group, Entry) ->
+apply_log(Group, LogFiles, NewSeqs, TmpDir) ->
     #set_view_group{
         id_btree = IdBtree,
-        views = Views,
         index_header = Header
     } = Group,
-    {NewSeqs, AddDocIdViewIdKeys, RemoveDocIds, LogViewsAddRemoveKvs} = Entry,
-    {ok, NewIdBtree} = couch_btree:add_remove(IdBtree, AddDocIdViewIdKeys, RemoveDocIds),
+
+    [IdLogFiles | ViewLogFiles] = LogFiles,
+    IdMergeFile = merge_files(IdLogFiles, IdBtree, TmpDir),
+    {ok, NewIdBtree, _, _} = couch_set_view_updater_helper:update_btree(
+        IdBtree, IdMergeFile, ?SORTED_CHUNK_SIZE),
+    ok = file2:delete(IdMergeFile),
+
     NewViews = lists:zipwith(
-        fun(#set_view{btree = Bt} = View, {AddKeyValues, KeysToRemove}) ->
-            {ok, Bt2} = couch_btree:add_remove(Bt, AddKeyValues, KeysToRemove),
-            View#set_view{btree = Bt2}
+        fun(#set_view{btree = Bt} = V, Files) ->
+           MergeFile = merge_files(Files, Bt, TmpDir),
+           {ok, NewBt, _, _} = couch_set_view_updater_helper:update_btree(
+               Bt, MergeFile, ?SORTED_CHUNK_SIZE),
+           ok = file2:delete(MergeFile),
+           V#set_view{btree = NewBt}
         end,
-        Views,
-        LogViewsAddRemoveKvs),
-    couch_task_status:update([]),
+        Group#set_view_group.views, ViewLogFiles),
+
     Group#set_view_group{
         id_btree = NewIdBtree,
         views = NewViews,
@@ -376,3 +327,17 @@ apply_log_entry(Group, Entry) ->
             view_states = [couch_btree:get_state(V#set_view.btree) || V <- NewViews]
         }
     }.
+
+
+merge_files([F], _Bt, _TmpDir) ->
+    F;
+merge_files(Files, #btree{less = Less}, TmpDir) ->
+    NewFile = couch_set_view_util:new_sort_file_path(TmpDir, compactor),
+    SortOptions = [
+        {order, couch_set_view_updater_helper:batch_sort_fun(Less)},
+        {tmpdir, TmpDir},
+        {format, binary}
+    ],
+    ok = file_sorter_2:merge(Files, NewFile, SortOptions),
+    ok = lists:foreach(fun(F) -> ok = file2:delete(F) end, Files),
+    NewFile.

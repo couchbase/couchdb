@@ -26,6 +26,7 @@ source_files = \
     src/couch_set_view_http.erl \
     src/couch_set_view_group.erl \
     src/couch_set_view_updater.erl \
+    src/couch_set_view_updater_helper.erl \
     src/couch_set_view_compactor.erl \
     src/couch_set_view_util.erl \
     src/couch_set_view_mapreduce.erl \
@@ -60,7 +61,8 @@ test_files = \
     test/20-debug-params.t \
     test/21-updater-cleanup.t \
     test/22-compactor-cleanup.t \
-    test/23-replica-group-missing.t
+    test/23-replica-group-missing.t \
+    test/24-updater-add-more-passive-partitions.t
 
 compiled_files = \
     ebin/couch_set_view.app \
@@ -68,6 +70,7 @@ compiled_files = \
     ebin/couch_set_view_http.beam \
     ebin/couch_set_view_group.beam \
     ebin/couch_set_view_updater.beam \
+    ebin/couch_set_view_updater_helper.beam \
     ebin/couch_set_view_compactor.beam \
     ebin/couch_set_view_util.beam \
     ebin/couch_set_view_mapreduce.beam \

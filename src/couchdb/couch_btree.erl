@@ -12,7 +12,8 @@
 
 -module(couch_btree).
 
--export([open/2, open/3, query_modify/4, query_modify_raw/2, add/2, add_remove/3]).
+-export([open/2, open/3, query_modify/4, add/2, add_remove/3]).
+-export([query_modify_raw/2, query_modify_raw/4]).
 -export([fold/4, full_reduce/1, final_reduce/2, size/1, foldl/3, foldl/4, lookup_sorted/2]).
 -export([modify/3, fold_reduce/4, lookup/2, get_state/1, set_options/2]).
 -export([add_remove/5, query_modify/6]).
@@ -244,6 +245,13 @@ query_modify_raw(#btree{root=Root} = Bt, SortedActions) ->
         modify_node(Bt, Root, SortedActions, [], nil, nil, nil, false),
     {ok, NewRoot, Bt3} = complete_root(Bt2, KeyPointers),
     {ok, QueryResults, Bt3#btree{root=NewRoot}}.
+
+query_modify_raw(#btree{root=Root} = Bt, SortedActions, PurgeFun, PurgeAcc) ->
+    KeepPurging = is_function(PurgeFun, 3),
+    {ok, KeyPointers, QueryResults, nil, PurgeAcc2, _KeepPurging2, Bt2} =
+        modify_node(Bt, Root, SortedActions, [], nil, PurgeFun, PurgeAcc, KeepPurging),
+    {ok, NewRoot, Bt3} = complete_root(Bt2, KeyPointers),
+    {ok, QueryResults, PurgeAcc2, Bt3#btree{root=NewRoot}}.
 
 
 modify(Bt, KeyFuns, Acc) ->

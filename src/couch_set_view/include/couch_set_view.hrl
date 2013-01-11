@@ -108,6 +108,11 @@
 -type set_view_fold_reduce_fun() :: fun((set_view_key(), Reduction::term(), Acc::term()) ->
                                     {'ok' | 'stop', FinalAcc::term()}).
 
+-type view_btree_op()            :: {'insert', Key::binary(), Value::binary()} |
+                                    {'remove', Key::binary(), 'nil'}.
+
+-type view_btree_less_fun()      :: fun((binary(), binary()) -> boolean()).
+
 
 % Used to configure a new set view.
 -record(set_view_params, {
@@ -216,17 +221,22 @@
     filepath = ""                           :: string()
 }).
 
--record(set_view_updater_result, {
-    group = #set_view_group{}  :: #set_view_group{},
+-record(set_view_updater_stats, {
     indexing_time = 0.0        :: float(),  % seconds
     blocked_time = 0.0         :: float(),  % seconds
-    state = updating_active    :: set_view_updater_state(),
     cleanup_kv_count = 0       :: non_neg_integer(),
     cleanup_time = 0.0         :: float(),  % seconds
     inserted_ids = 0           :: non_neg_integer(),
     deleted_ids = 0            :: non_neg_integer(),
     inserted_kvs = 0           :: non_neg_integer(),
-    deleted_kvs = 0            :: non_neg_integer()
+    deleted_kvs = 0            :: non_neg_integer(),
+    seqs = 0                   :: non_neg_integer()
+}).
+
+-record(set_view_updater_result, {
+    group = #set_view_group{}          :: #set_view_group{},
+    state = updating_active            :: set_view_updater_state(),
+    stats = #set_view_updater_stats{}  :: #set_view_updater_stats{}
 }).
 
 -record(set_view_compactor_result, {
