@@ -33,7 +33,7 @@ main(_) ->
         ok ->
             etap:end_tests();
         Other ->
-            etap:diag(io_lib:format("Test died abnormally: ~p", [Other])),
+            io:format(standard_error, "Test died abnormally: ~p", [Other]),
             etap:bail(Other)
     end,
     ok.
@@ -105,6 +105,7 @@ test() ->
 
     etap:diag("Shutting down group pid, and verifying last written header is good"),
     couch_util:shutdown_sync(GroupPid),
+    wait_group_respawn(GroupPid, 3000),
 
     verify_btrees(ValueGenFun1, num_docs_0(), ActiveParts, PassiveParts),
 
@@ -112,6 +113,19 @@ test() ->
     ok = timer:sleep(1000),
     couch_set_view_test_util:stop_server(),
     ok.
+
+
+wait_group_respawn(OldPid, T) when T =< 0 ->
+    etap:bail("Timeout waiting for group respawn");
+wait_group_respawn(OldPid, T) ->
+    NewPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    case NewPid of
+    OldPid ->
+        ok = timer:sleep(20),
+        wait_group_respawn(OldPid, T - 20);
+    _ ->
+        ok
+    end.
 
 
 get_group_snapshot() ->
