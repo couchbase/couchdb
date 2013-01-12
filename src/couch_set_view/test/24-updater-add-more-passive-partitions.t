@@ -64,22 +64,49 @@ test() ->
         end,
         NewPassiveParts),
 
-    etap:diag("Added more passive partitions while updater is/was running"),
+    etap:diag("Added more passive partitions while updater is running"),
+
+    ActiveParts0 = lists:seq(1, num_set_partitions() - 1, 2),
+    PassiveParts0 = lists:seq(0, num_set_partitions() - 1, 2),
+
+    etap:diag("Changing the state of some partitions from passive to active " ++
+                  "while the updater is running"),
+    lists:foreach(
+        fun(PartId) ->
+            ok = couch_set_view:set_partition_states(
+                test_set_name(), ddoc_id(), [PartId], [], [])
+        end,
+        ActiveParts0),
+
+    PassiveParts = ordsets:union(PassiveParts0, lists:seq(1, num_set_partitions() - 1, 4)),
+    ActiveParts = ordsets:subtract(ActiveParts0, PassiveParts),
+
+    etap:diag("Changing the state of some partitions from active back to passive " ++
+                  "while the updater is running"),
+    lists:foreach(
+        fun(PartId) ->
+            ok = couch_set_view:set_partition_states(
+                test_set_name(), ddoc_id(), [], [PartId], [])
+        end,
+        PassiveParts),
+
     UpdaterPid ! continue,
     etap:diag("Waiting for updater to finish"),
     receive
-    {'DOWN', Ref, _, _, _} ->
-        etap:diag("Updater finished")
+    {'DOWN', Ref, _, _, {updater_finished, _}} ->
+        etap:diag("Updater finished");
+    {'DOWN', Ref, _, _, Reason} ->
+        etap:bail("Updater finished with unexpected reason: " ++ couch_util:to_list(Reason))
     after ?MAX_WAIT_TIME ->
         etap:bail("Timeout waiting for updater to finish")
     end,
 
-    verify_btrees(ValueGenFun1, num_docs_0()),
+    verify_btrees(ValueGenFun1, num_docs_0(), ActiveParts, PassiveParts),
 
     etap:diag("Shutting down group pid, and verifying last written header is good"),
     couch_util:shutdown_sync(GroupPid),
 
-    verify_btrees(ValueGenFun1, num_docs_0()),
+    verify_btrees(ValueGenFun1, num_docs_0(), ActiveParts, PassiveParts),
 
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
     ok = timer:sleep(1000),
@@ -149,7 +176,7 @@ doc_id(I) ->
     iolist_to_binary(io_lib:format("doc_~8..0b", [I])).
 
 
-verify_btrees(ValueGenFun, NumDocs) ->
+verify_btrees(ValueGenFun, NumDocs, ActiveParts, PassiveParts) ->
     Group = get_group_snapshot(),
     #set_view_group{
         id_btree = IdBtree,
@@ -167,24 +194,26 @@ verify_btrees(ValueGenFun, NumDocs) ->
     #set_view{
         btree = View2Btree
     } = View2,
-    PassiveParts = lists:seq(0, num_set_partitions() - 1),
-    ExpectedBitmask = couch_set_view_util:build_bitmask(PassiveParts),
-    DbSeqs = couch_set_view_test_util:get_db_seqs(test_set_name(), PassiveParts),
+    AllParts = ordsets:union(ActiveParts, PassiveParts),
+    ExpectedActiveBitmask = couch_set_view_util:build_bitmask(ActiveParts),
+    ExpectedPassiveBitmask = couch_set_view_util:build_bitmask(PassiveParts),
+    ExpectedIndexedBitmask = ExpectedActiveBitmask bor ExpectedPassiveBitmask,
+    DbSeqs = couch_set_view_test_util:get_db_seqs(test_set_name(), AllParts),
     ExpectedKVCount = length([I || I <- lists:seq(0, NumDocs - 1),
-        ordsets:is_element((I rem num_set_partitions()), PassiveParts)]),
+        ordsets:is_element((I rem num_set_partitions()), AllParts)]),
 
     etap:is(
         couch_set_view_test_util:full_reduce_id_btree(Group, IdBtree),
-        {ok, {ExpectedKVCount, ExpectedBitmask}},
+        {ok, {ExpectedKVCount, ExpectedIndexedBitmask}},
         "Id Btree has the right reduce value"),
     etap:is(
         couch_set_view_test_util:full_reduce_view_btree(Group, View1Btree),
-        {ok, {ExpectedKVCount, [ExpectedKVCount], ExpectedBitmask}},
+        {ok, {ExpectedKVCount, [ExpectedKVCount], ExpectedIndexedBitmask}},
         "View1 Btree has the right reduce value"),
 
     etap:is(HeaderUpdateSeqs, DbSeqs, "Header has right update seqs list"),
-    etap:is(Abitmask, 0, "Header has right active bitmask"),
-    etap:is(Pbitmask, ExpectedBitmask, "Header has right passive bitmask"),
+    etap:is(Abitmask, ExpectedActiveBitmask, "Header has right active bitmask"),
+    etap:is(Pbitmask, ExpectedPassiveBitmask, "Header has right passive bitmask"),
     etap:is(Cbitmask, 0, "Header has right cleanup bitmask"),
 
     etap:diag("Verifying the Id Btree"),
@@ -217,7 +246,7 @@ verify_btrees(ValueGenFun, NumDocs) ->
             end,
             {ok, {RestParts, I + num_set_partitions(), C, It + 1}}
         end,
-        {PassiveParts, hd(PassiveParts), 0, 0}, []),
+        {AllParts, hd(AllParts), 0, 0}, []),
     etap:is(IdBtreeFoldResult, ExpectedKVCount,
         "Id Btree has " ++ integer_to_list(ExpectedKVCount) ++ " entries"),
 
@@ -235,9 +264,9 @@ verify_btrees(ValueGenFun, NumDocs) ->
             false ->
                 etap:bail("View1 Btree has an unexpected KV at iteration " ++ integer_to_list(Count + 1))
             end,
-            {ok, {next_i(I, PassiveParts), Count + 1}}
+            {ok, {next_i(I, AllParts), Count + 1}}
         end,
-        {hd(PassiveParts), 0}, []),
+        {hd(AllParts), 0}, []),
     etap:is(View1BtreeFoldResult, ExpectedKVCount,
         "View1 Btree has " ++ integer_to_list(ExpectedKVCount) ++ " entries"),
 
@@ -255,18 +284,18 @@ verify_btrees(ValueGenFun, NumDocs) ->
             false ->
                 etap:bail("View2 Btree has an unexpected KV at iteration " ++ integer_to_list(Count + 1))
             end,
-            {ok, {next_i(I, PassiveParts), Count + 1}}
+            {ok, {next_i(I, AllParts), Count + 1}}
         end,
-        {hd(PassiveParts), 0}, []),
+        {hd(AllParts), 0}, []),
     etap:is(View2BtreeFoldResult, ExpectedKVCount,
         "View2 Btree has " ++ integer_to_list(ExpectedKVCount) ++ " entries"),
     ok.
 
 
-next_i(I, PassiveParts) ->
-    case ordsets:is_element((I + 1) rem num_set_partitions(), PassiveParts) of
+next_i(I, Parts) ->
+    case ordsets:is_element((I + 1) rem num_set_partitions(), Parts) of
     true ->
         I + 1;
     false ->
-        next_i(I + 1, PassiveParts)
+        next_i(I + 1, Parts)
     end.
