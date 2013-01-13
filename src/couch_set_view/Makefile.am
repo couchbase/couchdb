@@ -62,7 +62,8 @@ test_files = \
     test/21-updater-cleanup.t \
     test/22-compactor-cleanup.t \
     test/23-replica-group-missing.t \
-    test/24-updater-add-more-passive-partitions.t
+    test/24-updater-add-more-passive-partitions.t \
+    test/25-util-stats.t
 
 compiled_files = \
     ebin/couch_set_view.app \

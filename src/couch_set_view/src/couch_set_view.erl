@@ -20,6 +20,7 @@
 -export([get_group/3, get_group_pid/2, release_group/1, define_group/3]).
 -export([get_group_info/2, cleanup_index_files/1, set_index_dir/2]).
 -export([get_group_data_size/2, get_group_signature/2]).
+-export([reset_utilization_stats/2, get_utilization_stats/2]).
 
 -export([is_view_defined/2]).
 -export([set_partition_states/5, add_replica_partitions/3, remove_replica_partitions/3]).
@@ -378,6 +379,19 @@ get_group_info(SetName, DDocId) ->
 get_group_data_size(SetName, DDocId) ->
     GroupPid = get_group_pid(SetName, DDocId),
     {ok, _Info} = couch_set_view_group:get_data_size(GroupPid).
+
+
+-spec reset_utilization_stats(binary(), binary()) -> 'ok'.
+reset_utilization_stats(SetName, DDocId) ->
+    GroupPid = get_group_pid(SetName, DDocId),
+    ok = couch_set_view_group:reset_utilization_stats(GroupPid).
+
+
+-spec get_utilization_stats(binary(), binary()) ->
+                                   {'ok', [{atom() | binary(), term()}]}.
+get_utilization_stats(SetName, DDocId) ->
+    GroupPid = get_group_pid(SetName, DDocId),
+    {ok, _} = couch_set_view_group:get_utilization_stats(GroupPid).
 
 
 -spec get_group_signature(binary(), binary()) -> {'ok', binary()}.

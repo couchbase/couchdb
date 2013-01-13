@@ -88,6 +88,14 @@ route_request(#httpd{method = 'GET'} = Req, SetName, DDocId, [<<"_btree_stats">>
     Stats = {[{<<"id_btree">>, {IdBtreeStats}} | ViewStats]},
     couch_httpd:send_json(Req, 200, Stats);
 
+route_request(#httpd{method = 'POST'} = Req, SetName, DDocId, [<<"_reset_utilization_stats">>]) ->
+    ok = couch_set_view:reset_utilization_stats(SetName, DDocId),
+    couch_httpd:send_json(Req, 201, true);
+
+route_request(#httpd{method = 'GET'} = Req, SetName, DDocId, [<<"_get_utilization_stats">>]) ->
+    {ok, Stats} = couch_set_view:get_utilization_stats(SetName, DDocId),
+    couch_httpd:send_json(Req, 200, {Stats});
+
 route_request(#httpd{method = 'GET'} = Req, SetName, DDocId, [<<"_view">>, ViewName]) ->
     Keys = couch_httpd:qs_json_value(Req, "keys", nil),
     FilteredPartitions = couch_httpd:qs_json_value(Req, "partitions", []),
