@@ -28,7 +28,7 @@ num_docs_0() -> 78144.  % keep it a multiple of num_set_partitions()
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(18),
+    etap:plan(36),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -46,11 +46,34 @@ test() ->
     couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
 
     create_set(),
-    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
 
     ValueGenFun1 = fun(I) -> I end,
     update_documents(0, num_docs_0(), ValueGenFun1),
 
+    etap:diag("Testing state transitions during initial index build"),
+    test_state_changes_while_updater_running(ValueGenFun1, num_docs_0()),
+
+    ok = couch_set_view:set_partition_states(
+        test_set_name(), ddoc_id(),
+        [],
+        lists:seq(0, (num_set_partitions() div 2) - 1),
+        lists:seq(num_set_partitions() div 2, num_set_partitions() - 1)),
+
+    ValueGenFun2 = fun(I) -> I * 3 end,
+    NumDocs2 = num_docs_0() + (5 * num_set_partitions()),
+    update_documents(0, NumDocs2, ValueGenFun2),
+
+    etap:diag("Testing state transitions during incremental index update"),
+    test_state_changes_while_updater_running(ValueGenFun2, NumDocs2),
+
+    couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
+    ok = timer:sleep(1000),
+    couch_set_view_test_util:stop_server(),
+    ok.
+
+
+test_state_changes_while_updater_running(ValueGenFun, NumDocs) ->
+    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
     NewPassiveParts = lists:seq(num_set_partitions() div 2, num_set_partitions() - 1),
 
     % Trigger index update
@@ -101,21 +124,16 @@ test() ->
         etap:bail("Timeout waiting for updater to finish")
     end,
 
-    verify_btrees(ValueGenFun1, num_docs_0(), ActiveParts, PassiveParts),
+    verify_btrees(ValueGenFun, NumDocs, ActiveParts, PassiveParts),
 
     etap:diag("Shutting down group pid, and verifying last written header is good"),
     couch_util:shutdown_sync(GroupPid),
     wait_group_respawn(GroupPid, 3000),
 
-    verify_btrees(ValueGenFun1, num_docs_0(), ActiveParts, PassiveParts),
-
-    couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
-    ok = timer:sleep(1000),
-    couch_set_view_test_util:stop_server(),
-    ok.
+    verify_btrees(ValueGenFun, NumDocs, ActiveParts, PassiveParts).
 
 
-wait_group_respawn(OldPid, T) when T =< 0 ->
+wait_group_respawn(_OldPid, T) when T =< 0 ->
     etap:bail("Timeout waiting for group respawn");
 wait_group_respawn(OldPid, T) ->
     NewPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),

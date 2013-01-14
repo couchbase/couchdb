@@ -22,6 +22,7 @@
 -export([add_replica_partitions/2, remove_replica_partitions/2]).
 -export([mark_as_unindexable/2, mark_as_indexable/2]).
 -export([monitor_partition_update/4, demonitor_partition_update/2]).
+-export([reset_utilization_stats/1, get_utilization_stats/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -57,6 +58,16 @@
           #set_view_index_header.pending_transition) /= nil)).
 
 -define(MAX_HIST_SIZE, 10).
+
+-record(util_stats, {
+    useful_indexing_time = 0.0  :: float(),
+    wasted_indexing_time = 0.0  :: float(),
+    updates = 0                 :: non_neg_integer(),
+    updater_interruptions = 0   :: non_neg_integer(),
+    compaction_time = 0.0       :: float(),
+    compactions = 0             :: non_neg_integer(),
+    compactor_interruptions = 0 :: non_neg_integer()
+}).
 
 -record(up_listener, {
     pid,
@@ -289,6 +300,16 @@ demonitor_partition_update(Pid, Ref) ->
     ok = gen_server:call(Pid, {demonitor_partition_update, Ref}, infinity).
 
 
+-spec reset_utilization_stats(pid()) -> 'ok'.
+reset_utilization_stats(Pid) ->
+    ok = gen_server:call(Pid, reset_utilization_stats, infinity).
+
+
+-spec get_utilization_stats(pid()) -> {'ok', [{atom() | binary(), term()}]}.
+get_utilization_stats(Pid) ->
+    gen_server:call(Pid, get_utilization_stats, infinity).
+
+
 start_link({RootDir, SetName, Group}) ->
     Args = {RootDir, SetName, Group#set_view_group{type = main}},
     proc_lib:start_link(?MODULE, init, [Args]).
@@ -385,6 +406,7 @@ do_init({_, SetName, _} = InitArgs) ->
              #set_view_group_stats{ets_key = ?set_view_group_stats_key(Group)}),
         TmpDir = updater_tmp_dir(State),
         ok = couch_set_view_util:delete_sort_files(TmpDir, all),
+        reset_util_stats(),
         {ok, maybe_apply_pending_transition(State3)};
     Error ->
         throw(Error)
@@ -706,6 +728,7 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
         ?LOG_INFO("Set view `~s`, ~s group `~s`, compaction complete in ~.3f seconds,"
             " filtered ~p key-value pairs",
             [?set_name(State), ?type(State), ?group_id(State), Duration, CleanupKVCount]),
+        inc_util_stat(#util_stats.compaction_time, Duration),
         ok = couch_file:only_snapshot_reads(OldFd),
         ok = couch_file:delete(?root_dir(State), OldFilepath),
         %% After rename call we're sure the header was written to the file
@@ -790,7 +813,33 @@ handle_call({demonitor_partition_update, Ref}, _From, State) ->
 
 handle_call(compact_log_files, _From, State) ->
     NewState = State#state{compact_log_files = nil},
-    {reply, {ok, State#state.compact_log_files}, NewState, ?TIMEOUT}.
+    {reply, {ok, State#state.compact_log_files}, NewState, ?TIMEOUT};
+
+handle_call(reset_utilization_stats, _From, State) ->
+    reset_util_stats(),
+    {reply, ok, State, ?TIMEOUT};
+
+handle_call(get_utilization_stats, _From, #state{replica_group = RepPid} = State) ->
+    Stats = erlang:get(util_stats),
+    UsefulIndexing = Stats#util_stats.useful_indexing_time,
+    WastedIndexing = Stats#util_stats.wasted_indexing_time,
+    StatNames = record_info(fields, util_stats),
+    StatPoses = lists:seq(2, record_info(size, util_stats)),
+    StatsList0 = lists:foldr(
+        fun({StatName, StatPos}, Acc) ->
+            Val = element(StatPos, Stats),
+            [{StatName, Val} | Acc]
+        end,
+        [], lists:zip(StatNames, StatPoses)),
+    StatsList1 = [{total_indexing_time, UsefulIndexing + WastedIndexing} | StatsList0],
+    case is_pid(RepPid) of
+    true ->
+        {ok, RepStats} = gen_server:call(RepPid, get_utilization_stats, infinity),
+        StatsList = StatsList1 ++ [{replica_utilization_stats, {RepStats}}];
+    false ->
+        StatsList = StatsList1
+    end,
+    {reply, {ok, StatsList}, State, ?TIMEOUT}.
 
 
 handle_cast(_Msg, State) when not ?is_defined(State) ->
@@ -2497,6 +2546,7 @@ stop_compactor(#state{compactor_pid = Pid, compactor_file = CompactFd} = State) 
     _ ->
         ?inc_cleanup_stops(State#state.group)
     end,
+    inc_util_stat(#util_stats.compactor_interruptions, 1),
     State#state{compactor_pid = nil, compactor_file = nil}.
 
 
@@ -2513,9 +2563,11 @@ stop_updater(#state{updater_pid = nil} = State) ->
 stop_updater(#state{updater_pid = Pid, initial_build = true} = State) when is_pid(Pid) ->
     LostTime = updater_lost_time(),
     ?LOG_INFO("Stopping updater for set view `~s`, ~s group `~s` "
-              "(doing initial index build), discarded indexing time ~.3f seconds.",
+              "(doing initial index build), wasted indexing time ~.3f seconds.",
         [?set_name(State), ?type(State), ?group_id(State), LostTime]),
     couch_util:shutdown_sync(Pid),
+    inc_util_stat(#util_stats.updater_interruptions, 1),
+    inc_util_stat(#util_stats.wasted_indexing_time, LostTime),
     State#state{
         updater_pid = nil,
         initial_build = false,
@@ -2588,8 +2640,11 @@ after_updater_stopped(State, _Reason) ->
     LostTime = updater_lost_time(),
     ?LOG_INFO("Stopped updater, set view `~s`, ~s group `~s`, "
               "useful indexing time of ~.3f seconds, "
-              "discarded indexing time of ~.3f seconds.",
+              "wasted indexing time of ~.3f seconds.",
               [?set_name(State), ?type(State), ?group_id(State), IndexingTime, LostTime]),
+    inc_util_stat(#util_stats.updater_interruptions, 1),
+    inc_util_stat(#util_stats.useful_indexing_time, IndexingTime),
+    inc_util_stat(#util_stats.wasted_indexing_time, LostTime),
     State#state{
         updater_pid = nil,
         initial_build = false,
@@ -2841,6 +2896,8 @@ inc_updates(Group, UpdaterResult, PartialUpdate, ForcedStop) ->
         inserted_kvs = InsertedKvs,
         deleted_kvs = DeletedKvs
     } = UpdaterResult#set_view_updater_result.stats,
+    inc_util_stat(#util_stats.updates, 1),
+    inc_util_stat(#util_stats.useful_indexing_time, IndexingTime),
     Entry = {
         case PartialUpdate of
         true ->
@@ -2918,6 +2975,7 @@ inc_compactions(Result) ->
         compact_time = Duration,
         cleanup_kv_count = CleanupKVCount
     } = Result,
+    inc_util_stat(#util_stats.compactions, 1),
     [Stats] = ets:lookup(?SET_VIEW_STATS_ETS, ?set_view_group_stats_key(Group)),
     #set_view_group_stats{compaction_history = Hist} = Stats,
     Entry = {[
@@ -3387,6 +3445,16 @@ updater_indexing_time() ->
     StartTs = get_updater_start_time(),
     LastCpTs = get_last_updater_checkpoint_ts(),
     timer:now_diff(LastCpTs, StartTs) / 1000000.
+
+
+inc_util_stat(StatPos, Inc) ->
+    Stats = erlang:get(util_stats),
+    Stats2 = setelement(StatPos, Stats, element(StatPos, Stats) + Inc),
+    erlang:put(util_stats, Stats2).
+
+
+reset_util_stats() ->
+    erlang:put(util_stats, #util_stats{}).
 
 
 -spec updater_needs_restart(#set_view_group{}, bitmask(),
