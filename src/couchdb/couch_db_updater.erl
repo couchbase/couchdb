@@ -394,8 +394,12 @@ btree_by_seq_split(#doc_info{id=Id, local_seq=Seq, rev={RevPos, RevId},
     {<<Seq:48>>, Val}.
 
 btree_by_seq_join(<<Seq:48>>, Val) ->
-    <<SizeId:12,SizeBody:28,Deleted:1,Bp:47,RevPos:48,Meta:8,
+    <<SizeId:12,SizeBody:28,Deleted:1,Bp:47,RevPos0:48,Meta:8,
         Id:SizeId/binary,RevId/binary>> = Val,
+    % It is possible when upgrading from 1.8.x to 2.0.0 to create items
+    % on disk with a revision number of 0, which is not a valid revision
+    % number. We fix this on load here and in ep-engine.
+    RevPos = case RevPos0 of 0 -> 1; X -> X end,
     #doc_info{
         id = binary:copy(Id),
         local_seq = Seq,
@@ -412,7 +416,11 @@ btree_by_id_split(#doc_info{id=Id, local_seq=Seq, rev={RevPos,RevId},
     {Id, Val}.
 
 btree_by_id_join(Id, Bin) ->
-    <<Seq:48,Size:32,DeletedBit:1,Bp:47,RevPos:48,Meta:8,RevId/binary>> = Bin,
+    <<Seq:48,Size:32,DeletedBit:1,Bp:47,RevPos0:48,Meta:8,RevId/binary>> = Bin,
+    % It is possible when upgrading from 1.8.x to 2.0.0 to create items
+    % on disk with a revision number of 0, which is not a valid revision
+    % number. We fix this on load here and in ep-engine.
+    RevPos = case RevPos0 of 0 -> 1; X -> X end,
     #doc_info{
         id = Id,
         local_seq = Seq,
