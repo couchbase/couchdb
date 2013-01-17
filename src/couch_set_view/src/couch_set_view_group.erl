@@ -815,8 +815,14 @@ handle_call(compact_log_files, _From, State) ->
     NewState = State#state{compact_log_files = nil},
     {reply, {ok, State#state.compact_log_files}, NewState, ?TIMEOUT};
 
-handle_call(reset_utilization_stats, _From, State) ->
+handle_call(reset_utilization_stats, _From, #state{replica_group = RepPid} = State) ->
     reset_util_stats(),
+    case is_pid(RepPid) of
+    true ->
+        ok = gen_server:call(RepPid, reset_utilization_stats, infinity);
+    false ->
+        ok
+    end,
     {reply, ok, State, ?TIMEOUT};
 
 handle_call(get_utilization_stats, _From, #state{replica_group = RepPid} = State) ->
