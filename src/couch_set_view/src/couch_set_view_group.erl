@@ -2491,11 +2491,13 @@ cleaner(#state{group = Group}) ->
 
 -spec indexable_partition_seqs(#state{}) -> partition_seqs().
 indexable_partition_seqs(#state{group = Group} = State) ->
+    Sync = (dict:size(State#state.update_listeners) > 0) orelse
+        (State#state.waiting_list /= []),
     {ok, CurSeqs} = case ?set_unindexable_seqs(Group) of
     [] ->
-        couch_db_set:get_seqs(?db_set(State), false);
+        couch_db_set:get_seqs(?db_set(State), Sync);
     _ ->
-        couch_db_set:get_seqs(?db_set(State), [P || {P, _} <- ?set_seqs(Group)], false)
+        couch_db_set:get_seqs(?db_set(State), [P || {P, _} <- ?set_seqs(Group)], Sync)
     end,
     CurSeqs.
 
