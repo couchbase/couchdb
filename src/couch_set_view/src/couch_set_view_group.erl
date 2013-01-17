@@ -3461,6 +3461,8 @@ reset_util_stats() ->
                             bitmask(), bitmask()) -> boolean().
 updater_needs_restart(Group, _, _, _) when ?set_replicas_on_transfer(Group) /= [] ->
     true;
+updater_needs_restart(Group, _, _, _) when ?set_pending_transition(Group) /= nil ->
+    true;
 updater_needs_restart(Group, ActiveMask, PassiveMask, CleanupMask) ->
     BeforeIndexable = ?set_abitmask(Group) bor ?set_pbitmask(Group),
     AfterActive = (?set_abitmask(Group) bor ActiveMask) band (bnot CleanupMask),
