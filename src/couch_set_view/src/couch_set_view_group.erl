@@ -984,11 +984,12 @@ handle_info(timeout, State) when not ?is_defined(State) ->
     {noreply, State};
 
 handle_info(timeout, #state{group = Group} = State) ->
-    case ?set_replicas_on_transfer(Group) of
-    [] ->
-        {noreply, maybe_start_cleaner(State)};
-    _ ->
-        {noreply, start_updater(State)}
+    case (?set_replicas_on_transfer(Group) /= []) orelse
+        (dict:size(State#state.update_listeners) > 0) of
+    true ->
+        {noreply, start_updater(State)};
+    false ->
+        {noreply, maybe_start_cleaner(State)}
     end;
 
 handle_info({partial_update, Pid, NewGroup}, #state{updater_pid = Pid} = State) ->
