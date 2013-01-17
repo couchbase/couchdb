@@ -802,7 +802,7 @@ handle_call({demonitor_partition_update, Ref}, _From, State) ->
     error ->
         {reply, ok, State, ?TIMEOUT};
     {ok, #up_listener{monref = MonRef, partition = PartId}} ->
-        ?LOG_DEBUG("Set view `~s`, ~s group `~s`, removing partition ~p"
+        ?LOG_INFO("Set view `~s`, ~s group `~s`, removing partition ~p"
                    "update monitor, reference ~p",
                    [?set_name(State), ?type(State), ?group_id(State),
                     PartId, Ref]),
@@ -815,8 +815,14 @@ handle_call(compact_log_files, _From, State) ->
     NewState = State#state{compact_log_files = nil},
     {reply, {ok, State#state.compact_log_files}, NewState, ?TIMEOUT};
 
-handle_call(reset_utilization_stats, _From, State) ->
+handle_call(reset_utilization_stats, _From, #state{replica_group = RepPid} = State) ->
     reset_util_stats(),
+    case is_pid(RepPid) of
+    true ->
+        ok = gen_server:call(RepPid, reset_utilization_stats, infinity);
+    false ->
+        ok
+    end,
     {reply, ok, State, ?TIMEOUT};
 
 handle_call(get_utilization_stats, _From, #state{replica_group = RepPid} = State) ->
@@ -978,11 +984,12 @@ handle_info(timeout, State) when not ?is_defined(State) ->
     {noreply, State};
 
 handle_info(timeout, #state{group = Group} = State) ->
-    case ?set_replicas_on_transfer(Group) of
-    [] ->
-        {noreply, maybe_start_cleaner(State)};
-    _ ->
-        {noreply, start_updater(State)}
+    case (?set_replicas_on_transfer(Group) /= []) orelse
+        (dict:size(State#state.update_listeners) > 0) of
+    true ->
+        {noreply, start_updater(State)};
+    false ->
+        {noreply, maybe_start_cleaner(State)}
     end;
 
 handle_info({partial_update, Pid, NewGroup}, #state{updater_pid = Pid} = State) ->
@@ -1217,7 +1224,7 @@ handle_info({'DOWN', Ref, process, Pid, Reason}, State) ->
             State#state.db_refs),
         UpdateListeners2 = dict:filter(
             fun(RefList, #up_listener{pid = Pid0, partition = PartId}) when Pid0 == Pid ->
-                ?LOG_DEBUG("Set view `~s`, ~s group `~s`, removing partition ~p"
+                ?LOG_INFO("Set view `~s`, ~s group `~s`, removing partition ~p"
                            "update monitor, reference ~p (it died)",
                            [?set_name(State), ?type(State), ?group_id(State),
                             PartId, RefList]),
@@ -2072,7 +2079,7 @@ persist_partition_states(State, ActiveList, PassiveList, CleanupList, PendingTra
                 } = Listener,
                 case lists:member(PartId, CleanupList) of
                 true ->
-                    ?LOG_DEBUG("Set view `~s`, ~s group `~s`, replying to partition ~p"
+                    ?LOG_INFO("Set view `~s`, ~s group `~s`, replying to partition ~p"
                                "update monitor, reference ~p, error: marked_for_cleanup",
                                [?set_name(State), ?type(State), ?group_id(State),
                                 Ref, PartId]),
@@ -2485,11 +2492,13 @@ cleaner(#state{group = Group}) ->
 
 -spec indexable_partition_seqs(#state{}) -> partition_seqs().
 indexable_partition_seqs(#state{group = Group} = State) ->
+    Sync = (dict:size(State#state.update_listeners) > 0) orelse
+        (State#state.waiting_list /= []),
     {ok, CurSeqs} = case ?set_unindexable_seqs(Group) of
     [] ->
-        couch_db_set:get_seqs(?db_set(State), false);
+        couch_db_set:get_seqs(?db_set(State), Sync);
     _ ->
-        couch_db_set:get_seqs(?db_set(State), [P || {P, _} <- ?set_seqs(Group)], false)
+        couch_db_set:get_seqs(?db_set(State), [P || {P, _} <- ?set_seqs(Group)], Sync)
     end,
     CurSeqs.
 
@@ -2849,7 +2858,7 @@ notify_update_listeners(State, Listeners, NewGroup) ->
                 } = Listener,
                 case couch_set_view_util:find_part_seq(PartId, ?set_seqs(NewGroup)) of
                 {ok, IndexedSeq} when IndexedSeq >= Seq ->
-                   ?LOG_DEBUG("Set view `~s`, ~s group `~s`, replying to partition ~p"
+                   ?LOG_INFO("Set view `~s`, ~s group `~s`, replying to partition ~p"
                               " update monitor, reference ~p, desired indexed seq ~p,"
                               " indexed seq ~p",
                               [?set_name(State), ?type(State), ?group_id(State),
@@ -2857,7 +2866,12 @@ notify_update_listeners(State, Listeners, NewGroup) ->
                     Pid ! {Ref, updated},
                     erlang:demonitor(MonRef, [flush]),
                     false;
-                _ ->
+                {ok, IndexedSeq} ->
+                   ?LOG_INFO("Set view `~s`, ~s group `~s`, not replying yet to partition"
+                             " ~p update monitor, reference ~p, desired indexed seq ~p,"
+                             " indexed seq ~p",
+                             [?set_name(State), ?type(State), ?group_id(State),
+                              PartId, Ref, Seq, IndexedSeq]),
                     true
                 end
             end,
@@ -2869,7 +2883,7 @@ notify_update_listeners(State, Listeners, NewGroup) ->
 error_notify_update_listeners(State, Listeners, Error) ->
     _ = dict:fold(
         fun(Ref, #up_listener{pid = ListPid, partition = PartId}, _Acc) ->
-            ?LOG_DEBUG("Set view `~s`, ~s group `~s`, replying to partition ~p"
+            ?LOG_INFO("Set view `~s`, ~s group `~s`, replying to partition ~p"
                        "update monitor, reference ~p, error: ~p",
                        [?set_name(State), ?type(State), ?group_id(State),
                         Ref, PartId, Error]),
@@ -3382,7 +3396,7 @@ process_monitor_partition_update(#state{group = Group} = State, PartId, Ref, Pid
             partition = PartId,
             seq = CurSeq
         },
-        ?LOG_DEBUG("Set view `~s`, ~s group `~s`, blocking partition ~p update monitor,"
+        ?LOG_INFO("Set view `~s`, ~s group `~s`, blocking partition ~p update monitor,"
                    " reference ~p, desired indexed seq ~p, indexed seq ~p",
                    [?set_name(State), ?type(State), ?group_id(State),
                     PartId, Ref, CurSeq, Seq]),
@@ -3390,7 +3404,7 @@ process_monitor_partition_update(#state{group = Group} = State, PartId, Ref, Pid
             update_listeners = dict:store(Ref, Listener, State2#state.update_listeners)
         };
     false ->
-        ?LOG_DEBUG("Set view `~s`, ~s group `~s`, replying to partition ~p update monitor,"
+        ?LOG_INFO("Set view `~s`, ~s group `~s`, replying to partition ~p update monitor,"
                    " reference ~p, desired indexed seq ~p, indexed seq ~p",
                    [?set_name(State), ?type(State), ?group_id(State),
                     PartId, Ref, CurSeq, Seq]),
@@ -3460,6 +3474,8 @@ reset_util_stats() ->
 -spec updater_needs_restart(#set_view_group{}, bitmask(),
                             bitmask(), bitmask()) -> boolean().
 updater_needs_restart(Group, _, _, _) when ?set_replicas_on_transfer(Group) /= [] ->
+    true;
+updater_needs_restart(Group, _, _, _) when ?set_pending_transition(Group) /= nil ->
     true;
 updater_needs_restart(Group, ActiveMask, PassiveMask, CleanupMask) ->
     BeforeIndexable = ?set_abitmask(Group) bor ?set_pbitmask(Group),

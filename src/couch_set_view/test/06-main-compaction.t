@@ -67,6 +67,8 @@ test() ->
     DiskSizeBefore = main_index_disk_size(),
 
     verify_group_info_before_cleanup_request(),
+    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    ok = gen_server:call(GroupPid, {set_auto_cleanup, false}, infinity),
     ok = couch_set_view:set_partition_states(test_set_name(), ddoc_id(), [], [], lists:seq(8, 63)),
     verify_group_info_after_cleanup_request(),
 
