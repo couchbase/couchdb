@@ -574,7 +574,7 @@ flush_writes(#writer_acc{initial_build = false} = Acc0) ->
             Acc2#writer_acc{state = updating_passive};
         false ->
             case Acc#writer_acc.final_batch orelse
-                (?set_cbitmask(Acc#writer_acc.group) /= ?set_cbitmask(Group)) of
+                (?set_cbitmask(NewGroup) /= ?set_cbitmask(Group)) of
             true ->
                 checkpoint(Acc);
             false ->
@@ -1069,12 +1069,6 @@ maybe_update_btrees(WriterAcc0) ->
         group = NewGroup,
         last_seqs = NewLastSeqs
     },
-    case (not IsFinalBatch) andalso (NewGroup =/= Group0) of
-    true ->
-        NewWriterAcc2 = maybe_checkpoint(NewWriterAcc);
-    false ->
-        NewWriterAcc2 = NewWriterAcc
-    end,
     SeqsDone = NewStats#set_view_updater_stats.seqs - SeqsDoneBefore,
     case SeqsDone of
     _ when SeqsDone > 0 ->
@@ -1082,7 +1076,7 @@ maybe_update_btrees(WriterAcc0) ->
     0 ->
         ok
     end,
-    NewWriterAcc2.
+    NewWriterAcc.
 
 
 send_log_compact_files(_Owner, [], _Seqs) ->
