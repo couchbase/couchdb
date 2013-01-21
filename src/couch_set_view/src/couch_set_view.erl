@@ -14,31 +14,26 @@
 -behaviour(gen_server).
 
 % public API
--export([start_link/0]).
-
--export([get_map_view/4, get_reduce_view/4]).
--export([get_group/3, get_group_pid/2, release_group/1, define_group/3]).
--export([get_group_info/2, cleanup_index_files/1, set_index_dir/2]).
+-export([define_group/3]).
+-export([cleanup_index_files/1, set_index_dir/2]).
 -export([get_group_data_size/2, get_group_signature/2]).
 -export([reset_utilization_stats/2, get_utilization_stats/2]).
-
--export([is_view_defined/2]).
 -export([set_partition_states/5, add_replica_partitions/3, remove_replica_partitions/3]).
 -export([mark_partitions_unindexable/3, mark_partitions_indexable/3]).
 -export([monitor_partition_update/3, demonitor_partition_update/3]).
 -export([trigger_update/3, trigger_replica_update/3]).
 
+% Internal, not meant to be used by components other than the view engine.
+-export([get_group_pid/2, get_group/3, release_group/1, get_group_info/2]).
+-export([get_map_view/4, get_reduce_view/4]).
 -export([fold/5, fold_reduce/5]).
 -export([get_row_count/2, reduce_to_count/1, extract_map_view/1]).
-
 -export([map_view_key_compare/2, reduce_view_key_compare/2]).
-
+-export([get_map_view0/2, get_reduce_view0/2]).
 -export([handle_db_event/1]).
 
-% for tests
--export([get_map_view0/2, get_reduce_view0/2]).
-
 % gen_server callbacks
+-export([start_link/0]).
 -export([init/1, terminate/2, handle_call/3, handle_cast/2, handle_info/2, code_change/3]).
 
 -include("couch_db.hrl").
@@ -129,19 +124,17 @@ release_group(Group) ->
 
 -spec define_group(binary(), binary(), #set_view_params{}) -> 'ok'.
 define_group(SetName, DDocId, #set_view_params{} = Params) ->
-    GroupPid = get_group_pid(SetName, DDocId),
-    case couch_set_view_group:define_view(GroupPid, Params) of
-    ok ->
-        ok;
-    Error ->
-        throw(Error)
+    try
+        GroupPid = get_group_pid(SetName, DDocId),
+        case couch_set_view_group:define_view(GroupPid, Params) of
+        ok ->
+            ok;
+        Error ->
+            throw(Error)
+        end
+    catch throw:{error, empty_group} ->
+        ok
     end.
-
-
--spec is_view_defined(binary(), binary()) -> boolean().
-is_view_defined(SetName, DDocId) ->
-    GroupPid = get_group_pid(SetName, DDocId),
-    couch_set_view_group:is_view_defined(GroupPid).
 
 
 % This is an incremental operation. That is, the following sequence of calls:
@@ -183,13 +176,17 @@ is_view_defined(SetName, DDocId) ->
                            ordsets:ordset(partition_id()),
                            ordsets:ordset(partition_id())) -> 'ok'.
 set_partition_states(SetName, DDocId, ActivePartitions, PassivePartitions, CleanupPartitions) ->
-    GroupPid = get_group_pid(SetName, DDocId),
-    case couch_set_view_group:set_state(
-        GroupPid, ActivePartitions, PassivePartitions, CleanupPartitions) of
-    ok ->
-        ok;
-    Error ->
-        throw(Error)
+    try
+        GroupPid = get_group_pid(SetName, DDocId),
+        case couch_set_view_group:set_state(
+            GroupPid, ActivePartitions, PassivePartitions, CleanupPartitions) of
+        ok ->
+            ok;
+        Error ->
+            throw(Error)
+        end
+    catch throw:{error, empty_group} ->
+        ok
     end.
 
 
@@ -201,13 +198,16 @@ set_partition_states(SetName, DDocId, ActivePartitions, PassivePartitions, Clean
 %
 -spec add_replica_partitions(binary(), binary(), ordsets:ordset(partition_id())) -> 'ok'.
 add_replica_partitions(SetName, DDocId, Partitions) ->
-    GroupPid = get_group_pid(SetName, DDocId),
-    case couch_set_view_group:add_replica_partitions(
-        GroupPid, Partitions) of
-    ok ->
-        ok;
-    Error ->
-        throw(Error)
+    try
+        GroupPid = get_group_pid(SetName, DDocId),
+        case couch_set_view_group:add_replica_partitions(GroupPid, Partitions) of
+        ok ->
+            ok;
+        Error ->
+            throw(Error)
+        end
+    catch throw:{error, empty_group} ->
+        ok
     end.
 
 
@@ -220,13 +220,16 @@ add_replica_partitions(SetName, DDocId, Partitions) ->
 %
 -spec remove_replica_partitions(binary(), binary(), ordsets:ordset(partition_id())) -> 'ok'.
 remove_replica_partitions(SetName, DDocId, Partitions) ->
-    GroupPid = get_group_pid(SetName, DDocId),
-    case couch_set_view_group:remove_replica_partitions(
-        GroupPid, Partitions) of
-    ok ->
-        ok;
-    Error ->
-        throw(Error)
+    try
+        GroupPid = get_group_pid(SetName, DDocId),
+        case couch_set_view_group:remove_replica_partitions(GroupPid, Partitions) of
+        ok ->
+            ok;
+        Error ->
+            throw(Error)
+        end
+    catch throw:{error, empty_group} ->
+        ok
     end.
 
 
@@ -239,12 +242,16 @@ remove_replica_partitions(SetName, DDocId, Partitions) ->
 mark_partitions_unindexable(_SetName, _DDocId, []) ->
     ok;
 mark_partitions_unindexable(SetName, DDocId, Partitions) ->
-    Pid = get_group_pid(SetName, DDocId),
-    case couch_set_view_group:mark_as_unindexable(Pid, Partitions) of
-    ok ->
-        ok;
-    Error ->
-        throw(Error)
+    try
+        Pid = get_group_pid(SetName, DDocId),
+        case couch_set_view_group:mark_as_unindexable(Pid, Partitions) of
+        ok ->
+            ok;
+        Error ->
+            throw(Error)
+        end
+    catch throw:{error, empty_group} ->
+        ok
     end.
 
 
@@ -257,12 +264,16 @@ mark_partitions_unindexable(SetName, DDocId, Partitions) ->
 mark_partitions_indexable(_SetName, _DDocId, []) ->
     ok;
 mark_partitions_indexable(SetName, DDocId, Partitions) ->
-    Pid = get_group_pid(SetName, DDocId),
-    case couch_set_view_group:mark_as_indexable(Pid, Partitions) of
-    ok ->
-        ok;
-    Error ->
-        throw(Error)
+    try
+        Pid = get_group_pid(SetName, DDocId),
+        case couch_set_view_group:mark_as_indexable(Pid, Partitions) of
+        ok ->
+            ok;
+        Error ->
+            throw(Error)
+        end
+    catch throw:{error, empty_group} ->
+        ok
     end.
 
 
@@ -296,12 +307,17 @@ mark_partitions_indexable(SetName, DDocId, Partitions) ->
 -spec monitor_partition_update(binary(), binary(), partition_id()) -> reference().
 monitor_partition_update(SetName, DDocId, PartitionId) ->
     Ref = make_ref(),
-    Pid = get_group_pid(SetName, DDocId),
-    case couch_set_view_group:monitor_partition_update(Pid, PartitionId, Ref, self()) of
-    ok ->
-        Ref;
-    Error ->
-        throw(Error)
+    try
+        Pid = get_group_pid(SetName, DDocId),
+        case couch_set_view_group:monitor_partition_update(Pid, PartitionId, Ref, self()) of
+        ok ->
+            Ref;
+        Error ->
+            throw(Error)
+        end
+    catch throw:{error, empty_group} ->
+        self() ! {Ref, updated},
+        Ref
     end.
 
 
@@ -314,12 +330,16 @@ demonitor_partition_update(SetName, DDocId, Ref) ->
     {Ref, _} ->
         ok
     after 0 ->
-        Pid = get_group_pid(SetName, DDocId),
-        ok = couch_set_view_group:demonitor_partition_update(Pid, Ref),
-        receive
-        {Ref, _} ->
-            ok
-        after 0 ->
+        try
+            Pid = get_group_pid(SetName, DDocId),
+            ok = couch_set_view_group:demonitor_partition_update(Pid, Ref),
+            receive
+            {Ref, _} ->
+                ok
+            after 0 ->
+                ok
+            end
+        catch throw:{error, empty_group} ->
             ok
         end
     end.
@@ -329,19 +349,29 @@ demonitor_partition_update(SetName, DDocId, Ref) ->
 % (from all the active/passive partitions) to index.
 -spec trigger_update(binary(), binary(), non_neg_integer()) -> no_return().
 trigger_update(SetName, DDocId, MinNumChanges) ->
-    Pid = get_group_pid(SetName, DDocId),
-    ok = gen_server:cast(Pid, {update, MinNumChanges}).
+    try
+        Pid = get_group_pid(SetName, DDocId),
+        ok = gen_server:cast(Pid, {update, MinNumChanges})
+    catch throw:{error, empty_group} ->
+        ok
+    end.
 
 
 % Trigger a replica view group index update if there are at least N new
 % changes (from all the currently defined replica partitions) to index.
 -spec trigger_replica_update(binary(), binary(), non_neg_integer()) -> no_return().
 trigger_replica_update(SetName, DDocId, MinNumChanges) ->
-    Pid = get_group_pid(SetName, DDocId),
-    ok = gen_server:cast(Pid, {update_replica, MinNumChanges}).
+    try
+        Pid = get_group_pid(SetName, DDocId),
+        ok = gen_server:cast(Pid, {update_replica, MinNumChanges})
+    catch throw:{error, empty_group} ->
+        ok
+    end.
 
 
 -spec get_group_server(binary(), #set_view_group{}) -> pid().
+get_group_server(_SetName, #set_view_group{views = []}) ->
+    throw({error, empty_group});
 get_group_server(SetName, #set_view_group{sig = Sig} = Group) ->
     case ets:lookup(couch_sig_to_setview_pid, {SetName, Sig}) of
     [{_, Pid}] when is_pid(Pid) ->
@@ -377,8 +407,21 @@ get_group_info(SetName, DDocId) ->
 
 
 get_group_data_size(SetName, DDocId) ->
-    GroupPid = get_group_pid(SetName, DDocId),
-    {ok, _Info} = couch_set_view_group:get_data_size(GroupPid).
+    try
+        GroupPid = get_group_pid(SetName, DDocId),
+        {ok, _Info} = couch_set_view_group:get_data_size(GroupPid)
+    catch throw:{error, empty_group} ->
+        {ok, Sig} = get_group_signature(SetName, DDocId),
+        EmptyInfo = [
+            {signature, ?b2l(Sig)},
+            {disk_size, 0},
+            {data_size, 0},
+            {accesses, 0},
+            {updater_running, false},
+            {initial_build, false}
+        ],
+        {ok, EmptyInfo}
+    end.
 
 
 -spec reset_utilization_stats(binary(), binary()) -> 'ok'.
@@ -627,13 +670,18 @@ get_key_pos(Key, [_|Rest], N) ->
 
 get_map_view(SetName, DDoc, ViewName, Req) ->
     #set_view_group_req{wanted_partitions = WantedPartitions} = Req,
-    {ok, Group0} = get_group(SetName, DDoc, Req),
-    {Group, Unindexed} = modify_bitmasks(Group0, WantedPartitions),
-    case get_map_view0(ViewName, Group#set_view_group.views) of
-    {ok, View} ->
-        {ok, View, Group, Unindexed};
-    Else ->
-        Else
+    try
+        {ok, Group0} = get_group(SetName, DDoc, Req),
+        {Group, Unindexed} = modify_bitmasks(Group0, WantedPartitions),
+        case get_map_view0(ViewName, Group#set_view_group.views) of
+        {ok, View} ->
+            {ok, View, Group, Unindexed};
+        Else ->
+            Else
+        end
+    catch
+    throw:{error, empty_group} ->
+        {not_found, missing_named_view}
     end.
 
 get_map_view0(_Name, []) ->
@@ -647,16 +695,21 @@ get_map_view0(Name, [#set_view{map_names=MapNames}=View|Rest]) ->
 
 get_reduce_view(SetName, DDoc, ViewName, Req) ->
     #set_view_group_req{wanted_partitions = WantedPartitions} = Req,
-    {ok, Group0} = get_group(SetName, DDoc, Req),
-    {Group, Unindexed} = modify_bitmasks(Group0, WantedPartitions),
-    #set_view_group{
-        views = Views
-    } = Group,
-    case get_reduce_view0(ViewName, Views) of
-    {ok, View} ->
-        {ok, View, Group, Unindexed};
-    Else ->
-        Else
+    try
+        {ok, Group0} = get_group(SetName, DDoc, Req),
+        {Group, Unindexed} = modify_bitmasks(Group0, WantedPartitions),
+        #set_view_group{
+            views = Views
+        } = Group,
+        case get_reduce_view0(ViewName, Views) of
+        {ok, View} ->
+            {ok, View, Group, Unindexed};
+        Else ->
+            Else
+        end
+    catch
+    throw:{error, empty_group} ->
+        {not_found, missing_named_view}
     end.
 
 get_reduce_view0(_Name, []) ->

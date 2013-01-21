@@ -951,9 +951,6 @@ handle_cast({before_partition_delete, PartId}, #state{group = Group} = State) ->
         end
     end;
 
-handle_cast({update, _MinNumChanges}, #state{group = #set_view_group{views = []}} = State) ->
-    {noreply, State};
-
 handle_cast({update, MinNumChanges}, #state{group = Group} = State) ->
     case is_pid(State#state.updater_pid) of
     true ->
@@ -968,9 +965,6 @@ handle_cast({update, MinNumChanges}, #state{group = Group} = State) ->
             {noreply, State}
         end
     end;
-
-handle_cast({update_replica, _MinNumChanges}, #state{group = #set_view_group{views = []}} = State) ->
-    {noreply, State};
 
 handle_cast({update_replica, _MinNumChanges}, #state{replica_group = nil} = State) ->
     {noreply, State};
@@ -2681,8 +2675,6 @@ start_updater(State) ->
 
 -spec start_updater(#state{}, [term()]) -> #state{}.
 start_updater(#state{updater_pid = Pid} = State, _Options) when is_pid(Pid) ->
-    State;
-start_updater(#state{group = #set_view_group{views = []}} = State, _Options) ->
     State;
 start_updater(#state{updater_pid = nil, updater_state = not_running} = State, Options) ->
     #state{
