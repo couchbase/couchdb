@@ -703,7 +703,8 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
             max_seqs = MaxSeqs2,
             stats = Stats#set_view_updater_stats{
                 inserted_kvs = Stats#set_view_updater_stats.inserted_kvs + InsertKVCount,
-                inserted_ids = Stats#set_view_updater_stats.inserted_ids + length(DocIdViewIdKeys)
+                inserted_ids = Stats#set_view_updater_stats.inserted_ids + length(DocIdViewIdKeys),
+                seqs = lists:sum([S || {_, S} <- MaxSeqs2])
             },
             group = Group#set_view_group{
                 id_btree = NewIdBtree,

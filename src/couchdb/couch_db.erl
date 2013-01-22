@@ -14,7 +14,7 @@
 -behaviour(gen_server).
 
 -export([open/2,open_int/2,close/1,create/2,get_db_info/1,get_design_docs/1]).
--export([start_compact/1, cancel_compact/1,get_design_docs/2]).
+-export([start_compact/1, start_compact/2, cancel_compact/1, get_design_docs/2]).
 -export([open_ref_counted/2,is_idle/1,monitor/1,count_changes_since/2]).
 -export([update_doc/2,update_doc/3,update_header_pos/3]).
 -export([update_docs/2,update_docs/3]).
@@ -150,8 +150,11 @@ is_idle(MainPid) ->
 monitor(#db{main_pid=MainPid}) ->
     erlang:monitor(process, MainPid).
 
+start_compact(#db{update_pid=Pid}, Options) ->
+    gen_server:call(Pid, {start_compact, Options}, infinity).
+
 start_compact(#db{update_pid=Pid}) ->
-    gen_server:call(Pid, start_compact, infinity).
+    gen_server:call(Pid, {start_compact, []}, infinity).
 
 cancel_compact(#db{update_pid=Pid}) ->
     gen_server:call(Pid, cancel_compact, infinity).
