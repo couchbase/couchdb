@@ -371,7 +371,10 @@ delete_sort_files(RootDir, compactor) ->
 do_delete_sort_files(RootDir, Suffix) ->
     WildCard = filename:join([RootDir, "*" ++ Suffix]),
     lists:foreach(
-        fun(F) -> _ = file2:delete(F) end,
+        fun(F) ->
+             ?LOG_INFO("Deleting temporary file ~s", [F]),
+            _ = file2:delete(F)
+        end,
         filelib:wildcard(WildCard)).
 
 

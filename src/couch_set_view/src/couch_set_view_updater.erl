@@ -218,7 +218,13 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
             write_queue_size = couch_util:get_value(max_size, WriteQueueOptions),
             new_partitions = [P || {P, Seq} <- ?set_seqs(Group), Seq == 0]
         }),
-        delete_prev_sort_files(WriterAcc2),
+        TmpDir = WriterAcc2#writer_acc.tmp_dir,
+        case CompactorRunning of
+        true ->
+            ok = couch_set_view_util:delete_sort_files(TmpDir, updater);
+        false ->
+            ok = couch_set_view_util:delete_sort_files(TmpDir, all)
+        end,
         ok = couch_set_view_util:open_raw_read_fd(Group),
         try
             couch_set_view_mapreduce:start_reduce_context(Group),
@@ -1353,10 +1359,6 @@ new_sort_file_name(TmpDir, true) ->
     couch_set_view_util:new_sort_file_path(TmpDir, compactor);
 new_sort_file_name(TmpDir, false) ->
     couch_set_view_util:new_sort_file_path(TmpDir, updater).
-
-
-delete_prev_sort_files(#writer_acc{tmp_dir = TmpDir}) ->
-    ok = couch_set_view_util:delete_sort_files(TmpDir, updater).
 
 
 wait_for_workers(Pids) ->

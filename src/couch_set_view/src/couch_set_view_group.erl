@@ -1189,11 +1189,10 @@ handle_info({'EXIT', Pid, Reason}, #state{compactor_pid = Pid} = State) ->
                [?set_name(State), ?type(State), ?group_id(State), Pid, Reason]),
     couch_util:shutdown_sync(State#state.compactor_file),
     _ = couch_file:delete(?root_dir(State), compact_file_name(State)),
-    TmpDir = updater_tmp_dir(State),
-    ok = couch_set_view_util:delete_sort_files(TmpDir, compactor),
     State2 = State#state{
         compactor_pid = nil,
-        compactor_file = nil
+        compactor_file = nil,
+        compact_log_files = nil
     },
     {noreply, State2, ?TIMEOUT};
 
@@ -2550,7 +2549,7 @@ stop_compactor(#state{compactor_pid = Pid, compactor_file = CompactFd} = State) 
         ?inc_cleanup_stops(State#state.group)
     end,
     inc_util_stat(#util_stats.compactor_interruptions, 1),
-    State#state{compactor_pid = nil, compactor_file = nil}.
+    State#state{compactor_pid = nil, compactor_file = nil, compact_log_files = nil}.
 
 
 -spec compact_group(#state{}) -> #set_view_group{}.
