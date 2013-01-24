@@ -82,8 +82,6 @@ compact_group(Group0, EmptyGroup, TmpDir, UpdaterPid, Owner, UserStatus) ->
         type = Type
     } = Group0,
 
-    ok = couch_set_view_util:delete_sort_files(TmpDir, compactor),
-
     case is_pid(UpdaterPid) of
     true ->
         MonRef = erlang:monitor(process, UpdaterPid),
