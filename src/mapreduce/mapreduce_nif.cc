@@ -64,7 +64,7 @@ static int onLoad(ErlNifEnv* env, void** priv, ERL_NIF_TERM info);
 static void onUnload(ErlNifEnv *env, void *priv_data);
 
 // Utilities
-static inline ERL_NIF_TERM makeError(ErlNifEnv *env, const std::string &msg);
+static ERL_NIF_TERM makeError(ErlNifEnv *env, const std::string &msg);
 static bool parseFunctions(ErlNifEnv *env, ERL_NIF_TERM functionsArg, function_sources_list_t &result);
 
 // NIF resource functions
@@ -129,28 +129,38 @@ ERL_NIF_TERM doMapDoc(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     try {
         // Map results is a list of lists. An inner list is the list of key value
         // pairs emitted by a map function for the document.
-        map_results_list_list_t mapResults = mapDoc(ctx, docBin, metaBin);
+        map_results_list_t mapResults = mapDoc(ctx, docBin, metaBin);
         ERL_NIF_TERM outerList = enif_make_list(env, 0);
-        map_results_list_list_t::reverse_iterator i = mapResults.rbegin();
+        map_results_list_t::reverse_iterator i = mapResults.rbegin();
 
         for ( ; i != mapResults.rend(); ++i) {
-            map_results_list_t funResults = *i;
-            ERL_NIF_TERM innerList = enif_make_list(env, 0);
-            map_results_list_t::reverse_iterator j = funResults.rbegin();
+            map_result_t mapResult = *i;
 
-            for ( ; j != funResults.rend(); ++j) {
-                ErlNifBinary key = j->first;
-                ErlNifBinary value = j->second;
-                ERL_NIF_TERM kvPair;
+            switch (mapResult.type) {
+            case MAP_KVS:
+                {
+                    ERL_NIF_TERM kvList = enif_make_list(env, 0);
+                    kv_pair_list_t::reverse_iterator j = mapResult.result.kvs->rbegin();
 
-                kvPair = enif_make_tuple2(env,
-                                          enif_make_binary(env, &key),
-                                          enif_make_binary(env, &value));
+                    for ( ; j != mapResult.result.kvs->rend(); ++j) {
+                        ERL_NIF_TERM key = enif_make_binary(env, &j->first);
+                        ERL_NIF_TERM value = enif_make_binary(env, &j->second);
+                        ERL_NIF_TERM kvPair = enif_make_tuple2(env, key, value);
+                        kvList = enif_make_list_cell(env, kvPair, kvList);
+                    }
+                    mapResult.result.kvs->~kv_pair_list_t();
+                    enif_free(mapResult.result.kvs);
+                    outerList = enif_make_list_cell(env, kvList, outerList);
+                }
+                break;
+            case MAP_ERROR:
+                ERL_NIF_TERM reason = enif_make_binary(env, mapResult.result.error);
+                ERL_NIF_TERM errorTuple = enif_make_tuple2(env, ATOM_ERROR, reason);
 
-                innerList = enif_make_list_cell(env, kvPair, innerList);
+                enif_free(mapResult.result.error);
+                outerList = enif_make_list_cell(env, errorTuple, outerList);
+                break;
             }
-
-            outerList = enif_make_list_cell(env, innerList, outerList);
         }
 
         return enif_make_tuple2(env, ATOM_OK, outerList);

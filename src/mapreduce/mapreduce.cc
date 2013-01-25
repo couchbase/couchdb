@@ -98,8 +98,9 @@ static void doInitContext(map_reduce_ctx_t *ctx, const function_sources_list_t &
 static Persistent<Context> createJsContext(map_reduce_ctx_t *ctx);
 static Handle<Value> emit(const Arguments& args);
 static void loadFunctions(map_reduce_ctx_t *ctx, const function_sources_list_t &funs);
-static void deleteJsonData(const json_results_list_t &data);
-static void deleteJsonData(const map_results_list_t &data);
+static void freeJsonData(const json_results_list_t &data);
+static void freeMapResult(const map_result_t &data);
+static void freeMapResultList(const map_results_list_t &results);
 static Handle<Function> compileFunction(const function_source_t &funSource);
 static inline ErlNifBinary jsonStringify(const Handle<Value> &obj);
 static inline Handle<Value> jsonParse(const ErlNifBinary &thing);
@@ -159,7 +160,9 @@ void doInitContext(map_reduce_ctx_t *ctx, const function_sources_list_t &funs)
 }
 
 
-map_results_list_list_t mapDoc(map_reduce_ctx_t *ctx, const ErlNifBinary &doc, const ErlNifBinary &meta)
+map_results_list_t mapDoc(map_reduce_ctx_t *ctx,
+                          const ErlNifBinary &doc,
+                          const ErlNifBinary &meta)
 {
     Locker locker(ctx->isolate);
     Isolate::Scope isolateScope(ctx->isolate);
@@ -172,34 +175,54 @@ map_results_list_list_t mapDoc(map_reduce_ctx_t *ctx, const ErlNifBinary &doc, c
         throw MapReduceError("metadata is not a JSON object");
     }
 
-    map_results_list_list_t results;
+    map_results_list_t results;
     Handle<Value> funArgs[] = { docObject, metaObject };
 
     taskStarted(ctx);
 
     for (unsigned int i = 0; i < ctx->functions->size(); ++i) {
-        map_results_list_t funResults;
+        map_result_t mapResult;
         Handle<Function> fun = (*ctx->functions)[i];
         TryCatch trycatch;
 
-        ctx->mapFunResults = &funResults;
+        mapResult.type = MAP_KVS;
+        mapResult.result.kvs = (kv_pair_list_t *) enif_alloc(sizeof(kv_pair_list_t));
+
+        if (mapResult.result.kvs == NULL) {
+            freeMapResultList(results);
+            throw std::bad_alloc();
+        }
+
+        mapResult.result.kvs = new (mapResult.result.kvs) kv_pair_list_t();
+        ctx->kvs = mapResult.result.kvs;
         Handle<Value> result = fun->Call(fun, 2, funArgs);
 
         if (result.IsEmpty()) {
-            map_results_list_list_t::iterator it = results.begin();
-            for ( ; it != results.end(); ++it) {
-                deleteJsonData(*it);
-            }
-            deleteJsonData(funResults);
+            freeMapResult(mapResult);
 
             if (!trycatch.CanContinue()) {
+                freeMapResultList(results);
                 throw MapReduceError("timeout");
             }
 
-            throw MapReduceError(exceptionString(trycatch));
+            mapResult.type = MAP_ERROR;
+            std::string exceptString = exceptionString(trycatch);
+            size_t len = exceptString.length();
+
+            mapResult.result.error = (ErlNifBinary *) enif_alloc(sizeof(ErlNifBinary));
+            if (mapResult.result.error == NULL) {
+                freeMapResultList(results);
+                throw std::bad_alloc();
+            }
+            if (!enif_alloc_binary_compat(ctx->env, len, mapResult.result.error)) {
+                freeMapResultList(results);
+                throw std::bad_alloc();
+            }
+            // Caller responsible for invoking enif_make_binary() or enif_release_binary()
+            memcpy(mapResult.result.error->data, exceptString.data(), len);
         }
 
-        results.push_back(funResults);
+        results.push_back(mapResult);
     }
 
     taskFinished(ctx);
@@ -230,7 +253,7 @@ json_results_list_t runReduce(map_reduce_ctx_t *ctx,
         Handle<Value> result = fun->Call(fun, 3, args);
 
         if (result.IsEmpty()) {
-            deleteJsonData(results);
+            freeJsonData(results);
 
             if (!trycatch.CanContinue()) {
                 throw MapReduceError("timeout");
@@ -243,7 +266,7 @@ json_results_list_t runReduce(map_reduce_ctx_t *ctx,
             ErlNifBinary jsonResult = jsonStringify(result);
             results.push_back(jsonResult);
         } catch(...) {
-            deleteJsonData(results);
+            freeJsonData(results);
             throw;
         }
     }
@@ -332,28 +355,6 @@ ErlNifBinary runRereduce(map_reduce_ctx_t *ctx,
 }
 
 
-void deleteJsonData(const json_results_list_t &data)
-{
-    json_results_list_t::const_iterator it = data.begin();
-    for ( ; it != data.end(); ++it) {
-        ErlNifBinary bin = *it;
-        enif_release_binary(&bin);
-    }
-}
-
-
-void deleteJsonData(const map_results_list_t &data)
-{
-    map_results_list_t::const_iterator it = data.begin();
-    for ( ; it != data.end(); ++it) {
-        ErlNifBinary key = it->first;
-        ErlNifBinary value = it->second;
-        enif_release_binary(&key);
-        enif_release_binary(&value);
-    }
-}
-
-
 void destroyContext(map_reduce_ctx_t *ctx)
 {
     {
@@ -417,8 +418,8 @@ Handle<Value> emit(const Arguments& args)
         ErlNifBinary keyJson = jsonStringify(args[0]);
         ErlNifBinary valueJson = jsonStringify(args[1]);
 
-        map_result_t result = map_result_t(keyJson, valueJson);
-        isoData->ctx->mapFunResults->push_back(result);
+        kv_pair_t result = kv_pair_t(keyJson, valueJson);
+        isoData->ctx->kvs->push_back(result);
 
         return Undefined();
     } catch(Handle<Value> &ex) {
@@ -582,4 +583,48 @@ std::string exceptionString(const TryCatch &tryCatch)
     }
 
     return std::string("runtime error");
+}
+
+
+void freeMapResultList(const map_results_list_t &results)
+{
+    map_results_list_t::const_iterator it = results.begin();
+
+    for ( ; it != results.end(); ++it) {
+        freeMapResult(*it);
+    }
+}
+
+
+void freeMapResult(const map_result_t &mapResult)
+{
+    switch (mapResult.type) {
+    case MAP_KVS:
+        {
+            kv_pair_list_t::const_iterator it = mapResult.result.kvs->begin();
+            for ( ; it != mapResult.result.kvs->end(); ++it) {
+                ErlNifBinary key = it->first;
+                ErlNifBinary value = it->second;
+                enif_release_binary(&key);
+                enif_release_binary(&value);
+            }
+            mapResult.result.kvs->~kv_pair_list_t();
+            enif_free(mapResult.result.kvs);
+        }
+        break;
+    case MAP_ERROR:
+        enif_release_binary(mapResult.result.error);
+        enif_free(mapResult.result.error);
+        break;
+    }
+}
+
+
+void freeJsonData(const json_results_list_t &data)
+{
+    json_results_list_t::const_iterator it = data.begin();
+    for ( ; it != data.end(); ++it) {
+        ErlNifBinary bin = *it;
+        enif_release_binary(&bin);
+    }
 }

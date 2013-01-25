@@ -472,10 +472,16 @@ load_doc(Db, PartitionId, DocInfo, MapQueue, Group, InitialBuild) ->
 
 
 do_maps(Group, MapQueue, WriteQueue) ->
+    #set_view_group{
+        set_name = SetName,
+        name = DDocId,
+        type = Type
+    } = Group,
     case couch_work_queue:dequeue(MapQueue) of
     closed ->
         couch_work_queue:close(WriteQueue);
     {ok, Queue, _QueueSize} ->
+        ViewCount = length(Group#set_view_group.views),
         Items = lists:foldr(
             fun({Seq, #doc{id = Id, deleted = true}, PartitionId}, Acc) ->
                 Item = {Seq, Id, PartitionId, []},
@@ -483,14 +489,21 @@ do_maps(Group, MapQueue, WriteQueue) ->
             ({Seq, #doc{id = Id, deleted = false} = Doc, PartitionId}, Acc) ->
                 try
                     {ok, Result} = couch_set_view_mapreduce:map(Doc),
-                    Item = {Seq, Id, PartitionId, Result},
+                    {Result2, _} = lists:foldr(
+                        fun({error, Reason}, {AccRes, Pos}) ->
+                            ErrorMsg = "Bucket `~s`, ~s group `~s`, error mapping"
+                                    " document `~s` for view `~s`: ~s",
+                            Args = [SetName, Type, DDocId, Id,
+                                view_name(Group, Pos), couch_util:to_binary(Reason)],
+                            ?LOG_MAPREDUCE_ERROR(ErrorMsg, Args),
+                            {[[] | AccRes], Pos - 1};
+                        (KVs, {AccRes, Pos}) ->
+                            {[KVs | AccRes], Pos - 1}
+                        end,
+                        {[], ViewCount}, Result),
+                    Item = {Seq, Id, PartitionId, Result2},
                     [Item | Acc]
                 catch _:{error, Reason} ->
-                    #set_view_group{
-                        set_name = SetName,
-                        name = DDocId,
-                        type = Type
-                    } = Group,
                     ErrorMsg = "Bucket `~s`, ~s group `~s`, error mapping document `~s`: ~s",
                     Args = [SetName, Type, DDocId, Id, couch_util:to_binary(Reason)],
                     ?LOG_MAPREDUCE_ERROR(ErrorMsg, Args),
@@ -501,6 +514,17 @@ do_maps(Group, MapQueue, WriteQueue) ->
         ok = couch_work_queue:queue(WriteQueue, Items),
         do_maps(Group, MapQueue, WriteQueue)
     end.
+
+
+view_name(#set_view_group{views = Views}, ViewPos) ->
+    V = lists:nth(ViewPos, Views),
+    case V#set_view.map_names of
+    [] ->
+        [{Name, _} | _] = V#set_view.reduce_funs;
+    [Name | _] ->
+        ok
+    end,
+    Name.
 
 
 do_writes(Acc) ->

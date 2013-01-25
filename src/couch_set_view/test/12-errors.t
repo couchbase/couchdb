@@ -58,7 +58,7 @@ num_docs() -> 1000.
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(17),
+    etap:plan(21),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -77,6 +77,8 @@ test() ->
 
     etap:diag("Testing map function with a runtime error"),
     test_map_runtime_error(),
+    etap:diag("Testing map function with a runtime error for a group of a views"),
+    test_map_runtime_error_multiple_views(),
     etap:diag("Testing map function with invalid syntax"),
     test_map_syntax_error(),
 
@@ -211,6 +213,64 @@ test_map_runtime_error() ->
 
     QueryResult = (catch query_map_view(DDocId, <<"test">>, false)),
     etap:is(QueryResult, {ok, []}, "Map view query returned 0 rows"),
+
+    receive
+    {'DOWN', MonRef, _, _, _} ->
+        etap:bail("view group died")
+    after 5000 ->
+        etap:is(is_process_alive(GroupPid), true, "View group is still alive")
+    end,
+    couch_util:shutdown_sync(GroupPid),
+    couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()).
+
+
+test_map_runtime_error_multiple_views() ->
+    couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
+    couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
+
+    DDocId = <<"_design/test">>,
+    DDoc = {[
+        {<<"meta">>, {[{<<"id">>, DDocId}]}},
+        {<<"json">>, {[
+        {<<"views">>, {[
+            {<<"test1">>, {[
+                {<<"map">>, <<"function(doc, meta) { emit(doc.value, 1); }">>}
+            ]}},
+            {<<"test2">>, {[
+                {<<"map">>, <<"function(doc, meta) { emit(doc.value.foo.bar, 2); }">>}
+            ]}},
+            {<<"test3">>, {[
+                {<<"map">>, <<"function(doc, meta) { emit(doc.value, 3); }">>}
+            ]}}
+        ]}}
+        ]}}
+    ]},
+    populate_set(DDoc, 4),
+
+    ok = configure_view_group(DDocId, [0, 1, 2, 3], []),
+    GroupPid = couch_set_view:get_group_pid(test_set_name(), DDocId),
+    MonRef = erlang:monitor(process, GroupPid),
+
+    QueryResult2 = (catch query_map_view(DDocId, <<"test2">>, false)),
+    etap:is(QueryResult2, {ok, []}, "Map view test2 query returned 0 rows"),
+
+    QueryResult1 = (catch query_map_view(DDocId, <<"test1">>, false)),
+    ExpectedRows1 = [
+        {{{json, <<"1">>}, <<"doc1">>}, {json, <<"1">>}},
+        {{{json, <<"2">>}, <<"doc2">>}, {json, <<"1">>}},
+        {{{json, <<"3">>}, <<"doc3">>}, {json, <<"1">>}},
+        {{{json, <<"4">>}, <<"doc4">>}, {json, <<"1">>}}
+    ],
+    etap:is(QueryResult1, {ok, ExpectedRows1}, "Map view test1 query returned 4 rows"),
+
+    QueryResult3 = (catch query_map_view(DDocId, <<"test3">>, false)),
+    ExpectedRows3 = [
+        {{{json, <<"1">>}, <<"doc1">>}, {json, <<"3">>}},
+        {{{json, <<"2">>}, <<"doc2">>}, {json, <<"3">>}},
+        {{{json, <<"3">>}, <<"doc3">>}, {json, <<"3">>}},
+        {{{json, <<"4">>}, <<"doc4">>}, {json, <<"3">>}}
+    ],
+    etap:is(QueryResult3, {ok, ExpectedRows3}, "Map view test3 query returned 4 rows"),
 
     receive
     {'DOWN', MonRef, _, _, _} ->
@@ -492,7 +552,7 @@ query_map_view(DDocId, ViewName, Stale) ->
     },
     {ok, _, Rows} = couch_set_view:fold(Group, View, FoldFun, [], ViewArgs),
     couch_set_view:release_group(Group),
-    {ok, Rows}.
+    {ok, lists:reverse(Rows)}.
 
 
 query_reduce_view(DDocId, ViewName, Stale) ->

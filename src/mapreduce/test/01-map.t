@@ -18,10 +18,15 @@
 % License for the specific language governing permissions and limitations under
 % the License.
 
+-define(etap_match(Got, Expected, Desc),
+        etap:fun_is(fun(XXXXXX) ->
+            case XXXXXX of Expected -> true; _ -> false end
+        end, Got, Desc)).
+
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(84),
+    etap:plan(90),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -36,6 +41,7 @@ test() ->
     test_map_function_bad_syntax(),
     test_map_function_throw_exception(),
     test_map_function_runtime_error(),
+    test_multiple_map_functions_runtime_errors(),
     test_empty_results_single_function(),
     test_empty_results_multiple_functions(),
     test_single_results_single_function(),
@@ -71,7 +77,8 @@ test_map_function_throw_exception() ->
         <<"function(doc) { throw('foobar'); }">>
     ]),
     Results = mapreduce:map_doc(Ctx, <<"{\"_id\": \"doc1\", \"value\": 1}">>, <<"{}">>),
-    etap:is(Results, {error, <<"foobar">>}, "Got error when map function throws exception").
+    etap:is(Results, {ok, [{error, <<"foobar">>}]},
+            "Got error when map function throws exception").
 
 
 test_map_function_runtime_error() ->
@@ -80,15 +87,46 @@ test_map_function_runtime_error() ->
     ]),
     Results = mapreduce:map_doc(Ctx, <<"{\"_id\": \"doc1\", \"value\": 1}">>, <<"{}">>),
     % {error,<<"TypeError: Cannot read property 'bar' of undefined">>}
-    etap:is(element(1, Results), error, "Got an error when map function applied over doc"),
-    etap:is(is_binary(element(2, Results)), true, "Error reason is a binary"),
+    ?etap_match(Results, {ok, [{error, _}]}, "Got an error when map function applied over doc"),
+    {ok, [{error, Reason}]} = Results,
+    etap:is(is_binary(Reason), true, "Error reason is a binary"),
 
     {ok, Ctx2} = mapreduce:start_map_context([
         <<"function(doc, meta) { if (jsonType == 'player') { emit(meta.id, doc); } }">>
     ]),
     Results2 = mapreduce:map_doc(Ctx2, <<"{\"value\": 1}">>, <<"{}">>),
-    etap:is(Results2, {error, <<"ReferenceError: jsonType is not defined">>},
-            "Got error mapping document").
+    ?etap_match(Results2, {ok, [{error, _}]}, "Got error mapping document"),
+    {ok, [{error, Reason2}]} = Results2,
+    etap:is(is_binary(Reason2), true, "Error reason is a binary").
+
+
+test_multiple_map_functions_runtime_errors() ->
+    {ok, Ctx} = mapreduce:start_map_context([
+        <<"function(doc) { if (doc.value % 2 == 0) { emit(doc.foo.bar.z, null); } else { emit(doc.value, null); } }">>,
+        <<"function(doc) { emit(doc.value * 3, null); }">>,
+        <<"function(doc) { if (doc.value % 3 == 0) { throw('foobar'); } else { emit(doc.value * 2, 1); } }">>
+    ]),
+    Result1 = mapreduce:map_doc(Ctx, <<"{\"value\":1}">>, <<"{}">>),
+    etap:is(Result1,
+            {ok, [[{<<"1">>, <<"null">>}], [{<<"3">>, <<"null">>}], [{<<"2">>, <<"1">>}]]},
+            "Got expected result for doc 1"),
+    Result2 = mapreduce:map_doc(Ctx, <<"{\"value\":2}">>, <<"{}">>),
+    ?etap_match(Result2,
+                {ok, [{error, _}, [{<<"6">>, <<"null">>}], [{<<"4">>, <<"1">>}]]},
+                "Got expected result for doc 2"),
+    Result3 = mapreduce:map_doc(Ctx, <<"{\"value\":3}">>, <<"{}">>),
+    ?etap_match(Result3,
+                {ok, [[{<<"3">>, <<"null">>}], [{<<"9">>, <<"null">>}], {error, <<"foobar">>}]},
+                "Got expected result for doc 3"),
+    Result4 = mapreduce:map_doc(Ctx, <<"{\"value\":4}">>, <<"{}">>),
+    ?etap_match(Result4,
+                {ok, [{error, _}, [{<<"12">>, <<"null">>}], [{<<"8">>, <<"1">>}]]},
+                "Got expected result for doc 4"),
+    Result12 = mapreduce:map_doc(Ctx, <<"{\"value\":12}">>, <<"{}">>),
+    ?etap_match(Result12,
+                {ok, [{error, _}, [{<<"36">>, <<"null">>}], {error, <<"foobar">>}]},
+                "Got expected result for doc 12"),
+    ok.
 
 
 test_empty_results_single_function() ->
