@@ -175,6 +175,7 @@ do_maps(Group, MapQueue, WriteQueue, AccItems, AccItemsSize) ->
         end,
         couch_work_queue:close(WriteQueue);
     {ok, Queue, QueueSize} ->
+        ViewCount = length(Group#group.views),
         Items = lists:foldr(
             fun({Seq, #doc{id = Id, deleted = true}}, Acc) ->
                 Item = {Seq, Id, []},
@@ -182,7 +183,19 @@ do_maps(Group, MapQueue, WriteQueue, AccItems, AccItemsSize) ->
             ({Seq, #doc{id = Id, deleted = false} = Doc}, Acc) ->
                 try
                     {ok, Result} = couch_view_mapreduce:map(Doc),
-                    Item = {Seq, Id, Result},
+                    {Result2, _} = lists:foldr(
+                        fun({error, Reason}, {AccRes, Pos}) ->
+                            ErrorMsg = "View group `~s`, error mapping document "
+                                    " `~s` for view `~s`: ~s",
+                            Args = [Group#group.name, Id, view_name(Group, Pos),
+                                couch_util:to_binary(Reason)],
+                            ?LOG_MAPREDUCE_ERROR(ErrorMsg, Args),
+                            {[[] | AccRes], Pos - 1};
+                        (KVs, {AccRes, Pos}) ->
+                            {[KVs | AccRes], Pos - 1}
+                        end,
+                        {[], ViewCount}, Result),
+                    Item = {Seq, Id, Result2},
                     [Item | Acc]
                 catch _:{error, Reason} ->
                     ErrorMsg = "View group `~s`, error mapping document `~s`: ~s",
@@ -203,6 +216,17 @@ do_maps(Group, MapQueue, WriteQueue, AccItems, AccItemsSize) ->
             do_maps(Group, MapQueue, WriteQueue, AccItems2, AccItemsSize2)
         end
     end.
+
+
+view_name(#group{views = Views}, ViewPos) ->
+    V = lists:nth(ViewPos, Views),
+    case V#view.map_names of
+    [] ->
+        [{Name, _} | _] = V#view.reduce_funs;
+    [Name | _] ->
+        ok
+    end,
+    Name.
 
 
 do_writes(Parent, Owner, Group, WriteQueue, InitialBuild, ViewEmptyKVs, Acc) ->

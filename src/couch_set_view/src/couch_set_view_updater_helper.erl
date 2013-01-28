@@ -39,13 +39,13 @@ update_btree(Bt, FilePath, BufferSize, PurgeFun, PurgeAcc) ->
     (catch file:advise(Fd, 0, 0, sequential)),
     try
         update_btree_loop(
-            Fd, Bt, BufferSize, PurgeFun, PurgeAcc, [], 0, 0, 0)
+            Fd, Bt, BufferSize, PurgeFun, PurgeAcc, [], 0, 0, 0, 0, 0)
     after
         ok = file:close(Fd)
     end.
 
 update_btree_loop(Fd, Bt, BufferSize, PurgeFun, PurgeAcc,
-                  Acc, AccSize, Inserted, Deleted) ->
+                  Acc, AccSize, Inserted, Deleted, FlushStartOffset, FlushEndOffset) ->
     case file:read(Fd, 4) of
     {ok, <<Len:32>>} ->
         {ok, ActionBin} = file:read(Fd, Len),
@@ -60,21 +60,26 @@ update_btree_loop(Fd, Bt, BufferSize, PurgeFun, PurgeAcc,
             Inserted2 = Inserted + 1,
             Deleted2 = Deleted
         end,
+        FlushEndOffset2 = FlushEndOffset + 4 + Len,
         case AccSize2 >= BufferSize of
         true ->
+            _ = file:advise(Fd, FlushStartOffset, FlushEndOffset2, dont_need),
             Actions = lists:reverse(Acc2),
             {ok, [], PurgeAcc2, Bt2} = couch_btree:query_modify_raw(
                 Bt, Actions, PurgeFun, PurgeAcc),
             ok = couch_file:flush(Bt#btree.fd),
             update_btree_loop(Fd, Bt2, BufferSize,
-                              PurgeFun, PurgeAcc2, [], 0, Inserted2, Deleted2);
+                              PurgeFun, PurgeAcc2, [], 0,
+                              Inserted2, Deleted2, FlushEndOffset2, FlushEndOffset2);
         false ->
             update_btree_loop(Fd, Bt, BufferSize,
-                              PurgeFun, PurgeAcc, Acc2, AccSize2, Inserted2, Deleted2)
+                              PurgeFun, PurgeAcc, Acc2, AccSize2,
+                              Inserted2, Deleted2, FlushStartOffset, FlushEndOffset2)
         end;
     eof when Acc == [] ->
         {ok, PurgeAcc, Bt, Inserted, Deleted};
     eof ->
+        _ = file:advise(Fd, FlushStartOffset, FlushEndOffset, dont_need),
         Actions = lists:reverse(Acc),
         {ok, [], PurgeAcc2, Bt2} = couch_btree:query_modify_raw(Bt, Actions, PurgeFun, PurgeAcc),
         ok = couch_file:flush(Bt#btree.fd),

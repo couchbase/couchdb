@@ -87,6 +87,7 @@ copy Release\mapreduce.lib .\mapreduce_nif.lib</Command>
   <ItemGroup>
     <ClInclude Include="..\erl_nif_compat.h" />
     <ClInclude Include="..\mapreduce.h" />
+    <ClInclude Include="..\nif_stl_allocator.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

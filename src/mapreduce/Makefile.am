@@ -29,7 +29,8 @@ mapreduce_cxx_srcs = \
 
 mapreduce_cxx_hdrs = \
     erl_nif_compat.h \
-    mapreduce.h
+    mapreduce.h \
+    nif_stl_allocator.h
 endif
 mapreduce_file_collection = \
     mapreduce.app.in \

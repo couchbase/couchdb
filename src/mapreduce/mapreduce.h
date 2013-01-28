@@ -27,16 +27,29 @@
 #include <v8.h>
 
 #include "erl_nif_compat.h"
+#include "nif_stl_allocator.h"
 
 class MapReduceError;
-template<class T> class NifStlAllocator;
 
 typedef std::list<ErlNifBinary, NifStlAllocator<ErlNifBinary> >  json_results_list_t;
+typedef std::pair<ErlNifBinary, ErlNifBinary>  kv_pair_t;
+typedef std::list< kv_pair_t, NifStlAllocator< kv_pair_t > >  kv_pair_list_t;
 
-typedef std::pair<ErlNifBinary, ErlNifBinary> map_result_t;
-typedef std::list< map_result_t, NifStlAllocator< map_result_t > >  map_results_list_t;
-typedef std::list< map_results_list_t,
-                   NifStlAllocator< map_results_list_t > >  map_results_list_list_t;
+typedef enum {
+    MAP_KVS,
+    MAP_ERROR
+} map_result_type_t;
+
+typedef struct {
+    map_result_type_t type;
+    union {
+        kv_pair_list_t *kvs;
+        ErlNifBinary *error;
+    } result;
+} map_result_t;
+
+typedef std::list< map_result_t,
+                   NifStlAllocator< map_result_t > >  map_results_list_t;
 
 typedef std::vector< v8::Persistent<v8::Function>,
                      NifStlAllocator< v8::Persistent<v8::Function> > >  function_vector_t;
@@ -53,7 +66,7 @@ typedef struct {
     v8::Persistent<v8::Context>                  jsContext;
     v8::Isolate                                  *isolate;
     function_vector_t                            *functions;
-    map_results_list_t                           *mapFunResults;
+    kv_pair_list_t                               *kvs;
     unsigned int                                 key;
     ErlNifEnv                                    *env;
     volatile time_t                              taskStartTime;
@@ -63,9 +76,9 @@ typedef struct {
 void initContext(map_reduce_ctx_t *ctx, const function_sources_list_t &funs);
 void destroyContext(map_reduce_ctx_t *ctx);
 
-map_results_list_list_t mapDoc(map_reduce_ctx_t *ctx,
-                               const ErlNifBinary &doc,
-                               const ErlNifBinary &meta);
+map_results_list_t mapDoc(map_reduce_ctx_t *ctx,
+                          const ErlNifBinary &doc,
+                          const ErlNifBinary &meta);
 
 json_results_list_t runReduce(map_reduce_ctx_t *ctx,
                               const json_results_list_t &keys,
@@ -97,84 +110,6 @@ public:
 private:
     const std::string _msg;
 };
-
-
-// Some information about STL allocators:
-// http://www.cplusplus.com/reference/std/memory/allocator/
-//
-template<class T> class NifStlAllocator {
-public:
-    typedef size_t    size_type;
-    typedef ptrdiff_t difference_type;
-    typedef T*        pointer;
-    typedef const T*  const_pointer;
-    typedef T&        reference;
-    typedef const T&  const_reference;
-    typedef T         value_type;
-
-    NifStlAllocator() {}
-    NifStlAllocator(const NifStlAllocator&) {}
-
-    pointer allocate(size_type n, const void * = 0) {
-        if (n > this->max_size()) {
-            throw std::bad_alloc();
-        }
-        pointer t = static_cast<pointer>(enif_alloc(n * sizeof(value_type)));
-        if (!t) {
-            throw std::bad_alloc();
-        }
-        return t;
-    }
-
-    void deallocate(void *p, size_type) {
-        if (p) {
-            enif_free(p);
-        }
-    }
-
-    pointer address(reference x) const {
-        return &x;
-    }
-
-    const_pointer address(const_reference x) const {
-        return &x;
-    }
-
-    void construct(pointer p, const_reference val) {
-        new (p) value_type(val);
-    }
-
-    void destroy(pointer p) {
-        p->~T();
-    }
-
-    size_type max_size() const {
-        return size_t(-1) / sizeof(value_type);
-    }
-
-    template <class U>
-    struct rebind {
-        typedef NifStlAllocator<U> other;
-    };
-
-    template <class U>
-    NifStlAllocator(const NifStlAllocator<U>&) {}
-
-    template <class U>
-    NifStlAllocator& operator=(const NifStlAllocator<U>&) {
-        return *this;
-    }
-};
-
-template<typename T>
-inline bool operator==(const NifStlAllocator<T>&, const NifStlAllocator<T>&) {
-    return true;
-}
-
-template<typename T>
-inline bool operator!=(const NifStlAllocator<T>&, const NifStlAllocator<T>&) {
-    return false;
-}
 
 
 #endif
