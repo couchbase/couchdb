@@ -81,6 +81,7 @@ compact_group(Group0, EmptyGroup, TmpDir, UpdaterPid, Owner, UserStatus) ->
         set_name = SetName,
         type = Type
     } = Group0,
+    StartTime = os:timestamp(),
 
     case is_pid(UpdaterPid) of
     true ->
@@ -110,7 +111,6 @@ compact_group(Group0, EmptyGroup, TmpDir, UpdaterPid, Owner, UserStatus) ->
         index_header = Header,
         sig = GroupSig
     } = Group,
-    StartTime = os:timestamp(),
 
     #set_view_group{
         id_btree = EmptyIdBtree,
