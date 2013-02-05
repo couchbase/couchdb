@@ -247,8 +247,9 @@ init_delete_dir(RootDir) ->
     file2:ensure_dir(filename:join(Dir,"foo")),
     file2:fold_files(Dir, ".*", true,
         fun(Filename, _) ->
-            ok = file2:delete(Filename)
-        end, ok).
+            _ = file2:delete(Filename)
+        end, ok),
+    ok.
 
 
 read_header(Fd) ->
