@@ -64,10 +64,12 @@ map(Doc) ->
     {DocBody, DocMeta} = couch_doc:to_raw_json_binary_views(Doc),
     case mapreduce:map_doc(Ctx, DocBody, DocMeta) of
     {ok, Results} ->
-        {ok, [
-            [{?JSON_DECODE(K), ?JSON_DECODE(V)} || {K, V} <- FunResult]
-                || FunResult <- Results
-        ]};
+        Fun = fun({error, _Reason} = Error) ->
+                    Error;
+            ({K, V}) ->
+                    {?JSON_DECODE(K), ?JSON_DECODE(V)}
+        end,
+        {ok, [lists:map(Fun, FunResult) || FunResult <- Results]};
     Error ->
         throw(Error)
     end.
