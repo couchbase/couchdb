@@ -66,10 +66,12 @@ map(Doc) ->
     {ok, Results} ->
         Fun = fun({error, _Reason} = Error) ->
                     Error;
-            ({K, V}) ->
-                    {?JSON_DECODE(K), ?JSON_DECODE(V)}
+            (KvList) ->
+                    lists:map(
+                        fun({K,V}) -> {?JSON_DECODE(K), ?JSON_DECODE(V)} end,
+                        KvList)
         end,
-        {ok, [lists:map(Fun, FunResult) || FunResult <- Results]};
+        {ok, lists:map(Fun, Results)};
     Error ->
         throw(Error)
     end.
