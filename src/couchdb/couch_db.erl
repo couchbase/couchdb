@@ -687,7 +687,11 @@ open_doc_int(Db, <<?LOCAL_DOC_PREFIX, _/binary>> = Id, Options) ->
     end;
 open_doc_int(Db, #doc_info{id=Id,deleted=IsDeleted,rev=RevInfo, body_ptr=Bp,
         content_meta=ContentMeta}=DocInfo, Options) ->
-    {ok, Body} = couch_file:pread_iolist(Db#db.fd, Bp),
+    Body = case Bp of
+    0 -> <<>>;
+    _ -> {ok, Body0} = couch_file:pread_iolist(Db#db.fd, Bp),
+         Body0
+    end,
     Doc = #doc{
         id = Id,
         rev = RevInfo,
