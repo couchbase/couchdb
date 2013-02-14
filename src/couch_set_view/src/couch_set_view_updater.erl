@@ -1352,11 +1352,12 @@ maybe_fix_group(#set_view_group{index_header = Header} = Group) ->
     end.
 
 
-check_if_compactor_started(Acc) ->
+check_if_compactor_started(#writer_acc{group = Group0} = Acc) ->
     receive
     {compactor_started, Pid} ->
-        Pid ! {compactor_started_ack, self(), Acc#writer_acc.group},
-        Acc#writer_acc{compactor_running = true}
+        Group = maybe_fix_group(Group0),
+        Pid ! {compactor_started_ack, self(), Group},
+        Acc#writer_acc{compactor_running = true, group = Group}
     after 0 ->
         Acc
     end.
