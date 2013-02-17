@@ -21,7 +21,7 @@
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(132),
+    etap:plan(138),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -40,6 +40,7 @@ test() ->
     test_reduce_single_function_sum(),
     test_reduce_multiple_functions(),
     test_reduce_using_emit(),
+    test_reduce_no_return(),
     test_burst(reduce, 1000),
     test_burst(reduce, 10000),
     test_burst(reduce, 25000),
@@ -255,6 +256,36 @@ test_reduce_using_emit() ->
     etap:is(RereduceResult2, {ok, <<"2">>}, "Rereduce result is 2"),
     RereduceResult3 = mapreduce:rereduce(Ctx, 1, [Red1]),
     etap:is(RereduceResult3, {ok, <<"1">>}, "Rereduce result is 1").
+
+
+test_reduce_no_return() ->
+    FunBin = <<"function(key, values, rereduce) { }">>,
+    {ok, Ctx} = mapreduce:start_reduce_context([FunBin]),
+    Results1 = mapreduce:reduce(Ctx, [
+        {<<"\"a\"">>, <<"1">>},
+        {<<"\"b\"">>, <<"2">>},
+        {<<"\"c\"">>, <<"3">>},
+        {<<"\"d\"">>, <<"4">>}
+    ]),
+    Results2 = mapreduce:reduce(Ctx, [
+        {<<"\"x\"">>, <<"666">>}
+    ]),
+    Results3 = mapreduce:reduce(Ctx, [
+        {<<"\"y\"">>, <<"999">>},
+        {<<"\"z\"">>, <<"1000">>}
+    ]),
+    etap:is(Results1, {ok, [<<"null">>]}, "Reduce value is null"),
+    etap:is(Results2, {ok, [<<"null">>]}, "Reduce value is null"),
+    etap:is(Results3, {ok, [<<"null">>]}, "Reduce value is null"),
+    {ok, [Red1]} = Results1,
+    {ok, [Red2]} = Results2,
+    {ok, [Red3]} = Results3,
+    RereduceResult1 = mapreduce:rereduce(Ctx, 1, [Red1, Red2, Red3]),
+    etap:is(RereduceResult1, {ok, <<"null">>}, "Rereduce result is null"),
+    RereduceResult2 = mapreduce:rereduce(Ctx, 1, [Red1, Red2]),
+    etap:is(RereduceResult2, {ok, <<"null">>}, "Rereduce result is null"),
+    RereduceResult3 = mapreduce:rereduce(Ctx, 1, [Red1]),
+    etap:is(RereduceResult3, {ok, <<"null">>}, "Rereduce result is null").
 
 
 test_burst(Fun, N) ->
