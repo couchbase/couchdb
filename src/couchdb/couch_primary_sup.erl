@@ -84,6 +84,12 @@ init([]) ->
             permanent,
             brutal_kill,
             worker,
+            [couch_index_barrier]},
+        {couch_spatial_index_barrier,
+            {couch_index_barrier, start_link, [couch_spatial_index_barrier, "max_parallel_spatial_indexers"]},
+            permanent,
+            brutal_kill,
+            worker,
             [couch_index_barrier]}
     ],
     {ok, {{one_for_one, 10, 3600}, Children}}.

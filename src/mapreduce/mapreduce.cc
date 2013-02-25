@@ -411,6 +411,10 @@ Handle<Value> emit(const Arguments& args)
 {
     isolate_data_t *isoData = getIsolateData();
 
+    if (isoData->ctx->kvs == NULL) {
+        return Undefined();
+    }
+
     try {
         ErlNifBinary keyJson = jsonStringify(args[0]);
         ErlNifBinary valueJson = jsonStringify(args[1]);
@@ -546,6 +550,7 @@ isolate_data_t *getIsolateData()
 void taskStarted(map_reduce_ctx_t *ctx)
 {
     ctx->taskStartTime = time(NULL);
+    ctx->kvs = NULL;
 }
 
 
