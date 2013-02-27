@@ -827,18 +827,10 @@ initial_copy_compact(#db{docinfo_by_seq_btree=SrcBySeq,
     NewDb#db{docinfo_by_seq_btree=NewBySeqBtree,
             docinfo_by_id_btree=DestById#btree{root=NewByIdRoot}}.
 
-fd_to_db(#db{name=Name, header=#db_header{purge_seq=PurgeSeq}}=Db, CompactFile, Header, Fd) ->
+fd_to_db(#db{name=Name}=Db, CompactFile, Header, Fd) ->
     NewDb = init_db(Name, CompactFile, Fd, Header, Db#db.options),
-    NewDb2 =
-        if PurgeSeq > 0 ->
-            {ok, PurgedIdsRevs} = couch_db:get_last_purged(Db),
-            {ok, Pointer, _} = couch_file:append_term(Fd, PurgedIdsRevs),
-            NewDb#db{header=Header#db_header{purge_seq=PurgeSeq, purged_docs=Pointer}};
-        true ->
-            NewDb
-    end,
     unlink(Fd),
-    NewDb2.
+    NewDb.
 
 make_target_db(Db, CompactFile) ->
     case couch_file:open(CompactFile) of
