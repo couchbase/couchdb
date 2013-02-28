@@ -33,12 +33,12 @@ num_docs() -> 16448.  % keep it a multiple of num_set_partitions()
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(74),
+    etap:plan(138),
     case (catch test()) of
         ok ->
             etap:end_tests();
         Other ->
-            etap:diag(io_lib:format("Test died abnormally: ~p", [Other])),
+            io:format(standard_error, "Test died abnormally: ~p", [Other]),
             etap:bail(Other)
     end,
     ok.
@@ -48,17 +48,21 @@ test() ->
     couch_set_view_test_util:start_server(test_set_name()),
 
     create_set(),
-    ActiveParts = lists:seq(0, num_set_partitions() - 1),
+    ReplicaParts = lists:seq(num_set_partitions() div 2, num_set_partitions() - 1),
+    couch_set_view:add_replica_partitions(test_set_name(), ddoc_id(), ReplicaParts),
+
+    ActiveParts = lists:seq(0, (num_set_partitions() div 2) - 1),
     ValueGenFun1 = fun(I) -> I end,
     update_documents(0, num_docs(), ValueGenFun1),
 
-    trigger_update_and_wait(),
+    trigger_main_update_and_wait(),
+    trigger_replica_update_and_wait(),
 
     ExpectedSeqs1 = couch_set_view_test_util:get_db_seqs(test_set_name(), ActiveParts),
     ExpectedUnindexableSeqs1 = [],
-    verify_btrees_1(ExpectedSeqs1, ExpectedUnindexableSeqs1, ValueGenFun1),
+    verify_btrees_1(ActiveParts, [], ExpectedSeqs1, ExpectedUnindexableSeqs1, ValueGenFun1),
 
-    Unindexable = lists:seq(0, num_set_partitions() - 1, 2),
+    Unindexable = lists:seq(0, (num_set_partitions() div 2) - 1, 2),
     etap:diag("Marking the following partitions as unindexable: ~w", [Unindexable]),
 
     etap:is(
@@ -76,10 +80,10 @@ test() ->
         {P, S} <- couch_set_view_test_util:get_db_seqs(test_set_name(), ActiveParts),
         ordsets:is_element(P, Unindexable)
     ],
-    verify_btrees_1(ExpectedSeqs2, ExpectedUnindexableSeqs2, ValueGenFun1),
+    verify_btrees_1(ActiveParts, [], ExpectedSeqs2, ExpectedUnindexableSeqs2, ValueGenFun1),
 
     compact_view_group(),
-    verify_btrees_1(ExpectedSeqs2, ExpectedUnindexableSeqs2, ValueGenFun1),
+    verify_btrees_1(ActiveParts, [], ExpectedSeqs2, ExpectedUnindexableSeqs2, ValueGenFun1),
 
     MarkResult1 = try
         couch_set_view:set_partition_states(
@@ -100,6 +104,16 @@ test() ->
     ?etap_match(MarkResult2,
                 {error, _},
                 "Error setting unindexable partition to cleanup state"),
+
+    MarkResult3 = try
+        couch_set_view:mark_partitions_unindexable(
+            test_set_name(), ddoc_id(), [lists:last(ReplicaParts)])
+    catch throw:Error3 ->
+        Error3
+    end,
+    ?etap_match(MarkResult3,
+                {error, _},
+                "Error marking replica partition as unindexable"),
 
     ValueGenFun2 = fun(I) -> I * 3 end,
     update_documents(0, num_docs(), ValueGenFun2),
@@ -135,7 +149,7 @@ test() ->
         ok,
         "Marked indexable partitions"),
 
-    trigger_update_and_wait(),
+    trigger_main_update_and_wait(),
 
     % Client should have been unblocked already or is just about to be unblocked.
     receive
@@ -149,10 +163,53 @@ test() ->
 
     ExpectedSeqs4 = couch_set_view_test_util:get_db_seqs(test_set_name(), ActiveParts),
     ExpectedUnindexableSeqs4 = [],
-    verify_btrees_1(ExpectedSeqs4, ExpectedUnindexableSeqs4, ValueGenFun2),
+    verify_btrees_1(ActiveParts, [], ExpectedSeqs4, ExpectedUnindexableSeqs4, ValueGenFun2),
 
     compact_view_group(),
-    verify_btrees_1(ExpectedSeqs4, ExpectedUnindexableSeqs4, ValueGenFun2),
+    verify_btrees_1(ActiveParts, [], ExpectedSeqs4, ExpectedUnindexableSeqs4, ValueGenFun2),
+
+    % Mark first replica partition as active. Verify that after this it's possible
+    % to mark it as unindexable and then back to indexable once again.
+    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    ok = gen_server:call(GroupPid, {set_auto_transfer_replicas, false}, infinity),
+
+    ActivateReplicaResult = couch_set_view:set_partition_states(
+        test_set_name(), ddoc_id(), [hd(ReplicaParts)], [], []),
+    ?etap_match(ActivateReplicaResult,
+                ok,
+                "Activated replica partition " ++ integer_to_list(hd(ReplicaParts))),
+
+    Unindexable2 = [hd(ReplicaParts)],
+    etap:is(
+        couch_set_view:mark_partitions_unindexable(test_set_name(), ddoc_id(), Unindexable2),
+        ok,
+        "Marked replica partition on transfer as unindexable"),
+
+    PassiveParts = [hd(ReplicaParts)],
+    ExpectedSeqs5 = ExpectedSeqs4,
+    ExpectedUnindexableSeqs5 = [{hd(ReplicaParts), 0}],
+    verify_btrees_1(ActiveParts, PassiveParts, ExpectedSeqs5, ExpectedUnindexableSeqs5, ValueGenFun2),
+    compact_view_group(),
+    verify_btrees_1(ActiveParts, PassiveParts, ExpectedSeqs5, ExpectedUnindexableSeqs5, ValueGenFun2),
+
+    etap:is(
+        couch_set_view:mark_partitions_indexable(test_set_name(), ddoc_id(), Unindexable2),
+        ok,
+        "Marked replica partition on transfer as indexable again"),
+
+    ExpectedSeqs6 = ExpectedSeqs5 ++ [{hd(ReplicaParts), 0}],
+    ExpectedUnindexableSeqs6 = [],
+    verify_btrees_1(ActiveParts, PassiveParts, ExpectedSeqs6, ExpectedUnindexableSeqs6, ValueGenFun2),
+    compact_view_group(),
+    verify_btrees_1(ActiveParts, PassiveParts, ExpectedSeqs6, ExpectedUnindexableSeqs6, ValueGenFun2),
+
+    ok = couch_set_view:set_partition_states(
+        test_set_name(), ddoc_id(), [], [], [hd(ReplicaParts)]),
+    wait_for_main_cleanup(),
+
+    verify_btrees_1(ActiveParts, [], ExpectedSeqs4, ExpectedUnindexableSeqs4, ValueGenFun2),
+    compact_view_group(),
+    verify_btrees_1(ActiveParts, [], ExpectedSeqs4, ExpectedUnindexableSeqs4, ValueGenFun2),
 
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
     ok = timer:sleep(1000),
@@ -162,14 +219,22 @@ test() ->
 
 get_group_snapshot(Staleness) ->
     GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
-    {ok, Group, 0} = gen_server:call(
+    {ok, Group, _} = gen_server:call(
         GroupPid, #set_view_group_req{stale = Staleness}, infinity),
     Group.
 
 
-trigger_update_and_wait() ->
-    etap:diag("Trigerring index update"),
+trigger_main_update_and_wait() ->
     GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    trigger_update_and_wait(GroupPid).
+
+trigger_replica_update_and_wait() ->
+    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    {ok, ReplicaGroupPid} = gen_server:call(GroupPid, replica_pid, infinity),
+    trigger_update_and_wait(ReplicaGroupPid).
+
+trigger_update_and_wait(GroupPid) ->
+    etap:diag("Trigerring index update"),
     {ok, UpPid} = gen_server:call(GroupPid, {start_updater, []}, infinity),
     case is_pid(UpPid) of
     true ->
@@ -187,6 +252,18 @@ trigger_update_and_wait() ->
         etap:bail("Failure updating main group: " ++ couch_util:to_list(Reason))
     after ?MAX_WAIT_TIME ->
         etap:bail("Timeout waiting for main group update")
+    end.
+
+
+wait_for_main_cleanup() ->
+    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    {ok, CleanerPid} = gen_server:call(GroupPid, start_cleaner, infinity),
+    CleanerRef = erlang:monitor(process, CleanerPid),
+    receive
+    {'DOWN', CleanerRef, _, _, _} ->
+        ok
+    after 60000 ->
+        etap:bail("Timeout waiting for cleaner to finish")
     end.
 
 
@@ -209,12 +286,12 @@ create_set() ->
         ]}}
     ]},
     ok = couch_set_view_test_util:update_ddoc(test_set_name(), DDoc),
-    etap:diag("Configuring set view with partitions [0 .. 63] as active"),
+    etap:diag("Configuring set view with partitions [0 .. 31] as active"),
     Params = #set_view_params{
         max_partitions = num_set_partitions(),
-        active_partitions = lists:seq(0, 63),
+        active_partitions = lists:seq(0, (num_set_partitions() div 2) - 1),
         passive_partitions = [],
-        use_replica_index = false
+        use_replica_index = true
     },
     ok = couch_set_view:define_group(test_set_name(), ddoc_id(), Params).
 
@@ -258,7 +335,8 @@ compact_view_group() ->
     end.
 
 
-verify_btrees_1(ExpectedSeqs, ExpectedUnindexableSeqs, ValueGenFun) ->
+verify_btrees_1(ActiveParts, PassiveParts, ExpectedSeqs,
+                ExpectedUnindexableSeqs, ValueGenFun) ->
     Group = get_group_snapshot(ok),
     #set_view_group{
         id_btree = IdBtree,
@@ -276,26 +354,32 @@ verify_btrees_1(ExpectedSeqs, ExpectedUnindexableSeqs, ValueGenFun) ->
     #set_view{
         btree = View1Btree
     } = View1,
-    ActiveParts = lists:seq(0, num_set_partitions() - 1),
-    ExpectedBitmask = couch_set_view_util:build_bitmask(ActiveParts),
-    ExpectedKVCount = (num_docs() div num_set_partitions()) * length(ActiveParts),
+    AllSeqs = HeaderUpdateSeqs ++ UnindexableSeqs,
+    ExpectedActiveBitmask = couch_set_view_util:build_bitmask(ActiveParts),
+    ExpectedPassiveBitmask = couch_set_view_util:build_bitmask(PassiveParts),
+    ExpectedIndexedBitmask = couch_set_view_util:build_bitmask(
+        [P || P <- (ActiveParts ++ PassiveParts), couch_util:get_value(P, AllSeqs, -1) > 0]),
+    ExpectedKVCount = (num_docs() div num_set_partitions()) *
+        length([P || P <- ActiveParts, couch_util:get_value(P, AllSeqs, -1) > 0]),
     ExpectedView1Reduction = lists:sum([
-        ValueGenFun(I) || I <- lists:seq(0, num_docs() - 1)
+        ValueGenFun(I) || I <- lists:seq(0, num_docs() - 1),
+            lists:member(I rem num_set_partitions(), ActiveParts),
+            couch_util:get_value(I rem num_set_partitions(), AllSeqs, -1) > 0
     ]),
 
     etap:is(
         couch_set_view_test_util:full_reduce_id_btree(Group, IdBtree),
-        {ok, {ExpectedKVCount, ExpectedBitmask}},
+        {ok, {ExpectedKVCount, ExpectedIndexedBitmask}},
         "Id Btree has the right reduce value"),
     etap:is(
         couch_set_view_test_util:full_reduce_view_btree(Group, View1Btree),
-        {ok, {ExpectedKVCount, [ExpectedView1Reduction], ExpectedBitmask}},
+        {ok, {ExpectedKVCount, [ExpectedView1Reduction], ExpectedIndexedBitmask}},
         "View1 Btree has the right reduce value 1"),
 
     etap:is(HeaderUpdateSeqs, ExpectedSeqs, "Header has right update seqs list"),
     etap:is(UnindexableSeqs, ExpectedUnindexableSeqs, "Header has right unindexable seqs list"),
-    etap:is(Abitmask, ExpectedBitmask, "Header has right active bitmask"),
-    etap:is(Pbitmask, 0, "Header has right passive bitmask"),
+    etap:is(Abitmask, ExpectedActiveBitmask, "Header has right active bitmask"),
+    etap:is(Pbitmask, ExpectedPassiveBitmask, "Header has right passive bitmask"),
     etap:is(Cbitmask, 0, "Header has right cleanup bitmask"),
 
     etap:diag("Verifying the Id Btree"),
@@ -331,13 +415,13 @@ verify_btrees_1(ExpectedSeqs, ExpectedUnindexableSeqs, ValueGenFun) ->
         "Id Btree has " ++ integer_to_list(ExpectedKVCount) ++ " entries"),
 
     etap:diag("Verifying the View1 Btree"),
-    {ok, _, View1BtreeFoldResult} = couch_set_view_test_util:fold_view_btree(
+    {ok, _, {_, View1BtreeFoldResult}} = couch_set_view_test_util:fold_view_btree(
         Group,
         View1Btree,
-        fun(Kv, _, I) ->
-            PartId = I rem num_set_partitions(),
-            Key = DocId = doc_id(I),
-            Value = ValueGenFun(I),
+        fun(Kv, _, {NextId, I}) ->
+            PartId = NextId rem num_set_partitions(),
+            Key = DocId = doc_id(NextId),
+            Value = ValueGenFun(NextId),
             ExpectedKv = {{Key, DocId}, {PartId, Value}},
             case ExpectedKv =:= Kv of
             true ->
@@ -345,9 +429,14 @@ verify_btrees_1(ExpectedSeqs, ExpectedUnindexableSeqs, ValueGenFun) ->
             false ->
                 etap:bail("View1 Btree has an unexpected KV at iteration " ++ integer_to_list(I))
             end,
-            {ok, I + 1}
+            case PartId =:= 31 of
+            true ->
+                {ok, {NextId + 33, I + 1}};
+            false ->
+                {ok, {NextId + 1, I + 1}}
+            end
         end,
-        0, []),
+        {0, 0}, []),
     etap:is(View1BtreeFoldResult, ExpectedKVCount,
         "View1 Btree has " ++ integer_to_list(ExpectedKVCount) ++ " entries"),
     ok.
@@ -371,15 +460,17 @@ verify_btrees_2(ExpectedSeqs, ExpectedUnindexableSeqs, ValueGenFun1, ValueGenFun
     #set_view{
         btree = View1Btree
     } = View1,
-    ActiveParts = lists:seq(0, num_set_partitions() - 1),
+    ActiveParts = lists:seq(0, (num_set_partitions() div 2) - 1),
     ExpectedBitmask = couch_set_view_util:build_bitmask(ActiveParts),
     ExpectedKVCount = (num_docs() div num_set_partitions()) * length(ActiveParts),
     ExpectedView1Reduction = lists:sum([
         ValueGenFun1(I) || I <- lists:seq(0, num_docs() - 1),
-        orddict:is_key(I rem num_set_partitions(), ExpectedUnindexableSeqs)
+        orddict:is_key(I rem num_set_partitions(), ExpectedUnindexableSeqs),
+        lists:member(I rem num_set_partitions(), ActiveParts)
     ]) + lists:sum([
         ValueGenFun2(I) || I <- lists:seq(0, num_docs() - 1),
-        (not orddict:is_key(I rem num_set_partitions(), ExpectedUnindexableSeqs))
+        (not orddict:is_key(I rem num_set_partitions(), ExpectedUnindexableSeqs)),
+        lists:member(I rem num_set_partitions(), ActiveParts)
     ]),
 
     etap:is(
@@ -430,18 +521,18 @@ verify_btrees_2(ExpectedSeqs, ExpectedUnindexableSeqs, ValueGenFun1, ValueGenFun
         "Id Btree has " ++ integer_to_list(ExpectedKVCount) ++ " entries"),
 
     etap:diag("Verifying the View1 Btree"),
-    {ok, _, View1BtreeFoldResult} = couch_set_view_test_util:fold_view_btree(
+    {ok, _, {_, View1BtreeFoldResult}} = couch_set_view_test_util:fold_view_btree(
         Group,
         View1Btree,
-        fun(Kv, _, I) ->
-            PartId = I rem num_set_partitions(),
+        fun(Kv, _, {NextId, I}) ->
+            PartId = NextId rem num_set_partitions(),
             case orddict:is_key(PartId, ExpectedUnindexableSeqs) of
             true ->
-                Value = ValueGenFun1(I);
+                Value = ValueGenFun1(NextId);
             false ->
-                Value = ValueGenFun2(I)
+                Value = ValueGenFun2(NextId)
             end,
-            Key = DocId = doc_id(I),
+            Key = DocId = doc_id(NextId),
             ExpectedKv = {{Key, DocId}, {PartId, Value}},
             case ExpectedKv =:= Kv of
             true ->
@@ -449,9 +540,14 @@ verify_btrees_2(ExpectedSeqs, ExpectedUnindexableSeqs, ValueGenFun1, ValueGenFun
             false ->
                 etap:bail("View1 Btree has an unexpected KV at iteration " ++ integer_to_list(I))
             end,
-            {ok, I + 1}
+            case PartId =:= 31 of
+            true ->
+                {ok, {NextId + 33, I + 1}};
+            false ->
+                {ok, {NextId + 1, I + 1}}
+            end
         end,
-        0, []),
+        {0, 0}, []),
     etap:is(View1BtreeFoldResult, ExpectedKVCount,
         "View1 Btree has " ++ integer_to_list(ExpectedKVCount) ++ " entries"),
     ok.
