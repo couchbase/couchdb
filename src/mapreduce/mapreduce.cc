@@ -563,6 +563,7 @@ void taskFinished(map_reduce_ctx_t *ctx)
 void terminateTask(map_reduce_ctx_t *ctx)
 {
     V8::TerminateExecution(ctx->isolate);
+    taskFinished(ctx);
 }
 
 
