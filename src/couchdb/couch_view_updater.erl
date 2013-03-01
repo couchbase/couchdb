@@ -41,8 +41,6 @@ update(Owner, Group, #db{name = DbName} = Db) ->
     DbPurgeSeq = couch_db:get_purge_seq(Db),
     if DbPurgeSeq == PurgeSeq ->
         ok;
-    DbPurgeSeq == PurgeSeq + 1 ->
-        ok;
     true ->
         exit(reset)
     end,
@@ -70,18 +68,12 @@ update(Owner, Group, #db{name = DbName} = Db) ->
             {total_changes, TotalChanges}
         ]),
         couch_task_status:set_update_frequency(500),
-        Group2 =
-        if DbPurgeSeq == PurgeSeq + 1 ->
-            purge_index(Group, Db);
-        true ->
-            Group
-        end,
-        ViewEmptyKVs = [{View, []} || View <- Group2#group.views],
-        couch_view_mapreduce:start_reduce_context(Group2),
+        ViewEmptyKVs = [{View, []} || View <- Group#group.views],
+        couch_view_mapreduce:start_reduce_context(Group),
         try
-            do_writes(Self, Owner, Group2, WriteQueue, Seq == 0, ViewEmptyKVs, [])
+            do_writes(Self, Owner, Group, WriteQueue, Seq == 0, ViewEmptyKVs, [])
         after
-            couch_view_mapreduce:end_reduce_context(Group2)
+            couch_view_mapreduce:end_reduce_context(Group)
         end
     end),
     % compute on all docs modified since we last computed.
@@ -109,45 +101,6 @@ update(Owner, Group, #db{name = DbName} = Db) ->
         exit({new_group,
                 NewGroup#group{current_seq=couch_db:get_update_seq(Db)}})
     end.
-
-
-purge_index(#group{fd=Fd, views=Views, id_btree=IdBtree}=Group, Db) ->
-    {ok, PurgedIdsRevs} = couch_db:get_last_purged(Db),
-    Ids = [Id || {Id, _Revs} <- PurgedIdsRevs],
-    {ok, Lookups, IdBtree2} = couch_btree:query_modify(IdBtree, Ids, [], Ids),
-
-    % now populate the dictionary with all the keys to delete
-    ViewKeysToRemoveDict = lists:foldl(
-        fun({ok,{DocId,ViewNumRowKeys}}, ViewDictAcc) ->
-            lists:foldl(
-                fun({ViewNum, RowKey}, ViewDictAcc2) ->
-                    dict:append(ViewNum, {RowKey, DocId}, ViewDictAcc2)
-                end, ViewDictAcc, ViewNumRowKeys);
-        ({not_found, _}, ViewDictAcc) ->
-            ViewDictAcc
-        end, dict:new(), Lookups),
-
-    % Now remove the values from the btrees
-    PurgeSeq = couch_db:get_purge_seq(Db),
-    Views2 = lists:map(
-        fun(#view{id_num=Num,btree=Btree}=View) ->
-            case dict:find(Num, ViewKeysToRemoveDict) of
-            {ok, RemoveKeys} ->
-                {ok, ViewBtree2} = couch_btree:add_remove(Btree, [], RemoveKeys),
-                case ViewBtree2 =/= Btree of
-                    true ->
-                        View#view{btree=ViewBtree2, purge_seq=PurgeSeq};
-                    _ ->
-                        View#view{btree=ViewBtree2}
-                end;
-            error -> % no keys to remove in this view
-                View
-            end
-        end, Views),
-    ok = couch_file:flush(Fd),
-    Group#group{id_btree=IdBtree2,
-            views=Views2,
-            purge_seq=PurgeSeq}.
 
 
 load_doc(Db, DocInfo, MapQueue, DocOpts, IncludeDesign) ->
