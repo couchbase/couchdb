@@ -98,6 +98,7 @@
     shutdown = false                   :: boolean(),
     shutdown_aliases                   :: [binary()],
     auto_cleanup = true                :: boolean(),
+    auto_transfer_replicas = true      :: boolean(),
     replica_partitions = []            :: ordsets:ordset(partition_id()),
     pending_transition_waiters = []    :: [{From::{pid(), reference()}, #set_view_group_req{}}],
     update_listeners = dict:new()      :: dict(),
@@ -418,6 +419,10 @@ handle_call(get_sig, _From, #state{group = Group} = State) ->
 handle_call({set_auto_cleanup, Enabled}, _From, State) ->
     % To be used only by unit tests.
     {reply, ok, State#state{auto_cleanup = Enabled}, ?TIMEOUT};
+
+handle_call({set_auto_transfer_replicas, Enabled}, _From, State) ->
+    % To be used only by unit tests.
+    {reply, ok, State#state{auto_transfer_replicas = Enabled}, ?TIMEOUT};
 
 handle_call({define_view, NumPartitions, _, _, _, _, _}, _From, State)
         when (not ?is_defined(State)), NumPartitions > ?MAX_NUM_PARTITIONS ->
@@ -980,8 +985,9 @@ handle_info(timeout, State) when not ?is_defined(State) ->
     {noreply, State};
 
 handle_info(timeout, #state{group = Group} = State) ->
-    case (?set_replicas_on_transfer(Group) /= []) orelse
-        (dict:size(State#state.update_listeners) > 0) of
+    TransferReplicas = (?set_replicas_on_transfer(Group) /= []) andalso
+        State#state.auto_transfer_replicas,
+    case TransferReplicas orelse (dict:size(State#state.update_listeners) > 0) of
     true ->
         {noreply, start_updater(State)};
     false ->
@@ -3097,13 +3103,22 @@ process_mark_as_unindexable(#state{group = Group} = State, Partitions0) ->
     PendingTrans = ?set_pending_transition(Group),
     PendingActive = ?pending_transition_active(PendingTrans),
     PendingPassive = ?pending_transition_passive(PendingTrans),
-    Partitions = lists:filter(
+    {Partitions, Rest0} = lists:partition(
         fun(PartId) ->
             couch_set_view_util:has_part_seq(PartId, ?set_seqs(Group)) orelse
             lists:member(PartId, PendingActive) orelse
             lists:member(PartId, PendingPassive)
         end,
         Partitions0),
+    Rest = ordsets:from_list(Rest0),
+    case ordsets:intersection(State#state.replica_partitions, Rest) of
+    [] ->
+        ok;
+    ReplicasIntersection ->
+        ErrorMsg = io_lib:format("Intersection between requested unindexable list"
+            " and current set of replica partitions: ~w", [ReplicasIntersection]),
+        throw({error, iolist_to_binary(ErrorMsg)})
+    end,
     do_process_mark_as_unindexable(State, Partitions).
 
 
@@ -3113,21 +3128,9 @@ do_process_mark_as_unindexable(State, []) ->
     State;
 do_process_mark_as_unindexable(State0, Partitions) ->
     #state{
-        group = #set_view_group{index_header = Header} = Group,
-        replica_partitions = ReplicaParts
+        group = #set_view_group{index_header = Header} = Group
     } = State = stop_updater(State0),
     UpdaterWasRunning = is_pid(State0#state.updater_pid),
-    ReplicasIntersection = [
-        P || P <- Partitions, lists:member(P, ReplicaParts)
-    ],
-    case ReplicasIntersection of
-    [] ->
-        ok;
-    _ ->
-        ErrorMsg = io_lib:format("Intersection between requested unindexable list"
-            " and current set of replica partitions: ~w", [ReplicasIntersection]),
-        throw({error, iolist_to_binary(ErrorMsg)})
-    end,
 
     PendingTrans = ?set_pending_transition(Group),
     PendingActive = ?pending_transition_active(PendingTrans),
