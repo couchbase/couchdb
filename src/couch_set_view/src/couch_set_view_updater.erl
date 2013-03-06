@@ -580,12 +580,8 @@ flush_writes(#writer_acc{initial_build = false} = Acc0) ->
         owner = Owner,
         last_seqs = LastSeqs
     } = Acc0,
-    {ViewKVs, DocIdViewIdKeys, NewPartIdSeqs} =
-        process_map_results(Kvs, ViewEmptyKVs, orddict:new()),
-    NewLastSeqs = orddict:merge(
-        fun(_, S1, S2) -> erlang:max(S1, S2) end,
-        LastSeqs,
-        NewPartIdSeqs),
+    {ViewKVs, DocIdViewIdKeys, NewLastSeqs} =
+        process_map_results(Kvs, ViewEmptyKVs, LastSeqs),
     Acc1 = Acc0#writer_acc{last_seqs = NewLastSeqs},
     Acc = write_to_tmp_batch_files(ViewKVs, DocIdViewIdKeys, Acc1),
     #writer_acc{group = NewGroup} = Acc,
