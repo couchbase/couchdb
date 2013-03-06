@@ -188,7 +188,6 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
     end),
 
     Parent = self(),
-    unlink(BarrierEntryPid),
     Writer = spawn_link(fun() ->
         DDocIds = couch_set_view_util:get_ddoc_ids_with_sig(SetName, Group),
         couch_task_status:add_task([
