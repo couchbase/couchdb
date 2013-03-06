@@ -25,9 +25,6 @@
 % initial index build
 -define(MAX_SORT_BUFFER_SIZE, 1048576).
 
-% incremental updates
--define(CHECKPOINT_WRITE_INTERVAL, 60000000).
-
 % Same as in couch_btree.erl
 -define(KEY_BITS,       12).
 -define(MAX_KEY_SIZE,   ((1 bsl ?KEY_BITS) - 1)).
@@ -594,22 +591,16 @@ flush_writes(#writer_acc{initial_build = false} = Acc0) ->
     #writer_acc{group = NewGroup} = Acc,
     case ?set_seqs(NewGroup) =/= ?set_seqs(Group) of
     true ->
+        Acc2 = checkpoint(Acc),
         case (Acc#writer_acc.state =:= updating_active) andalso
-        lists:any(fun({PartId, _}) ->
-            ((1 bsl PartId) band ?set_pbitmask(Group) =/= 0)
-        end, NewLastSeqs) of
+            lists:any(fun({PartId, _}) ->
+                ((1 bsl PartId) band ?set_pbitmask(Group) =/= 0)
+            end, NewLastSeqs) of
         true ->
-            Acc2 = checkpoint(Acc),
             notify_owner(Owner, {state, updating_passive}, Parent),
             Acc2#writer_acc{state = updating_passive};
         false ->
-            case Acc#writer_acc.final_batch orelse
-                (?set_cbitmask(NewGroup) /= ?set_cbitmask(Group)) of
-            true ->
-                checkpoint(Acc);
-            false ->
-                maybe_checkpoint(Acc)
-            end
+            Acc2
         end;
     false ->
         Acc
@@ -1294,23 +1285,6 @@ update_task(NumChanges) ->
     ]).
 
 
-maybe_checkpoint(WriterAcc) ->
-    Before = get(last_header_commit_ts),
-    Now = os:timestamp(),
-    case (Before == undefined) orelse
-        (timer:now_diff(Now, Before) >= ?CHECKPOINT_WRITE_INTERVAL) of
-    true ->
-        NewWriterAcc = checkpoint(WriterAcc),
-        put(last_header_commit_ts, Now),
-        NewWriterAcc;
-    false ->
-        NewWriterAcc = maybe_fix_group(WriterAcc),
-        #writer_acc{owner = Owner, parent = Parent, group = Group} = NewWriterAcc,
-        Owner ! {partial_update, Parent, Group},
-        NewWriterAcc
-    end.
-
-
 checkpoint(#writer_acc{owner = Owner, parent = Parent, group = Group} = Acc) ->
     #set_view_group{
         set_name = SetName,
@@ -1324,9 +1298,6 @@ checkpoint(#writer_acc{owner = Owner, parent = Parent, group = Group} = Acc) ->
     Acc#writer_acc{group = NewGroup}.
 
 
-maybe_fix_group(#writer_acc{group = Group} = Acc) ->
-    NewGroup = maybe_fix_group(Group),
-    Acc#writer_acc{group = NewGroup};
 maybe_fix_group(#set_view_group{index_header = Header} = Group) ->
     receive
     {new_passive_partitions, Parts} ->
