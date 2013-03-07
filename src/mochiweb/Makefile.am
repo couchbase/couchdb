@@ -29,7 +29,7 @@ mochiweb_file_collection = \
 	mochinum.erl \
 	mochitemp.erl \
 	mochiutf8.erl \
-	mochiweb.app.in \
+	mochiweb.app.src \
 	mochiweb.erl \
 	mochiweb_acceptor.erl \
 	mochiweb_app.erl \
@@ -98,7 +98,7 @@ EXTRA_DIST =  \
 CLEANFILES = \
     $(mochiwebebin_make_generated_file_list)
 
-%.app: %.app.in
+%.app: %.app.src
 	cp $< $@
 
 mochijson2.beam: mochijson2.erl

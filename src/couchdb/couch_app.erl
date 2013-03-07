@@ -22,7 +22,7 @@ start(_Type, DefaultIniFiles) ->
     IniFiles = get_ini_files(DefaultIniFiles),
     Apps = [
         crypto, public_key, sasl, inets, oauth, ssl, lhttpc,
-        mochiweb, os_mon
+        xmerl, compiler, syntax_tools, mochiweb, os_mon
     ] ++ couch_apps(),
 
     case start_apps(Apps) of

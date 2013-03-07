@@ -19,9 +19,7 @@ etap_file_collection = \
     etap_exception.erl \
     etap_process.erl \
 	etap_report.erl \
-	etap_request.erl \
-	etap_string.erl \
-   	etap_web.erl
+	etap_string.erl
 
 etapebin_make_generated_file_list = \
     etap.beam \
@@ -30,9 +28,7 @@ etapebin_make_generated_file_list = \
     etap_exception.beam \
     etap_process.beam \
 	etap_report.beam \
-	etap_request.beam \
-	etap_string.beam \
-   	etap_web.beam
+	etap_string.beam
 
 etapebin_DATA = $(etapebin_make_generated_file_list)
 
