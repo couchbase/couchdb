@@ -49,7 +49,7 @@
     tmp_dir = nil,
     sort_files = nil,
     sort_file_workers = [],
-    new_partitions = [],
+    initial_seqs,
     write_queue_size,
     max_tmp_files,
     max_insert_batch_size,
@@ -212,7 +212,7 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
             view_empty_kvs = ViewEmptyKVs,
             compactor_running = CompactorRunning,
             write_queue_size = couch_util:get_value(max_size, WriteQueueOptions),
-            new_partitions = [P || {P, Seq} <- ?set_seqs(Group), Seq == 0]
+            initial_seqs = ?set_seqs(Group)
         }),
         TmpDir = WriterAcc2#writer_acc.tmp_dir,
         case CompactorRunning of
@@ -883,14 +883,13 @@ view_insert_doc_query_results(DocId, PartitionId, [ResultKVs | RestResults],
 write_to_tmp_batch_files(ViewKeyValuesToAdd, DocIdViewIdKeys, WriterAcc) ->
     #writer_acc{
         sort_files = SortFiles,
-        group = #set_view_group{id_btree = IdBtree} = Group,
-        new_partitions = NewParts
+        group = #set_view_group{id_btree = IdBtree} = Group
     } = WriterAcc,
 
     {AddDocIdViewIdKeys0, RemoveDocIds, LookupDocIds} = lists:foldr(
         fun({DocId, {PartId, [] = _ViewIdKeys}}, {A, B, C}) ->
                 BackKey = make_back_index_key(DocId, PartId),
-                case lists:member(PartId, NewParts) of
+                case is_new_partition(PartId, WriterAcc) of
                 true ->
                     {A, [BackKey | B], C};
                 false ->
@@ -898,7 +897,7 @@ write_to_tmp_batch_files(ViewKeyValuesToAdd, DocIdViewIdKeys, WriterAcc) ->
                 end;
             ({DocId, {PartId, _ViewIdKeys}} = KvPairs, {A, B, C}) ->
                 BackKey = make_back_index_key(DocId, PartId),
-                case lists:member(PartId, NewParts) of
+                case is_new_partition(PartId, WriterAcc) of
                 true ->
                     {[KvPairs | A], B, C};
                 false ->
@@ -987,6 +986,10 @@ write_to_tmp_batch_files(ViewKeyValuesToAdd, DocIdViewIdKeys, WriterAcc) ->
         sort_files = SortFiles3
     },
     maybe_update_btrees(WriterAcc2).
+
+
+is_new_partition(PartId, #writer_acc{initial_seqs = InitialSeqs}) ->
+    couch_util:get_value(PartId, InitialSeqs, 0) == 0.
 
 
 maybe_update_btrees(WriterAcc0) ->
