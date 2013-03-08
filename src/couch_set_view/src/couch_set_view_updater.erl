@@ -25,9 +25,6 @@
 % initial index build
 -define(MAX_SORT_BUFFER_SIZE, 1048576).
 
-% incremental updates
--define(CHECKPOINT_WRITE_INTERVAL, 60000000).
-
 % Same as in couch_btree.erl
 -define(KEY_BITS,       12).
 -define(MAX_KEY_SIZE,   ((1 bsl ?KEY_BITS) - 1)).
@@ -52,7 +49,7 @@
     tmp_dir = nil,
     sort_files = nil,
     sort_file_workers = [],
-    new_partitions = [],
+    initial_seqs,
     write_queue_size,
     max_tmp_files,
     max_insert_batch_size,
@@ -191,7 +188,6 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
     end),
 
     Parent = self(),
-    unlink(BarrierEntryPid),
     Writer = spawn_link(fun() ->
         DDocIds = couch_set_view_util:get_ddoc_ids_with_sig(SetName, Group),
         couch_task_status:add_task([
@@ -216,7 +212,7 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
             view_empty_kvs = ViewEmptyKVs,
             compactor_running = CompactorRunning,
             write_queue_size = couch_util:get_value(max_size, WriteQueueOptions),
-            new_partitions = [P || {P, Seq} <- ?set_seqs(Group), Seq == 0]
+            initial_seqs = ?set_seqs(Group)
         }),
         TmpDir = WriterAcc2#writer_acc.tmp_dir,
         case CompactorRunning of
@@ -583,33 +579,23 @@ flush_writes(#writer_acc{initial_build = false} = Acc0) ->
         owner = Owner,
         last_seqs = LastSeqs
     } = Acc0,
-    {ViewKVs, DocIdViewIdKeys, NewPartIdSeqs} =
-        process_map_results(Kvs, ViewEmptyKVs, orddict:new()),
-    NewLastSeqs = orddict:merge(
-        fun(_, S1, S2) -> erlang:max(S1, S2) end,
-        LastSeqs,
-        NewPartIdSeqs),
+    {ViewKVs, DocIdViewIdKeys, NewLastSeqs} =
+        process_map_results(Kvs, ViewEmptyKVs, LastSeqs),
     Acc1 = Acc0#writer_acc{last_seqs = NewLastSeqs},
     Acc = write_to_tmp_batch_files(ViewKVs, DocIdViewIdKeys, Acc1),
     #writer_acc{group = NewGroup} = Acc,
     case ?set_seqs(NewGroup) =/= ?set_seqs(Group) of
     true ->
+        Acc2 = checkpoint(Acc),
         case (Acc#writer_acc.state =:= updating_active) andalso
-        lists:any(fun({PartId, _}) ->
-            ((1 bsl PartId) band ?set_pbitmask(Group) =/= 0)
-        end, NewLastSeqs) of
+            lists:any(fun({PartId, _}) ->
+                ((1 bsl PartId) band ?set_pbitmask(Group) =/= 0)
+            end, NewLastSeqs) of
         true ->
-            Acc2 = checkpoint(Acc),
             notify_owner(Owner, {state, updating_passive}, Parent),
             Acc2#writer_acc{state = updating_passive};
         false ->
-            case Acc#writer_acc.final_batch orelse
-                (?set_cbitmask(NewGroup) /= ?set_cbitmask(Group)) of
-            true ->
-                checkpoint(Acc);
-            false ->
-                maybe_checkpoint(Acc)
-            end
+            Acc2
         end;
     false ->
         Acc
@@ -897,14 +883,13 @@ view_insert_doc_query_results(DocId, PartitionId, [ResultKVs | RestResults],
 write_to_tmp_batch_files(ViewKeyValuesToAdd, DocIdViewIdKeys, WriterAcc) ->
     #writer_acc{
         sort_files = SortFiles,
-        group = #set_view_group{id_btree = IdBtree} = Group,
-        new_partitions = NewParts
+        group = #set_view_group{id_btree = IdBtree} = Group
     } = WriterAcc,
 
     {AddDocIdViewIdKeys0, RemoveDocIds, LookupDocIds} = lists:foldr(
         fun({DocId, {PartId, [] = _ViewIdKeys}}, {A, B, C}) ->
                 BackKey = make_back_index_key(DocId, PartId),
-                case lists:member(PartId, NewParts) of
+                case is_new_partition(PartId, WriterAcc) of
                 true ->
                     {A, [BackKey | B], C};
                 false ->
@@ -912,7 +897,7 @@ write_to_tmp_batch_files(ViewKeyValuesToAdd, DocIdViewIdKeys, WriterAcc) ->
                 end;
             ({DocId, {PartId, _ViewIdKeys}} = KvPairs, {A, B, C}) ->
                 BackKey = make_back_index_key(DocId, PartId),
-                case lists:member(PartId, NewParts) of
+                case is_new_partition(PartId, WriterAcc) of
                 true ->
                     {[KvPairs | A], B, C};
                 false ->
@@ -1001,6 +986,10 @@ write_to_tmp_batch_files(ViewKeyValuesToAdd, DocIdViewIdKeys, WriterAcc) ->
         sort_files = SortFiles3
     },
     maybe_update_btrees(WriterAcc2).
+
+
+is_new_partition(PartId, #writer_acc{initial_seqs = InitialSeqs}) ->
+    couch_util:get_value(PartId, InitialSeqs, 0) == 0.
 
 
 maybe_update_btrees(WriterAcc0) ->
@@ -1294,23 +1283,6 @@ update_task(NumChanges) ->
     ]).
 
 
-maybe_checkpoint(WriterAcc) ->
-    Before = get(last_header_commit_ts),
-    Now = os:timestamp(),
-    case (Before == undefined) orelse
-        (timer:now_diff(Now, Before) >= ?CHECKPOINT_WRITE_INTERVAL) of
-    true ->
-        NewWriterAcc = checkpoint(WriterAcc),
-        put(last_header_commit_ts, Now),
-        NewWriterAcc;
-    false ->
-        NewWriterAcc = maybe_fix_group(WriterAcc),
-        #writer_acc{owner = Owner, parent = Parent, group = Group} = NewWriterAcc,
-        Owner ! {partial_update, Parent, Group},
-        NewWriterAcc
-    end.
-
-
 checkpoint(#writer_acc{owner = Owner, parent = Parent, group = Group} = Acc) ->
     #set_view_group{
         set_name = SetName,
@@ -1324,9 +1296,6 @@ checkpoint(#writer_acc{owner = Owner, parent = Parent, group = Group} = Acc) ->
     Acc#writer_acc{group = NewGroup}.
 
 
-maybe_fix_group(#writer_acc{group = Group} = Acc) ->
-    NewGroup = maybe_fix_group(Group),
-    Acc#writer_acc{group = NewGroup};
 maybe_fix_group(#set_view_group{index_header = Header} = Group) ->
     receive
     {new_passive_partitions, Parts} ->
