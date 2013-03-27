@@ -283,8 +283,8 @@
 -record(btree, {
     fd,
     root,
-    extract_kv = fun({_Key, _Value} = KV) -> KV end,
-    assemble_kv = fun(Key, Value) -> {Key, Value} end,
+    extract_kv = identity,  % fun({_Key, _Value} = KV) -> KV end,
+    assemble_kv = identity, % fun({Key, Value}) -> {Key, Value} end,
     less = fun(A, B) -> A < B end,
     reduce = nil,
     kv_chunk_threshold = 16#4ff,
