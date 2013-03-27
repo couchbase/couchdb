@@ -84,11 +84,11 @@ reduce(#view{ref = Ref, reduce_funs = RedFuns}, KVs0) ->
     {NativeFuns, JsFuns} = lists:partition(
         fun(<<"_", _/binary>>) -> true; (_) -> false end,
         RedFunSources),
+    KVs = encode_kvs(KVs0, []),
     case JsFuns of
     [] ->
-        builtin_reduce(reduce, NativeFuns, KVs0, []);
+        builtin_reduce(reduce, NativeFuns, KVs, []);
     _ ->
-        KVs = encode_kvs(KVs0, []),
         {ok, NativeResults} = builtin_reduce(reduce, NativeFuns, KVs, []),
         Ctx = erlang:get({reduce_context, Ref}),
         case mapreduce:reduce(Ctx, KVs) of
@@ -105,14 +105,14 @@ reduce(#view{reduce_funs = []}, _NthRed, _KVs) ->
     {ok, []};
 reduce(#view{ref = Ref, reduce_funs = RedFuns}, NthRed, KVs0) ->
     {Before, [{_Name, FunSrc} | _]} = lists:split(NthRed - 1, RedFuns),
+    KVs = encode_kvs(KVs0, []),
     case FunSrc of
     <<"_", _/binary>> ->
-        builtin_reduce(reduce, [FunSrc], KVs0, []);
+        builtin_reduce(reduce, [FunSrc], KVs, []);
     _ ->
-        KVs = encode_kvs(KVs0, []),
         Ctx = erlang:get({reduce_context, Ref}),
         NthRed2 = lists:foldl(
-            fun(<<"_", _/binary>>, Acc) ->
+            fun({_, <<"_", _/binary>>}, Acc) ->
                     Acc - 1;
                 (_, Acc) ->
                     Acc
@@ -159,7 +159,7 @@ rereduce(#view{ref = Ref, reduce_funs = RedFuns}, NthRed, ReducedValues) ->
     _ ->
         Ctx = erlang:get({reduce_context, Ref}),
         NthRed2 = lists:foldl(
-            fun(<<"_", _/binary>>, Acc) ->
+            fun({_, <<"_", _/binary>>}, Acc) ->
                     Acc - 1;
                 (_, Acc) ->
                     Acc
@@ -213,13 +213,7 @@ group_reductions_results(List) ->
 builtin_reduce(_Re, [], _KVs, Acc) ->
     {ok, lists:reverse(Acc)};
 builtin_reduce(Re, [<<"_sum", _/binary>> | BuiltinReds], KVs, Acc) ->
-    case Re of
-    reduce ->
-        KVs2 = contract_kvs(KVs, []);
-    rereduce ->
-        KVs2 = KVs
-    end,
-    Sum = builtin_sum_rows(KVs2),
+    Sum = builtin_sum_rows(KVs),
     builtin_reduce(Re, BuiltinReds, KVs, [Sum | Acc]);
 builtin_reduce(reduce, [<<"_count", _/binary>> | BuiltinReds], KVs, Acc) ->
     Count = length(KVs),
@@ -228,13 +222,7 @@ builtin_reduce(rereduce, [<<"_count", _/binary>> | BuiltinReds], KVs, Acc) ->
     Count = builtin_sum_rows(KVs),
     builtin_reduce(rereduce, BuiltinReds, KVs, [Count | Acc]);
 builtin_reduce(Re, [<<"_stats", _/binary>> | BuiltinReds], KVs, Acc) ->
-    case Re of
-    reduce ->
-        KVs2 = contract_kvs(KVs, []);
-    rereduce ->
-        KVs2 = KVs
-    end,
-    Stats = builtin_stats(Re, KVs2),
+    Stats = builtin_stats(Re, KVs),
     builtin_reduce(Re, BuiltinReds, KVs, [Stats | Acc]);
 builtin_reduce(_Re, [InvalidBuiltin | _BuiltinReds], _KVs, _Acc) ->
     throw({error, <<"Invalid builtin reduce function: ", InvalidBuiltin/binary>>}).
@@ -287,13 +275,6 @@ builtin_stats(rereduce, [{_, First} | Rest]) ->
     {Sum, Cnt, Min, Max, Sqr} = Stats,
     {[{<<"sum">>, Sum}, {<<"count">>, Cnt}, {<<"min">>, Min}, {<<"max">>, Max}, {<<"sumsqr">>, Sqr}]}.
 
-
-contract_kvs([], Acc) ->
-    lists:reverse(Acc);
-contract_kvs([KV | Rest], Acc) ->
-    {{Key, Id}, Value} = KV,
-    NKV = {[Key, Id], Value},
-    contract_kvs(Rest, [NKV | Acc]).
 
 encode_kvs([], Acc) ->
     lists:reverse(Acc);
