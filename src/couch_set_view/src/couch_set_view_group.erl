@@ -1709,12 +1709,19 @@ init_group(Fd, Group, IndexHeader) ->
                         try
                              couch_set_view_mapreduce:reduce(View, KVs2)
                         catch throw:{error, Reason} = Error ->
+                            PrettyKVs = [
+                                begin
+                                    {KeyDocId, <<_PartId:16, Value/binary>>} = RawKV,
+                                    {couch_set_view_util:split_key_docid(KeyDocId), Value}
+                                end
+                                || RawKV <- KVs2
+                            ],
                             ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, error executing"
                                                  " reduce function for view `~s'~n"
                                                  "  reason:                ~s~n"
                                                  "  input key-value pairs: ~p~n",
                                                  [SetName, Type, DDocId, ViewName,
-                                                  couch_util:to_binary(Reason), KVs2]),
+                                                  couch_util:to_binary(Reason), PrettyKVs]),
                             throw(Error)
                         end,
                     if length(Reduced) > 255 ->
