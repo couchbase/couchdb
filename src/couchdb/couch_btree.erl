@@ -34,6 +34,9 @@
 -define(MAX_VALUE_SIZE,   ((1 bsl ?VALUE_BITS) - 1)).
 -define(MAX_RED_SIZE,     ((1 bsl ?RED_BITS) - 1)).
 
+-define(KV_NODE_TYPE, 1).
+-define(KP_NODE_TYPE, 0).
+
 
 extract(#btree{extract_kv = identity}, Value) ->
     Value;
@@ -430,16 +433,21 @@ get_node(#btree{fd = Fd,binary_mode=false}, NodePos) ->
     Term;
 get_node(#btree{fd = Fd,binary_mode=true}, NodePos) ->
     {ok, CompressedBin} = couch_file:pread_binary(Fd, NodePos),
-    <<TypeInt, NodeBin/binary>> = couch_compress:decompress(CompressedBin),
-    Type = if TypeInt == 1 -> kv_node; true -> kp_node end,
-    decode_node(Type, NodeBin, []).
+    <<TypeInt:8, NodeBin/binary>> = couch_compress:decompress(CompressedBin),
+    Type = type_int_to_atom(TypeInt),
+    decode_node(NodeBin, Type, []).
 
-decode_node(Type, <<>>, Acc) ->
+type_int_to_atom(?KV_NODE_TYPE) ->
+    kv_node;
+type_int_to_atom(?KP_NODE_TYPE) ->
+    kp_node.
+
+decode_node(<<>>, Type, Acc) ->
     {Type, lists:reverse(Acc)};
-decode_node(Type, Binary, Acc) ->
-    <<SizeK:?KEY_BITS, SizeV:?VALUE_BITS,
-      K:SizeK/binary, V:SizeV/binary,
-      Rest/binary>> = Binary,
+decode_node(<<SizeK:?KEY_BITS, SizeV:?VALUE_BITS,
+              K:SizeK/binary, V:SizeV/binary,
+              Rest/binary>>,
+            Type, Acc) ->
     case Type of
     kv_node ->
         Val = binary:copy(V);
@@ -450,11 +458,11 @@ decode_node(Type, Binary, Acc) ->
           Reduction:RedSize/binary>> = V,
         Val = {Pointer, binary:copy(Reduction), SubtreeSize}
     end,
-    decode_node(Type, Rest, [{binary:copy(K), Val} | Acc]).
+    decode_node(Rest, Type, [{binary:copy(K), Val} | Acc]).
 
 encode_node(kv_node, Kvs) ->
     Bin = [encode_node_kv(K, V) || {K, V} <- Kvs],
-    couch_compress:compress([1 | Bin]);
+    couch_compress:compress([?KV_NODE_TYPE | Bin]);
 encode_node(kp_node, Kvs) ->
     KvBins = [
         begin
@@ -473,7 +481,7 @@ encode_node(kp_node, Kvs) ->
         end
         || {K, {Pointer, Reduction, SubtreeSize}} <- Kvs
     ],
-    couch_compress:compress([0 | KvBins]).
+    couch_compress:compress([?KP_NODE_TYPE | KvBins]).
 
 encode_node_kv(K, V) ->
     SizeK = erlang:iolist_size(K),

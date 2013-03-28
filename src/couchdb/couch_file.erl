@@ -510,7 +510,7 @@ load_header(Fd, Block) ->
         RawBin = <<RestBlock/binary, Missing/binary>>
     end,
     <<Crc32:32, HeaderBin/binary>> =
-        iolist_to_binary(remove_block_prefixes(5, RawBin)),
+        iolist_to_binary(remove_block_prefixes(RawBin, 5)),
     Crc32 = erlang:crc32(HeaderBin),
     {ok, HeaderBin}.
 
@@ -529,7 +529,7 @@ read_raw_iolist_int(ReadFd, Pos, Len) ->
     TotalBytes = calculate_total_read_len(BlockOffset, Len),
     case file:pread(ReadFd, Pos, TotalBytes) of
     {ok, <<RawBin:TotalBytes/binary>>} ->
-        {remove_block_prefixes(BlockOffset, RawBin), Pos + TotalBytes};
+        {remove_block_prefixes(RawBin, BlockOffset), Pos + TotalBytes};
     {ok, RawBin} ->
         UnexpectedBin = {
             unexpected_binary,
@@ -559,16 +559,16 @@ calculate_total_read_len(BlockOffset, FinalLen) ->
                 true -> 1 end
     end.
 
-remove_block_prefixes(_BlockOffset, <<>>) ->
+remove_block_prefixes(<<>>, _BlockOffset) ->
     [];
-remove_block_prefixes(0, <<_BlockPrefix,Rest/binary>>) ->
-    remove_block_prefixes(1, Rest);
-remove_block_prefixes(BlockOffset, Bin) ->
+remove_block_prefixes(<<_BlockPrefix, Rest/binary>>, 0) ->
+    remove_block_prefixes(Rest, 1);
+remove_block_prefixes(Bin, BlockOffset) ->
     BlockBytesAvailable = ?SIZE_BLOCK - BlockOffset,
     case size(Bin) of
     Size when Size > BlockBytesAvailable ->
         <<DataBlock:BlockBytesAvailable/binary,Rest/binary>> = Bin,
-        [DataBlock | remove_block_prefixes(0, Rest)];
+        [DataBlock | remove_block_prefixes(Rest, 0)];
     _Size ->
         [Bin]
     end.
