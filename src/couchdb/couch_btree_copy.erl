@@ -141,20 +141,24 @@ apply_options([{kp_chunk_threshold, Threshold} | Rest], Acc) ->
     apply_options(Rest, Acc#acc{kp_chunk_threshold = Threshold}).
 
 
+extract(#acc{btree = #btree{extract_kv = identity}}, Value) ->
+    Value;
 extract(#acc{btree = #btree{extract_kv = Extract}}, Value) ->
     Extract(Value).
 
 
-assemble(#acc{btree = #btree{assemble_kv = Assemble}}, Key, Value) ->
-    Assemble(Key, Value).
+assemble(#acc{btree = #btree{assemble_kv = identity}}, KeyValue) ->
+    KeyValue;
+assemble(#acc{btree = #btree{assemble_kv = Assemble}}, KeyValue) ->
+    Assemble(KeyValue).
 
 
 before_leaf_write(#acc{before_kv_write = nil} = Acc, KVs) ->
     {KVs, Acc};
 before_leaf_write(#acc{before_kv_write = Fun, user_acc = UserAcc0} = Acc, KVs) ->
     {NewKVs, NewUserAcc} = lists:mapfoldl(
-        fun({K, V}, UAcc) ->
-            Item = assemble(Acc, K, V),
+        fun({K, _V} = Kv, UAcc) ->
+            Item = assemble(Acc, Kv),
             {NewItem, UAcc2} = Fun(Item, UAcc),
             {K, _NewValue} = NewKV = extract(Acc, NewItem),
             {NewKV, UAcc2}
@@ -317,9 +321,12 @@ flush_leaf(KVs, #acc{btree = Btree} = Acc) ->
         true -> <<>>
         end;
     _ ->
-        Items = lists:map(
-            fun({K, V}) -> assemble(Acc2, K, V) end,
-            NewKVs),
+        case Btree#btree.assemble_kv of
+        identity ->
+            Items = NewKVs;
+        _ ->
+            Items = [assemble(Acc2, Kv) || Kv <- NewKVs]
+        end,
         couch_btree:final_reduce(Btree, {Items, []})
     end,
     {ok, LeafState} = write_leaf(Acc2, NewKVs, Red),

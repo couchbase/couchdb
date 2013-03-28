@@ -156,7 +156,7 @@ distsign: distcheck check
 if WINDOWS
 COUCHDB_PLT ?= couchdb.plt
 else
-COUCHDB_PLT ?= ~/.couchdb.plt
+COUCHDB_PLT ?= $(shell pwd)/../couchdb.plt
 endif
 
 $(COUCHDB_PLT):
@@ -198,6 +198,7 @@ rebuild_plt:
 dialyzer: all $(COUCHDB_PLT)
 	dialyzer --plt $(COUCHDB_PLT) \
 		--verbose \
+		--check_plt \
                 -Wno_improper_lists \
 		-pa src/couchdb \
 		-pa src/couch_set_view \

@@ -484,7 +484,6 @@ cleanup_index_files(SetName) ->
             [SetName, string:join(DeleteFiles, "\n")])
     end,
     RootDir = couch_config:get("couchdb", "view_index_dir"),
-    couch_file:init_delete_dir(RootDir),
     lists:foreach(
         fun(File) -> couch_file:delete(RootDir, File, false) end,
         DeleteFiles).

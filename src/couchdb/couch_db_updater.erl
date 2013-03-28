@@ -393,7 +393,7 @@ btree_by_seq_split(#doc_info{id=Id, local_seq=Seq, rev={RevPos, RevId},
                 Id/binary,RevId/binary>>,
     {<<Seq:48>>, Val}.
 
-btree_by_seq_join(<<Seq:48>>, Val) ->
+btree_by_seq_join({<<Seq:48>>, Val}) ->
     <<SizeId:12,SizeBody:28,Deleted:1,Bp:47,RevPos0:48,Meta:8,
         Id:SizeId/binary,RevId/binary>> = Val,
     % It is possible when upgrading from 1.8.x to 2.0.0 to create items
@@ -415,7 +415,7 @@ btree_by_id_split(#doc_info{id=Id, local_seq=Seq, rev={RevPos,RevId},
     Val = <<Seq:48,0:4,Size:28,DeletedBit:1,Bp:47,RevPos:48,Meta:8,RevId/binary>>,
     {Id, Val}.
 
-btree_by_id_join(Id, Bin) ->
+btree_by_id_join({Id, Bin}) ->
     <<Seq:48,Size:32,DeletedBit:1,Bp:47,RevPos0:48,Meta:8,RevId/binary>> = Bin,
     % It is possible when upgrading from 1.8.x to 2.0.0 to create items
     % on disk with a revision number of 0, which is not a valid revision
@@ -516,15 +516,15 @@ populate_db_from_header(Db, NewHeader) ->
         end,
     {ok, IdBtree} = couch_btree:open(Header#db_header.docinfo_by_id_btree_state,
             Db#db.fd,
-            [{split, fun(X) -> btree_by_id_split(X) end},
-            {join, fun(X,Y) -> btree_by_id_join(X,Y) end},
-            {reduce, fun(X,Y) -> btree_by_id_reduce(X,Y) end},
+            [{split, fun btree_by_id_split/1},
+            {join, fun btree_by_id_join/1},
+            {reduce, fun btree_by_id_reduce/2},
             {binary_mode, true}]),
     {ok, SeqBtree} = couch_btree:open(Header#db_header.docinfo_by_seq_btree_state,
             Db#db.fd,
-            [{split, fun(X) -> btree_by_seq_split(X) end},
-            {join, fun(X,Y) -> btree_by_seq_join(X,Y) end},
-            {reduce, fun(X,Y) -> btree_by_seq_reduce(X,Y) end},
+            [{split, fun btree_by_seq_split/1},
+            {join, fun btree_by_seq_join/1},
+            {reduce, fun btree_by_seq_reduce/2},
             {less, Less},
             {binary_mode, true}]),
     {ok, LocalDocsBtree} = couch_btree:open(Header#db_header.local_docs_btree_state,
