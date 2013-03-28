@@ -154,7 +154,7 @@ get_node(#btree{fd = Fd, binary_mode = true}, NodePos) ->
     {ok, CompressedBin} = couch_file:pread_binary(Fd, NodePos),
     <<TypeInt, NodeBin/binary>> = Bin = couch_compress:decompress(CompressedBin),
     Type = if TypeInt == 1 -> kv_node; true -> kp_node end,
-    {couch_btree:decode_node(Type, NodeBin, []), byte_size(CompressedBin), byte_size(Bin)}.
+    {couch_btree:decode_node(NodeBin, Type, []), byte_size(CompressedBin), byte_size(Bin)}.
 
 
 expand_stat(Values, StatName) ->
