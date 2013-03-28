@@ -183,7 +183,7 @@ reduce_fun_indexes(RedFuns) ->
                 {Idx, Idx + 1}
         end,
         1, RedFuns),
-    lists:reverse(L).
+    L.
 
 
 recombine_reduce_results([], [], [], Acc) ->
