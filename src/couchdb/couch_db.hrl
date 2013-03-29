@@ -10,6 +10,9 @@
 % License for the specific language governing permissions and limitations under
 % the License.
 
+-ifndef(_COUCH_DB_COMMON__HRL_).
+-define(_COUCH_DB_COMMON__HRL_,).
+
 -define(LOCAL_DOC_PREFIX, "_local/").
 -define(DESIGN_DOC_PREFIX0, "_design").
 -define(DESIGN_DOC_PREFIX, "_design/").
@@ -291,3 +294,6 @@
     kp_chunk_threshold = 2 * 16#4ff,
     binary_mode = false
 }).
+
+-endif.
+
