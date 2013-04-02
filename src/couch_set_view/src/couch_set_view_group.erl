@@ -1801,6 +1801,8 @@ filter_out_bitmask_partitions(Partitions, BMask) ->
 maybe_update_partition_states(ActiveList0, PassiveList0, CleanupList0, State) ->
     #state{group = Group} = State,
     PendingTrans = ?set_pending_transition(Group),
+    PendingActive = ?pending_transition_active(PendingTrans),
+    PendingPassive = ?pending_transition_passive(PendingTrans),
     PendingUnindexable = ?pending_transition_unindexable(PendingTrans),
     case (?set_unindexable_seqs(Group) == []) andalso (PendingUnindexable == []) of
     true ->
@@ -1808,8 +1810,10 @@ maybe_update_partition_states(ActiveList0, PassiveList0, CleanupList0, State) ->
         PassiveList = PassiveList0,
         CleanupList = CleanupList0;
     false ->
-        ActiveList = filter_out_bitmask_partitions(ActiveList0, ?set_abitmask(Group)),
-        PassiveList = filter_out_bitmask_partitions(PassiveList0, ?set_pbitmask(Group)),
+        AlreadyActive = couch_set_view_util:build_bitmask(PendingActive) bor ?set_abitmask(Group),
+        AlreadyPassive = couch_set_view_util:build_bitmask(PendingPassive) bor ?set_pbitmask(Group),
+        ActiveList = filter_out_bitmask_partitions(ActiveList0, AlreadyActive),
+        PassiveList = filter_out_bitmask_partitions(PassiveList0, AlreadyPassive),
         CleanupList = filter_out_bitmask_partitions(CleanupList0, ?set_cbitmask(Group)),
         ActiveMarkedAsUnindexable = [
             P || P <- ActiveList, is_unindexable_part(P, Group)

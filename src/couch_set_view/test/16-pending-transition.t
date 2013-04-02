@@ -638,6 +638,11 @@ test_unindexable_partitions() ->
     Unindexable = ordsets:union(PendingActiveUnindexable, PendingPassiveUnindexable),
     ok = couch_set_view:mark_partitions_unindexable(test_set_name(), ddoc_id(), Unindexable),
 
+    etap:diag("Marking unindexable partitions to the state they're already in, is a no-op"),
+    ok = couch_set_view:set_partition_states(
+        test_set_name(), ddoc_id(),
+        PendingActiveUnindexable, PendingPassiveUnindexable, []),
+
     Group1 = get_group_snapshot(ok),
     PendingTrans = ?set_pending_transition(Group1),
     etap:is(?pending_transition_unindexable(PendingTrans),
