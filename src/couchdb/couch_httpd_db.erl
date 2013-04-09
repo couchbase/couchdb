@@ -513,7 +513,7 @@ db_doc_req(#httpd{method='PUT'}=Req, Db, DocId) ->
     update_doc(Req, Db, DocId, Doc, RespHeaders);
 
 db_doc_req(Req, _Db, _DocId) ->
-    send_method_not_allowed(Req, "DELETE,GET,HEAD,POST,PUT").
+    send_method_not_allowed(Req, "DELETE,GET,HEAD,PUT").
 
 
 send_doc(Req, Doc, _Options) ->
