@@ -96,8 +96,7 @@ encode_btree_op(remove = Op, Key) ->
 -spec encode_btree_op('insert', binary(), binary()) -> binary().
 encode_btree_op(insert = Op, Key, Value) ->
     Data = <<(btree_op_to_code(Op)):8,
-             (byte_size(Key)):16, Key/binary,
-             (byte_size(Value)):32, Value/binary>>,
+             (byte_size(Key)):16, Key/binary, Value/binary>>,
     <<(byte_size(Data)):32, Data/binary>>.
 
 
@@ -134,6 +133,5 @@ file_sorter_batch_format_fun(<<Op:8, KeyLen:16, K:KeyLen/binary, Rest/binary>>) 
     remove ->
         {remove, K, nil};
     insert ->
-        <<ValLen:32, V:ValLen/binary>> = Rest,
-        {insert, K, V}
+        {insert, K, Rest}
     end.

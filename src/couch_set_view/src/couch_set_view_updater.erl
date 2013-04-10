@@ -24,6 +24,9 @@
 
 % initial index build
 -define(MAX_SORT_BUFFER_SIZE, 1048576).
+% incremental updates
+-define(INC_MAX_TMP_FILE_SIZE, 31457280).
+-define(INC_MIN_BATCH_SIZE_PER_VIEW, 65536).
 
 % Same as in couch_btree.erl
 -define(KEY_BITS,       12).
@@ -53,7 +56,13 @@
     write_queue_size,
     max_tmp_files,
     max_insert_batch_size,
-    min_batch_size_per_view
+    tmp_files = dict:new()
+}).
+
+-record(tmp_file_info, {
+    name = nil,
+    fd = nil,
+    size = 0
 }).
 
 
@@ -136,9 +145,7 @@ update(Owner, Group, CurSeqs, CompactorRunning, TmpDir, Options) ->
         max_tmp_files = list_to_integer(
             couch_config:get("set_views", "indexer_max_tmp_files", "16")),
         max_insert_batch_size = list_to_integer(
-            couch_config:get("set_views", "indexer_max_insert_batch_size", "1048576")),
-        min_batch_size_per_view = list_to_integer(
-            couch_config:get("set_views", "indexer_min_batch_size_per_view", "1048576"))
+            couch_config:get("set_views", "indexer_max_insert_batch_size", "1048576"))
     },
     update(WriterAcc0, ActiveParts, PassiveParts,
             BlockedTime, BarrierEntryPid, NumChanges, CompactorRunning, Options).
@@ -560,10 +567,9 @@ should_flush_writes(#writer_acc{initial_build = true} = Acc) ->
 should_flush_writes(#writer_acc{initial_build = false} = Acc) ->
     #writer_acc{
         view_empty_kvs = ViewEmptyKvs,
-        kvs_size = KvsSize,
-       min_batch_size_per_view = MinBatchSizePerView
+        kvs_size = KvsSize
     } = Acc,
-    KvsSize >= (MinBatchSizePerView * length(ViewEmptyKvs)).
+    KvsSize >= (?INC_MIN_BATCH_SIZE_PER_VIEW * length(ViewEmptyKvs)).
 
 
 flush_writes(#writer_acc{kvs = [], initial_build = false} = Acc) ->
@@ -807,6 +813,9 @@ maybe_flush_merge_buffers(BuffersDict, WriterAcc) ->
         ViewInfos).
 
 
+-spec update_transferred_replicas(#set_view_group{},
+                                  partition_seqs(),
+                                  partition_seqs()) -> #set_view_group{}.
 update_transferred_replicas(Group, _MaxSeqs, _PartIdSeqs) when ?set_replicas_on_transfer(Group) =:= [] ->
     Group;
 update_transferred_replicas(Group, MaxSeqs, PartIdSeqs) ->
@@ -841,6 +850,7 @@ update_transferred_replicas(Group, MaxSeqs, PartIdSeqs) ->
     }.
 
 
+-spec update_part_seq(update_seq(), partition_id(), partition_seqs()) -> partition_seqs().
 update_part_seq(Seq, PartId, Acc) ->
     case couch_set_view_util:find_part_seq(PartId, Acc) of
     {ok, Max} when Max >= Seq ->
@@ -882,7 +892,7 @@ view_insert_doc_query_results(DocId, PartitionId, [ResultKVs | RestResults],
 % Incremental updates.
 write_to_tmp_batch_files(ViewKeyValuesToAdd, DocIdViewIdKeys, WriterAcc) ->
     #writer_acc{
-        sort_files = SortFiles,
+        tmp_files = TmpFiles,
         group = #set_view_group{id_btree = IdBtree} = Group
     } = WriterAcc,
 
@@ -920,17 +930,25 @@ write_to_tmp_batch_files(ViewKeyValuesToAdd, DocIdViewIdKeys, WriterAcc) ->
         IdsData1,
         AddDocIdViewIdKeys),
 
-    BaseIdLess = couch_set_view_updater_helper:batch_sort_fun(IdBtree#btree.less),
-    IdsData3 = lists:sort(
-       fun(<<_:32, A/binary>>, <<_:32, B/binary>>) -> BaseIdLess(A, B) end,
-       IdsData2),
-    NewIdsIndexFile = new_sort_file_name(WriterAcc),
-    {ok, IdsIndexFd} = file2:open(NewIdsIndexFile, [raw, append, binary]),
-    ok = file:write(IdsIndexFd, IdsData3),
-    ok = file:close(IdsIndexFd),
+    IdTmpFileInfo = dict:fetch(ids_index, TmpFiles),
+    case IdTmpFileInfo of
+    #tmp_file_info{fd = nil} ->
+        0 = IdTmpFileInfo#tmp_file_info.size,
+        IdTmpFilePath = new_sort_file_name(WriterAcc),
+        {ok, IdTmpFileFd} = file2:open(IdTmpFilePath, [raw, append, binary]),
+        IdTmpFileSize = 0;
+    #tmp_file_info{fd = IdTmpFileFd, name = IdTmpFilePath, size = IdTmpFileSize} ->
+        ok
+    end,
 
-    IdsIndexFiles = dict:fetch(ids_index, SortFiles),
-    SortFiles2 = dict:store(ids_index, [NewIdsIndexFile | IdsIndexFiles], SortFiles),
+    ok = file:write(IdTmpFileFd, IdsData2),
+
+    IdTmpFileInfo2 = IdTmpFileInfo#tmp_file_info{
+        fd = IdTmpFileFd,
+        name = IdTmpFilePath,
+        size = IdTmpFileSize + iolist_size(IdsData2)
+    },
+    TmpFiles2 = dict:store(ids_index, IdTmpFileInfo2, TmpFiles),
 
     case LookupDocIds of
     [] ->
@@ -955,8 +973,8 @@ write_to_tmp_batch_files(ViewKeyValuesToAdd, DocIdViewIdKeys, WriterAcc) ->
         end,
         dict:new(), LookupResults),
 
-    SortFiles3 = lists:foldl(
-        fun({#set_view{id_num = ViewId, btree = Bt}, AddKeyValues}, AccSortFiles) ->
+    TmpFiles3 = lists:foldl(
+        fun({#set_view{id_num = ViewId}, AddKeyValues}, AccTmpFiles) ->
             AddKeyValuesBinaries = convert_primary_index_kvs_to_binary(AddKeyValues, Group, []),
             KeysToRemove = couch_util:dict_find(ViewId, KeysToRemoveByView, []),
             BatchData = lists:map(
@@ -968,22 +986,31 @@ write_to_tmp_batch_files(ViewKeyValuesToAdd, DocIdViewIdKeys, WriterAcc) ->
                     [Bin | Acc]
                 end,
                 BatchData, AddKeyValuesBinaries),
-            BaseLess = couch_set_view_updater_helper:batch_sort_fun(Bt#btree.less),
-            BatchData3 = lists:sort(
-                fun(<<_:32, A/binary>>, <<_:32, B/binary>>) -> BaseLess(A, B) end,
-                BatchData2),
-            NewBatchFile = new_sort_file_name(WriterAcc),
-            {ok, Fd} = file2:open(NewBatchFile, [raw, append, binary]),
-            ok = file:write(Fd, BatchData3),
-            ok = file:close(Fd),
-            ViewBatchFiles = dict:fetch(ViewId, AccSortFiles),
-            dict:store(ViewId, [NewBatchFile | ViewBatchFiles], AccSortFiles)
+            ViewTmpFileInfo = dict:fetch(ViewId, TmpFiles),
+            case ViewTmpFileInfo of
+            #tmp_file_info{fd = nil} ->
+                0 = ViewTmpFileInfo#tmp_file_info.size,
+                ViewTmpFilePath = new_sort_file_name(WriterAcc),
+                {ok, ViewTmpFileFd} = file2:open(ViewTmpFilePath, [raw, append, binary]),
+                ViewTmpFileSize = 0;
+            #tmp_file_info{fd = ViewTmpFileFd,
+                           size = ViewTmpFileSize,
+                           name = ViewTmpFilePath} ->
+                ok
+            end,
+            ok = file:write(ViewTmpFileFd, BatchData2),
+            ViewTmpFileInfo2 = ViewTmpFileInfo#tmp_file_info{
+                fd = ViewTmpFileFd,
+                name = ViewTmpFilePath,
+                size = ViewTmpFileSize + iolist_size(BatchData2)
+            },
+            dict:store(ViewId, ViewTmpFileInfo2, AccTmpFiles)
         end,
-        SortFiles2,
+        TmpFiles2,
         ViewKeyValuesToAdd),
 
     WriterAcc2 = WriterAcc#writer_acc{
-        sort_files = SortFiles3
+        tmp_files = TmpFiles3
     },
     maybe_update_btrees(WriterAcc2).
 
@@ -995,22 +1022,21 @@ is_new_partition(PartId, #writer_acc{initial_seqs = InitialSeqs}) ->
 maybe_update_btrees(WriterAcc0) ->
     #writer_acc{
         view_empty_kvs = ViewEmptyKVs,
-        sort_files = SortFiles,
+        tmp_files = TmpFiles,
         group = Group0,
         stats = #set_view_updater_stats{seqs = SeqsDoneBefore},
         final_batch = IsFinalBatch,
         owner = Owner,
-        last_seqs = LastSeqs,
-        max_tmp_files = MaxTmpFiles,
-        tmp_dir = TmpDir,
-        compactor_running = CompactorRunning
+        last_seqs = LastSeqs
     } = WriterAcc0,
+    IdTmpFileInfo = dict:fetch(ids_index, TmpFiles),
     ShouldFlush = IsFinalBatch orelse
-        length(dict:fetch(ids_index, SortFiles)) >= MaxTmpFiles orelse
+        ((IdTmpFileInfo#tmp_file_info.size >= ?INC_MAX_TMP_FILE_SIZE) andalso
         lists:any(
             fun({#set_view{id_num = Id}, _}) ->
-                length(dict:fetch(Id, SortFiles)) >= MaxTmpFiles
-            end, ViewEmptyKVs),
+                ViewTmpFileInfo = dict:fetch(Id, TmpFiles),
+                ViewTmpFileInfo#tmp_file_info.size >= ?INC_MAX_TMP_FILE_SIZE
+            end, ViewEmptyKVs)),
     case ShouldFlush of
     false ->
         NewLastSeqs1 = LastSeqs,
@@ -1029,20 +1055,10 @@ maybe_update_btrees(WriterAcc0) ->
             end
         end;
     true ->
-        ViewInfos = [
-            {ids_index, Group0#set_view_group.id_btree} |
-            [{V#set_view.id_num, V#set_view.btree} || V <- Group0#set_view_group.views]
-        ],
-        SortFiles1 = lists:foldl(
-            fun({Id, Bt}, A) ->
-                Files = dict:fetch(Id, SortFiles),
-                SortedFile = merge_files(Files, Bt, TmpDir, CompactorRunning),
-                dict:store(Id, [SortedFile], A)
-            end,
-            SortFiles, ViewInfos),
+        ok = sort_tmp_files(TmpFiles, Group0),
         case erlang:erase(updater_worker) of
         undefined ->
-            WriterAcc1 = WriterAcc0#writer_acc{sort_files = SortFiles1};
+            WriterAcc1 = WriterAcc0;
         UpdaterWorker when is_reference(UpdaterWorker) ->
             receive
             {UpdaterWorker, UpGroup2, UpStats2, CompactFiles2} ->
@@ -1050,8 +1066,7 @@ maybe_update_btrees(WriterAcc0) ->
                 WriterAcc1 = check_if_compactor_started(
                     WriterAcc0#writer_acc{
                         group = UpGroup2,
-                        stats = UpStats2,
-                        sort_files = SortFiles1
+                        stats = UpStats2
                     })
             end
         end,
@@ -1059,8 +1074,8 @@ maybe_update_btrees(WriterAcc0) ->
         NewUpdaterWorker = spawn_updater_worker(WriterAcc2, LastSeqs),
         NewLastSeqs1 = orddict:new(),
         erlang:put(updater_worker, NewUpdaterWorker),
-        SortFiles2 = dict:map(fun(_, _) -> [] end, SortFiles),
-        WriterAcc = WriterAcc2#writer_acc{sort_files = SortFiles2}
+        TmpFiles2 = dict:map(fun(_, _) -> #tmp_file_info{} end, TmpFiles),
+        WriterAcc = WriterAcc2#writer_acc{tmp_files = TmpFiles2}
     end,
     #writer_acc{
         stats = NewStats0,
@@ -1179,7 +1194,7 @@ update_btrees(WriterAcc) ->
         stats = Stats,
         group = Group,
         tmp_dir = TmpDir,
-        sort_files = SortFiles,
+        tmp_files = TmpFiles,
         compactor_running = CompactorRunning,
         max_insert_batch_size = MaxBatchSize
     } = WriterAcc,
@@ -1197,63 +1212,46 @@ update_btrees(WriterAcc) ->
     ok = couch_set_view_util:open_raw_read_fd(Group),
     {NewBtrees, {{_, CleanupCount}, NewStats, CompactFiles}} = lists:mapfoldl(
         fun({ViewId, Bt}, {CleanupAcc, StatsAcc, AccCompactFiles}) ->
-            [SortedFile] = dict:fetch(ViewId, SortFiles),
-            {ok, CleanupAcc2, Bt2, Inserted, Deleted} =
-                couch_set_view_updater_helper:update_btree(
-                    Bt, SortedFile, MaxBatchSize, CleanupFun, CleanupAcc),
-            StatsAcc2 = case ViewId of
-            ids_index ->
-                StatsAcc#set_view_updater_stats{
-                    inserted_ids = StatsAcc#set_view_updater_stats.inserted_ids + Inserted,
-                    deleted_ids = StatsAcc#set_view_updater_stats.deleted_ids + Deleted
-                };
+            #tmp_file_info{name = SortedFile} = dict:fetch(ViewId, TmpFiles),
+            case SortedFile of
+            nil ->
+                {Bt, {CleanupAcc, StatsAcc, AccCompactFiles}};
             _ ->
-                StatsAcc#set_view_updater_stats{
-                    inserted_kvs = StatsAcc#set_view_updater_stats.inserted_kvs + Inserted,
-                    deleted_kvs = StatsAcc#set_view_updater_stats.deleted_kvs + Deleted
-                }
-            end,
-            case CompactorRunning of
-            true ->
-                SortedFile2 = merge_files([SortedFile], Bt, TmpDir, true),
-                AccCompactFiles2 = [SortedFile2 | AccCompactFiles];
-            false ->
-                ok = file2:delete(SortedFile),
-                AccCompactFiles2 = AccCompactFiles
-            end,
-            {Bt2, {CleanupAcc2, StatsAcc2, AccCompactFiles2}}
+                {ok, CleanupAcc2, Bt2, Inserted, Deleted} =
+                    couch_set_view_updater_helper:update_btree(
+                        Bt, SortedFile, MaxBatchSize, CleanupFun, CleanupAcc),
+                StatsAcc2 = case ViewId of
+                ids_index ->
+                    StatsAcc#set_view_updater_stats{
+                        inserted_ids = StatsAcc#set_view_updater_stats.inserted_ids + Inserted,
+                        deleted_ids = StatsAcc#set_view_updater_stats.deleted_ids + Deleted
+                    };
+                _ ->
+                    StatsAcc#set_view_updater_stats{
+                        inserted_kvs = StatsAcc#set_view_updater_stats.inserted_kvs + Inserted,
+                        deleted_kvs = StatsAcc#set_view_updater_stats.deleted_kvs + Deleted
+                    }
+                end,
+                case CompactorRunning of
+                true ->
+                    case filename:extension(SortedFile) of
+                    ".compact" ->
+                        AccCompactFiles2 = [SortedFile | AccCompactFiles];
+                    _ ->
+                        SortedFile2 = new_sort_file_name(TmpDir, true),
+                        ok = file2:rename(SortedFile, SortedFile2),
+                        AccCompactFiles2 = [SortedFile2 | AccCompactFiles]
+                    end;
+                false ->
+                    ok = file2:delete(SortedFile),
+                    AccCompactFiles2 = AccCompactFiles
+                end,
+                {Bt2, {CleanupAcc2, StatsAcc2, AccCompactFiles2}}
+            end
         end,
         {CleanupAcc0, Stats, []}, ViewInfos),
     ok = couch_set_view_util:close_raw_read_fd(Group),
     {ok, NewBtrees, CleanupCount, NewStats, lists:reverse(CompactFiles)}.
-
-
-merge_files([F], _Bt, _TmpDir, false) ->
-    F;
-merge_files([F], _Bt, TmpDir, true) ->
-    case filename:extension(F) of
-    ".compact" ->
-        F;
-    _ ->
-        NewName = new_sort_file_name(TmpDir, true),
-        ok = file2:rename(F, NewName),
-        NewName
-    end;
-merge_files(Files, #btree{less = Less}, TmpDir, CompactorRunning) ->
-    NewFile = new_sort_file_name(TmpDir, CompactorRunning),
-    SortOptions = [
-        {order, couch_set_view_updater_helper:batch_sort_fun(Less)},
-        {tmpdir, TmpDir},
-        {format, binary}
-    ],
-    case file_sorter_2:merge(Files, NewFile, SortOptions) of
-    ok ->
-        ok;
-    {error, Reason} ->
-        exit({batch_sort_failed, Reason})
-    end,
-    ok = lists:foreach(fun(F) -> ok = file2:delete(F) end, Files),
-    NewFile.
 
 
 update_seqs(PartIdSeqs, Seqs) ->
@@ -1333,9 +1331,9 @@ check_if_compactor_started(#writer_acc{group = Group0} = Acc) ->
 
 
 init_view_merge_params(#writer_acc{group = Group, initial_build = false} = WriterAcc) ->
-    SortFiles = [{View#set_view.id_num, []} || View <- Group#set_view_group.views],
+    Files = [{View#set_view.id_num, #tmp_file_info{}} || View <- Group#set_view_group.views],
     WriterAcc#writer_acc{
-        sort_files = dict:from_list([{ids_index, []} | SortFiles])
+        tmp_files = dict:from_list([{ids_index, #tmp_file_info{}} | Files])
     };
 init_view_merge_params(#writer_acc{group = Group} = WriterAcc) ->
     SortFiles = [{View#set_view.id_num, []} || View <- Group#set_view_group.views],
@@ -1475,3 +1473,69 @@ count_seqs_done(Group, NewSeqs) ->
             Acc + (SeqDone - SeqBefore)
         end,
         0, NewSeqs).
+
+
+% Incremental updates.
+-spec sort_tmp_files(dict(), #set_view_group{}) -> 'ok'.
+sort_tmp_files(TmpFiles, Group) ->
+    case os:find_executable("couch_view_file_sorter") of
+    false ->
+        FileSorterCmd = nil,
+        throw(<<"couch_view_file_sorter command not found">>);
+    FileSorterCmd ->
+        ok
+    end,
+    PortOptions = [exit_status, use_stdio, stderr_to_stdout, {line, 4096}, binary],
+    FileSorter = open_port({spawn_executable, FileSorterCmd}, PortOptions),
+    NumViews = length(Group#set_view_group.views),
+    true = port_command(FileSorter, [integer_to_list(NumViews), $\n]),
+    IdTmpFileInfo = dict:fetch(ids_index, TmpFiles),
+    ok = close_tmp_fd(IdTmpFileInfo),
+    true = port_command(FileSorter, [tmp_file_name(IdTmpFileInfo), $\n]),
+    ok = lists:foreach(
+        fun(#set_view{id_num = Id}) ->
+            ViewTmpFileInfo = dict:fetch(Id, TmpFiles),
+            ok = close_tmp_fd(ViewTmpFileInfo),
+            true = port_command(FileSorter, [tmp_file_name(ViewTmpFileInfo), $\n])
+        end,
+        Group#set_view_group.views),
+    try
+        file_sorter_wait_loop(FileSorter, Group, [])
+    after
+        catch port_close(FileSorter)
+    end.
+
+
+close_tmp_fd(#tmp_file_info{fd = nil}) ->
+    ok;
+close_tmp_fd(#tmp_file_info{fd = Fd}) ->
+    ok = file:close(Fd).
+
+
+tmp_file_name(#tmp_file_info{name = nil}) ->
+    "<nil>";
+tmp_file_name(#tmp_file_info{name = Name}) ->
+    Name.
+
+
+file_sorter_wait_loop(Port, Group, Acc) ->
+    receive
+    {Port, {exit_status, 0}} ->
+        ok;
+    {Port, {exit_status, Status}} ->
+        throw({file_sorter_exit, Status});
+    {Port, {data, {noeol, Data}}} ->
+        file_sorter_wait_loop(Port, Group, [Data | Acc]);
+    {Port, {data, {eol, Data}}} ->
+        #set_view_group{
+            set_name = SetName,
+            name = DDocId,
+            type = Type
+        } = Group,
+        Msg = lists:reverse([Data | Acc]),
+        ?LOG_ERROR("Set view `~s`, ~s group `~s`, received error from file sorter: ~s",
+                   [SetName, Type, DDocId, Msg]),
+        file_sorter_wait_loop(Port, Group, []);
+    {Port, Error} ->
+        throw({file_sorter_error, Error})
+    end.
