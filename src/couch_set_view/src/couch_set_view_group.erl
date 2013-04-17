@@ -3533,6 +3533,7 @@ fix_updater_group(UpdaterGroup, OurGroup) ->
         index_header = UpdaterHeader#set_view_index_header{
             abitmask = ?set_abitmask(OurGroup),
             pbitmask = ?set_pbitmask(OurGroup),
+            pending_transition = ?set_pending_transition(OurGroup),
             seqs = Seqs2
         }
     }.
