@@ -28,7 +28,7 @@ num_docs_0() -> 78144.  % keep it a multiple of num_set_partitions()
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(36),
+    etap:plan(40),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -64,7 +64,14 @@ test() ->
     update_documents(0, NumDocs2, ValueGenFun2),
 
     etap:diag("Testing state transitions during incremental index update"),
-    test_state_changes_while_updater_running(ValueGenFun2, NumDocs2),
+    {ActiveParts, PassiveParts} =
+        test_state_changes_while_updater_running(ValueGenFun2, NumDocs2),
+
+    % Test adding a new passive partition to the updater while it's running and
+    % that partition ends up in the pending transition.
+    % This failed to happen in MB-8109.
+    test_add_passive_partition_to_pending_transition_while_updater_running(
+        ActiveParts, PassiveParts, NumDocs2, ValueGenFun1),
 
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
     ok = timer:sleep(1000),
@@ -130,7 +137,58 @@ test_state_changes_while_updater_running(ValueGenFun, NumDocs) ->
     couch_util:shutdown_sync(GroupPid),
     wait_group_respawn(GroupPid, 3000),
 
-    verify_btrees(ValueGenFun, NumDocs, ActiveParts, PassiveParts).
+    verify_btrees(ValueGenFun, NumDocs, ActiveParts, PassiveParts),
+    {ActiveParts, PassiveParts}.
+
+
+test_add_passive_partition_to_pending_transition_while_updater_running(
+        Active, Passive, NumDocs, ValueGenFun) ->
+    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    ok = gen_server:call(GroupPid, {set_auto_cleanup, false}, infinity),
+    Parts = ordsets:from_list([hd(Active), hd(Passive)]),
+    ok = couch_set_view:set_partition_states(test_set_name(), ddoc_id(), [], [], Parts),
+
+    % Bump partition seq numbers so that the updater can be triggered.
+    update_documents(0, NumDocs, ValueGenFun),
+    {ok, UpdaterPid} = gen_server:call(GroupPid, {start_updater, [pause]}, infinity),
+
+    % Now mark partitions under cleanup as passive while the updater is running
+    ok = couch_set_view:set_partition_states(test_set_name(), ddoc_id(), [], Parts, []),
+
+    Group = get_group_snapshot(),
+    PendingTrans = ?set_pending_transition(Group),
+    PendingPassive = ?pending_transition_passive(PendingTrans),
+
+    etap:is(PendingPassive, Parts,
+            "Correct list of passive partitions in pending transition"),
+
+    Ref = erlang:monitor(process, UpdaterPid),
+    UpdaterPid ! continue,
+    etap:diag("Waiting for updater to finish"),
+    receive
+    {'DOWN', Ref, _, _, {updater_finished, _}} ->
+        etap:diag("Updater finished");
+    {'DOWN', Ref, _, _, {updater_error, shutdown}} ->
+        etap:diag("Updater restarted");
+    {'DOWN', Ref, _, _, Reason} ->
+        etap:bail("Updater finished with unexpected reason: " ++ couch_util:to_list(Reason))
+    after ?MAX_WAIT_TIME ->
+        etap:bail("Timeout waiting for updater to finish")
+    end,
+
+    Group2 = get_group_snapshot(),
+    PendingTrans2 = ?set_pending_transition(Group2),
+    etap:is(PendingTrans2, nil, "Pending transition is empty after updater finished"),
+
+    PartsMask = couch_set_view_util:build_bitmask(Parts),
+    PartSeqs = [couch_util:get_value(P, ?set_seqs(Group2), -1) || P <- Parts],
+
+    etap:is(PartSeqs, [0 || _P <- Parts],
+            "Group snapshot has the right seq numbers for the new passive partitions"),
+    etap:is((?set_pbitmask(Group2) band PartsMask),
+            PartsMask,
+            "Group snapshot has new passive partitions set in its passive bitmask"),
+    ok.
 
 
 wait_group_respawn(_OldPid, T) when T =< 0 ->
