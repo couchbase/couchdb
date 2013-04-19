@@ -28,6 +28,10 @@
 -define(INC_MAX_TMP_FILE_SIZE, 31457280).
 -define(INC_MIN_BATCH_SIZE_PER_VIEW, 65536).
 
+% For file sorter and file merger commands.
+-define(PORT_OPTS,
+        [exit_status, use_stdio, stderr_to_stdout, {line, 4096}, binary]).
+
 % Same as in couch_btree.erl
 -define(KEY_BITS,       12).
 -define(MAX_KEY_SIZE,   ((1 bsl ?KEY_BITS) - 1)).
@@ -757,18 +761,14 @@ maybe_flush_merge_buffers(BuffersDict, WriterAcc) ->
         view_empty_kvs = ViewEmptyKVs,
         sort_files = SortFilesDict,
         sort_file_workers = Workers,
-        tmp_dir = TmpDir,
-        group = #set_view_group{id_btree = IdBtree},
+        group = Group,
         final_batch = IsFinalBatch,
         max_tmp_files = MaxTmpFiles
     } = WriterAcc,
-    ViewInfos = [
-        {ids_index, IdBtree#btree.less} |
-        [{V#set_view.id_num, (V#set_view.btree)#btree.less} || {V, _} <- ViewEmptyKVs]
-    ],
+    ViewInfos = [ids_index | [V#set_view.id_num || {V, _} <- ViewEmptyKVs]],
     NumBtrees = length(ViewEmptyKVs) + 1,
     lists:foldl(
-        fun({Id, Less}, {AccBuffers, AccFiles, AccWorkers}) ->
+        fun(Id, {AccBuffers, AccFiles, AccWorkers}) ->
             {Buf, BufSize} = dict:fetch(Id, AccBuffers),
             case (BufSize >= ?MAX_SORT_BUFFER_SIZE) orelse IsFinalBatch of
             true ->
@@ -781,7 +781,6 @@ maybe_flush_merge_buffers(BuffersDict, WriterAcc) ->
                 SortFiles2 = ordsets:add_element({0, FileName}, SortFiles),
                 case (ordsets:size(SortFiles2) >= MaxTmpFiles) orelse IsFinalBatch of
                 true ->
-                    LessFun = fun({A, _}, {B, _}) -> Less(A, B) end,
                     MergeSortFile = new_sort_file_name(WriterAcc),
                     {FilesToMerge, NextGen, RestSortFiles} =
                         split_files_to_merge(SortFiles2, IsFinalBatch),
@@ -798,7 +797,7 @@ maybe_flush_merge_buffers(BuffersDict, WriterAcc) ->
                             AccWorkers2 = AccWorkers
                         end,
                         MergeWorker = spawn_merge_worker(
-                            LessFun, TmpDir, AccWorkers2, FilesToMerge, MergeSortFile),
+                            Id, Group, AccWorkers2, FilesToMerge, MergeSortFile),
                         SortFiles3 = ordsets:add_element({NextGen, MergeSortFile}, RestSortFiles),
                         {AccBuffers2, dict:store(Id, SortFiles3, AccFiles), [MergeWorker | AccWorkers2]}
                     end;
@@ -1439,29 +1438,60 @@ split_files_by_gen(Gen, [{Gen2, _} | _] = Rest, AccNot, Acc) when Gen2 > Gen ->
     {Gen, Acc, ordsets:union(AccNot, Rest)}.
 
 
-spawn_merge_worker(LessFun, TmpDir, Workers, FilesToMerge, DestFile) ->
+spawn_merge_worker(ViewId, Group, Workers, FilesToMerge, DestFile) ->
     spawn_link(fun() ->
-        SortOptions = [
-            {order, LessFun},
-            {tmpdir, TmpDir},
-            {format, fun file_sorter_initial_build_format_fun/1}
+        NumFiles = length(FilesToMerge),
+        case ViewId of
+        ids_index ->
+            Type = "i";
+        _ when is_integer(ViewId) ->
+            Type = "v"
+        end,
+        case os:find_executable("couch_view_file_merger") of
+        false ->
+            FileMergerCmd = nil,
+            throw(<<"couch_view_file_merger command not found">>);
+        FileMergerCmd ->
+            ok
+        end,
+        MergerInput = [
+            Type, $\n,
+            integer_to_list(NumFiles), $\n,
+            string:join(FilesToMerge, "\n"), $\n,
+            DestFile, $\n
         ],
         wait_for_workers(Workers),
-        case file_sorter_2:merge(FilesToMerge, DestFile, SortOptions) of
-        ok ->
-            ok;
-        {error, Reason} ->
-            exit({sort_worker_died, Reason})
-        end,
-        lists:foreach(fun(F) ->
-            case file2:delete(F) of
-            ok ->
-                ok;
-            {error, Reason2} ->
-                exit({sort_worker_died, Reason2})
-            end
-        end, FilesToMerge)
+        FileMerger = open_port({spawn_executable, FileMergerCmd}, ?PORT_OPTS),
+        true = port_command(FileMerger, MergerInput),
+        try
+            file_merger_wait_loop(FileMerger, Group, [])
+        after
+            catch port_close(FileMerger)
+        end
     end).
+
+
+file_merger_wait_loop(Port, Group, Acc) ->
+    receive
+    {Port, {exit_status, 0}} ->
+        ok;
+    {Port, {exit_status, Status}} ->
+        throw({file_merger_exit, Status});
+    {Port, {data, {noeol, Data}}} ->
+        file_merger_wait_loop(Port, Group, [Data | Acc]);
+    {Port, {data, {eol, Data}}} ->
+        #set_view_group{
+            set_name = SetName,
+            name = DDocId,
+            type = Type
+        } = Group,
+        Msg = lists:reverse([Data | Acc]),
+        ?LOG_ERROR("Set view `~s`, ~s group `~s`, received error from file merger: ~s",
+                   [SetName, Type, DDocId, Msg]),
+        file_merger_wait_loop(Port, Group, []);
+    {Port, Error} ->
+        throw({file_merger_error, Error})
+    end.
 
 
 count_seqs_done(Group, NewSeqs) ->
@@ -1485,8 +1515,7 @@ sort_tmp_files(TmpFiles, Group) ->
     FileSorterCmd ->
         ok
     end,
-    PortOptions = [exit_status, use_stdio, stderr_to_stdout, {line, 4096}, binary],
-    FileSorter = open_port({spawn_executable, FileSorterCmd}, PortOptions),
+    FileSorter = open_port({spawn_executable, FileSorterCmd}, ?PORT_OPTS),
     NumViews = length(Group#set_view_group.views),
     true = port_command(FileSorter, [integer_to_list(NumViews), $\n]),
     IdTmpFileInfo = dict:fetch(ids_index, TmpFiles),
