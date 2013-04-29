@@ -218,7 +218,8 @@
     replica_group = nil                     :: 'nil' | #set_view_group{},
     replica_pid = nil                       :: 'nil' | pid(),
     debug_info = nil                        :: #set_view_debug_info{} | 'nil',
-    filepath = ""                           :: string()
+    filepath = ""                           :: string(),
+    mod = mapreduce_view                    :: atom()
 }).
 
 -record(set_view_updater_stats, {

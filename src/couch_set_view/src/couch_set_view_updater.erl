@@ -13,6 +13,8 @@
 -module(couch_set_view_updater).
 
 -export([update/6]).
+% Exported for the MapReduce specific stuff
+-export([file_sorter_initial_build_format_fun/1, new_sort_file_name/1]).
 % Exported for unit tests only.
 -export([convert_back_index_kvs_to_binary/2]).
 
@@ -156,7 +158,8 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
         set_name = SetName,
         type = Type,
         name = DDocId,
-        sig = GroupSig
+        sig = GroupSig,
+        mod = Mod
     } = Group,
 
     StartTime = os:timestamp(),
@@ -212,12 +215,12 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
         }),
         ok = couch_set_view_util:open_raw_read_fd(Group),
         try
-            couch_set_view_mapreduce:start_reduce_context(Group),
+            Mod:start_reduce_context(Group),
             try
                 FinalWriterAcc = do_writes(WriterAcc2),
                 Parent ! {writer_finished, FinalWriterAcc}
             after
-                couch_set_view_mapreduce:end_reduce_context(Group)
+                Mod:end_reduce_context(Group)
             end
         catch _:Error ->
             Stacktrace = erlang:get_stacktrace(),
@@ -460,7 +463,8 @@ do_maps(Group, MapQueue, WriteQueue) ->
     #set_view_group{
         set_name = SetName,
         name = DDocId,
-        type = Type
+        type = Type,
+        mod = Mod
     } = Group,
     case couch_work_queue:dequeue(MapQueue) of
     closed ->
@@ -478,8 +482,9 @@ do_maps(Group, MapQueue, WriteQueue) ->
                         fun({error, Reason}, {AccRes, Pos}) ->
                             ErrorMsg = "Bucket `~s`, ~s group `~s`, error mapping"
                                     " document `~s` for view `~s`: ~s",
-                            Args = [SetName, Type, DDocId, Id,
-                                view_name(Group, Pos), couch_util:to_binary(Reason)],
+                            ViewName = Mod:view_name(Group, Pos),
+                            Args = [SetName, Type, DDocId, Id, ViewName,
+                                    couch_util:to_binary(Reason)],
                             ?LOG_MAPREDUCE_ERROR(ErrorMsg, Args),
                             {[[] | AccRes], Pos - 1};
                         (KVs, {AccRes, Pos}) ->
@@ -499,17 +504,6 @@ do_maps(Group, MapQueue, WriteQueue) ->
         ok = couch_work_queue:queue(WriteQueue, Items),
         do_maps(Group, MapQueue, WriteQueue)
     end.
-
-
-view_name(#set_view_group{views = Views}, ViewPos) ->
-    V = lists:nth(ViewPos, Views),
-    case V#set_view.map_names of
-    [] ->
-        [{Name, _} | _] = V#set_view.reduce_funs;
-    [Name | _] ->
-        ok
-    end,
-    Name.
 
 
 do_writes(Acc) ->
@@ -603,7 +597,8 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
         set_name = SetName,
         type = Type,
         name = DDocId,
-        fd = GroupFd
+        fd = GroupFd,
+        mod = Mod
     } = Group,
     {ViewKVs, DocIdViewIdKeys, MaxSeqs2} = process_map_results(Kvs, ViewEmptyKVs, MaxSeqs),
 
@@ -619,20 +614,7 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
     #tmp_file_info{fd = IdFd, name = IdFile} = dict:fetch(ids_index, TmpFiles),
     ok = file:write(IdFd, IdRecords),
 
-    InsertKVCount = lists:foldl(
-        fun({#set_view{id_num = Id}, KvList}, AccCount) ->
-            #tmp_file_info{fd = ViewFd} = dict:fetch(Id, TmpFiles),
-            KvBins = convert_primary_index_kvs_to_binary(KvList, Group, []),
-            ViewRecords = lists:foldr(
-                fun({KeyBin, ValBin}, Acc) ->
-                    KvBin = [<<(byte_size(KeyBin)):16>>, KeyBin, ValBin],
-                    [[<<(iolist_size(KvBin)):32>>, KvBin] | Acc]
-                end,
-                [], KvBins),
-            ok = file:write(ViewFd, ViewRecords),
-            AccCount + length(KvBins)
-        end,
-        0, ViewKVs),
+    InsertKVCount = Mod:write_kvs(Group, TmpFiles, ViewKVs),
 
     update_task(KvsLength),
     case IsFinalBatch of
@@ -656,20 +638,14 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
         NewIdBtree = IdBtree#btree{root = NewIdBtreeRoot},
         ok = file2:delete(IdFile),
         NewViews = lists:map(
-            fun(#set_view{id_num = Id, btree = Bt} = View) ->
-               #tmp_file_info{name = ViewFile} = dict:fetch(Id, TmpFiles),
-               {ok, NewBtRoot} = couch_btree_copy:from_sorted_file(
-                   Bt, ViewFile, GroupFd, fun file_sorter_initial_build_format_fun/1),
-               ok = file2:delete(ViewFile),
-               View#set_view{
-                   btree = Bt#btree{root = NewBtRoot}
-               }
+            fun(View) ->
+                Mod:finish_build(View, GroupFd, TmpFiles)
             end,
             Group#set_view_group.views),
         Header = Group#set_view_group.index_header,
         NewHeader = Header#set_view_index_header{
             id_btree_state = couch_btree:get_state(NewIdBtree),
-            view_states = [couch_btree:get_state(V#set_view.btree) || V <- NewViews],
+            view_states = [Mod:get_state(V#set_view.btree) || V <- NewViews],
             seqs = MaxSeqs2
         },
         update_task(1),
@@ -783,7 +759,10 @@ view_insert_doc_query_results(DocId, PartitionId, [ResultKVs | RestResults],
 write_to_tmp_batch_files(ViewKeyValuesToAdd, DocIdViewIdKeys, WriterAcc) ->
     #writer_acc{
         tmp_files = TmpFiles,
-        group = #set_view_group{id_btree = IdBtree} = Group
+        group = #set_view_group{
+            id_btree = IdBtree,
+            mod = Mod
+        }
     } = WriterAcc,
 
     {AddDocIdViewIdKeys0, RemoveDocIds, LookupDocIds} = lists:foldr(
@@ -863,45 +842,9 @@ write_to_tmp_batch_files(ViewKeyValuesToAdd, DocIdViewIdKeys, WriterAcc) ->
         end,
         dict:new(), LookupResults),
 
-    TmpFiles3 = lists:foldl(
-        fun({#set_view{id_num = ViewId}, AddKeyValues}, AccTmpFiles) ->
-            AddKeyValuesBinaries = convert_primary_index_kvs_to_binary(AddKeyValues, Group, []),
-            KeysToRemove = couch_util:dict_find(ViewId, KeysToRemoveByView, []),
-            BatchData = lists:map(
-                fun(K) -> couch_set_view_updater_helper:encode_btree_op(remove, K) end,
-                KeysToRemove),
-            BatchData2 = lists:foldl(
-                fun({K, V}, Acc) ->
-                    Bin = couch_set_view_updater_helper:encode_btree_op(insert, K, V),
-                    [Bin | Acc]
-                end,
-                BatchData, AddKeyValuesBinaries),
-            ViewTmpFileInfo = dict:fetch(ViewId, TmpFiles),
-            case ViewTmpFileInfo of
-            #tmp_file_info{fd = nil} ->
-                0 = ViewTmpFileInfo#tmp_file_info.size,
-                ViewTmpFilePath = new_sort_file_name(WriterAcc),
-                {ok, ViewTmpFileFd} = file2:open(ViewTmpFilePath, [raw, append, binary]),
-                ViewTmpFileSize = 0;
-            #tmp_file_info{fd = ViewTmpFileFd,
-                           size = ViewTmpFileSize,
-                           name = ViewTmpFilePath} ->
-                ok
-            end,
-            ok = file:write(ViewTmpFileFd, BatchData2),
-            ViewTmpFileInfo2 = ViewTmpFileInfo#tmp_file_info{
-                fd = ViewTmpFileFd,
-                name = ViewTmpFilePath,
-                size = ViewTmpFileSize + iolist_size(BatchData2)
-            },
-            dict:store(ViewId, ViewTmpFileInfo2, AccTmpFiles)
-        end,
-        TmpFiles2,
-        ViewKeyValuesToAdd),
-
-    WriterAcc2 = WriterAcc#writer_acc{
-        tmp_files = TmpFiles3
-    },
+    WriterAcc2 = Mod:update_tmp_files(
+        WriterAcc#writer_acc{tmp_files = TmpFiles2}, ViewKeyValuesToAdd,
+        KeysToRemoveByView),
     maybe_update_btrees(WriterAcc2).
 
 
@@ -1011,11 +954,14 @@ send_log_compact_files(Owner, Files, Seqs) ->
     ok = gen_server:cast(Owner, {compact_log_files, Files, Seqs}).
 
 
+% XXX vmx 2013-05-08: This is still too MapReduce specific
 spawn_updater_worker(WriterAcc, PartIdSeqs) ->
     Parent = self(),
     Ref = make_ref(),
     #writer_acc{
-        group = Group,
+        group = #set_view_group{
+            mod = Mod
+        } = Group,
         max_seqs = MaxSeqs
     } = WriterAcc,
     _Pid = spawn_link(fun() ->
@@ -1025,7 +971,7 @@ spawn_updater_worker(WriterAcc, PartIdSeqs) ->
         _ ->
             CleanupStart = os:timestamp()
         end,
-        couch_set_view_mapreduce:start_reduce_context(Group),
+        Mod:start_reduce_context(Group),
         {ok, NewBtrees, CleanupCount, NewStats, NewCompactFiles} = update_btrees(WriterAcc),
         couch_set_view_mapreduce:end_reduce_context(Group),
         [IdBtree2 | ViewBtrees2] = NewBtrees,
@@ -1253,34 +1199,6 @@ new_sort_file_name(TmpDir, true) ->
     couch_set_view_util:new_sort_file_path(TmpDir, compactor);
 new_sort_file_name(TmpDir, false) ->
     couch_set_view_util:new_sort_file_path(TmpDir, updater).
-
-
-convert_primary_index_kvs_to_binary([], _Group, Acc) ->
-    lists:reverse(Acc);
-convert_primary_index_kvs_to_binary([{{Key, DocId}, {PartId, V0}} | Rest], Group, Acc)->
-    V = case V0 of
-    {dups, Values} ->
-        ValueListBinary = lists:foldl(
-            fun(V, Acc2) ->
-                <<Acc2/binary, (byte_size(V)):24, V/binary>>
-            end,
-            <<>>, Values),
-        <<PartId:16, ValueListBinary/binary>>;
-    _ ->
-        <<PartId:16, (byte_size(V0)):24, V0/binary>>
-    end,
-    KeyBin = couch_set_view_util:encode_key_docid(Key, DocId),
-    case byte_size(KeyBin) > ?MAX_KEY_SIZE of
-    true ->
-        #set_view_group{set_name = SetName, name = DDocId, type = Type} = Group,
-        KeyPrefix = lists:sublist(unicode:characters_to_list(Key), 100),
-        Error = iolist_to_binary(
-            io_lib:format("key emitted for document `~s` is too long: ~s...", [DocId, KeyPrefix])),
-        ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, ~s", [SetName, Type, DDocId, Error]),
-        throw({error, Error});
-    false ->
-        convert_primary_index_kvs_to_binary(Rest, Group, [{KeyBin, V} | Acc])
-    end.
 
 
 convert_back_index_kvs_to_binary([], Acc)->
