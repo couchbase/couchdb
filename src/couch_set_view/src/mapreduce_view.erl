@@ -20,6 +20,8 @@
 % For the group
 -export([design_doc_to_set_view_group/2, view_group_data_size/2,
          reset_view/1, make_views_fun/3]).
+% For the utils
+-export([clean_views/5]).
 
 
 -include("couch_db.hrl").
@@ -344,3 +346,16 @@ make_views_fun(Fd, BtreeOptions, Group) ->
             BTState, Fd, [{less, Less}, {reduce, ReduceFun} | BtreeOptions]),
         View#set_view{btree = Btree}
     end.
+
+
+clean_views(_, _, [], Count, Acc) ->
+    {Count, lists:reverse(Acc)};
+clean_views(stop, _, Rest, Count, Acc) ->
+    {Count, lists:reverse(Acc, Rest)};
+clean_views(go, PurgeFun, [#set_view{btree = Btree} = View | Rest], Count, Acc) ->
+    couch_set_view_mapreduce:start_reduce_context(View),
+    {ok, NewBtree, {Go, PurgedCount}} =
+        couch_btree:guided_purge(Btree, PurgeFun, {go, Count}),
+    couch_set_view_mapreduce:end_reduce_context(View),
+    NewAcc = [View#set_view{btree = NewBtree} | Acc],
+    clean_views(Go, PurgeFun, Rest, PurgedCount, NewAcc).

@@ -228,13 +228,13 @@ close_raw_read_fd(#set_view_group{fd = FilePid}) ->
 
 
 -spec compute_indexed_bitmap(#set_view_group{}) -> bitmap().
-compute_indexed_bitmap(#set_view_group{id_btree = IdBtree, views = Views}) ->
-    compute_indexed_bitmap(IdBtree, Views).
+compute_indexed_bitmap(#set_view_group{id_btree = IdBtree, views = Views, mod = Mod}) ->
+    compute_indexed_bitmap(Mod, IdBtree, Views).
 
-compute_indexed_bitmap(IdBtree, Views) ->
+compute_indexed_bitmap(Mod, IdBtree, Views) ->
     {ok, <<_Count:40, IdBitmap:?MAX_NUM_PARTITIONS>>} = couch_btree:full_reduce(IdBtree),
-    lists:foldl(fun(#set_view{btree = Bt}, AccMap) ->
-        {ok, <<_Size:40, Bm:?MAX_NUM_PARTITIONS, _/binary>>} = couch_btree:full_reduce(Bt),
+    lists:foldl(fun(View, AccMap) ->
+        Bm = Mod:view_bitmap(View#set_view.btree),
         AccMap bor Bm
     end,
     IdBitmap, Views).
@@ -247,39 +247,28 @@ cleanup_group(Group) ->
     #set_view_group{
         index_header = Header,
         id_btree = IdBtree,
-        views = Views
+        views = Views,
+        mod = Mod
     } = Group,
     PurgeFun = make_btree_purge_fun(Group),
     ok = couch_set_view_util:open_raw_read_fd(Group),
     {ok, NewIdBtree, {Go, IdPurgedCount}} =
         couch_btree:guided_purge(IdBtree, PurgeFun, {go, 0}),
     {TotalPurgedCount, NewViews} =
-        clean_views(Go, PurgeFun, Views, IdPurgedCount, []),
+        Mod:clean_views(Go, PurgeFun, Views, IdPurgedCount, []),
     ok = couch_set_view_util:close_raw_read_fd(Group),
-    IndexedBitmap = compute_indexed_bitmap(NewIdBtree, NewViews),
+    IndexedBitmap = compute_indexed_bitmap(Mod, NewIdBtree, NewViews),
     Group2 = Group#set_view_group{
         id_btree = NewIdBtree,
         views = NewViews,
         index_header = Header#set_view_index_header{
             cbitmask = ?set_cbitmask(Group) band IndexedBitmap,
             id_btree_state = couch_btree:get_state(NewIdBtree),
-            view_states = [couch_btree:get_state(V#set_view.btree) || V <- NewViews]
+            view_states = [Mod:get_state(V#set_view.btree) || V <- NewViews]
         }
     },
     ok = couch_file:flush(Group#set_view_group.fd),
     {ok, Group2, TotalPurgedCount}.
-
-clean_views(_, _, [], Count, Acc) ->
-    {Count, lists:reverse(Acc)};
-clean_views(stop, _, Rest, Count, Acc) ->
-    {Count, lists:reverse(Acc, Rest)};
-clean_views(go, PurgeFun, [#set_view{btree = Btree} = View | Rest], Count, Acc) ->
-    couch_set_view_mapreduce:start_reduce_context(View),
-    {ok, NewBtree, {Go, PurgedCount}} =
-        couch_btree:guided_purge(Btree, PurgeFun, {go, Count}),
-    couch_set_view_mapreduce:end_reduce_context(View),
-    NewAcc = [View#set_view{btree = NewBtree} | Acc],
-    clean_views(Go, PurgeFun, Rest, PurgedCount, NewAcc).
 
 
 -spec missing_changes_count(partition_seqs(), partition_seqs()) -> non_neg_integer().
