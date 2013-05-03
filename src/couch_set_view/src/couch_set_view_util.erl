@@ -389,17 +389,17 @@ group_to_header_bin(#set_view_group{index_header = Header, sig = Sig}) ->
         cbitmask = Cbitmask,
         seqs = Seqs,
         id_btree_state = IdBtreeState,
-        view_states = ViewBtreeStates,
+        view_states = ViewStates,
         has_replica = HasReplica,
         replicas_on_transfer = RepsOnTransfer,
         pending_transition = PendingTrans,
         unindexable_seqs = Unindexable
     } = Header,
-    ViewBtreeStatesBin = lists:foldl(
-        fun(BtState, Acc) ->
-            <<Acc/binary, (btree_state_to_bin(BtState))/binary>>
+    ViewStatesBin = lists:foldl(
+        fun(State, Acc) ->
+            <<Acc/binary, (view_state_to_bin(State))/binary>>
         end,
-        <<>>, ViewBtreeStates),
+        <<>>, ViewStates),
     Base = <<
              Version:8,
              NumParts:16,
@@ -407,8 +407,8 @@ group_to_header_bin(#set_view_group{index_header = Header, sig = Sig}) ->
              Pbitmask:?MAX_NUM_PARTITIONS,
              Cbitmask:?MAX_NUM_PARTITIONS,
              (length(Seqs)):16, (seqs_to_bin(Seqs, <<>>))/binary,
-             (btree_state_to_bin(IdBtreeState))/binary,
-             (length(ViewBtreeStates)):8, ViewBtreeStatesBin/binary,
+             (view_state_to_bin(IdBtreeState))/binary,
+             (length(ViewStates)):8, ViewStatesBin/binary,
              (bool_to_bin(HasReplica))/binary,
              (length(RepsOnTransfer)):16, (partitions_to_bin(RepsOnTransfer, <<>>))/binary,
              (pending_trans_to_bin(PendingTrans))/binary,
@@ -440,7 +440,7 @@ header_bin_to_term(HeaderBin) ->
     <<
       IdBtreeStateSize:16,
       IdBtreeStateBin:IdBtreeStateSize/binary,
-      NumViewBtreeStates:8,
+      NumViewStates:8,
       Rest3/binary
     >> = Rest2,
     IdBtreeState = case IdBtreeStateBin of
@@ -449,7 +449,7 @@ header_bin_to_term(HeaderBin) ->
     _ ->
         IdBtreeStateBin
     end,
-    {ViewStates, Rest4} = bin_to_view_states(NumViewBtreeStates, Rest3, []),
+    {ViewStates, Rest4} = bin_to_view_states(NumViewStates, Rest3, []),
     <<
       HasReplica:8,
       NumReplicasOnTransfer:16,
@@ -478,13 +478,13 @@ header_bin_to_term(HeaderBin) ->
     }.
 
 
-btree_state_to_bin(nil) ->
+view_state_to_bin(nil) ->
     <<0:16>>;
-btree_state_to_bin(BinState) ->
+view_state_to_bin(BinState) ->
     StateSize = byte_size(BinState),
     case StateSize >= (1 bsl 16) of
     true ->
-        throw({too_large_btree_state, StateSize});
+        throw({too_large_view_state, StateSize});
     false ->
         <<StateSize:16, BinState/binary>>
     end.
@@ -544,12 +544,12 @@ bin_to_seqs(N, <<P:16, S:48, Rest/binary>>, Acc) ->
 
 bin_to_view_states(0, Rest, Acc) ->
     {lists:reverse(Acc), Rest};
-bin_to_view_states(NumViewBtreeStates, <<Sz:16, State:Sz/binary, Rest/binary>>, Acc) ->
+bin_to_view_states(NumViewStates, <<Sz:16, State:Sz/binary, Rest/binary>>, Acc) ->
     case State of
     <<>> ->
-        bin_to_view_states(NumViewBtreeStates - 1, Rest, [nil | Acc]);
+        bin_to_view_states(NumViewStates - 1, Rest, [nil | Acc]);
     _ ->
-        bin_to_view_states(NumViewBtreeStates - 1, Rest, [State | Acc])
+        bin_to_view_states(NumViewStates - 1, Rest, [State | Acc])
     end.
 
 
