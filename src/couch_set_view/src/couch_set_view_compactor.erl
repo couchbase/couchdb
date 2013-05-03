@@ -17,6 +17,7 @@
 
 -export([start_compact/2, start_compact/3, start_compact/4,
          cancel_compact/2, cancel_compact/3]).
+-export([merge_files/3]).
 
 -define(SORTED_CHUNK_SIZE, 1024 * 1024).
 
@@ -79,7 +80,8 @@ mk_compact_group(UserStatus) ->
 compact_group(Group0, EmptyGroup, TmpDir, UpdaterPid, Owner, UserStatus) ->
     #set_view_group{
         set_name = SetName,
-        type = Type
+        type = Type,
+        mod = Mod
     } = Group0,
     StartTime = os:timestamp(),
 
@@ -158,7 +160,7 @@ compact_group(Group0, EmptyGroup, TmpDir, UpdaterPid, Owner, UserStatus) ->
     NewIdBtree = EmptyIdBtree#btree{root = NewIdBtreeRoot},
 
     {NewViews, _} = lists:mapfoldl(fun({View, EmptyView}, Acc) ->
-        compact_view(Fd, View, EmptyView, FilterFun, Acc)
+        Mod:compact_view(Fd, View, EmptyView, FilterFun, BeforeKVWriteFun, Acc)
     end, Acc1, lists:zip(Views, EmptyViews)),
 
     ok = couch_set_view_util:close_raw_read_fd(Group),
@@ -169,7 +171,7 @@ compact_group(Group0, EmptyGroup, TmpDir, UpdaterPid, Owner, UserStatus) ->
         index_header = Header#set_view_index_header{
             cbitmask = 0,
             id_btree_state = couch_btree:get_state(NewIdBtree),
-            view_states = [couch_btree:get_state(V#set_view.btree) || V <- NewViews]
+            view_states = [Mod:get_state(V#set_view.btree) || V <- NewViews]
         }
     },
 
@@ -248,24 +250,6 @@ get_group_pid(SetName, DDocId, replica) ->
     end.
 
 
-compact_view(Fd, View, #set_view{btree = ViewBtree} = EmptyView, FilterFun, Acc0) ->
-    BeforeKVWriteFun = fun(Item, Acc) ->
-        {Item, update_task(Acc, 1)}
-    end,
-
-    couch_set_view_mapreduce:start_reduce_context(View),
-    {ok, NewBtreeRoot, Acc2} = couch_btree_copy:copy(
-        View#set_view.btree, Fd,
-        [{before_kv_write, {BeforeKVWriteFun, Acc0}}, {filter, FilterFun}]),
-    couch_set_view_mapreduce:end_reduce_context(View),
-
-    ViewBtree2 = ViewBtree#btree{root = NewBtreeRoot},
-    NewView = EmptyView#set_view{
-        btree = ViewBtree2
-    },
-    {NewView, Acc2}.
-
-
 update_task(#acc{total_changes = 0} = Acc, _ChangesInc) ->
     Acc;
 update_task(#acc{changes = Changes, total_changes = Total} = Acc, ChangesInc) ->
@@ -282,14 +266,11 @@ update_task(#acc{changes = Changes, total_changes = Total} = Acc, ChangesInc) ->
     Acc#acc{changes = Changes2}.
 
 
-total_kv_count(#set_view_group{id_btree = IdBtree, views = Views}) ->
+total_kv_count(#set_view_group{id_btree = IdBtree, views = Views, mod = Mod}) ->
     {ok, <<IdCount:40, _/binary>>} = couch_btree:full_reduce(IdBtree),
     lists:foldl(
-        fun(#set_view{btree = Bt} = View, Acc) ->
-            couch_set_view_mapreduce:start_reduce_context(View),
-            {ok, <<Count:40, _/binary>>} = couch_btree:full_reduce(Bt),
-            couch_set_view_mapreduce:end_reduce_context(View),
-            Acc + Count
+        fun(View, Acc) ->
+            Acc + Mod:get_row_count(View)
         end,
         IdCount, Views).
 
@@ -297,7 +278,8 @@ total_kv_count(#set_view_group{id_btree = IdBtree, views = Views}) ->
 apply_log(Group, LogFiles, NewSeqs, TmpDir) ->
     #set_view_group{
         id_btree = IdBtree,
-        index_header = Header
+        index_header = Header,
+        mod = Mod
     } = Group,
 
     [IdLogFiles | ViewLogFiles] = LogFiles,
@@ -306,15 +288,7 @@ apply_log(Group, LogFiles, NewSeqs, TmpDir) ->
         IdBtree, IdMergeFile, ?SORTED_CHUNK_SIZE),
     ok = file2:delete(IdMergeFile),
 
-    NewViews = lists:zipwith(
-        fun(#set_view{btree = Bt} = V, Files) ->
-           MergeFile = merge_files(Files, Bt, TmpDir),
-           {ok, NewBt, _, _} = couch_set_view_updater_helper:update_btree(
-               Bt, MergeFile, ?SORTED_CHUNK_SIZE),
-           ok = file2:delete(MergeFile),
-           V#set_view{btree = NewBt}
-        end,
-        Group#set_view_group.views, ViewLogFiles),
+    NewViews = Mod:apply_log(Group#set_view_group.views, ViewLogFiles, TmpDir),
 
     Group#set_view_group{
         id_btree = NewIdBtree,
@@ -322,7 +296,7 @@ apply_log(Group, LogFiles, NewSeqs, TmpDir) ->
         index_header = Header#set_view_index_header{
             seqs = NewSeqs,
             id_btree_state = couch_btree:get_state(NewIdBtree),
-            view_states = [couch_btree:get_state(V#set_view.btree) || V <- NewViews]
+            view_states = [Mod:get_state(V#set_view.btree) || V <- NewViews]
         }
     }.
 

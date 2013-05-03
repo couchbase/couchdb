@@ -22,6 +22,8 @@
          reset_view/1, make_views_fun/3]).
 % For the utils
 -export([clean_views/5]).
+% For the compactor
+-export([compact_view/6, get_row_count/1, apply_log/3]).
 
 
 -include("couch_db.hrl").
@@ -59,6 +61,9 @@
     fd = nil,
     size = 0
 }).
+% XXX vmx 2013-05-03: from couch_set_view_compactor! Don't duplicate it, but
+%    move it to a common header file
+-define(SORTED_CHUNK_SIZE, 1024 * 1024).
 
 
 write_kvs(Group, TmpFiles, ViewKVs) ->
@@ -359,3 +364,41 @@ clean_views(go, PurgeFun, [#set_view{btree = Btree} = View | Rest], Count, Acc) 
     couch_set_view_mapreduce:end_reduce_context(View),
     NewAcc = [View#set_view{btree = NewBtree} | Acc],
     clean_views(Go, PurgeFun, Rest, PurgedCount, NewAcc).
+
+
+compact_view(Fd, View, EmptyView, FilterFun, BeforeKVWriteFun, Acc0) ->
+    #set_view{
+        btree = ViewBtree
+    } = EmptyView,
+
+    couch_set_view_mapreduce:start_reduce_context(View),
+    {ok, NewBtreeRoot, Acc2} = couch_btree_copy:copy(
+        View#set_view.btree, Fd,
+        [{before_kv_write, {BeforeKVWriteFun, Acc0}}, {filter, FilterFun}]),
+    couch_set_view_mapreduce:end_reduce_context(View),
+
+    ViewBtree2 = ViewBtree#btree{root = NewBtreeRoot},
+    NewView = EmptyView#set_view{
+        btree = ViewBtree2
+    },
+    {NewView, Acc2}.
+
+
+-spec get_row_count(#set_view{}) -> non_neg_integer().
+get_row_count(SetView) ->
+    Bt = SetView#set_view.btree,
+    ok = couch_set_view_mapreduce:start_reduce_context(SetView),
+    {ok, <<Count:40, _/binary>>} = couch_btree:full_reduce(Bt),
+    ok = couch_set_view_mapreduce:end_reduce_context(SetView),
+    Count.
+
+
+apply_log(SetViews, ViewLogFiles, TmpDir) ->
+    lists:zipwith(fun(SetView, Files) ->
+        Bt = SetView#set_view.btree,
+        MergeFile = couch_set_view_compactor:merge_files(Files, Bt, TmpDir),
+        {ok, NewBt, _, _} = couch_set_view_updater_helper:update_btree(
+               Bt, MergeFile, ?SORTED_CHUNK_SIZE),
+        ok = file2:delete(MergeFile),
+        SetView#set_view{btree = NewBt}
+    end, SetViews, ViewLogFiles).
