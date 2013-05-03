@@ -17,6 +17,9 @@
          start_reduce_context/1, end_reduce_context/1, view_name/2,
          update_tmp_files/3, view_bitmap/1]).
 -export([update_index/5]).
+% For the group
+-export([design_doc_to_set_view_group/2, view_group_data_size/2,
+         reset_view/1, make_views_fun/3]).
 
 
 -include("couch_db.hrl").
@@ -203,3 +206,141 @@ update_tmp_files(WriterAcc, ViewKeyValues, KeysToRemoveByView) ->
 update_index(Bt, FilePath, BufferSize, PurgeFun, PurgeAcc) ->
     couch_set_view_updater_helper:update_btree(Bt, FilePath, BufferSize,
         PurgeFun, PurgeAcc).
+
+
+-spec design_doc_to_set_view_group(binary(), #doc{}) -> #set_view_group{}.
+design_doc_to_set_view_group(SetName, #doc{id = Id, body = {Fields}}) ->
+    {DesignOptions} = couch_util:get_value(<<"options">>, Fields, {[]}),
+    {RawViews} = couch_util:get_value(<<"views">>, Fields, {[]}),
+    % add the views to a dictionary object, with the map source as the key
+    DictBySrc =
+    lists:foldl(
+        fun({Name, {MRFuns}}, DictBySrcAcc) ->
+            case couch_util:get_value(<<"map">>, MRFuns) of
+            undefined -> DictBySrcAcc;
+            MapSrc ->
+                RedSrc = couch_util:get_value(<<"reduce">>, MRFuns, null),
+                {ViewOptions} = couch_util:get_value(<<"options">>, MRFuns, {[]}),
+                View =
+                case dict:find({MapSrc, ViewOptions}, DictBySrcAcc) of
+                    {ok, View0} -> View0;
+                    error -> #set_view{def = MapSrc, options = ViewOptions}
+                end,
+                View2 =
+                if RedSrc == null ->
+                    View#set_view{map_names = [Name | View#set_view.map_names]};
+                true ->
+                    View#set_view{reduce_funs = [{Name, RedSrc} | View#set_view.reduce_funs]}
+                end,
+                dict:store({MapSrc, ViewOptions}, View2, DictBySrcAcc)
+            end
+        end, dict:new(), RawViews),
+    % number the views
+    {Views, _N} = lists:mapfoldl(
+        fun({_Src, View}, N) ->
+            {View#set_view{id_num = N}, N + 1}
+        end,
+        0, lists:sort(dict:to_list(DictBySrc))),
+    SetViewGroup = #set_view_group{
+        set_name = SetName,
+        name = Id,
+        views = Views,
+        design_options = DesignOptions
+    },
+    couch_set_view_util:set_view_sig(SetViewGroup).
+
+
+-spec view_group_data_size(#btree{}, [#set_view{}]) -> non_neg_integer().
+view_group_data_size(IdBtree, Views) ->
+    lists:foldl(
+        fun(#set_view{btree = Btree}, Acc) ->
+            Acc + couch_btree:size(Btree)
+        end,
+        couch_btree:size(IdBtree),
+        Views).
+
+
+reset_view(_Btree) ->
+    nil.
+
+
+% Needs to return that a function that takes 2 arguments, a btree state and
+% the corresponding view
+make_views_fun(Fd, BtreeOptions, Group) ->
+    #set_view_group{
+        set_name = SetName,
+        name = DDocId,
+        type = Type
+    } = Group,
+    fun(BTState, View) ->
+        case View#set_view.reduce_funs of
+        [{ViewName, _} | _] ->
+            ok;
+        [] ->
+            [ViewName | _] = View#set_view.map_names
+        end,
+        ReduceFun =
+            fun(reduce, KVs) ->
+                AllPartitionsBitMap = couch_set_view_util:partitions_map(KVs, 0),
+                KVs2 = couch_set_view_util:expand_dups(KVs, []),
+                {ok, Reduced} =
+                    try
+                         couch_set_view_mapreduce:reduce(View, KVs2)
+                    catch throw:{error, Reason} = Error ->
+                        PrettyKVs = [
+                            begin
+                                {KeyDocId, <<_PartId:16, Value/binary>>} = RawKV,
+                                {couch_set_view_util:split_key_docid(KeyDocId), Value}
+                            end
+                            || RawKV <- KVs2
+                        ],
+                        ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, error executing"
+                                             " reduce function for view `~s'~n"
+                                             "  reason:                ~s~n"
+                                             "  input key-value pairs: ~p~n",
+                                             [SetName, Type, DDocId, ViewName,
+                                              couch_util:to_binary(Reason), PrettyKVs]),
+                        throw(Error)
+                    end,
+                if length(Reduced) > 255 ->
+                    throw({too_many_reductions, <<"Maximum reductions allowed is 255">>});
+                true -> ok
+                end,
+                LenReductions = [<<(size(R)):16, R/binary>> || R <- Reduced],
+                iolist_to_binary([<<(length(KVs2)):40, AllPartitionsBitMap:?MAX_NUM_PARTITIONS>> | LenReductions]);
+            (rereduce, [<<Count0:40, AllPartitionsBitMap0:?MAX_NUM_PARTITIONS, Red0/binary>> | Reds]) ->
+                {Count, AllPartitionsBitMap, UserReds} = lists:foldl(
+                    fun(<<C:40, Apbm:?MAX_NUM_PARTITIONS, R/binary>>, {CountAcc, ApbmAcc, RedAcc}) ->
+                        {C + CountAcc, Apbm bor ApbmAcc, [couch_set_view_util:parse_reductions(R) | RedAcc]}
+                    end,
+                    {Count0, AllPartitionsBitMap0, [couch_set_view_util:parse_reductions(Red0)]},
+                    Reds),
+                {ok, Reduced} =
+                    try
+                        couch_set_view_mapreduce:rereduce(View, UserReds)
+                    catch throw:{error, Reason} = Error ->
+                        ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, error executing"
+                                             " rereduce function for view `~s'~n"
+                                             "  reason:           ~s~n"
+                                             "  input reductions: ~p~n",
+                                             [SetName, Type, DDocId, ViewName,
+                                              couch_util:to_binary(Reason), UserReds]),
+                        throw(Error)
+                    end,
+                LenReductions = [<<(size(R1)):16, R1/binary>> || R1 <- Reduced],
+                iolist_to_binary([<<Count:40, AllPartitionsBitMap:?MAX_NUM_PARTITIONS>> | LenReductions])
+            end,
+        Less = fun(A, B) ->
+            {Key1, DocId1} = couch_set_view_util:split_key_docid(A),
+            {Key2, DocId2} = couch_set_view_util:split_key_docid(B),
+            case couch_ejson_compare:less_json(Key1, Key2) of
+            0 ->
+                DocId1 < DocId2;
+            LessResult ->
+                LessResult < 0
+            end
+        end,
+        {ok, Btree} = couch_btree:open(
+            BTState, Fd, [{less, Less}, {reduce, ReduceFun} | BtreeOptions]),
+        View#set_view{btree = Btree}
+    end.

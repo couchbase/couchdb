@@ -15,7 +15,7 @@
 
 %% API
 -export([start_link/1, request_group_info/1, get_data_size/1]).
--export([open_set_group/2]).
+-export([open_set_group/3]).
 -export([request_group/2, release_group/1]).
 -export([is_view_defined/1, define_view/2]).
 -export([set_state/4]).
@@ -1365,7 +1365,11 @@ reply_all(#state{waiting_list = WaitList} = State, Reply) ->
 
 -spec prepare_group(init_args(), boolean()) -> {'ok', #set_view_group{}} |
                                                {'error', atom()}.
-prepare_group({RootDir, SetName, #set_view_group{sig = Sig, type = Type} = Group0}, ForceReset)->
+prepare_group({RootDir, SetName, Group0}, ForceReset)->
+    #set_view_group{
+        sig = Sig,
+        type = Type
+    } = Group0,
     Filepath = find_index_file(RootDir, Group0),
     Group = Group0#set_view_group{filepath = Filepath},
     case open_index_file(Filepath) of
@@ -1423,7 +1427,8 @@ hex_sig(GroupSig) ->
 
 -spec base_index_file_name(#set_view_group{}, set_view_group_type()) -> string().
 base_index_file_name(Group, Type) ->
-    atom_to_list(Type) ++ "_" ++ hex_sig(Group#set_view_group.sig) ++ ".view".
+    atom_to_list(Type) ++ "_" ++ hex_sig(Group#set_view_group.sig) ++
+        Group#set_view_group.extension.
 
 
 -spec find_index_file(string(), #set_view_group{}) -> string().
@@ -1504,10 +1509,10 @@ do_open_index_file(Filepath) ->
     end.
 
 
-open_set_group(SetName, GroupId) ->
+open_set_group(Mod, SetName, GroupId) ->
     case couch_set_view_ddoc_cache:get_ddoc(SetName, GroupId) of
     {ok, DDoc} ->
-        {ok, couch_set_view_util:design_doc_to_set_view_group(SetName, DDoc)};
+        {ok, Mod:design_doc_to_set_view_group(SetName, DDoc)};
     {doc_open_error, Error} ->
         Error;
     {db_open_error, Error} ->
@@ -1531,7 +1536,8 @@ get_group_info(State) ->
         fd = Fd,
         sig = GroupSig,
         id_btree = Btree,
-        views = Views
+        views = Views,
+        mod = Mod
     } = Group,
     PendingTrans = get_pending_transition(State),
     [Stats] = ets:lookup(?SET_VIEW_STATS_ETS, ?set_view_group_stats_key(Group)),
@@ -1557,7 +1563,7 @@ get_group_info(State) ->
     [
         {signature, ?l2b(hex_sig(GroupSig))},
         {disk_size, Size},
-        {data_size, view_group_data_size(Btree, Views)},
+        {data_size, Mod:view_group_data_size(Btree, Views)},
         {updater_running, is_pid(UpdaterPid)},
         {initial_build, is_pid(UpdaterPid) andalso State#state.initial_build},
         {updater_state, couch_util:to_binary(UpdaterState)},
@@ -1612,10 +1618,11 @@ get_data_size_info(State) ->
         fd = Fd,
         id_btree = Btree,
         sig = GroupSig,
-        views = Views
+        views = Views,
+        mod = Mod
     } = Group,
     {ok, FileSize} = couch_file:bytes(Fd),
-    DataSize = view_group_data_size(Btree, Views),
+    DataSize = Mod:view_group_data_size(Btree, Views),
     [Stats] = ets:lookup(?SET_VIEW_STATS_ETS, ?set_view_group_stats_key(Group)),
     Info = [
         {signature, hex_sig(GroupSig)},
@@ -1634,19 +1641,17 @@ get_data_size_info(State) ->
     end.
 
 
--spec view_group_data_size(#btree{}, [#set_view{}]) -> non_neg_integer().
-view_group_data_size(IdBtree, Views) ->
-    lists:foldl(
-        fun(#set_view{btree = Btree}, Acc) ->
-            Acc + couch_btree:size(Btree)
-        end,
-        couch_btree:size(IdBtree),
-        Views).
-
-
 -spec reset_group(#set_view_group{}) -> #set_view_group{}.
-reset_group(#set_view_group{views = Views} = Group) ->
+reset_group(Group) ->
+    #set_view_group{
+        views = Views,
+        mod = Mod
+    } = Group,
     Views2 = [View#set_view{btree = nil} || View <- Views],
+    Views2 = lists:map(fun(View) ->
+        Reset = Mod:reset_view(View#set_view.btree),
+        View#set_view{btree = Reset}
+    end, Views),
     Group#set_view_group{
         fd = nil,
         index_header = #set_view_index_header{},
@@ -1674,9 +1679,7 @@ reset_file(Fd, #set_view_group{views = Views, index_header = Header} = Group) ->
 init_group(Fd, Group, IndexHeader) ->
     #set_view_group{
         views = Views0,
-        set_name = SetName,
-        name = DDocId,
-        type = Type
+        mod = Mod
     } = Group,
     Views = [V#set_view{ref = make_ref()} || V <- Views0],
     #set_view_index_header{
@@ -1702,79 +1705,7 @@ init_group(Fd, Group, IndexHeader) ->
     {ok, IdBtree} = couch_btree:open(
         IdBtreeState, Fd, [{reduce, IdTreeReduce} | BtreeOptions]),
     Views2 = lists:zipwith(
-        fun(BTState, View) ->
-            case View#set_view.reduce_funs of
-            [{ViewName, _} | _] ->
-                ok;
-            [] ->
-                [ViewName | _] = View#set_view.map_names
-            end,
-            ReduceFun =
-                fun(reduce, KVs) ->
-                    AllPartitionsBitMap = couch_set_view_util:partitions_map(KVs, 0),
-                    KVs2 = couch_set_view_util:expand_dups(KVs, []),
-                    {ok, Reduced} =
-                        try
-                             couch_set_view_mapreduce:reduce(View, KVs2)
-                        catch throw:{error, Reason} = Error ->
-                            PrettyKVs = [
-                                begin
-                                    {KeyDocId, <<_PartId:16, Value/binary>>} = RawKV,
-                                    {couch_set_view_util:split_key_docid(KeyDocId), Value}
-                                end
-                                || RawKV <- KVs2
-                            ],
-                            ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, error executing"
-                                                 " reduce function for view `~s'~n"
-                                                 "  reason:                ~s~n"
-                                                 "  input key-value pairs: ~p~n",
-                                                 [SetName, Type, DDocId, ViewName,
-                                                  couch_util:to_binary(Reason), PrettyKVs]),
-                            throw(Error)
-                        end,
-                    if length(Reduced) > 255 ->
-                        throw({too_many_reductions, <<"Maximum reductions allowed is 255">>});
-                    true -> ok
-                    end,
-                    LenReductions = [<<(size(R)):16, R/binary>> || R <- Reduced],
-                    iolist_to_binary([<<(length(KVs2)):40, AllPartitionsBitMap:?MAX_NUM_PARTITIONS>> | LenReductions]);
-                (rereduce, [<<Count0:40, AllPartitionsBitMap0:?MAX_NUM_PARTITIONS, Red0/binary>> | Reds]) ->
-                    {Count, AllPartitionsBitMap, UserReds} = lists:foldl(
-                        fun(<<C:40, Apbm:?MAX_NUM_PARTITIONS, R/binary>>, {CountAcc, ApbmAcc, RedAcc}) ->
-                            {C + CountAcc, Apbm bor ApbmAcc, [couch_set_view_util:parse_reductions(R) | RedAcc]}
-                        end,
-                        {Count0, AllPartitionsBitMap0, [couch_set_view_util:parse_reductions(Red0)]},
-                        Reds),
-                    {ok, Reduced} =
-                        try
-                            couch_set_view_mapreduce:rereduce(View, UserReds)
-                        catch throw:{error, Reason} = Error ->
-                            ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, error executing"
-                                                 " rereduce function for view `~s'~n"
-                                                 "  reason:           ~s~n"
-                                                 "  input reductions: ~p~n",
-                                                 [SetName, Type, DDocId, ViewName,
-                                                  couch_util:to_binary(Reason), UserReds]),
-                            throw(Error)
-                        end,
-                    LenReductions = [<<(size(R1)):16, R1/binary>> || R1 <- Reduced],
-                    iolist_to_binary([<<Count:40, AllPartitionsBitMap:?MAX_NUM_PARTITIONS>> | LenReductions])
-                end,
-            Less = fun(A, B) ->
-                {Key1, DocId1} = couch_set_view_util:split_key_docid(A),
-                {Key2, DocId2} = couch_set_view_util:split_key_docid(B),
-                case couch_ejson_compare:less_json(Key1, Key2) of
-                0 ->
-                    DocId1 < DocId2;
-                LessResult ->
-                    LessResult < 0
-                end
-            end,
-            {ok, Btree} = couch_btree:open(
-                BTState, Fd, [{less, Less}, {reduce, ReduceFun} | BtreeOptions]),
-            View#set_view{btree = Btree}
-        end,
-        ViewStates, Views),
+        Mod:make_views_fun(Fd, BtreeOptions, Group), ViewStates, Views),
     Group#set_view_group{
         fd = Fd,
         id_btree = IdBtree,

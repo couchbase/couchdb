@@ -16,7 +16,7 @@
 -export([build_bitmask/1, decode_bitmask/1]).
 -export([make_btree_purge_fun/1]).
 -export([make_key_options/1]).
--export([design_doc_to_set_view_group/2, get_ddoc_ids_with_sig/2]).
+-export([get_ddoc_ids_with_sig/2]).
 -export([open_raw_read_fd/1, close_raw_read_fd/1]).
 -export([compute_indexed_bitmap/1, cleanup_group/1]).
 -export([missing_changes_count/2]).
@@ -28,6 +28,7 @@
 -export([group_to_header_bin/1, header_bin_sig/1, header_bin_to_term/1]).
 -export([open_db/2]).
 -export([get_part_seq/2, has_part_seq/2, find_part_seq/2]).
+-export([set_view_sig/1]).
 
 
 -include("couch_db.hrl").
@@ -186,48 +187,6 @@ get_ddoc_ids_with_sig(SetName, #set_view_group{sig = Sig, name = FirstDDocId}) -
     Matching ->
         [DDocId || {_SetName, {DDocId, _Sig}} <- Matching]
     end.
-
-
--spec design_doc_to_set_view_group(binary(), #doc{}) -> #set_view_group{}.
-design_doc_to_set_view_group(SetName, #doc{id = Id, body = {Fields}}) ->
-    {DesignOptions} = couch_util:get_value(<<"options">>, Fields, {[]}),
-    {RawViews} = couch_util:get_value(<<"views">>, Fields, {[]}),
-    % add the views to a dictionary object, with the map source as the key
-    DictBySrc =
-    lists:foldl(
-        fun({Name, {MRFuns}}, DictBySrcAcc) ->
-            case couch_util:get_value(<<"map">>, MRFuns) of
-            undefined -> DictBySrcAcc;
-            MapSrc ->
-                RedSrc = couch_util:get_value(<<"reduce">>, MRFuns, null),
-                {ViewOptions} = couch_util:get_value(<<"options">>, MRFuns, {[]}),
-                View =
-                case dict:find({MapSrc, ViewOptions}, DictBySrcAcc) of
-                    {ok, View0} -> View0;
-                    error -> #set_view{def = MapSrc, options = ViewOptions}
-                end,
-                View2 =
-                if RedSrc == null ->
-                    View#set_view{map_names = [Name | View#set_view.map_names]};
-                true ->
-                    View#set_view{reduce_funs = [{Name, RedSrc} | View#set_view.reduce_funs]}
-                end,
-                dict:store({MapSrc, ViewOptions}, View2, DictBySrcAcc)
-            end
-        end, dict:new(), RawViews),
-    % number the views
-    {Views, _N} = lists:mapfoldl(
-        fun({_Src, View}, N) ->
-            {View#set_view{id_num = N}, N + 1}
-        end,
-        0, lists:sort(dict:to_list(DictBySrc))),
-    SetViewGroup = #set_view_group{
-        set_name = SetName,
-        name = Id,
-        views = Views,
-        design_options = DesignOptions
-    },
-    set_view_sig(SetViewGroup).
 
 
 -spec set_view_sig(#set_view_group{}) -> #set_view_group{}.

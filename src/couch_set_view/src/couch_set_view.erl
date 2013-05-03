@@ -111,7 +111,7 @@ get_group(SetName, DDoc, #set_view_group_req{type = replica} = Req) ->
 
 -spec get_group_pid(binary(), binary() | #doc{}) -> pid().
 get_group_pid(SetName, #doc{} = DDoc) ->
-    Group = couch_set_view_util:design_doc_to_set_view_group(SetName, DDoc),
+    Group = mapreduce_view:design_doc_to_set_view_group(SetName, DDoc),
     get_group_server(SetName, Group);
 get_group_pid(SetName, DDocId) when is_binary(DDocId) ->
     get_group_server(SetName, open_set_group(SetName, DDocId)).
@@ -388,7 +388,7 @@ get_group_server(SetName, #set_view_group{sig = Sig} = Group) ->
 
 -spec open_set_group(binary(), binary()) -> #set_view_group{}.
 open_set_group(SetName, GroupId) ->
-    case couch_set_view_group:open_set_group(SetName, GroupId) of
+    case couch_set_view_group:open_set_group(mapreduce_view, SetName, GroupId) of
     {ok, Group} ->
         Group;
     Error ->
@@ -441,7 +441,7 @@ get_utilization_stats(SetName, DDocId) ->
 get_group_signature(SetName, DDocId) ->
     case couch_set_view_ddoc_cache:get_ddoc(SetName, DDocId) of
     {ok, DDoc} ->
-        Group = couch_set_view_util:design_doc_to_set_view_group(SetName, DDoc),
+        Group = mapreduce_view:design_doc_to_set_view_group(SetName, DDoc),
         {ok, ?l2b(couch_util:to_hex(Group#set_view_group.sig))};
     Error ->
         throw(Error)
@@ -457,7 +457,7 @@ cleanup_index_files(SetName) ->
     % make unique list of group sigs
     Sigs = lists:map(fun(DDoc) ->
             #set_view_group{sig = Sig} =
-                couch_set_view_util:design_doc_to_set_view_group(SetName, DDoc),
+                mapreduce_view:design_doc_to_set_view_group(SetName, DDoc),
             couch_util:to_hex(Sig)
         end,
         [DD || DD <- DesignDocs, not DD#doc.deleted]),
@@ -933,7 +933,7 @@ handle_call({before_database_delete, DbName}, _From, Server) ->
 
 handle_call({ddoc_updated, SetName, #doc{deleted = false} = DDoc0}, _From, Server) ->
     #doc{id = DDocId} = DDoc = couch_doc:with_ejson_body(DDoc0),
-    #set_view_group{sig = Sig} = couch_set_view_util:design_doc_to_set_view_group(SetName, DDoc),
+    #set_view_group{sig = Sig} = mapreduce_view:design_doc_to_set_view_group(SetName, DDoc),
     true = ets:insert(couch_setview_name_to_sig, {SetName, {DDocId, Sig}}),
     {reply, ok, Server};
 
@@ -1104,7 +1104,7 @@ handle_db_event({ddoc_updated, {DbName, #doc{id = DDocId} = DDoc}}) ->
         case DDoc#doc.deleted of
         false ->
             DDoc2 = couch_doc:with_ejson_body(DDoc),
-            #set_view_group{sig = NewSig} = couch_set_view_util:design_doc_to_set_view_group(SetName, DDoc2);
+            #set_view_group{sig = NewSig} = mapreduce_view:design_doc_to_set_view_group(SetName, DDoc2);
         true ->
             NewSig = <<>>
         end,
@@ -1226,7 +1226,7 @@ get_ddoc_ids_with_sig(SetName, ViewGroupSig) ->
     ok = couch_db:close(Db),
     lists:foldl(
         fun(#doc{id = Id} = DDoc, Acc) ->
-            case couch_set_view_util:design_doc_to_set_view_group(SetName, DDoc) of
+            case mapreduce_view:design_doc_to_set_view_group(SetName, DDoc) of
             #set_view_group{sig = ViewGroupSig} ->
                 [Id | Acc];
             #set_view_group{sig = _OtherSig} ->

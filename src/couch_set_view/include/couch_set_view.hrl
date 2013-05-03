@@ -219,7 +219,9 @@
     replica_pid = nil                       :: 'nil' | pid(),
     debug_info = nil                        :: #set_view_debug_info{} | 'nil',
     filepath = ""                           :: string(),
-    mod = mapreduce_view                    :: atom()
+    mod = mapreduce_view                    :: atom(),
+    % The file extension that will be used for the index files
+    extension = ".view"                     :: string()
 }).
 
 -record(set_view_updater_stats, {
