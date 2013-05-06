@@ -1054,7 +1054,7 @@ maybe_update_btrees(WriterAcc0) ->
             end
         end;
     true ->
-        ok = sort_tmp_files(TmpFiles, Group0),
+        ok = sort_tmp_files(TmpFiles, WriterAcc0#writer_acc.tmp_dir, Group0),
         case erlang:erase(updater_worker) of
         undefined ->
             WriterAcc1 = WriterAcc0;
@@ -1506,8 +1506,8 @@ count_seqs_done(Group, NewSeqs) ->
 
 
 % Incremental updates.
--spec sort_tmp_files(dict(), #set_view_group{}) -> 'ok'.
-sort_tmp_files(TmpFiles, Group) ->
+-spec sort_tmp_files(dict(), string(), #set_view_group{}) -> 'ok'.
+sort_tmp_files(TmpFiles, TmpDir, Group) ->
     case os:find_executable("couch_view_file_sorter") of
     false ->
         FileSorterCmd = nil,
@@ -1516,6 +1516,7 @@ sort_tmp_files(TmpFiles, Group) ->
         ok
     end,
     FileSorter = open_port({spawn_executable, FileSorterCmd}, ?PORT_OPTS),
+    true = port_command(FileSorter, [TmpDir, $\n]),
     NumViews = length(Group#set_view_group.views),
     true = port_command(FileSorter, [integer_to_list(NumViews), $\n]),
     IdTmpFileInfo = dict:fetch(ids_index, TmpFiles),
