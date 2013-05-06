@@ -85,7 +85,8 @@ test_same_key_by_same_doc_multiple_times() ->
     etap:diag("Marking partitions lists:seq(1, 63, 2) for cleanup"),
     ok = lists:foreach(
         fun(I) ->
-            ok = couch_set_view:set_partition_states(test_set_name(), ddoc_id(), [], [], [I])
+            ok = couch_set_view:set_partition_states(
+                mapreduce_view, test_set_name(), ddoc_id(), [], [], [I])
         end,
         lists:reverse(lists:seq(1, 63, 2))),
 
@@ -160,14 +161,16 @@ test_same_key_by_different_docs_multiple_times() ->
 
 
 get_group_snapshot() ->
-    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id()),
     {ok, Group, 0} = gen_server:call(
         GroupPid, #set_view_group_req{stale = false, debug = true}, infinity),
     Group.
 
 
 compact_view_group() ->
-    {ok, CompactPid} = couch_set_view_compactor:start_compact(test_set_name(), ddoc_id(), main),
+    {ok, CompactPid} = couch_set_view_compactor:start_compact(
+        mapreduce_view, test_set_name(), ddoc_id(), main),
     Ref = erlang:monitor(process, CompactPid),
     etap:diag("Waiting for view group compaction to finish"),
     receive
@@ -214,7 +217,8 @@ wait_for_cleanup_loop(GroupInfo) ->
 
 
 get_group_info() ->
-    {ok, Info} = couch_set_view:get_group_info(test_set_name(), ddoc_id()),
+    {ok, Info} = couch_set_view:get_group_info(
+        mapreduce_view, test_set_name(), ddoc_id()),
     Info.
 
 
@@ -265,7 +269,7 @@ test_same_key_by_different_docs_multiple_times_create_set() ->
 create_set(DDoc) ->
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
     couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
-    couch_set_view:cleanup_index_files(test_set_name()),
+    couch_set_view:cleanup_index_files(mapreduce_view, test_set_name()),
     etap:diag("Creating the set databases (# of partitions: " ++
         integer_to_list(num_set_partitions()) ++ ")"),
     ok = couch_set_view_test_util:update_ddoc(test_set_name(), DDoc),
@@ -276,7 +280,8 @@ create_set(DDoc) ->
         passive_partitions = [],
         use_replica_index = false
     },
-    ok = couch_set_view:define_group(test_set_name(), ddoc_id(), Params).
+    ok = couch_set_view:define_group(
+        mapreduce_view, test_set_name(), ddoc_id(), Params).
 
 
 add_documents(StartId, Count) ->

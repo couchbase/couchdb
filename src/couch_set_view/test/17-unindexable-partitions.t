@@ -49,7 +49,8 @@ test() ->
 
     create_set(),
     ReplicaParts = lists:seq(num_set_partitions() div 2, num_set_partitions() - 1),
-    couch_set_view:add_replica_partitions(test_set_name(), ddoc_id(), ReplicaParts),
+    couch_set_view:add_replica_partitions(
+        mapreduce_view, test_set_name(), ddoc_id(), ReplicaParts),
 
     ActiveParts = lists:seq(0, (num_set_partitions() div 2) - 1),
     ValueGenFun1 = fun(I) -> I end,
@@ -66,7 +67,8 @@ test() ->
     etap:diag("Marking the following partitions as unindexable: ~w", [Unindexable]),
 
     etap:is(
-        couch_set_view:mark_partitions_unindexable(test_set_name(), ddoc_id(), Unindexable),
+        couch_set_view:mark_partitions_unindexable(
+            mapreduce_view, test_set_name(), ddoc_id(), Unindexable),
         ok,
         "Marked unindexable partitions"),
 
@@ -87,7 +89,8 @@ test() ->
 
     MarkResult1 = try
         couch_set_view:set_partition_states(
-            test_set_name(), ddoc_id(), [], [lists:last(Unindexable)], [])
+            mapreduce_view, test_set_name(), ddoc_id(), [],
+            [lists:last(Unindexable)], [])
     catch throw:Error ->
         Error
     end,
@@ -97,7 +100,8 @@ test() ->
 
     MarkResult2 = try
         couch_set_view:set_partition_states(
-            test_set_name(), ddoc_id(), [], [], [lists:last(Unindexable)])
+            mapreduce_view, test_set_name(), ddoc_id(), [], [],
+            [lists:last(Unindexable)])
     catch throw:Error2 ->
         Error2
     end,
@@ -107,7 +111,8 @@ test() ->
 
     MarkResult3 = try
         couch_set_view:mark_partitions_unindexable(
-            test_set_name(), ddoc_id(), [lists:last(ReplicaParts)])
+            mapreduce_view, test_set_name(), ddoc_id(),
+            [lists:last(ReplicaParts)])
     catch throw:Error3 ->
         Error3
     end,
@@ -145,7 +150,8 @@ test() ->
     etap:diag("Marking the following partitions as indexable (again): ~w", [Unindexable]),
 
     etap:is(
-        couch_set_view:mark_partitions_indexable(test_set_name(), ddoc_id(), Unindexable),
+        couch_set_view:mark_partitions_indexable(
+            mapreduce_view, test_set_name(), ddoc_id(), Unindexable),
         ok,
         "Marked indexable partitions"),
 
@@ -170,18 +176,21 @@ test() ->
 
     % Mark first replica partition as active. Verify that after this it's possible
     % to mark it as unindexable and then back to indexable once again.
-    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id()),
     ok = gen_server:call(GroupPid, {set_auto_transfer_replicas, false}, infinity),
 
     ActivateReplicaResult = couch_set_view:set_partition_states(
-        test_set_name(), ddoc_id(), [hd(ReplicaParts)], [], []),
+        mapreduce_view, test_set_name(), ddoc_id(),
+        [hd(ReplicaParts)], [], []),
     ?etap_match(ActivateReplicaResult,
                 ok,
                 "Activated replica partition " ++ integer_to_list(hd(ReplicaParts))),
 
     Unindexable2 = [hd(ReplicaParts)],
     etap:is(
-        couch_set_view:mark_partitions_unindexable(test_set_name(), ddoc_id(), Unindexable2),
+        couch_set_view:mark_partitions_unindexable(
+            mapreduce_view, test_set_name(), ddoc_id(), Unindexable2),
         ok,
         "Marked replica partition on transfer as unindexable"),
 
@@ -193,7 +202,8 @@ test() ->
     verify_btrees_1(ActiveParts, PassiveParts, ExpectedSeqs5, ExpectedUnindexableSeqs5, ValueGenFun2),
 
     etap:is(
-        couch_set_view:mark_partitions_indexable(test_set_name(), ddoc_id(), Unindexable2),
+        couch_set_view:mark_partitions_indexable(
+            mapreduce_view, test_set_name(), ddoc_id(), Unindexable2),
         ok,
         "Marked replica partition on transfer as indexable again"),
 
@@ -204,7 +214,7 @@ test() ->
     verify_btrees_1(ActiveParts, PassiveParts, ExpectedSeqs6, ExpectedUnindexableSeqs6, ValueGenFun2),
 
     ok = couch_set_view:set_partition_states(
-        test_set_name(), ddoc_id(), [], [], [hd(ReplicaParts)]),
+        mapreduce_view, test_set_name(), ddoc_id(), [], [], [hd(ReplicaParts)]),
     wait_for_main_cleanup(),
 
     verify_btrees_1(ActiveParts, [], ExpectedSeqs4, ExpectedUnindexableSeqs4, ValueGenFun2),
@@ -218,18 +228,21 @@ test() ->
 
 
 get_group_snapshot(Staleness) ->
-    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id()),
     {ok, Group, _} = gen_server:call(
         GroupPid, #set_view_group_req{stale = Staleness}, infinity),
     Group.
 
 
 trigger_main_update_and_wait() ->
-    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id()),
     trigger_update_and_wait(GroupPid).
 
 trigger_replica_update_and_wait() ->
-    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id()),
     {ok, ReplicaGroupPid} = gen_server:call(GroupPid, replica_pid, infinity),
     trigger_update_and_wait(ReplicaGroupPid).
 
@@ -256,7 +269,8 @@ trigger_update_and_wait(GroupPid) ->
 
 
 wait_for_main_cleanup() ->
-    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id()),
     {ok, CleanerPid} = gen_server:call(GroupPid, start_cleaner, infinity),
     CleanerRef = erlang:monitor(process, CleanerPid),
     receive
@@ -270,7 +284,7 @@ wait_for_main_cleanup() ->
 create_set() ->
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
     couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
-    couch_set_view:cleanup_index_files(test_set_name()),
+    couch_set_view:cleanup_index_files(mapreduce_view, test_set_name()),
     etap:diag("Creating the set databases (# of partitions: " ++
         integer_to_list(num_set_partitions()) ++ ")"),
     DDoc = {[
@@ -293,7 +307,8 @@ create_set() ->
         passive_partitions = [],
         use_replica_index = true
     },
-    ok = couch_set_view:define_group(test_set_name(), ddoc_id(), Params).
+    ok = couch_set_view:define_group(
+        mapreduce_view, test_set_name(), ddoc_id(), Params).
 
 
 update_documents(StartId, Count, ValueGenFun) ->
@@ -320,7 +335,8 @@ doc_id(I) ->
 
 
 compact_view_group() ->
-    {ok, CompactPid} = couch_set_view_compactor:start_compact(test_set_name(), ddoc_id(), main),
+    {ok, CompactPid} = couch_set_view_compactor:start_compact(
+        mapreduce_view, test_set_name(), ddoc_id(), main),
     Ref = erlang:monitor(process, CompactPid),
     etap:diag("Waiting for view group compaction to finish"),
     receive

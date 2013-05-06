@@ -54,7 +54,7 @@ test() ->
     test_state_changes_while_updater_running(ValueGenFun1, num_docs_0()),
 
     ok = couch_set_view:set_partition_states(
-        test_set_name(), ddoc_id(),
+        mapreduce_view, test_set_name(), ddoc_id(),
         [],
         lists:seq(0, (num_set_partitions() div 2) - 1),
         lists:seq(num_set_partitions() div 2, num_set_partitions() - 1)),
@@ -80,7 +80,8 @@ test() ->
 
 
 test_state_changes_while_updater_running(ValueGenFun, NumDocs) ->
-    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id()),
     NewPassiveParts = lists:seq(num_set_partitions() div 2, num_set_partitions() - 1),
 
     % Trigger index update
@@ -90,7 +91,7 @@ test_state_changes_while_updater_running(ValueGenFun, NumDocs) ->
     lists:foreach(
         fun(PartId) ->
             ok = couch_set_view:set_partition_states(
-                test_set_name(), ddoc_id(), [], [PartId], [])
+                mapreduce_view, test_set_name(), ddoc_id(), [], [PartId], [])
         end,
         NewPassiveParts),
 
@@ -104,7 +105,7 @@ test_state_changes_while_updater_running(ValueGenFun, NumDocs) ->
     lists:foreach(
         fun(PartId) ->
             ok = couch_set_view:set_partition_states(
-                test_set_name(), ddoc_id(), [PartId], [], [])
+                mapreduce_view, test_set_name(), ddoc_id(), [PartId], [], [])
         end,
         ActiveParts0),
 
@@ -116,7 +117,7 @@ test_state_changes_while_updater_running(ValueGenFun, NumDocs) ->
     lists:foreach(
         fun(PartId) ->
             ok = couch_set_view:set_partition_states(
-                test_set_name(), ddoc_id(), [], [PartId], [])
+                mapreduce_view, test_set_name(), ddoc_id(), [], [PartId], [])
         end,
         PassiveParts),
 
@@ -143,17 +144,20 @@ test_state_changes_while_updater_running(ValueGenFun, NumDocs) ->
 
 test_add_passive_partition_to_pending_transition_while_updater_running(
         Active, Passive, NumDocs, ValueGenFun) ->
-    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id()),
     ok = gen_server:call(GroupPid, {set_auto_cleanup, false}, infinity),
     Parts = ordsets:from_list([hd(Active), hd(Passive)]),
-    ok = couch_set_view:set_partition_states(test_set_name(), ddoc_id(), [], [], Parts),
+    ok = couch_set_view:set_partition_states(
+        mapreduce_view, test_set_name(), ddoc_id(), [], [], Parts),
 
     % Bump partition seq numbers so that the updater can be triggered.
     update_documents(0, NumDocs, ValueGenFun),
     {ok, UpdaterPid} = gen_server:call(GroupPid, {start_updater, [pause]}, infinity),
 
     % Now mark partitions under cleanup as passive while the updater is running
-    ok = couch_set_view:set_partition_states(test_set_name(), ddoc_id(), [], Parts, []),
+    ok = couch_set_view:set_partition_states(
+        mapreduce_view, test_set_name(), ddoc_id(), [], Parts, []),
 
     Group = get_group_snapshot(),
     PendingTrans = ?set_pending_transition(Group),
@@ -194,7 +198,8 @@ test_add_passive_partition_to_pending_transition_while_updater_running(
 wait_group_respawn(_OldPid, T) when T =< 0 ->
     etap:bail("Timeout waiting for group respawn");
 wait_group_respawn(OldPid, T) ->
-    NewPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    NewPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id()),
     case NewPid of
     OldPid ->
         ok = timer:sleep(20),
@@ -205,7 +210,8 @@ wait_group_respawn(OldPid, T) ->
 
 
 get_group_snapshot() ->
-    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id()),
     {ok, Group} = gen_server:call(GroupPid, request_group, infinity),
     Group.
 
@@ -213,7 +219,7 @@ get_group_snapshot() ->
 create_set() ->
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
     couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
-    couch_set_view:cleanup_index_files(test_set_name()),
+    couch_set_view:cleanup_index_files(mapreduce_view, test_set_name()),
     etap:diag("Creating the set databases (# of partitions: " ++
         integer_to_list(num_set_partitions()) ++ ")"),
     DDoc = {[
@@ -240,7 +246,8 @@ create_set() ->
         passive_partitions = lists:seq(0, (num_set_partitions() div 2) - 1),
         use_replica_index = false
     },
-    ok = couch_set_view:define_group(test_set_name(), ddoc_id(), Params).
+    ok = couch_set_view:define_group(
+        mapreduce_view, test_set_name(), ddoc_id(), Params).
 
 
 update_documents(StartId, Count, ValueGenFun) ->

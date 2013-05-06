@@ -14,17 +14,17 @@
 -behaviour(gen_server).
 
 % public API
--export([define_group/3]).
--export([cleanup_index_files/1, set_index_dir/2]).
--export([get_group_data_size/2, get_group_signature/2]).
--export([reset_utilization_stats/2, get_utilization_stats/2]).
--export([set_partition_states/5, add_replica_partitions/3, remove_replica_partitions/3]).
--export([mark_partitions_unindexable/3, mark_partitions_indexable/3]).
--export([monitor_partition_update/3, demonitor_partition_update/3]).
--export([trigger_update/3, trigger_replica_update/3]).
+-export([define_group/4]).
+-export([cleanup_index_files/2, set_index_dir/2]).
+-export([get_group_data_size/3, get_group_signature/3]).
+-export([reset_utilization_stats/3, get_utilization_stats/3]).
+-export([set_partition_states/6, add_replica_partitions/4, remove_replica_partitions/4]).
+-export([mark_partitions_unindexable/4, mark_partitions_indexable/4]).
+-export([monitor_partition_update/4, demonitor_partition_update/4]).
+-export([trigger_update/4, trigger_replica_update/4]).
 
 % Internal, not meant to be used by components other than the view engine.
--export([get_group_pid/2, get_group/3, release_group/1, get_group_info/2]).
+-export([get_group_pid/3, get_group/4, release_group/1, get_group_info/3]).
 -export([get_map_view/4, get_reduce_view/4]).
 -export([fold/5, fold_reduce/5]).
 -export([get_row_count/2, reduce_to_count/1, extract_map_view/1]).
@@ -75,11 +75,12 @@
 %    the view key/values that originated from any of these
 %    partitions will eventually be removed from the index
 %
--spec get_group(binary(),
+-spec get_group(atom(),
+                binary(),
                 binary() | #doc{},
                 #set_view_group_req{}) -> {'ok', #set_view_group{}}.
-get_group(SetName, DDoc, #set_view_group_req{type = main} = Req) ->
-    GroupPid = get_group_pid(SetName, DDoc),
+get_group(Mod, SetName, DDoc, #set_view_group_req{type = main} = Req) ->
+    GroupPid = get_group_pid(Mod, SetName, DDoc),
     case couch_set_view_group:request_group(GroupPid, Req) of
     {ok, Group} ->
         {ok, Group};
@@ -89,9 +90,9 @@ get_group(SetName, DDoc, #set_view_group_req{type = main} = Req) ->
     Error ->
         throw(Error)
     end;
-get_group(SetName, DDoc, #set_view_group_req{type = replica} = Req) ->
+get_group(Mod, SetName, DDoc, #set_view_group_req{type = replica} = Req) ->
     {ok, MainGroup} = get_group(
-        SetName, DDoc, Req#set_view_group_req{type = main, stale = ok}),
+        Mod, SetName, DDoc, Req#set_view_group_req{type = main, stale = ok}),
     release_group(MainGroup),
     case MainGroup#set_view_group.replica_pid of
     nil ->
@@ -109,12 +110,12 @@ get_group(SetName, DDoc, #set_view_group_req{type = replica} = Req) ->
     end.
 
 
--spec get_group_pid(binary(), binary() | #doc{}) -> pid().
-get_group_pid(SetName, #doc{} = DDoc) ->
-    Group = mapreduce_view:design_doc_to_set_view_group(SetName, DDoc),
+-spec get_group_pid(atom(), binary(), binary() | #doc{}) -> pid().
+get_group_pid(Mod, SetName, #doc{} = DDoc) ->
+    Group = Mod:design_doc_to_set_view_group(SetName, DDoc),
     get_group_server(SetName, Group);
-get_group_pid(SetName, DDocId) when is_binary(DDocId) ->
-    get_group_server(SetName, open_set_group(SetName, DDocId)).
+get_group_pid(Mod, SetName, DDocId) when is_binary(DDocId) ->
+    get_group_server(SetName, open_set_group(Mod, SetName, DDocId)).
 
 
 -spec release_group(#set_view_group{}) -> no_return().
@@ -122,10 +123,10 @@ release_group(Group) ->
     couch_set_view_group:release_group(Group).
 
 
--spec define_group(binary(), binary(), #set_view_params{}) -> 'ok'.
-define_group(SetName, DDocId, #set_view_params{} = Params) ->
+-spec define_group(atom(), binary(), binary(), #set_view_params{}) -> 'ok'.
+define_group(Mod, SetName, DDocId, #set_view_params{} = Params) ->
     try
-        GroupPid = get_group_pid(SetName, DDocId),
+        GroupPid = get_group_pid(Mod, SetName, DDocId),
         case couch_set_view_group:define_view(GroupPid, Params) of
         ok ->
             ok;
@@ -170,14 +171,15 @@ define_group(SetName, DDocId, #set_view_params{} = Params) ->
 % replica partition, data from that partition will start to be transfered from
 % the replica index into the main index.
 %
--spec set_partition_states(binary(),
+-spec set_partition_states(atom(),
+                           binary(),
                            binary(),
                            ordsets:ordset(partition_id()),
                            ordsets:ordset(partition_id()),
                            ordsets:ordset(partition_id())) -> 'ok'.
-set_partition_states(SetName, DDocId, ActivePartitions, PassivePartitions, CleanupPartitions) ->
+set_partition_states(Mod, SetName, DDocId, ActivePartitions, PassivePartitions, CleanupPartitions) ->
     try
-        GroupPid = get_group_pid(SetName, DDocId),
+        GroupPid = get_group_pid(Mod, SetName, DDocId),
         case couch_set_view_group:set_state(
             GroupPid, ActivePartitions, PassivePartitions, CleanupPartitions) of
         ok ->
@@ -196,10 +198,10 @@ set_partition_states(SetName, DDocId, ActivePartitions, PassivePartitions, Clean
 % All the given partitions must not be in the active nor passive state.
 % Like set_partition_states, this is an incremental operation.
 %
--spec add_replica_partitions(binary(), binary(), ordsets:ordset(partition_id())) -> 'ok'.
-add_replica_partitions(SetName, DDocId, Partitions) ->
+-spec add_replica_partitions(atom(), binary(), binary(), ordsets:ordset(partition_id())) -> 'ok'.
+add_replica_partitions(Mod, SetName, DDocId, Partitions) ->
     try
-        GroupPid = get_group_pid(SetName, DDocId),
+        GroupPid = get_group_pid(Mod, SetName, DDocId),
         case couch_set_view_group:add_replica_partitions(GroupPid, Partitions) of
         ok ->
             ok;
@@ -218,10 +220,10 @@ add_replica_partitions(SetName, DDocId, Partitions) ->
 % This is a no-op for partitions not currently marked as replicas.
 % Like set_partition_states, this is an incremental operation.
 %
--spec remove_replica_partitions(binary(), binary(), ordsets:ordset(partition_id())) -> 'ok'.
-remove_replica_partitions(SetName, DDocId, Partitions) ->
+-spec remove_replica_partitions(atom(), binary(), binary(), ordsets:ordset(partition_id())) -> 'ok'.
+remove_replica_partitions(Mod, SetName, DDocId, Partitions) ->
     try
-        GroupPid = get_group_pid(SetName, DDocId),
+        GroupPid = get_group_pid(Mod, SetName, DDocId),
         case couch_set_view_group:remove_replica_partitions(GroupPid, Partitions) of
         ok ->
             ok;
@@ -238,12 +240,12 @@ remove_replica_partitions(SetName, DDocId, Partitions) ->
 % corresponding partition databases. This operation doesn't remove any data from
 % the index, nor does it start any cleanup operation. Queries will still see
 % and get data from the corresponding partitions.
--spec mark_partitions_unindexable(binary(), binary(), ordsets:ordset(partition_id())) -> 'ok'.
-mark_partitions_unindexable(_SetName, _DDocId, []) ->
+-spec mark_partitions_unindexable(atom(), binary(), binary(), ordsets:ordset(partition_id())) -> 'ok'.
+mark_partitions_unindexable(_Mod, _SetName, _DDocId, []) ->
     ok;
-mark_partitions_unindexable(SetName, DDocId, Partitions) ->
+mark_partitions_unindexable(Mod, SetName, DDocId, Partitions) ->
     try
-        Pid = get_group_pid(SetName, DDocId),
+        Pid = get_group_pid(Mod, SetName, DDocId),
         case couch_set_view_group:mark_as_unindexable(Pid, Partitions) of
         ok ->
             ok;
@@ -260,12 +262,12 @@ mark_partitions_unindexable(SetName, DDocId, Partitions) ->
 % changes (changes that happened since the last index update prior to the
 % mark_partitions_unindexable/3 call). The given partitions are currently in either the
 % active or passive states and were marked as unindexable before.
--spec mark_partitions_indexable(binary(), binary(), ordsets:ordset(partition_id())) -> 'ok'.
-mark_partitions_indexable(_SetName, _DDocId, []) ->
+-spec mark_partitions_indexable(atom(), binary(), binary(), ordsets:ordset(partition_id())) -> 'ok'.
+mark_partitions_indexable(_Mod, _SetName, _DDocId, []) ->
     ok;
-mark_partitions_indexable(SetName, DDocId, Partitions) ->
+mark_partitions_indexable(Mod, SetName, DDocId, Partitions) ->
     try
-        Pid = get_group_pid(SetName, DDocId),
+        Pid = get_group_pid(Mod, SetName, DDocId),
         case couch_set_view_group:mark_as_indexable(Pid, Partitions) of
         ok ->
             ok;
@@ -304,11 +306,11 @@ mark_partitions_indexable(SetName, DDocId, Partitions) ->
 %
 % The target partition must be either an active or passive partition.
 % Replica partitions are not supported at the moment.
--spec monitor_partition_update(binary(), binary(), partition_id()) -> reference().
-monitor_partition_update(SetName, DDocId, PartitionId) ->
+-spec monitor_partition_update(atom(), binary(), binary(), partition_id()) -> reference().
+monitor_partition_update(Mod, SetName, DDocId, PartitionId) ->
     Ref = make_ref(),
     try
-        Pid = get_group_pid(SetName, DDocId),
+        Pid = get_group_pid(Mod, SetName, DDocId),
         case couch_set_view_group:monitor_partition_update(Pid, PartitionId, Ref, self()) of
         ok ->
             Ref;
@@ -324,14 +326,14 @@ monitor_partition_update(SetName, DDocId, PartitionId) ->
 % Stop monitoring for notification of when a partition is fully indexed.
 % This is a counter part to monitor_partition_update/3. This call flushes
 % any monitor messsages from the callers mailbox.
--spec demonitor_partition_update(binary(), binary(), reference()) -> 'ok'.
-demonitor_partition_update(SetName, DDocId, Ref) ->
+-spec demonitor_partition_update(atom(), binary(), binary(), reference()) -> 'ok'.
+demonitor_partition_update(Mod, SetName, DDocId, Ref) ->
     receive
     {Ref, _} ->
         ok
     after 0 ->
         try
-            Pid = get_group_pid(SetName, DDocId),
+            Pid = get_group_pid(Mod, SetName, DDocId),
             ok = couch_set_view_group:demonitor_partition_update(Pid, Ref),
             receive
             {Ref, _} ->
@@ -347,10 +349,10 @@ demonitor_partition_update(SetName, DDocId, Ref) ->
 
 % Trigger a view group index update if there are at least N new changes
 % (from all the active/passive partitions) to index.
--spec trigger_update(binary(), binary(), non_neg_integer()) -> no_return().
-trigger_update(SetName, DDocId, MinNumChanges) ->
+-spec trigger_update(atom(), binary(), binary(), non_neg_integer()) -> no_return().
+trigger_update(Mod, SetName, DDocId, MinNumChanges) ->
     try
-        Pid = get_group_pid(SetName, DDocId),
+        Pid = get_group_pid(Mod, SetName, DDocId),
         ok = gen_server:cast(Pid, {update, MinNumChanges})
     catch throw:{error, empty_group} ->
         ok
@@ -359,10 +361,10 @@ trigger_update(SetName, DDocId, MinNumChanges) ->
 
 % Trigger a replica view group index update if there are at least N new
 % changes (from all the currently defined replica partitions) to index.
--spec trigger_replica_update(binary(), binary(), non_neg_integer()) -> no_return().
-trigger_replica_update(SetName, DDocId, MinNumChanges) ->
+-spec trigger_replica_update(atom(), binary(), binary(), non_neg_integer()) -> no_return().
+trigger_replica_update(Mod, SetName, DDocId, MinNumChanges) ->
     try
-        Pid = get_group_pid(SetName, DDocId),
+        Pid = get_group_pid(Mod, SetName, DDocId),
         ok = gen_server:cast(Pid, {update_replica, MinNumChanges})
     catch throw:{error, empty_group} ->
         ok
@@ -386,9 +388,9 @@ get_group_server(SetName, #set_view_group{sig = Sig} = Group) ->
     end.
 
 
--spec open_set_group(binary(), binary()) -> #set_view_group{}.
-open_set_group(SetName, GroupId) ->
-    case couch_set_view_group:open_set_group(mapreduce_view, SetName, GroupId) of
+-spec open_set_group(atom(), binary(), binary()) -> #set_view_group{}.
+open_set_group(Mod, SetName, GroupId) ->
+    case couch_set_view_group:open_set_group(Mod, SetName, GroupId) of
     {ok, Group} ->
         Group;
     Error ->
@@ -401,17 +403,17 @@ start_link() ->
 
 
 % To be used only for debugging. This is a very expensive call.
-get_group_info(SetName, DDocId) ->
-    GroupPid = get_group_pid(SetName, DDocId),
+get_group_info(Mod, SetName, DDocId) ->
+    GroupPid = get_group_pid(Mod, SetName, DDocId),
     {ok, _Info} = couch_set_view_group:request_group_info(GroupPid).
 
 
-get_group_data_size(SetName, DDocId) ->
+get_group_data_size(Mod, SetName, DDocId) ->
     try
-        GroupPid = get_group_pid(SetName, DDocId),
+        GroupPid = get_group_pid(Mod, SetName, DDocId),
         {ok, _Info} = couch_set_view_group:get_data_size(GroupPid)
     catch throw:{error, empty_group} ->
-        {ok, Sig} = get_group_signature(SetName, DDocId),
+        {ok, Sig} = get_group_signature(Mod, SetName, DDocId),
         EmptyInfo = [
             {signature, ?b2l(Sig)},
             {disk_size, 0},
@@ -424,31 +426,31 @@ get_group_data_size(SetName, DDocId) ->
     end.
 
 
--spec reset_utilization_stats(binary(), binary()) -> 'ok'.
-reset_utilization_stats(SetName, DDocId) ->
-    GroupPid = get_group_pid(SetName, DDocId),
+-spec reset_utilization_stats(atom(), binary(), binary()) -> 'ok'.
+reset_utilization_stats(Mod, SetName, DDocId) ->
+    GroupPid = get_group_pid(Mod, SetName, DDocId),
     ok = couch_set_view_group:reset_utilization_stats(GroupPid).
 
 
--spec get_utilization_stats(binary(), binary()) ->
+-spec get_utilization_stats(atom(), binary(), binary()) ->
                                    {'ok', [{atom() | binary(), term()}]}.
-get_utilization_stats(SetName, DDocId) ->
-    GroupPid = get_group_pid(SetName, DDocId),
+get_utilization_stats(Mod, SetName, DDocId) ->
+    GroupPid = get_group_pid(Mod, SetName, DDocId),
     {ok, _} = couch_set_view_group:get_utilization_stats(GroupPid).
 
 
--spec get_group_signature(binary(), binary()) -> {'ok', binary()}.
-get_group_signature(SetName, DDocId) ->
+-spec get_group_signature(atom(), binary(), binary()) -> {'ok', binary()}.
+get_group_signature(Mod, SetName, DDocId) ->
     case couch_set_view_ddoc_cache:get_ddoc(SetName, DDocId) of
     {ok, DDoc} ->
-        Group = mapreduce_view:design_doc_to_set_view_group(SetName, DDoc),
+        Group = Mod:design_doc_to_set_view_group(SetName, DDoc),
         {ok, ?l2b(couch_util:to_hex(Group#set_view_group.sig))};
     Error ->
         throw(Error)
     end.
 
 
-cleanup_index_files(SetName) ->
+cleanup_index_files(Mod, SetName) ->
     % load all ddocs
     {ok, Db} = couch_db:open_int(?master_dbname(SetName), []),
     {ok, DesignDocs} = couch_db:get_design_docs(Db),
@@ -457,7 +459,7 @@ cleanup_index_files(SetName) ->
     % make unique list of group sigs
     Sigs = lists:map(fun(DDoc) ->
             #set_view_group{sig = Sig} =
-                mapreduce_view:design_doc_to_set_view_group(SetName, DDoc),
+                Mod:design_doc_to_set_view_group(SetName, DDoc),
             couch_util:to_hex(Sig)
         end,
         [DD || DD <- DesignDocs, not DD#doc.deleted]),
@@ -495,19 +497,14 @@ list_index_files(SetName) ->
 
 
 -spec get_row_count(#set_view_group{}, #set_view{}) -> non_neg_integer().
-get_row_count(#set_view_group{replica_group = nil}, #set_view{btree = Bt} = View) ->
-    ok = couch_set_view_mapreduce:start_reduce_context(View),
-    {ok, <<Count:40, _/binary>>} = couch_btree:full_reduce(Bt),
-    ok = couch_set_view_mapreduce:end_reduce_context(View),
-    Count;
-get_row_count(#set_view_group{replica_group = RepGroup}, View) ->
+get_row_count(#set_view_group{replica_group = nil} = Group, View) ->
+    Mod = Group#set_view_group.mod,
+    Mod:get_row_count(View);
+get_row_count(#set_view_group{replica_group = RepGroup} = Group, View) ->
+    Mod = Group#set_view_group.mod,
     RepView = lists:nth(View#set_view.id_num + 1, RepGroup#set_view_group.views),
-    ok = couch_set_view_mapreduce:start_reduce_context(View),
-    {ok, <<CountMain:40, _/binary>>} = couch_btree:full_reduce(View#set_view.btree),
-    ok = couch_set_view_mapreduce:end_reduce_context(View),
-    ok = couch_set_view_mapreduce:start_reduce_context(RepView),
-    {ok, <<CountRep:40, _/binary>>} = couch_btree:full_reduce(RepView#set_view.btree),
-    ok = couch_set_view_mapreduce:end_reduce_context(RepView),
+    CountMain = Mod:get_row_count(View),
+    CountRep = Mod:get_row_count(RepView),
     CountMain + CountRep.
 
 
@@ -671,7 +668,7 @@ get_key_pos(Key, [_|Rest], N) ->
 get_map_view(SetName, DDoc, ViewName, Req) ->
     #set_view_group_req{wanted_partitions = WantedPartitions} = Req,
     try
-        {ok, Group0} = get_group(SetName, DDoc, Req),
+        {ok, Group0} = get_group(mapreduce_view, SetName, DDoc, Req),
         {Group, Unindexed} = modify_bitmasks(Group0, WantedPartitions),
         case get_map_view0(ViewName, Group#set_view_group.views) of
         {ok, View} ->
@@ -696,7 +693,7 @@ get_map_view0(Name, [#set_view{map_names=MapNames}=View|Rest]) ->
 get_reduce_view(SetName, DDoc, ViewName, Req) ->
     #set_view_group_req{wanted_partitions = WantedPartitions} = Req,
     try
-        {ok, Group0} = get_group(SetName, DDoc, Req),
+        {ok, Group0} = get_group(mapreduce_view, SetName, DDoc, Req),
         {Group, Unindexed} = modify_bitmasks(Group0, WantedPartitions),
         #set_view_group{
             views = Views
@@ -791,7 +788,9 @@ fold(Group, View, Fun, Acc, #view_query_args{keys = Keys} = ViewQueryArgs0) ->
         Keys).
 
 
-do_fold(Group, #set_view{btree=Btree}, Fun, Acc, ViewQueryArgs) ->
+do_fold(Group, SetView, Fun, Acc, ViewQueryArgs) ->
+    Mod = Group#set_view_group.mod,
+
     Filter = case ViewQueryArgs#view_query_args.filter of
         false ->
             false;
@@ -799,38 +798,14 @@ do_fold(Group, #set_view{btree=Btree}, Fun, Acc, ViewQueryArgs) ->
             filter(Group)
     end,
 
-    WrapperFun = case Filter of
-    false ->
-        fun(KV, Reds, Acc2) ->
-            ExpandedKVs = couch_set_view_util:expand_dups([KV], []),
-            fold_fun(Fun, ExpandedKVs, Reds, Acc2)
-        end;
-    {true, _, IncludeBitmask} ->
-        fun(KV, Reds, Acc2) ->
-            ExpandedKVs = couch_set_view_util:expand_dups([KV], IncludeBitmask, []),
-            fold_fun(Fun, ExpandedKVs, Reds, Acc2)
-        end
-    end,
+    WrapperFun = Mod:make_wrapper_fun(Fun, Filter),
     couch_set_view_util:open_raw_read_fd(Group),
     try
         Options = couch_set_view_util:make_key_options(ViewQueryArgs),
         {ok, _LastReduce, _AccResult} =
-            couch_btree:fold(Btree, WrapperFun, Acc, Options)
+            Mod:fold(SetView, WrapperFun, Acc, Options)
     after
         couch_set_view_util:close_raw_read_fd(Group)
-    end.
-
-
-fold_fun(_Fun, [], _, Acc) ->
-    {ok, Acc};
-fold_fun(Fun, [KV | Rest], {KVReds, Reds}, Acc) ->
-    {KeyDocId, <<PartId:16, Value/binary>>} = KV,
-    {JsonKey, DocId} = couch_set_view_util:split_key_docid(KeyDocId),
-    case Fun({{{json, JsonKey}, DocId}, {PartId, {json, Value}}}, {KVReds, Reds}, Acc) of
-    {ok, Acc2} ->
-        fold_fun(Fun, Rest, {[KV | KVReds], Reds}, Acc2);
-    {stop, Acc2} ->
-        {stop, Acc2}
     end.
 
 
@@ -933,6 +908,7 @@ handle_call({before_database_delete, DbName}, _From, Server) ->
 
 handle_call({ddoc_updated, SetName, #doc{deleted = false} = DDoc0}, _From, Server) ->
     #doc{id = DDocId} = DDoc = couch_doc:with_ejson_body(DDoc0),
+% XXX vmx 2013-05-03: Don't hard-code mapreduce_view
     #set_view_group{sig = Sig} = mapreduce_view:design_doc_to_set_view_group(SetName, DDoc),
     true = ets:insert(couch_setview_name_to_sig, {SetName, {DDocId, Sig}}),
     {reply, ok, Server};
@@ -945,11 +921,16 @@ handle_call({ddoc_updated, SetName, #doc{id = DDocId, deleted = true}}, _From, S
 handle_cast(Msg, Server) ->
     {stop, {unexpected_cast, Msg}, Server}.
 
-new_group(Root, SetName, #set_view_group{name = DDocId, sig = Sig} = Group) ->
+new_group(Root, SetName, Group) ->
+    #set_view_group{
+        name = DDocId,
+        sig = Sig,
+        mod = Mod
+    } = Group,
     process_flag(trap_exit, true),
     Reply = case (catch couch_set_view_group:start_link({Root, SetName, Group})) of
     {ok, NewPid} ->
-        Aliases = get_ddoc_ids_with_sig(SetName, Sig),
+        Aliases = get_ddoc_ids_with_sig(Mod, SetName, Sig),
         unlink(NewPid),
         {ok, NewPid, Aliases};
     {error, Reason} ->
@@ -1104,6 +1085,7 @@ handle_db_event({ddoc_updated, {DbName, #doc{id = DDocId} = DDoc}}) ->
         case DDoc#doc.deleted of
         false ->
             DDoc2 = couch_doc:with_ejson_body(DDoc),
+% XXX vmx 2013-05-03: Don't hard-code mapreduce_view
             #set_view_group{sig = NewSig} = mapreduce_view:design_doc_to_set_view_group(SetName, DDoc2);
         true ->
             NewSig = <<>>
@@ -1219,14 +1201,14 @@ is_array_key(K) when is_binary(K) ->
     false.
 
 
--spec get_ddoc_ids_with_sig(binary(), binary()) -> [binary()].
-get_ddoc_ids_with_sig(SetName, ViewGroupSig) ->
+-spec get_ddoc_ids_with_sig(atom(), binary(), binary()) -> [binary()].
+get_ddoc_ids_with_sig(Mod, SetName, ViewGroupSig) ->
     {ok, Db} = couch_db:open_int(?master_dbname(SetName), []),
     {ok, DDocList} = couch_db:get_design_docs(Db, no_deletes),
     ok = couch_db:close(Db),
     lists:foldl(
         fun(#doc{id = Id} = DDoc, Acc) ->
-            case mapreduce_view:design_doc_to_set_view_group(SetName, DDoc) of
+            case Mod:design_doc_to_set_view_group(SetName, DDoc) of
             #set_view_group{sig = ViewGroupSig} ->
                 [Id | Acc];
             #set_view_group{sig = _OtherSig} ->

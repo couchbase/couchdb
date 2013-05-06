@@ -51,12 +51,14 @@ test_partition_deletes_when_group_is_alive() ->
     ValueGenFun1 = fun(I) -> I end,
     update_documents(0, num_docs(), ValueGenFun1),
 
-    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id()),
     ok = gen_server:call(GroupPid, {set_auto_cleanup, false}, infinity),
     RepGroupPid = get_replica_pid(GroupPid),
     ok = gen_server:call(RepGroupPid, {set_auto_cleanup, false}, infinity),
 
-    ok = couch_set_view:add_replica_partitions(test_set_name(), ddoc_id(), [5]),
+    ok = couch_set_view:add_replica_partitions(
+        mapreduce_view, test_set_name(), ddoc_id(), [5]),
 
     IndexFile = group_index_file(main),
     RepIndexFile = group_index_file(replica),
@@ -249,7 +251,7 @@ query_view(ExpectedRowCount, QueryString) ->
 create_set(ActiveParts, PassiveParts) ->
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
     couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
-    couch_set_view:cleanup_index_files(test_set_name()),
+    couch_set_view:cleanup_index_files(mapreduce_view, test_set_name()),
     etap:diag("Creating the set databases (# of partitions: " ++
         integer_to_list(num_set_partitions()) ++ ")"),
     DDoc = {[
@@ -272,7 +274,8 @@ create_set(ActiveParts, PassiveParts) ->
         passive_partitions = PassiveParts,
         use_replica_index = true
     },
-    ok = couch_set_view:define_group(test_set_name(), ddoc_id(), Params).
+    ok = couch_set_view:define_group(
+        mapreduce_view, test_set_name(), ddoc_id(), Params).
 
 
 update_documents(StartId, Count, ValueGenFun) ->
@@ -299,7 +302,8 @@ doc_id(I) ->
 
 
 group_index_file(Type) ->
-    {ok, Info} = couch_set_view:get_group_info(test_set_name(), ddoc_id()),
+    {ok, Info} = couch_set_view:get_group_info(
+        mapreduce_view, test_set_name(), ddoc_id()),
     binary_to_list(iolist_to_binary(
         [
             filename:join([

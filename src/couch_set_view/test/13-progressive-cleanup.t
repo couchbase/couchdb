@@ -44,7 +44,8 @@ test() ->
 
     create_set(),
     add_documents(0, num_docs()),
-    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id()),
     erlang:put(group_pid, GroupPid),
 
     % build index
@@ -58,7 +59,7 @@ test() ->
             lists:seq(PartId, num_docs() - 1, num_set_partitions())
         )),
         ok = couch_set_view:set_partition_states(
-            test_set_name(), ddoc_id(), [], [], [PartId]),
+            mapreduce_view, test_set_name(), ddoc_id(), [], [], [PartId]),
         wait_for_cleanup(),
         verify_btrees(ActivePartsAcc2, RedValueAcc2),
         {ActivePartsAcc2, RedValueAcc2}
@@ -99,7 +100,8 @@ test() ->
 
 
 get_group_snapshot() ->
-    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id()),
     {ok, Group, 0} = gen_server:call(
         GroupPid, #set_view_group_req{stale = false, debug = true}, infinity),
     Group.
@@ -136,14 +138,15 @@ wait_for_cleanup() ->
 
 
 get_group_info() ->
-    {ok, Info} = couch_set_view:get_group_info(test_set_name(), ddoc_id()),
+    {ok, Info} = couch_set_view:get_group_info(
+        mapreduce_view, test_set_name(), ddoc_id()),
     Info.
 
 
 create_set() ->
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
     couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
-    couch_set_view:cleanup_index_files(test_set_name()),
+    couch_set_view:cleanup_index_files(mapreduce_view, test_set_name()),
     etap:diag("Creating the set databases (# of partitions: " ++
         integer_to_list(num_set_partitions()) ++ ")"),
     DDoc = {[
@@ -170,7 +173,8 @@ create_set() ->
         passive_partitions = [],
         use_replica_index = false
     },
-    ok = couch_set_view:define_group(test_set_name(), ddoc_id(), Params).
+    ok = couch_set_view:define_group(
+        mapreduce_view, test_set_name(), ddoc_id(), Params).
 
 
 add_documents(StartId, Count) ->

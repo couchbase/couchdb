@@ -32,7 +32,7 @@ handle_req(#httpd{path_parts = [<<"_set_view">>, SetName, <<"_cleanup">>]} = Req
     case Req#httpd.method of
     'POST' ->
          couch_httpd:validate_ctype(Req, "application/json"),
-         ok = couch_set_view:cleanup_index_files(SetName),
+         ok = couch_set_view:cleanup_index_files(mapreduce_view, SetName),
          send_json(Req, 202, {[{ok, true}]});
      _ ->
          send_method_not_allowed(Req, "POST")
@@ -51,14 +51,16 @@ route_request(#httpd{method = 'POST'} = Req, SetName, DDocId, [<<"_define">>]) -
         passive_partitions = couch_util:get_value(<<"passive_partitions">>, Fields, []),
         use_replica_index = couch_util:get_value(<<"use_replica_index">>, Fields, false)
     },
-    ok = couch_set_view:define_group(SetName, DDocId, SetViewParams),
+    ok = couch_set_view:define_group(
+        mapreduce_view, SetName, DDocId, SetViewParams),
     couch_httpd:send_json(Req, 201, {[{ok, true}]});
 
 route_request(Req, _SetName, _DDocId, [<<"_define">>]) ->
     send_method_not_allowed(Req, "POST");
 
 route_request(#httpd{method = 'GET'} = Req, SetName, DDocId, [<<"_info">>]) ->
-    {ok, Info} = couch_set_view:get_group_info(SetName, DDocId),
+    {ok, Info} = couch_set_view:get_group_info(
+        mapreduce_view, SetName, DDocId),
     couch_httpd:send_json(Req, 200, {Info});
 
 route_request(#httpd{method = 'GET'} = Req, SetName, DDocId, [<<"_btree_stats">>]) ->
@@ -67,7 +69,8 @@ route_request(#httpd{method = 'GET'} = Req, SetName, DDocId, [<<"_btree_stats">>
         stale = ok,
         update_stats = false
     },
-    {ok, Group} = couch_set_view:get_group(SetName, DDocId, GroupReq),
+    {ok, Group} = couch_set_view:get_group(
+        mapreduce_view, SetName, DDocId, GroupReq),
     #set_view_group{
         id_btree = IdBtree,
         views = Views
@@ -89,11 +92,13 @@ route_request(#httpd{method = 'GET'} = Req, SetName, DDocId, [<<"_btree_stats">>
     couch_httpd:send_json(Req, 200, Stats);
 
 route_request(#httpd{method = 'POST'} = Req, SetName, DDocId, [<<"_reset_utilization_stats">>]) ->
-    ok = couch_set_view:reset_utilization_stats(SetName, DDocId),
+    ok = couch_set_view:reset_utilization_stats(
+        mapreduce_view, SetName, DDocId),
     couch_httpd:send_json(Req, 201, true);
 
 route_request(#httpd{method = 'GET'} = Req, SetName, DDocId, [<<"_get_utilization_stats">>]) ->
-    {ok, Stats} = couch_set_view:get_utilization_stats(SetName, DDocId),
+    {ok, Stats} = couch_set_view:get_utilization_stats(
+        mapreduce_view, SetName, DDocId),
     couch_httpd:send_json(Req, 200, {Stats});
 
 route_request(#httpd{method = 'GET'} = Req, SetName, DDocId, [<<"_view">>, ViewName]) ->
@@ -120,17 +125,20 @@ route_request(#httpd{method = 'POST'} = Req, SetName, DDocId, [<<"_view">>, View
 
 route_request(#httpd{method = 'POST'} = Req, SetName, DDocId, [<<"_compact">>]) ->
     couch_httpd:validate_ctype(Req, "application/json"),
-    {ok, _Pid} = couch_set_view_compactor:start_compact(SetName, DDocId, main),
+    {ok, _Pid} = couch_set_view_compactor:start_compact(
+        mapreduce_view, SetName, DDocId, main),
     couch_httpd:send_json(Req, 202, {[{ok, true}]});
 
 route_request(#httpd{method = 'POST'} = Req, SetName, DDocId, [<<"_compact">>, <<"main">>]) ->
     couch_httpd:validate_ctype(Req, "application/json"),
-    {ok, _Pid} = couch_set_view_compactor:start_compact(SetName, DDocId, main),
+    {ok, _Pid} = couch_set_view_compactor:start_compact(
+        mapreduce_view, SetName, DDocId, main),
     couch_httpd:send_json(Req, 202, {[{ok, true}]});
 
 route_request(#httpd{method = 'POST'} = Req, SetName, DDocId, [<<"_compact">>, <<"replica">>]) ->
     couch_httpd:validate_ctype(Req, "application/json"),
-    {ok, _Pid} = couch_set_view_compactor:start_compact(SetName, DDocId, replica),
+    {ok, _Pid} = couch_set_view_compactor:start_compact(
+        mapreduce_view, SetName, DDocId, replica),
     couch_httpd:send_json(Req, 202, {[{ok, true}]});
 
 route_request(#httpd{method = 'POST'} = Req, SetName, DDocId, [<<"_set_partition_states">>]) ->
@@ -140,19 +148,21 @@ route_request(#httpd{method = 'POST'} = Req, SetName, DDocId, [<<"_set_partition
     Passive = couch_util:get_value(<<"passive">>, Fields, []),
     Cleanup = couch_util:get_value(<<"cleanup">>, Fields, []),
     ok = couch_set_view:set_partition_states(
-        SetName, DDocId, Active, Passive, Cleanup),
+        mapreduce_view, SetName, DDocId, Active, Passive, Cleanup),
     couch_httpd:send_json(Req, 201, {[{ok, true}]});
 
 route_request(#httpd{method = 'POST'} = Req, SetName, DDocId, [<<"_add_replica_partitions">>]) ->
     couch_httpd:validate_ctype(Req, "application/json"),
     List = [_ | _] = couch_httpd:json_body(Req),
-    ok = couch_set_view:add_replica_partitions(SetName, DDocId, List),
+    ok = couch_set_view:add_replica_partitions(
+        mapreduce_view, SetName, DDocId, List),
     couch_httpd:send_json(Req, 201, {[{ok, true}]});
 
 route_request(#httpd{method = 'POST'} = Req, SetName, DDocId, [<<"_remove_replica_partitions">>]) ->
     couch_httpd:validate_ctype(Req, "application/json"),
     List = [_ | _] = couch_httpd:json_body(Req),
-    ok = couch_set_view:remove_replica_partitions(SetName, DDocId, List),
+    ok = couch_set_view:remove_replica_partitions(mapreduce_view,
+        SetName, DDocId, List),
     couch_httpd:send_json(Req, 201, {[{ok, true}]}).
 
 

@@ -45,7 +45,8 @@ test() ->
     ValueGenFun1 = fun(I) -> I end,
     update_documents(0, num_docs(), ValueGenFun1),
 
-    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id()),
     etap:is(is_process_alive(GroupPid), true, "Group is alive"),
 
     etap:diag("Querying view before database compactions"),
@@ -105,7 +106,7 @@ query_view(ExpectedRowCount) ->
 create_set(ActiveParts, PassiveParts) ->
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
     couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
-    couch_set_view:cleanup_index_files(test_set_name()),
+    couch_set_view:cleanup_index_files(mapreduce_view, test_set_name()),
     etap:diag("Creating the set databases (# of partitions: " ++
         integer_to_list(num_set_partitions()) ++ ")"),
     DDoc = {[
@@ -128,7 +129,8 @@ create_set(ActiveParts, PassiveParts) ->
         passive_partitions = PassiveParts,
         use_replica_index = true
     },
-    ok = couch_set_view:define_group(test_set_name(), ddoc_id(), Params).
+    ok = couch_set_view:define_group(
+        mapreduce_view, test_set_name(), ddoc_id(), Params).
 
 
 update_documents(StartId, Count, ValueGenFun) ->

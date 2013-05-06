@@ -133,7 +133,8 @@ test() ->
     etap:diag("Marking partitions [ 32 .. 63 ] for cleanup"),
     ok = lists:foreach(
         fun(I) ->
-            ok = couch_set_view:set_partition_states(test_set_name(), ddoc_id(), [], [], [I])
+            ok = couch_set_view:set_partition_states(
+                mapreduce_view, test_set_name(), ddoc_id(), [], [], [I])
         end,
         lists:seq(32, 63)),
 
@@ -187,7 +188,8 @@ test() ->
     etap:diag("Marking partitions [ 32 .. 63 ] as active"),
     ok = lists:foreach(
         fun(I) ->
-            ok = couch_set_view:set_partition_states(test_set_name(), ddoc_id(), [I], [], [])
+            ok = couch_set_view:set_partition_states(
+                mapreduce_view, test_set_name(), ddoc_id(), [I], [], [])
         end,
         lists:seq(32, 63)),
 
@@ -338,7 +340,8 @@ wait_for_cleanup_loop(GroupInfo) ->
 
 
 get_group_info() ->
-    {ok, Info} = couch_set_view:get_group_info(test_set_name(), ddoc_id()),
+    {ok, Info} = couch_set_view:get_group_info(
+        mapreduce_view, test_set_name(), ddoc_id()),
     Info.
 
 
@@ -379,7 +382,7 @@ delete_docs(StartId, NumDocs) ->
 create_set() ->
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
     couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
-    couch_set_view:cleanup_index_files(test_set_name()),
+    couch_set_view:cleanup_index_files(mapreduce_view, test_set_name()),
     etap:diag("Creating the set databases (# of partitions: " ++
         integer_to_list(num_set_partitions()) ++ ")"),
     DDoc = {[
@@ -420,7 +423,8 @@ create_set() ->
         passive_partitions = [],
         use_replica_index = false
     },
-    ok = couch_set_view:define_group(test_set_name(), ddoc_id(), Params).
+    ok = couch_set_view:define_group(
+        mapreduce_view, test_set_name(), ddoc_id(), Params).
 
 
 add_documents(StartId, Count) ->
@@ -447,7 +451,8 @@ doc_id(I) ->
 
 
 compact_view_group() ->
-    {ok, CompactPid} = couch_set_view_compactor:start_compact(test_set_name(), ddoc_id(), main),
+    {ok, CompactPid} = couch_set_view_compactor:start_compact(
+        mapreduce_view, test_set_name(), ddoc_id(), main),
     Ref = erlang:monitor(process, CompactPid),
     etap:diag("Waiting for view group compaction to finish"),
     receive

@@ -50,9 +50,11 @@ test() ->
     ValueGenFun1 = fun(I) -> I end,
     update_documents(0, num_docs_0(), ValueGenFun1),
 
-    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id()),
 
-    {ok, Stats0} = couch_set_view:get_utilization_stats(test_set_name(), ddoc_id()),
+    {ok, Stats0} = couch_set_view:get_utilization_stats(
+        mapreduce_view, test_set_name(), ddoc_id()),
     etap:is(couch_util:get_value(updates, Stats0), 0,
             "Right number of updates"),
     etap:is(couch_util:get_value(updater_interruptions, Stats0), 0,
@@ -80,7 +82,8 @@ test() ->
         etap:bail("Timeout waiting for updater to finish")
     end,
 
-    {ok, CompactPid1} = couch_set_view_compactor:start_compact(test_set_name(), ddoc_id(), main),
+    {ok, CompactPid1} = couch_set_view_compactor:start_compact(
+        mapreduce_view, test_set_name(), ddoc_id(), main),
     Ref2 = erlang:monitor(process, CompactPid1),
     etap:diag("Waiting for main group compaction to finish"),
     receive
@@ -100,7 +103,8 @@ test() ->
     Ref3 = erlang:monitor(process, UpdaterPid2),
 
     etap:diag("Marking partition 0 for cleanup while updater is running"),
-    ok = couch_set_view:set_partition_states(test_set_name(), ddoc_id(), [], [], [0]),
+    ok = couch_set_view:set_partition_states(
+        mapreduce_view, test_set_name(), ddoc_id(), [], [], [0]),
 
     etap:diag("Waiting for updater to be shutdown"),
     receive
@@ -127,11 +131,13 @@ test() ->
         ok
     end,
 
-    {ok, CompactPid2} = couch_set_view_compactor:start_compact(test_set_name(), ddoc_id(), main),
+    {ok, CompactPid2} = couch_set_view_compactor:start_compact(
+        mapreduce_view, test_set_name(), ddoc_id(), main),
     CompactPid2 ! pause,
     Ref5 = erlang:monitor(process, CompactPid2),
     etap:diag("Marking partition 1 for cleanup while compactor is running"),
-    ok = couch_set_view:set_partition_states(test_set_name(), ddoc_id(), [], [], [1]),
+    ok = couch_set_view:set_partition_states(
+        mapreduce_view, test_set_name(), ddoc_id(), [], [], [1]),
 
     etap:diag("Waiting for main group compaction to shutdown"),
     receive
@@ -143,7 +149,8 @@ test() ->
         etap:bail("Timeout waiting for main group compaction to shutdown")
     end,
 
-    {ok, Stats2} = couch_set_view:get_utilization_stats(test_set_name(), ddoc_id()),
+    {ok, Stats2} = couch_set_view:get_utilization_stats(
+        mapreduce_view, test_set_name(), ddoc_id()),
     etap:is(couch_util:get_value(updates, Stats2), 2,
             "Right number of updates"),
     etap:is(couch_util:get_value(updater_interruptions, Stats2), 1,
@@ -166,8 +173,10 @@ test() ->
             "Compaction time is greater than zero"),
 
     etap:diag("Reseting stats"),
-    ok = couch_set_view:reset_utilization_stats(test_set_name(), ddoc_id()),
-    {ok, Stats3} = couch_set_view:get_utilization_stats(test_set_name(), ddoc_id()),
+    ok = couch_set_view:reset_utilization_stats(
+        mapreduce_view, test_set_name(), ddoc_id()),
+    {ok, Stats3} = couch_set_view:get_utilization_stats(
+        mapreduce_view, test_set_name(), ddoc_id()),
     etap:is(couch_util:get_value(updates, Stats3), 0,
             "Right number of updates"),
     etap:is(couch_util:get_value(updater_interruptions, Stats3), 0,
@@ -192,7 +201,7 @@ test() ->
 create_set() ->
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
     couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
-    couch_set_view:cleanup_index_files(test_set_name()),
+    couch_set_view:cleanup_index_files(mapreduce_view, test_set_name()),
     etap:diag("Creating the set databases (# of partitions: " ++
         integer_to_list(num_set_partitions()) ++ ")"),
     DDoc = {[
@@ -214,7 +223,8 @@ create_set() ->
         passive_partitions = [],
         use_replica_index = false
     },
-    ok = couch_set_view:define_group(test_set_name(), ddoc_id(), Params).
+    ok = couch_set_view:define_group(
+        mapreduce_view, test_set_name(), ddoc_id(), Params).
 
 
 update_documents(StartId, Count, ValueGenFun) ->

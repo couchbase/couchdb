@@ -23,7 +23,9 @@
 % For the utils
 -export([clean_views/5]).
 % For the compactor
--export([compact_view/6, get_row_count/1, apply_log/3]).
+-export([compact_view/6, apply_log/3]).
+% For the main module
+-export([get_row_count/1, make_wrapper_fun/2, fold/4]).
 
 
 -include("couch_db.hrl").
@@ -402,3 +404,36 @@ apply_log(SetViews, ViewLogFiles, TmpDir) ->
         ok = file2:delete(MergeFile),
         SetView#set_view{btree = NewBt}
     end, SetViews, ViewLogFiles).
+
+
+make_wrapper_fun(Fun, Filter) ->
+    case Filter of
+    false ->
+        fun(KV, Reds, Acc2) ->
+            ExpandedKVs = couch_set_view_util:expand_dups([KV], []),
+            fold_fun(Fun, ExpandedKVs, Reds, Acc2)
+        end;
+    {true, _, IncludeBitmask} ->
+        fun(KV, Reds, Acc2) ->
+            ExpandedKVs = couch_set_view_util:expand_dups([KV], IncludeBitmask, []),
+            fold_fun(Fun, ExpandedKVs, Reds, Acc2)
+        end
+    end.
+
+
+fold_fun(_Fun, [], _, Acc) ->
+    {ok, Acc};
+fold_fun(Fun, [KV | Rest], {KVReds, Reds}, Acc) ->
+    {KeyDocId, <<PartId:16, Value/binary>>} = KV,
+    {JsonKey, DocId} = couch_set_view_util:split_key_docid(KeyDocId),
+    case Fun({{{json, JsonKey}, DocId}, {PartId, {json, Value}}}, {KVReds, Reds}, Acc) of
+    {ok, Acc2} ->
+        fold_fun(Fun, Rest, {[KV | KVReds], Reds}, Acc2);
+    {stop, Acc2} ->
+        {stop, Acc2}
+    end.
+
+
+fold(View, WrapperFun, Acc, Options) ->
+    Bt = View#set_view.btree,
+    couch_btree:fold(Bt, WrapperFun, Acc, Options).

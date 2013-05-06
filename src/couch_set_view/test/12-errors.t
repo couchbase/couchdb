@@ -155,7 +155,8 @@ test_partition_not_found_when_group_starts() ->
             ok = couch_db:close(Db)
         end,
         [master, 0, 1, 2, 3]),
-    GroupPid1 = couch_set_view:get_group_pid(test_set_name(), DDocId),
+    GroupPid1 = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), DDocId),
     couch_util:shutdown_sync(GroupPid1),
 
     etap:diag("Deleting database of active partition 1 after view group shutdown"),
@@ -168,7 +169,8 @@ test_partition_not_found_when_group_starts() ->
     MonRef = erlang:monitor(process, SetViewServerBefore),
 
     try
-        couch_set_view:get_group_pid(test_set_name(), DDocId),
+        couch_set_view:get_group_pid(
+            mapreduce_view, test_set_name(), DDocId),
         etap:bail("No failure opening view group after deleting an active partition database")
     catch _:Error ->
         ?etap_match(
@@ -208,7 +210,8 @@ test_map_runtime_error() ->
     populate_set(DDoc),
 
     ok = configure_view_group(DDocId, [0, 1, 2, 3], []),
-    GroupPid = couch_set_view:get_group_pid(test_set_name(), DDocId),
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), DDocId),
     MonRef = erlang:monitor(process, GroupPid),
 
     QueryResult = (catch query_map_view(DDocId, <<"test">>, false)),
@@ -248,7 +251,8 @@ test_map_runtime_error_multiple_views() ->
     populate_set(DDoc, 4),
 
     ok = configure_view_group(DDocId, [0, 1, 2, 3], []),
-    GroupPid = couch_set_view:get_group_pid(test_set_name(), DDocId),
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), DDocId),
     MonRef = erlang:monitor(process, GroupPid),
 
     QueryResult2 = (catch query_map_view(DDocId, <<"test2">>, false)),
@@ -334,7 +338,8 @@ test_too_long_map_key() ->
     populate_set(DDoc, 1),
 
     ok = configure_view_group(DDocId, [0, 1, 2, 3], []),
-    GroupPid = couch_set_view:get_group_pid(test_set_name(), DDocId),
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), DDocId),
     MonRef = erlang:monitor(process, GroupPid),
 
     QueryResult = (catch query_map_view(DDocId, <<"test">>, false)),
@@ -373,7 +378,8 @@ test_builtin_reduce_sum_runtime_error() ->
     populate_set(DDoc),
 
     ok = configure_view_group(DDocId, [0, 1, 2, 3], []),
-    GroupPid = couch_set_view:get_group_pid(test_set_name(), DDocId),
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), DDocId),
     MonRef = erlang:monitor(process, GroupPid),
 
     QueryResult = try
@@ -416,7 +422,8 @@ test_builtin_reduce_stats_runtime_error() ->
     populate_set(DDoc),
 
     ok = configure_view_group(DDocId, [0, 1, 2, 3], []),
-    GroupPid = couch_set_view:get_group_pid(test_set_name(), DDocId),
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), DDocId),
     MonRef = erlang:monitor(process, GroupPid),
 
     QueryResult = try
@@ -488,7 +495,8 @@ test_reduce_runtime_error() ->
     populate_set(DDoc),
 
     ok = configure_view_group(DDocId, [0, 1, 2, 3], []),
-    GroupPid = couch_set_view:get_group_pid(test_set_name(), DDocId),
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), DDocId),
     MonRef = erlang:monitor(process, GroupPid),
 
     QueryResult = try
@@ -606,7 +614,8 @@ configure_view_group(DDocId, Active, Passive) ->
         passive_partitions = Passive
     },
     try
-        couch_set_view:define_group(test_set_name(), DDocId, Params)
+        couch_set_view:define_group(
+            mapreduce_view, test_set_name(), DDocId, Params)
     catch _:Error ->
         Error
     end.

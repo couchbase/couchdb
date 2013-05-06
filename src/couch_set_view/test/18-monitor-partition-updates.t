@@ -52,7 +52,8 @@ test() ->
     GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
     ok = gen_server:call(GroupPid, {set_timeout, infinity}, infinity),
 
-    Ref1 = couch_set_view:monitor_partition_update(test_set_name(), ddoc_id(), 10),
+    Ref1 = couch_set_view:monitor_partition_update(
+        mapreduce_view, test_set_name(), ddoc_id(), 10),
     Msg1 = receive
     {Ref1, _} ->
         ok
@@ -61,7 +62,8 @@ test() ->
     end,
     etap:is(Msg1, undefined, "Didn't got any partition 10 updated notification"),
 
-    Ref2 = couch_set_view:monitor_partition_update(test_set_name(), ddoc_id(), 33),
+    Ref2 = couch_set_view:monitor_partition_update(
+        mapreduce_view, test_set_name(), ddoc_id(), 33),
     Msg2 = receive
     {Ref2, _} ->
         ok
@@ -71,7 +73,8 @@ test() ->
     etap:is(Msg2, undefined, "Didn't got any partition 33 updated notification"),
 
     Ref3 = try
-        couch_set_view:monitor_partition_update(test_set_name(), ddoc_id(), 60)
+        couch_set_view:monitor_partition_update(
+            mapreduce_view, test_set_name(), ddoc_id(), 60)
     catch throw:Error ->
         Error
     end,
@@ -100,7 +103,8 @@ test() ->
     etap:is(GotPart33Notify, true, "Got update notification for partition 33"),
 
     Ref4 = try
-        couch_set_view:monitor_partition_update(test_set_name(), ddoc_id(), 127)
+        couch_set_view:monitor_partition_update(
+            mapreduce_view, test_set_name(), ddoc_id(), 127)
     catch throw:Error2 ->
         Error2
     end,
@@ -111,7 +115,8 @@ test() ->
                 "Got error when asking to monitor partition 127 update"
                 " (not in range 0 .. 63)"),
 
-    Ref5 = couch_set_view:monitor_partition_update(test_set_name(), ddoc_id(), 12),
+    Ref5 = couch_set_view:monitor_partition_update(
+        mapreduce_view, test_set_name(), ddoc_id(), 12),
     GotPart12ImmediateNotification = receive
     {Ref5, updated} ->
         true
@@ -123,7 +128,8 @@ test() ->
 
     update_documents(num_docs(), num_set_partitions(), ValueGenFun1),
 
-    Ref6 = couch_set_view:monitor_partition_update(test_set_name(), ddoc_id(), 20),
+    Ref6 = couch_set_view:monitor_partition_update(
+        mapreduce_view, test_set_name(), ddoc_id(), 20),
     ok = couch_set_view_test_util:delete_set_db(test_set_name(), 20),
 
     GotPart20CleanupNotify = receive
@@ -141,7 +147,8 @@ test() ->
 
 
 get_group_snapshot() ->
-    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id()),
     {ok, Group, 0} = gen_server:call(
         GroupPid, #set_view_group_req{stale = false}, infinity),
     Group.
@@ -150,7 +157,7 @@ get_group_snapshot() ->
 create_set() ->
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
     couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
-    couch_set_view:cleanup_index_files(test_set_name()),
+    couch_set_view:cleanup_index_files(mapreduce_view, test_set_name()),
     etap:diag("Creating the set databases (# of partitions: " ++
         integer_to_list(num_set_partitions()) ++ ")"),
     DDoc = {[
@@ -174,7 +181,8 @@ create_set() ->
         passive_partitions = lists:seq(32, 47),
         use_replica_index = false
     },
-    ok = couch_set_view:define_group(test_set_name(), ddoc_id(), Params).
+    ok = couch_set_view:define_group(
+        mapreduce_view, test_set_name(), ddoc_id(), Params).
 
 
 update_documents(StartId, Count, ValueGenFun) ->
@@ -201,7 +209,8 @@ doc_id(I) ->
 
 
 wait_updater_finished() ->
-    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id()),
     {ok, UpPid} = gen_server:call(GroupPid, updater_pid),
     case is_pid(UpPid) of
     true ->

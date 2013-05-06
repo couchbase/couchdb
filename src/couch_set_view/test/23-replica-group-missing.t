@@ -89,7 +89,7 @@ test() ->
 
 
 configure_group() ->
-    couch_set_view:cleanup_index_files(test_set_name()),
+    couch_set_view:cleanup_index_files(mapreduce_view, test_set_name()),
     DDoc = {[
         {<<"meta">>, {[{<<"id">>, ddoc_id()}]}},
         {<<"json">>, {[
@@ -109,11 +109,13 @@ configure_group() ->
         passive_partitions = [],
         use_replica_index = true
     },
-    ok = couch_set_view:define_group(test_set_name(), ddoc_id(), Params).
+    ok = couch_set_view:define_group(
+        mapreduce_view, test_set_name(), ddoc_id(), Params).
 
 
 get_main_pid() ->
-    couch_set_view:get_group_pid(test_set_name(), ddoc_id()).
+    couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id()).
 
 
 get_replica_pid(MainPid) ->
@@ -124,7 +126,8 @@ get_replica_pid(MainPid) ->
 replica_index_file() ->
     RootDir = couch_config:get("couchdb", "view_index_dir"),
     IndexDir = couch_set_view:set_index_dir(RootDir, test_set_name()),
-    {ok, GroupSig} = couch_set_view:get_group_signature(test_set_name(), ddoc_id()),
+    {ok, GroupSig} = couch_set_view:get_group_signature(
+        mapreduce_view, test_set_name(), ddoc_id()),
     filename:join([IndexDir, "replica_" ++ binary_to_list(GroupSig) ++ ".view.1"]).
 
 

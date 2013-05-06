@@ -67,9 +67,11 @@ test() ->
     DiskSizeBefore = main_index_disk_size(),
 
     verify_group_info_before_cleanup_request(),
-    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id()),
     ok = gen_server:call(GroupPid, {set_auto_cleanup, false}, infinity),
-    ok = couch_set_view:set_partition_states(test_set_name(), ddoc_id(), [], [], lists:seq(8, 63)),
+    ok = couch_set_view:set_partition_states(
+        mapreduce_view, test_set_name(), ddoc_id(), [], [], lists:seq(8, 63)),
     verify_group_info_after_cleanup_request(),
 
     GroupBefore = get_group_snapshot(false),
@@ -80,7 +82,8 @@ test() ->
         "Main group's ref counter count is 1"),
 
     etap:diag("Triggering main group compaction"),
-    {ok, CompactPid} = couch_set_view_compactor:start_compact(test_set_name(), ddoc_id(), main),
+    {ok, CompactPid} = couch_set_view_compactor:start_compact(
+        mapreduce_view, test_set_name(), ddoc_id(), main),
     Ref = erlang:monitor(process, CompactPid),
     etap:diag("Waiting for main group compaction to finish"),
     receive
@@ -159,7 +162,8 @@ test() ->
 
 get_group_snapshot(StaleType) ->
     {ok, Group} = couch_set_view:get_group(
-        test_set_name(), ddoc_id(), #set_view_group_req{stale = StaleType, debug = true}),
+        mapreduce_view, test_set_name(), ddoc_id(),
+        #set_view_group_req{stale = StaleType, debug = true}),
     couch_ref_counter:drop(Group#set_view_group.ref_counter),
     Group.
 
@@ -221,7 +225,8 @@ verify_group_info_after_main_compact() ->
 
 
 get_main_group_info() ->
-    {ok, MainInfo} = couch_set_view:get_group_info(test_set_name(), ddoc_id()),
+    {ok, MainInfo} = couch_set_view:get_group_info(
+        mapreduce_view, test_set_name(), ddoc_id()),
     MainInfo.
 
 
@@ -234,7 +239,7 @@ main_index_disk_size() ->
 
 
 populate_set() ->
-    couch_set_view:cleanup_index_files(test_set_name()),
+    couch_set_view:cleanup_index_files(mapreduce_view, test_set_name()),
     etap:diag("Populating the " ++ ?i2l(num_set_partitions()) ++
         " databases with " ++ ?i2l(num_docs()) ++ " documents"),
     DDoc = {[
@@ -271,4 +276,5 @@ populate_set() ->
         passive_partitions = [],
         use_replica_index = true
     },
-    ok = couch_set_view:define_group(test_set_name(), ddoc_id(), Params).
+    ok = couch_set_view:define_group(
+        mapreduce_view, test_set_name(), ddoc_id(), Params).

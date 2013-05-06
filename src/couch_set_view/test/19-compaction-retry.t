@@ -46,7 +46,8 @@ test() ->
     couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
 
     create_set(),
-    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id()),
 
     ValueGenFun1 = fun(I) -> I end,
     update_documents(0, num_docs_0(), ValueGenFun1),
@@ -89,7 +90,8 @@ test() ->
 
 
 compact_add_new_docs(NewDocCount, ValueGenFun) ->
-    {ok, Pid} = couch_set_view_compactor:start_compact(test_set_name(), ddoc_id(), main),
+    {ok, Pid} = couch_set_view_compactor:start_compact(
+        mapreduce_view, test_set_name(), ddoc_id(), main),
     Ref = erlang:monitor(process, Pid),
     Pid ! pause,
     receive
@@ -114,7 +116,8 @@ compact_add_new_docs(NewDocCount, ValueGenFun) ->
 
 
 compact_update_docs(DocCount, ValueGenFun) ->
-    {ok, Pid} = couch_set_view_compactor:start_compact(test_set_name(), ddoc_id(), main),
+    {ok, Pid} = couch_set_view_compactor:start_compact(
+        mapreduce_view, test_set_name(), ddoc_id(), main),
     Ref = erlang:monitor(process, Pid),
     Pid ! pause,
     receive
@@ -139,7 +142,8 @@ compact_update_docs(DocCount, ValueGenFun) ->
 
 
 compact_delete_docs(TotalDocCount, ToDeleteCount) ->
-    {ok, Pid} = couch_set_view_compactor:start_compact(test_set_name(), ddoc_id(), main),
+    {ok, Pid} = couch_set_view_compactor:start_compact(
+        mapreduce_view, test_set_name(), ddoc_id(), main),
     Ref = erlang:monitor(process, Pid),
     Pid ! pause,
     receive
@@ -164,7 +168,8 @@ compact_delete_docs(TotalDocCount, ToDeleteCount) ->
 
 
 compact_2_retries_update_docs(DocCount, ValueGenFun1, ValueGenFun2) ->
-    {ok, Pid} = couch_set_view_compactor:start_compact(test_set_name(), ddoc_id(), main),
+    {ok, Pid} = couch_set_view_compactor:start_compact(
+        mapreduce_view, test_set_name(), ddoc_id(), main),
     Ref = erlang:monitor(process, Pid),
     Pid ! pause,
     receive
@@ -201,7 +206,8 @@ compact_2_retries_update_docs(DocCount, ValueGenFun1, ValueGenFun2) ->
 
 test_start_compactor_after_updater(ValueGenFun, DocCount) ->
     update_documents(0, DocCount, ValueGenFun),
-    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id()),
     {ok, UpPid} = gen_server:call(GroupPid, {start_updater, []}, infinity),
     case is_pid(UpPid) of
     true ->
@@ -209,7 +215,8 @@ test_start_compactor_after_updater(ValueGenFun, DocCount) ->
     false ->
         etap:bail("Updater not started")
     end,
-    {ok, CompactorPid} = couch_set_view_compactor:start_compact(test_set_name(), ddoc_id(), main),
+    {ok, CompactorPid} = couch_set_view_compactor:start_compact(
+        mapreduce_view, test_set_name(), ddoc_id(), main),
     CompactorPid ! pause,
     UpRef = erlang:monitor(process, UpPid),
     receive
@@ -241,7 +248,8 @@ test_start_compactor_after_updater(ValueGenFun, DocCount) ->
 
 
 get_group_snapshot() ->
-    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id()),
     {ok, Group, 0} = gen_server:call(
         GroupPid, #set_view_group_req{stale = false, debug = true}, infinity),
     Group.
@@ -250,7 +258,7 @@ get_group_snapshot() ->
 create_set() ->
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
     couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
-    couch_set_view:cleanup_index_files(test_set_name()),
+    couch_set_view:cleanup_index_files(mapreduce_view, test_set_name()),
     etap:diag("Creating the set databases (# of partitions: " ++
         integer_to_list(num_set_partitions()) ++ ")"),
     DDoc = {[
@@ -277,7 +285,8 @@ create_set() ->
         passive_partitions = [],
         use_replica_index = false
     },
-    ok = couch_set_view:define_group(test_set_name(), ddoc_id(), Params).
+    ok = couch_set_view:define_group(
+        mapreduce_view, test_set_name(), ddoc_id(), Params).
 
 
 update_documents(StartId, Count, ValueGenFun) ->

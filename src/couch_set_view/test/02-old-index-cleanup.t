@@ -44,7 +44,8 @@ test() ->
 
     ok = populate_set(),
 
-    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id()),
     query_view(ddoc_id(), num_docs(), []),
     etap:is(is_process_alive(GroupPid), true, "Group alive after query"),
     GroupSig = get_group_sig(),
@@ -62,7 +63,8 @@ test() ->
 
     ok = update_ddoc(ddoc_id()),
     ok = timer:sleep(1000),
-    NewGroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    NewGroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id()),
     etap:isnt(NewGroupPid, GroupPid, "Got new group after ddoc update"),
 
     OldGroupMon = erlang:monitor(process, GroupPid),
@@ -98,14 +100,15 @@ test() ->
     couch_util:shutdown_sync(NewGroupPid),
     % Let couch_set_view process group process EXIT message
     ok = timer:sleep(1000),
-    NewGroupPid2 = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    NewGroupPid2 = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id()),
     etap:isnt(NewGroupPid2, NewGroupPid, "Got different group pid"),
     AllIndexFiles2 = all_index_files(),
     etap:is(lists:member(NewIndexFile, AllIndexFiles2), true,
         "New index file found after group process restart"),
 
     etap:diag("Performing view cleanup"),
-    couch_set_view:cleanup_index_files(test_set_name()),
+    couch_set_view:cleanup_index_files(mapreduce_view, test_set_name()),
     NewAllIndexFiles = all_index_files(),
     etap:is(lists:member(NewIndexFile, NewAllIndexFiles), true,
         "New index file found after cleanup"),
@@ -158,7 +161,8 @@ test() ->
             [],
             "No group entry in couch_sig_to_setview_pid ets table"),
 
-    NewGroupPid3 = couch_set_view:get_group_pid(test_set_name(), ddoc_id_copy()),
+    NewGroupPid3 = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id_copy()),
     etap:isnt(NewGroupPid3, NewGroupPid2, "New group pid after deleting original ddoc"),
     query_view(ddoc_id_copy(), num_docs(), "stale=ok"),
     etap:diag("Got empty results after deleting original ddoc and querying "
@@ -177,7 +181,7 @@ test() ->
     ok = couch_set_view_test_util:delete_ddoc(test_set_name(), ddoc_id_copy()),
 
     etap:diag("Performing view cleanup"),
-    couch_set_view:cleanup_index_files(test_set_name()),
+    couch_set_view:cleanup_index_files(mapreduce_view, test_set_name()),
     etap:is(all_index_files(), [], "0 index files after ddoc deleted and cleanup"),
 
     % Let couch_set_view have some time to process the group's down message
@@ -202,7 +206,8 @@ test_recreate_ddoc_with_copy() ->
     etap:diag("Recreating design doc with a copy"),
 
     update_ddoc(ddoc_id()),
-    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id()),
     RawGroupSig = get_raw_sig(ddoc_id()),
 
     etap:is(ets:lookup(couch_setview_name_to_sig, test_set_name()),
@@ -217,7 +222,8 @@ test_recreate_ddoc_with_copy() ->
     etap:diag("Creating ddoc copy"),
     ok = create_ddoc_copy(ddoc_id_copy()),
 
-    GroupPidCopy = couch_set_view:get_group_pid(test_set_name(), ddoc_id_copy()),
+    GroupPidCopy = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id_copy()),
     etap:is(GroupPidCopy, GroupPid, "DDoc copy has same group pid"),
     RawGroupSigCopy = get_raw_sig(ddoc_id_copy()),
     etap:is(RawGroupSigCopy, RawGroupSig, "DDoc copy has same signature"),
@@ -257,11 +263,12 @@ test_recreate_ddoc_with_copy() ->
             [],
             "No group entry in couch_sig_to_setview_pid ets table"),
 
-    couch_set_view:cleanup_index_files(test_set_name()),
+    couch_set_view:cleanup_index_files(mapreduce_view, test_set_name()),
 
     etap:diag("Creating original ddoc again"),
     update_ddoc(ddoc_id()),
-    GroupPid2 = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    GroupPid2 = couch_set_view:get_group_pid(
+       mapreduce_view, test_set_name(), ddoc_id()),
     query_view(ddoc_id(), num_docs(), []),
 
     etap:diag("Creating ddoc copy again"),
@@ -287,7 +294,8 @@ test_recreate_ddoc_with_copy() ->
             "couch_sig_to_setview_pid ets table is empty"),
 
     etap:diag("Starting again view group process"),
-    GroupPid3 = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    GroupPid3 = couch_set_view:get_group_pid(
+       mapreduce_view, test_set_name(), ddoc_id()),
     etap:isnt(GroupPid3, GroupPid2, "Got a different view group pid"),
 
     etap:is(ets:lookup(couch_setview_name_to_sig, test_set_name()),
@@ -422,12 +430,14 @@ create_ddoc_copy(CopyId) ->
 
 
 get_group_sig() ->
-    {ok, Info} = couch_set_view:get_group_info(test_set_name(), ddoc_id()),
+    {ok, Info} = couch_set_view:get_group_info(
+       mapreduce_view, test_set_name(), ddoc_id()),
     couch_util:get_value(signature, Info).
 
 
 get_raw_sig(DDocId) ->
-    Pid = couch_set_view:get_group_pid(test_set_name(), DDocId),
+    Pid = couch_set_view:get_group_pid(
+       mapreduce_view, test_set_name(), DDocId),
     {ok, Sig} = gen_server:call(Pid, get_sig, infinity),
     Sig.
 

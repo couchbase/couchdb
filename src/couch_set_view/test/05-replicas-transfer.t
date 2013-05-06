@@ -136,7 +136,8 @@ test() ->
         "Replica group has [ ] as cleanup partitions"),
 
     etap:diag("Marking partitions [ 32 .. 63 ] as replicas"),
-    ok = couch_set_view:add_replica_partitions(test_set_name(), ddoc_id(), lists:seq(32, 63)),
+    ok = couch_set_view:add_replica_partitions(
+        mapreduce_view, test_set_name(), ddoc_id(), lists:seq(32, 63)),
 
     MainGroupInfo2 = get_group_info(),
     {RepGroupInfo2} = couch_util:get_value(replica_group_info, MainGroupInfo2),
@@ -209,7 +210,8 @@ test() ->
     etap:diag("Marking partitions [ 32 .. 63 ] as active"),
     lists:foreach(
         fun(I) ->
-            ok = couch_set_view:set_partition_states(test_set_name(), ddoc_id(), [I], [], [])
+            ok = couch_set_view:set_partition_states(
+                mapreduce_view, test_set_name(), ddoc_id(), [I], [], [])
         end,
         lists:seq(32, 63)),
 
@@ -385,7 +387,8 @@ wait_for_replica_full_update() ->
     etap:diag("Waiting for a full replica group update"),
     {Stats} = couch_util:get_value(stats, get_replica_group_info()),
     Updates = couch_util:get_value(full_updates, Stats),
-    MainGroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    MainGroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id()),
     {ok, ReplicaGroupPid} = gen_server:call(MainGroupPid, replica_pid, infinity),
     {ok, UpPid} = gen_server:call(ReplicaGroupPid, {start_updater, []}, infinity),
     case is_pid(UpPid) of
@@ -517,7 +520,8 @@ wait_main_update_loop(Updates, ExpectedReduceValue1, ExpectedReduceValue2, Expec
 
 
 get_group_info() ->
-    {ok, Info} = couch_set_view:get_group_info(test_set_name(), ddoc_id()),
+    {ok, Info} = couch_set_view:get_group_info(
+        mapreduce_view, test_set_name(), ddoc_id()),
     Info.
 
 
@@ -551,7 +555,7 @@ add_documents(StartId, Count) ->
 
 
 create_set() ->
-    couch_set_view:cleanup_index_files(test_set_name()),
+    couch_set_view:cleanup_index_files(mapreduce_view, test_set_name()),
     etap:diag("Populating the " ++ integer_to_list(num_set_partitions()) ++
         " databases with " ++ integer_to_list(num_docs()) ++ " documents"),
     DDoc = {[
@@ -578,7 +582,8 @@ create_set() ->
         passive_partitions = [],
         use_replica_index = true
     },
-    ok = couch_set_view:define_group(test_set_name(), ddoc_id(), Params).
+    ok = couch_set_view:define_group(
+        mapreduce_view, test_set_name(), ddoc_id(), Params).
 
 
 compact_main_view_group() ->
@@ -588,7 +593,8 @@ compact_replica_view_group() ->
     compact_view_group(replica).
 
 compact_view_group(Type) ->
-    {ok, CompactPid} = couch_set_view_compactor:start_compact(test_set_name(), ddoc_id(), Type),
+    {ok, CompactPid} = couch_set_view_compactor:start_compact(
+        mapreduce_view, test_set_name(), ddoc_id(), Type),
     etap:diag("Waiting for " ++ atom_to_list(Type) ++ " view group compaction to finish"),
     Ref = erlang:monitor(process, CompactPid),
     receive

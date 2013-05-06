@@ -118,7 +118,7 @@ test() ->
 create_set() ->
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
     couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
-    couch_set_view:cleanup_index_files(test_set_name()),
+    couch_set_view:cleanup_index_files(mapreduce_view, test_set_name()),
     etap:diag("Creating the set databases (# of partitions: " ++
         integer_to_list(num_set_partitions()) ++ ")"),
     DDoc = {[
@@ -169,7 +169,8 @@ create_set() ->
         passive_partitions = [],
         use_replica_index = false
     },
-    ok = couch_set_view:define_group(test_set_name(), ddoc_id(), Params).
+    ok = couch_set_view:define_group(
+        mapreduce_view, test_set_name(), ddoc_id(), Params).
 
 
 update_documents(StartId, Count, ValueGenFun) ->
@@ -197,7 +198,7 @@ doc_id(I) ->
 
 compact_view_group() ->
     {ok, CompactPid} = couch_set_view_compactor:start_compact(
-        test_set_name(), ddoc_id(), main),
+        mapreduce_view, test_set_name(), ddoc_id(), main),
     Ref = erlang:monitor(process, CompactPid),
     etap:diag("Waiting for view group compaction to finish"),
     receive
@@ -213,7 +214,8 @@ compact_view_group() ->
 
 
 trigger_update() ->
-    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id()),
     {ok, UpdaterPid} = gen_server:call(GroupPid, {start_updater, []}, infinity),
     Ref = erlang:monitor(process, UpdaterPid),
     etap:diag("Waiting for updater to finish"),
@@ -250,7 +252,8 @@ query_reduce_view(ViewName, StartKey, EndKey) ->
 
 
 verify_btrees_1(ValueGenFun) ->
-    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id()),
     {ok, Group} = gen_server:call(GroupPid, request_group, infinity),
     #set_view_group{
         id_btree = IdBtree,

@@ -15,8 +15,8 @@
 -include ("couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
 
--export([start_compact/2, start_compact/3, start_compact/4,
-         cancel_compact/2, cancel_compact/3]).
+-export([start_compact/3, start_compact/4, start_compact/5,
+         cancel_compact/3, cancel_compact/4]).
 -export([merge_files/3]).
 
 -define(SORTED_CHUNK_SIZE, 1024 * 1024).
@@ -26,33 +26,33 @@
    total_changes
 }).
 
--spec start_compact(binary(), binary()) -> {'ok', pid()} |
-                                           {'error', 'initial_build'}.
-start_compact(SetName, DDocId) ->
-    start_compact(SetName, DDocId, main).
+-spec start_compact(atom(), binary(), binary()) -> {'ok', pid()} |
+                                                   {'error', 'initial_build'}.
+start_compact(Mod, SetName, DDocId) ->
+    start_compact(Mod, SetName, DDocId, main).
 
--spec start_compact(binary(), binary(), set_view_group_type()) ->
+-spec start_compact(atom(), binary(), binary(), set_view_group_type()) ->
                            {'ok', pid()} |
                            {'error', 'initial_build'}.
-start_compact(SetName, DDocId, Type) ->
-    start_compact(SetName, DDocId, Type, []).
+start_compact(Mod, SetName, DDocId, Type) ->
+    start_compact(Mod, SetName, DDocId, Type, []).
 
--spec start_compact(binary(), binary(),
+-spec start_compact(atom(), binary(), binary(),
                     set_view_group_type(), list()) -> {'ok', pid()} |
                                                       {'error', 'initial_build'}.
-start_compact(SetName, DDocId, Type, UserTaskStatus) ->
-    {ok, Pid} = get_group_pid(SetName, DDocId, Type),
+start_compact(Mod, SetName, DDocId, Type, UserTaskStatus) ->
+    {ok, Pid} = get_group_pid(Mod, SetName, DDocId, Type),
     gen_server:call(Pid, {start_compact, mk_compact_group(UserTaskStatus)}, infinity).
 
 
 
--spec cancel_compact(binary(), binary()) -> 'ok'.
-cancel_compact(SetName, DDocId) ->
-    cancel_compact(SetName, DDocId, main).
+-spec cancel_compact(atom(), binary(), binary()) -> 'ok'.
+cancel_compact(Mod, SetName, DDocId) ->
+    cancel_compact(Mod, SetName, DDocId, main).
 
--spec cancel_compact(binary(), binary(), set_view_group_type()) -> 'ok'.
-cancel_compact(SetName, DDocId, Type) ->
-    {ok, Pid} = get_group_pid(SetName, DDocId, Type),
+-spec cancel_compact(atom(), binary(), binary(), set_view_group_type()) -> 'ok'.
+cancel_compact(Mod, SetName, DDocId, Type) ->
+    {ok, Pid} = get_group_pid(Mod, SetName, DDocId, Type),
     gen_server:call(Pid, cancel_compact).
 
 
@@ -236,11 +236,11 @@ maybe_retry_compact(CompactResult0, StartTime, TmpDir, Owner, Retries) ->
     end.
 
 
-get_group_pid(SetName, DDocId, main) ->
-    Pid = couch_set_view:get_group_pid(SetName, DDocId),
+get_group_pid(Mod, SetName, DDocId, main) ->
+    Pid = couch_set_view:get_group_pid(Mod, SetName, DDocId),
     {ok, Pid};
-get_group_pid(SetName, DDocId, replica) ->
-    Pid = couch_set_view:get_group_pid(SetName, DDocId),
+get_group_pid(Mod, SetName, DDocId, replica) ->
+    Pid = couch_set_view:get_group_pid(Mod, SetName, DDocId),
     {ok, Group} = gen_server:call(Pid, request_group, infinity),
     case is_pid(Group#set_view_group.replica_pid) of
     true ->

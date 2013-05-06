@@ -84,7 +84,7 @@ test() ->
     FoldFun = fun(PartId, ActivePartsAcc) ->
         ActivePartsAcc2 = ordsets:del_element(PartId, ActivePartsAcc),
         ok = couch_set_view:set_partition_states(
-            test_set_name(), ddoc_id(), [], [PartId], []),
+            mapreduce_view, test_set_name(), ddoc_id(), [], [PartId], []),
         fold_view(ActivePartsAcc2, fun(I) -> I end),
         ActivePartsAcc2
     end,
@@ -167,7 +167,7 @@ test() ->
     lists:foreach(
         fun(PartId) ->
             ok = couch_set_view:set_partition_states(
-                test_set_name(), ddoc_id(), [PartId], [], [])
+                mapreduce_view, test_set_name(), ddoc_id(), [PartId], [], [])
         end, FinalActivePartitions),
 
     fold_view(FinalActivePartitions, fun(I) -> I end),
@@ -198,7 +198,7 @@ test() ->
 create_set() ->
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
     couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
-    couch_set_view:cleanup_index_files(test_set_name()),
+    couch_set_view:cleanup_index_files(mapreduce_view, test_set_name()),
     etap:diag("Creating the set databases (# of partitions: " ++
         integer_to_list(num_set_partitions()) ++ ")"),
     DDoc = {[
@@ -221,7 +221,8 @@ create_set() ->
         passive_partitions = [],
         use_replica_index = false
     },
-    ok = couch_set_view:define_group(test_set_name(), ddoc_id(), Params).
+    ok = couch_set_view:define_group(
+        mapreduce_view, test_set_name(), ddoc_id(), Params).
 
 
 add_documents(StartId, Count) ->
@@ -473,14 +474,16 @@ verify_btrees(ActiveParts, ValueGenFun) ->
 
 
 get_group_snapshot() ->
-    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id()),
     {ok, Group, 0} = gen_server:call(
         GroupPid, #set_view_group_req{stale = false, debug = true}, infinity),
     Group.
 
 
 wait_updater_finishes() ->
-    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id()),
     {ok, UpPid} = gen_server:call(GroupPid, updater_pid, infinity),
     case UpPid of
     nil ->
@@ -501,7 +504,8 @@ wait_updater_finishes() ->
 
 
 compact_view_group() ->
-    {ok, CompactPid} = couch_set_view_compactor:start_compact(test_set_name(), ddoc_id(), main),
+    {ok, CompactPid} = couch_set_view_compactor:start_compact(
+        mapreduce_view, test_set_name(), ddoc_id(), main),
     etap:diag("Waiting for main view group compaction to finish"),
     Ref = erlang:monitor(process, CompactPid),
     receive

@@ -55,7 +55,8 @@ test() ->
     ValueGenFun1 = fun(I) -> I end,
     update_documents(0, num_docs(), ValueGenFun1),
 
-    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id()),
     ok = gen_server:call(GroupPid, {set_auto_cleanup, false}, infinity),
 
     % build index
@@ -65,7 +66,7 @@ test() ->
 
     etap:diag("Marking all odd partitions for cleanup"),
     ok = couch_set_view:set_partition_states(
-        test_set_name(), ddoc_id(), [], [],
+        mapreduce_view, test_set_name(), ddoc_id(), [], [],
         lists:seq(1, num_set_partitions() - 1, 2)),
 
     verify_btrees_2(ValueGenFun1),
@@ -73,7 +74,7 @@ test() ->
     etap:diag("Marking partition 1 as active and all even partitions, "
               "except partition 0, for cleanup"),
     ok = couch_set_view:set_partition_states(
-        test_set_name(), ddoc_id(),
+        mapreduce_view, test_set_name(), ddoc_id(),
         [1], [], lists:seq(2, num_set_partitions() - 1, 2)),
 
     verify_btrees_3(ValueGenFun1),
@@ -146,7 +147,7 @@ open_db(PartId) ->
 create_set() ->
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
     couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
-    couch_set_view:cleanup_index_files(test_set_name()),
+    couch_set_view:cleanup_index_files(mapreduce_view, test_set_name()),
     etap:diag("Creating the set databases (# of partitions: " ++
         integer_to_list(num_set_partitions()) ++ ")"),
     DDoc = {[
@@ -169,7 +170,8 @@ create_set() ->
         passive_partitions = [],
         use_replica_index = false
     },
-    ok = couch_set_view:define_group(test_set_name(), ddoc_id(), Params).
+    ok = couch_set_view:define_group(
+        mapreduce_view, test_set_name(), ddoc_id(), Params).
 
 
 update_documents(StartId, NumDocs, ValueGenFun) ->
@@ -600,14 +602,16 @@ get_group_snapshot() ->
     get_group_snapshot(false).
 
 get_group_snapshot(Staleness) ->
-    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id()),
     {ok, Group, 0} = gen_server:call(
         GroupPid, #set_view_group_req{stale = Staleness, debug = true}, infinity),
     Group.
 
 
 compact_view_group() ->
-    {ok, CompactPid} = couch_set_view_compactor:start_compact(test_set_name(), ddoc_id(), main),
+    {ok, CompactPid} = couch_set_view_compactor:start_compact(
+        mapreduce_view, test_set_name(), ddoc_id(), main),
     Ref = erlang:monitor(process, CompactPid),
     etap:diag("Waiting for main view group compaction to finish"),
     receive
@@ -631,16 +635,18 @@ test_unindexable_partitions() ->
     NewActivePending = lists:seq(1, num_set_partitions() div 2, 2),
     NewPassivePending = lists:seq(num_set_partitions() div 2, num_set_partitions() - 1, 2),
     ok = couch_set_view:set_partition_states(
-        test_set_name(), ddoc_id(), NewActivePending, NewPassivePending, []),
+        mapreduce_view, test_set_name(), ddoc_id(), NewActivePending,
+        NewPassivePending, []),
 
     PendingActiveUnindexable = lists:sublist(NewActivePending, length(NewActivePending) div 2),
     PendingPassiveUnindexable = lists:sublist(NewPassivePending, length(NewPassivePending) div 2),
     Unindexable = ordsets:union(PendingActiveUnindexable, PendingPassiveUnindexable),
-    ok = couch_set_view:mark_partitions_unindexable(test_set_name(), ddoc_id(), Unindexable),
+    ok = couch_set_view:mark_partitions_unindexable(
+        mapreduce_view, test_set_name(), ddoc_id(), Unindexable),
 
     etap:diag("Marking unindexable partitions to the state they're already in, is a no-op"),
     ok = couch_set_view:set_partition_states(
-        test_set_name(), ddoc_id(),
+        mapreduce_view, test_set_name(), ddoc_id(),
         PendingActiveUnindexable, PendingPassiveUnindexable, []),
 
     Group1 = get_group_snapshot(ok),
@@ -658,7 +664,8 @@ test_unindexable_partitions() ->
             [],
             "Right set of unindexable partitions"),
 
-    ok = couch_set_view:mark_partitions_indexable(test_set_name(), ddoc_id(), Unindexable),
+    ok = couch_set_view:mark_partitions_indexable(
+        mapreduce_view, test_set_name(), ddoc_id(), Unindexable),
 
     Group2 = get_group_snapshot(ok),
     PendingTrans2 = ?set_pending_transition(Group2),
@@ -679,9 +686,11 @@ test_unindexable_partitions() ->
     PrevActivePending = ?pending_transition_active(PrevPendingTrans),
     PrevPassivePending = ?pending_transition_passive(PrevPendingTrans),
     ok = couch_set_view:set_partition_states(
-        test_set_name(), ddoc_id(), [], [], ordsets:union(NewActivePending, NewPassivePending)),
+        mapreduce_view, test_set_name(), ddoc_id(), [], [],
+        ordsets:union(NewActivePending, NewPassivePending)),
     ok = couch_set_view:set_partition_states(
-        test_set_name(), ddoc_id(), PrevActivePending, PrevPassivePending, []).
+        mapreduce_view, test_set_name(), ddoc_id(), PrevActivePending,
+        PrevPassivePending, []).
 
 
 test_monitor_pending_partition() ->
@@ -690,7 +699,7 @@ test_monitor_pending_partition() ->
     % is received after.
     etap:diag("Marking partition 0 for cleanup"),
     ok = couch_set_view:set_partition_states(
-        test_set_name(), ddoc_id(), [], [], [0]),
+        mapreduce_view, test_set_name(), ddoc_id(), [], [], [0]),
 
     Group0 = get_group_snapshot(ok),
     etap:is(?set_seqs(Group0), [], "Empty list of seqs in group snapshot"),
@@ -701,7 +710,7 @@ test_monitor_pending_partition() ->
 
     etap:diag("Marking partition 0 as active while it's still in cleanup"),
     ok = couch_set_view:set_partition_states(
-        test_set_name(), ddoc_id(), [0], [], []),
+        mapreduce_view, test_set_name(), ddoc_id(), [0], [], []),
 
     Group1 = get_group_snapshot(ok),
     PendingTrans1 = ?set_pending_transition(Group1),
@@ -712,7 +721,8 @@ test_monitor_pending_partition() ->
     Parent = self(),
     {ListenerPid, ListenerRef} = spawn_monitor(fun() ->
         etap:diag("Asking view group to monitor partition 0 (in pending transition)"),
-        Ref1 = couch_set_view:monitor_partition_update(test_set_name(), ddoc_id(), 0),
+        Ref1 = couch_set_view:monitor_partition_update(
+            mapreduce_view, test_set_name(), ddoc_id(), 0),
         Parent ! {self(), ok},
         receive
         {Ref1, Reason} ->
@@ -730,7 +740,8 @@ test_monitor_pending_partition() ->
     end,
 
     % Perform cleanup + apply pending transition + update + notify listener
-    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id()),
     {ok, CleanerPid} = gen_server:call(GroupPid, start_cleaner, infinity),
     CleanerRef = erlang:monitor(process, CleanerPid),
     receive
@@ -790,7 +801,7 @@ test_pending_transition_changes() ->
             "Empty pending transition unindexable set"),
 
     ok = couch_set_view:set_partition_states(
-        test_set_name(), ddoc_id(), [], [1], []),
+        mapreduce_view, test_set_name(), ddoc_id(), [], [1], []),
 
     Group1 = get_group_snapshot(ok),
     PendingTrans1 = ?set_pending_transition(Group1),
@@ -802,7 +813,7 @@ test_pending_transition_changes() ->
             "Empty pending transition unindexable set"),
 
     ok = couch_set_view:set_partition_states(
-        test_set_name(), ddoc_id(), [1], [], []),
+        mapreduce_view, test_set_name(), ddoc_id(), [1], [], []),
 
     Group2 = get_group_snapshot(ok),
     PendingTrans2 = ?set_pending_transition(Group2),

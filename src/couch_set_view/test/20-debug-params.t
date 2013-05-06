@@ -137,8 +137,8 @@ test_filter_parameter_replica(AccessType) ->
     setup_test(),
 
     ok = configure_view_group(ddoc_id(), lists:seq(0, 47), [], []),
-    ok = couch_set_view:add_replica_partitions(test_set_name(), ddoc_id(),
-        lists:seq(48, 63)),
+    ok = couch_set_view:add_replica_partitions(
+        mapreduce_view, test_set_name(), ddoc_id(), lists:seq(48, 63)),
 
     % There are 75% main and 25% replica partitions, from the replica
     % partitions are 87.5% active and 12.5% passive
@@ -174,7 +174,8 @@ test_filter_parameter_replica(AccessType) ->
 
 
 shutdown_group() ->
-    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id()),
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
     MonRef = erlang:monitor(process, GroupPid),
     receive
@@ -299,14 +300,17 @@ configure_view_group(DDocId, Active, Passive, Cleanup) ->
         use_replica_index = true
     },
     try
-        couch_set_view:define_group(test_set_name(), DDocId, Params),
+        couch_set_view:define_group(
+            mapreduce_view, test_set_name(), DDocId, Params),
 
-        GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+        GroupPid = couch_set_view:get_group_pid(
+            mapreduce_view, test_set_name(), ddoc_id()),
         ok = gen_server:call(GroupPid, {set_auto_cleanup, false}, infinity),
         % Somehow the set_auto_cleanup doesn't get set when I don't request
         % the group afterwards
         Req = #set_view_group_req{stale = false},
-        {ok, _Group} = couch_set_view:get_group(test_set_name(), DDocId, Req),
+        {ok, _Group} = couch_set_view:get_group(
+            mapreduce_view, test_set_name(), DDocId, Req),
 
         couch_set_view_group:set_state(GroupPid, Active, Passive, Cleanup)
     catch _:Error ->
@@ -317,7 +321,8 @@ configure_view_group(DDocId, Active, Passive, Cleanup) ->
 configure_replica_group(DDocId, Active, Passive) ->
     etap:diag("Configuring replica group"),
     Req = #set_view_group_req{stale = false},
-    {ok, Group} = couch_set_view:get_group(test_set_name(), DDocId, Req),
+    {ok, Group} = couch_set_view:get_group(
+        mapreduce_view, test_set_name(), DDocId, Req),
 
     couch_set_view_group:set_state(
         Group#set_view_group.replica_pid, Active, Passive, []),
