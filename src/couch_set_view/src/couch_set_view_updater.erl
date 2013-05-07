@@ -22,11 +22,9 @@
 -define(MAP_QUEUE_SIZE, 256 * 1024).
 -define(WRITE_QUEUE_SIZE, 512 * 1024).
 
-% initial index build
--define(MAX_SORT_BUFFER_SIZE, 1048576).
 % incremental updates
 -define(INC_MAX_TMP_FILE_SIZE, 31457280).
--define(INC_MIN_BATCH_SIZE_PER_VIEW, 65536).
+-define(MIN_BATCH_SIZE_PER_VIEW, 65536).
 
 % For file sorter and file merger commands.
 -define(PORT_OPTS,
@@ -52,13 +50,8 @@
     final_batch = false,
     max_seqs,
     stats = #set_view_updater_stats{},
-    merge_buffers = nil,
     tmp_dir = nil,
-    sort_files = nil,
-    sort_file_workers = [],
     initial_seqs,
-    write_queue_size,
-    max_tmp_files,
     max_insert_batch_size,
     tmp_files = dict:new()
 }).
@@ -146,8 +139,6 @@ update(Owner, Group, CurSeqs, CompactorRunning, TmpDir, Options) ->
         initial_build = InitialBuild,
         max_seqs = CurSeqs,
         tmp_dir = TmpDir,
-        max_tmp_files = list_to_integer(
-            couch_config:get("set_views", "indexer_max_tmp_files", "16")),
         max_insert_batch_size = list_to_integer(
             couch_config:get("set_views", "indexer_max_insert_batch_size", "1048576"))
     },
@@ -171,12 +162,7 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
     StartTime = os:timestamp(),
 
     MapQueueOptions = [{max_size, ?MAP_QUEUE_SIZE}, {max_items, infinity}],
-    WriteQueueOptions = case WriterAcc#writer_acc.initial_build of
-    true ->
-        [{max_size, ?MAX_SORT_BUFFER_SIZE div 2}, {max_items, infinity}];
-    false ->
-        [{max_size, ?WRITE_QUEUE_SIZE}, {max_items, infinity}]
-    end,
+    WriteQueueOptions = [{max_size, ?WRITE_QUEUE_SIZE}, {max_items, infinity}],
     {ok, MapQueue} = couch_work_queue:new(MapQueueOptions),
     {ok, WriteQueue} = couch_work_queue:new(WriteQueueOptions),
 
@@ -216,22 +202,14 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
         couch_task_status:set_update_frequency(5000),
 
         ViewEmptyKVs = [{View, []} || View <- Group#set_view_group.views],
-        WriterAcc2 = init_view_merge_params(WriterAcc#writer_acc{
+        WriterAcc2 = init_tmp_files(WriterAcc#writer_acc{
             parent = Parent,
             group = Group,
             write_queue = WriteQueue,
             view_empty_kvs = ViewEmptyKVs,
             compactor_running = CompactorRunning,
-            write_queue_size = couch_util:get_value(max_size, WriteQueueOptions),
             initial_seqs = ?set_seqs(Group)
         }),
-        TmpDir = WriterAcc2#writer_acc.tmp_dir,
-        case CompactorRunning of
-        true ->
-            ok = couch_set_view_util:delete_sort_files(TmpDir, updater);
-        false ->
-            ok = couch_set_view_util:delete_sort_files(TmpDir, all)
-        end,
         ok = couch_set_view_util:open_raw_read_fd(Group),
         try
             couch_set_view_mapreduce:start_reduce_context(Group),
@@ -565,15 +543,12 @@ do_writes(Acc) ->
     end.
 
 
-should_flush_writes(#writer_acc{initial_build = true} = Acc) ->
-    #writer_acc{kvs_size = KvsSize, write_queue_size = Wqsz} = Acc,
-    KvsSize >= Wqsz;
-should_flush_writes(#writer_acc{initial_build = false} = Acc) ->
+should_flush_writes(Acc) ->
     #writer_acc{
         view_empty_kvs = ViewEmptyKvs,
         kvs_size = KvsSize
     } = Acc,
-    KvsSize >= (?INC_MIN_BATCH_SIZE_PER_VIEW * length(ViewEmptyKvs)).
+    KvsSize >= (?MIN_BATCH_SIZE_PER_VIEW * length(ViewEmptyKvs)).
 
 
 flush_writes(#writer_acc{kvs = [], initial_build = false} = Acc) ->
@@ -616,7 +591,8 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
         kvs = Kvs,
         kvs_length = KvsLength,
         view_empty_kvs = ViewEmptyKVs,
-        merge_buffers = Buffers,
+        tmp_files = TmpFiles,
+        tmp_dir = TmpDir,
         group = Group,
         final_batch = IsFinalBatch,
         max_seqs = MaxSeqs,
@@ -630,66 +606,38 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
         fd = GroupFd
     } = Group,
     {ViewKVs, DocIdViewIdKeys, MaxSeqs2} = process_map_results(Kvs, ViewEmptyKVs, MaxSeqs),
-    {IdBuffer, IdBufferSize} = dict:fetch(ids_index, Buffers),
-    {NewIdBuffer0, NewIdBufferSize} = lists:foldr(
+
+    IdRecords = lists:foldr(
         fun({_DocId, {_PartId, []}}, Acc) ->
-            Acc;
-        (Kv, {AccBuf, AccSize}) ->
-            [{KeyBin, ValBin}] = convert_back_index_kvs_to_binary([Kv], []),
-            KvBin = [<<(byte_size(KeyBin)):16>>, KeyBin, ValBin],
-            KvBinSize = iolist_size(KvBin),
-            {[[<<KvBinSize:32>>, KvBin] | AccBuf], AccSize + KvBinSize}
+                Acc;
+            (Kv, Acc) ->
+                [{KeyBin, ValBin}] = convert_back_index_kvs_to_binary([Kv], []),
+                KvBin = [<<(byte_size(KeyBin)):16>>, KeyBin, ValBin],
+                [[<<(iolist_size(KvBin)):32>>, KvBin] | Acc]
         end,
-        {IdBuffer, IdBufferSize},
-        DocIdViewIdKeys),
-    NewIdBuffer = case (NewIdBufferSize >= ?MAX_SORT_BUFFER_SIZE) orelse IsFinalBatch of
-    true ->
-        IdLessFun = fun([_, [_, A, _]], [_, [_, B, _]]) -> (IdBtree#btree.less)(A, B) end,
-        lists:sort(IdLessFun, NewIdBuffer0);
-    false ->
-        NewIdBuffer0
-    end,
-    {NewBuffers0, InsertKVCount} = lists:foldl(
-        fun({#set_view{id_num = Id}, KvList}, {AccBuffers, AccCount}) ->
-            {Buf, BufSize} = dict:fetch(Id, AccBuffers),
-            {NewBuf, NewBufSize, AccCount3} = lists:foldr(
-                fun({KeyBin, ValBin}, {AccBuf, AccBufSize, AccCount2}) ->
+        [], DocIdViewIdKeys),
+    #tmp_file_info{fd = IdFd, name = IdFile} = dict:fetch(ids_index, TmpFiles),
+    ok = file:write(IdFd, IdRecords),
+
+    InsertKVCount = lists:foldl(
+        fun({#set_view{id_num = Id}, KvList}, AccCount) ->
+            #tmp_file_info{fd = ViewFd} = dict:fetch(Id, TmpFiles),
+            KvBins = convert_primary_index_kvs_to_binary(KvList, Group, []),
+            ViewRecords = lists:foldr(
+                fun({KeyBin, ValBin}, Acc) ->
                     KvBin = [<<(byte_size(KeyBin)):16>>, KeyBin, ValBin],
-                    KvBinSize = iolist_size(KvBin),
-                    AccBuf2 = [[<<KvBinSize:32>>, KvBin] | AccBuf],
-                    {AccBuf2, AccBufSize + KvBinSize, AccCount2 + 1}
+                    [[<<(iolist_size(KvBin)):32>>, KvBin] | Acc]
                 end,
-                {Buf, BufSize, AccCount},
-                convert_primary_index_kvs_to_binary(KvList, Group, [])),
-            {dict:store(Id, {NewBuf, NewBufSize}, AccBuffers), AccCount3}
+                [], KvBins),
+            ok = file:write(ViewFd, ViewRecords),
+            AccCount + length(KvBins)
         end,
-        {dict:store(ids_index, {NewIdBuffer, NewIdBufferSize}, Buffers), 0},
-        ViewKVs),
+        0, ViewKVs),
 
-    NewBuffers = lists:foldl(
-        fun(#set_view{id_num = Id, btree = Bt}, AccBuffers) ->
-            {Buf, BufSize} = dict:fetch(Id, AccBuffers),
-            case (BufSize >= ?MAX_SORT_BUFFER_SIZE) orelse IsFinalBatch of
-            true ->
-                ViewLessFun = fun([_, [_, A, _]], [_, [_, B, _]]) -> (Bt#btree.less)(A, B) end,
-                Buf2 = lists:sort(ViewLessFun, Buf),
-                dict:store(Id, {Buf2, BufSize}, AccBuffers);
-            false ->
-                AccBuffers
-            end
-        end,
-        NewBuffers0,
-        Group#set_view_group.views),
-
-    {NewBuffers2, NewSortFiles2, SortFileWorkers2} =
-        maybe_flush_merge_buffers(NewBuffers, WriterAcc),
     update_task(KvsLength),
     case IsFinalBatch of
     false ->
         WriterAcc#writer_acc{
-            merge_buffers = NewBuffers2,
-            sort_files = NewSortFiles2,
-            sort_file_workers = SortFileWorkers2,
             max_seqs = MaxSeqs2,
             stats = Stats#set_view_updater_stats{
                 inserted_kvs = Stats#set_view_updater_stats.inserted_kvs + InsertKVCount,
@@ -697,20 +645,22 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
             }
         };
     true ->
-        ?LOG_INFO("Updater for set view `~s`, ~s group `~s`, performing final "
-                  "btree build phase", [SetName, Type, DDocId]),
-        wait_for_workers(SortFileWorkers2),
-        [{_, IdsSortedFile}] = dict:fetch(ids_index, NewSortFiles2),
+        ?LOG_INFO("Updater for set view `~s`, ~s group `~s`, sorting view files",
+                  [SetName, Type, DDocId]),
+        ok = sort_tmp_files(TmpFiles, TmpDir, Group, true),
+        update_task(1),
+        ?LOG_INFO("Updater for set view `~s`, ~s group `~s`, starting btree "
+                  "build phase" , [SetName, Type, DDocId]),
         {ok, NewIdBtreeRoot} = couch_btree_copy:from_sorted_file(
-            IdBtree, IdsSortedFile, GroupFd, fun file_sorter_initial_build_format_fun/1),
+            IdBtree, IdFile, GroupFd, fun file_sorter_initial_build_format_fun/1),
         NewIdBtree = IdBtree#btree{root = NewIdBtreeRoot},
-        ok = file2:delete(IdsSortedFile),
+        ok = file2:delete(IdFile),
         NewViews = lists:map(
             fun(#set_view{id_num = Id, btree = Bt} = View) ->
-               [{_, KvSortedFile}] = dict:fetch(Id, NewSortFiles2),
+               #tmp_file_info{name = ViewFile} = dict:fetch(Id, TmpFiles),
                {ok, NewBtRoot} = couch_btree_copy:from_sorted_file(
-                   Bt, KvSortedFile, GroupFd, fun file_sorter_initial_build_format_fun/1),
-               ok = file2:delete(KvSortedFile),
+                   Bt, ViewFile, GroupFd, fun file_sorter_initial_build_format_fun/1),
+               ok = file2:delete(ViewFile),
                View#set_view{
                    btree = Bt#btree{root = NewBtRoot}
                }
@@ -724,8 +674,6 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
         },
         update_task(1),
         WriterAcc#writer_acc{
-            sort_files = nil,
-            sort_file_workers = [],
             max_seqs = MaxSeqs2,
             stats = Stats#set_view_updater_stats{
                 inserted_kvs = Stats#set_view_updater_stats.inserted_kvs + InsertKVCount,
@@ -753,63 +701,6 @@ process_map_results(Kvs, ViewEmptyKVs, PartSeqs) ->
             {NewViewKVs, [{DocId, {PartId, NewViewIdKeys}} | DocIdViewIdKeysAcc], PartIdSeqs2}
         end,
         {ViewEmptyKVs, [], PartSeqs}, Kvs).
-
-
-% initial build
-maybe_flush_merge_buffers(BuffersDict, WriterAcc) ->
-    #writer_acc{
-        view_empty_kvs = ViewEmptyKVs,
-        sort_files = SortFilesDict,
-        sort_file_workers = Workers,
-        group = Group,
-        final_batch = IsFinalBatch,
-        max_tmp_files = MaxTmpFiles
-    } = WriterAcc,
-    ViewInfos = [ids_index | [V#set_view.id_num || {V, _} <- ViewEmptyKVs]],
-    NumBtrees = length(ViewEmptyKVs) + 1,
-    lists:foldl(
-        fun(Id, {AccBuffers, AccFiles, AccWorkers}) ->
-            {Buf, BufSize} = dict:fetch(Id, AccBuffers),
-            case (BufSize >= ?MAX_SORT_BUFFER_SIZE) orelse IsFinalBatch of
-            true ->
-                SortFiles = dict:fetch(Id, AccFiles),
-                FileName = new_sort_file_name(WriterAcc),
-                {ok, Fd} = file2:open(FileName, [raw, append, binary]),
-                ok = file:write(Fd, Buf),
-                ok = file:close(Fd),
-                AccBuffers2 = dict:store(Id, {[], 0}, AccBuffers),
-                SortFiles2 = ordsets:add_element({0, FileName}, SortFiles),
-                case (ordsets:size(SortFiles2) >= MaxTmpFiles) orelse IsFinalBatch of
-                true ->
-                    MergeSortFile = new_sort_file_name(WriterAcc),
-                    {FilesToMerge, NextGen, RestSortFiles} =
-                        split_files_to_merge(SortFiles2, IsFinalBatch),
-                    case FilesToMerge of
-                    [_] ->
-                        {AccBuffers2, dict:store(Id, SortFiles2, AccFiles), AccWorkers};
-                    [_, _ | _] ->
-                        case length(AccWorkers) >= NumBtrees of
-                        true ->
-                            [OldestWorker | RestWorkersRev] = lists:reverse(AccWorkers),
-                            wait_for_workers([OldestWorker]),
-                            AccWorkers2 = lists:reverse(RestWorkersRev);
-                        false ->
-                            AccWorkers2 = AccWorkers
-                        end,
-                        MergeWorker = spawn_merge_worker(
-                            Id, Group, AccWorkers2, FilesToMerge, MergeSortFile),
-                        SortFiles3 = ordsets:add_element({NextGen, MergeSortFile}, RestSortFiles),
-                        {AccBuffers2, dict:store(Id, SortFiles3, AccFiles), [MergeWorker | AccWorkers2]}
-                    end;
-                false ->
-                    {AccBuffers2, dict:store(Id, SortFiles2, AccFiles), AccWorkers}
-                end;
-            false ->
-                {AccBuffers, AccFiles, AccWorkers}
-            end
-        end,
-        {BuffersDict, SortFilesDict, Workers},
-        ViewInfos).
 
 
 -spec update_transferred_replicas(#set_view_group{},
@@ -1018,6 +909,7 @@ is_new_partition(PartId, #writer_acc{initial_seqs = InitialSeqs}) ->
     couch_util:get_value(PartId, InitialSeqs, 0) == 0.
 
 
+% For incremental index updates.
 maybe_update_btrees(WriterAcc0) ->
     #writer_acc{
         view_empty_kvs = ViewEmptyKVs,
@@ -1054,7 +946,7 @@ maybe_update_btrees(WriterAcc0) ->
             end
         end;
     true ->
-        ok = sort_tmp_files(TmpFiles, WriterAcc0#writer_acc.tmp_dir, Group0),
+        ok = sort_tmp_files(TmpFiles, WriterAcc0#writer_acc.tmp_dir, Group0, false),
         case erlang:erase(updater_worker) of
         undefined ->
             WriterAcc1 = WriterAcc0;
@@ -1188,6 +1080,7 @@ spawn_updater_worker(WriterAcc, PartIdSeqs) ->
     Ref.
 
 
+% For incremental index updates.
 update_btrees(WriterAcc) ->
     #writer_acc{
         stats = Stats,
@@ -1329,18 +1222,28 @@ check_if_compactor_started(#writer_acc{group = Group0} = Acc) ->
     end.
 
 
-init_view_merge_params(#writer_acc{group = Group, initial_build = false} = WriterAcc) ->
-    Files = [{View#set_view.id_num, #tmp_file_info{}} || View <- Group#set_view_group.views],
-    WriterAcc#writer_acc{
-        tmp_files = dict:from_list([{ids_index, #tmp_file_info{}} | Files])
-    };
-init_view_merge_params(#writer_acc{group = Group} = WriterAcc) ->
-    SortFiles = [{View#set_view.id_num, []} || View <- Group#set_view_group.views],
-    Buffers = [{View#set_view.id_num, {[], 0}} || View <- Group#set_view_group.views],
-    WriterAcc#writer_acc{
-        merge_buffers = dict:from_list([{ids_index, {[], 0}} | Buffers]),
-        sort_files = dict:from_list([{ids_index, []} | SortFiles])
-    }.
+init_tmp_files(WriterAcc) ->
+    #writer_acc{
+        group = Group, initial_build = Init, tmp_dir = TmpDir
+    } = WriterAcc,
+    case WriterAcc#writer_acc.compactor_running of
+    true ->
+        ok = couch_set_view_util:delete_sort_files(TmpDir, updater);
+    false ->
+        ok = couch_set_view_util:delete_sort_files(TmpDir, all)
+    end,
+    Ids = [ids_index | [V#set_view.id_num || V <- Group#set_view_group.views]],
+    Files = case Init of
+    true ->
+        [begin
+             FileName = new_sort_file_name(WriterAcc),
+             {ok, Fd} = file2:open(FileName, [raw, append, binary]),
+             {Id, #tmp_file_info{fd = Fd, name = FileName}}
+         end || Id <- Ids];
+    false ->
+         [{Id, #tmp_file_info{}} || Id <- Ids]
+    end,
+    WriterAcc#writer_acc{tmp_files = dict:from_list(Files)}.
 
 
 new_sort_file_name(#writer_acc{tmp_dir = TmpDir, compactor_running = Cr}) ->
@@ -1350,18 +1253,6 @@ new_sort_file_name(TmpDir, true) ->
     couch_set_view_util:new_sort_file_path(TmpDir, compactor);
 new_sort_file_name(TmpDir, false) ->
     couch_set_view_util:new_sort_file_path(TmpDir, updater).
-
-
-wait_for_workers(Pids) ->
-    ok = lists:foldr(fun(W, ok) ->
-        Ref = erlang:monitor(process, W),
-        receive
-        {'DOWN', Ref, process, W, {sort_worker_died, _} = Reason} ->
-            exit(Reason);
-        {'DOWN', Ref, process, W, _Reason} ->
-            ok
-        end
-    end, ok, Pids).
 
 
 convert_primary_index_kvs_to_binary([], _Group, Acc) ->
@@ -1418,82 +1309,6 @@ file_sorter_initial_build_format_fun(<<KeyLen:16, Key:KeyLen/binary, Value/binar
     {Key, Value}.
 
 
-split_files_to_merge(SortFiles, true) ->
-    {LastGen, _} = lists:last(SortFiles),
-    {[F || {_, F} <- SortFiles], LastGen + 1, []};
-
-split_files_to_merge([{MinGen, FirstFile} | Rest], false) ->
-    {ChosenGen, ToMerge, NotToMerge} =
-        split_files_by_gen(MinGen, Rest, ordsets:new(), [FirstFile]),
-    {ToMerge, ChosenGen + length(ToMerge), NotToMerge}.
-
-
-split_files_by_gen(Gen, [{Gen, F} | Rest], AccNot, Acc) ->
-    split_files_by_gen(Gen, Rest, AccNot, [F | Acc]);
-split_files_by_gen(Gen, [], AccNot, Acc) ->
-    {Gen, Acc, AccNot};
-split_files_by_gen(Gen, [{Gen2, F} | Rest], AccNot, [FAcc]) when Gen2 > Gen ->
-    split_files_by_gen(Gen2, Rest, ordsets:add_element({Gen, FAcc}, AccNot), [F]);
-split_files_by_gen(Gen, [{Gen2, _} | _] = Rest, AccNot, Acc) when Gen2 > Gen ->
-    {Gen, Acc, ordsets:union(AccNot, Rest)}.
-
-
-spawn_merge_worker(ViewId, Group, Workers, FilesToMerge, DestFile) ->
-    spawn_link(fun() ->
-        NumFiles = length(FilesToMerge),
-        case ViewId of
-        ids_index ->
-            Type = "i";
-        _ when is_integer(ViewId) ->
-            Type = "v"
-        end,
-        case os:find_executable("couch_view_file_merger") of
-        false ->
-            FileMergerCmd = nil,
-            throw(<<"couch_view_file_merger command not found">>);
-        FileMergerCmd ->
-            ok
-        end,
-        MergerInput = [
-            Type, $\n,
-            integer_to_list(NumFiles), $\n,
-            string:join(FilesToMerge, "\n"), $\n,
-            DestFile, $\n
-        ],
-        wait_for_workers(Workers),
-        FileMerger = open_port({spawn_executable, FileMergerCmd}, ?PORT_OPTS),
-        true = port_command(FileMerger, MergerInput),
-        try
-            file_merger_wait_loop(FileMerger, Group, [])
-        after
-            catch port_close(FileMerger)
-        end
-    end).
-
-
-file_merger_wait_loop(Port, Group, Acc) ->
-    receive
-    {Port, {exit_status, 0}} ->
-        ok;
-    {Port, {exit_status, Status}} ->
-        throw({file_merger_exit, Status});
-    {Port, {data, {noeol, Data}}} ->
-        file_merger_wait_loop(Port, Group, [Data | Acc]);
-    {Port, {data, {eol, Data}}} ->
-        #set_view_group{
-            set_name = SetName,
-            name = DDocId,
-            type = Type
-        } = Group,
-        Msg = lists:reverse([Data | Acc]),
-        ?LOG_ERROR("Set view `~s`, ~s group `~s`, received error from file merger: ~s",
-                   [SetName, Type, DDocId, Msg]),
-        file_merger_wait_loop(Port, Group, []);
-    {Port, Error} ->
-        throw({file_merger_error, Error})
-    end.
-
-
 count_seqs_done(Group, NewSeqs) ->
     % NewSeqs might have new passive partitions that Group's seqs doesn't
     % have yet (will get them after a checkpoint period).
@@ -1506,8 +1321,8 @@ count_seqs_done(Group, NewSeqs) ->
 
 
 % Incremental updates.
--spec sort_tmp_files(dict(), string(), #set_view_group{}) -> 'ok'.
-sort_tmp_files(TmpFiles, TmpDir, Group) ->
+-spec sort_tmp_files(dict(), string(), #set_view_group{}, boolean()) -> 'ok'.
+sort_tmp_files(TmpFiles, TmpDir, Group, InitialBuild) ->
     case os:find_executable("couch_view_file_sorter") of
     false ->
         FileSorterCmd = nil,
@@ -1516,7 +1331,12 @@ sort_tmp_files(TmpFiles, TmpDir, Group) ->
         ok
     end,
     FileSorter = open_port({spawn_executable, FileSorterCmd}, ?PORT_OPTS),
-    true = port_command(FileSorter, [TmpDir, $\n]),
+    case InitialBuild of
+    true ->
+        true = port_command(FileSorter, [TmpDir, $\n, "b", $\n]);
+    false ->
+        true = port_command(FileSorter, [TmpDir, $\n, "u", $\n])
+    end,
     NumViews = length(Group#set_view_group.views),
     true = port_command(FileSorter, [integer_to_list(NumViews), $\n]),
     IdTmpFileInfo = dict:fetch(ids_index, TmpFiles),
