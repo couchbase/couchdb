@@ -576,7 +576,10 @@ fold_reduce(Group, View, FoldFun, FoldAcc, #view_query_args{keys = Keys} = ViewQ
 
 do_fold_reduce(Group, ViewInfo, Fun, Acc, Options0, ViewQueryArgs) ->
     {reduce, NthRed, View} = ViewInfo,
-    #set_view{btree = Bt, reduce_funs = RedFuns} = View,
+    #mapreduce_view{
+        btree = Bt,
+        reduce_funs = RedFuns
+    } = View#set_view.indexer,
     #view_query_args{
         filter = DoFilter,
         group_level = GroupLevel
@@ -683,7 +686,8 @@ get_map_view(SetName, DDoc, ViewName, Req) ->
 
 get_map_view0(_Name, []) ->
     {not_found, missing_named_view};
-get_map_view0(Name, [#set_view{map_names=MapNames}=View|Rest]) ->
+get_map_view0(Name, [#set_view{} = View|Rest]) ->
+    MapNames = (View#set_view.indexer)#mapreduce_view.map_names,
     case lists:member(Name, MapNames) of
         true -> {ok, View};
         false -> get_map_view0(Name, Rest)
@@ -711,7 +715,8 @@ get_reduce_view(SetName, DDoc, ViewName, Req) ->
 
 get_reduce_view0(_Name, []) ->
     {not_found, missing_named_view};
-get_reduce_view0(Name, [#set_view{reduce_funs = RedFuns} = View | Rest]) ->
+get_reduce_view0(Name, [#set_view{} = View|Rest]) ->
+    RedFuns = (View#set_view.indexer)#mapreduce_view.reduce_funs,
     case get_key_pos(Name, RedFuns, 0) of
         0 -> get_reduce_view0(Name, Rest);
         N -> {ok, {reduce, N, View}}
@@ -789,6 +794,7 @@ fold(Group, View, Fun, Acc, #view_query_args{keys = Keys} = ViewQueryArgs0) ->
 
 
 do_fold(Group, SetView, Fun, Acc, ViewQueryArgs) ->
+    View = SetView#set_view.indexer,
     Mod = Group#set_view_group.mod,
 
     Filter = case ViewQueryArgs#view_query_args.filter of
@@ -803,7 +809,7 @@ do_fold(Group, SetView, Fun, Acc, ViewQueryArgs) ->
     try
         Options = couch_set_view_util:make_key_options(ViewQueryArgs),
         {ok, _LastReduce, _AccResult} =
-            Mod:fold(SetView, WrapperFun, Acc, Options)
+            Mod:fold(View, WrapperFun, Acc, Options)
     after
         couch_set_view_util:close_raw_read_fd(Group)
     end.

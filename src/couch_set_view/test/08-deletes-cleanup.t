@@ -352,7 +352,9 @@ verify_btrees_1(Group) ->
     } = Group,
     #set_view{
         id_num = 0,
-        btree = View0Btree
+        indexer = #mapreduce_view{
+            btree = View0Btree
+        }
     } = View0,
     etap:diag("Verifying view group btrees"),
     ExpectedBitmask = couch_set_view_util:build_bitmask(lists:seq(0, 63)),
@@ -436,7 +438,9 @@ verify_btrees_2(Group) ->
     } = Group,
     #set_view{
         id_num = 0,
-        btree = View0Btree
+        indexer = #mapreduce_view{
+            btree = View0Btree
+        }
     } = View0,
     etap:diag("Verifying view group btrees"),
     ExpectedABitmask = couch_set_view_util:build_bitmask(lists:seq(0, 31)),
@@ -489,7 +493,9 @@ verify_btrees_3(Group) ->
     } = Group,
     #set_view{
         id_num = 0,
-        btree = View0Btree
+        indexer = #mapreduce_view{
+            btree = View0Btree
+        }
     } = View0,
     etap:diag("Verifying view group btrees"),
     ExpectedABitmask = couch_set_view_util:build_bitmask(lists:seq(0, 63)),

@@ -195,12 +195,17 @@
 
 -record(set_view, {
     id_num = 0        :: non_neg_integer(),
-    map_names = []    :: [binary()],
     def = <<>>        :: binary(),
+    ref               :: reference(),
+    indexer = {}      :: tuple()
+}).
+
+% XXX vmx 2012-12-21: This should go into the mapreduce specific header file
+-record(mapreduce_view, {
+    map_names = []    :: [binary()],
     btree = nil       :: 'nil' | #btree{},
     reduce_funs = []  :: [{binary(), binary()}],
-    options = []      :: [term()],
-    ref               :: reference()
+    options = []      :: [term()]
 }).
 
 -record(set_view_group, {
@@ -219,6 +224,10 @@
     replica_pid = nil                       :: 'nil' | pid(),
     debug_info = nil                        :: #set_view_debug_info{} | 'nil',
     filepath = ""                           :: string(),
+    % This is the module that populated the set view. It can be a module for
+    % the MapReduce index or the spatial index
+    % XXX vmx 2012-12-21: For now default it to 'mapreduce_view', this should
+    %     be set to 'nil' when the refactoring is done.
     mod = mapreduce_view                    :: atom(),
     % The file extension that will be used for the index files
     extension = ".view"                     :: string()

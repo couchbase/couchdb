@@ -645,7 +645,7 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
         Header = Group#set_view_group.index_header,
         NewHeader = Header#set_view_index_header{
             id_btree_state = couch_btree:get_state(NewIdBtree),
-            view_states = [Mod:get_state(V#set_view.btree) || V <- NewViews],
+            view_states = [Mod:get_state(V#set_view.indexer) || V <- NewViews],
             seqs = MaxSeqs2
         },
         update_task(1),
@@ -1008,7 +1008,14 @@ spawn_updater_worker(WriterAcc, PartIdSeqs) ->
         },
         NewGroup0 = Group#set_view_group{
             views = lists:zipwith(
-                fun(V, Bt) -> V#set_view{btree = Bt} end,
+                fun(V, Bt) ->
+                    Indexer = V#set_view.indexer,
+                    V#set_view{
+                        indexer = Indexer#mapreduce_view{
+                            btree = Bt
+                        }
+                    }
+                end,
                 Group#set_view_group.views,
                 ViewBtrees2),
             id_btree = IdBtree2,
@@ -1038,7 +1045,8 @@ update_btrees(WriterAcc) ->
     } = WriterAcc,
     ViewInfos = [
         {ids_index, Group#set_view_group.id_btree} |
-        [{V#set_view.id_num, V#set_view.btree} || V <- Group#set_view_group.views]
+        [{V#set_view.id_num, (V#set_view.indexer)#mapreduce_view.btree} ||
+            V <- Group#set_view_group.views]
     ],
     CleanupAcc0 = {go, 0},
     case ?set_cbitmask(Group) of

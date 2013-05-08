@@ -381,12 +381,13 @@ doc_id(I) ->
 
 get_view(_ViewName, []) ->
     undefined;
-get_view(ViewName, [#set_view{reduce_funs = RedFuns} = View | Rest]) ->
+get_view(ViewName, [SetView | Rest]) ->
+    RedFuns = (SetView#set_view.indexer)#mapreduce_view.reduce_funs,
     case couch_util:get_value(ViewName, RedFuns) of
     undefined ->
         get_view(ViewName, Rest);
     _ ->
-        View
+        SetView
     end.
 
 
@@ -404,7 +405,9 @@ same_key_by_same_doc_multiple_times_verify_btrees_1(Group) ->
     etap:is(1, length(Views), "1 view btree in the group"),
     View1 = get_view(<<"view_1">>, Views),
     #set_view{
-        btree = View1Btree
+        indexer = #mapreduce_view{
+            btree = View1Btree
+        }
     } = View1,
     PartList = lists:seq(0, num_set_partitions() - 1),
     ExpectedBitmask = couch_set_view_util:build_bitmask(PartList),
@@ -495,7 +498,9 @@ same_key_by_same_doc_multiple_times_verify_btrees_2(Group) ->
     etap:is(1, length(Views), "1 view btree in the group"),
     View1 = get_view(<<"view_1">>, Views),
     #set_view{
-        btree = View1Btree
+        indexer = #mapreduce_view{
+            btree = View1Btree
+        }
     } = View1,
     PartList = lists:seq(0, num_set_partitions() - 1),
     ExpectedBitmask = couch_set_view_util:build_bitmask(PartList),
@@ -581,7 +586,9 @@ same_key_by_same_doc_multiple_times_verify_btrees_3(Group) ->
     etap:is(1, length(Views), "1 view btree in the group"),
     View1 = get_view(<<"view_1">>, Views),
     #set_view{
-        btree = View1Btree
+        indexer = #mapreduce_view{
+            btree = View1Btree
+        }
     } = View1,
     PartList = lists:seq(0, num_set_partitions() - 1, 2),
     ExpectedBitmask = couch_set_view_util:build_bitmask(PartList),
@@ -670,7 +677,9 @@ same_key_by_same_doc_multiple_times_verify_btrees_4(Group) ->
     etap:is(1, length(Views), "1 view btree in the group"),
     View1 = get_view(<<"view_1">>, Views),
     #set_view{
-        btree = View1Btree
+        indexer = #mapreduce_view{
+            btree = View1Btree
+        }
     } = View1,
     PartList = lists:seq(0, num_set_partitions() - 1, 2),
     ExpectedBitmask = couch_set_view_util:build_bitmask(PartList),
@@ -726,7 +735,9 @@ test_same_key_by_different_docs_multiple_times_verify_btrees_1(Group) ->
     etap:is(1, length(Views), "1 view btree in the group"),
     View1 = get_view(<<"view_1">>, Views),
     #set_view{
-        btree = View1Btree
+        indexer = #mapreduce_view{
+            btree = View1Btree
+        }
     } = View1,
     PartList = lists:seq(0, num_set_partitions() - 1),
     ExpectedBitmask = couch_set_view_util:build_bitmask(PartList),
@@ -834,7 +845,9 @@ test_same_key_by_different_docs_multiple_times_verify_btrees_2(Group) ->
     etap:is(1, length(Views), "1 view btree in the group"),
     View1 = get_view(<<"view_1">>, Views),
     #set_view{
-        btree = View1Btree
+        indexer = #mapreduce_view{
+            btree = View1Btree
+        }
     } = View1,
     PartList = lists:seq(0, num_set_partitions() - 1),
     ExpectedBitmask = couch_set_view_util:build_bitmask(PartList),
@@ -920,7 +933,9 @@ test_same_key_by_different_docs_multiple_times_verify_btrees_3(Group) ->
     etap:is(1, length(Views), "1 view btree in the group"),
     View1 = get_view(<<"view_1">>, Views),
     #set_view{
-        btree = View1Btree
+        indexer = #mapreduce_view{
+            btree = View1Btree
+        }
     } = View1,
     PartList = lists:seq(0, num_set_partitions() - 1),
     ExpectedBitmask = couch_set_view_util:build_bitmask(PartList),

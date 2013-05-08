@@ -469,12 +469,13 @@ compact_view_group() ->
 
 get_view(_ViewName, []) ->
     undefined;
-get_view(ViewName, [#set_view{reduce_funs = RedFuns} = View | Rest]) ->
+get_view(ViewName, [SetView | Rest]) ->
+    RedFuns = (SetView#set_view.indexer)#mapreduce_view.reduce_funs,
     case couch_util:get_value(ViewName, RedFuns) of
     undefined ->
         get_view(ViewName, Rest);
     _ ->
-        View
+        SetView
     end.
 
 
@@ -495,10 +496,14 @@ verify_btrees_1(Group) ->
     View2 = get_view(<<"view_3">>, Views),
     etap:is(View1, View0, "Views 1 and 2 share the same btree"),
     #set_view{
-        btree = View0Btree
+        indexer = #mapreduce_view{
+            btree = View0Btree
+        }
     } = View0,
     #set_view{
-        btree = View2Btree
+        indexer = #mapreduce_view{
+            btree = View2Btree
+        }
     } = View2,
     etap:diag("Verifying view group btrees"),
     ExpectedBitmask = couch_set_view_util:build_bitmask(lists:seq(0, 63)),
@@ -611,10 +616,14 @@ verify_btrees_2(Group) ->
     View2 = get_view(<<"view_3">>, Views),
     etap:is(View1, View0, "Views 1 and 2 share the same btree"),
     #set_view{
-        btree = View0Btree
+        indexer = #mapreduce_view{
+            btree = View0Btree
+        }
     } = View0,
     #set_view{
-        btree = View2Btree
+        indexer = #mapreduce_view{
+            btree = View2Btree
+        }
     } = View2,
     etap:diag("Verifying view group btrees"),
     ExpectedABitmask = couch_set_view_util:build_bitmask(lists:seq(0, 31)),
@@ -688,10 +697,14 @@ verify_btrees_3(Group) ->
     View2 = get_view(<<"view_3">>, Views),
     etap:is(View1, View0, "Views 1 and 2 share the same btree"),
     #set_view{
-        btree = View0Btree
+        indexer = #mapreduce_view{
+            btree = View0Btree
+        }
     } = View0,
     #set_view{
-        btree = View2Btree
+        indexer = #mapreduce_view{
+            btree = View2Btree
+        }
     } = View2,
     etap:diag("Verifying view group btrees"),
     ExpectedABitmask = couch_set_view_util:build_bitmask(lists:seq(0, 63)),

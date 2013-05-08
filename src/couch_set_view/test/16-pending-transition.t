@@ -229,7 +229,9 @@ verify_btrees_1(ValueGenFun) ->
         }
     } = Group,
     #set_view{
-        btree = View1Btree
+        indexer = #mapreduce_view{
+            btree = View1Btree
+        }
     } = View1,
     ActiveParts = lists:seq(0, num_set_partitions() - 1),
     ExpectedBitmask = couch_set_view_util:build_bitmask(ActiveParts),
@@ -323,7 +325,9 @@ verify_btrees_2(ValueGenFun) ->
         }
     } = Group,
     #set_view{
-        btree = View1Btree
+        indexer = #mapreduce_view{
+            btree = View1Btree
+        }
     } = View1,
     ActiveParts = lists:seq(0, num_set_partitions() - 1, 2),
     CleanupParts = lists:seq(1, num_set_partitions() - 1, 2),
@@ -418,7 +422,9 @@ verify_btrees_3(ValueGenFun) ->
         }
     } = Group,
     #set_view{
-        btree = View1Btree
+        indexer = #mapreduce_view{
+            btree = View1Btree
+        }
     } = View1,
     ActiveParts = [0],
     CleanupParts = lists:seq(1, num_set_partitions() - 1),
@@ -518,7 +524,9 @@ verify_btrees_4(ValueGenFun) ->
         }
     } = Group,
     #set_view{
-        btree = View1Btree
+        indexer = #mapreduce_view{
+            btree = View1Btree
+        }
     } = View1,
     ActiveParts = [0],
     ExpectedBitmask = couch_set_view_util:build_bitmask(ActiveParts),
@@ -754,7 +762,7 @@ test_monitor_pending_partition() ->
     Group2 = get_group_snapshot(false),
     #set_view_group{
         id_btree = IdBtree,
-        views = [#set_view{btree = View1Btree}]
+        views = [#set_view{indexer = #mapreduce_view{btree = View1Btree}}]
     } = Group2,
 
     etap:is(?set_cbitmask(Group2), 0, "Cleanup bitmask is 0"),

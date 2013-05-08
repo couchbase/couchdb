@@ -359,10 +359,14 @@ verify_btrees(ValueGenFun, NumDocs) ->
         }
     } = Group,
     #set_view{
-        btree = View1Btree
+        indexer = #mapreduce_view{
+            btree = View1Btree
+        }
     } = View1,
     #set_view{
-        btree = View2Btree
+        indexer = #mapreduce_view{
+            btree = View2Btree
+        }
     } = View2,
     ActiveParts = lists:seq(0, num_set_partitions() - 1),
     ExpectedBitmask = couch_set_view_util:build_bitmask(ActiveParts),

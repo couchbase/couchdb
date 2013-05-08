@@ -368,7 +368,9 @@ verify_btrees_1(ActiveParts, PassiveParts, ExpectedSeqs,
     etap:is(1, length(Views), "1 view btree in the group"),
     [View1] = Views,
     #set_view{
-        btree = View1Btree
+        indexer = #mapreduce_view{
+            btree = View1Btree
+        }
     } = View1,
     AllSeqs = HeaderUpdateSeqs ++ UnindexableSeqs,
     ExpectedActiveBitmask = couch_set_view_util:build_bitmask(ActiveParts),
@@ -474,7 +476,9 @@ verify_btrees_2(ExpectedSeqs, ExpectedUnindexableSeqs, ValueGenFun1, ValueGenFun
     etap:is(1, length(Views), "1 view btree in the group"),
     [View1] = Views,
     #set_view{
-        btree = View1Btree
+        indexer = #mapreduce_view{
+            btree = View1Btree
+        }
     } = View1,
     ActiveParts = lists:seq(0, (num_set_partitions() div 2) - 1),
     ExpectedBitmask = couch_set_view_util:build_bitmask(ActiveParts),

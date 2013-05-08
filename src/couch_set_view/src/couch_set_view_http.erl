@@ -77,7 +77,12 @@ route_request(#httpd{method = 'GET'} = Req, SetName, DDocId, [<<"_btree_stats">>
     } = Group,
     IdBtreeStats = couch_btree_stats:compute(IdBtree),
     ViewStats = lists:foldr(
-        fun(#set_view{btree = Bt, reduce_funs = RedFuns, map_names = MapNames}, Acc) ->
+        fun(SetView, Acc) ->
+            #mapreduce_view{
+                btree = Bt,
+                reduce_funs = RedFuns,
+                map_names = MapNames
+            } = SetView#set_view.indexer,
             S = couch_btree_stats:compute(Bt),
             case RedFuns of
             [{ViewName, _} | _] ->

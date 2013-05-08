@@ -171,7 +171,7 @@ compact_group(Group0, EmptyGroup, TmpDir, UpdaterPid, Owner, UserStatus) ->
         index_header = Header#set_view_index_header{
             cbitmask = 0,
             id_btree_state = couch_btree:get_state(NewIdBtree),
-            view_states = [Mod:get_state(V#set_view.btree) || V <- NewViews]
+            view_states = [Mod:get_state(V#set_view.indexer) || V <- NewViews]
         }
     },
 
@@ -296,7 +296,7 @@ apply_log(Group, LogFiles, NewSeqs, TmpDir) ->
         index_header = Header#set_view_index_header{
             seqs = NewSeqs,
             id_btree_state = couch_btree:get_state(NewIdBtree),
-            view_states = [Mod:get_state(V#set_view.btree) || V <- NewViews]
+            view_states = [Mod:get_state(V#set_view.indexer) || V <- NewViews]
         }
     }.
 

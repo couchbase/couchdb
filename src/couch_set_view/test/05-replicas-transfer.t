@@ -611,12 +611,13 @@ compact_view_group(Type) ->
 
 get_view(_ViewName, []) ->
     undefined;
-get_view(ViewName, [#set_view{reduce_funs = RedFuns} = View | Rest]) ->
+get_view(ViewName, [SetView | Rest]) ->
+    RedFuns = (SetView#set_view.indexer)#mapreduce_view.reduce_funs,
     case couch_util:get_value(ViewName, RedFuns) of
     undefined ->
         get_view(ViewName, Rest);
     _ ->
-        View
+        SetView
     end.
 
 
@@ -637,10 +638,14 @@ verify_main_group_btrees_1(Group) ->
     View2 = get_view(<<"view_2">>, Views),
     etap:isnt(View1, View2, "Views 1 and 2 have different btrees"),
     #set_view{
-        btree = View1Btree
+        indexer = #mapreduce_view{
+            btree = View1Btree
+        }
     } = View1,
     #set_view{
-        btree = View2Btree
+        indexer = #mapreduce_view{
+            btree = View2Btree
+        }
     } = View2,
     ExpectedBitmask = couch_set_view_util:build_bitmask(lists:seq(0, 31)),
     DbSeqs = couch_set_view_test_util:get_db_seqs(test_set_name(), lists:seq(0, 31)),
@@ -778,10 +783,14 @@ verify_replica_group_btrees_1(MainGroup) ->
     View2 = get_view(<<"view_2">>, Views),
     etap:isnt(View1, View2, "Views 1 and 2 have different btrees"),
     #set_view{
-        btree = View1Btree
+        indexer = #mapreduce_view{
+            btree = View1Btree
+        }
     } = View1,
     #set_view{
-        btree = View2Btree
+        indexer = #mapreduce_view{
+            btree = View2Btree
+        }
     } = View2,
 
     etap:is(
@@ -858,10 +867,14 @@ verify_replica_group_btrees_2(MainGroup) ->
     View2 = get_view(<<"view_2">>, Views),
     etap:isnt(View1, View2, "Views 1 and 2 have different btrees"),
     #set_view{
-        btree = View1Btree
+        indexer = #mapreduce_view{
+            btree = View1Btree
+        }
     } = View1,
     #set_view{
-        btree = View2Btree
+        indexer = #mapreduce_view{
+            btree = View2Btree
+        }
     } = View2,
     ExpectedBitmask = couch_set_view_util:build_bitmask(lists:seq(32, 63)),
     DbSeqs = couch_set_view_test_util:get_db_seqs(test_set_name(), lists:seq(32, 63)),
@@ -992,10 +1005,14 @@ verify_main_group_btrees_3(Group) ->
     View2 = get_view(<<"view_2">>, Views),
     etap:isnt(View1, View2, "Views 1 and 2 have different btrees"),
     #set_view{
-        btree = View1Btree
+        indexer = #mapreduce_view{
+            btree = View1Btree
+        }
     } = View1,
     #set_view{
-        btree = View2Btree
+        indexer = #mapreduce_view{
+            btree = View2Btree
+        }
     } = View2,
     ExpectedBitmask = couch_set_view_util:build_bitmask(lists:seq(0, 63)),
     DbSeqs = couch_set_view_test_util:get_db_seqs(test_set_name(), lists:seq(0, 63)),

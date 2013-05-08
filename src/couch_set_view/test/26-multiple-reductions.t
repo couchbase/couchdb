@@ -267,19 +267,23 @@ verify_btrees_1(ValueGenFun) ->
     } = Group,
     etap:is(length(Views), 2, "2 view record in view group"),
     [View1, View2] = Views,
-    ?etap_match(View1#set_view.reduce_funs,
+    ?etap_match((View1#set_view.indexer)#mapreduce_view.reduce_funs,
                 [{<<"test5">>, _}, {<<"test4">>, _}, {<<"test3">>, _}],
                 "First view record has views 5 downto 3"),
-    ?etap_match(View2#set_view.reduce_funs,
+    ?etap_match((View2#set_view.indexer)#mapreduce_view.reduce_funs,
                 [{<<"test2">>, _}, {<<"test">>, _}],
                 "Second view record has views 2 downto 1"),
     #set_view{
         id_num = 0,
-        btree = View1Btree
+        indexer = #mapreduce_view{
+            btree = View1Btree
+        }
     } = View1,
     #set_view{
         id_num = 1,
-        btree = View2Btree
+        indexer = #mapreduce_view{
+            btree = View2Btree
+        }
     } = View2,
 
     etap:diag("Verifying view group btrees"),

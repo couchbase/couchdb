@@ -117,8 +117,12 @@ convert_primary_index_kvs_to_binary([{{Key, DocId}, {PartId, V0}} | Rest], Group
 finish_build(SetView, GroupFd, TmpFiles) ->
     #set_view{
         id_num = Id,
-        btree = Bt
+        indexer = View
     } = SetView,
+
+    #mapreduce_view{
+        btree = Bt
+    } = View,
 
     #tmp_file_info{name = ViewFile} = dict:fetch(Id, TmpFiles),
     {ok, NewBtRoot} = couch_btree_copy:from_sorted_file(
@@ -126,18 +130,19 @@ finish_build(SetView, GroupFd, TmpFiles) ->
         fun couch_set_view_updater:file_sorter_initial_build_format_fun/1),
     ok = file2:delete(ViewFile),
     SetView#set_view{
-        btree = Bt#btree{root = NewBtRoot}
+        indexer = View#mapreduce_view{
+            btree = Bt#btree{root = NewBtRoot}
+        }
     }.
 
 
 % Return the state of a view (which will be stored in the header)
-get_state(Btree) ->
-    couch_btree:get_state(Btree).
+get_state(View) ->
+    couch_btree:get_state(View#mapreduce_view.btree).
 
-
-view_bitmap(Bt) ->
+view_bitmap(View) ->
     {ok, <<_Size:40, Bm:?MAX_NUM_PARTITIONS, _/binary>>} =
-        couch_btree:full_reduce(Bt),
+        couch_btree:full_reduce(View#mapreduce_view.btree),
     Bm.
 
 
@@ -148,11 +153,11 @@ end_reduce_context(Group) ->
     couch_set_view_mapreduce:end_reduce_context(Group).
 
 
-view_name(#set_view_group{views = Views}, ViewPos) ->
-    V = lists:nth(ViewPos, Views),
-    case V#set_view.map_names of
+view_name(#set_view_group{views = SetViews}, ViewPos) ->
+    View = (lists:nth(ViewPos, SetViews))#set_view.indexer,
+    case View#mapreduce_view.map_names of
     [] ->
-        [{Name, _} | _] = V#set_view.reduce_funs;
+        [{Name, _} | _] = View#mapreduce_view.reduce_funs;
     [Name | _] ->
         ok
     end,
@@ -230,30 +235,42 @@ design_doc_to_set_view_group(SetName, #doc{id = Id, body = {Fields}}) ->
             MapSrc ->
                 RedSrc = couch_util:get_value(<<"reduce">>, MRFuns, null),
                 {ViewOptions} = couch_util:get_value(<<"options">>, MRFuns, {[]}),
-                View =
+                SetView =
                 case dict:find({MapSrc, ViewOptions}, DictBySrcAcc) of
-                    {ok, View0} -> View0;
-                    error -> #set_view{def = MapSrc, options = ViewOptions}
+                {ok, SetView0} ->
+                    SetView0;
+                error ->
+                   #set_view{
+                        def = MapSrc,
+                        indexer = #mapreduce_view{
+                            options = ViewOptions
+                        }
+                    }
                 end,
+                View = SetView#set_view.indexer,
                 View2 =
                 if RedSrc == null ->
-                    View#set_view{map_names = [Name | View#set_view.map_names]};
+                    View#mapreduce_view{
+                        map_names = [Name | View#mapreduce_view.map_names]};
                 true ->
-                    View#set_view{reduce_funs = [{Name, RedSrc} | View#set_view.reduce_funs]}
+                    View#mapreduce_view{
+                        reduce_funs = [{Name, RedSrc} |
+                            View#mapreduce_view.reduce_funs]}
                 end,
-                dict:store({MapSrc, ViewOptions}, View2, DictBySrcAcc)
+                dict:store({MapSrc, ViewOptions},
+                    SetView#set_view{indexer = View2}, DictBySrcAcc)
             end
         end, dict:new(), RawViews),
     % number the views
-    {Views, _N} = lists:mapfoldl(
-        fun({_Src, View}, N) ->
-            {View#set_view{id_num = N}, N + 1}
+    {SetViews, _N} = lists:mapfoldl(
+        fun({_Src, SetView}, N) ->
+            {SetView#set_view{id_num = N}, N + 1}
         end,
         0, lists:sort(dict:to_list(DictBySrc))),
     SetViewGroup = #set_view_group{
         set_name = SetName,
         name = Id,
-        views = Views,
+        views = SetViews,
         design_options = DesignOptions
     },
     couch_set_view_util:set_view_sig(SetViewGroup).
@@ -262,15 +279,16 @@ design_doc_to_set_view_group(SetName, #doc{id = Id, body = {Fields}}) ->
 -spec view_group_data_size(#btree{}, [#set_view{}]) -> non_neg_integer().
 view_group_data_size(IdBtree, Views) ->
     lists:foldl(
-        fun(#set_view{btree = Btree}, Acc) ->
+        fun(SetView, Acc) ->
+            Btree = (SetView#set_view.indexer)#mapreduce_view.btree,
             Acc + couch_btree:size(Btree)
         end,
         couch_btree:size(IdBtree),
         Views).
 
 
-reset_view(_Btree) ->
-    nil.
+reset_view(View) ->
+    View#mapreduce_view{btree = nil}.
 
 
 % Needs to return that a function that takes 2 arguments, a btree state and
@@ -281,12 +299,13 @@ make_views_fun(Fd, BtreeOptions, Group) ->
         name = DDocId,
         type = Type
     } = Group,
-    fun(BTState, View) ->
-        case View#set_view.reduce_funs of
+    fun(BTState, SetView) ->
+        View = SetView#set_view.indexer,
+        case View#mapreduce_view.reduce_funs of
         [{ViewName, _} | _] ->
             ok;
         [] ->
-            [ViewName | _] = View#set_view.map_names
+            [ViewName | _] = View#mapreduce_view.map_names
         end,
         ReduceFun =
             fun(reduce, KVs) ->
@@ -294,7 +313,7 @@ make_views_fun(Fd, BtreeOptions, Group) ->
                 KVs2 = couch_set_view_util:expand_dups(KVs, []),
                 {ok, Reduced} =
                     try
-                         couch_set_view_mapreduce:reduce(View, KVs2)
+                         couch_set_view_mapreduce:reduce(SetView, KVs2)
                     catch throw:{error, Reason} = Error ->
                         PrettyKVs = [
                             begin
@@ -326,7 +345,7 @@ make_views_fun(Fd, BtreeOptions, Group) ->
                     Reds),
                 {ok, Reduced} =
                     try
-                        couch_set_view_mapreduce:rereduce(View, UserReds)
+                        couch_set_view_mapreduce:rereduce(SetView, UserReds)
                     catch throw:{error, Reason} = Error ->
                         ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, error executing"
                                              " rereduce function for view `~s'~n"
@@ -351,44 +370,56 @@ make_views_fun(Fd, BtreeOptions, Group) ->
         end,
         {ok, Btree} = couch_btree:open(
             BTState, Fd, [{less, Less}, {reduce, ReduceFun} | BtreeOptions]),
-        View#set_view{btree = Btree}
+        SetView#set_view{
+            indexer = View#mapreduce_view{btree = Btree}
+        }
     end.
 
 
+% XXX vmx 2013-01-04: Check if we really need the full function, or just the
+%    `guided_purge` in this indexer specific module
 clean_views(_, _, [], Count, Acc) ->
     {Count, lists:reverse(Acc)};
 clean_views(stop, _, Rest, Count, Acc) ->
     {Count, lists:reverse(Acc, Rest)};
-clean_views(go, PurgeFun, [#set_view{btree = Btree} = View | Rest], Count, Acc) ->
-    couch_set_view_mapreduce:start_reduce_context(View),
+clean_views(go, PurgeFun, [SetView | Rest], Count, Acc) ->
+    View = SetView#set_view.indexer,
+    Btree = View#mapreduce_view.btree,
+    couch_set_view_mapreduce:start_reduce_context(SetView),
     {ok, NewBtree, {Go, PurgedCount}} =
         couch_btree:guided_purge(Btree, PurgeFun, {go, Count}),
-    couch_set_view_mapreduce:end_reduce_context(View),
-    NewAcc = [View#set_view{btree = NewBtree} | Acc],
+    couch_set_view_mapreduce:end_reduce_context(SetView),
+    NewAcc = [SetView#set_view{
+        indexer = View#mapreduce_view{btree = NewBtree}
+    } | Acc],
     clean_views(Go, PurgeFun, Rest, PurgedCount, NewAcc).
 
 
-compact_view(Fd, View, EmptyView, FilterFun, BeforeKVWriteFun, Acc0) ->
-    #set_view{
-        btree = ViewBtree
+compact_view(Fd, SetView, EmptySetView, FilterFun, BeforeKVWriteFun, Acc0) ->
+    EmptyView = EmptySetView#set_view.indexer,
+    #mapreduce_view{
+       btree = ViewBtree
     } = EmptyView,
 
-    couch_set_view_mapreduce:start_reduce_context(View),
+    couch_set_view_mapreduce:start_reduce_context(SetView),
     {ok, NewBtreeRoot, Acc2} = couch_btree_copy:copy(
-        View#set_view.btree, Fd,
+        (SetView#set_view.indexer)#mapreduce_view.btree, Fd,
         [{before_kv_write, {BeforeKVWriteFun, Acc0}}, {filter, FilterFun}]),
-    couch_set_view_mapreduce:end_reduce_context(View),
+    couch_set_view_mapreduce:end_reduce_context(SetView),
 
-    ViewBtree2 = ViewBtree#btree{root = NewBtreeRoot},
-    NewView = EmptyView#set_view{
-        btree = ViewBtree2
+    NewSetView = EmptySetView#set_view{
+        indexer = EmptyView#mapreduce_view{
+            btree = ViewBtree#btree{
+                root = NewBtreeRoot
+            }
+        }
     },
-    {NewView, Acc2}.
+    {NewSetView, Acc2}.
 
 
 -spec get_row_count(#set_view{}) -> non_neg_integer().
 get_row_count(SetView) ->
-    Bt = SetView#set_view.btree,
+    Bt = (SetView#set_view.indexer)#mapreduce_view.btree,
     ok = couch_set_view_mapreduce:start_reduce_context(SetView),
     {ok, <<Count:40, _/binary>>} = couch_btree:full_reduce(Bt),
     ok = couch_set_view_mapreduce:end_reduce_context(SetView),
@@ -397,12 +428,17 @@ get_row_count(SetView) ->
 
 apply_log(SetViews, ViewLogFiles, TmpDir) ->
     lists:zipwith(fun(SetView, Files) ->
-        Bt = SetView#set_view.btree,
+        View = SetView#set_view.indexer,
+        Bt = View#mapreduce_view.btree,
         MergeFile = couch_set_view_compactor:merge_files(Files, Bt, TmpDir),
         {ok, NewBt, _, _} = couch_set_view_updater_helper:update_btree(
                Bt, MergeFile, ?SORTED_CHUNK_SIZE),
         ok = file2:delete(MergeFile),
-        SetView#set_view{btree = NewBt}
+        SetView#set_view{
+            indexer = View#mapreduce_view{
+                btree = NewBt
+            }
+        }
     end, SetViews, ViewLogFiles).
 
 
@@ -435,5 +471,5 @@ fold_fun(Fun, [KV | Rest], {KVReds, Reds}, Acc) ->
 
 
 fold(View, WrapperFun, Acc, Options) ->
-    Bt = View#set_view.btree,
+    Bt = View#mapreduce_view.btree,
     couch_btree:fold(Bt, WrapperFun, Acc, Options).

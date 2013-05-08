@@ -392,7 +392,9 @@ verify_btrees(ActiveParts, ValueGenFun) ->
         }
     } = Group,
     #set_view{
-        btree = View1Btree
+        indexer = #mapreduce_view{
+            btree = View1Btree
+        }
     } = View1,
     ExpectedBitmask = couch_set_view_util:build_bitmask(
         lists:seq(0, num_set_partitions() - 1)),

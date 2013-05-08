@@ -185,10 +185,14 @@ verify_btrees(ValueGenFun, NumDocs, CleanupParts) ->
         }
     } = Group,
     #set_view{
-        btree = View1Btree
+        indexer = #mapreduce_view{
+            btree = View1Btree
+        }
     } = View1,
     #set_view{
-        btree = View2Btree
+        indexer = #mapreduce_view{
+            btree = View2Btree
+        }
     } = View2,
     ActiveParts = ordsets:subtract(lists:seq(0, num_set_partitions() - 1), CleanupParts),
     ExpectedBitmask = couch_set_view_util:build_bitmask(ActiveParts),

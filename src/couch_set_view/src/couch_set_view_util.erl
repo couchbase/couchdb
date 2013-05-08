@@ -234,7 +234,7 @@ compute_indexed_bitmap(#set_view_group{id_btree = IdBtree, views = Views, mod = 
 compute_indexed_bitmap(Mod, IdBtree, Views) ->
     {ok, <<_Count:40, IdBitmap:?MAX_NUM_PARTITIONS>>} = couch_btree:full_reduce(IdBtree),
     lists:foldl(fun(View, AccMap) ->
-        Bm = Mod:view_bitmap(View#set_view.btree),
+        Bm = Mod:view_bitmap(View#set_view.indexer),
         AccMap bor Bm
     end,
     IdBitmap, Views).
@@ -264,7 +264,7 @@ cleanup_group(Group) ->
         index_header = Header#set_view_index_header{
             cbitmask = ?set_cbitmask(Group) band IndexedBitmap,
             id_btree_state = couch_btree:get_state(NewIdBtree),
-            view_states = [Mod:get_state(V#set_view.btree) || V <- NewViews]
+            view_states = [Mod:get_state(V#set_view.indexer) || V <- NewViews]
         }
     },
     ok = couch_file:flush(Group#set_view_group.fd),

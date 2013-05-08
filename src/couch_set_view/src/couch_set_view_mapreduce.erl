@@ -39,7 +39,13 @@ end_map_context() ->
 start_reduce_context(#set_view_group{views = Views}) ->
     lists:foreach(fun start_reduce_context/1, Views);
 
-start_reduce_context(#set_view{ref = Ref, reduce_funs = RedFuns}) ->
+start_reduce_context(SetView) ->
+    #set_view{
+        ref = Ref,
+        indexer = #mapreduce_view{
+            reduce_funs = RedFuns
+        }
+    } = SetView,
     FunSrcs = lists:foldr(
         fun({_Name, <<"_", _/binary>>}, Acc) ->
             Acc;
@@ -76,9 +82,15 @@ map(Doc) ->
     end.
 
 
-reduce(#set_view{reduce_funs = []}, _KVs) ->
+reduce(#set_view{indexer = #mapreduce_view{reduce_funs = []}}, _KVs) ->
     {ok, []};
-reduce(#set_view{ref = Ref, reduce_funs = RedFuns}, KVs0) ->
+reduce(SetView, KVs0) ->
+    #set_view{
+        ref = Ref,
+        indexer = #mapreduce_view{
+            reduce_funs = RedFuns
+        }
+    } = SetView,
     RedFunSources = [FunSource || {_Name, FunSource} <- RedFuns],
     {NativeFuns, JsFuns} = lists:partition(
         fun(<<"_", _/binary>>) -> true; (_) -> false end,
@@ -99,9 +111,16 @@ reduce(#set_view{ref = Ref, reduce_funs = RedFuns}, KVs0) ->
     end.
 
 
-reduce(#set_view{reduce_funs = []}, _NthRed, _KVs) ->
+reduce(#set_view{indexer = #mapreduce_view{reduce_funs = []}},
+        _NthRed, _KVs) ->
     {ok, []};
-reduce(#set_view{ref = Ref, reduce_funs = RedFuns}, NthRed, KVs0) ->
+reduce(SetView, NthRed, KVs0) ->
+    #set_view{
+        ref = Ref,
+        indexer = #mapreduce_view{
+            reduce_funs = RedFuns
+        }
+    } = SetView,
     {Before, [{_Name, FunSrc} | _]} = lists:split(NthRed - 1, RedFuns),
     KVs = encode_kvs(KVs0, []),
     case FunSrc of
@@ -126,9 +145,16 @@ reduce(#set_view{ref = Ref, reduce_funs = RedFuns}, NthRed, KVs0) ->
     end.
 
 
-rereduce(#set_view{reduce_funs = []}, _ReducedValues) ->
+rereduce(#set_view{indexer = #mapreduce_view{reduce_funs = []}},
+        _ReducedValues) ->
     {ok, []};
-rereduce(#set_view{ref = Ref, reduce_funs = RedFuns}, ReducedValues) ->
+rereduce(SetView, ReducedValues) ->
+    #set_view{
+        ref = Ref,
+        indexer = #mapreduce_view{
+            reduce_funs = RedFuns
+        }
+    } = SetView,
     Grouped = group_reductions_results(ReducedValues),
     Ctx = erlang:get({reduce_context, Ref}),
     Results = lists:zipwith(
@@ -146,9 +172,16 @@ rereduce(#set_view{ref = Ref, reduce_funs = RedFuns}, ReducedValues) ->
     {ok, Results}.
 
 
-rereduce(#set_view{reduce_funs = []}, _NthRed, _ReducedValues) ->
+rereduce(#set_view{indexer = #mapreduce_view{reduce_funs = []}},
+        _NthRed, _ReducedValues) ->
     {ok, []};
-rereduce(#set_view{ref = Ref, reduce_funs = RedFuns}, NthRed, ReducedValues) ->
+rereduce(SetView, NthRed, ReducedValues) ->
+    #set_view{
+        ref = Ref,
+        indexer = #mapreduce_view{
+            reduce_funs = RedFuns
+        }
+    } = SetView,
     {Before, [{_Name, FunSrc} | _]} = lists:split(NthRed - 1, RedFuns),
     [Values] = group_reductions_results(ReducedValues),
     case FunSrc of

@@ -1647,10 +1647,9 @@ reset_group(Group) ->
         views = Views,
         mod = Mod
     } = Group,
-    Views2 = [View#set_view{btree = nil} || View <- Views],
     Views2 = lists:map(fun(View) ->
-        Reset = Mod:reset_view(View#set_view.btree),
-        View#set_view{btree = Reset}
+        Indexer = Mod:reset_view(View#set_view.indexer),
+        View#set_view{indexer = Indexer}
     end, Views),
     Group#set_view_group{
         fd = nil,

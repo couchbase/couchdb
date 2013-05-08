@@ -286,10 +286,14 @@ verify_btrees(ValueGenFun, NumDocs, ActiveParts, PassiveParts) ->
         }
     } = Group,
     #set_view{
-        btree = View1Btree
+        indexer = #mapreduce_view{
+            btree = View1Btree
+        }
     } = View1,
     #set_view{
-        btree = View2Btree
+        indexer = #mapreduce_view{
+            btree = View2Btree
+        }
     } = View2,
     AllParts = ordsets:union(ActiveParts, PassiveParts),
     ExpectedActiveBitmask = couch_set_view_util:build_bitmask(ActiveParts),
