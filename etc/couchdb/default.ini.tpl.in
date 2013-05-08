@@ -6,23 +6,12 @@
 database_dir = %localstatelibdir%
 view_index_dir = %localstatelibdir%
 util_driver_dir = %couchprivlibdir%
-os_process_timeout = 30000 ; 5 seconds. for view and external servers.
 delayed_commits = true ; set this to false to ensure an fsync before 201 Created is returned
 uri_file = %localstaterundir%/couch.uri
-; Method used to compress everything that is appended to database and view index files, except
-; for attachments (see the attachments section). Available methods are:
-;
-; none         - no compression
-; snappy       - use google snappy, a very fast compressor/decompressor
-; deflate_[N]  - use zlib's deflate, N is the compression level which ranges from 1 (fastest,
-;                lowest compression ratio) to 9 (slowest, highest compression ratio)
-file_compression = snappy
 ; Maximum number of distinct view update/building processes at any point in time.
 max_parallel_indexers = 4
 max_parallel_replica_indexers = 2
 max_parallel_spatial_indexers = 4
-; BTree Implmentation to use (native or erlang)
-btree_implementation = native
 consistency_check_precompacted = false
 consistency_check_compacted = false
 ; Maximum period for which we attempt to retry file operations on Windows.
@@ -60,18 +49,6 @@ authentication_redirect = /_utils/session.html
 require_valid_user = false
 timeout = 600 ; number of seconds before automatic logout
 auth_cache_size = 50 ; size is number of cache entries
-
-[query_servers]
-javascript = %bindir%/%couchjs_command_name% %localbuilddatadir%/server/main.js
-coffeescript = %bindir%/%couchjs_command_name% %localbuilddatadir%/server/main-coffee.js
-
-
-; Changing reduce_limit to false will disable reduce_limit.
-; If you think you're hitting reduce_limit with a "good" reduce function,
-; please let us know on the mailing list so we can fine tune the heuristic.
-[query_server_config]
-reduce_limit = true
-os_process_limit = 50
 
 [daemons]
 view_manager={couch_view, start_link, []}
