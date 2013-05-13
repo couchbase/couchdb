@@ -48,6 +48,10 @@ test() ->
     ValueGenFun1 = fun(I) -> I end,
     update_documents(0, num_docs(), ValueGenFun1),
 
+    % Disable automatic updates when there are clients monitoring partition updates
+    GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
+    ok = gen_server:call(GroupPid, {set_timeout, infinity}, infinity),
+
     Ref1 = couch_set_view:monitor_partition_update(test_set_name(), ddoc_id(), 10),
     Msg1 = receive
     {Ref1, _} ->

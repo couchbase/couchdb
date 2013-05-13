@@ -41,7 +41,8 @@
                          'marked_for_cleanup' |
                          {'updater_error', any()}.
 
--define(TIMEOUT, 3000).
+-define(DEFAULT_TIMEOUT, 3000).
+-define(GET_TIMEOUT(State), ((State)#state.timeout)).
 
 -define(root_dir(State), element(1, State#state.init_args)).
 -define(set_name(State), element(2, State#state.init_args)).
@@ -105,7 +106,8 @@
     compact_log_files = nil            :: 'nil' | {[[string()]], partition_seqs()},
     % Monitor references for active, passive and replica partitions.
     % Applies to main group only, replica group must always have an empty dict.
-    db_refs = dict:new()               :: dict()
+    db_refs = dict:new()               :: dict(),
+    timeout = ?DEFAULT_TIMEOUT         :: non_neg_integer() | 'infinity'
 }).
 
 -define(inc_stat(Group, S),
@@ -414,15 +416,19 @@ do_init({_, SetName, _} = InitArgs) ->
     end.
 
 handle_call(get_sig, _From, #state{group = Group} = State) ->
-    {reply, {ok, Group#set_view_group.sig}, State, ?TIMEOUT};
+    {reply, {ok, Group#set_view_group.sig}, State, ?GET_TIMEOUT(State)};
 
 handle_call({set_auto_cleanup, Enabled}, _From, State) ->
     % To be used only by unit tests.
-    {reply, ok, State#state{auto_cleanup = Enabled}, ?TIMEOUT};
+    {reply, ok, State#state{auto_cleanup = Enabled}, ?GET_TIMEOUT(State)};
+
+handle_call({set_timeout, T}, _From, State) ->
+    % To be used only by unit tests.
+    {reply, ok, State#state{timeout = T}, T};
 
 handle_call({set_auto_transfer_replicas, Enabled}, _From, State) ->
     % To be used only by unit tests.
-    {reply, ok, State#state{auto_transfer_replicas = Enabled}, ?TIMEOUT};
+    {reply, ok, State#state{auto_transfer_replicas = Enabled}, ?GET_TIMEOUT(State)};
 
 handle_call({define_view, NumPartitions, _, _, _, _, _}, _From, State)
         when (not ?is_defined(State)), NumPartitions > ?MAX_NUM_PARTITIONS ->
@@ -476,16 +482,16 @@ handle_call({define_view, NumPartitions, ActiveList, ActiveBitmask,
             false -> "no "
             end,
             ActiveList, PassiveList]),
-        {reply, ok, State4, ?TIMEOUT};
+        {reply, ok, State4, ?GET_TIMEOUT(State4)};
     Error ->
-        {reply, Error, State, ?TIMEOUT}
+        {reply, Error, State, ?GET_TIMEOUT(State)}
     end;
 
 handle_call({define_view, _, _, _, _, _, _}, _From, State) ->
-    {reply, view_already_defined, State, ?TIMEOUT};
+    {reply, view_already_defined, State, ?GET_TIMEOUT(State)};
 
 handle_call(is_view_defined, _From, State) ->
-    {reply, ?is_defined(State), State, ?TIMEOUT};
+    {reply, ?is_defined(State), State, ?GET_TIMEOUT(State)};
 
 handle_call(_Msg, _From, State) when not ?is_defined(State) ->
     {reply, {error, view_undefined}, State};
@@ -494,7 +500,7 @@ handle_call({set_state, ActiveList, PassiveList, CleanupList}, _From, State) ->
     try
         NewState = maybe_update_partition_states(
             ActiveList, PassiveList, CleanupList, State),
-        {reply, ok, NewState, ?TIMEOUT}
+        {reply, ok, NewState, ?GET_TIMEOUT(NewState)}
     catch
     throw:Error ->
         {reply, Error, State}
@@ -535,7 +541,7 @@ handle_call({add_replicas, BitMask}, _From, #state{replica_group = ReplicaPid} =
         replica_partitions = NewReplicaParts
     },
     State3 = monitor_partitions(State2, Parts),
-    {reply, ok, State3, ?TIMEOUT};
+    {reply, ok, State3, ?GET_TIMEOUT(State3)};
 
 handle_call({remove_replicas, Partitions}, _From, #state{replica_group = ReplicaPid} = State) when is_pid(ReplicaPid) ->
     #state{
@@ -590,24 +596,24 @@ handle_call({remove_replicas, Partitions}, _From, #state{replica_group = Replica
     end,
     ?LOG_INFO("Set view `~s`, ~s group `~s`, marked the following replica partitions for removal: ~w",
               [?set_name(State), ?type(State), ?group_id(State), Partitions]),
-    {reply, ok, NewState, ?TIMEOUT};
+    {reply, ok, NewState, ?GET_TIMEOUT(NewState)};
 
 handle_call({mark_as_unindexable, Partitions}, _From, State) ->
     try
         State2 = process_mark_as_unindexable(State, Partitions),
-        {reply, ok, State2}
+        {reply, ok, State2, ?GET_TIMEOUT(State2)}
     catch
     throw:Error ->
-        {reply, Error, State}
+        {reply, Error, State, ?GET_TIMEOUT(State)}
     end;
 
 handle_call({mark_as_indexable, Partitions}, _From, State) ->
     try
         State2 = process_mark_as_indexable(State, Partitions, true),
-        {reply, ok, State2}
+        {reply, ok, State2, ?GET_TIMEOUT(State2)}
     catch
     throw:Error ->
-        {reply, Error, State}
+        {reply, Error, State, ?GET_TIMEOUT(State)}
     end;
 
 handle_call(#set_view_group_req{} = Req, From, State) ->
@@ -622,51 +628,51 @@ handle_call(#set_view_group_req{} = Req, From, State) ->
         State#state{pending_transition_waiters = [{From, Req} | Waiters]}
     end,
     inc_view_group_access_stats(Req, State2#state.group),
-    {noreply, State2, ?TIMEOUT};
+    {noreply, State2, ?GET_TIMEOUT(State2)};
 
 handle_call(request_group, _From, #state{group = Group} = State) ->
     % Meant to be called only by this module and the compactor module.
     % Callers aren't supposed to read from the group's fd, we don't
     % increment here the ref counter on behalf of the caller.
-    {reply, {ok, Group}, State, ?TIMEOUT};
+    {reply, {ok, Group}, State, ?GET_TIMEOUT(State)};
 
 handle_call(replica_pid, _From, #state{replica_group = Pid} = State) ->
     % To be used only by unit tests.
-    {reply, {ok, Pid}, State, ?TIMEOUT};
+    {reply, {ok, Pid}, State, ?GET_TIMEOUT(State)};
 
 handle_call({start_updater, Options}, _From, State) ->
     % To be used only by unit tests.
     State2 = start_updater(State, Options),
-    {reply, {ok, State2#state.updater_pid}, State2, ?TIMEOUT};
+    {reply, {ok, State2#state.updater_pid}, State2, ?GET_TIMEOUT(State2)};
 
 handle_call(start_cleaner, _From, State) ->
     % To be used only by unit tests.
     State2 = maybe_start_cleaner(State#state{auto_cleanup = true}),
     State3 = State2#state{auto_cleanup = State#state.auto_cleanup},
-    {reply, {ok, State2#state.cleaner_pid}, State3, ?TIMEOUT};
+    {reply, {ok, State2#state.cleaner_pid}, State3, ?GET_TIMEOUT(State3)};
 
 handle_call(updater_pid, _From, #state{updater_pid = Pid} = State) ->
     % To be used only by unit tests.
-    {reply, {ok, Pid}, State, ?TIMEOUT};
+    {reply, {ok, Pid}, State, ?GET_TIMEOUT(State)};
 
 handle_call(cleaner_pid, _From, #state{cleaner_pid = Pid} = State) ->
     % To be used only by unit tests.
-    {reply, {ok, Pid}, State, ?TIMEOUT};
+    {reply, {ok, Pid}, State, ?GET_TIMEOUT(State)};
 
 handle_call(request_group_info, _From, State) ->
     GroupInfo = get_group_info(State),
-    {reply, {ok, GroupInfo}, State, ?TIMEOUT};
+    {reply, {ok, GroupInfo}, State, ?GET_TIMEOUT(State)};
 
 handle_call(get_data_size, _From, State) ->
     DataSizeInfo = get_data_size_info(State),
-    {reply, {ok, DataSizeInfo}, State, ?TIMEOUT};
+    {reply, {ok, DataSizeInfo}, State, ?GET_TIMEOUT(State)};
 
 handle_call({start_compact, _CompactFun}, _From,
             #state{updater_pid = UpPid, initial_build = true} = State) when is_pid(UpPid) ->
-    {reply, {error, initial_build}, State};
+    {reply, {error, initial_build}, State, ?GET_TIMEOUT(State)};
 handle_call({start_compact, CompactFun}, _From, #state{compactor_pid = nil} = State) ->
     #state{compactor_pid = Pid} = State2 = start_compactor(State, CompactFun),
-    {reply, {ok, Pid}, State2};
+    {reply, {ok, Pid}, State2, ?GET_TIMEOUT(State2)};
 handle_call({start_compact, _}, _From, State) ->
     %% compact already running, this is a no-op
     {reply, {ok, State#state.compactor_pid}, State};
@@ -772,42 +778,42 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
             group = NewGroup2
         },
         inc_compactions(Result),
-        {reply, ok, maybe_apply_pending_transition(State2), ?TIMEOUT};
+        {reply, ok, maybe_apply_pending_transition(State2), ?GET_TIMEOUT(State2)};
     false ->
-        {reply, {update, MissingChangesCount}, State}
+        {reply, {update, MissingChangesCount}, State, ?GET_TIMEOUT(State)}
     end;
 handle_call({compact_done, _Result}, _From, State) ->
     % From a previous compactor that was killed/stopped, ignore.
-    {noreply, State, ?TIMEOUT};
+    {noreply, State, ?GET_TIMEOUT(State)};
 
 handle_call(cancel_compact, _From, #state{compactor_pid = nil} = State) ->
-    {reply, ok, State, ?TIMEOUT};
+    {reply, ok, State, ?GET_TIMEOUT(State)};
 handle_call(cancel_compact, _From, #state{compactor_pid = Pid} = State) ->
     ?LOG_INFO("Set view `~s`, ~s group `~s`, canceling compaction (pid ~p)",
               [?set_name(State), ?type(State), ?group_id(State), Pid]),
     State2 = stop_compactor(State),
     State3 = maybe_start_cleaner(State2),
-    {reply, ok, State3, ?TIMEOUT};
+    {reply, ok, State3, ?GET_TIMEOUT(State3)};
 
 handle_call({monitor_partition_update, PartId, _Ref, _Pid}, _From, State)
         when PartId >= ?set_num_partitions(State#state.group) ->
     Msg = io_lib:format("Invalid partition: ~p", [PartId]),
-    {reply, {error, iolist_to_binary(Msg)}, State, ?TIMEOUT};
+    {reply, {error, iolist_to_binary(Msg)}, State, ?GET_TIMEOUT(State)};
 
 handle_call({monitor_partition_update, PartId, Ref, Pid}, _From, State) ->
     try
         State2 = process_monitor_partition_update(State, PartId, Ref, Pid),
-        {reply, ok, State2, ?TIMEOUT}
+        {reply, ok, State2, ?GET_TIMEOUT(State2)}
     catch
     throw:Error ->
-        {reply, Error, State, ?TIMEOUT}
+        {reply, Error, State, ?GET_TIMEOUT(State)}
     end;
 
 handle_call({demonitor_partition_update, Ref}, _From, State) ->
     #state{update_listeners = Listeners} = State,
     case dict:find(Ref, Listeners) of
     error ->
-        {reply, ok, State, ?TIMEOUT};
+        {reply, ok, State, ?GET_TIMEOUT(State)};
     {ok, #up_listener{monref = MonRef, partition = PartId}} ->
         ?LOG_INFO("Set view `~s`, ~s group `~s`, removing partition ~p"
                    "update monitor, reference ~p",
@@ -815,12 +821,12 @@ handle_call({demonitor_partition_update, Ref}, _From, State) ->
                     PartId, Ref]),
         erlang:demonitor(MonRef, [flush]),
         State2 = State#state{update_listeners = dict:erase(Ref, Listeners)},
-        {reply, ok, State2, ?TIMEOUT}
+        {reply, ok, State2, ?GET_TIMEOUT(State2)}
     end;
 
 handle_call(compact_log_files, _From, State) ->
     NewState = State#state{compact_log_files = nil},
-    {reply, {ok, State#state.compact_log_files}, NewState, ?TIMEOUT};
+    {reply, {ok, State#state.compact_log_files}, NewState, ?GET_TIMEOUT(NewState)};
 
 handle_call(reset_utilization_stats, _From, #state{replica_group = RepPid} = State) ->
     reset_util_stats(),
@@ -830,7 +836,7 @@ handle_call(reset_utilization_stats, _From, #state{replica_group = RepPid} = Sta
     false ->
         ok
     end,
-    {reply, ok, State, ?TIMEOUT};
+    {reply, ok, State, ?GET_TIMEOUT(State)};
 
 handle_call(get_utilization_stats, _From, #state{replica_group = RepPid} = State) ->
     Stats = erlang:get(util_stats),
@@ -852,7 +858,7 @@ handle_call(get_utilization_stats, _From, #state{replica_group = RepPid} = State
     false ->
         StatsList = StatsList1
     end,
-    {reply, {ok, StatsList}, State, ?TIMEOUT}.
+    {reply, {ok, StatsList}, State, ?GET_TIMEOUT(State)}.
 
 
 handle_cast(_Msg, State) when not ?is_defined(State) ->
@@ -860,14 +866,14 @@ handle_cast(_Msg, State) when not ?is_defined(State) ->
 
 handle_cast({compact_log_files, Files, Seqs}, #state{compact_log_files = nil} = State) ->
     L = lists:map(fun(F) -> [F] end, Files),
-    {noreply, State#state{compact_log_files = {L, Seqs}}, ?TIMEOUT};
+    {noreply, State#state{compact_log_files = {L, Seqs}}, ?GET_TIMEOUT(State)};
 
 handle_cast({compact_log_files, Files, NewSeqs}, State) ->
     {OldL, _OldSeqs} = State#state.compact_log_files,
     L = lists:zipwith(
         fun(F, Current) -> [F | Current] end,
         Files, OldL),
-    {noreply, State#state{compact_log_files = {L, NewSeqs}}, ?TIMEOUT};
+    {noreply, State#state{compact_log_files = {L, NewSeqs}}, ?GET_TIMEOUT(State)};
 
 handle_cast({ddoc_updated, NewSig, Aliases}, State) ->
     #state{
@@ -884,7 +890,8 @@ handle_cast({ddoc_updated, NewSig, Aliases}, State) ->
                State#state.shutdown, length(Waiters)]),
     case NewSig of
     CurSig ->
-        {noreply, State#state{shutdown = false, shutdown_aliases = undefined}, ?TIMEOUT};
+        State2 = State#state{shutdown = false, shutdown_aliases = undefined},
+        {noreply, State2, ?GET_TIMEOUT(State2)};
     _ ->
         State2 = State#state{shutdown = true, shutdown_aliases = Aliases},
         case Waiters of
@@ -938,7 +945,7 @@ handle_cast({before_partition_delete, PartId}, #state{group = Group} = State) ->
             State2 = State
         end,
         State3 = update_partition_states([], [], [PartId], State2, true),
-        {noreply, State3, ?TIMEOUT};
+        {noreply, State3, ?GET_TIMEOUT(State3)};
     false ->
         case lists:member(PartId, ReplicaParts) of
         true ->
@@ -952,9 +959,9 @@ handle_cast({before_partition_delete, PartId}, #state{group = Group} = State) ->
                replica_partitions = ordsets:del_element(PartId, ReplicaParts)
             },
             State3 = demonitor_partitions(State2, [PartId]),
-            {noreply, State3, ?TIMEOUT};
+            {noreply, State3, ?GET_TIMEOUT(State3)};
         false ->
-            {noreply, State, ?TIMEOUT}
+            {noreply, State, ?GET_TIMEOUT(State)}
         end
     end;
 
@@ -1009,7 +1016,7 @@ handle_info({partial_update, Pid, NewGroup}, #state{updater_pid = Pid} = State) 
     {noreply, NewState};
 handle_info({partial_update, _, _}, State) ->
     %% message from an old (probably pre-compaction) updater; ignore
-    {noreply, State, ?TIMEOUT};
+    {noreply, State, ?GET_TIMEOUT(State)};
 
 handle_info({updater_info, Pid, {state, UpdaterState}}, #state{updater_pid = Pid} = State) ->
     #state{
@@ -1036,7 +1043,7 @@ handle_info({updater_info, Pid, {state, UpdaterState}}, #state{updater_pid = Pid
 
 handle_info({updater_info, _Pid, {state, _UpdaterState}}, State) ->
     % Message from an old updater, ignore.
-    {noreply, State, ?TIMEOUT};
+    {noreply, State, ?GET_TIMEOUT(State)};
 
 handle_info({'EXIT', Pid, {clean_group, NewGroup0, Count, Time}}, #state{cleaner_pid = Pid} = State) ->
     #state{group = OldGroup} = State,
@@ -1080,7 +1087,7 @@ handle_info({'EXIT', Pid, Reason}, #state{cleaner_pid = Pid} = State) ->
     ?LOG_ERROR("Set view `~s`, ~s group `~s`, cleanup process ~p died with "
                "unexpected reason: ~p",
                [?set_name(State), ?type(State), ?group_id(State), Pid, Reason]),
-    {noreply, State#state{cleaner_pid = nil}, ?TIMEOUT};
+    {noreply, State#state{cleaner_pid = nil}, ?GET_TIMEOUT(State)};
 
 handle_info({'EXIT', Pid, Reason},
     #state{group = #set_view_group{db_set = Pid}} = State) ->
@@ -1143,7 +1150,7 @@ handle_info({'EXIT', Pid, {updater_finished, Result}}, #state{updater_pid = Pid}
             State4
         end,
         State6 = maybe_start_cleaner(State5),
-        {noreply, State6, ?TIMEOUT}
+        {noreply, State6, ?GET_TIMEOUT(State6)}
     end;
 
 handle_info({'EXIT', Pid, {updater_error, Error}}, #state{updater_pid = Pid} = State) ->
@@ -1168,12 +1175,12 @@ handle_info({'EXIT', Pid, {updater_error, Error}}, #state{updater_pid = Pid} = S
         _ ->
             State3 = reply_all(State2, {error, Error})
         end,
-        {noreply, maybe_start_cleaner(State3), ?TIMEOUT}
+        {noreply, maybe_start_cleaner(State3), ?GET_TIMEOUT(State3)}
     end;
 
 handle_info({'EXIT', _Pid, {updater_error, _Error}}, State) ->
     % from old, shutdown updater, ignore
-    {noreply, State, ?TIMEOUT};
+    {noreply, State, ?GET_TIMEOUT(State)};
 
 handle_info({'EXIT', UpPid, reset}, #state{updater_pid = UpPid} = State) ->
     % TODO: once purge support is properly added, this needs to take into
@@ -1183,13 +1190,13 @@ handle_info({'EXIT', UpPid, reset}, #state{updater_pid = UpPid} = State) ->
     {ok, ResetGroup} ->
         {ok, start_updater(State2#state{group = ResetGroup})};
     Error ->
-        {stop, normal, reply_all(State2, Error), ?TIMEOUT}
+        {stop, normal, reply_all(State2, Error)}
     end;
 
 handle_info({'EXIT', Pid, normal}, State) ->
     ?LOG_INFO("Set view `~s`, ~s group `~s`, linked PID ~p stopped normally",
               [?set_name(State), ?type(State), ?group_id(State), Pid]),
-    {noreply, State, ?TIMEOUT};
+    {noreply, State, ?GET_TIMEOUT(State)};
 
 handle_info({'EXIT', Pid, Reason}, #state{compactor_pid = Pid} = State) ->
     ?LOG_ERROR("Set view `~s`, ~s group `~s`, compactor process ~p died with "
@@ -1202,7 +1209,7 @@ handle_info({'EXIT', Pid, Reason}, #state{compactor_pid = Pid} = State) ->
         compactor_file = nil,
         compact_log_files = nil
     },
-    {noreply, State2, ?TIMEOUT};
+    {noreply, State2, ?GET_TIMEOUT(State2)};
 
 handle_info({'EXIT', Pid, Reason}, #state{group = #set_view_group{db_set = Pid}} = State) ->
     {stop, {db_set_died, Reason}, State};
@@ -1234,7 +1241,8 @@ handle_info({'DOWN', Ref, process, Pid, Reason}, State) ->
                 true
             end,
             State#state.update_listeners),
-        {noreply, State#state{update_listeners = UpdateListeners2}}
+        State2 = State#state{update_listeners = UpdateListeners2},
+        {noreply, State2, ?GET_TIMEOUT(State2)}
     catch throw:{found, PartId} ->
         ?LOG_ERROR("Set view `~s`, ~s group `~s`, terminating because "
                    "partition ~p died with reason: ~p",
