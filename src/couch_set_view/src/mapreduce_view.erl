@@ -19,7 +19,7 @@
 -export([update_index/5]).
 % For the group
 -export([design_doc_to_set_view_group/2, view_group_data_size/2,
-         reset_view/1, make_views_fun/3]).
+         reset_view/1, setup_views/5]).
 % For the utils
 -export([clean_views/5]).
 % For the compactor
@@ -291,15 +291,13 @@ reset_view(View) ->
     View#mapreduce_view{btree = nil}.
 
 
-% Needs to return that a function that takes 2 arguments, a btree state and
-% the corresponding view
-make_views_fun(Fd, BtreeOptions, Group) ->
+setup_views(Fd, BtreeOptions, Group, ViewStates, Views) ->
     #set_view_group{
         set_name = SetName,
         name = DDocId,
         type = Type
     } = Group,
-    fun(BTState, SetView) ->
+    lists:zipwith(fun(BTState, SetView) ->
         View = SetView#set_view.indexer,
         case View#mapreduce_view.reduce_funs of
         [{ViewName, _} | _] ->
@@ -373,7 +371,8 @@ make_views_fun(Fd, BtreeOptions, Group) ->
         SetView#set_view{
             indexer = View#mapreduce_view{btree = Btree}
         }
-    end.
+    end,
+    ViewStates, Views).
 
 
 % XXX vmx 2013-01-04: Check if we really need the full function, or just the

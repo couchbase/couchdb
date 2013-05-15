@@ -1703,8 +1703,7 @@ init_group(Fd, Group, IndexHeader) ->
     ],
     {ok, IdBtree} = couch_btree:open(
         IdBtreeState, Fd, [{reduce, IdTreeReduce} | BtreeOptions]),
-    Views2 = lists:zipwith(
-        Mod:make_views_fun(Fd, BtreeOptions, Group), ViewStates, Views),
+    Views2 = Mod:setup_views(Fd, BtreeOptions, Group, ViewStates, Views),
     Group#set_view_group{
         fd = Fd,
         id_btree = IdBtree,
