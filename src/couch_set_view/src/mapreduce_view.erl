@@ -29,42 +29,13 @@
 
 
 -include("couch_db.hrl").
--include_lib("couch_set_view/include/couch_set_view.hrl").
+-include("couch_set_view_updater.hrl").
 
-
-%% XXX vmx 2012-01-02: from couch_set_view_updater! Don't duplicate it, but
-%%    move it to a common header file
--define(MAX_SORT_BUFFER_SIZE, 1048576).
+% Same as in couch_btree.erl
 -define(KEY_BITS,       12).
 -define(MAX_KEY_SIZE,   ((1 bsl ?KEY_BITS) - 1)).
--record(writer_acc, {
-    parent,
-    owner,
-    group,
-    last_seqs = orddict:new(),
-    compactor_running,
-    write_queue,
-    initial_build,
-    view_empty_kvs,
-    kvs = [],
-    kvs_size = 0,
-    kvs_length = 0,
-    state = updating_active,
-    final_batch = false,
-    max_seqs,
-    stats = #set_view_updater_stats{},
-    tmp_dir = nil,
-    initial_seqs,
-    max_insert_batch_size,
-    tmp_files = dict:new()
-}).
--record(tmp_file_info, {
-    name = nil,
-    fd = nil,
-    size = 0
-}).
-% XXX vmx 2013-05-03: from couch_set_view_compactor! Don't duplicate it, but
-%    move it to a common header file
+
+% Same as the compactor uses for the ID-btree
 -define(SORTED_CHUNK_SIZE, 1024 * 1024).
 
 

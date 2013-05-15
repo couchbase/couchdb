@@ -19,7 +19,7 @@
 -export([convert_back_index_kvs_to_binary/2]).
 
 -include("couch_db.hrl").
--include_lib("couch_set_view/include/couch_set_view.hrl").
+-include("couch_set_view_updater.hrl").
 
 -define(MAP_QUEUE_SIZE, 256 * 1024).
 -define(WRITE_QUEUE_SIZE, 512 * 1024).
@@ -31,38 +31,6 @@
 % For file sorter and file merger commands.
 -define(PORT_OPTS,
         [exit_status, use_stdio, stderr_to_stdout, {line, 4096}, binary]).
-
-% Same as in couch_btree.erl
--define(KEY_BITS,       12).
--define(MAX_KEY_SIZE,   ((1 bsl ?KEY_BITS) - 1)).
-
--record(writer_acc, {
-    parent,
-    owner,
-    group,
-    last_seqs = orddict:new(),
-    compactor_running,
-    write_queue,
-    initial_build,
-    view_empty_kvs,
-    kvs = [],
-    kvs_size = 0,
-    kvs_length = 0,
-    state = updating_active,
-    final_batch = false,
-    max_seqs,
-    stats = #set_view_updater_stats{},
-    tmp_dir = nil,
-    initial_seqs,
-    max_insert_batch_size,
-    tmp_files = dict:new()
-}).
-
--record(tmp_file_info, {
-    name = nil,
-    fd = nil,
-    size = 0
-}).
 
 
 -spec update(pid(), #set_view_group{},
