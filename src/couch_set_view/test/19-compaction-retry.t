@@ -47,7 +47,7 @@ test() ->
 
     create_set(),
     GroupPid = couch_set_view:get_group_pid(
-        mapreduce_view, test_set_name(), ddoc_id()),
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
 
     ValueGenFun1 = fun(I) -> I end,
     update_documents(0, num_docs_0(), ValueGenFun1),
@@ -207,7 +207,7 @@ compact_2_retries_update_docs(DocCount, ValueGenFun1, ValueGenFun2) ->
 test_start_compactor_after_updater(ValueGenFun, DocCount) ->
     update_documents(0, DocCount, ValueGenFun),
     GroupPid = couch_set_view:get_group_pid(
-        mapreduce_view, test_set_name(), ddoc_id()),
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
     {ok, UpPid} = gen_server:call(GroupPid, {start_updater, []}, infinity),
     case is_pid(UpPid) of
     true ->
@@ -249,7 +249,7 @@ test_start_compactor_after_updater(ValueGenFun, DocCount) ->
 
 get_group_snapshot() ->
     GroupPid = couch_set_view:get_group_pid(
-        mapreduce_view, test_set_name(), ddoc_id()),
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
     {ok, Group, 0} = gen_server:call(
         GroupPid, #set_view_group_req{stale = false, debug = true}, infinity),
     Group.

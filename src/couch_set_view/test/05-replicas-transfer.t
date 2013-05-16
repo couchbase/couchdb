@@ -388,7 +388,7 @@ wait_for_replica_full_update() ->
     {Stats} = couch_util:get_value(stats, get_replica_group_info()),
     Updates = couch_util:get_value(full_updates, Stats),
     MainGroupPid = couch_set_view:get_group_pid(
-        mapreduce_view, test_set_name(), ddoc_id()),
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
     {ok, ReplicaGroupPid} = gen_server:call(MainGroupPid, replica_pid, infinity),
     {ok, UpPid} = gen_server:call(ReplicaGroupPid, {start_updater, []}, infinity),
     case is_pid(UpPid) of

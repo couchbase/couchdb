@@ -27,6 +27,7 @@
 -export([full_reduce_view_btree/2]).
 -export([fold_id_btree/5]).
 -export([fold_view_btree/5]).
+-export([get_daemon_pid/1]).
 
 -include("couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
@@ -353,3 +354,9 @@ fold_view_btree(_Group, Btree, Fun, Acc, Args) ->
         Fun({{Key, Id}, {PartId, Val}}, AccRed, Acc0)
     end,
     couch_btree:fold(Btree, FunWrap, Acc, Args).
+
+
+get_daemon_pid(Name) ->
+    SupervisorChildren = supervisor:which_children(couch_secondary_services),
+    {Name, Pid, _, _} = lists:keyfind(Name, 1, SupervisorChildren),
+    Pid.

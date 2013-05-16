@@ -112,7 +112,7 @@
 
 -define(inc_stat(Group, S),
     ets:update_counter(
-        ?SET_VIEW_STATS_ETS,
+        Group#set_view_group.stats_ets,
         ?set_view_group_stats_key(Group),
         {S, 1})).
 -define(inc_cleanup_stops(Group), ?inc_stat(Group, #set_view_group_stats.cleanup_stops)).
@@ -405,7 +405,7 @@ do_init({_, SetName, _} = InitArgs) ->
         State2 = monitor_partitions(State, [master | PartitionsList]),
         State3 = monitor_partitions(State2, ReplicaParts),
         true = ets:insert(
-             ?SET_VIEW_STATS_ETS,
+             Group#set_view_group.stats_ets,
              #set_view_group_stats{ets_key = ?set_view_group_stats_key(Group)}),
         TmpDir = updater_tmp_dir(State),
         ok = couch_set_view_util:delete_sort_files(TmpDir, all),
@@ -1264,7 +1264,9 @@ terminate(Reason, #state{group = #set_view_group{sig = Sig} = Group} = State) ->
     couch_util:shutdown_sync(State3#state.compactor_pid),
     couch_util:shutdown_sync(State3#state.compactor_file),
     couch_util:shutdown_sync(State3#state.replica_group),
-    true = ets:delete(?SET_VIEW_STATS_ETS, ?set_view_group_stats_key(State#state.group)),
+    Group = State#state.group,
+    true = ets:delete(Group#set_view_group.stats_ets,
+        ?set_view_group_stats_key(Group)),
     catch couch_file:only_snapshot_reads((State3#state.group)#set_view_group.fd),
     case State#state.shutdown of
     true when ?type(State) == main ->
@@ -1319,7 +1321,8 @@ reply_with_group(Group, ReplicaPartitions, WaitList) ->
                 [Waiter | Acc]
             end;
         (#waiter{debug = true} = Waiter, Acc) ->
-            [Stats] = ets:lookup(?SET_VIEW_STATS_ETS, ?set_view_group_stats_key(Group)),
+            [Stats] = ets:lookup(Group#set_view_group.stats_ets,
+                ?set_view_group_stats_key(Group)),
             DebugGroup = Group#set_view_group{
                 debug_info = #set_view_debug_info{
                     stats = Stats,
@@ -1540,7 +1543,8 @@ get_group_info(State) ->
         mod = Mod
     } = Group,
     PendingTrans = get_pending_transition(State),
-    [Stats] = ets:lookup(?SET_VIEW_STATS_ETS, ?set_view_group_stats_key(Group)),
+    [Stats] = ets:lookup(Group#set_view_group.stats_ets,
+        ?set_view_group_stats_key(Group)),
     JsonStats = {[
         {full_updates, Stats#set_view_group_stats.full_updates},
         {partial_updates, Stats#set_view_group_stats.partial_updates},
@@ -1623,7 +1627,8 @@ get_data_size_info(State) ->
     } = Group,
     {ok, FileSize} = couch_file:bytes(Fd),
     DataSize = Mod:view_group_data_size(Btree, Views),
-    [Stats] = ets:lookup(?SET_VIEW_STATS_ETS, ?set_view_group_stats_key(Group)),
+    [Stats] = ets:lookup(Group#set_view_group.stats_ets,
+        ?set_view_group_stats_key(Group)),
     Info = [
         {signature, hex_sig(GroupSig)},
         {disk_size, FileSize},
@@ -2845,7 +2850,8 @@ error_notify_update_listeners(State, Listeners, Error) ->
                   boolean(),
                   boolean()) -> no_return().
 inc_updates(Group, UpdaterResult, PartialUpdate, ForcedStop) ->
-    [Stats] = ets:lookup(?SET_VIEW_STATS_ETS, ?set_view_group_stats_key(Group)),
+    [Stats] = ets:lookup(Group#set_view_group.stats_ets,
+        ?set_view_group_stats_key(Group)),
     #set_view_group_stats{update_history = Hist} = Stats,
     #set_view_updater_stats{
         indexing_time = IndexingTime,
@@ -2897,9 +2903,10 @@ inc_updates(Group, UpdaterResult, PartialUpdate, ForcedStop) ->
     },
     case CleanupKvCount > 0 of
     true ->
-        inc_cleanups(Stats2, CleanupTime, CleanupKvCount, true);
+        inc_cleanups(Stats2, CleanupTime, CleanupKvCount, true,
+            Group#set_view_group.stats_ets);
     false ->
-        true = ets:insert(?SET_VIEW_STATS_ETS, Stats2)
+        true = ets:insert(Group#set_view_group.stats_ets, Stats2)
     end.
 
 
@@ -2908,10 +2915,13 @@ inc_updates(Group, UpdaterResult, PartialUpdate, ForcedStop) ->
                    non_neg_integer(),
                    boolean()) -> no_return().
 inc_cleanups(Group, Duration, Count, ByUpdater) when is_record(Group, set_view_group) ->
-    [Stats] = ets:lookup(?SET_VIEW_STATS_ETS, ?set_view_group_stats_key(Group)),
-    inc_cleanups(Stats, Duration, Count, ByUpdater);
+    [Stats] = ets:lookup(Group#set_view_group.stats_ets,
+        ?set_view_group_stats_key(Group)),
+    inc_cleanups(Stats, Duration, Count, ByUpdater,
+        Group#set_view_group.stats_ets).
 
-inc_cleanups(#set_view_group_stats{cleanup_history = Hist} = Stats, Duration, Count, ByUpdater) ->
+inc_cleanups(#set_view_group_stats{cleanup_history = Hist} = Stats, Duration,
+        Count, ByUpdater, StatsEts) ->
     Entry = {[
         {<<"duration">>, Duration},
         {<<"kv_count">>, Count}
@@ -2926,7 +2936,7 @@ inc_cleanups(#set_view_group_stats{cleanup_history = Hist} = Stats, Duration, Co
                 Stats#set_view_group_stats.updater_cleanups
             end
     },
-    true = ets:insert(?SET_VIEW_STATS_ETS, Stats2).
+    true = ets:insert(StatsEts, Stats2).
 
 
 -spec inc_compactions(#set_view_compactor_result{}) -> no_return().
@@ -2937,7 +2947,8 @@ inc_compactions(Result) ->
         cleanup_kv_count = CleanupKVCount
     } = Result,
     inc_util_stat(#util_stats.compactions, 1),
-    [Stats] = ets:lookup(?SET_VIEW_STATS_ETS, ?set_view_group_stats_key(Group)),
+    [Stats] = ets:lookup(Group#set_view_group.stats_ets,
+        ?set_view_group_stats_key(Group)),
     #set_view_group_stats{compaction_history = Hist} = Stats,
     Entry = {[
         {<<"duration">>, Duration},
@@ -2953,7 +2964,7 @@ inc_compactions(Result) ->
                 Stats#set_view_group_stats.cleanups + 1
         end
     },
-    true = ets:insert(?SET_VIEW_STATS_ETS, Stats2).
+    true = ets:insert(Group#set_view_group.stats_ets, Stats2).
 
 
 -spec new_fd_ref_counter(pid()) -> pid().

@@ -477,7 +477,7 @@ verify_btrees(ActiveParts, ValueGenFun) ->
 
 get_group_snapshot() ->
     GroupPid = couch_set_view:get_group_pid(
-        mapreduce_view, test_set_name(), ddoc_id()),
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
     {ok, Group, 0} = gen_server:call(
         GroupPid, #set_view_group_req{stale = false, debug = true}, infinity),
     Group.
@@ -485,7 +485,7 @@ get_group_snapshot() ->
 
 wait_updater_finishes() ->
     GroupPid = couch_set_view:get_group_pid(
-        mapreduce_view, test_set_name(), ddoc_id()),
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
     {ok, UpPid} = gen_server:call(GroupPid, updater_pid, infinity),
     case UpPid of
     nil ->

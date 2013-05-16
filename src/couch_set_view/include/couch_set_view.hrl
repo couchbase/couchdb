@@ -11,7 +11,19 @@
 % the License.
 
 -define(MAX_NUM_PARTITIONS, 1024).
--define(SET_VIEW_STATS_ETS, couch_set_view_stats).
+
+-define(SET_VIEW_STATS_ETS_PROD, couch_set_view_stats_prod).
+-define(SET_VIEW_NAME_TO_SIG_ETS_PROD, couch_set_view_name_to_sig_prod).
+-define(SET_VIEW_SIG_TO_PID_ETS_PROD, couch_set_view_sig_to_pid_prod).
+-define(SET_VIEW_PID_TO_SIG_ETS_PROD, couch_set_view_pid_to_sig_prod).
+-define(SET_VIEW_STATS_ETS_DEV, couch_set_view_stats_dev).
+-define(SET_VIEW_NAME_TO_SIG_ETS_DEV, couch_set_view_name_to_sig_dev).
+-define(SET_VIEW_SIG_TO_PID_ETS_DEV, couch_set_view_sig_to_pid_dev).
+-define(SET_VIEW_PID_TO_SIG_ETS_DEV, couch_set_view_pid_to_sig_dev).
+
+-define(SET_VIEW_SERVER_NAME_PROD, couch_setview_server_name_prod).
+-define(SET_VIEW_SERVER_NAME_DEV, couch_setview_server_name_dev).
+
 
 -define(set_view_group_stats_key(Group),
     {
@@ -127,7 +139,8 @@
     update_stats = false    :: boolean(),
     wanted_partitions = []  :: [partition_id()],
     debug = false           :: boolean(),
-    type = main             :: set_view_group_type()
+    type = main             :: set_view_group_type(),
+    category = prod         :: 'prod' | 'dev'
 }).
 
 -record(set_view_transition, {
@@ -230,7 +243,10 @@
     %     be set to 'nil' when the refactoring is done.
     mod = mapreduce_view                    :: atom(),
     % The file extension that will be used for the index files
-    extension = ".view"                     :: string()
+    extension = ".view"                     :: string(),
+    % Used to distinguish production and development set view groups
+    category = nil                          :: 'nil' | 'prod' | 'dev',
+    stats_ets = nil                         :: atom()
 }).
 
 -record(set_view_updater_stats, {

@@ -52,7 +52,7 @@ auth_cache_size = 50 ; size is number of cache entries
 
 [daemons]
 view_manager={couch_view, start_link, []}
-set_view_manager={couch_set_view, start_link, []}
+set_view_manager={couch_set_view, start_link, [prod]}
 index_merger_pool={lhttpc_manager, start_link, [[{connection_timeout, 90000}, {pool_size, 10000}, {name, couch_index_merger_connection_pool}]]}
 query_servers={couch_query_servers, start_link, []}
 httpd={couch_httpd, start_link, []}

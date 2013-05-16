@@ -47,7 +47,7 @@ test() ->
 
     create_set(),
     GroupPid = couch_set_view:get_group_pid(
-        mapreduce_view, test_set_name(), ddoc_id()),
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
     ok = gen_server:call(GroupPid, {set_auto_cleanup, false}, infinity),
 
     ValueGenFun1 = fun(I) -> I end,
@@ -64,7 +64,8 @@ test() ->
     ok = couch_set_view:set_partition_states(
         mapreduce_view, test_set_name(), ddoc_id(), [], [], CleanupPartitions),
 
-    [StatsBefore] = ets:lookup(?SET_VIEW_STATS_ETS, ?set_view_group_stats_key(Group0)),
+    [StatsBefore] = ets:lookup(Group0#set_view_group.stats_ets,
+        ?set_view_group_stats_key(Group0)),
 
     {ok, CompactPid} = couch_set_view_compactor:start_compact(
         mapreduce_view, test_set_name(), ddoc_id()),
@@ -81,7 +82,8 @@ test() ->
 
     verify_btrees(ValueGenFun1, num_docs_0(), CleanupPartitions),
 
-    [StatsAfter] = ets:lookup(?SET_VIEW_STATS_ETS, ?set_view_group_stats_key(Group0)),
+    [StatsAfter] = ets:lookup(Group0#set_view_group.stats_ets,
+        ?set_view_group_stats_key(Group0)),
 
     etap:is(StatsBefore#set_view_group_stats.cleanups, 0,
             "# of cleanups before was 0"),
@@ -98,7 +100,7 @@ test() ->
 
 get_group_snapshot() ->
     GroupPid = couch_set_view:get_group_pid(
-        mapreduce_view, test_set_name(), ddoc_id()),
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
     {ok, Group, 0} = gen_server:call(
         GroupPid, #set_view_group_req{stale = false, debug = true}, infinity),
     Group.

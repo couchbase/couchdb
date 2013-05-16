@@ -46,7 +46,7 @@ test() ->
     update_documents(0, num_docs(), ValueGenFun1),
 
     GroupPid = couch_set_view:get_group_pid(
-        mapreduce_view, test_set_name(), ddoc_id()),
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
     etap:is(is_process_alive(GroupPid), true, "Group is alive"),
 
     etap:diag("Querying view before database compactions"),

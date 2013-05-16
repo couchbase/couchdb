@@ -177,7 +177,7 @@ test() ->
     % Mark first replica partition as active. Verify that after this it's possible
     % to mark it as unindexable and then back to indexable once again.
     GroupPid = couch_set_view:get_group_pid(
-        mapreduce_view, test_set_name(), ddoc_id()),
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
     ok = gen_server:call(GroupPid, {set_auto_transfer_replicas, false}, infinity),
 
     ActivateReplicaResult = couch_set_view:set_partition_states(
@@ -229,7 +229,7 @@ test() ->
 
 get_group_snapshot(Staleness) ->
     GroupPid = couch_set_view:get_group_pid(
-        mapreduce_view, test_set_name(), ddoc_id()),
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
     {ok, Group, _} = gen_server:call(
         GroupPid, #set_view_group_req{stale = Staleness}, infinity),
     Group.
@@ -237,12 +237,12 @@ get_group_snapshot(Staleness) ->
 
 trigger_main_update_and_wait() ->
     GroupPid = couch_set_view:get_group_pid(
-        mapreduce_view, test_set_name(), ddoc_id()),
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
     trigger_update_and_wait(GroupPid).
 
 trigger_replica_update_and_wait() ->
     GroupPid = couch_set_view:get_group_pid(
-        mapreduce_view, test_set_name(), ddoc_id()),
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
     {ok, ReplicaGroupPid} = gen_server:call(GroupPid, replica_pid, infinity),
     trigger_update_and_wait(ReplicaGroupPid).
 
@@ -270,7 +270,7 @@ trigger_update_and_wait(GroupPid) ->
 
 wait_for_main_cleanup() ->
     GroupPid = couch_set_view:get_group_pid(
-        mapreduce_view, test_set_name(), ddoc_id()),
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
     {ok, CleanerPid} = gen_server:call(GroupPid, start_cleaner, infinity),
     CleanerRef = erlang:monitor(process, CleanerPid),
     receive

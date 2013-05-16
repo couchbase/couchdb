@@ -56,7 +56,7 @@ test() ->
     update_documents(0, num_docs(), ValueGenFun1),
 
     GroupPid = couch_set_view:get_group_pid(
-        mapreduce_view, test_set_name(), ddoc_id()),
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
     ok = gen_server:call(GroupPid, {set_auto_cleanup, false}, infinity),
 
     % build index
@@ -611,7 +611,7 @@ get_group_snapshot() ->
 
 get_group_snapshot(Staleness) ->
     GroupPid = couch_set_view:get_group_pid(
-        mapreduce_view, test_set_name(), ddoc_id()),
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
     {ok, Group, 0} = gen_server:call(
         GroupPid, #set_view_group_req{stale = Staleness, debug = true}, infinity),
     Group.
@@ -749,7 +749,7 @@ test_monitor_pending_partition() ->
 
     % Perform cleanup + apply pending transition + update + notify listener
     GroupPid = couch_set_view:get_group_pid(
-        mapreduce_view, test_set_name(), ddoc_id()),
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
     {ok, CleanerPid} = gen_server:call(GroupPid, start_cleaner, infinity),
     CleanerRef = erlang:monitor(process, CleanerPid),
     receive

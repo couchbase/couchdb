@@ -26,16 +26,15 @@
 -export([delete_index_dir/2]).
 
 % Internal, not meant to be used by components other than the view engine.
--export([get_group_pid/3, get_group/4, release_group/1, get_group_info/3]).
+-export([get_group_pid/4, get_group/4, release_group/1, get_group_info/3]).
 -export([get_map_view/4, get_reduce_view/4]).
 -export([fold/5, fold_reduce/5]).
 -export([get_row_count/2, reduce_to_count/1, extract_map_view/1]).
 -export([map_view_key_compare/2, reduce_view_key_compare/2]).
 -export([get_map_view0/2, get_reduce_view0/2]).
--export([handle_db_event/1]).
 
 % gen_server callbacks
--export([start_link/0]).
+-export([start_link/1]).
 -export([init/1, terminate/2, handle_call/3, handle_cast/2, handle_info/2, code_change/3]).
 
 -include("couch_db.hrl").
@@ -46,7 +45,12 @@
 
 -record(server, {
     root_dir = [],
-    db_notifier
+    db_notifier,
+    stats_ets       :: atom(),
+    name_to_sig_ets :: atom(),
+    sig_to_pid_ets  :: atom(),
+    pid_to_sig_ets  :: atom(),
+    name            :: atom()
 }).
 
 -record(merge_acc, {
@@ -82,7 +86,8 @@
                 binary() | #doc{},
                 #set_view_group_req{}) -> {'ok', #set_view_group{}}.
 get_group(Mod, SetName, DDoc, #set_view_group_req{type = main} = Req) ->
-    GroupPid = get_group_pid(Mod, SetName, DDoc),
+    GroupPid = get_group_pid(Mod, SetName, DDoc,
+        Req#set_view_group_req.category),
     case couch_set_view_group:request_group(GroupPid, Req) of
     {ok, Group} ->
         {ok, Group};
@@ -112,12 +117,21 @@ get_group(Mod, SetName, DDoc, #set_view_group_req{type = replica} = Req) ->
     end.
 
 
--spec get_group_pid(atom(), binary(), binary() | #doc{}) -> pid().
-get_group_pid(Mod, SetName, #doc{} = DDoc) ->
+-spec get_group_pid(atom(), binary(), binary() | #doc{}, dev | prod) -> pid().
+get_group_pid(Mod, SetName, #doc{} = DDoc, Category) ->
     Group = Mod:design_doc_to_set_view_group(SetName, DDoc),
-    get_group_server(SetName, Group);
-get_group_pid(Mod, SetName, DDocId) when is_binary(DDocId) ->
-    get_group_server(SetName, open_set_group(Mod, SetName, DDocId)).
+    StatsEts = case Category of
+    prod ->
+        ?SET_VIEW_STATS_ETS_PROD;
+    dev ->
+        ?SET_VIEW_STATS_ETS_DEV
+    end,
+    get_group_server(SetName, Group#set_view_group{
+        category = Category,
+        stats_ets = StatsEts
+    });
+get_group_pid(Mod, SetName, DDocId, Category) when is_binary(DDocId) ->
+    get_group_server(SetName, open_set_group(Mod, SetName, DDocId, Category)).
 
 
 -spec release_group(#set_view_group{}) -> no_return().
@@ -128,7 +142,7 @@ release_group(Group) ->
 -spec define_group(atom(), binary(), binary(), #set_view_params{}) -> 'ok'.
 define_group(Mod, SetName, DDocId, #set_view_params{} = Params) ->
     try
-        GroupPid = get_group_pid(Mod, SetName, DDocId),
+        GroupPid = get_group_pid(Mod, SetName, DDocId, prod),
         case couch_set_view_group:define_view(GroupPid, Params) of
         ok ->
             ok;
@@ -181,7 +195,7 @@ define_group(Mod, SetName, DDocId, #set_view_params{} = Params) ->
                            ordsets:ordset(partition_id())) -> 'ok'.
 set_partition_states(Mod, SetName, DDocId, ActivePartitions, PassivePartitions, CleanupPartitions) ->
     try
-        GroupPid = get_group_pid(Mod, SetName, DDocId),
+        GroupPid = get_group_pid(Mod, SetName, DDocId, prod),
         case couch_set_view_group:set_state(
             GroupPid, ActivePartitions, PassivePartitions, CleanupPartitions) of
         ok ->
@@ -203,7 +217,7 @@ set_partition_states(Mod, SetName, DDocId, ActivePartitions, PassivePartitions, 
 -spec add_replica_partitions(atom(), binary(), binary(), ordsets:ordset(partition_id())) -> 'ok'.
 add_replica_partitions(Mod, SetName, DDocId, Partitions) ->
     try
-        GroupPid = get_group_pid(Mod, SetName, DDocId),
+        GroupPid = get_group_pid(Mod, SetName, DDocId, prod),
         case couch_set_view_group:add_replica_partitions(GroupPid, Partitions) of
         ok ->
             ok;
@@ -225,7 +239,7 @@ add_replica_partitions(Mod, SetName, DDocId, Partitions) ->
 -spec remove_replica_partitions(atom(), binary(), binary(), ordsets:ordset(partition_id())) -> 'ok'.
 remove_replica_partitions(Mod, SetName, DDocId, Partitions) ->
     try
-        GroupPid = get_group_pid(Mod, SetName, DDocId),
+        GroupPid = get_group_pid(Mod, SetName, DDocId, prod),
         case couch_set_view_group:remove_replica_partitions(GroupPid, Partitions) of
         ok ->
             ok;
@@ -247,7 +261,7 @@ mark_partitions_unindexable(_Mod, _SetName, _DDocId, []) ->
     ok;
 mark_partitions_unindexable(Mod, SetName, DDocId, Partitions) ->
     try
-        Pid = get_group_pid(Mod, SetName, DDocId),
+        Pid = get_group_pid(Mod, SetName, DDocId, prod),
         case couch_set_view_group:mark_as_unindexable(Pid, Partitions) of
         ok ->
             ok;
@@ -269,7 +283,7 @@ mark_partitions_indexable(_Mod, _SetName, _DDocId, []) ->
     ok;
 mark_partitions_indexable(Mod, SetName, DDocId, Partitions) ->
     try
-        Pid = get_group_pid(Mod, SetName, DDocId),
+        Pid = get_group_pid(Mod, SetName, DDocId, prod),
         case couch_set_view_group:mark_as_indexable(Pid, Partitions) of
         ok ->
             ok;
@@ -312,7 +326,7 @@ mark_partitions_indexable(Mod, SetName, DDocId, Partitions) ->
 monitor_partition_update(Mod, SetName, DDocId, PartitionId) ->
     Ref = make_ref(),
     try
-        Pid = get_group_pid(Mod, SetName, DDocId),
+        Pid = get_group_pid(Mod, SetName, DDocId, prod),
         case couch_set_view_group:monitor_partition_update(Pid, PartitionId, Ref, self()) of
         ok ->
             Ref;
@@ -335,7 +349,7 @@ demonitor_partition_update(Mod, SetName, DDocId, Ref) ->
         ok
     after 0 ->
         try
-            Pid = get_group_pid(Mod, SetName, DDocId),
+            Pid = get_group_pid(Mod, SetName, DDocId, prod),
             ok = couch_set_view_group:demonitor_partition_update(Pid, Ref),
             receive
             {Ref, _} ->
@@ -354,7 +368,7 @@ demonitor_partition_update(Mod, SetName, DDocId, Ref) ->
 -spec trigger_update(atom(), binary(), binary(), non_neg_integer()) -> no_return().
 trigger_update(Mod, SetName, DDocId, MinNumChanges) ->
     try
-        Pid = get_group_pid(Mod, SetName, DDocId),
+        Pid = get_group_pid(Mod, SetName, DDocId, prod),
         ok = gen_server:cast(Pid, {update, MinNumChanges})
     catch throw:{error, empty_group} ->
         ok
@@ -366,7 +380,7 @@ trigger_update(Mod, SetName, DDocId, MinNumChanges) ->
 -spec trigger_replica_update(atom(), binary(), binary(), non_neg_integer()) -> no_return().
 trigger_replica_update(Mod, SetName, DDocId, MinNumChanges) ->
     try
-        Pid = get_group_pid(Mod, SetName, DDocId),
+        Pid = get_group_pid(Mod, SetName, DDocId, prod),
         ok = gen_server:cast(Pid, {update_replica, MinNumChanges})
     catch throw:{error, empty_group} ->
         ok
@@ -376,12 +390,25 @@ trigger_replica_update(Mod, SetName, DDocId, MinNumChanges) ->
 -spec get_group_server(binary(), #set_view_group{}) -> pid().
 get_group_server(_SetName, #set_view_group{views = []}) ->
     throw({error, empty_group});
-get_group_server(SetName, #set_view_group{sig = Sig} = Group) ->
-    case ets:lookup(couch_sig_to_setview_pid, {SetName, Sig}) of
+get_group_server(SetName, Group) ->
+    #set_view_group{
+        sig = Sig,
+        category = Category
+    } = Group,
+    case Category of
+    prod ->
+        SigToPidEts = ?SET_VIEW_SIG_TO_PID_ETS_PROD,
+        ServerName = ?SET_VIEW_SERVER_NAME_PROD;
+    dev ->
+        SigToPidEts = ?SET_VIEW_SIG_TO_PID_ETS_DEV,
+        ServerName = ?SET_VIEW_SERVER_NAME_DEV
+    end,
+    case ets:lookup(SigToPidEts, {SetName, Sig}) of
     [{_, Pid}] when is_pid(Pid) ->
         Pid;
     _ ->
-        case gen_server:call(?MODULE, {get_group_server, SetName, Group}, infinity) of
+        case gen_server:call(ServerName, {get_group_server, SetName, Group},
+                infinity) of
         {ok, Pid} ->
             Pid;
         Error ->
@@ -390,29 +417,45 @@ get_group_server(SetName, #set_view_group{sig = Sig} = Group) ->
     end.
 
 
--spec open_set_group(atom(), binary(), binary()) -> #set_view_group{}.
-open_set_group(Mod, SetName, GroupId) ->
+-spec open_set_group(atom(), binary(), binary(), dev | prod) ->
+                            #set_view_group{}.
+open_set_group(Mod, SetName, GroupId, Category) ->
     case couch_set_view_group:open_set_group(Mod, SetName, GroupId) of
     {ok, Group} ->
-        Group;
+        StatsEts = case Category of
+        prod ->
+            ?SET_VIEW_STATS_ETS_PROD;
+        dev ->
+            ?SET_VIEW_STATS_ETS_DEV
+        end,
+        Group#set_view_group{
+            category = Category,
+            stats_ets = StatsEts
+        };
     Error ->
         throw(Error)
     end.
 
-
-start_link() ->
-    gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
+-spec start_link(dev | prod) ->
+                        {ok, pid()} | ignore |
+                        {error, {already_started, pid()} | term()}.
+start_link(prod) ->
+    gen_server:start_link(
+        {local, ?SET_VIEW_SERVER_NAME_PROD}, ?MODULE, [prod], []);
+start_link(dev) ->
+    gen_server:start_link(
+        {local, ?SET_VIEW_SERVER_NAME_DEV}, ?MODULE, [dev], []).
 
 
 % To be used only for debugging. This is a very expensive call.
 get_group_info(Mod, SetName, DDocId) ->
-    GroupPid = get_group_pid(Mod, SetName, DDocId),
+    GroupPid = get_group_pid(Mod, SetName, DDocId, prod),
     {ok, _Info} = couch_set_view_group:request_group_info(GroupPid).
 
 
 get_group_data_size(Mod, SetName, DDocId) ->
     try
-        GroupPid = get_group_pid(Mod, SetName, DDocId),
+        GroupPid = get_group_pid(Mod, SetName, DDocId, prod),
         {ok, _Info} = couch_set_view_group:get_data_size(GroupPid)
     catch throw:{error, empty_group} ->
         {ok, Sig} = get_group_signature(Mod, SetName, DDocId),
@@ -430,14 +473,14 @@ get_group_data_size(Mod, SetName, DDocId) ->
 
 -spec reset_utilization_stats(atom(), binary(), binary()) -> 'ok'.
 reset_utilization_stats(Mod, SetName, DDocId) ->
-    GroupPid = get_group_pid(Mod, SetName, DDocId),
+    GroupPid = get_group_pid(Mod, SetName, DDocId, prod),
     ok = couch_set_view_group:reset_utilization_stats(GroupPid).
 
 
 -spec get_utilization_stats(atom(), binary(), binary()) ->
                                    {'ok', [{atom() | binary(), term()}]}.
 get_utilization_stats(Mod, SetName, DDocId) ->
-    GroupPid = get_group_pid(Mod, SetName, DDocId),
+    GroupPid = get_group_pid(Mod, SetName, DDocId, prod),
     {ok, _} = couch_set_view_group:get_utilization_stats(GroupPid).
 
 
@@ -817,7 +860,8 @@ do_fold(Group, SetView, Fun, Acc, ViewQueryArgs) ->
     end.
 
 
-init([]) ->
+-spec init([prod] | [dev]) -> {ok, #server{}}.
+init([Category]) ->
     % read configuration settings and register for configuration changes
     RootDir = couch_config:get("couchdb", "view_index_dir"),
     ok = couch_config:register(
@@ -828,45 +872,65 @@ init([]) ->
     ok = mapreduce:set_timeout(list_to_integer(
         couch_config:get("mapreduce", "function_timeout", "10000"))),
 
+    Server = init_server(Category),
     % {SetName, {DDocId, Signature}}
-    ets:new(couch_setview_name_to_sig,
+    ets:new(Server#server.name_to_sig_ets,
             [bag, protected, named_table, {read_concurrency, true}]),
     % {{SetName, Signature}, Pid | WaitListPids}
-    ets:new(couch_sig_to_setview_pid,
+    ets:new(Server#server.sig_to_pid_ets,
             [set, protected, named_table, {read_concurrency, true}]),
     % {Pid, {SetName, Sig, DDocId}}
-    ets:new(couch_pid_to_setview_sig, [set, private, named_table]),
+    ets:new(Server#server.pid_to_sig_ets, [set, private, named_table]),
 
-    ets:new(
-        ?SET_VIEW_STATS_ETS,
+    ets:new(Server#server.stats_ets,
         [set, public, named_table, {keypos, #set_view_group_stats.ets_key}]),
 
-    {ok, Notifier} = couch_db_update_notifier:start_link(fun ?MODULE:handle_db_event/1),
+    {ok, Notifier} = couch_db_update_notifier:start_link(
+        make_handle_db_event_fun(
+            mapreduce_view, Server#server.name, Server#server.sig_to_pid_ets,
+            Server#server.name_to_sig_ets)),
 
     process_flag(trap_exit, true),
     ok = couch_file:init_delete_dir(RootDir),
-    {ok, #server{root_dir = RootDir, db_notifier = Notifier}}.
+    {ok, Server#server{root_dir = RootDir, db_notifier = Notifier}}.
+
+init_server(prod) ->
+    #server{
+        stats_ets = ?SET_VIEW_STATS_ETS_PROD,
+        name_to_sig_ets = ?SET_VIEW_NAME_TO_SIG_ETS_PROD,
+        sig_to_pid_ets = ?SET_VIEW_SIG_TO_PID_ETS_PROD,
+        pid_to_sig_ets = ?SET_VIEW_PID_TO_SIG_ETS_PROD,
+        name = ?SET_VIEW_SERVER_NAME_PROD
+    };
+init_server(dev) ->
+    #server{
+        stats_ets = ?SET_VIEW_STATS_ETS_DEV,
+        name_to_sig_ets = ?SET_VIEW_NAME_TO_SIG_ETS_DEV,
+        sig_to_pid_ets = ?SET_VIEW_SIG_TO_PID_ETS_DEV,
+        pid_to_sig_ets = ?SET_VIEW_PID_TO_SIG_ETS_DEV,
+        name = ?SET_VIEW_SERVER_NAME_DEV
+    }.
 
 
-terminate(_Reason, _Srv) ->
+terminate(_Reason, Server) ->
     [couch_util:shutdown_sync(Pid) || {Pid, _} <-
-            ets:tab2list(couch_pid_to_setview_sig)],
+            ets:tab2list(Server#server.pid_to_sig_ets)],
     ok.
 
 
 handle_call({get_group_server, SetName, Group}, From, Server) ->
     #set_view_group{sig = Sig} = Group,
-    case ets:lookup(couch_sig_to_setview_pid, {SetName, Sig}) of
+    case ets:lookup(Server#server.sig_to_pid_ets, {SetName, Sig}) of
     [] ->
         WaitList = [From],
         _ = spawn_monitor(fun() ->
             exit(new_group(Server#server.root_dir, SetName, Group))
         end),
-        ets:insert(couch_sig_to_setview_pid, {{SetName, Sig}, WaitList}),
+        ets:insert(Server#server.sig_to_pid_ets, {{SetName, Sig}, WaitList}),
         {noreply, Server};
     [{_, WaitList}] when is_list(WaitList) ->
         WaitList2 = [From | WaitList],
-        ets:insert(couch_sig_to_setview_pid, {{SetName, Sig}, WaitList2}),
+        ets:insert(Server#server.sig_to_pid_ets, {{SetName, Sig}, WaitList2}),
         {noreply, Server};
     [{_, ExistingPid}] ->
         {reply, {ok, ExistingPid}, Server}
@@ -887,17 +951,17 @@ handle_call({before_database_delete, DbName}, _From, Server) ->
                 % and happen before it shutdowns the database processes. However
                 % we must be sure here that we don't do any synchronous calls to
                 % couch_server in order to avoid deadlocks.
-                case ets:lookup(couch_sig_to_setview_pid, {SetName, Sig}) of
+                case ets:lookup(Server#server.sig_to_pid_ets, {SetName, Sig}) of
                 [{_, Pid}] when is_pid(Pid) ->
                     gen_server:cast(Pid, {before_partition_delete, PartId});
                 _ ->
                     ok
                 end
             end,
-            ets:lookup(couch_setview_name_to_sig, SetName)),
+            ets:lookup(Server#server.name_to_sig_ets, SetName)),
         case PartId of
         master ->
-            true = ets:delete(couch_setview_name_to_sig, SetName),
+            true = ets:delete(Server#server.name_to_sig_ets, SetName),
             ?LOG_INFO("Deleting index files for set `~s` because master database"
                       "is about to deleted", [SetName]),
             try
@@ -918,11 +982,11 @@ handle_call({ddoc_updated, SetName, #doc{deleted = false} = DDoc0}, _From, Serve
     #doc{id = DDocId} = DDoc = couch_doc:with_ejson_body(DDoc0),
 % XXX vmx 2013-05-03: Don't hard-code mapreduce_view
     #set_view_group{sig = Sig} = mapreduce_view:design_doc_to_set_view_group(SetName, DDoc),
-    true = ets:insert(couch_setview_name_to_sig, {SetName, {DDocId, Sig}}),
+    true = ets:insert(Server#server.name_to_sig_ets, {SetName, {DDocId, Sig}}),
     {reply, ok, Server};
 
 handle_call({ddoc_updated, SetName, #doc{id = DDocId, deleted = true}}, _From, Server) ->
-    true = ets:match_delete(couch_setview_name_to_sig, {SetName, {DDocId, '$1'}}),
+    true = ets:match_delete(Server#server.name_to_sig_ets, {SetName, {DDocId, '$1'}}),
     {reply, ok, Server}.
 
 
@@ -953,7 +1017,7 @@ handle_info({'EXIT', Pid, Reason}, #server{db_notifier = Pid} = Server) ->
     {stop, Reason, Server};
 
 handle_info({'EXIT', FromPid, Reason}, Server) ->
-    case ets:lookup(couch_pid_to_setview_sig, FromPid) of
+    case ets:lookup(Server#server.pid_to_sig_ets, FromPid) of
     [] ->
         if Reason /= normal ->
             % non-updater linked process died, we propagate the error
@@ -962,39 +1026,39 @@ handle_info({'EXIT', FromPid, Reason}, Server) ->
         true -> ok
         end;
     [{_, {SetName, Sig, DDocId}}] ->
-        delete_from_ets(FromPid, SetName, DDocId, Sig),
-        true = ets:match_delete(couch_setview_name_to_sig, {SetName, {'$1', Sig}})
+        delete_from_ets(FromPid, SetName, DDocId, Sig, Server),
+        true = ets:match_delete(Server#server.name_to_sig_ets, {SetName, {'$1', Sig}})
     end,
     {noreply, Server};
 
 handle_info({'DOWN', _MonRef, _, _Pid, {SetName, DDocId, Sig, Reply}}, Server) ->
     Key = {SetName, Sig},
-    [{_, WaitList}] = ets:lookup(couch_sig_to_setview_pid, Key),
+    [{_, WaitList}] = ets:lookup(Server#server.sig_to_pid_ets, Key),
     case Reply of
     {ok, NewPid, Aliases} ->
         lists:foreach(fun(From) -> gen_server:reply(From, {ok, NewPid}) end, WaitList),
         true = link(NewPid),
-        add_to_ets(NewPid, SetName, DDocId, Sig),
+        add_to_ets(NewPid, SetName, DDocId, Sig, Server),
         lists:foreach(fun(AliasDDocId) ->
-            true = ets:insert(couch_setview_name_to_sig, {SetName, {AliasDDocId, Sig}})
+            true = ets:insert(Server#server.name_to_sig_ets, {SetName, {AliasDDocId, Sig}})
         end, Aliases);
     _ ->
         lists:foreach(fun(From) -> gen_server:reply(From, Reply) end, WaitList),
-        ets:delete(couch_sig_to_setview_pid, Key)
+        ets:delete(Server#server.sig_to_pid_ets, Key)
     end,
     {noreply, Server}.
 
-add_to_ets(Pid, SetName, DDocId, Sig) ->
-    true = ets:insert(couch_pid_to_setview_sig, {Pid, {SetName, Sig, DDocId}}),
-    true = ets:insert(couch_sig_to_setview_pid, {{SetName, Sig}, Pid}),
-    true = ets:insert(couch_setview_name_to_sig, {SetName, {DDocId, Sig}}).
+add_to_ets(Pid, SetName, DDocId, Sig, Server) ->
+    true = ets:insert(Server#server.pid_to_sig_ets, {Pid, {SetName, Sig, DDocId}}),
+    true = ets:insert(Server#server.sig_to_pid_ets, {{SetName, Sig}, Pid}),
+    true = ets:insert(Server#server.name_to_sig_ets, {SetName, {DDocId, Sig}}).
 
-delete_from_ets(Pid, SetName, DDocId, Sig) ->
-    true = ets:delete(couch_pid_to_setview_sig, Pid),
-    true = ets:delete(couch_sig_to_setview_pid, {SetName, Sig}),
-    true = ets:delete_object(couch_setview_name_to_sig, {SetName, {DDocId, Sig}}),
-    true = ets:delete(?SET_VIEW_STATS_ETS, {SetName, DDocId, Sig, main}),
-    true = ets:delete(?SET_VIEW_STATS_ETS, {SetName, DDocId, Sig, replica}).
+delete_from_ets(Pid, SetName, DDocId, Sig, Server) ->
+    true = ets:delete(Server#server.pid_to_sig_ets, Pid),
+    true = ets:delete(Server#server.sig_to_pid_ets, {SetName, Sig}),
+    true = ets:delete_object(Server#server.name_to_sig_ets, {SetName, {DDocId, Sig}}),
+    true = ets:delete(Server#server.stats_ets, {SetName, DDocId, Sig, main}),
+    true = ets:delete(Server#server.stats_ets, {SetName, DDocId, Sig, replica}).
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
@@ -1085,40 +1149,48 @@ modify_bitmasks(#set_view_group{replica_group = RepGroup} = Group, Partitions) -
     {Group2, Unindexed}.
 
 
-handle_db_event({before_delete, DbName}) ->
-    ok = gen_server:call(?MODULE, {before_database_delete, DbName}, infinity);
-handle_db_event({ddoc_updated, {DbName, #doc{id = DDocId} = DDoc}}) ->
-    case couch_set_view_util:split_set_db_name(DbName) of
-    {ok, SetName, master} ->
-        case DDoc#doc.deleted of
-        false ->
-            DDoc2 = couch_doc:with_ejson_body(DDoc),
-% XXX vmx 2013-05-03: Don't hard-code mapreduce_view
-            #set_view_group{sig = NewSig} = mapreduce_view:design_doc_to_set_view_group(SetName, DDoc2);
-        true ->
-            NewSig = <<>>
-        end,
-        lists:foreach(
-            fun({_SetName, {_DDocId, Sig}}) ->
-                case ets:lookup(couch_sig_to_setview_pid, {SetName, Sig}) of
-                [{_, GroupPid}] when is_pid(GroupPid), Sig =/= NewSig->
-                    Aliases = [
-                        AliasDDocId || {_SetName2, {AliasDDocId, _Sig2}} <-
-                            ets:match_object(couch_setview_name_to_sig, {SetName, {'$1', Sig}}),
-                            AliasDDocId =/= DDocId
-                    ],
-                    ok = gen_server:cast(GroupPid, {ddoc_updated, NewSig, Aliases});
-                _ ->
-                    ok
-                end
+% Wrap the handle_db_event handler so that it works independent of the
+% indexer and production/development views.
+make_handle_db_event_fun(Mod, ServerName, SigToPidEts, NameToSigEts) ->
+    fun
+    ({before_delete, DbName}) ->
+        ok = gen_server:call(
+            ServerName, {before_database_delete, DbName}, infinity);
+    ({ddoc_updated, {DbName, #doc{id = DDocId} = DDoc}}) ->
+        case couch_set_view_util:split_set_db_name(DbName) of
+        {ok, SetName, master} ->
+            case DDoc#doc.deleted of
+            false ->
+                DDoc2 = couch_doc:with_ejson_body(DDoc),
+                #set_view_group{sig = NewSig} = Mod:design_doc_to_set_view_group(
+                    SetName, DDoc2);
+            true ->
+                NewSig = <<>>
             end,
-            ets:match_object(couch_setview_name_to_sig, {SetName, {DDocId, '$1'}})),
-        ok = gen_server:call(?MODULE, {ddoc_updated, SetName, DDoc}, infinity);
-    _ ->
+
+            lists:foreach(
+                fun({_SetName, {_DDocId, Sig}}) ->
+                    case ets:lookup(SigToPidEts, {SetName, Sig}) of
+                    [{_, GroupPid}] when is_pid(GroupPid), Sig =/= NewSig->
+                        Aliases = [
+                            AliasDDocId || {_SetName2, {AliasDDocId, _Sig2}} <-
+                                ets:match_object(NameToSigEts, {SetName, {'$1', Sig}}),
+                                AliasDDocId =/= DDocId
+                        ],
+                        ok = gen_server:cast(GroupPid, {ddoc_updated, NewSig, Aliases});
+                    _ ->
+                        ok
+                    end
+                end,
+                ets:match_object(NameToSigEts, {SetName, {DDocId, '$1'}})),
+            ok = gen_server:call(ServerName, {ddoc_updated, SetName, DDoc}, infinity);
+
+        _ ->
+            ok
+        end;
+    (_) ->
         ok
-    end;
-handle_db_event(_) ->
-    ok.
+    end.
 
 
 map_view_merge_callback(start, Acc) ->

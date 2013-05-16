@@ -115,7 +115,7 @@ configure_group() ->
 
 get_main_pid() ->
     couch_set_view:get_group_pid(
-        mapreduce_view, test_set_name(), ddoc_id()).
+        mapreduce_view, test_set_name(), ddoc_id(), prod).
 
 
 get_replica_pid(MainPid) ->

@@ -68,7 +68,7 @@ test() ->
 
     verify_group_info_before_cleanup_request(),
     GroupPid = couch_set_view:get_group_pid(
-        mapreduce_view, test_set_name(), ddoc_id()),
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
     ok = gen_server:call(GroupPid, {set_auto_cleanup, false}, infinity),
     ok = couch_set_view:set_partition_states(
         mapreduce_view, test_set_name(), ddoc_id(), [], [], lists:seq(8, 63)),

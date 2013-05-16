@@ -215,7 +215,7 @@ compact_view_group() ->
 
 trigger_update() ->
     GroupPid = couch_set_view:get_group_pid(
-        mapreduce_view, test_set_name(), ddoc_id()),
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
     {ok, UpdaterPid} = gen_server:call(GroupPid, {start_updater, []}, infinity),
     Ref = erlang:monitor(process, UpdaterPid),
     etap:diag("Waiting for updater to finish"),
@@ -253,7 +253,7 @@ query_reduce_view(ViewName, StartKey, EndKey) ->
 
 verify_btrees_1(ValueGenFun) ->
     GroupPid = couch_set_view:get_group_pid(
-        mapreduce_view, test_set_name(), ddoc_id()),
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
     {ok, Group} = gen_server:call(GroupPid, request_group, infinity),
     #set_view_group{
         id_btree = IdBtree,

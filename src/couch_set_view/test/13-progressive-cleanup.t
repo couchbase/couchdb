@@ -45,7 +45,7 @@ test() ->
     create_set(),
     add_documents(0, num_docs()),
     GroupPid = couch_set_view:get_group_pid(
-        mapreduce_view, test_set_name(), ddoc_id()),
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
     erlang:put(group_pid, GroupPid),
 
     % build index
@@ -101,7 +101,7 @@ test() ->
 
 get_group_snapshot() ->
     GroupPid = couch_set_view:get_group_pid(
-        mapreduce_view, test_set_name(), ddoc_id()),
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
     {ok, Group, 0} = gen_server:call(
         GroupPid, #set_view_group_req{stale = false, debug = true}, infinity),
     Group.

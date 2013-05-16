@@ -175,7 +175,7 @@ test_filter_parameter_replica(AccessType) ->
 
 shutdown_group() ->
     GroupPid = couch_set_view:get_group_pid(
-        mapreduce_view, test_set_name(), ddoc_id()),
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
     MonRef = erlang:monitor(process, GroupPid),
     receive
@@ -304,7 +304,7 @@ configure_view_group(DDocId, Active, Passive, Cleanup) ->
             mapreduce_view, test_set_name(), DDocId, Params),
 
         GroupPid = couch_set_view:get_group_pid(
-            mapreduce_view, test_set_name(), ddoc_id()),
+            mapreduce_view, test_set_name(), ddoc_id(), prod),
         ok = gen_server:call(GroupPid, {set_auto_cleanup, false}, infinity),
         % Somehow the set_auto_cleanup doesn't get set when I don't request
         % the group afterwards

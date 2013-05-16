@@ -15,6 +15,8 @@
 % the License.
 
 
+-include_lib("couch_set_view/include/couch_set_view.hrl").
+
 test_set_name() -> <<"couch_test_set_index_cleanup">>.
 num_set_partitions() -> 4.
 ddoc_id() -> <<"_design/test">>.
@@ -45,7 +47,7 @@ test() ->
     ok = populate_set(),
 
     GroupPid = couch_set_view:get_group_pid(
-        mapreduce_view, test_set_name(), ddoc_id()),
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
     query_view(ddoc_id(), num_docs(), []),
     etap:is(is_process_alive(GroupPid), true, "Group alive after query"),
     GroupSig = get_group_sig(),
@@ -54,17 +56,17 @@ test() ->
     etap:is(all_index_files(), [IndexFile], "Index file found"),
 
     RawGroupSig = get_raw_sig(ddoc_id()),
-    etap:is(ets:lookup(couch_setview_name_to_sig, test_set_name()),
+    etap:is(ets:lookup(?SET_VIEW_NAME_TO_SIG_ETS_PROD, test_set_name()),
             [{test_set_name(), {ddoc_id(), RawGroupSig}}],
-            "Correct group entry in couch_setview_name_to_sig ets table"),
-    etap:is(ets:lookup(couch_sig_to_setview_pid, {test_set_name(), RawGroupSig}),
+            "Correct group entry in ?SET_VIEW_NAME_TO_SIG_ETS_PROD ets table"),
+    etap:is(ets:lookup(?SET_VIEW_SIG_TO_PID_ETS_PROD, {test_set_name(), RawGroupSig}),
             [{{test_set_name(), RawGroupSig}, GroupPid}],
-            "Correct group entry in couch_sig_to_setview_pid ets table"),
+            "Correct group entry in ?SET_VIEW_SIG_TO_PID_ETS_PROD ets table"),
 
     ok = update_ddoc(ddoc_id()),
     ok = timer:sleep(1000),
     NewGroupPid = couch_set_view:get_group_pid(
-        mapreduce_view, test_set_name(), ddoc_id()),
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
     etap:isnt(NewGroupPid, GroupPid, "Got new group after ddoc update"),
 
     OldGroupMon = erlang:monitor(process, GroupPid),
@@ -80,15 +82,15 @@ test() ->
     etap:isnt(NewGroupSig, GroupSig, "New group has a different signature"),
 
     RawNewGroupSig = get_raw_sig(ddoc_id()),
-    etap:is(ets:lookup(couch_setview_name_to_sig, test_set_name()),
+    etap:is(ets:lookup(?SET_VIEW_NAME_TO_SIG_ETS_PROD, test_set_name()),
             [{test_set_name(), {ddoc_id(), RawNewGroupSig}}],
-            "Correct group entry in couch_setview_name_to_sig ets table"),
-    etap:is(ets:lookup(couch_sig_to_setview_pid, {test_set_name(), RawNewGroupSig}),
+            "Correct group entry in ?SET_VIEW_NAME_TO_SIG_ETS_PROD ets table"),
+    etap:is(ets:lookup(?SET_VIEW_SIG_TO_PID_ETS_PROD, {test_set_name(), RawNewGroupSig}),
             [{{test_set_name(), RawNewGroupSig}, NewGroupPid}],
-            "Correct group entry in couch_sig_to_setview_pid ets table"),
-    etap:is(ets:lookup(couch_sig_to_setview_pid, {test_set_name(), RawGroupSig}),
+            "Correct group entry in ?SET_VIEW_SIG_TO_PID_ETS_PROD ets table"),
+    etap:is(ets:lookup(?SET_VIEW_SIG_TO_PID_ETS_PROD, {test_set_name(), RawGroupSig}),
             [],
-            "Old group entry not in couch_sig_to_setview_pid ets table anymore"),
+            "Old group entry not in ?SET_VIEW_SIG_TO_PID_ETS_PROD ets table anymore"),
 
     NewIndexFile = "main_" ++ binary_to_list(NewGroupSig) ++ ".view.1",
     AllIndexFiles = all_index_files(),
@@ -101,7 +103,7 @@ test() ->
     % Let couch_set_view process group process EXIT message
     ok = timer:sleep(1000),
     NewGroupPid2 = couch_set_view:get_group_pid(
-        mapreduce_view, test_set_name(), ddoc_id()),
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
     etap:isnt(NewGroupPid2, NewGroupPid, "Got different group pid"),
     AllIndexFiles2 = all_index_files(),
     etap:is(lists:member(NewIndexFile, AllIndexFiles2), true,
@@ -129,13 +131,13 @@ test() ->
 
     RawNewGroupCopySig = get_raw_sig(ddoc_id_copy()),
     etap:is(RawNewGroupCopySig, RawNewGroupSig, "Group copy has same signature"),
-    etap:is(ets:lookup(couch_setview_name_to_sig, test_set_name()),
+    etap:is(ets:lookup(?SET_VIEW_NAME_TO_SIG_ETS_PROD, test_set_name()),
             [{test_set_name(), {ddoc_id(), RawNewGroupSig}},
              {test_set_name(), {ddoc_id_copy(), RawNewGroupCopySig}}],
-            "Correct group entries in couch_setview_name_to_sig ets table"),
-    etap:is(ets:lookup(couch_sig_to_setview_pid, {test_set_name(), RawNewGroupSig}),
+            "Correct group entries in ?SET_VIEW_NAME_TO_SIG_ETS_PROD ets table"),
+    etap:is(ets:lookup(?SET_VIEW_SIG_TO_PID_ETS_PROD, {test_set_name(), RawNewGroupSig}),
             [{{test_set_name(), RawNewGroupSig}, NewGroupPid2}],
-            "Correct group entry in couch_sig_to_setview_pid ets table"),
+            "Correct group entry in ?SET_VIEW_SIG_TO_PID_ETS_PROD ets table"),
 
     etap:diag("Deleting original ddoc"),
     ok = couch_set_view_test_util:delete_ddoc(test_set_name(), ddoc_id()),
@@ -154,15 +156,15 @@ test() ->
     etap:is(lists:member(NewIndexFile, AllIndexFiles3), true,
         "Index file found after deleting original ddoc"),
 
-    etap:is(ets:lookup(couch_setview_name_to_sig, test_set_name()),
+    etap:is(ets:lookup(?SET_VIEW_NAME_TO_SIG_ETS_PROD, test_set_name()),
             [],
-            "No group entry in couch_setview_name_to_sig ets table"),
-    etap:is(ets:lookup(couch_sig_to_setview_pid, {test_set_name(), RawNewGroupSig}),
+            "No group entry in ?SET_VIEW_NAME_TO_SIG_ETS_PROD ets table"),
+    etap:is(ets:lookup(?SET_VIEW_SIG_TO_PID_ETS_PROD, {test_set_name(), RawNewGroupSig}),
             [],
-            "No group entry in couch_sig_to_setview_pid ets table"),
+            "No group entry in ?SET_VIEW_SIG_TO_PID_ETS_PROD ets table"),
 
     NewGroupPid3 = couch_set_view:get_group_pid(
-        mapreduce_view, test_set_name(), ddoc_id_copy()),
+        mapreduce_view, test_set_name(), ddoc_id_copy(), prod),
     etap:isnt(NewGroupPid3, NewGroupPid2, "New group pid after deleting original ddoc"),
     query_view(ddoc_id_copy(), num_docs(), "stale=ok"),
     etap:diag("Got empty results after deleting original ddoc and querying "
@@ -170,12 +172,12 @@ test() ->
     etap:is(is_process_alive(NewGroupPid3), true,
         "New group copy alive after query with ?stale=ok"),
 
-    etap:is(ets:lookup(couch_setview_name_to_sig, test_set_name()),
+    etap:is(ets:lookup(?SET_VIEW_NAME_TO_SIG_ETS_PROD, test_set_name()),
             [{test_set_name(), {ddoc_id_copy(), RawNewGroupSig}}],
-            "New group entry in couch_setview_name_to_sig ets table"),
-    etap:is(ets:lookup(couch_sig_to_setview_pid, {test_set_name(), RawNewGroupSig}),
+            "New group entry in ?SET_VIEW_NAME_TO_SIG_ETS_PROD ets table"),
+    etap:is(ets:lookup(?SET_VIEW_SIG_TO_PID_ETS_PROD, {test_set_name(), RawNewGroupSig}),
             [{{test_set_name(), RawNewGroupSig}, NewGroupPid3}],
-            "New group entry in couch_sig_to_setview_pid ets table"),
+            "New group entry in ?SET_VIEW_SIG_TO_PID_ETS_PROD ets table"),
 
     etap:diag("Deleting ddoc copy"),
     ok = couch_set_view_test_util:delete_ddoc(test_set_name(), ddoc_id_copy()),
@@ -187,12 +189,12 @@ test() ->
     % Let couch_set_view have some time to process the group's down message
     ok = timer:sleep(1500),
 
-    etap:is(ets:lookup(couch_setview_name_to_sig, test_set_name()),
+    etap:is(ets:lookup(?SET_VIEW_NAME_TO_SIG_ETS_PROD, test_set_name()),
             [],
-            "No group entry in couch_setview_name_to_sig ets table"),
-    etap:is(ets:lookup(couch_sig_to_setview_pid, {test_set_name(), RawNewGroupSig}),
+            "No group entry in ?SET_VIEW_NAME_TO_SIG_ETS_PROD ets table"),
+    etap:is(ets:lookup(?SET_VIEW_SIG_TO_PID_ETS_PROD, {test_set_name(), RawNewGroupSig}),
             [],
-            "No group entry in couch_sig_to_setview_pid ets table"),
+            "No group entry in ?SET_VIEW_SIG_TO_PID_ETS_PROD ets table"),
 
     test_recreate_ddoc_with_copy(),
 
@@ -207,15 +209,15 @@ test_recreate_ddoc_with_copy() ->
 
     update_ddoc(ddoc_id()),
     GroupPid = couch_set_view:get_group_pid(
-        mapreduce_view, test_set_name(), ddoc_id()),
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
     RawGroupSig = get_raw_sig(ddoc_id()),
 
-    etap:is(ets:lookup(couch_setview_name_to_sig, test_set_name()),
+    etap:is(ets:lookup(?SET_VIEW_NAME_TO_SIG_ETS_PROD, test_set_name()),
             [{test_set_name(), {ddoc_id(), RawGroupSig}}],
-            "Correct group entry in couch_setview_name_to_sig ets table"),
-    etap:is(ets:lookup(couch_sig_to_setview_pid, {test_set_name(), RawGroupSig}),
+            "Correct group entry in ?SET_VIEW_NAME_TO_SIG_ETS_PROD ets table"),
+    etap:is(ets:lookup(?SET_VIEW_SIG_TO_PID_ETS_PROD, {test_set_name(), RawGroupSig}),
             [{{test_set_name(), RawGroupSig}, GroupPid}],
-            "Correct group entry in couch_sig_to_setview_pid ets table"),
+            "Correct group entry in ?SET_VIEW_SIG_TO_PID_ETS_PROD ets table"),
 
     query_view(ddoc_id(), num_docs(), []),
 
@@ -223,31 +225,31 @@ test_recreate_ddoc_with_copy() ->
     ok = create_ddoc_copy(ddoc_id_copy()),
 
     GroupPidCopy = couch_set_view:get_group_pid(
-        mapreduce_view, test_set_name(), ddoc_id_copy()),
+        mapreduce_view, test_set_name(), ddoc_id_copy(), prod),
     etap:is(GroupPidCopy, GroupPid, "DDoc copy has same group pid"),
     RawGroupSigCopy = get_raw_sig(ddoc_id_copy()),
     etap:is(RawGroupSigCopy, RawGroupSig, "DDoc copy has same signature"),
 
     query_view(ddoc_id_copy(), num_docs(), "stale=ok"),
 
-    etap:is(ets:lookup(couch_setview_name_to_sig, test_set_name()),
+    etap:is(ets:lookup(?SET_VIEW_NAME_TO_SIG_ETS_PROD, test_set_name()),
             [{test_set_name(), {ddoc_id(), RawGroupSig}},
              {test_set_name(), {ddoc_id_copy(), RawGroupSig}}],
-            "Correct group entries in couch_setview_name_to_sig ets table"),
-    etap:is(ets:lookup(couch_sig_to_setview_pid, {test_set_name(), RawGroupSig}),
+            "Correct group entries in ?SET_VIEW_NAME_TO_SIG_ETS_PROD ets table"),
+    etap:is(ets:lookup(?SET_VIEW_SIG_TO_PID_ETS_PROD, {test_set_name(), RawGroupSig}),
             [{{test_set_name(), RawGroupSig}, GroupPid}],
-            "Correct group entry in couch_sig_to_setview_pid ets table"),
+            "Correct group entry in ?SET_VIEW_SIG_TO_PID_ETS_PROD ets table"),
 
     etap:diag("Deleting ddoc copy"),
     ok = couch_set_view_test_util:delete_ddoc(test_set_name(), ddoc_id_copy()),
     ok = timer:sleep(1000),
 
-    etap:is(ets:lookup(couch_setview_name_to_sig, test_set_name()),
+    etap:is(ets:lookup(?SET_VIEW_NAME_TO_SIG_ETS_PROD, test_set_name()),
             [],
-            "No group entry in couch_setview_name_to_sig ets table"),
-    etap:is(ets:lookup(couch_sig_to_setview_pid, {test_set_name(), RawGroupSig}),
+            "No group entry in ?SET_VIEW_NAME_TO_SIG_ETS_PROD ets table"),
+    etap:is(ets:lookup(?SET_VIEW_SIG_TO_PID_ETS_PROD, {test_set_name(), RawGroupSig}),
             [],
-            "No group entry in couch_sig_to_setview_pid ets table"),
+            "No group entry in ?SET_VIEW_SIG_TO_PID_ETS_PROD ets table"),
 
     query_view(ddoc_id(), num_docs(), "stale=ok"),
 
@@ -256,66 +258,66 @@ test_recreate_ddoc_with_copy() ->
     % Let couch_set_view have some time to process the group's down message
     ok = timer:sleep(1500),
 
-    etap:is(ets:lookup(couch_setview_name_to_sig, test_set_name()),
+    etap:is(ets:lookup(?SET_VIEW_NAME_TO_SIG_ETS_PROD, test_set_name()),
             [],
-            "No group entry in couch_setview_name_to_sig ets table"),
-    etap:is(ets:lookup(couch_sig_to_setview_pid, {test_set_name(), RawGroupSig}),
+            "No group entry in ?SET_VIEW_NAME_TO_SIG_ETS_PROD ets table"),
+    etap:is(ets:lookup(?SET_VIEW_SIG_TO_PID_ETS_PROD, {test_set_name(), RawGroupSig}),
             [],
-            "No group entry in couch_sig_to_setview_pid ets table"),
+            "No group entry in ?SET_VIEW_SIG_TO_PID_ETS_PROD ets table"),
 
     couch_set_view:cleanup_index_files(mapreduce_view, test_set_name()),
 
     etap:diag("Creating original ddoc again"),
     update_ddoc(ddoc_id()),
     GroupPid2 = couch_set_view:get_group_pid(
-       mapreduce_view, test_set_name(), ddoc_id()),
+       mapreduce_view, test_set_name(), ddoc_id(), prod),
     query_view(ddoc_id(), num_docs(), []),
 
     etap:diag("Creating ddoc copy again"),
     ok = create_ddoc_copy(ddoc_id_copy()),
 
-    etap:is(ets:lookup(couch_setview_name_to_sig, test_set_name()),
+    etap:is(ets:lookup(?SET_VIEW_NAME_TO_SIG_ETS_PROD, test_set_name()),
             [{test_set_name(), {ddoc_id(), RawGroupSig}},
              {test_set_name(), {ddoc_id_copy(), RawGroupSig}}],
-            "Correct group entries in couch_setview_name_to_sig ets table"),
-    etap:is(ets:lookup(couch_sig_to_setview_pid, {test_set_name(), RawGroupSig}),
+            "Correct group entries in ?SET_VIEW_NAME_TO_SIG_ETS_PROD ets table"),
+    etap:is(ets:lookup(?SET_VIEW_SIG_TO_PID_ETS_PROD, {test_set_name(), RawGroupSig}),
             [{{test_set_name(), RawGroupSig}, GroupPid2}],
-            "Correct group entry in couch_sig_to_setview_pid ets table"),
+            "Correct group entry in ?SET_VIEW_SIG_TO_PID_ETS_PROD ets table"),
 
     etap:diag("Killing view group process"),
     couch_util:shutdown_sync(GroupPid2),
     ok = timer:sleep(1000),
 
-    etap:is(ets:lookup(couch_setview_name_to_sig, test_set_name()),
+    etap:is(ets:lookup(?SET_VIEW_NAME_TO_SIG_ETS_PROD, test_set_name()),
             [],
-            "couch_setview_name_to_sig ets table is empty"),
-    etap:is(ets:lookup(couch_sig_to_setview_pid, {test_set_name(), RawGroupSig}),
+            "?SET_VIEW_NAME_TO_SIG_ETS_PROD ets table is empty"),
+    etap:is(ets:lookup(?SET_VIEW_SIG_TO_PID_ETS_PROD, {test_set_name(), RawGroupSig}),
             [],
-            "couch_sig_to_setview_pid ets table is empty"),
+            "?SET_VIEW_SIG_TO_PID_ETS_PROD ets table is empty"),
 
     etap:diag("Starting again view group process"),
     GroupPid3 = couch_set_view:get_group_pid(
-       mapreduce_view, test_set_name(), ddoc_id()),
+       mapreduce_view, test_set_name(), ddoc_id(), prod),
     etap:isnt(GroupPid3, GroupPid2, "Got a different view group pid"),
 
-    etap:is(ets:lookup(couch_setview_name_to_sig, test_set_name()),
+    etap:is(ets:lookup(?SET_VIEW_NAME_TO_SIG_ETS_PROD, test_set_name()),
             [{test_set_name(), {ddoc_id(), RawGroupSig}},
              {test_set_name(), {ddoc_id_copy(), RawGroupSig}}],
-            "Correct group entries in couch_setview_name_to_sig ets table"),
-    etap:is(ets:lookup(couch_sig_to_setview_pid, {test_set_name(), RawGroupSig}),
+            "Correct group entries in ?SET_VIEW_NAME_TO_SIG_ETS_PROD ets table"),
+    etap:is(ets:lookup(?SET_VIEW_SIG_TO_PID_ETS_PROD, {test_set_name(), RawGroupSig}),
             [{{test_set_name(), RawGroupSig}, GroupPid3}],
-            "Correct group entry in couch_sig_to_setview_pid ets table"),
+            "Correct group entry in ?SET_VIEW_SIG_TO_PID_ETS_PROD ets table"),
 
     etap:diag("Deleting master database"),
     couch_set_view_test_util:delete_set_db(test_set_name(), master),
     ok = timer:sleep(1000),
 
-    etap:is(ets:lookup(couch_setview_name_to_sig, test_set_name()),
+    etap:is(ets:lookup(?SET_VIEW_NAME_TO_SIG_ETS_PROD, test_set_name()),
             [],
-            "couch_setview_name_to_sig ets table is empty"),
-    etap:is(ets:lookup(couch_sig_to_setview_pid, {test_set_name(), RawGroupSig}),
+            "?SET_VIEW_NAME_TO_SIG_ETS_PROD ets table is empty"),
+    etap:is(ets:lookup(?SET_VIEW_SIG_TO_PID_ETS_PROD, {test_set_name(), RawGroupSig}),
             [],
-            "couch_sig_to_setview_pid ets table is empty"),
+            "?SET_VIEW_SIG_TO_PID_ETS_PROD ets table is empty"),
 
     etap:is(ets:tab2list(set_view_by_ddoc_id_ets), [], "ddoc cache is empty"),
 
@@ -326,26 +328,26 @@ test_recreate_ddoc_with_copy() ->
     etap:diag("Adding design document again, but not opening its view group"),
     ok = couch_set_view_test_util:update_ddoc(test_set_name(), ddoc(ddoc_id())),
 
-    etap:is(ets:lookup(couch_setview_name_to_sig, test_set_name()),
+    etap:is(ets:lookup(?SET_VIEW_NAME_TO_SIG_ETS_PROD, test_set_name()),
             [{test_set_name(), {ddoc_id(), RawGroupSig}}],
-            "Correct alias in couch_setview_name_to_sig ets table"),
-    etap:is(ets:lookup(couch_sig_to_setview_pid, {test_set_name(), RawGroupSig}),
+            "Correct alias in ?SET_VIEW_NAME_TO_SIG_ETS_PROD ets table"),
+    etap:is(ets:lookup(?SET_VIEW_SIG_TO_PID_ETS_PROD, {test_set_name(), RawGroupSig}),
             [],
-            "couch_sig_to_setview_pid ets table is empty"),
+            "?SET_VIEW_SIG_TO_PID_ETS_PROD ets table is empty"),
 
-    ViewManagerPid = whereis(couch_set_view),
+    ViewManagerPid = couch_set_view_test_util:get_daemon_pid(set_view_manager),
 
     etap:diag("Deleting master database"),
     couch_set_view_test_util:delete_set_db(test_set_name(), master),
     ok = timer:sleep(1000),
 
     etap:is(is_process_alive(ViewManagerPid), true, "View manager didn't die"),
-    etap:is(ets:lookup(couch_setview_name_to_sig, test_set_name()),
+    etap:is(ets:lookup(?SET_VIEW_NAME_TO_SIG_ETS_PROD, test_set_name()),
             [],
-            "couch_setview_name_to_sig ets table is empty"),
-    etap:is(ets:lookup(couch_sig_to_setview_pid, {test_set_name(), RawGroupSig}),
+            "?SET_VIEW_NAME_TO_SIG_ETS_PROD ets table is empty"),
+    etap:is(ets:lookup(?SET_VIEW_SIG_TO_PID_ETS_PROD, {test_set_name(), RawGroupSig}),
             [],
-            "couch_sig_to_setview_pid ets table is empty"),
+            "?SET_VIEW_SIG_TO_PID_ETS_PROD ets table is empty"),
 
     etap:is(ets:tab2list(set_view_by_ddoc_id_ets), [], "ddoc cache is empty"),
     ok.
@@ -437,7 +439,7 @@ get_group_sig() ->
 
 get_raw_sig(DDocId) ->
     Pid = couch_set_view:get_group_pid(
-       mapreduce_view, test_set_name(), DDocId),
+       mapreduce_view, test_set_name(), DDocId, prod),
     {ok, Sig} = gen_server:call(Pid, get_sig, infinity),
     Sig.
 

@@ -52,7 +52,7 @@ test_partition_deletes_when_group_is_alive() ->
     update_documents(0, num_docs(), ValueGenFun1),
 
     GroupPid = couch_set_view:get_group_pid(
-        mapreduce_view, test_set_name(), ddoc_id()),
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
     ok = gen_server:call(GroupPid, {set_auto_cleanup, false}, infinity),
     RepGroupPid = get_replica_pid(GroupPid),
     ok = gen_server:call(RepGroupPid, {set_auto_cleanup, false}, infinity),

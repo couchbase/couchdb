@@ -51,7 +51,7 @@ test() ->
     update_documents(0, num_docs_0(), ValueGenFun1),
 
     GroupPid = couch_set_view:get_group_pid(
-        mapreduce_view, test_set_name(), ddoc_id()),
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
 
     {ok, Stats0} = couch_set_view:get_utilization_stats(
         mapreduce_view, test_set_name(), ddoc_id()),

@@ -50,7 +50,7 @@ test() ->
 
     % Disable automatic updates when there are clients monitoring partition updates
     GroupPid = couch_set_view:get_group_pid(
-        mapreduce_view, test_set_name(), ddoc_id()),
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
     ok = gen_server:call(GroupPid, {set_timeout, infinity}, infinity),
 
     Ref1 = couch_set_view:monitor_partition_update(
@@ -149,7 +149,7 @@ test() ->
 
 get_group_snapshot() ->
     GroupPid = couch_set_view:get_group_pid(
-        mapreduce_view, test_set_name(), ddoc_id()),
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
     {ok, Group, 0} = gen_server:call(
         GroupPid, #set_view_group_req{stale = false}, infinity),
     Group.
@@ -211,7 +211,7 @@ doc_id(I) ->
 
 wait_updater_finished() ->
     GroupPid = couch_set_view:get_group_pid(
-        mapreduce_view, test_set_name(), ddoc_id()),
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
     {ok, UpPid} = gen_server:call(GroupPid, updater_pid),
     case is_pid(UpPid) of
     true ->

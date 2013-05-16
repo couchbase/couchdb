@@ -179,8 +179,19 @@ reverse_key_default(Key) -> Key.
 
 
 -spec get_ddoc_ids_with_sig(binary(), #set_view_group{}) -> [binary()].
-get_ddoc_ids_with_sig(SetName, #set_view_group{sig = Sig, name = FirstDDocId}) ->
-    case ets:match_object(couch_setview_name_to_sig, {SetName, {'$1', Sig}}) of
+get_ddoc_ids_with_sig(SetName, Group) ->
+    #set_view_group{
+        sig = Sig,
+        name = FirstDDocId,
+        category = Category
+    } = Group,
+    NameToSigEts = case Category of
+    prod ->
+        ?SET_VIEW_NAME_TO_SIG_ETS_PROD;
+    dev ->
+        ?SET_VIEW_NAME_TO_SIG_ETS_DEV
+    end,
+    case ets:match_object(NameToSigEts, {SetName, {'$1', Sig}}) of
     [] ->
         % ets just got updated because view group died
         [FirstDDocId];

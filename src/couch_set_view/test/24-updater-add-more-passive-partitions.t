@@ -81,7 +81,7 @@ test() ->
 
 test_state_changes_while_updater_running(ValueGenFun, NumDocs) ->
     GroupPid = couch_set_view:get_group_pid(
-        mapreduce_view, test_set_name(), ddoc_id()),
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
     NewPassiveParts = lists:seq(num_set_partitions() div 2, num_set_partitions() - 1),
 
     % Trigger index update
@@ -145,7 +145,7 @@ test_state_changes_while_updater_running(ValueGenFun, NumDocs) ->
 test_add_passive_partition_to_pending_transition_while_updater_running(
         Active, Passive, NumDocs, ValueGenFun) ->
     GroupPid = couch_set_view:get_group_pid(
-        mapreduce_view, test_set_name(), ddoc_id()),
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
     ok = gen_server:call(GroupPid, {set_auto_cleanup, false}, infinity),
     Parts = ordsets:from_list([hd(Active), hd(Passive)]),
     ok = couch_set_view:set_partition_states(
@@ -199,7 +199,7 @@ wait_group_respawn(_OldPid, T) when T =< 0 ->
     etap:bail("Timeout waiting for group respawn");
 wait_group_respawn(OldPid, T) ->
     NewPid = couch_set_view:get_group_pid(
-        mapreduce_view, test_set_name(), ddoc_id()),
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
     case NewPid of
     OldPid ->
         ok = timer:sleep(20),
@@ -211,7 +211,7 @@ wait_group_respawn(OldPid, T) ->
 
 get_group_snapshot() ->
     GroupPid = couch_set_view:get_group_pid(
-        mapreduce_view, test_set_name(), ddoc_id()),
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
     {ok, Group} = gen_server:call(GroupPid, request_group, infinity),
     Group.
 

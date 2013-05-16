@@ -145,7 +145,7 @@ test() ->
 
 get_group_snapshots() ->
     GroupPid = couch_set_view:get_group_pid(
-        mapreduce_view, test_set_name(), ddoc_id()),
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
     {ok, MainGroup, 0} = gen_server:call(
         GroupPid,
         #set_view_group_req{stale = false, debug = true},
@@ -229,7 +229,7 @@ wait_for_replica_full_update() ->
     etap:diag("Waiting for a full replica group update"),
     UpdateCountBefore = get_replica_updates_count(),
     MainGroupPid = couch_set_view:get_group_pid(
-        mapreduce_view, test_set_name(), ddoc_id()),
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
     {ok, ReplicaGroupPid} = gen_server:call(MainGroupPid, replica_pid, infinity),
     {ok, UpPid} = gen_server:call(ReplicaGroupPid, {start_updater, []}, infinity),
     case is_pid(UpPid) of
