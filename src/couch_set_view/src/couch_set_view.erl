@@ -22,6 +22,8 @@
 -export([mark_partitions_unindexable/4, mark_partitions_indexable/4]).
 -export([monitor_partition_update/4, demonitor_partition_update/4]).
 -export([trigger_update/4, trigger_replica_update/4]).
+% Exported for ns_server
+-export([delete_index_dir/2]).
 
 % Internal, not meant to be used by components other than the view engine.
 -export([get_group_pid/3, get_group/4, release_group/1, get_group_info/3]).
