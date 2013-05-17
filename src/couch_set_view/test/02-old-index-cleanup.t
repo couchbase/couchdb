@@ -446,7 +446,7 @@ get_raw_sig(DDocId) ->
 
 all_index_files() ->
     IndexDir = couch_set_view:set_index_dir(
-        couch_config:get("couchdb", "view_index_dir"), test_set_name()),
+        couch_config:get("couchdb", "view_index_dir"), test_set_name(), prod),
     filelib:fold_files(
         IndexDir, ".*\\.view\\.[0-9]+$", false,
         fun(N, A) -> [filename:basename(N) | A] end, []).

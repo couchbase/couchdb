@@ -307,7 +307,9 @@ group_index_file(Type) ->
     binary_to_list(iolist_to_binary(
         [
             filename:join([
-                couch_set_view:set_index_dir(couch_config:get("couchdb", "view_index_dir"), test_set_name()),
+                couch_set_view:set_index_dir(
+                    couch_config:get("couchdb", "view_index_dir"),
+                    test_set_name(), prod),
                 atom_to_list(Type) ++ "_" ++ binary_to_list(couch_util:get_value(signature, Info))
             ]),
             ".view.1"

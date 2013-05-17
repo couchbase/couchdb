@@ -15,7 +15,7 @@
 
 % public API
 -export([define_group/4]).
--export([cleanup_index_files/2, set_index_dir/2]).
+-export([cleanup_index_files/2, set_index_dir/3]).
 -export([get_group_data_size/3, get_group_signature/3]).
 -export([reset_utilization_stats/3, get_utilization_stats/3]).
 -export([set_partition_states/6, add_replica_partitions/4, remove_replica_partitions/4]).
@@ -538,7 +538,9 @@ cleanup_index_files(Mod, SetName) ->
 list_index_files(SetName) ->
     % call server to fetch the index files
     RootDir = couch_config:get("couchdb", "view_index_dir"),
-    filelib:wildcard(filename:join([set_index_dir(RootDir, SetName), "*"])).
+    ProdIndexDir = filename:join(set_index_dir(RootDir, SetName, prod), "*"),
+    DevIndexDir = filename:join(set_index_dir(RootDir, SetName, dev), "*"),
+    filelib:wildcard(ProdIndexDir) ++ filelib:wildcard(DevIndexDir).
 
 
 -spec get_row_count(#set_view_group{}, #set_view{}) -> non_neg_integer().
@@ -1065,11 +1067,18 @@ code_change(_OldVsn, State, _Extra) ->
 
 
 delete_index_dir(RootDir, SetName) ->
-    DirName = set_index_dir(RootDir, SetName),
-    nuke_dir(RootDir, DirName).
+    ProdDirName = set_index_dir(RootDir, SetName, prod),
+    DevDirName = set_index_dir(RootDir, SetName, dev),
+    nuke_dir(RootDir, ProdDirName),
+    nuke_dir(RootDir, DevDirName).
 
-set_index_dir(RootDir, SetName) ->
-    filename:join([RootDir, "@indexes", ?b2l(SetName)]).
+set_index_dir(RootDir, SetName, prod) ->
+    filename:join([RootDir, "@indexes", ?b2l(SetName)]);
+% development views must be stored in a different directory as they have
+% the same signature/filename as the production views
+set_index_dir(RootDir, SetName, dev) ->
+    filename:join([RootDir, "@indexes_dev", ?b2l(SetName)]).
+
 
 nuke_dir(RootDelDir, Dir) ->
     case file:list_dir(Dir) of

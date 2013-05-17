@@ -125,7 +125,7 @@ get_replica_pid(MainPid) ->
 
 replica_index_file() ->
     RootDir = couch_config:get("couchdb", "view_index_dir"),
-    IndexDir = couch_set_view:set_index_dir(RootDir, test_set_name()),
+    IndexDir = couch_set_view:set_index_dir(RootDir, test_set_name(), prod),
     {ok, GroupSig} = couch_set_view:get_group_signature(
         mapreduce_view, test_set_name(), ddoc_id()),
     filename:join([IndexDir, "replica_" ++ binary_to_list(GroupSig) ++ ".view.1"]).

@@ -1436,11 +1436,12 @@ base_index_file_name(Group, Type) ->
 
 -spec find_index_file(string(), #set_view_group{}) -> string().
 find_index_file(RootDir, Group) ->
-    find_index_file(RootDir, Group, Group#set_view_group.type).
-
--spec find_index_file(string(), #set_view_group{}, set_view_group_type()) -> string().
-find_index_file(RootDir, Group, Type) ->
-    DesignRoot = couch_set_view:set_index_dir(RootDir, Group#set_view_group.set_name),
+    #set_view_group{
+        set_name = SetName,
+        type = Type,
+        category = Category
+    } = Group,
+    DesignRoot = couch_set_view:set_index_dir(RootDir, SetName, Category),
     BaseName = base_index_file_name(Group, Type),
     FullPath = filename:join([DesignRoot, BaseName]),
     case filelib:wildcard(FullPath ++ ".[0-9]*") of
@@ -1473,7 +1474,11 @@ find_index_file(RootDir, Group, Type) ->
 
 -spec delete_index_file(string(), #set_view_group{}, set_view_group_type()) -> no_return().
 delete_index_file(RootDir, Group, Type) ->
-    SetDir = couch_set_view:set_index_dir(RootDir, Group#set_view_group.set_name),
+    #set_view_group{
+        set_name = SetName,
+        category = Category
+    } = Group,
+    SetDir = couch_set_view:set_index_dir(RootDir, SetName, Category),
     BaseName = filename:join([SetDir, base_index_file_name(Group, Type)]),
     lists:foreach(
         fun(F) -> ok = couch_file:delete(RootDir, F) end,
@@ -3298,8 +3303,13 @@ demonitor_partitions([PartId | Rest], SetName, Dict) ->
 
 
 updater_tmp_dir(#state{group = Group} = State) ->
-    #set_view_group{sig = Sig, type = Type} = Group,
-    Base = couch_set_view:set_index_dir(?root_dir(State), ?set_name(State)),
+    #set_view_group{
+        sig = Sig,
+        type = Type,
+        category = Category
+    } = Group,
+    Base = couch_set_view:set_index_dir(
+        ?root_dir(State), ?set_name(State), Category),
     filename:join(
         [Base, "tmp_" ++ couch_util:to_hex(Sig) ++ "_" ++ atom_to_list(Type)]).
 
