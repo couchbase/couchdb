@@ -396,11 +396,12 @@ get_row_count(SetView) ->
     Count.
 
 
-apply_log(SetViews, ViewLogFiles, TmpDir) ->
+apply_log(#set_view_group{views = SetViews} = Group, ViewLogFiles, TmpDir) ->
     lists:zipwith(fun(SetView, Files) ->
         View = SetView#set_view.indexer,
         Bt = View#mapreduce_view.btree,
-        MergeFile = couch_set_view_compactor:merge_files(Files, Bt, TmpDir),
+        MergeFile = couch_set_view_compactor:merge_files(
+            Files, TmpDir, Group, "v"),
         {ok, NewBt, _, _} = couch_set_view_updater_helper:update_btree(
                Bt, MergeFile, ?SORTED_CHUNK_SIZE),
         ok = file2:delete(MergeFile),

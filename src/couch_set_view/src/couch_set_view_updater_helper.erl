@@ -14,7 +14,7 @@
 
 -export([update_btree/3, update_btree/5]).
 -export([encode_btree_op/2, encode_btree_op/3]).
--export([batch_sort_fun/1, file_sorter_batch_format_fun/1]).
+-export([file_sorter_batch_format_fun/1]).
 
 
 -include("couch_db.hrl").
@@ -98,21 +98,6 @@ encode_btree_op(insert = Op, Key, Value) ->
     Data = <<(btree_op_to_code(Op)):8,
              (byte_size(Key)):16, Key/binary, Value/binary>>,
     <<(byte_size(Data)):32, Data/binary>>.
-
-
--spec batch_sort_fun(view_btree_less_fun()) -> view_btree_less_fun().
-batch_sort_fun(KeyLessFun) ->
-    fun(A, B) ->
-        <<OpA:8, KeyASize:16, KeyA:KeyASize/binary, _/binary>> = A,
-        <<OpB:8, KeyBSize:16, KeyB:KeyBSize/binary, _/binary>> = B,
-        case KeyA == KeyB of
-        true ->
-            OpA < OpB;
-        false ->
-            KeyLessFun(KeyA, KeyB)
-        end
-    end.
-
 
 
 btree_op_to_code(remove) ->
