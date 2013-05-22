@@ -341,7 +341,7 @@ wait_for_cleanup_loop(GroupInfo) ->
 
 get_group_info() ->
     {ok, Info} = couch_set_view:get_group_info(
-        mapreduce_view, test_set_name(), ddoc_id()),
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
     Info.
 
 

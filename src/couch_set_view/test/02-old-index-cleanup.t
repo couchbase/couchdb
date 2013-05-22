@@ -433,7 +433,7 @@ create_ddoc_copy(CopyId) ->
 
 get_group_sig() ->
     {ok, Info} = couch_set_view:get_group_info(
-       mapreduce_view, test_set_name(), ddoc_id()),
+       mapreduce_view, test_set_name(), ddoc_id(), prod),
     couch_util:get_value(signature, Info).
 
 

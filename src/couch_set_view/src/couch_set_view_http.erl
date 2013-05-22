@@ -60,7 +60,7 @@ route_request(Req, _SetName, _DDocId, [<<"_define">>]) ->
 
 route_request(#httpd{method = 'GET'} = Req, SetName, DDocId, [<<"_info">>]) ->
     {ok, Info} = couch_set_view:get_group_info(
-        mapreduce_view, SetName, DDocId),
+        mapreduce_view, SetName, DDocId, prod),
     couch_httpd:send_json(Req, 200, {Info});
 
 route_request(#httpd{method = 'GET'} = Req, SetName, DDocId, [<<"_btree_stats">>]) ->

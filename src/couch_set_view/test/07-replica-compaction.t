@@ -271,7 +271,7 @@ get_replica_updates_count(RepGroupInfo) ->
 
 get_replica_group_info() ->
     {ok, MainInfo} = couch_set_view:get_group_info(
-        mapreduce_view, test_set_name(), ddoc_id()),
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
     {RepInfo} = couch_util:get_value(replica_group_info, MainInfo),
     RepInfo.
 

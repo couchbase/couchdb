@@ -226,7 +226,7 @@ verify_group_info_after_main_compact() ->
 
 get_main_group_info() ->
     {ok, MainInfo} = couch_set_view:get_group_info(
-        mapreduce_view, test_set_name(), ddoc_id()),
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
     MainInfo.
 
 

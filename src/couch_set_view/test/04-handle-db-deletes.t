@@ -303,7 +303,7 @@ doc_id(I) ->
 
 group_index_file(Type) ->
     {ok, Info} = couch_set_view:get_group_info(
-        mapreduce_view, test_set_name(), ddoc_id()),
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
     binary_to_list(iolist_to_binary(
         [
             filename:join([

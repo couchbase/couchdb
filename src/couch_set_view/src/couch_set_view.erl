@@ -26,7 +26,7 @@
 -export([delete_index_dir/2]).
 
 % Internal, not meant to be used by components other than the view engine.
--export([get_group_pid/4, get_group/4, release_group/1, get_group_info/3]).
+-export([get_group_pid/4, get_group/4, release_group/1, get_group_info/4]).
 -export([get_map_view/4, get_reduce_view/4]).
 -export([fold/5, fold_reduce/5]).
 -export([get_row_count/2, reduce_to_count/1, extract_map_view/1]).
@@ -448,8 +448,8 @@ start_link(dev) ->
 
 
 % To be used only for debugging. This is a very expensive call.
-get_group_info(Mod, SetName, DDocId) ->
-    GroupPid = get_group_pid(Mod, SetName, DDocId, prod),
+get_group_info(Mod, SetName, DDocId, Category) ->
+    GroupPid = get_group_pid(Mod, SetName, DDocId, Category),
     {ok, _Info} = couch_set_view_group:request_group_info(GroupPid).
 
 
