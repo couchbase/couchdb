@@ -23,6 +23,7 @@ include_files = \
 source_files = \
     src/couch_set_view.app.src \
     src/couch_set_view.erl \
+    src/couch_set_view_dev.erl \
     src/couch_set_view_http.erl \
     src/couch_set_view_group.erl \
     src/couch_set_view_updater.erl \
@@ -65,11 +66,13 @@ test_files = \
     test/23-replica-group-missing.t \
     test/24-updater-add-more-passive-partitions.t \
     test/25-util-stats.t \
-    test/26-multiple-reductions.t
+    test/26-multiple-reductions.t \
+    test/27-dev-views.t
 
 compiled_files = \
     ebin/couch_set_view.app \
     ebin/couch_set_view.beam \
+    ebin/couch_set_view_dev.beam \
     ebin/couch_set_view_http.beam \
     ebin/couch_set_view_group.beam \
     ebin/couch_set_view_updater.beam \
