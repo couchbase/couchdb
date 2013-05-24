@@ -55,7 +55,7 @@ docs_per_partition() -> num_docs() div num_set_partitions().
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(16),
+    etap:plan(20),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -81,8 +81,8 @@ test() ->
     test_reduce_query(2),
     test_reduce_query(3),
 
+    test_set_active_partition(),
     test_map_query_updated(0),
-
     test_cleanup(0),
 
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
@@ -111,6 +111,26 @@ test_reduce_query(PartitionId) ->
     ExpectedReduce = lists:sum(lists:seq(
         1 + Offset, Offset + docs_per_partition())),
     etap:is(Reduce, ExpectedReduce, "Reduce value is correct"),
+
+    shutdown_group().
+
+
+test_set_active_partition() ->
+    setup_test(),
+    ok = configure_view_group(ddoc_id(), 1),
+
+    {ok, Rows} = (catch query_map_view(<<"test">>)),
+    etap:is(length(Rows), docs_per_partition(),
+        "Got " ++ integer_to_list(docs_per_partition()) ++ " view rows"),
+    verify_rows(Rows, 1),
+
+    % Set a different partition as active
+    couch_set_view_dev:set_active_partition(
+        mapreduce_view, test_set_name(), ddoc_id(), 2),
+    {ok, Rows2} = (catch query_map_view(<<"test">>)),
+    etap:is(length(Rows2), docs_per_partition(),
+        "Got " ++ integer_to_list(docs_per_partition()) ++ " view rows"),
+    verify_rows(Rows2, 2),
 
     shutdown_group().
 

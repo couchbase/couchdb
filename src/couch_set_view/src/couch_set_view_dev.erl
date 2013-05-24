@@ -11,10 +11,10 @@
 % the License.
 
 % This module is mainly a proxy to couch_set_view. It's specifically
-% for development view
+% for development views.
 -module(couch_set_view_dev).
 
--export([define_group/4]).
+-export([define_group/4, set_active_partition/4]).
 
 
 -include("couch_db.hrl").
@@ -24,7 +24,7 @@
 -spec define_group(atom(), binary(), binary(), partition_id()) -> 'ok'.
 define_group(Mod, SetName, DDocId, PartitionId) ->
     Params = #set_view_params{
-        max_partitions = 1,
+        max_partitions = ?MAX_NUM_PARTITIONS,
         active_partitions = [PartitionId],
         passive_partitions = [],
         use_replica_index = false
@@ -32,6 +32,24 @@ define_group(Mod, SetName, DDocId, PartitionId) ->
     try
         GroupPid = couch_set_view:get_group_pid(Mod, SetName, DDocId, dev),
         case couch_set_view_group:define_view(GroupPid, Params) of
+        ok ->
+            ok;
+        Error ->
+            throw(Error)
+        end
+    catch throw:{error, empty_group} ->
+        ok
+    end.
+
+
+-spec set_active_partition(atom(), binary(), binary(), partition_id()) -> 'ok'.
+set_active_partition(Mod, SetName, DDocId, ActivePartition) ->
+    try
+        GroupPid = couch_set_view:get_group_pid(Mod, SetName, DDocId, dev),
+        CleanupPartitions =
+            lists:seq(0, ?MAX_NUM_PARTITIONS - 1) -- [ActivePartition],
+        case couch_set_view_group:set_state(
+                GroupPid, [ActivePartition], [], CleanupPartitions) of
         ok ->
             ok;
         Error ->
