@@ -50,6 +50,7 @@
 -define(group_sig(State), (element(3, State#state.init_args))#set_view_group.sig).
 -define(group_id(State), (State#state.group)#set_view_group.name).
 -define(db_set(State), (State#state.group)#set_view_group.db_set).
+-define(category(State), (State#state.group)#set_view_group.category).
 -define(is_defined(State),
     (((State#state.group)#set_view_group.index_header)#set_view_index_header.num_partitions > 0)).
 -define(replicas_on_transfer(State),
@@ -139,16 +140,18 @@ request_group(Pid, Req, Retries) ->
             ref_counter = RefCounter,
             replica_pid = RepPid,
             name = GroupName,
-            set_name = SetName
+            set_name = SetName,
+            category = Category
         } = Group,
         case request_replica_group(RepPid, ActiveReplicasBitmask, Req) of
         {ok, RepGroup} ->
             {ok, Group#set_view_group{replica_group = RepGroup}};
         retry ->
             couch_ref_counter:drop(RefCounter),
-            ?LOG_INFO("Retrying group `~s` request, stale=~s,"
-                  " set `~s`, retry attempt #~p",
-                  [GroupName, Req#set_view_group_req.stale, SetName, Retries]),
+            ?LOG_INFO("Retrying group `~s` (~s) request, stale=~s,"
+                      " set `~s`, retry attempt #~p",
+                      [GroupName, Category, Req#set_view_group_req.stale,
+                       SetName,Retries]),
             request_group(Pid, Req, Retries + 1)
         end;
     Error ->
@@ -324,8 +327,10 @@ init({_, _, Group} = InitArgs) ->
         do_init(InitArgs)
     catch
     _:Error ->
-        ?LOG_ERROR("~s error opening set view group `~s`, signature `~s', from set `~s`: ~p",
-                   [?MODULE, Group#set_view_group.name, hex_sig(Group),
+        ?LOG_ERROR("~s error opening set view group `~s` (~s), signature `~s',"
+                   " from set `~s`: ~p",
+                   [?MODULE, Group#set_view_group.name,
+                    Group#set_view_group.category, hex_sig(Group),
                     Group#set_view_group.set_name, Error]),
         exit(Error)
     end,
@@ -335,7 +340,13 @@ init({_, _, Group} = InitArgs) ->
 
 do_init({_, SetName, _} = InitArgs) ->
     case prepare_group(InitArgs, false) of
-    {ok, #set_view_group{fd = Fd, index_header = Header, type = Type} = Group} ->
+    {ok, Group} ->
+        #set_view_group{
+            fd = Fd,
+            index_header = Header,
+            type = Type,
+            category = Category
+        } = Group,
         RefCounter = new_fd_ref_counter(Fd),
         PartitionsList = make_partitions_list(Group),
         case Header#set_view_index_header.has_replica of
@@ -351,9 +362,10 @@ do_init({_, SetName, _} = InitArgs) ->
         case Header#set_view_index_header.num_partitions > 0 of
         false ->
             DbSet = nil,
-            ?LOG_INFO("Started undefined ~s set view group `~s`, group `~s`,"
-                      " signature `~s', view count: ~p",
-                      [Type, SetName, Group#set_view_group.name, hex_sig(Group), ViewCount]);
+            ?LOG_INFO("Started undefined ~s (~s) set view group `~s`,"
+                      " group `~s`,  signature `~s', view count: ~p",
+                      [Type, Category, SetName,
+                       Group#set_view_group.name, hex_sig(Group), ViewCount]);
         true ->
             DbSet = case (catch couch_db_set:open(SetName, PartitionsList)) of
             {ok, SetPid} ->
@@ -361,7 +373,8 @@ do_init({_, SetName, _} = InitArgs) ->
             Error ->
                 throw(Error)
             end,
-            ?LOG_INFO("Started ~s set view group `~s`, group `~s`, signature `~s', view count ~p~n"
+            ?LOG_INFO("Started ~s (~s) set view group `~s`, group `~s`,"
+                      " signature `~s', view count ~p~n"
                       "active partitions:      ~w~n"
                       "passive partitions:     ~w~n"
                       "cleanup partitions:     ~w~n"
@@ -374,7 +387,8 @@ do_init({_, SetName, _} = InitArgs) ->
                       false ->
                           ""
                       end,
-                      [Type, SetName, Group#set_view_group.name, hex_sig(Group), ViewCount,
+                      [Type, Category, SetName, Group#set_view_group.name,
+                       hex_sig(Group), ViewCount,
                        couch_set_view_util:decode_bitmask(Header#set_view_index_header.abitmask),
                        couch_set_view_util:decode_bitmask(Header#set_view_index_header.pbitmask),
                        couch_set_view_util:decode_bitmask(Header#set_view_index_header.cbitmask),
@@ -471,16 +485,18 @@ handle_call({define_view, NumPartitions, ActiveList, ActiveBitmask,
         State3 = monitor_partitions(State2, ActiveList),
         State4 = monitor_partitions(State3, PassiveList),
         ok = commit_header(NewGroup),
-        ?LOG_INFO("Set view `~s`, ~s group `~s`, signature `~s', configured with:~n"
-            "~p partitions~n"
-            "~sreplica support~n"
-            "initial active partitions ~w~n"
-            "initial passive partitions ~w",
-            [?set_name(State), ?type(State), DDocId, hex_sig(Group), NumPartitions,
-            case UseReplicaIndex of
-            true ->  "";
-            false -> "no "
-            end,
+        ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`, signature `~s',"
+                  " configured with:~n"
+                  "~p partitions~n"
+                  "~sreplica support~n"
+                  "initial active partitions ~w~n"
+                  "initial passive partitions ~w",
+                  [?set_name(State), ?type(State), ?category(State), DDocId,
+                   hex_sig(Group), NumPartitions,
+                   case UseReplicaIndex of
+                   true ->  "";
+                   false -> "no "
+                   end,
             ActiveList, PassiveList]),
         {reply, ok, State4, ?GET_TIMEOUT(State4)};
     Error ->
@@ -515,9 +531,11 @@ handle_call({add_replicas, BitMask}, _From, #state{replica_group = ReplicaPid} =
     0 ->
         BitMask;
     Common1 ->
-        ?LOG_INFO("Set view `~s`, ~s group `~s`, ignoring request to set partitions"
-                  " ~w to replica state because they are currently marked as active",
-                  [?set_name(State), ?type(State), ?group_id(State),
+        ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`, ignoring request to"
+                  " set partitions ~w to replica state because they are"
+                  " currently marked as active",
+                  [?set_name(State), ?type(State), ?category(State),
+                   ?group_id(State),
                    couch_set_view_util:decode_bitmask(Common1)]),
         BitMask bxor Common1
     end,
@@ -525,18 +543,22 @@ handle_call({add_replicas, BitMask}, _From, #state{replica_group = ReplicaPid} =
     0 ->
         BitMask2;
     Common2 ->
-        ?LOG_INFO("Set view `~s`, ~s group `~s`, ignoring request to set partitions"
-                  " ~w to replica state because they are currently marked as passive",
-                  [?set_name(State), ?type(State), ?group_id(State),
+        ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`, ignoring request to"
+                  " set partitions  ~w to replica state because they are"
+                  " currently marked as passive",
+                  [?set_name(State), ?type(State), ?category(State),
+                   ?group_id(State),
                    couch_set_view_util:decode_bitmask(Common2)]),
         BitMask2 bxor Common2
     end,
     Parts = couch_set_view_util:decode_bitmask(BitMask3),
     ok = set_state(ReplicaPid, [], Parts, []),
     NewReplicaParts = ordsets:union(ReplicaParts, Parts),
-    ?LOG_INFO("Set view `~s`, ~s group `~s`, defined new replica partitions: ~w~n"
+    ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`,"
+              " defined new replica partitions: ~w~n"
               "New full set of replica partitions is: ~w~n",
-              [?set_name(State), ?type(State), ?group_id(State), Parts, NewReplicaParts]),
+              [?set_name(State), ?type(State), ?category(State),
+               ?group_id(State), Parts, NewReplicaParts]),
     State2 = State#state{
         replica_partitions = NewReplicaParts
     },
@@ -594,8 +616,10 @@ handle_call({remove_replicas, Partitions}, _From, #state{replica_group = Replica
         end,
         NewState = maybe_start_cleaner(State6)
     end,
-    ?LOG_INFO("Set view `~s`, ~s group `~s`, marked the following replica partitions for removal: ~w",
-              [?set_name(State), ?type(State), ?group_id(State), Partitions]),
+    ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`, marked the following"
+              " replica partitions for removal: ~w",
+              [?set_name(State), ?type(State), ?category(State),
+               ?group_id(State), Partitions]),
     {reply, ok, NewState, ?GET_TIMEOUT(NewState)};
 
 handle_call({mark_as_unindexable, Partitions}, _From, State) ->
@@ -704,8 +728,10 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
         HeaderBin = couch_set_view_util:group_to_header_bin(NewGroup),
         ok = couch_file:write_header_bin(NewGroup#set_view_group.fd, HeaderBin),
         if is_pid(UpdaterPid) ->
-            ?LOG_INFO("Set view `~s`, ~s group `~s`, compact group up to date - restarting updater",
-                      [?set_name(State), ?type(State), ?group_id(State)]),
+            ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`, compact group"
+                      " up to date - restarting updater",
+                      [?set_name(State), ?type(State), ?category(State),
+                       ?group_id(State)]),
             couch_util:shutdown_sync(UpdaterPid);
         true ->
             ok
@@ -738,9 +764,10 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
                 filepath = NewFilepath
             }
         end,
-        ?LOG_INFO("Set view `~s`, ~s group `~s`, compaction complete in ~.3f seconds,"
-            " filtered ~p key-value pairs",
-            [?set_name(State), ?type(State), ?group_id(State), Duration, CleanupKVCount]),
+        ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`, compaction complete"
+                  " in ~.3f seconds, filtered ~p key-value pairs",
+                  [?set_name(State), ?type(State), ?category(State),
+                   ?group_id(State), Duration, CleanupKVCount]),
         inc_util_stat(#util_stats.compaction_time, Duration),
         ok = couch_file:only_snapshot_reads(OldFd),
         ok = couch_file:delete(?root_dir(State), OldFilepath),
@@ -789,8 +816,10 @@ handle_call({compact_done, _Result}, _From, State) ->
 handle_call(cancel_compact, _From, #state{compactor_pid = nil} = State) ->
     {reply, ok, State, ?GET_TIMEOUT(State)};
 handle_call(cancel_compact, _From, #state{compactor_pid = Pid} = State) ->
-    ?LOG_INFO("Set view `~s`, ~s group `~s`, canceling compaction (pid ~p)",
-              [?set_name(State), ?type(State), ?group_id(State), Pid]),
+    ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`,"
+              " canceling compaction (pid ~p)",
+              [?set_name(State), ?type(State), ?category(State),
+               ?group_id(State), Pid]),
     State2 = stop_compactor(State),
     State3 = maybe_start_cleaner(State2),
     {reply, ok, State3, ?GET_TIMEOUT(State3)};
@@ -815,10 +844,10 @@ handle_call({demonitor_partition_update, Ref}, _From, State) ->
     error ->
         {reply, ok, State, ?GET_TIMEOUT(State)};
     {ok, #up_listener{monref = MonRef, partition = PartId}} ->
-        ?LOG_INFO("Set view `~s`, ~s group `~s`, removing partition ~p"
+        ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`, removing partition ~p"
                    "update monitor, reference ~p",
-                   [?set_name(State), ?type(State), ?group_id(State),
-                    PartId, Ref]),
+                   [?set_name(State), ?type(State), ?category(State),
+                    ?group_id(State), PartId, Ref]),
         erlang:demonitor(MonRef, [flush]),
         State2 = State#state{update_listeners = dict:erase(Ref, Listeners)},
         {reply, ok, State2, ?GET_TIMEOUT(State2)}
@@ -880,13 +909,14 @@ handle_cast({ddoc_updated, NewSig, Aliases}, State) ->
         waiting_list = Waiters,
         group = #set_view_group{sig = CurSig}
     } = State,
-    ?LOG_INFO("Set view `~s`, ~s group `~s`, signature `~s', design document was updated~n"
+    ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`, signature `~s',"
+              " design document was updated~n"
               "  new signature:   ~s~n"
               "  current aliases: ~p~n"
               "  shutdown flag:   ~s~n"
               "  waiting clients: ~p~n",
-              [?set_name(State), ?type(State), ?group_id(State),
-               hex_sig(CurSig), hex_sig(NewSig), Aliases,
+              [?set_name(State), ?type(State), ?category(State),
+               ?group_id(State), hex_sig(CurSig), hex_sig(NewSig), Aliases,
                State#state.shutdown, length(Waiters)]),
     case NewSig of
     CurSig ->
@@ -906,9 +936,10 @@ handle_cast({ddoc_updated, NewSig, Aliases}, State) ->
 handle_cast({before_partition_delete, master}, State) ->
     Error = {error, {db_deleted, ?master_dbname((?set_name(State)))}},
     State2 = reply_all(State, Error),
-    ?LOG_INFO("Set view `~s`, ~s group `~s`, going to shutdown because "
+    ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`, going to shutdown because "
               "master database is being deleted",
-              [?set_name(State), ?type(State), ?group_id(State)]),
+              [?set_name(State), ?type(State), ?category(State),
+               ?group_id(State)]),
     {stop, shutdown, State2};
 
 handle_cast({before_partition_delete, _PartId}, State) when not ?is_defined(State) ->
@@ -935,9 +966,10 @@ handle_cast({before_partition_delete, PartId}, #state{group = Group} = State) ->
         lists:member(PartId, ActivePending) orelse
         lists:member(PartId, PassivePending) of
     true ->
-        ?LOG_INFO("Set view `~s`, ~s group `~s`, marking partition ~p for "
-                  "cleanup because it's about to be deleted",
-                  [?set_name(State), ?type(State), ?group_id(State), PartId]),
+        ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`, marking"
+                  " partition ~p for cleanup because it's about to be deleted",
+                  [?set_name(State), ?type(State), ?category(State),
+                   ?group_id(State), PartId]),
         case couch_set_view_util:has_part_seq(PartId, ?set_unindexable_seqs(State#state.group)) of
         true ->
             State2 = process_mark_as_indexable(State, [PartId], false);
@@ -951,9 +983,10 @@ handle_cast({before_partition_delete, PartId}, #state{group = Group} = State) ->
         true ->
             % Can't be a replica on transfer, otherwise it would be part of the
             % set of passive partitions.
-            ?LOG_INFO("Set view `~s`, ~s group `~s`, removing replica partition ~p"
-                      " because it's about to be deleted",
-                      [?set_name(State), ?type(State), ?group_id(State), PartId]),
+            ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`, removing"
+                      " replica partition ~p because it's about to be deleted",
+                      [?set_name(State), ?type(State), ?category(State),
+                       ?group_id(State), PartId]),
             ok = set_state(ReplicaPid, [], [], [PartId]),
             State2 = State#state{
                replica_partitions = ordsets:del_element(PartId, ReplicaParts)
@@ -1048,7 +1081,7 @@ handle_info({updater_info, _Pid, {state, _UpdaterState}}, State) ->
 handle_info({'EXIT', Pid, {clean_group, NewGroup0, Count, Time}}, #state{cleaner_pid = Pid} = State) ->
     #state{group = OldGroup} = State,
     NewGroup = update_clean_group_seqs(OldGroup, NewGroup0),
-    ?LOG_INFO("Cleanup finished for set view `~s`, ~s group `~s`~n"
+    ?LOG_INFO("Cleanup finished for set view `~s`, ~s (~s) group `~s`~n"
               "Removed ~p values from the index in ~.3f seconds~n"
               "active partitions before:  ~w~n"
               "active partitions after:   ~w~n"
@@ -1063,7 +1096,8 @@ handle_info({'EXIT', Pid, {clean_group, NewGroup0, Count, Time}}, #state{cleaner
           false ->
                []
           end,
-          [?set_name(State), ?type(State), ?group_id(State), Count, Time,
+          [?set_name(State), ?type(State), ?category(State), ?group_id(State),
+           Count, Time,
            couch_set_view_util:decode_bitmask(?set_abitmask(OldGroup)),
            couch_set_view_util:decode_bitmask(?set_abitmask(NewGroup)),
            couch_set_view_util:decode_bitmask(?set_pbitmask(OldGroup)),
@@ -1084,16 +1118,18 @@ handle_info({'EXIT', Pid, {clean_group, NewGroup0, Count, Time}}, #state{cleaner
     {noreply, maybe_apply_pending_transition(State2)};
 
 handle_info({'EXIT', Pid, Reason}, #state{cleaner_pid = Pid} = State) ->
-    ?LOG_ERROR("Set view `~s`, ~s group `~s`, cleanup process ~p died with "
-               "unexpected reason: ~p",
-               [?set_name(State), ?type(State), ?group_id(State), Pid, Reason]),
+    ?LOG_ERROR("Set view `~s`, ~s (~s) group `~s`, cleanup process ~p"
+               " died with unexpected reason: ~p",
+               [?set_name(State), ?type(State), ?category(State),
+                ?group_id(State), Pid, Reason]),
     {noreply, State#state{cleaner_pid = nil}, ?GET_TIMEOUT(State)};
 
 handle_info({'EXIT', Pid, Reason},
     #state{group = #set_view_group{db_set = Pid}} = State) ->
-    ?LOG_INFO("Set view `~s`, ~s group `~s`, terminating because database set ~p"
-              " exited with reason: ~p",
-              [?set_name(State), ?type(State), ?group_id(State), Pid, Reason]),
+    ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`, terminating"
+              " because database set ~p exited with reason: ~p",
+              [?set_name(State), ?type(State), ?category(State),
+               ?group_id(State), Pid, Reason]),
     {stop, Reason, State};
 
 handle_info({'EXIT', Pid, {updater_finished, Result}}, #state{updater_pid = Pid} = State) ->
@@ -1121,17 +1157,18 @@ handle_info({'EXIT', Pid, {updater_finished, Result}}, #state{updater_pid = Pid}
     } = State2,
     WaitList2 = reply_with_group(NewGroup2, ReplicaParts, WaitList),
     inc_updates(NewGroup2, Result, false, false),
-    ?LOG_INFO("Set view `~s`, ~s group `~s`, updater finished~n"
-        "Indexing time: ~.3f seconds~n"
-        "Blocked time:  ~.3f seconds~n"
-        "Inserted IDs:  ~p~n"
-        "Deleted IDs:   ~p~n"
-        "Inserted KVs:  ~p~n"
-        "Deleted KVs:   ~p~n"
-        "Cleaned KVs:   ~p~n"
-        "# seqs done:   ~p~n",
-        [?set_name(State), ?type(State), ?group_id(State), IndexingTime, BlockedTime,
-            InsertedIds, DeletedIds, InsertedKVs, DeletedKVs, CleanupKVCount, SeqsDone]),
+    ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`, updater finished~n"
+              "Indexing time: ~.3f seconds~n"
+              "Blocked time:  ~.3f seconds~n"
+              "Inserted IDs:  ~p~n"
+              "Deleted IDs:   ~p~n"
+              "Inserted KVs:  ~p~n"
+              "Deleted KVs:   ~p~n"
+              "Cleaned KVs:   ~p~n"
+              "# seqs done:   ~p~n",
+              [?set_name(State), ?type(State), ?category(State),
+               ?group_id(State), IndexingTime, BlockedTime, InsertedIds,
+               DeletedIds, InsertedKVs, DeletedKVs, CleanupKVCount, SeqsDone]),
     case Shutdown andalso (WaitList2 == []) of
     true ->
         {stop, normal, State2#state{waiting_list = []}};
@@ -1154,8 +1191,10 @@ handle_info({'EXIT', Pid, {updater_finished, Result}}, #state{updater_pid = Pid}
     end;
 
 handle_info({'EXIT', Pid, {updater_error, Error}}, #state{updater_pid = Pid} = State) ->
-    ?LOG_ERROR("Set view `~s`, ~s group `~s`, received error from updater: ~p",
-        [?set_name(State), ?type(State), ?group_id(State), Error]),
+    ?LOG_ERROR("Set view `~s`, ~s (~s) group `~s`,"
+               " received error from updater: ~p",
+               [?set_name(State), ?type(State), ?category(State),
+                ?group_id(State), Error]),
     Listeners2 = error_notify_update_listeners(
         State, State#state.update_listeners, {updater_error, Error}),
     State2 = State#state{
@@ -1194,14 +1233,17 @@ handle_info({'EXIT', UpPid, reset}, #state{updater_pid = UpPid} = State) ->
     end;
 
 handle_info({'EXIT', Pid, normal}, State) ->
-    ?LOG_INFO("Set view `~s`, ~s group `~s`, linked PID ~p stopped normally",
-              [?set_name(State), ?type(State), ?group_id(State), Pid]),
+    ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`,"
+              " linked PID ~p stopped normally",
+              [?set_name(State), ?type(State), ?category(State),
+               ?group_id(State), Pid]),
     {noreply, State, ?GET_TIMEOUT(State)};
 
 handle_info({'EXIT', Pid, Reason}, #state{compactor_pid = Pid} = State) ->
-    ?LOG_ERROR("Set view `~s`, ~s group `~s`, compactor process ~p died with "
-               "unexpected reason: ~p",
-               [?set_name(State), ?type(State), ?group_id(State), Pid, Reason]),
+    ?LOG_ERROR("Set view `~s`, ~s (~s) group `~s`,"
+               " compactor process ~p died with unexpected reason: ~p",
+               [?set_name(State), ?type(State), ?category(State),
+                ?group_id(State), Pid, Reason]),
     couch_util:shutdown_sync(State#state.compactor_file),
     _ = couch_file:delete(?root_dir(State), compact_file_name(State)),
     State2 = State#state{
@@ -1215,9 +1257,10 @@ handle_info({'EXIT', Pid, Reason}, #state{group = #set_view_group{db_set = Pid}}
     {stop, {db_set_died, Reason}, State};
 
 handle_info({'EXIT', Pid, Reason}, State) ->
-    ?LOG_ERROR("Set view `~s`, ~s group `~s`, terminating because linked PID ~p "
-              "died with reason: ~p",
-              [?set_name(State), ?type(State), ?group_id(State), Pid, Reason]),
+    ?LOG_ERROR("Set view `~s`, ~s (~s) group `~s`,"
+               " terminating because linked PID ~p died with reason: ~p",
+               [?set_name(State), ?type(State), ?category(State),
+                ?group_id(State), Pid, Reason]),
     {stop, Reason, State};
 
 handle_info({'DOWN', Ref, process, Pid, Reason}, State) ->
@@ -1232,10 +1275,11 @@ handle_info({'DOWN', Ref, process, Pid, Reason}, State) ->
             State#state.db_refs),
         UpdateListeners2 = dict:filter(
             fun(RefList, #up_listener{pid = Pid0, partition = PartId}) when Pid0 == Pid ->
-                ?LOG_INFO("Set view `~s`, ~s group `~s`, removing partition ~p"
-                           "update monitor, reference ~p (it died)",
-                           [?set_name(State), ?type(State), ?group_id(State),
-                            PartId, RefList]),
+                ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`,"
+                          " removing partition ~p update monitor,"
+                          " reference ~p (it died)",
+                          [?set_name(State), ?type(State), ?category(State),
+                           ?group_id(State), PartId, RefList]),
                 false;
             (_ , _) ->
                 true
@@ -1244,16 +1288,19 @@ handle_info({'DOWN', Ref, process, Pid, Reason}, State) ->
         State2 = State#state{update_listeners = UpdateListeners2},
         {noreply, State2, ?GET_TIMEOUT(State2)}
     catch throw:{found, PartId} ->
-        ?LOG_ERROR("Set view `~s`, ~s group `~s`, terminating because "
-                   "partition ~p died with reason: ~p",
-                   [?set_name(State), ?type(State), ?group_id(State), PartId, Reason]),
+        ?LOG_ERROR("Set view `~s`, ~s (~s) group `~s`, terminating because"
+                   " partition ~p died with reason: ~p",
+                   [?set_name(State), ?type(State), ?category(State),
+                    ?group_id(State), PartId, Reason]),
         {stop, shutdown, State}
     end.
 
 
 terminate(Reason, #state{group = #set_view_group{sig = Sig} = Group} = State) ->
-    ?LOG_INFO("Set view `~s`, ~s group `~s`, signature `~s`, terminating with reason: ~p",
-        [?set_name(State), ?type(State), ?group_id(State), hex_sig(Sig), Reason]),
+    ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`, signature `~s`,"
+              " terminating with reason: ~p",
+              [?set_name(State), ?type(State), ?category(State),
+               ?group_id(State), hex_sig(Sig), Reason]),
     Listeners2 = error_notify_update_listeners(
         State, State#state.update_listeners, {shutdown, Reason}),
     State2 = reply_all(State#state{update_listeners = Listeners2}, Reason),
@@ -1405,8 +1452,10 @@ prepare_group({RootDir, SetName, Group0}, ForceReset)->
             end
         end;
     {error, emfile} = Error ->
-        ?LOG_ERROR("Can't open set view `~s`, ~s group `~s`: too many files open",
-            [SetName, Type, Group#set_view_group.name]),
+        ?LOG_ERROR("Can't open set view `~s`, ~s (~s) group `~s`:"
+                   " too many files open",
+                   [SetName, Type, Group#set_view_group.category,
+                    Group#set_view_group.name]),
         Error;
     Error ->
         ok = delete_index_file(RootDir, Group, Type),
@@ -2038,10 +2087,13 @@ persist_partition_states(State, ActiveList, PassiveList, CleanupList, PendingTra
                 } = Listener,
                 case lists:member(PartId, CleanupList) of
                 true ->
-                    ?LOG_INFO("Set view `~s`, ~s group `~s`, replying to partition ~p"
-                               "update monitor, reference ~p, error: marked_for_cleanup",
-                               [?set_name(State), ?type(State), ?group_id(State),
-                                Ref, PartId]),
+                    ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`,"
+                              " replying to partition ~p"
+                              " update monitor, reference ~p,"
+                              " error: marked_for_cleanup",
+                              [?set_name(State), ?type(State),
+                               ?category(State), ?group_id(State),
+                               Ref, PartId]),
                     Pid ! {Ref, marked_for_cleanup},
                     erlang:demonitor(MonRef, [flush]),
                     false;
@@ -2114,13 +2166,14 @@ maybe_apply_pending_transition(State) ->
         UnindexablePending),
     case (ApplyActiveList /= []) orelse (ApplyPassiveList /= []) of
     true ->
-        ?LOG_INFO("Set view `~s`, ~s group `~s`, applying state transitions "
-                  "from pending transition:~n"
+        ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`,"
+                  " applying state transitions from pending transition:~n"
                   "  Active partitions:  ~w~n"
                   "  Passive partitions: ~w~n"
                   "  Unindexable:        ~w~n",
-                  [?set_name(State), ?type(State), ?group_id(State),
-                   ApplyActiveList, ApplyPassiveList, ApplyUnindexableList]),
+                  [?set_name(State), ?type(State), ?category(State),
+                   ?group_id(State), ApplyActiveList, ApplyPassiveList,
+                   ApplyUnindexableList]),
         case (ActiveInCleanup == []) andalso (PassiveInCleanup == []) of
         true ->
             NewPendingTrans = nil;
@@ -2330,7 +2383,7 @@ update_header(State, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs, NewUnindexa
     NewState = monitor_partitions(NewState0, PartitionsList),
     FsyncHeader = (NewCbitmask /= Cbitmask),
     ok = commit_header(NewState#state.group, FsyncHeader),
-    ?LOG_INFO("Set view `~s`, ~s group `~s`, partition states updated~n"
+    ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`, partition states updated~n"
               "active partitions before:    ~w~n"
               "active partitions after:     ~w~n"
               "passive partitions before:   ~w~n"
@@ -2350,7 +2403,8 @@ update_header(State, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs, NewUnindexa
               "  active:      ~w~n"
               "  passive:     ~w~n"
               "  unindexable: ~w~n",
-              [?set_name(State), ?type(State), ?group_id(State),
+              [?set_name(State), ?type(State), ?category(State),
+               ?group_id(State),
                couch_set_view_util:decode_bitmask(Abitmask),
                couch_set_view_util:decode_bitmask(NewAbitmask),
                couch_set_view_util:decode_bitmask(Pbitmask),
@@ -2383,8 +2437,10 @@ maybe_start_cleaner(#state{group = Group} = State) ->
         State;
     false ->
         Cleaner = spawn_link(fun() -> exit(cleaner(State)) end),
-        ?LOG_INFO("Started cleanup process ~p for set view `~s`, ~s group `~s`",
-                  [Cleaner, ?set_name(State), ?type(State), ?group_id(State)]),
+        ?LOG_INFO("Started cleanup process ~p for"
+                  " set view `~s`, ~s (~s) group `~s`",
+                  [Cleaner, ?set_name(State), ?type(State), ?category(State),
+                   ?group_id(State)]),
         State#state{cleaner_pid = Cleaner}
     end.
 
@@ -2396,8 +2452,8 @@ stop_cleaner(#state{cleaner_pid = Pid} = State) when is_pid(Pid) ->
     MRef = erlang:monitor(process, Pid),
     Pid ! stop,
     unlink(Pid),
-    ?LOG_INFO("Stopping cleanup process for set view `~s`, group `~s`",
-        [?set_name(State), ?group_id(State)]),
+    ?LOG_INFO("Stopping cleanup process for set view `~s`, group `~s` (~s)",
+              [?set_name(State), ?group_id(State), ?category(State)]),
     NewState = receive
     {'EXIT', Pid, Reason} ->
         after_cleaner_stopped(State, Reason);
@@ -2406,8 +2462,10 @@ stop_cleaner(#state{cleaner_pid = Pid} = State) when is_pid(Pid) ->
         after_cleaner_stopped(State, Reason)
     after 5000 ->
         couch_util:shutdown_sync(Pid),
-        ?LOG_ERROR("Timeout stopping cleanup process ~p for set view `~s`, ~s group `~s`",
-                   [Pid, ?set_name(State), ?type(State), ?group_id(State)]),
+        ?LOG_ERROR("Timeout stopping cleanup process ~p for"
+                   " set view `~s`, ~s (~s) group `~s`",
+                   [Pid, ?set_name(State), ?type(State), ?category(State),
+                    ?group_id(State)]),
         State#state{cleaner_pid = nil}
     end,
     erlang:demonitor(MRef, [flush]),
@@ -2417,11 +2475,13 @@ stop_cleaner(#state{cleaner_pid = Pid} = State) when is_pid(Pid) ->
 after_cleaner_stopped(State, {clean_group, NewGroup0, Count, Time}) ->
     #state{group = OldGroup} = State,
     NewGroup = update_clean_group_seqs(OldGroup, NewGroup0),
-    ?LOG_INFO("Stopped cleanup process for set view `~s`, ~s group `~s`.~n"
+    ?LOG_INFO("Stopped cleanup process for"
+              " set view `~s`, ~s (~s) group `~s`.~n"
               "Removed ~p values from the index in ~.3f seconds~n"
               "New set of partitions to cleanup: ~w~n"
               "Old set of partitions to cleanup: ~w~n",
-              [?set_name(State), ?type(State), ?group_id(State), Count, Time,
+              [?set_name(State), ?type(State), ?category(State),
+               ?group_id(State), Count, Time,
                couch_set_view_util:decode_bitmask(?set_cbitmask(NewGroup)),
                couch_set_view_util:decode_bitmask(?set_cbitmask(OldGroup))]),
     case ?set_cbitmask(NewGroup) of
@@ -2435,9 +2495,10 @@ after_cleaner_stopped(State, {clean_group, NewGroup0, Count, Time}) ->
         cleaner_pid = nil
     };
 after_cleaner_stopped(#state{cleaner_pid = Pid} = State, Reason) ->
-    ?LOG_ERROR("Cleanup process ~p for set view `~s`, ~s group `~s`, died "
-               "with reason: ~p",
-               [Pid, ?set_name(State), ?type(State), ?group_id(State), Reason]),
+    ?LOG_ERROR("Cleanup process ~p for set view `~s`, ~s (~s) group `~s`,"
+               " died with reason: ~p",
+               [Pid, ?set_name(State), ?type(State), ?category(State),
+                ?group_id(State), Reason]),
     State#state{cleaner_pid = nil}.
 
 
@@ -2479,8 +2540,9 @@ make_partitions_list(Group) ->
 -spec start_compactor(#state{}, compact_fun()) -> #state{}.
 start_compactor(State, CompactFun) ->
     #state{group = Group} = State2 = stop_cleaner(State),
-    ?LOG_INFO("Set view `~s`, ~s group `~s`, compaction starting",
-              [?set_name(State2), ?type(State), ?group_id(State2)]),
+    ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`, compaction starting",
+              [?set_name(State2), ?type(State), ?category(State),
+               ?group_id(State2)]),
     #set_view_group{
         fd = CompactFd
     } = NewGroup = compact_group(State2),
@@ -2530,9 +2592,11 @@ stop_updater(#state{updater_pid = nil} = State) ->
     State;
 stop_updater(#state{updater_pid = Pid, initial_build = true} = State) when is_pid(Pid) ->
     LostTime = updater_lost_time(),
-    ?LOG_INFO("Stopping updater for set view `~s`, ~s group `~s` "
-              "(doing initial index build), wasted indexing time ~.3f seconds.",
-        [?set_name(State), ?type(State), ?group_id(State), LostTime]),
+    ?LOG_INFO("Stopping updater for set view `~s`, ~s (~s) group `~s`"
+              " (doing initial index build),"
+              " wasted indexing time ~.3f seconds.",
+              [?set_name(State), ?type(State), ?category(State),
+               ?group_id(State), LostTime]),
     couch_util:shutdown_sync(Pid),
     inc_util_stat(#util_stats.updater_interruptions, 1),
     inc_util_stat(#util_stats.wasted_indexing_time, LostTime),
@@ -2545,8 +2609,9 @@ stop_updater(#state{updater_pid = Pid} = State) when is_pid(Pid) ->
     MRef = erlang:monitor(process, Pid),
     exit(Pid, shutdown),
     unlink(Pid),
-    ?LOG_INFO("Stopping updater for set view `~s`, ~s group `~s`",
-        [?set_name(State), ?type(State), ?group_id(State)]),
+    ?LOG_INFO("Stopping updater for set view `~s`, ~s (~s) group `~s`",
+              [?set_name(State), ?type(State), ?category(State),
+               ?group_id(State)]),
     State2 = process_last_updater_group(State, nil),
     NewState = receive
     {'EXIT', Pid, Reason} ->
@@ -2575,7 +2640,7 @@ after_updater_stopped(State, {updater_finished, Result}) ->
         cleanup_kv_count = CleanupKVCount,
         seqs = SeqsDone
     } = Stats,
-    ?LOG_INFO("Set view `~s`, ~s group `~s`, updater stopped~n"
+    ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`, updater stopped~n"
               "Indexing time: ~.3f seconds~n"
               "Blocked time:  ~.3f seconds~n"
               "Inserted IDs:  ~p~n"
@@ -2584,8 +2649,10 @@ after_updater_stopped(State, {updater_finished, Result}) ->
               "Deleted KVs:   ~p~n"
               "Cleaned KVs:   ~p~n"
               "# seqs done:   ~p~n",
-              [?set_name(State), ?type(State), ?group_id(State), IndexingTime, BlockedTime,
-               InsertedIds, DeletedIds, InsertedKVs, DeletedKVs, CleanupKVCount, SeqsDone]),
+              [?set_name(State), ?type(State), ?category(State),
+               ?group_id(State), IndexingTime, BlockedTime,
+               InsertedIds, DeletedIds, InsertedKVs, DeletedKVs,
+               CleanupKVCount, SeqsDone]),
     State2 = process_partial_update(State, NewGroup),
     case UpdaterFinishState of
     updating_active ->
@@ -2606,10 +2673,11 @@ after_updater_stopped(State, {updater_finished, Result}) ->
 after_updater_stopped(State, _Reason) ->
     IndexingTime = updater_indexing_time(),
     LostTime = updater_lost_time(),
-    ?LOG_INFO("Stopped updater, set view `~s`, ~s group `~s`, "
+    ?LOG_INFO("Stopped updater, set view `~s`, ~s (~s) group `~s`, "
               "useful indexing time of ~.3f seconds, "
               "wasted indexing time of ~.3f seconds.",
-              [?set_name(State), ?type(State), ?group_id(State), IndexingTime, LostTime]),
+              [?set_name(State), ?type(State), ?category(State),
+               ?group_id(State), IndexingTime, LostTime]),
     inc_util_stat(#util_stats.updater_interruptions, 1),
     inc_util_stat(#util_stats.useful_indexing_time, IndexingTime),
     inc_util_stat(#util_stats.wasted_indexing_time, LostTime),
@@ -2663,8 +2731,9 @@ do_start_updater(State, CurSeqs, Options) ->
         group = Group,
         compactor_pid = CompactPid
     } = State2 = stop_cleaner(State),
-    ?LOG_INFO("Starting updater for set view `~s`, ~s group `~s`",
-              [?set_name(State), ?type(State), ?group_id(State)]),
+    ?LOG_INFO("Starting updater for set view `~s`, ~s (~s) group `~s`",
+              [?set_name(State), ?type(State), ?category(State),
+               ?group_id(State)]),
     TmpDir = updater_tmp_dir(State),
     CompactRunning = is_pid(CompactPid) andalso is_process_alive(CompactPid),
     reset_updater_start_time(),
@@ -2751,19 +2820,23 @@ maybe_fix_replica_group(ReplicaPid, Group) ->
     [] ->
         ok;
     _ ->
-        ?LOG_INFO("Set view `~s`, main group `~s`, fixing replica group by marking "
-                  " partitions ~w for cleanup because they were already transferred into "
-                  " the main group",
-                  [Group#set_view_group.set_name, Group#set_view_group.set_name, CleanupList])
+        ?LOG_INFO("Set view `~s`, main (~s) group `~s`, fixing replica group"
+                  " by marking partitions ~w  for cleanup because they were"
+                  " already transferred into the main group",
+                  [Group#set_view_group.set_name,
+                   Group#set_view_group.category, Group#set_view_group.name,
+                   CleanupList])
     end,
     case ActiveList of
     [] ->
         ok;
     _ ->
-        ?LOG_INFO("Set view `~s`, main group `~s`, fixing replica group by marking "
-                  " partitions ~w as active because they are marked as on transfer in "
-                  " the main group",
-                  [Group#set_view_group.set_name, Group#set_view_group.set_name, ActiveList])
+        ?LOG_INFO("Set view `~s`, main (~s) group `~s`, fixing replica group"
+                  " by marking partitions ~w as active because they are"
+                  " marked as on transfer in the main group",
+                  [Group#set_view_group.set_name,
+                   Group#set_view_group.category, Group#set_view_group.name,
+                   ActiveList])
     end,
     ok = set_state(ReplicaPid, ActiveList, [], CleanupList).
 
@@ -2782,10 +2855,12 @@ process_partial_update(State, NewGroup0) ->
         NewGroup1 = fix_updater_group(NewGroup0, Group),
         State#state{group = NewGroup1};
     _ ->
-        ?LOG_INFO("Set view `~s`, ~s group `~s`, completed transferral of replica partitions ~w~n"
+        ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`,"
+                  " completed transferral of replica partitions ~w~n"
                   "New group of replica partitions to transfer is ~w~n",
-                  [?set_name(State), ?type(State), ?group_id(State),
-                   ReplicasTransferred, ?set_replicas_on_transfer(NewGroup0)]),
+                  [?set_name(State), ?type(State), ?category(State),
+                   ?group_id(State), ReplicasTransferred,
+                   ?set_replicas_on_transfer(NewGroup0)]),
         ok = set_state(State#state.replica_group, [], [], ReplicasTransferred),
         State#state{
             group = NewGroup0,
@@ -2815,20 +2890,22 @@ notify_update_listeners(State, Listeners, NewGroup) ->
                 } = Listener,
                 case couch_set_view_util:find_part_seq(PartId, ?set_seqs(NewGroup)) of
                 {ok, IndexedSeq} when IndexedSeq >= Seq ->
-                   ?LOG_INFO("Set view `~s`, ~s group `~s`, replying to partition ~p"
-                              " update monitor, reference ~p, desired indexed seq ~p,"
-                              " indexed seq ~p",
-                              [?set_name(State), ?type(State), ?group_id(State),
-                               PartId, Ref, Seq, IndexedSeq]),
+                   ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`,"
+                             " replying to partition ~p update monitor,"
+                             " reference ~p, desired indexed seq ~p,"
+                             " indexed seq ~p",
+                             [?set_name(State), ?type(State), ?category(State),
+                              ?group_id(State), PartId, Ref, Seq, IndexedSeq]),
                     Pid ! {Ref, updated},
                     erlang:demonitor(MonRef, [flush]),
                     false;
                 {ok, IndexedSeq} ->
-                   ?LOG_INFO("Set view `~s`, ~s group `~s`, not replying yet to partition"
-                             " ~p update monitor, reference ~p, desired indexed seq ~p,"
+                   ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`,"
+                             " not replying yet to partition ~p update"
+                             " monitor, reference ~p, desired indexed seq ~p,"
                              " indexed seq ~p",
-                             [?set_name(State), ?type(State), ?group_id(State),
-                              PartId, Ref, Seq, IndexedSeq]),
+                             [?set_name(State), ?type(State), ?category(State),
+                              ?group_id(State), PartId, Ref, Seq, IndexedSeq]),
                     true
                 end
             end,
@@ -2840,10 +2917,11 @@ notify_update_listeners(State, Listeners, NewGroup) ->
 error_notify_update_listeners(State, Listeners, Error) ->
     _ = dict:fold(
         fun(Ref, #up_listener{pid = ListPid, partition = PartId}, _Acc) ->
-            ?LOG_INFO("Set view `~s`, ~s group `~s`, replying to partition ~p"
-                       "update monitor, reference ~p, error: ~p",
-                       [?set_name(State), ?type(State), ?group_id(State),
-                        Ref, PartId, Error]),
+            ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`,"
+                      " replying to partition ~p update monitor,"
+                      " reference ~p, error: ~p",
+                       [?set_name(State), ?type(State), ?category(State),
+                        ?group_id(State), Ref, PartId, Error]),
             ListPid ! {Ref, Error}
         end,
         ok, Listeners),
@@ -3148,14 +3226,15 @@ do_process_mark_as_unindexable(State0, Partitions) ->
             pending_transition = PendingTrans2
         }
     },
-    ?LOG_INFO("Set view `~s`, ~s group `~s`, unindexable partitions added.~n"
+    ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`,"
+              " unindexable partitions added.~n"
               "Previous set:         ~w~n"
               "New set:              ~w~n"
               "Previous pending set: ~w~n"
               "New pending set:      ~w~n",
-              [?set_name(State), ?type(State), ?group_id(State),
-               ?set_unindexable_seqs(Group), UnindexableSeqs2,
-               PendingUnindexable, PendingUnindexable2]),
+              [?set_name(State), ?type(State), ?category(State),
+               ?group_id(State), ?set_unindexable_seqs(Group),
+               UnindexableSeqs2, PendingUnindexable, PendingUnindexable2]),
     NewState = State#state{group = Group2},
     NewState2 = stop_compactor(NewState),
     case UpdaterWasRunning of
@@ -3230,14 +3309,15 @@ do_process_mark_as_indexable(State0, Partitions, LogTransition) ->
     },
     case LogTransition of
     true ->
-        ?LOG_INFO("Set view `~s`, ~s group `~s`, unindexable partitions removed.~n"
+        ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`,"
+                  " unindexable partitions removed.~n"
                   "Previous set:         ~w~n"
                   "New set:              ~w~n"
                   "Previous pending set: ~w~n"
                   "New pending set:      ~w~n",
-                  [?set_name(State), ?type(State), ?group_id(State),
-                   ?set_unindexable_seqs(Group), UnindexableSeqs2,
-                   PendingUnindexable, PendingUnindexable2]);
+                  [?set_name(State), ?type(State), ?category(State),
+                   ?group_id(State), ?set_unindexable_seqs(Group),
+                   UnindexableSeqs2, PendingUnindexable, PendingUnindexable2]);
     false ->
         ok
     end,
@@ -3361,18 +3441,20 @@ process_monitor_partition_update(#state{group = Group} = State, PartId, Ref, Pid
             partition = PartId,
             seq = CurSeq
         },
-        ?LOG_INFO("Set view `~s`, ~s group `~s`, blocking partition ~p update monitor,"
-                   " reference ~p, desired indexed seq ~p, indexed seq ~p",
-                   [?set_name(State), ?type(State), ?group_id(State),
-                    PartId, Ref, CurSeq, Seq]),
+        ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`,"
+                  " blocking partition ~p update monitor,"
+                  " reference ~p, desired indexed seq ~p, indexed seq ~p",
+                  [?set_name(State), ?type(State), ?category(State),
+                   ?group_id(State), PartId, Ref, CurSeq, Seq]),
         State2#state{
             update_listeners = dict:store(Ref, Listener, State2#state.update_listeners)
         };
     false ->
-        ?LOG_INFO("Set view `~s`, ~s group `~s`, replying to partition ~p update monitor,"
-                   " reference ~p, desired indexed seq ~p, indexed seq ~p",
-                   [?set_name(State), ?type(State), ?group_id(State),
-                    PartId, Ref, CurSeq, Seq]),
+        ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`,"
+                  " replying to partition ~p update monitor,"
+                  " reference ~p, desired indexed seq ~p, indexed seq ~p",
+                  [?set_name(State), ?type(State), ?category(State),
+                   ?group_id(State), PartId, Ref, CurSeq, Seq]),
         Pid ! {Ref, updated},
         State2
     end.
