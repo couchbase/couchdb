@@ -1503,7 +1503,8 @@ simple_set_view_query(Params, DDoc, Req) ->
         name = SetName,
         partitions = Partitions0,
         ddoc_id = DDocId,
-        view_name = ViewName
+        view_name = ViewName,
+        category = Category
     } = SetViewSpec,
 
     Stale = list_to_existing_atom(string:to_lower(
@@ -1523,7 +1524,8 @@ simple_set_view_query(Params, DDoc, Req) ->
         update_stats = true,
         wanted_partitions = Partitions,
         debug = Debug,
-        type = IndexType
+        type = IndexType,
+        category = Category
     },
 
     case get_set_view(

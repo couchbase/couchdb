@@ -22,5 +22,6 @@
     view_name,
     partitions,
     view = nil,
-    group = nil
+    group = nil,
+    category = prod :: 'prod' | 'dev'
 }).
