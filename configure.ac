@@ -526,7 +526,6 @@ AC_CONFIG_FILES([test/view_server/Makefile])
 AC_CONFIG_FILES([test/python/Makefile])
 AC_CONFIG_FILES([test/python/set_view/Makefile])
 AC_CONFIG_FILES([utils/Makefile])
-AC_CONFIG_FILES([var/Makefile])
 if test x${IS_WINDOWS} = xTRUE; then
     AC_CONFIG_FILES([src/couchdb/priv/icu_driver/win32/msbuild.bat.tpl])
     AC_CONFIG_FILES([src/couchdb/priv/icu_driver/win32/couch_icu_driver.vcxproj.tpl])
