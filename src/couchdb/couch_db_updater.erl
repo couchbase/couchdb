@@ -885,9 +885,6 @@ start_copy_compact(#db{name=Name,filepath=Filepath}=Db, Options) ->
     PrefixOpts = case lists:member(dropdeletes, Options) of
         true -> ["--dropdeletes"];
         _ -> []
-    end ++ case lists:member(evict_bodies, Options) of
-        true -> ["--evict"];
-        _ -> []
     end,
     CompactFile = Filepath ++ ".compact",
     ?LOG_DEBUG("Compaction process spawned for db \"~s\"", [Name]),
