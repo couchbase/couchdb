@@ -869,7 +869,7 @@ native_initial_compact(#db{filepath=Filepath}=Db, CompactFile, PrefixOpts) ->
     try
         Compactor = open_port({spawn_executable, CompactCmd},
                               [{args, Opts}, exit_status,
-                               use_stdio, stderr_to_stdout, {line, 80}]),
+                               use_stdio, stderr_to_stdout, {line, 1024}]),
         case compactor_message_loop(Compactor) of
             0 ->
                 make_target_db(Db, CompactFile);
