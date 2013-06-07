@@ -23,7 +23,7 @@
 % For the utils
 -export([clean_views/5]).
 % For the compactor
--export([compact_view/6, apply_log/3]).
+-export([compact_view/6, apply_log/2]).
 % For the main module
 -export([get_row_count/1, make_wrapper_fun/2, fold/4]).
 
@@ -396,15 +396,13 @@ get_row_count(SetView) ->
     Count.
 
 
-apply_log(#set_view_group{views = SetViews} = Group, ViewLogFiles, TmpDir) ->
-    lists:zipwith(fun(SetView, Files) ->
+apply_log(#set_view_group{views = SetViews}, ViewLogFiles) ->
+    lists:zipwith(fun(SetView, ViewLogFile) ->
         View = SetView#set_view.indexer,
         Bt = View#mapreduce_view.btree,
-        MergeFile = couch_set_view_compactor:merge_files(
-            Files, TmpDir, Group, "v"),
         {ok, NewBt, _, _} = couch_set_view_updater_helper:update_btree(
-               Bt, MergeFile, ?SORTED_CHUNK_SIZE),
-        ok = file2:delete(MergeFile),
+               Bt, ViewLogFile, ?SORTED_CHUNK_SIZE),
+        ok = file2:delete(ViewLogFile),
         SetView#set_view{
             indexer = View#mapreduce_view{
                 btree = NewBt

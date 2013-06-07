@@ -28,7 +28,7 @@ num_docs_0() -> 51136.
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(46),
+    etap:plan(75),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -81,6 +81,16 @@ test() ->
     test_start_compactor_after_updater(ValueGenFun5, num_docs_0() + 64),
 
     verify_btrees(ValueGenFun5, num_docs_0() + 64),
+
+    etap:diag("Testing compaction retry phase with multiple "
+              "updates during initial phase"),
+    ValueGenFun6 = fun(I) -> I * 39 end,
+    ValueGenFun7 = fun(I) -> I * 45 end,
+    % Simulates MB-8357
+    test_retry_multiple_updates_during_initial_phase(
+        ValueGenFun6, ValueGenFun7, num_docs_0() + 64),
+
+    verify_btrees(ValueGenFun7, num_docs_0() + 64),
 
     couch_util:shutdown_sync(GroupPid),
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
@@ -247,6 +257,71 @@ test_start_compactor_after_updater(ValueGenFun, DocCount) ->
     ok.
 
 
+% Simulates MB-8357
+test_retry_multiple_updates_during_initial_phase(ValueGenFun1, ValueGenFun2, DocCount) ->
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
+    {ok, CompactorPid} = couch_set_view_compactor:start_compact(
+        mapreduce_view, test_set_name(), ddoc_id(), main),
+    CompactorPid ! pause,
+    CompactorRef = erlang:monitor(process, CompactorPid),
+    receive
+    {'DOWN', CompactorRef, process, CompactorPid, noproc} ->
+        etap:bail("Compactor finished too soon")
+    after 0 ->
+        ok
+    end,
+
+    update_documents(0, DocCount, ValueGenFun1),
+    {ok, UpPid1} = gen_server:call(GroupPid, {start_updater, []}, infinity),
+    case is_pid(UpPid1) of
+    true ->
+        ok;
+    false ->
+        etap:bail("Updater not started")
+    end,
+    UpRef1 = erlang:monitor(process, UpPid1),
+    receive
+    {'DOWN', UpRef1, process, UpPid1, {updater_finished, _}} ->
+        ok;
+    {'DOWN', UpRef1, process, UpPid1, Reason1} ->
+        etap:bail("Updater died with unexpected reason: " ++ couch_util:to_list(Reason1))
+    after ?MAX_WAIT_TIME ->
+        etap:bail("Timeout waiting for updater to finish")
+    end,
+    etap:is(is_process_alive(CompactorPid), true, "Compactor is still running"),
+
+    update_documents(0, DocCount, ValueGenFun2),
+    {ok, UpPid2} = gen_server:call(GroupPid, {start_updater, []}, infinity),
+    case is_pid(UpPid2) of
+    true ->
+        ok;
+    false ->
+        etap:bail("Updater not started")
+    end,
+    UpRef2 = erlang:monitor(process, UpPid2),
+    receive
+    {'DOWN', UpRef2, process, UpPid2, {updater_finished, _}} ->
+        ok;
+    {'DOWN', UpRef2, process, UpPid2, Reason2} ->
+        etap:bail("Updater died with unexpected reason: " ++ couch_util:to_list(Reason2))
+    after ?MAX_WAIT_TIME ->
+        etap:bail("Timeout waiting for updater to finish")
+    end,
+    etap:is(is_process_alive(CompactorPid), true, "Compactor is still running"),
+
+    CompactorPid ! unpause,
+    receive
+    {'DOWN', CompactorRef, process, CompactorPid, normal} ->
+        ok;
+    {'DOWN', CompactorRef, process, CompactorPid, Reason3} ->
+        etap:bail("Compactor died with unexpected reason: " ++ couch_util:to_list(Reason3))
+    after ?MAX_WAIT_TIME ->
+        etap:bail("Timeout waiting for compactor to finish")
+    end,
+    ok.
+
+
 get_group_snapshot() ->
     GroupPid = couch_set_view:get_group_pid(
         mapreduce_view, test_set_name(), ddoc_id(), prod),
@@ -272,6 +347,10 @@ create_set() ->
             ]}},
             {<<"view_2">>, {[
                 {<<"map">>, <<"function(doc, meta) { emit(meta.id, meta.id); }">>},
+                {<<"reduce">>, <<"_count">>}
+            ]}},
+            {<<"view_3">>, {[
+                {<<"map">>, <<"function(doc, meta) { emit(doc.value, null); }">>},
                 {<<"reduce">>, <<"_count">>}
             ]}}
         ]}}
@@ -350,7 +429,7 @@ verify_btrees(ValueGenFun, NumDocs) ->
     Group = get_group_snapshot(),
     #set_view_group{
         id_btree = IdBtree,
-        views = [View1, View2],
+        views = [View3, View1, View2],
         index_header = #set_view_index_header{
             seqs = HeaderUpdateSeqs,
             abitmask = Abitmask,
@@ -368,6 +447,11 @@ verify_btrees(ValueGenFun, NumDocs) ->
             btree = View2Btree
         }
     } = View2,
+    #set_view{
+        indexer = #mapreduce_view{
+            btree = View3Btree
+        }
+    } = View3,
     ActiveParts = lists:seq(0, num_set_partitions() - 1),
     ExpectedBitmask = couch_set_view_util:build_bitmask(ActiveParts),
     DbSeqs = couch_set_view_test_util:get_db_seqs(test_set_name(), ActiveParts),
@@ -381,6 +465,14 @@ verify_btrees(ValueGenFun, NumDocs) ->
         couch_set_view_test_util:full_reduce_view_btree(Group, View1Btree),
         {ok, {ExpectedKVCount, [ExpectedKVCount], ExpectedBitmask}},
         "View1 Btree has the right reduce value"),
+    etap:is(
+        couch_set_view_test_util:full_reduce_view_btree(Group, View2Btree),
+        {ok, {ExpectedKVCount, [ExpectedKVCount], ExpectedBitmask}},
+        "View2 Btree has the right reduce value"),
+    etap:is(
+        couch_set_view_test_util:full_reduce_view_btree(Group, View3Btree),
+        {ok, {ExpectedKVCount, [ExpectedKVCount], ExpectedBitmask}},
+        "View3 Btree has the right reduce value"),
 
     etap:is(HeaderUpdateSeqs, DbSeqs, "Header has right update seqs list"),
     etap:is(Abitmask, ExpectedBitmask, "Header has right active bitmask"),
@@ -405,7 +497,11 @@ verify_btrees(ValueGenFun, NumDocs) ->
             end,
             true = (P < num_set_partitions()),
             DocId = doc_id(I),
-            Value = [{View1#set_view.id_num, DocId}, {View2#set_view.id_num, DocId}],
+            Value = [
+                {View3#set_view.id_num, ValueGenFun(P + (C - 1) * num_set_partitions())},
+                {View1#set_view.id_num, DocId},
+                {View2#set_view.id_num, DocId}
+            ],
             ExpectedKv = {<<P:16, DocId/binary>>, {P, Value}},
             case ExpectedKv =:= Kv of
             true ->
@@ -459,4 +555,24 @@ verify_btrees(ValueGenFun, NumDocs) ->
         0, []),
     etap:is(View2BtreeFoldResult, ExpectedKVCount,
         "View2 Btree has " ++ integer_to_list(ExpectedKVCount) ++ " entries"),
+
+    etap:diag("Verifying the View3 Btree"),
+    {ok, _, View3BtreeFoldResult} = couch_set_view_test_util:fold_view_btree(
+        Group,
+        View3Btree,
+        fun(Kv, _, I) ->
+            PartId = I rem num_set_partitions(),
+            DocId = doc_id(I),
+            ExpectedKv = {{ValueGenFun(I), DocId}, {PartId, null}},
+            case ExpectedKv =:= Kv of
+            true ->
+                ok;
+            false ->
+                etap:bail("View3 Btree has an unexpected KV at iteration " ++ integer_to_list(I))
+            end,
+            {ok, I + 1}
+        end,
+        0, []),
+    etap:is(View3BtreeFoldResult, ExpectedKVCount,
+        "View3 Btree has " ++ integer_to_list(ExpectedKVCount) ++ " entries"),
     ok.

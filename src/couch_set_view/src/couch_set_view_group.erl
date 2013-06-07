@@ -795,6 +795,7 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
             compactor_pid = nil,
             compactor_file = nil,
             compactor_fun = nil,
+            compact_log_files = nil,
             updater_pid = NewUpdaterPid,
             initial_build = is_pid(NewUpdaterPid) andalso
                     couch_set_view_util:is_group_empty(NewGroup2),
@@ -854,8 +855,10 @@ handle_call({demonitor_partition_update, Ref}, _From, State) ->
     end;
 
 handle_call(compact_log_files, _From, State) ->
+    {Files0, Seqs} = State#state.compact_log_files,
+    Files = lists:map(fun lists:reverse/1, Files0),
     NewState = State#state{compact_log_files = nil},
-    {reply, {ok, State#state.compact_log_files}, NewState, ?GET_TIMEOUT(NewState)};
+    {reply, {ok, {Files, Seqs}}, NewState, ?GET_TIMEOUT(NewState)};
 
 handle_call(reset_utilization_stats, _From, #state{replica_group = RepPid} = State) ->
     reset_util_stats(),

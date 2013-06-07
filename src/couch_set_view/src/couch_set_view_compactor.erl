@@ -16,7 +16,6 @@
 -include_lib("couch_set_view/include/couch_set_view.hrl").
 
 -export([start_compact/3, start_compact/4, start_compact/6, cancel_compact/5]).
--export([merge_files/4]).
 
 -define(SORTED_CHUNK_SIZE, 1024 * 1024).
 
@@ -271,77 +270,47 @@ total_kv_count(#set_view_group{id_btree = IdBtree, views = Views, mod = Mod}) ->
         IdCount, Views).
 
 
+apply_log(Group, [[] | _], NewSeqs, _TmpDir) ->
+    #set_view_group{
+        id_btree = IdBtree,
+        mod = Mod,
+        views = Views,
+        index_header = Header
+    } = Group,
+    Group#set_view_group{
+        index_header = Header#set_view_index_header{
+            seqs = NewSeqs,
+            id_btree_state = couch_btree:get_state(IdBtree),
+            view_states = [Mod:get_state(V#set_view.indexer) || V <- Views]
+        }
+    };
 apply_log(Group, LogFiles, NewSeqs, TmpDir) ->
     #set_view_group{
         id_btree = IdBtree,
-        index_header = Header,
         mod = Mod
     } = Group,
 
-    [IdLogFiles | ViewLogFiles] = LogFiles,
-    IdMergeFile = merge_files(IdLogFiles, TmpDir, Group, "i"),
+    {Batch, LogFiles2} = get_file_batch(LogFiles),
+
+    [IdMergeFile | ViewLogFiles] = Batch,
     {ok, NewIdBtree, _, _} = couch_set_view_updater_helper:update_btree(
         IdBtree, IdMergeFile, ?SORTED_CHUNK_SIZE),
     ok = file2:delete(IdMergeFile),
 
-    NewViews = Mod:apply_log(Group, ViewLogFiles, TmpDir),
+    NewViews = Mod:apply_log(Group, ViewLogFiles),
 
-    Group#set_view_group{
+    Group2 = Group#set_view_group{
         id_btree = NewIdBtree,
-        views = NewViews,
-        index_header = Header#set_view_index_header{
-            seqs = NewSeqs,
-            id_btree_state = couch_btree:get_state(NewIdBtree),
-            view_states = [Mod:get_state(V#set_view.indexer) || V <- NewViews]
-        }
-    }.
+        views = NewViews
+    },
+    apply_log(Group2, LogFiles2, NewSeqs, TmpDir).
 
 
-merge_files([F], _TmpDir, _Group, _ViewFileType) ->
-    F;
-merge_files(Files, TmpDir, Group, ViewFileType) ->
-    NewFile = couch_set_view_util:new_sort_file_path(TmpDir, compactor),
-    FileMergerCmd = case os:find_executable("couch_view_file_merger") of
-    false ->
-        throw(<<"couch_view_file_merger command not found">>);
-    Cmd ->
-        Cmd
-    end,
-    PortOpts = [exit_status, use_stdio, stderr_to_stdout, {line, 4096}, binary],
-    Merger = open_port({spawn_executable, FileMergerCmd}, PortOpts),
-    MergerInput = [
-        ViewFileType, $\n,
-        integer_to_list(length(Files)), $\n,
-        string:join(Files, "\n"), $\n,
-        NewFile, $\n
-    ],
-    true = port_command(Merger, MergerInput),
-    try
-        file_merger_wait_loop(Merger, Group, []),
-        NewFile
-    after
-        catch port_close(Merger)
-    end.
-
-
-file_merger_wait_loop(Port, Group, Acc) ->
-    receive
-    {Port, {exit_status, 0}} ->
-        ok;
-    {Port, {exit_status, Status}} ->
-        throw({file_merger_exit, Status});
-    {Port, {data, {noeol, Data}}} ->
-        file_merger_wait_loop(Port, Group, [Data | Acc]);
-    {Port, {data, {eol, Data}}} ->
-        #set_view_group{
-            set_name = SetName,
-            name = DDocId,
-            type = Type
-        } = Group,
-        Msg = lists:reverse([Data | Acc]),
-        ?LOG_ERROR("Set view `~s`, ~s group `~s`, received error from file merger: ~s",
-                   [SetName, Type, DDocId, Msg]),
-        file_merger_wait_loop(Port, Group, []);
-    {Port, Error} ->
-        throw({file_merger_error, Error})
-    end.
+get_file_batch(LogFiles) ->
+    lists:foldr(
+        fun(BtreeFiles, {AccBatch, AccLogFiles2}) ->
+            [First | Rest] = BtreeFiles,
+            {[First | AccBatch], [Rest | AccLogFiles2]}
+        end,
+        {[], []},
+        LogFiles).
