@@ -294,21 +294,33 @@ total_kv_count(#set_view_group{id_btree = IdBtree, views = Views}) ->
         IdCount, Views).
 
 
-apply_log(Group, LogFiles, NewSeqs, TmpDir) ->
+apply_log(Group, [[] | _], NewSeqs, _TmpDir) ->
     #set_view_group{
         id_btree = IdBtree,
+        views = Views,
         index_header = Header
     } = Group,
+    Group#set_view_group{
+        index_header = Header#set_view_index_header{
+            seqs = NewSeqs,
+            id_btree_state = couch_btree:get_state(IdBtree),
+            view_states = [couch_btree:get_state(V#set_view.btree) || V <- Views]
+        }
+    };
+apply_log(Group, LogFiles, NewSeqs, TmpDir) ->
+    #set_view_group{
+        id_btree = IdBtree
+    } = Group,
 
-    [IdLogFiles | ViewLogFiles] = LogFiles,
-    IdMergeFile = merge_files(IdLogFiles, IdBtree, TmpDir),
+    {Batch, LogFiles2} = get_file_batch(LogFiles),
+
+    [IdMergeFile | ViewLogFiles] = Batch,
     {ok, NewIdBtree, _, _} = couch_set_view_updater_helper:update_btree(
         IdBtree, IdMergeFile, ?SORTED_CHUNK_SIZE),
     ok = file2:delete(IdMergeFile),
 
     NewViews = lists:zipwith(
-        fun(#set_view{btree = Bt} = V, Files) ->
-           MergeFile = merge_files(Files, Bt, TmpDir),
+        fun(#set_view{btree = Bt} = V, MergeFile) ->
            {ok, NewBt, _, _} = couch_set_view_updater_helper:update_btree(
                Bt, MergeFile, ?SORTED_CHUNK_SIZE),
            ok = file2:delete(MergeFile),
@@ -316,26 +328,18 @@ apply_log(Group, LogFiles, NewSeqs, TmpDir) ->
         end,
         Group#set_view_group.views, ViewLogFiles),
 
-    Group#set_view_group{
+    Group2 = Group#set_view_group{
         id_btree = NewIdBtree,
-        views = NewViews,
-        index_header = Header#set_view_index_header{
-            seqs = NewSeqs,
-            id_btree_state = couch_btree:get_state(NewIdBtree),
-            view_states = [couch_btree:get_state(V#set_view.btree) || V <- NewViews]
-        }
-    }.
+        views = NewViews
+    },
+    apply_log(Group2, LogFiles2, NewSeqs, TmpDir).
 
 
-merge_files([F], _Bt, _TmpDir) ->
-    F;
-merge_files(Files, #btree{less = Less}, TmpDir) ->
-    NewFile = couch_set_view_util:new_sort_file_path(TmpDir, compactor),
-    SortOptions = [
-        {order, couch_set_view_updater_helper:batch_sort_fun(Less)},
-        {tmpdir, TmpDir},
-        {format, binary}
-    ],
-    ok = file_sorter_2:merge(Files, NewFile, SortOptions),
-    ok = lists:foreach(fun(F) -> ok = file2:delete(F) end, Files),
-    NewFile.
+get_file_batch(LogFiles) ->
+    lists:foldr(
+        fun(BtreeFiles, {AccBatch, AccLogFiles2}) ->
+            [First | Rest] = BtreeFiles,
+            {[First | AccBatch], [Rest | AccLogFiles2]}
+        end,
+        {[], []},
+        LogFiles).
