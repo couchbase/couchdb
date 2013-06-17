@@ -265,7 +265,7 @@ get_view_def(#doc{body = DDoc, id = DDocId}, ViewName) ->
     catch throw:{not_found, _} ->
         NotFoundMsg = io_lib:format("View `~s` not defined in local "
             "design document `~s`.", [ViewName, DDocId]),
-        throw({error, iolist_to_binary(NotFoundMsg)})
+        throw({not_found, iolist_to_binary(NotFoundMsg)})
     end.
 
 
@@ -1551,7 +1551,7 @@ simple_set_view_query(Params, DDoc, Req) ->
             MissingPartitions = Group = View = ViewType = nil,
             ErrorMsg = io_lib:format("Error opening view `~s`, from set `~s`, "
                 "design document `~s`: ~p", [ViewName, SetName, DDocId, Error]),
-            throw({error, iolist_to_binary(ErrorMsg)})
+            throw({not_found, iolist_to_binary(ErrorMsg)})
         end
     end,
 
