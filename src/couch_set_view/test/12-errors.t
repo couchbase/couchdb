@@ -58,7 +58,7 @@ num_docs() -> 1000.
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(21),
+    etap:plan(23),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -84,6 +84,9 @@ test() ->
 
     etap:diag("Testing case where map function emits a key that is too long"),
     test_too_long_map_key(),
+
+    etap:diag("Testing case where map function emits a value that is too long"),
+    test_too_long_map_value(),
 
     etap:diag("Testing builtin reduce _sum function with a runtime error"),
     test_builtin_reduce_sum_runtime_error(),
@@ -340,8 +343,51 @@ test_too_long_map_key() ->
     QueryResult = (catch query_map_view(DDocId, <<"test">>, false)),
     ExpectedResult = {error, <<"key emitted for document `doc1` is too long: "
                                "\"doc1doc1doc1doc1doc1doc1doc1doc1doc1doc1doc1"
-                               "doc1doc1doc1doc1doc1doc1doc1doc1doc1doc1doc1doc1doc1doc...">>},
+                               "doc1doc1doc1doc1doc1doc1doc1doc1doc1doc1doc1"
+                               "doc1doc1doc... (4104 bytes)">>},
     etap:is(QueryResult, ExpectedResult, "Got an error when a key is too long"),
+
+    receive
+    {'DOWN', MonRef, _, _, _} ->
+        etap:bail("view group died")
+    after 5000 ->
+        etap:is(is_process_alive(GroupPid), true, "View group is still alive")
+    end,
+    couch_util:shutdown_sync(GroupPid),
+    couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()).
+
+
+test_too_long_map_value() ->
+    couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
+    couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
+
+    DDocId = <<"_design/test">>,
+    DDoc = {[
+        {<<"meta">>, {[{<<"id">>, DDocId}]}},
+        {<<"json">>, {[
+        {<<"views">>, {[
+            {<<"test">>, {[
+                {<<"map">>, <<"function(doc, meta) {\n"
+                              "var val = meta.id;\n"
+                              "while (val.length < (16 * 1024 * 1024)) {\n"
+                              "    val = val.concat(val);\n"
+                              "}\n"
+                              "emit(meta.id, val);\n"
+                              "}">>}
+            ]}}
+        ]}}
+        ]}}
+    ]},
+    populate_set(DDoc, 1),
+
+    ok = configure_view_group(DDocId, [0, 1, 2, 3], []),
+    GroupPid = couch_set_view:get_group_pid(test_set_name(), DDocId),
+    MonRef = erlang:monitor(process, GroupPid),
+
+    QueryResult = (catch query_map_view(DDocId, <<"test">>, false)),
+    ExpectedResult = {error, <<"value emitted for key `\"doc1\"`, document "
+                               "`doc1`, is too big (16777218 bytes)">>},
+    etap:is(QueryResult, ExpectedResult, "Got an error when a value is too long"),
 
     receive
     {'DOWN', MonRef, _, _, _} ->
