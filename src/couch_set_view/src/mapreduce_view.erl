@@ -33,7 +33,14 @@
 
 % Same as in couch_btree.erl
 -define(KEY_BITS,       12).
+-define(VALUE_BITS,     28).
 -define(MAX_KEY_SIZE,   ((1 bsl ?KEY_BITS) - 1)).
+
+% View specific limits.
+-define(VIEW_SINGLE_VALUE_BITS,     24).
+-define(VIEW_ALL_VALUES_BITS,       ?VALUE_BITS).
+-define(MAX_VIEW_SINGLE_VALUE_SIZE, ((1 bsl ?VIEW_SINGLE_VALUE_BITS) - 1)).
+-define(MAX_VIEW_ALL_VALUES_SIZE,   ((1 bsl ?VIEW_ALL_VALUES_BITS) - 1)).
 
 % Same as the compactor uses for the ID-btree
 -define(SORTED_CHUNK_SIZE, 1024 * 1024).
@@ -59,29 +66,51 @@ write_kvs(Group, TmpFiles, ViewKVs) ->
 convert_primary_index_kvs_to_binary([], _Group, Acc) ->
     lists:reverse(Acc);
 convert_primary_index_kvs_to_binary([{{Key, DocId}, {PartId, V0}} | Rest], Group, Acc)->
+    KeyBin = couch_set_view_util:encode_key_docid(Key, DocId),
+    check_primary_key_size(KeyBin, Key, DocId, Group),
     V = case V0 of
     {dups, Values} ->
         ValueListBinary = lists:foldl(
             fun(V, Acc2) ->
-                <<Acc2/binary, (byte_size(V)):24, V/binary>>
+                check_primary_value_size(
+                    V, ?MAX_VIEW_SINGLE_VALUE_SIZE, DocId, Key, Group),
+                <<Acc2/binary, (byte_size(V)):?VIEW_SINGLE_VALUE_BITS, V/binary>>
             end,
             <<>>, Values),
         <<PartId:16, ValueListBinary/binary>>;
     _ ->
-        <<PartId:16, (byte_size(V0)):24, V0/binary>>
+        check_primary_value_size(
+            V0, ?MAX_VIEW_SINGLE_VALUE_SIZE, DocId, Key, Group),
+        <<PartId:16, (byte_size(V0)):?VIEW_SINGLE_VALUE_BITS, V0/binary>>
     end,
-    KeyBin = couch_set_view_util:encode_key_docid(Key, DocId),
-    case byte_size(KeyBin) > ?MAX_KEY_SIZE of
-    true ->
-        #set_view_group{set_name = SetName, name = DDocId, type = Type} = Group,
-        KeyPrefix = lists:sublist(unicode:characters_to_list(Key), 100),
-        Error = iolist_to_binary(
-            io_lib:format("key emitted for document `~s` is too long: ~s...", [DocId, KeyPrefix])),
-        ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, ~s", [SetName, Type, DDocId, Error]),
-        throw({error, Error});
-    false ->
-        convert_primary_index_kvs_to_binary(Rest, Group, [{KeyBin, V} | Acc])
-    end.
+    check_primary_value_size(
+        V, ?MAX_VIEW_ALL_VALUES_SIZE, DocId, Key, Group),
+    convert_primary_index_kvs_to_binary(Rest, Group, [{KeyBin, V} | Acc]).
+
+
+check_primary_key_size(Bin, Key, DocId, Group) when byte_size(Bin) > ?MAX_KEY_SIZE ->
+    #set_view_group{set_name = SetName, name = DDocId, type = Type} = Group,
+    KeyPrefix = lists:sublist(unicode:characters_to_list(Key), 100),
+    Error = iolist_to_binary(
+        io_lib:format("key emitted for document `~s` is too long: ~s... (~p bytes)",
+                      [DocId, KeyPrefix, byte_size(Bin)])),
+    ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, ~s",
+                         [SetName, Type, DDocId, Error]),
+    throw({error, Error});
+check_primary_key_size(_Bin, _Key, _DocId, _Group) ->
+    ok.
+
+
+check_primary_value_size(Bin, Max, DocId, Key, Group) when byte_size(Bin) > Max ->
+    #set_view_group{set_name = SetName, name = DDocId, type = Type} = Group,
+    Error = iolist_to_binary(
+        io_lib:format("value emitted for key `~s`, document `~s`, is too big"
+                      " (~p bytes)", [Key, DocId, byte_size(Bin)])),
+    ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, ~s",
+                         [SetName, Type, DDocId, Error]),
+    throw({error, Error});
+check_primary_value_size(_Bin, _Max, _DocId, _Key, _Group) ->
+    ok.
 
 
 % Build the tree out of the sorted files
