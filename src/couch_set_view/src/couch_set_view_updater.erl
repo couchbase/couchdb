@@ -1220,6 +1220,10 @@ count_seqs_done(Group, NewSeqs) ->
 % Incremental updates.
 -spec sort_tmp_files(dict(), string(), #set_view_group{}, boolean()) -> 'ok'.
 sort_tmp_files(TmpFiles, TmpDir, Group, InitialBuild) ->
+    #set_view_group{
+        views = Views,
+        mod = Mod
+    } = Group,
     case os:find_executable("couch_view_file_sorter") of
     false ->
         FileSorterCmd = nil,
@@ -1228,13 +1232,18 @@ sort_tmp_files(TmpFiles, TmpDir, Group, InitialBuild) ->
         ok
     end,
     FileSorter = open_port({spawn_executable, FileSorterCmd}, ?PORT_OPTS),
-    case InitialBuild of
-    true ->
-        true = port_command(FileSorter, [TmpDir, $\n, "b", $\n]);
-    false ->
-        true = port_command(FileSorter, [TmpDir, $\n, "u", $\n])
+    case Mod of
+    mapreduce_view ->
+        case InitialBuild of
+        true ->
+            true = port_command(FileSorter, [TmpDir, $\n, "b", $\n]);
+        false ->
+            true = port_command(FileSorter, [TmpDir, $\n, "u", $\n])
+        end;
+    spatial_view ->
+        true = port_command(FileSorter, [TmpDir, $\n, "s", $\n])
     end,
-    NumViews = length(Group#set_view_group.views),
+    NumViews = length(Views),
     true = port_command(FileSorter, [integer_to_list(NumViews), $\n]),
     IdTmpFileInfo = dict:fetch(ids_index, TmpFiles),
     ok = close_tmp_fd(IdTmpFileInfo),
@@ -1245,7 +1254,26 @@ sort_tmp_files(TmpFiles, TmpDir, Group, InitialBuild) ->
             ok = close_tmp_fd(ViewTmpFileInfo),
             true = port_command(FileSorter, [tmp_file_name(ViewTmpFileInfo), $\n])
         end,
-        Group#set_view_group.views),
+        Views),
+    case Mod of
+    mapreduce_view ->
+        ok;
+    spatial_view ->
+        % Spatial indexes need the enclosing bounding box of the data that
+        % is stored in the file
+        ok = lists:foreach(
+            fun(#set_view{id_num = Id}) ->
+                ViewTmpFileInfo = dict:fetch(Id, TmpFiles),
+                Mbb = ViewTmpFileInfo#set_view_tmp_file_info.extra,
+                NumValues = length(Mbb)*2,
+                Values = [
+                    [<<From:64/float-native>>, <<To:64/float-native>>] ||
+                    [From, To] <- Mbb],
+                Data = [<<NumValues:16/integer-native>>, Values, $\n],
+                true = port_command(FileSorter, Data)
+            end,
+            Views)
+    end,
     try
         file_sorter_wait_loop(FileSorter, Group, [])
     after

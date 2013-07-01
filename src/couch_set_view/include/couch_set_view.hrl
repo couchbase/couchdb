@@ -221,6 +221,19 @@
     options = []      :: [term()]
 }).
 
+% XXX vmx 2012-12-21: This should go into the spatial specific header file
+-record(spatial_view, {
+    map_names = []    :: [binary()],
+    % The bitmask for the partitions. It's stored in the #spatial_view{}
+    % record, as spatial indexes don't have a reduce
+    % XXX vmx 2013-02-21: When is this bitmap set? It also needs to be
+    %     persited somehow with the tree.
+    %bitmap = <<>>        :: binary(),
+    bitmap = 0        :: non_neg_integer(),
+    vtree = nil       %:: 'nil' | #vtree{}
+}).
+
+
 -record(set_view_group, {
     sig = binary:copy(<<0>>, 16)            :: <<_:128>>,
     fd = nil                                :: 'nil' | pid(),

@@ -227,3 +227,8 @@ btree_kv_node_threshold = 7168
 btree_kp_node_threshold = 6144
 ; For incremental updates (value in bytes).
 indexer_max_insert_batch_size = 1048576
+
+[spatial_views]
+vtree_kv_node_threshold = 2000
+vtree_kp_node_threshold = 2000
+vtree_min_fill_rate = 0.4
