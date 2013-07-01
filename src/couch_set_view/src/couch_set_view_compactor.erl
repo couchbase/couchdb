@@ -191,6 +191,7 @@ merge_statuses(UserStatus, OurStatus) ->
 maybe_retry_compact(CompactResult0, StartTime, TmpDir, Owner, Retries) ->
     NewGroup = CompactResult0#set_view_compactor_result.group,
     #set_view_group{
+        views = NewViews,
         set_name = SetName,
         name = DDocId,
         type = Type,
@@ -225,8 +226,12 @@ maybe_retry_compact(CompactResult0, StartTime, TmpDir, Owner, Retries) ->
             {retry_number, Retries}
         ]),
         ok = couch_set_view_util:open_raw_read_fd(NewGroup),
+        ok = lists:foreach(
+            fun couch_set_view_mapreduce:start_reduce_context/1, NewViews),
         NewGroup2 = apply_log(NewGroup, LogFiles, NewSeqs, TmpDir),
         ok = couch_set_view_util:close_raw_read_fd(NewGroup),
+        ok = lists:foreach(
+            fun couch_set_view_mapreduce:end_reduce_context/1, NewViews),
         CompactResult2 = CompactResult0#set_view_compactor_result{
             group = NewGroup2
         },

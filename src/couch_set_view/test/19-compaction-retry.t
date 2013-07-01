@@ -333,7 +333,12 @@ create_set() ->
         {<<"views">>, {[
             {<<"view_1">>, {[
                 {<<"map">>, <<"function(doc, meta) { emit(meta.id, doc.value); }">>},
-                {<<"reduce">>, <<"_count">>}
+                {<<"reduce">>, <<"function(key, values, rereduce) {"
+                                 "  if (rereduce) {"
+                                 "     return sum(values);"
+                                 "  }"
+                                 "  return values.length;"
+                                 "}">>}
             ]}},
             {<<"view_2">>, {[
                 {<<"map">>, <<"function(doc, meta) { emit(meta.id, meta.id); }">>},
