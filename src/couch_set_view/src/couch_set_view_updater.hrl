@@ -35,9 +35,3 @@
     max_insert_batch_size,
     tmp_files = dict:new()
 }).
-
--record(tmp_file_info, {
-    name = nil,
-    fd = nil,
-    size = 0
-}).

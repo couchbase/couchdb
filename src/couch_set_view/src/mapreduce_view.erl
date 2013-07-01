@@ -49,7 +49,7 @@
 write_kvs(Group, TmpFiles, ViewKVs) ->
     lists:foldl(
         fun({#set_view{id_num = Id}, KvList}, AccCount) ->
-            #tmp_file_info{fd = ViewFd} = dict:fetch(Id, TmpFiles),
+            #set_view_tmp_file_info{fd = ViewFd} = dict:fetch(Id, TmpFiles),
             KvBins = convert_primary_index_kvs_to_binary(KvList, Group, []),
             ViewRecords = lists:foldr(
                 fun({KeyBin, ValBin}, Acc) ->
@@ -124,7 +124,7 @@ finish_build(SetView, GroupFd, TmpFiles) ->
         btree = Bt
     } = View,
 
-    #tmp_file_info{name = ViewFile} = dict:fetch(Id, TmpFiles),
+    #set_view_tmp_file_info{name = ViewFile} = dict:fetch(Id, TmpFiles),
     {ok, NewBtRoot} = couch_btree_copy:from_sorted_file(
         Bt, ViewFile, GroupFd,
         fun couch_set_view_updater:file_sorter_initial_build_format_fun/1),
@@ -186,18 +186,18 @@ update_tmp_files(WriterAcc, ViewKeyValues, KeysToRemoveByView) ->
                 BatchData, AddKeyValuesBinaries),
             ViewTmpFileInfo = dict:fetch(ViewId, TmpFiles),
             case ViewTmpFileInfo of
-            #tmp_file_info{fd = nil} ->
-                0 = ViewTmpFileInfo#tmp_file_info.size,
+            #set_view_tmp_file_info{fd = nil} ->
+                0 = ViewTmpFileInfo#set_view_tmp_file_info.size,
                 ViewTmpFilePath = couch_set_view_updater:new_sort_file_name(WriterAcc),
                 {ok, ViewTmpFileFd} = file2:open(ViewTmpFilePath, [raw, append, binary]),
                 ViewTmpFileSize = 0;
-            #tmp_file_info{fd = ViewTmpFileFd,
-                           size = ViewTmpFileSize,
-                           name = ViewTmpFilePath} ->
+            #set_view_tmp_file_info{fd = ViewTmpFileFd,
+                                    size = ViewTmpFileSize,
+                                    name = ViewTmpFilePath} ->
                 ok
             end,
             ok = file:write(ViewTmpFileFd, BatchData2),
-            ViewTmpFileInfo2 = ViewTmpFileInfo#tmp_file_info{
+            ViewTmpFileInfo2 = ViewTmpFileInfo#set_view_tmp_file_info{
                 fd = ViewTmpFileFd,
                 name = ViewTmpFilePath,
                 size = ViewTmpFileSize + iolist_size(BatchData2)

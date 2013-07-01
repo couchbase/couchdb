@@ -579,7 +579,8 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
                 [[<<(iolist_size(KvBin)):32>>, KvBin] | Acc]
         end,
         [], DocIdViewIdKeys),
-    #tmp_file_info{fd = IdFd, name = IdFile} = dict:fetch(ids_index, TmpFiles),
+    #set_view_tmp_file_info{fd = IdFd, name = IdFile} =
+        dict:fetch(ids_index, TmpFiles),
     ok = file:write(IdFd, IdRecords),
 
     InsertKVCount = Mod:write_kvs(Group, TmpFiles, ViewKVs),
@@ -769,18 +770,19 @@ write_to_tmp_batch_files(ViewKeyValuesToAdd, DocIdViewIdKeys, WriterAcc) ->
 
     IdTmpFileInfo = dict:fetch(ids_index, TmpFiles),
     case IdTmpFileInfo of
-    #tmp_file_info{fd = nil} ->
-        0 = IdTmpFileInfo#tmp_file_info.size,
+    #set_view_tmp_file_info{fd = nil} ->
+        0 = IdTmpFileInfo#set_view_tmp_file_info.size,
         IdTmpFilePath = new_sort_file_name(WriterAcc),
         {ok, IdTmpFileFd} = file2:open(IdTmpFilePath, [raw, append, binary]),
         IdTmpFileSize = 0;
-    #tmp_file_info{fd = IdTmpFileFd, name = IdTmpFilePath, size = IdTmpFileSize} ->
+    #set_view_tmp_file_info{
+            fd = IdTmpFileFd, name = IdTmpFilePath, size = IdTmpFileSize} ->
         ok
     end,
 
     ok = file:write(IdTmpFileFd, IdsData2),
 
-    IdTmpFileInfo2 = IdTmpFileInfo#tmp_file_info{
+    IdTmpFileInfo2 = IdTmpFileInfo#set_view_tmp_file_info{
         fd = IdTmpFileFd,
         name = IdTmpFilePath,
         size = IdTmpFileSize + iolist_size(IdsData2)
@@ -833,11 +835,11 @@ maybe_update_btrees(WriterAcc0) ->
     } = WriterAcc0,
     IdTmpFileInfo = dict:fetch(ids_index, TmpFiles),
     ShouldFlush = IsFinalBatch orelse
-        ((IdTmpFileInfo#tmp_file_info.size >= ?INC_MAX_TMP_FILE_SIZE) andalso
+        ((IdTmpFileInfo#set_view_tmp_file_info.size >= ?INC_MAX_TMP_FILE_SIZE) andalso
         lists:any(
             fun({#set_view{id_num = Id}, _}) ->
                 ViewTmpFileInfo = dict:fetch(Id, TmpFiles),
-                ViewTmpFileInfo#tmp_file_info.size >= ?INC_MAX_TMP_FILE_SIZE
+                ViewTmpFileInfo#set_view_tmp_file_info.size >= ?INC_MAX_TMP_FILE_SIZE
             end, ViewEmptyKVs)),
     case ShouldFlush of
     false ->
@@ -876,7 +878,8 @@ maybe_update_btrees(WriterAcc0) ->
         NewUpdaterWorker = spawn_updater_worker(WriterAcc2, LastSeqs),
         NewLastSeqs1 = orddict:new(),
         erlang:put(updater_worker, NewUpdaterWorker),
-        TmpFiles2 = dict:map(fun(_, _) -> #tmp_file_info{} end, TmpFiles),
+        TmpFiles2 = dict:map(
+            fun(_, _) -> #set_view_tmp_file_info{} end, TmpFiles),
         WriterAcc = WriterAcc2#writer_acc{tmp_files = TmpFiles2}
     end,
     #writer_acc{
@@ -1026,7 +1029,7 @@ update_btrees(WriterAcc) ->
     ok = couch_set_view_util:open_raw_read_fd(Group),
     {NewBtrees, {{_, CleanupCount}, NewStats, CompactFiles}} = lists:mapfoldl(
         fun({ViewId, Bt}, {CleanupAcc, StatsAcc, AccCompactFiles}) ->
-            #tmp_file_info{name = SortedFile} = dict:fetch(ViewId, TmpFiles),
+            #set_view_tmp_file_info{name = SortedFile} = dict:fetch(ViewId, TmpFiles),
             case SortedFile of
             nil ->
                 {Bt, {CleanupAcc, StatsAcc, AccCompactFiles}};
@@ -1160,10 +1163,10 @@ init_tmp_files(WriterAcc) ->
         [begin
              FileName = new_sort_file_name(WriterAcc),
              {ok, Fd} = file2:open(FileName, [raw, append, binary]),
-             {Id, #tmp_file_info{fd = Fd, name = FileName}}
+             {Id, #set_view_tmp_file_info{fd = Fd, name = FileName}}
          end || Id <- Ids];
     false ->
-         [{Id, #tmp_file_info{}} || Id <- Ids]
+         [{Id, #set_view_tmp_file_info{}} || Id <- Ids]
     end,
     WriterAcc#writer_acc{tmp_files = dict:from_list(Files)}.
 
@@ -1250,15 +1253,15 @@ sort_tmp_files(TmpFiles, TmpDir, Group, InitialBuild) ->
     end.
 
 
-close_tmp_fd(#tmp_file_info{fd = nil}) ->
+close_tmp_fd(#set_view_tmp_file_info{fd = nil}) ->
     ok;
-close_tmp_fd(#tmp_file_info{fd = Fd}) ->
+close_tmp_fd(#set_view_tmp_file_info{fd = Fd}) ->
     ok = file:close(Fd).
 
 
-tmp_file_name(#tmp_file_info{name = nil}) ->
+tmp_file_name(#set_view_tmp_file_info{name = nil}) ->
     "<nil>";
-tmp_file_name(#tmp_file_info{name = Name}) ->
+tmp_file_name(#set_view_tmp_file_info{name = Name}) ->
     Name.
 
 

@@ -272,3 +272,13 @@
     compact_time = 0.0         :: float(), % seconds
     cleanup_kv_count = 0       :: non_neg_integer()
 }).
+
+-record(set_view_tmp_file_info, {
+    name = nil,
+    fd = nil,
+    size = 0,
+    % Additional meta information about the file (can be set by the indexer)
+    % The spatial indexer stores the enclosing bounding box of the data
+    % within the file
+    extra = nil
+}).
