@@ -47,7 +47,7 @@
 
 
 write_kvs(Group, TmpFiles, ViewKVs) ->
-    lists:foldl(
+    KVCount = lists:foldl(
         fun({#set_view{id_num = Id}, KvList}, AccCount) ->
             #set_view_tmp_file_info{fd = ViewFd} = dict:fetch(Id, TmpFiles),
             KvBins = convert_primary_index_kvs_to_binary(KvList, Group, []),
@@ -60,7 +60,8 @@ write_kvs(Group, TmpFiles, ViewKVs) ->
             ok = file:write(ViewFd, ViewRecords),
             AccCount + length(KvBins)
         end,
-        0, ViewKVs).
+        0, ViewKVs),
+    {KVCount, TmpFiles}.
 
 
 convert_primary_index_kvs_to_binary([], _Group, Acc) ->

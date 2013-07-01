@@ -583,7 +583,7 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
         dict:fetch(ids_index, TmpFiles),
     ok = file:write(IdFd, IdRecords),
 
-    InsertKVCount = Mod:write_kvs(Group, TmpFiles, ViewKVs),
+    {InsertKVCount, TmpFiles2} = Mod:write_kvs(Group, TmpFiles, ViewKVs),
 
     update_task(KvsLength),
     case IsFinalBatch of
@@ -598,7 +598,7 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
     true ->
         ?LOG_INFO("Updater for set view `~s`, ~s group `~s`, sorting view files",
                   [SetName, Type, DDocId]),
-        ok = sort_tmp_files(TmpFiles, TmpDir, Group, true),
+        ok = sort_tmp_files(TmpFiles2, TmpDir, Group, true),
         update_task(1),
         ?LOG_INFO("Updater for set view `~s`, ~s group `~s`, starting btree "
                   "build phase" , [SetName, Type, DDocId]),
@@ -608,7 +608,7 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
         ok = file2:delete(IdFile),
         NewViews = lists:map(
             fun(View) ->
-                Mod:finish_build(View, GroupFd, TmpFiles)
+                Mod:finish_build(View, GroupFd, TmpFiles2)
             end,
             Group#set_view_group.views),
         Header = Group#set_view_group.index_header,
