@@ -29,6 +29,7 @@
 -export([open_db/2]).
 -export([get_part_seq/2, has_part_seq/2, find_part_seq/2]).
 -export([set_view_sig/1]).
+-export([check_primary_key_size/5, check_primary_value_size/5]).
 
 
 -include("couch_db.hrl").
@@ -605,3 +606,32 @@ find_part_seq(PartId, Seqs) ->
     false ->
         not_found
     end.
+
+
+-spec check_primary_key_size(binary(), pos_integer(), binary(), binary(),
+        #set_view_group{}) -> ok.
+check_primary_key_size(Bin, Max, Key, DocId, Group) when byte_size(Bin) > Max ->
+    #set_view_group{set_name = SetName, name = DDocId, type = Type} = Group,
+    KeyPrefix = lists:sublist(unicode:characters_to_list(Key), 100),
+    Error = iolist_to_binary(
+        io_lib:format("key emitted for document `~s` is too long: ~s... (~p bytes)",
+                      [DocId, KeyPrefix, byte_size(Bin)])),
+    ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, ~s",
+                         [SetName, Type, DDocId, Error]),
+    throw({error, Error});
+check_primary_key_size(_Bin, _Max, _Key, _DocId, _Group) ->
+    ok.
+
+
+-spec check_primary_value_size(binary(), pos_integer(), binary(), binary(),
+        #set_view_group{}) -> ok.
+check_primary_value_size(Bin, Max, Key, DocId, Group) when byte_size(Bin) > Max ->
+    #set_view_group{set_name = SetName, name = DDocId, type = Type} = Group,
+    Error = iolist_to_binary(
+        io_lib:format("value emitted for key `~s`, document `~s`, is too big"
+                      " (~p bytes)", [Key, DocId, byte_size(Bin)])),
+    ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, ~s",
+                         [SetName, Type, DDocId, Error]),
+    throw({error, Error});
+check_primary_value_size(_Bin, _Max, _Key, _DocId, _Group) ->
+    ok.
