@@ -770,7 +770,7 @@ map_set_view_folder(ViewSpec, MergeParams, UserCtx, DDoc, Queue) ->
         %%  handled by prepare_set_view
         ok;
     {View, Group} ->
-        queue_debug_info(ViewArgs, Group, ViewGroupReq2, Queue),
+        queue_debug_info(Debug, Group, ViewGroupReq2, Queue),
         try
             FoldFun = make_map_set_fold_fun(IncludeDocs, SetName, UserCtx, Queue),
 
@@ -1087,7 +1087,7 @@ reduce_set_view_folder(ViewSpec, MergeParams, DDoc, Queue) ->
         %%  handled by prepare_set_view
         ok;
     {View, Group} ->
-        queue_debug_info(ViewArgs, Group, ViewGroupReq, Queue),
+        queue_debug_info(Debug, Group, ViewGroupReq, Queue),
         try
             FoldFun = fun(GroupedKey, Red, Acc) ->
                 ok = couch_view_merger_queue:queue(Queue, {GroupedKey, Red}),
@@ -1369,17 +1369,17 @@ reverse_key_default(?MAX_STR) -> ?MIN_STR;
 reverse_key_default(Key) -> Key.
 
 
-queue_debug_info(ViewArgs, Group, GroupReq, Queue) ->
-    case debug_info(ViewArgs, Group, GroupReq) of
+queue_debug_info(Debug, Group, GroupReq, Queue) ->
+    case debug_info(Debug, Group, GroupReq) of
     nil ->
         ok;
     DebugInfo ->
         ok = couch_view_merger_queue:queue(Queue, DebugInfo)
     end.
 
-debug_info(#view_query_args{debug = false}, _Group, _GroupReq) ->
+debug_info(false, _Group, _GroupReq) ->
     nil;
-debug_info(_QueryArgs, #set_view_group{} = Group, GroupReq) ->
+debug_info(true, #set_view_group{} = Group, GroupReq) ->
     #set_view_debug_info{
         original_abitmask = OrigMainAbitmask,
         original_pbitmask = OrigMainPbitmask,
@@ -1575,7 +1575,7 @@ simple_set_view_query(Params, DDoc, Req) ->
         stale = Stale
      },
 
-    case debug_info(QueryArgs2, Group, GroupReq) of
+    case debug_info(Debug, Group, GroupReq) of
     nil ->
         Params2 = Params#index_merge{user_ctx = Req#httpd.user_ctx};
     DebugInfo ->
