@@ -252,11 +252,10 @@
     filepath = ""                           :: string(),
     % This is the module that populated the set view. It can be a module for
     % the MapReduce index or the spatial index
-    % XXX vmx 2012-12-21: For now default it to 'mapreduce_view', this should
-    %     be set to 'nil' when the refactoring is done.
-    mod = mapreduce_view                    :: atom(),
+    mod = nil                                :: 'nil' | 'mapreduce_view' |
+                                                'spatial_view',
     % The file extension that will be used for the index files
-    extension = ".view"                     :: string(),
+    extension = ""                          :: string(), %".view" | ".spatial"
     % Used to distinguish production and development set view groups
     category = nil                          :: 'nil' | 'prod' | 'dev',
     stats_ets = nil                         :: atom()

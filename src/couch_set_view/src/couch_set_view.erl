@@ -50,7 +50,8 @@
     name_to_sig_ets :: atom(),
     sig_to_pid_ets  :: atom(),
     pid_to_sig_ets  :: atom(),
-    name            :: atom()
+    name            :: atom(),
+    indexer         :: mapreduce_view | spatial_view
 }).
 
 -record(merge_acc, {
@@ -440,11 +441,11 @@ open_set_group(Mod, SetName, GroupId, Category) ->
                         {ok, pid()} | ignore |
                         {error, {already_started, pid()} | term()}.
 start_link(prod) ->
-    gen_server:start_link(
-        {local, ?SET_VIEW_SERVER_NAME_PROD}, ?MODULE, [prod], []);
+    gen_server:start_link({local, ?SET_VIEW_SERVER_NAME_PROD}, ?MODULE,
+        {prod, mapreduce_view}, []);
 start_link(dev) ->
-    gen_server:start_link(
-        {local, ?SET_VIEW_SERVER_NAME_DEV}, ?MODULE, [dev], []).
+    gen_server:start_link({local, ?SET_VIEW_SERVER_NAME_DEV}, ?MODULE,
+        {dev, mapreduce_view}, []).
 
 
 % To be used only for debugging. This is a very expensive call.
@@ -501,7 +502,8 @@ cleanup_index_files(Mod, SetName) ->
     {ok, DesignDocs} = couch_db:get_design_docs(Db),
     couch_db:close(Db),
 
-    % make unique list of group sigs
+    % make unique list of group sigs and get the file
+    % extension (which is the same for all groups)
     Sigs = lists:map(fun(DDoc) ->
             #set_view_group{sig = Sig} =
                 Mod:design_doc_to_set_view_group(SetName, DDoc),
@@ -509,7 +511,8 @@ cleanup_index_files(Mod, SetName) ->
         end,
         [DD || DD <- DesignDocs, not DD#doc.deleted]),
 
-    FileList = list_index_files(SetName),
+    Extension = Mod:index_extension(),
+    FileList = list_index_files(SetName, Extension),
 
     % regex that matches all ddocs
     RegExp = "("++ string:join(Sigs, "|") ++")",
@@ -535,11 +538,14 @@ cleanup_index_files(Mod, SetName) ->
         fun(File) -> couch_file:delete(RootDir, File, false) end,
         DeleteFiles).
 
-list_index_files(SetName) ->
+list_index_files(SetName, Extension) ->
     % call server to fetch the index files
     RootDir = couch_config:get("couchdb", "view_index_dir"),
-    ProdIndexDir = filename:join(set_index_dir(RootDir, SetName, prod), "*"),
-    DevIndexDir = filename:join(set_index_dir(RootDir, SetName, dev), "*"),
+    Wildcard = "*" ++ Extension ++ "*",
+    ProdIndexDir = filename:join(
+        set_index_dir(RootDir, SetName, prod), Wildcard),
+    DevIndexDir = filename:join(
+        set_index_dir(RootDir, SetName, dev), Wildcard),
     filelib:wildcard(ProdIndexDir) ++ filelib:wildcard(DevIndexDir).
 
 
@@ -862,8 +868,8 @@ do_fold(Group, SetView, Fun, Acc, ViewQueryArgs) ->
     end.
 
 
--spec init([prod] | [dev]) -> {ok, #server{}}.
-init([Category]) ->
+-spec init({prod | dev, mapreduce_view | spatial_view}) -> {ok, #server{}}.
+init({Category, Indexer}) ->
     % read configuration settings and register for configuration changes
     RootDir = couch_config:get("couchdb", "view_index_dir"),
     ok = couch_config:register(
@@ -874,7 +880,7 @@ init([Category]) ->
     ok = mapreduce:set_timeout(list_to_integer(
         couch_config:get("mapreduce", "function_timeout", "10000"))),
 
-    Server = init_server(Category),
+    Server = init_server(Category, Indexer),
     % {SetName, {DDocId, Signature}}
     ets:new(Server#server.name_to_sig_ets,
             [bag, protected, named_table, {read_concurrency, true}]),
@@ -889,28 +895,30 @@ init([Category]) ->
 
     {ok, Notifier} = couch_db_update_notifier:start_link(
         make_handle_db_event_fun(
-            mapreduce_view, Server#server.name, Server#server.sig_to_pid_ets,
+            Indexer, Server#server.name, Server#server.sig_to_pid_ets,
             Server#server.name_to_sig_ets)),
 
     process_flag(trap_exit, true),
     ok = couch_file:init_delete_dir(RootDir),
     {ok, Server#server{root_dir = RootDir, db_notifier = Notifier}}.
 
-init_server(prod) ->
+init_server(prod, mapreduce_view=Indexer) ->
     #server{
         stats_ets = ?SET_VIEW_STATS_ETS_PROD,
         name_to_sig_ets = ?SET_VIEW_NAME_TO_SIG_ETS_PROD,
         sig_to_pid_ets = ?SET_VIEW_SIG_TO_PID_ETS_PROD,
         pid_to_sig_ets = ?SET_VIEW_PID_TO_SIG_ETS_PROD,
-        name = ?SET_VIEW_SERVER_NAME_PROD
+        name = ?SET_VIEW_SERVER_NAME_PROD,
+        indexer = Indexer
     };
-init_server(dev) ->
+init_server(dev, mapreduce_view=Indexer) ->
     #server{
         stats_ets = ?SET_VIEW_STATS_ETS_DEV,
         name_to_sig_ets = ?SET_VIEW_NAME_TO_SIG_ETS_DEV,
         sig_to_pid_ets = ?SET_VIEW_SIG_TO_PID_ETS_DEV,
         pid_to_sig_ets = ?SET_VIEW_PID_TO_SIG_ETS_DEV,
-        name = ?SET_VIEW_SERVER_NAME_DEV
+        name = ?SET_VIEW_SERVER_NAME_DEV,
+        indexer = Indexer
     }.
 
 
@@ -982,8 +990,8 @@ handle_call({before_database_delete, DbName}, _From, Server) ->
 
 handle_call({ddoc_updated, SetName, #doc{deleted = false} = DDoc0}, _From, Server) ->
     #doc{id = DDocId} = DDoc = couch_doc:with_ejson_body(DDoc0),
-% XXX vmx 2013-05-03: Don't hard-code mapreduce_view
-    #set_view_group{sig = Sig} = mapreduce_view:design_doc_to_set_view_group(SetName, DDoc),
+    Indexer = Server#server.indexer,
+    #set_view_group{sig = Sig} = Indexer:design_doc_to_set_view_group(SetName, DDoc),
     true = ets:insert(Server#server.name_to_sig_ets, {SetName, {DDocId, Sig}}),
     {reply, ok, Server};
 

@@ -25,7 +25,7 @@
 % For the compactor
 -export([compact_view/6, apply_log/2]).
 % For the main module
--export([get_row_count/1, make_wrapper_fun/2, fold/4]).
+-export([get_row_count/1, make_wrapper_fun/2, fold/4, index_extension/0]).
 
 
 -include("couch_db.hrl").
@@ -248,9 +248,16 @@ design_doc_to_set_view_group(SetName, #doc{id = Id, body = {Fields}}) ->
         set_name = SetName,
         name = Id,
         views = SetViews,
-        design_options = DesignOptions
+        design_options = DesignOptions,
+        mod = ?MODULE,
+        extension = index_extension()
     },
     couch_set_view_util:set_view_sig(SetViewGroup).
+
+
+-spec index_extension() -> string().
+index_extension() ->
+    ".view".
 
 
 -spec view_group_data_size(#btree{}, [#set_view{}]) -> non_neg_integer().
