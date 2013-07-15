@@ -881,11 +881,18 @@ native_initial_compact(#db{filepath=Filepath}=Db, CompactFile, PrefixOpts) ->
             {error, {T, E}}
     end.
 
-start_copy_compact(#db{name=Name,filepath=Filepath}=Db, Options) ->
-    PrefixOpts = case lists:member(dropdeletes, Options) of
-        true -> ["--dropdeletes"];
-        _ -> []
+make_compactor_options(Acc, []) ->
+    Acc;
+make_compactor_options(Acc, [Opt | Rest]) ->
+    Out = case Opt of
+        dropdeletes -> ["--dropdeletes" | Acc];
+        {purge_before, Timestamp} -> [io_lib:format("--purge-before ~B", [Timestamp]) | Acc];
+        _ -> Acc
     end,
+    make_compactor_options(Out, Rest).
+
+start_copy_compact(#db{name=Name,filepath=Filepath}=Db, Options) ->
+    PrefixOpts = make_compactor_options([], Options),
     CompactFile = Filepath ++ ".compact",
     ?LOG_DEBUG("Compaction process spawned for db \"~s\"", [Name]),
     % we don't want to consistency every time, so get the ratio
