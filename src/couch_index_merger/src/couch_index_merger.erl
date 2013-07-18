@@ -21,8 +21,7 @@
 -export([open_db/3, collect_rows/4, collect_row_count/6,
     merge_indexes_no_acc/2, merge_indexes_no_limit/1, handle_skip/1,
     dec_counter/1, get_group_id/2, void_event/1, should_check_rev/2,
-    ddoc_rev_str/1, ddoc_unchanged/2, validate_revision_param/1,
-    rem_passwd/1, ddoc_not_found_msg/2]).
+    ddoc_rev_str/1, ddoc_unchanged/2, ddoc_not_found_msg/2]).
 
 -include("couch_db.hrl").
 -include_lib("couch_index_merger/include/couch_index_merger.hrl").
@@ -807,13 +806,3 @@ ddoc_unchanged(Db, DDoc) ->
     {not_found, _} ->
         throw(ddoc_db_not_found)
     end.
-
-validate_revision_param(nil) ->
-    nil;
-validate_revision_param(<<"auto">>) ->
-    auto;
-validate_revision_param(Revision) ->
-    couch_doc:parse_rev(Revision).
-
-rem_passwd(Url) ->
-    ?l2b(couch_util:url_strip_password(Url)).

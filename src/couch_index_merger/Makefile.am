@@ -24,6 +24,7 @@ include_files = \
 source_files = \
     src/couch_index_merger.app.src \
     src/couch_index_merger.erl \
+    src/couch_index_merger_validation.erl \
     src/couch_view_merger.erl \
     src/couch_view_merger_queue.erl \
     src/couch_http_view_streamer.erl \
@@ -33,6 +34,7 @@ source_files = \
 compiled_files = \
     ebin/couch_index_merger.app \
     ebin/couch_index_merger.beam \
+    ebin/couch_index_merger_validation.beam \
     ebin/couch_view_merger.beam \
     ebin/couch_view_merger_queue.beam \
     ebin/couch_http_view_streamer.beam \
