@@ -145,7 +145,7 @@ AC_ARG_VAR([FLAGS], [general flags to prepend to LDFLAGS and CPPFLAGS])
 
 ac_test_ERLC_FLAGS=${ERLC_FLAGS+set}
 if test "$ac_test_ERLCFLAGS" != set; then
-  ERLC_FLAGS="+debug_info -Werror"
+  ERLC_FLAGS="+debug_info -Werror +nowarn_deprecated_function"
 fi
 
 LIB_FLAGS="-L/usr/local/lib -L/opt/local/lib"
