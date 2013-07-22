@@ -14,6 +14,7 @@
 -behaviour(gen_server).
 
 % public API
+-export([start_link/2]).
 -export([define_group/4]).
 -export([cleanup_index_files/2, set_index_dir/3]).
 -export([get_group_data_size/3, get_group_signature/3]).
@@ -34,7 +35,6 @@
 -export([get_map_view0/2, get_reduce_view0/2]).
 
 % gen_server callbacks
--export([start_link/1]).
 -export([init/1, terminate/2, handle_call/3, handle_cast/2, handle_info/2, code_change/3]).
 
 -include("couch_db.hrl").
@@ -422,13 +422,13 @@ open_set_group(Mod, SetName, GroupId, Category) ->
         throw(Error)
     end.
 
--spec start_link(dev | prod) ->
+-spec start_link(dev | prod, mapreduce_view | spatial_view) ->
                         {ok, pid()} | ignore |
                         {error, {already_started, pid()} | term()}.
-start_link(Category) ->
-    ServerName = mapreduce_view:server_name(Category),
+start_link(Category, Indexer) ->
+    ServerName = Indexer:server_name(Category),
     gen_server:start_link({local, ServerName}, ?MODULE,
-        {Category, mapreduce_view}, []).
+        {Category, Indexer}, []).
 
 
 % To be used only for debugging. This is a very expensive call.
