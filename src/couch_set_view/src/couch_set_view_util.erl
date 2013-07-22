@@ -184,14 +184,10 @@ get_ddoc_ids_with_sig(SetName, Group) ->
     #set_view_group{
         sig = Sig,
         name = FirstDDocId,
-        category = Category
+        category = Category,
+        mod = Mod
     } = Group,
-    NameToSigEts = case Category of
-    prod ->
-        ?SET_VIEW_NAME_TO_SIG_ETS_PROD;
-    dev ->
-        ?SET_VIEW_NAME_TO_SIG_ETS_DEV
-    end,
+    NameToSigEts = Mod:name_to_sig_ets(Category),
     case ets:match_object(NameToSigEts, {SetName, {'$1', Sig}}) of
     [] ->
         % ets just got updated because view group died

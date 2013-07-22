@@ -121,12 +121,7 @@ get_group(Mod, SetName, DDoc, #set_view_group_req{type = replica} = Req) ->
 -spec get_group_pid(atom(), binary(), binary() | #doc{}, dev | prod) -> pid().
 get_group_pid(Mod, SetName, #doc{} = DDoc, Category) ->
     Group = Mod:design_doc_to_set_view_group(SetName, DDoc),
-    StatsEts = case Category of
-    prod ->
-        ?SET_VIEW_STATS_ETS_PROD;
-    dev ->
-        ?SET_VIEW_STATS_ETS_DEV
-    end,
+    StatsEts = Mod:stats_ets(Category),
     get_group_server(SetName, Group#set_view_group{
         category = Category,
         stats_ets = StatsEts
@@ -394,16 +389,11 @@ get_group_server(_SetName, #set_view_group{views = []}) ->
 get_group_server(SetName, Group) ->
     #set_view_group{
         sig = Sig,
-        category = Category
+        category = Category,
+        mod = Mod
     } = Group,
-    case Category of
-    prod ->
-        SigToPidEts = ?SET_VIEW_SIG_TO_PID_ETS_PROD,
-        ServerName = ?SET_VIEW_SERVER_NAME_PROD;
-    dev ->
-        SigToPidEts = ?SET_VIEW_SIG_TO_PID_ETS_DEV,
-        ServerName = ?SET_VIEW_SERVER_NAME_DEV
-    end,
+    ServerName = Mod:server_name(Category),
+    SigToPidEts = Mod:sig_to_pid_ets(Category),
     case ets:lookup(SigToPidEts, {SetName, Sig}) of
     [{_, Pid}] when is_pid(Pid) ->
         Pid;
@@ -423,12 +413,7 @@ get_group_server(SetName, Group) ->
 open_set_group(Mod, SetName, GroupId, Category) ->
     case couch_set_view_group:open_set_group(Mod, SetName, GroupId) of
     {ok, Group} ->
-        StatsEts = case Category of
-        prod ->
-            ?SET_VIEW_STATS_ETS_PROD;
-        dev ->
-            ?SET_VIEW_STATS_ETS_DEV
-        end,
+        StatsEts = Mod:stats_ets(Category),
         Group#set_view_group{
             category = Category,
             stats_ets = StatsEts
@@ -440,12 +425,10 @@ open_set_group(Mod, SetName, GroupId, Category) ->
 -spec start_link(dev | prod) ->
                         {ok, pid()} | ignore |
                         {error, {already_started, pid()} | term()}.
-start_link(prod) ->
-    gen_server:start_link({local, ?SET_VIEW_SERVER_NAME_PROD}, ?MODULE,
-        {prod, mapreduce_view}, []);
-start_link(dev) ->
-    gen_server:start_link({local, ?SET_VIEW_SERVER_NAME_DEV}, ?MODULE,
-        {dev, mapreduce_view}, []).
+start_link(Category) ->
+    ServerName = mapreduce_view:server_name(Category),
+    gen_server:start_link({local, ServerName}, ?MODULE,
+        {Category, mapreduce_view}, []).
 
 
 % To be used only for debugging. This is a very expensive call.
@@ -902,22 +885,13 @@ init({Category, Indexer}) ->
     ok = couch_file:init_delete_dir(RootDir),
     {ok, Server#server{root_dir = RootDir, db_notifier = Notifier}}.
 
-init_server(prod, mapreduce_view=Indexer) ->
+init_server(Category, Indexer) ->
     #server{
-        stats_ets = ?SET_VIEW_STATS_ETS_PROD,
-        name_to_sig_ets = ?SET_VIEW_NAME_TO_SIG_ETS_PROD,
-        sig_to_pid_ets = ?SET_VIEW_SIG_TO_PID_ETS_PROD,
-        pid_to_sig_ets = ?SET_VIEW_PID_TO_SIG_ETS_PROD,
-        name = ?SET_VIEW_SERVER_NAME_PROD,
-        indexer = Indexer
-    };
-init_server(dev, mapreduce_view=Indexer) ->
-    #server{
-        stats_ets = ?SET_VIEW_STATS_ETS_DEV,
-        name_to_sig_ets = ?SET_VIEW_NAME_TO_SIG_ETS_DEV,
-        sig_to_pid_ets = ?SET_VIEW_SIG_TO_PID_ETS_DEV,
-        pid_to_sig_ets = ?SET_VIEW_PID_TO_SIG_ETS_DEV,
-        name = ?SET_VIEW_SERVER_NAME_DEV,
+        stats_ets = Indexer:stats_ets(Category),
+        name_to_sig_ets = Indexer:name_to_sig_ets(Category),
+        sig_to_pid_ets = Indexer:sig_to_pid_ets(Category),
+        pid_to_sig_ets = Indexer:pid_to_sig_ets(Category),
+        name = Indexer:server_name(Category),
         indexer = Indexer
     }.
 

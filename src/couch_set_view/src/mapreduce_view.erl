@@ -26,6 +26,8 @@
 -export([compact_view/6, apply_log/2]).
 % For the main module
 -export([get_row_count/1, make_wrapper_fun/2, fold/4, index_extension/0]).
+-export([stats_ets/1, server_name/1, sig_to_pid_ets/1, name_to_sig_ets/1,
+         pid_to_sig_ets/1]).
 
 
 -include("couch_db.hrl").
@@ -44,6 +46,19 @@
 
 % Same as the compactor uses for the ID-btree
 -define(SORTED_CHUNK_SIZE, 1024 * 1024).
+
+
+-define(SET_VIEW_STATS_ETS_PROD, couch_set_view_stats_prod).
+-define(SET_VIEW_NAME_TO_SIG_ETS_PROD, couch_set_view_name_to_sig_prod).
+-define(SET_VIEW_SIG_TO_PID_ETS_PROD, couch_set_view_sig_to_pid_prod).
+-define(SET_VIEW_PID_TO_SIG_ETS_PROD, couch_set_view_pid_to_sig_prod).
+-define(SET_VIEW_STATS_ETS_DEV, couch_set_view_stats_dev).
+-define(SET_VIEW_NAME_TO_SIG_ETS_DEV, couch_set_view_name_to_sig_dev).
+-define(SET_VIEW_SIG_TO_PID_ETS_DEV, couch_set_view_sig_to_pid_dev).
+-define(SET_VIEW_PID_TO_SIG_ETS_DEV, couch_set_view_pid_to_sig_dev).
+
+-define(SET_VIEW_SERVER_NAME_PROD, couch_setview_server_name_prod).
+-define(SET_VIEW_SERVER_NAME_DEV, couch_setview_server_name_dev).
 
 
 write_kvs(Group, TmpFiles, ViewKVs) ->
@@ -472,3 +487,29 @@ encode_reductions(Reduced) ->
          end
      end || R <- Reduced
     ].
+
+
+stats_ets(prod) ->
+    ?SET_VIEW_STATS_ETS_PROD;
+stats_ets(dev) ->
+    ?SET_VIEW_STATS_ETS_DEV.
+
+server_name(prod) ->
+    ?SET_VIEW_SERVER_NAME_PROD;
+server_name(dev) ->
+    ?SET_VIEW_SERVER_NAME_DEV.
+
+sig_to_pid_ets(prod) ->
+    ?SET_VIEW_SIG_TO_PID_ETS_PROD;
+sig_to_pid_ets(dev) ->
+    ?SET_VIEW_SIG_TO_PID_ETS_DEV.
+
+name_to_sig_ets(prod) ->
+    ?SET_VIEW_NAME_TO_SIG_ETS_PROD;
+name_to_sig_ets(dev) ->
+    ?SET_VIEW_NAME_TO_SIG_ETS_DEV.
+
+pid_to_sig_ets(prod) ->
+    ?SET_VIEW_PID_TO_SIG_ETS_PROD;
+pid_to_sig_ets(dev) ->
+    ?SET_VIEW_PID_TO_SIG_ETS_DEV.
