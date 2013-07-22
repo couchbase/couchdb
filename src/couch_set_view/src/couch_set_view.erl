@@ -594,7 +594,7 @@ fold_reduce(#set_view_group{replica_group = #set_view_group{} = RepGroup} = Grou
 
 fold_reduce(Group, View, FoldFun, FoldAcc, #view_query_args{keys = nil} = ViewQueryArgs) ->
     KeyGroupFun = make_reduce_group_keys_fun(ViewQueryArgs#view_query_args.group_level),
-    Options = [{key_group_fun, KeyGroupFun} | couch_set_view_util:make_key_options(ViewQueryArgs)],
+    Options = [{key_group_fun, KeyGroupFun} | mapreduce_view:make_key_options(ViewQueryArgs)],
     do_fold_reduce(Group, View, FoldFun, FoldAcc, Options, ViewQueryArgs);
 
 fold_reduce(Group, View, FoldFun, FoldAcc, #view_query_args{keys = Keys} = ViewQueryArgs0) ->
@@ -602,7 +602,7 @@ fold_reduce(Group, View, FoldFun, FoldAcc, #view_query_args{keys = Keys} = ViewQ
     {_, FinalAcc} = lists:foldl(
         fun(Key, {_, Acc}) ->
             ViewQueryArgs = ViewQueryArgs0#view_query_args{start_key = Key, end_key = Key},
-            Options = [{key_group_fun, KeyGroupFun} | couch_set_view_util:make_key_options(ViewQueryArgs)],
+            Options = [{key_group_fun, KeyGroupFun} | mapreduce_view:make_key_options(ViewQueryArgs)],
             do_fold_reduce(Group, View, FoldFun, Acc, Options, ViewQueryArgs)
         end,
         {ok, FoldAcc},
@@ -843,7 +843,7 @@ do_fold(Group, SetView, Fun, Acc, ViewQueryArgs) ->
     WrapperFun = Mod:make_wrapper_fun(Fun, Filter),
     couch_set_view_util:open_raw_read_fd(Group),
     try
-        Options = couch_set_view_util:make_key_options(ViewQueryArgs),
+        Options = Mod:make_key_options(ViewQueryArgs),
         {ok, _LastReduce, _AccResult} =
             Mod:fold(View, WrapperFun, Acc, Options)
     after

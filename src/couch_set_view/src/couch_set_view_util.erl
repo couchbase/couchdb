@@ -15,7 +15,6 @@
 -export([expand_dups/2, expand_dups/3, partitions_map/2]).
 -export([build_bitmask/1, decode_bitmask/1]).
 -export([make_btree_purge_fun/1]).
--export([make_key_options/1]).
 -export([get_ddoc_ids_with_sig/2]).
 -export([open_raw_read_fd/1, close_raw_read_fd/1]).
 -export([compute_indexed_bitmap/1, cleanup_group/1]).
@@ -154,29 +153,6 @@ btree_purge_fun(branch, Red, {go, Acc}, Cbitmask) ->
     _ ->
         {partial_purge, {go, Acc}}
     end.
-
-
--spec make_key_options(#view_query_args{}) -> [{atom(), term()}].
-make_key_options(#view_query_args{direction = Dir} = QArgs) ->
-    [{dir, Dir} | make_start_key_option(QArgs) ++ make_end_key_option(QArgs)].
-
-make_start_key_option(#view_query_args{start_key = Key, start_docid = DocId}) ->
-    if Key == undefined ->
-        [];
-    true ->
-        [{start_key, encode_key_docid(?JSON_ENCODE(Key), DocId)}]
-    end.
-
-make_end_key_option(#view_query_args{end_key = undefined}) ->
-    [];
-make_end_key_option(#view_query_args{end_key = Key, end_docid = DocId, inclusive_end = true}) ->
-    [{end_key, encode_key_docid(?JSON_ENCODE(Key), DocId)}];
-make_end_key_option(#view_query_args{end_key = Key, end_docid = DocId, inclusive_end = false}) ->
-    [{end_key_gt, encode_key_docid(?JSON_ENCODE(Key), reverse_key_default(DocId))}].
-
-reverse_key_default(?MIN_STR) -> ?MAX_STR;
-reverse_key_default(?MAX_STR) -> ?MIN_STR;
-reverse_key_default(Key) -> Key.
 
 
 -spec get_ddoc_ids_with_sig(binary(), #set_view_group{}) -> [binary()].
