@@ -316,8 +316,8 @@ setup_views(Fd, BtreeOptions, Group, ViewStates, Views) ->
                     throw({too_many_reductions, <<"Maximum reductions allowed is 255">>});
                 true -> ok
                 end,
-                LenReductions = [<<(size(R)):16, R/binary>> || R <- Reduced],
-                iolist_to_binary([<<(length(KVs2)):40, AllPartitionsBitMap:?MAX_NUM_PARTITIONS>> | LenReductions]);
+                UserReductions = encode_reductions(Reduced),
+                iolist_to_binary([<<(length(KVs2)):40, AllPartitionsBitMap:?MAX_NUM_PARTITIONS>> | UserReductions]);
             (rereduce, [<<Count0:40, AllPartitionsBitMap0:?MAX_NUM_PARTITIONS, Red0/binary>> | Reds]) ->
                 {Count, AllPartitionsBitMap, UserReds} = lists:foldl(
                     fun(<<C:40, Apbm:?MAX_NUM_PARTITIONS, R/binary>>, {CountAcc, ApbmAcc, RedAcc}) ->
@@ -337,8 +337,8 @@ setup_views(Fd, BtreeOptions, Group, ViewStates, Views) ->
                                               couch_util:to_binary(Reason), UserReds]),
                         throw(Error)
                     end,
-                LenReductions = [<<(size(R1)):16, R1/binary>> || R1 <- Reduced],
-                iolist_to_binary([<<Count:40, AllPartitionsBitMap:?MAX_NUM_PARTITIONS>> | LenReductions])
+                UserReductions = encode_reductions(Reduced),
+                iolist_to_binary([<<Count:40, AllPartitionsBitMap:?MAX_NUM_PARTITIONS>> | UserReductions])
             end,
         Less = fun(A, B) ->
             {Key1, DocId1} = couch_set_view_util:split_key_docid(A),
@@ -455,3 +455,20 @@ fold_fun(Fun, [KV | Rest], {KVReds, Reds}, Acc) ->
 fold(View, WrapperFun, Acc, Options) ->
     Bt = View#mapreduce_view.btree,
     couch_btree:fold(Bt, WrapperFun, Acc, Options).
+
+
+-spec encode_reductions([binary()]) -> [binary()].
+encode_reductions(Reduced) ->
+    [
+     begin
+         RedSz = byte_size(R),
+         case RedSz > ?MAX_USER_REDUCTION_SIZE of
+         true ->
+             ErrMsg = io_lib:format(
+                        "Reduction too large (~p bytes)", [RedSz]),
+             throw({error, iolist_to_binary(ErrMsg)});
+         false ->
+             <<RedSz:?USER_REDUCTION_SIZE_BITS, R/binary>>
+         end
+     end || R <- Reduced
+    ].

@@ -34,6 +34,9 @@
     }
 ).
 
+-define(USER_REDUCTION_SIZE_BITS,   16).
+-define(MAX_USER_REDUCTION_SIZE,    ((1 bsl ?USER_REDUCTION_SIZE_BITS) - 1)).
+
 -define(dbname(SetName, PartId),
       <<SetName/binary, $/, (?l2b(integer_to_list(PartId)))/binary>>).
 

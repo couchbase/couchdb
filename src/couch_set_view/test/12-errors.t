@@ -58,7 +58,7 @@ num_docs() -> 1000.
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(23),
+    etap:plan(27),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -98,6 +98,11 @@ test() ->
     test_reduce_runtime_error(),
     etap:diag("Testing reduce function with invalid syntax"),
     test_reduce_syntax_error(),
+
+    etap:diag("Testing reduce function producing a too large reduction"),
+    test_reduce_too_large_reduction(),
+    etap:diag("Testing reduce function producing a too large re-reduction"),
+    test_reduce_too_large_rereduction(),
 
     couch_set_view_test_util:stop_server(),
     ok.
@@ -592,6 +597,102 @@ test_reduce_syntax_error() ->
     {invalid_design_doc, Reason} = Result,
     etap:diag("Design document creation error reason: " ++ binary_to_list(Reason)),
 
+    couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()).
+
+
+test_reduce_too_large_reduction() ->
+    couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
+    couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
+
+    DDocId = <<"_design/test">>,
+    DDoc = {[
+        {<<"meta">>, {[{<<"id">>, DDocId}]}},
+        {<<"json">>, {[
+        {<<"views">>, {[
+            {<<"test">>, {[
+                {<<"map">>, <<"function(doc, meta) { emit(meta.id, 'foobar'); }">>},
+                {<<"reduce">>, <<"function(key, values, rereduce) {"
+                                 "  if (rereduce) return 'foo';"
+                                 "  var r = 'qwerty';"
+                                 "  while (r.length < 65536) {"
+                                 "    r = r.concat(r);"
+                                 "  }"
+                                 "  return r;"
+                                 "}">>}
+            ]}}
+        ]}}
+        ]}}
+    ]},
+    populate_set(DDoc),
+
+    ok = configure_view_group(DDocId, [0, 1, 2, 3], []),
+    GroupPid = couch_set_view:get_group_pid(mapreduce_view, test_set_name(), DDocId, prod),
+    MonRef = erlang:monitor(process, GroupPid),
+
+    QueryResult = try
+        query_reduce_view(DDocId, <<"test">>, false)
+    catch _:Error ->
+        Error
+    end,
+
+    etap:is(QueryResult, {error, <<"Reduction too large (98306 bytes)">>},
+            "Received error response with too large reduce value"),
+
+    receive
+    {'DOWN', MonRef, _, _, _} ->
+        etap:bail("view group died")
+    after 5000 ->
+        etap:is(is_process_alive(GroupPid), true, "View group is still alive")
+    end,
+    couch_util:shutdown_sync(GroupPid),
+    couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()).
+
+
+test_reduce_too_large_rereduction() ->
+    couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
+    couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
+
+    DDocId = <<"_design/test">>,
+    DDoc = {[
+        {<<"meta">>, {[{<<"id">>, DDocId}]}},
+        {<<"json">>, {[
+        {<<"views">>, {[
+            {<<"test">>, {[
+                {<<"map">>, <<"function(doc, meta) { emit(meta.id, 'foobar'); }">>},
+                {<<"reduce">>, <<"function(key, values, rereduce) {"
+                                 "  if (!rereduce) return 'foo';"
+                                 "  var r = 'qwerty';"
+                                 "  while (r.length < 65536) {"
+                                 "    r = r.concat(r);"
+                                 "  }"
+                                 "  return r;"
+                                 "}">>}
+            ]}}
+        ]}}
+        ]}}
+    ]},
+    populate_set(DDoc),
+
+    ok = configure_view_group(DDocId, [0, 1, 2, 3], []),
+    GroupPid = couch_set_view:get_group_pid(mapreduce_view, test_set_name(), DDocId, prod),
+    MonRef = erlang:monitor(process, GroupPid),
+
+    QueryResult = try
+        query_reduce_view(DDocId, <<"test">>, false)
+    catch _:Error ->
+        Error
+    end,
+
+    etap:is(QueryResult, {error, <<"Reduction too large (98306 bytes)">>},
+            "Received error response with too large rereduce value"),
+
+    receive
+    {'DOWN', MonRef, _, _, _} ->
+        etap:bail("view group died")
+    after 5000 ->
+        etap:is(is_process_alive(GroupPid), true, "View group is still alive")
+    end,
+    couch_util:shutdown_sync(GroupPid),
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()).
 
 
