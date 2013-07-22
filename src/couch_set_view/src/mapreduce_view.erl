@@ -26,7 +26,7 @@
 -export([compact_view/6, apply_log/2]).
 % For the main module
 -export([get_row_count/1, make_wrapper_fun/2, fold/4, index_extension/0,
-        make_key_options/1]).
+        make_key_options/1, should_filter/1]).
 -export([stats_ets/1, server_name/1, sig_to_pid_ets/1, name_to_sig_ets/1,
          pid_to_sig_ets/1]).
 
@@ -516,6 +516,11 @@ make_end_key_option(#view_query_args{end_key = Key, end_docid = DocId,
 reverse_key_default(?MIN_STR) -> ?MAX_STR;
 reverse_key_default(?MAX_STR) -> ?MIN_STR;
 reverse_key_default(Key) -> Key.
+
+
+-spec should_filter(#view_query_args{}) -> boolean().
+should_filter(ViewQueryArgs) ->
+    ViewQueryArgs#view_query_args.filter.
 
 
 stats_ets(prod) ->

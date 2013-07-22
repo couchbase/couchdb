@@ -833,7 +833,7 @@ do_fold(Group, SetView, Fun, Acc, ViewQueryArgs) ->
     View = SetView#set_view.indexer,
     Mod = Group#set_view_group.mod,
 
-    Filter = case ViewQueryArgs#view_query_args.filter of
+    Filter = case Mod:should_filter(ViewQueryArgs) of
         false ->
             false;
         true ->
