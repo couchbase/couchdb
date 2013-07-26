@@ -260,8 +260,8 @@ random_doc_info(#db{docinfo_by_id_btree = IdBtree}) ->
 increment_update_seq(#db{update_pid=UpdatePid}) ->
     gen_server:call(UpdatePid, increment_update_seq, infinity).
 
-purge_docs(#db{update_pid=UpdatePid}, IdsRevs) ->
-    gen_server:call(UpdatePid, {purge_docs, IdsRevs}, infinity).
+purge_docs(#db{update_pid = UpdatePid}, DocIds) ->
+    gen_server:call(UpdatePid, {purge_docs, DocIds}, infinity).
 
 get_committed_update_seq(#db{committed_update_seq=Seq}) ->
     Seq.

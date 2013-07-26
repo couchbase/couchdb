@@ -124,57 +124,48 @@ handle_call({set_security, NewSec}, _From, Db) ->
     ok = notify_db_updated(Db2),
     {reply, ok, Db2};
 
-handle_call({purge_docs, _IdRevs}, _From,
+handle_call({purge_docs, _DocIds}, _From,
         #db{compactor_info=Pid}=Db) when Pid /= nil ->
     {reply, {error, purge_during_compaction}, Db};
-handle_call({purge_docs, IdRevs}, _From, Db) ->
+
+% Used only for unit tests. Real purging is actually done
+% externally during compaction.
+handle_call({purge_docs, DocIds}, _From, Db) ->
     #db{
-        fd = Fd,
         docinfo_by_id_btree = DocInfoByIdBTree,
         docinfo_by_seq_btree = DocInfoBySeqBTree,
         update_seq = LastSeq,
-        header = Header = #db_header{purge_seq=PurgeSeq}
+        header = Header
         } = Db,
-    DocLookups = couch_btree:lookup(DocInfoByIdBTree,
-            [Id || {Id, _Rev} <- IdRevs]),
-
-    NewDocInfos = lists:zipwith(
-        fun({_Id, Rev}, {ok, #doc_info{rev=DiskRev}=DocInfo}) ->
-            case Rev of
-            DiskRev ->
-                DocInfo;
-            _ ->
-                nil
-            end;
-        (_, not_found) ->
-            nil
+    DocLookups = couch_btree:lookup(DocInfoByIdBTree, DocIds),
+    DocSeqs = lists:foldr(
+        fun({ok, #doc_info{local_seq = S}}, Acc) ->
+            [S | Acc];
+        (not_found, Acc) ->
+            Acc
         end,
-        IdRevs, DocLookups),
-
-    SeqsToRemove = [Seq
-            || #doc_info{local_seq=Seq} <- NewDocInfos],
-
-    IdRevsPurged = [{Id, [Rev]}
-            || #doc_info{id=Id, rev=Rev} <- NewDocInfos],
-
-    IdsToRemove = [Id || #doc_info{id=Id} <- NewDocInfos],
-
-    {ok, DocInfoBySeqBTree2} = couch_btree:add_remove(DocInfoBySeqBTree,
-            [], SeqsToRemove),
-    {ok, DocInfoByIdBTree2} = couch_btree:add_remove(DocInfoByIdBTree,
-            [], IdsToRemove),
-    {ok, Pointer, _} = couch_file:append_term(Fd, IdRevsPurged),
-
-    Db2 = commit_data(
-        Db#db{
+        [], DocLookups),
+    case DocSeqs of
+    [] ->
+        {reply, ok, Db};
+    [_ | _] ->
+        HighSeq = lists:max(DocSeqs),
+        {ok, DocInfoBySeqBTree2} = couch_btree:add_remove(DocInfoBySeqBTree, [], DocSeqs),
+        {ok, DocInfoByIdBTree2} = couch_btree:add_remove(DocInfoByIdBTree, [], DocIds),
+        % See: https://github.com/couchbaselabs/cbpurge/blob/master/purge_2.0.2_design.md
+        % for purge seq information.
+        Db2 = Db#db{
             docinfo_by_id_btree = DocInfoByIdBTree2,
             docinfo_by_seq_btree = DocInfoBySeqBTree2,
             update_seq = LastSeq + 1,
-            header=Header#db_header{purge_seq=PurgeSeq+1, purged_docs=Pointer}}),
+            header = Header#db_header{purge_seq = HighSeq}
+        },
+        Db3 = commit_data(Db2),
+        ok = notify_db_updated(Db3),
+        couch_db_update_notifier:notify({updated, {Db3#db.name, Db3#db.update_seq}}),
+        {reply, ok, Db3}
+    end;
 
-    ok = notify_db_updated(Db2),
-    couch_db_update_notifier:notify({updated, {Db2#db.name, Db2#db.update_seq}}),
-    {reply, {ok, (Db2#db.header)#db_header.purge_seq, IdRevsPurged}, Db2};
 handle_call({start_compact, Options}, _From, Db) ->
     case Db#db.compactor_info of
     nil ->
