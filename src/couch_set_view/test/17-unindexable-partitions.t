@@ -33,7 +33,7 @@ num_docs() -> 16448.  % keep it a multiple of num_set_partitions()
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(138),
+    etap:plan(150),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -202,6 +202,25 @@ test() ->
     verify_btrees_1(ActiveParts, PassiveParts, ExpectedSeqs6, ExpectedUnindexableSeqs6, ValueGenFun2),
     compact_view_group(),
     verify_btrees_1(ActiveParts, PassiveParts, ExpectedSeqs6, ExpectedUnindexableSeqs6, ValueGenFun2),
+
+    % Test for MB-8677
+    etap:is(
+        couch_set_view:mark_partitions_unindexable(test_set_name(), ddoc_id(), Unindexable2),
+        ok,
+        "Marked replica partition on transfer as unindexable again"),
+    % Trigger the automatic transfer
+    ok = gen_server:call(GroupPid, {set_auto_transfer_replicas, true}, infinity),
+    trigger_main_update_and_wait(),
+    ExpectedSeqs7 = ExpectedSeqs5 ++ [{hd(ReplicaParts), 514}],
+    verify_btrees_1(ActiveParts ++ Unindexable2,
+                    [],
+                    ExpectedSeqs7, ExpectedUnindexableSeqs5, ValueGenFun2),
+
+    % Mark it as indexable again, so that it can be cleanup
+    etap:is(
+        couch_set_view:mark_partitions_indexable(test_set_name(), ddoc_id(), Unindexable2),
+        ok,
+        "Marked replica partition on transfer as indexable again"),
 
     ok = couch_set_view:set_partition_states(
         test_set_name(), ddoc_id(), [], [], [hd(ReplicaParts)]),
@@ -429,9 +448,12 @@ verify_btrees_1(ActiveParts, PassiveParts, ExpectedSeqs,
             false ->
                 etap:bail("View1 Btree has an unexpected KV at iteration " ++ integer_to_list(I))
             end,
-            case PartId =:= 31 of
+
+            HighestActivePartId = length(ActiveParts) - 1,
+            case PartId =:= HighestActivePartId of
             true ->
-                {ok, {NextId + 33, I + 1}};
+                NumNonActiveParts = num_set_partitions() - HighestActivePartId,
+                {ok, {NextId + NumNonActiveParts, I + 1}};
             false ->
                 {ok, {NextId + 1, I + 1}}
             end

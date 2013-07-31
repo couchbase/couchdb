@@ -1853,9 +1853,18 @@ maybe_update_partition_states(ActiveList0, PassiveList0, CleanupList0, State) ->
         ActiveList = filter_out_bitmask_partitions(ActiveList0, AlreadyActive),
         PassiveList = filter_out_bitmask_partitions(PassiveList0, AlreadyPassive),
         CleanupList = filter_out_bitmask_partitions(CleanupList0, ?set_cbitmask(Group)),
-        ActiveMarkedAsUnindexable = [
+        ActiveMarkedAsUnindexable0 = [
             P || P <- ActiveList, is_unindexable_part(P, Group)
         ],
+
+        % Replicas on transfer look like normal active partitions for the
+        % caller. Hence they can be marked as unindexable. The actual
+        % transfer to a real active partition needs to happen though. Thus
+        % an intersection between newly activated partitions and unindexable
+        % ones is possible (MB-8677).
+        ActiveMarkedAsUnindexable = ordsets:subtract(
+            ActiveMarkedAsUnindexable0, ?set_replicas_on_transfer(Group)),
+
         case ActiveMarkedAsUnindexable of
         [] ->
             ok;
@@ -2548,7 +2557,12 @@ indexable_partition_seqs(#state{group = Group} = State) ->
     [] ->
         couch_db_set:get_seqs(?db_set(State), Sync);
     _ ->
-        couch_db_set:get_seqs(?db_set(State), [P || {P, _} <- ?set_seqs(Group)], Sync)
+        CurPartitions = [P || {P, _} <- ?set_seqs(Group)],
+        ReplicasOnTransfer = ?set_replicas_on_transfer(Group),
+        Partitions = ordsets:union(CurPartitions, ReplicasOnTransfer),
+        % Index unindexable replicas on transfer though (as the reason for the
+        % transfer is to become active and indexable).
+        couch_db_set:get_seqs(?db_set(State), Partitions, Sync)
     end,
     CurSeqs.
 
