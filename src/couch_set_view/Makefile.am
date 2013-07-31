@@ -64,7 +64,8 @@ test_files = \
     test/23-replica-group-missing.t \
     test/24-updater-add-more-passive-partitions.t \
     test/25-util-stats.t \
-    test/26-multiple-reductions.t
+    test/26-multiple-reductions.t \
+    test/27-database-purges.t
 
 compiled_files = \
     ebin/couch_set_view.app \

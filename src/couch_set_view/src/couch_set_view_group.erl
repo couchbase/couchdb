@@ -1149,6 +1149,27 @@ handle_info({'EXIT', Pid, {updater_finished, Result}}, #state{updater_pid = Pid}
         {noreply, State6, ?TIMEOUT}
     end;
 
+handle_info({'EXIT', Pid, {updater_error, purge}}, #state{updater_pid = Pid} = State) ->
+    Group = State#state.group,
+    Group2 = reset_file(Group#set_view_group.fd, Group),
+    #set_view_group{index_header = Header2} = Group2,
+    Header3 = Header2#set_view_index_header{
+        seqs = lists:map(fun({P, _S}) -> {P, 0} end,
+            Header2#set_view_index_header.seqs),
+        unindexable_seqs = lists:map(fun({P, _S}) -> {P, 0} end,
+            Header2#set_view_index_header.unindexable_seqs)
+    },
+    State2 = State#state{
+        updater_pid = nil,
+        initial_build = false,
+        updater_state = not_running,
+        group = Group2#set_view_group{index_header = Header3}
+    },
+    ?LOG_INFO("Set view `~s`, ~s group `~s`, group reset because updater"
+	      " detected missed document deletes (purge)",
+	      [?set_name(State), ?type(State), ?group_id(State)]),
+    {noreply, start_updater(State2), ?TIMEOUT};
+
 handle_info({'EXIT', Pid, {updater_error, Error}}, #state{updater_pid = Pid} = State) ->
     ?LOG_ERROR("Set view `~s`, ~s group `~s`, received error from updater: ~p",
         [?set_name(State), ?type(State), ?group_id(State), Error]),

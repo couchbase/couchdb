@@ -263,7 +263,10 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
             load_changes(Owner, Parent, Group, MapQueue,
                          ActiveParts, PassiveParts,
                          WriterAcc#writer_acc.initial_build)
-        catch _:Error ->
+        catch
+        throw:purge ->
+            exit(purge);
+        _:Error ->
             Stacktrace = erlang:get_stacktrace(),
             ?LOG_ERROR("Set view `~s`, ~s group `~s`, doc loader error~n"
                 "error:      ~p~n"
@@ -356,8 +359,19 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts, Initial
                                          [?dbname(SetName, PartId), Error]),
                 throw({error, iolist_to_binary(ErrorMsg)})
             end,
+            PurgeSeq = couch_db:get_purge_seq(Db),
+            Since = couch_util:get_value(PartId, SinceSeqs, 0),
+            case (PurgeSeq > Since) andalso (Since > 0) of
+            true ->
+                ?LOG_INFO("Updater ~s set view group `~s` from set `~s`, exiting"
+			  " with purge reason because partition ~p has purge seq"
+			  " ~p and last indexed seq is ~p",
+			  [GroupType, DDocId, SetName, PartId, PurgeSeq, Since]),
+                throw(purge);
+            false ->
+                ok
+            end,
             try
-                Since = couch_util:get_value(PartId, SinceSeqs, 0),
                 ChangesWrapper = fun(DocInfo, _, AccCount2) ->
                     load_doc(Db, PartId, DocInfo, MapQueue, Group, InitialBuild),
                     {ok, AccCount2 + 1}
