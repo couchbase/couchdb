@@ -841,17 +841,17 @@ fold(#set_view_group{replica_group = #set_view_group{} = RepGroup} = Group, View
     #merge_acc{acc = FinalAcc} = couch_index_merger:query_index(couch_view_merger, MergeParams),
     {ok, nil, FinalAcc};
 
-fold(Group, View, Fun, Acc, #view_query_args{keys = nil} = ViewQueryArgs) ->
-    do_fold(Group, View, Fun, Acc, ViewQueryArgs);
-
-fold(Group, View, Fun, Acc, #view_query_args{keys = Keys} = ViewQueryArgs0) ->
+fold(Group, View, Fun, Acc, #view_query_args{keys = Keys} = ViewQueryArgs0)
+        when Keys =/= nil ->
     lists:foldl(
         fun(Key, {ok, _, FoldAcc}) ->
             ViewQueryArgs = ViewQueryArgs0#view_query_args{start_key = Key, end_key = Key},
             do_fold(Group, View, Fun, FoldAcc, ViewQueryArgs)
         end,
         {ok, {[], []}, Acc},
-        Keys).
+        Keys);
+fold(Group, View, Fun, Acc, ViewQueryArgs) ->
+    do_fold(Group, View, Fun, Acc, ViewQueryArgs).
 
 
 do_fold(Group, SetView, Fun, Acc, ViewQueryArgs) ->
