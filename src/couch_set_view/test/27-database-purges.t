@@ -41,7 +41,7 @@ initial_num_docs() -> 17600.  % must be multiple of num_set_partitions()
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(18),
+    etap:plan(19),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -83,6 +83,10 @@ test() ->
     DocLookup = couch_db:open_doc(FirstPurgeDb2, LastPurgedId, [deleted]),
     etap:is(DocLookup, {not_found, missing}, "Document was purged"),
     ok = couch_db:close(FirstPurgeDb2),
+
+    GroupMissesDeletes = couch_set_view:does_group_misses_deletes(
+        test_set_name(), ddoc_id()),
+    etap:is(GroupMissesDeletes, true, "Group misses deletes"),
 
     GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
     {ok, UpdaterPid1} = gen_server:call(GroupPid, {start_updater, []}, infinity),

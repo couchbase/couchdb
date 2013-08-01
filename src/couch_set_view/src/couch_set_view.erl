@@ -22,6 +22,7 @@
 -export([mark_partitions_unindexable/3, mark_partitions_indexable/3]).
 -export([monitor_partition_update/3, demonitor_partition_update/3]).
 -export([trigger_update/3, trigger_replica_update/3]).
+-export([does_group_misses_deletes/2]).
 
 % Internal, not meant to be used by components other than the view engine.
 -export([get_group_pid/2, get_group/3, release_group/1, get_group_info/2]).
@@ -366,6 +367,24 @@ trigger_replica_update(SetName, DDocId, MinNumChanges) ->
         ok = gen_server:cast(Pid, {update_replica, MinNumChanges})
     catch throw:{error, empty_group} ->
         ok
+    end.
+
+
+% Check if a view group missed processing of any deleted documents that
+% got purged by database compaction. This performs an estimation only,
+% as a 'true' response really means 'maybe'. This is because after a
+% database compaction with purging enabled, it's impossible for a view
+% group to know exactly which deleted documents were purged.
+%
+% NOTE: use with moderation, as this call can cause delays to queries
+% if used too frequentely.
+-spec does_group_misses_deletes(binary(), binary()) -> boolean().
+does_group_misses_deletes(SetName, DDocId) ->
+    try
+        Pid = get_group_pid(SetName, DDocId),
+        gen_server:call(Pid, does_group_misses_deletes, infinity)
+    catch throw:{error, empty_group} ->
+        false
     end.
 
 
