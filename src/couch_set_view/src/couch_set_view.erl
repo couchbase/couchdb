@@ -22,7 +22,7 @@
 -export([mark_partitions_unindexable/3, mark_partitions_indexable/3]).
 -export([monitor_partition_update/3, demonitor_partition_update/3]).
 -export([trigger_update/3, trigger_replica_update/3]).
--export([does_group_misses_deletes/2]).
+-export([does_group_misses_deletes/2, group_indexed_document_ids/4]).
 
 % Internal, not meant to be used by components other than the view engine.
 -export([get_group_pid/2, get_group/3, release_group/1, get_group_info/2]).
@@ -386,6 +386,25 @@ does_group_misses_deletes(SetName, DDocId) ->
     catch throw:{error, empty_group} ->
         false
     end.
+
+
+-spec group_indexed_document_ids(binary(),
+				 binary(),
+				 fun((DocId::binary(), Acc::any()) ->
+					    {'ok', Acc2::any()} |
+					    {'stop', Acc2::any()}),
+				 Acc::any()) ->
+					{'ok', Acc3::any()}.
+group_indexed_document_ids(SetName, DDocId, Callback, Acc0) ->
+    Req = #set_view_group_req{stale = ok},
+    {ok, Group} = get_group(SetName, DDocId, Req),
+    FoldFun = fun({Key, _Value}, _AccRed, Acc) ->
+        <<_PartId:16, DocId/binary>> = Key,
+        Callback(DocId, Acc)
+    end,
+    {ok, _, FinalAcc} = couch_btree:fold(
+        Group#set_view_group.id_btree, FoldFun, Acc0, []),
+    {ok, FinalAcc}.
 
 
 -spec get_group_server(binary(), #set_view_group{}) -> pid().
