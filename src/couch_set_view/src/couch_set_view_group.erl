@@ -1180,8 +1180,8 @@ handle_info({'EXIT', Pid, {updater_error, purge}}, #state{updater_pid = Pid} = S
         group = Group2#set_view_group{index_header = Header3}
     },
     ?LOG_INFO("Set view `~s`, ~s group `~s`, group reset because updater"
-	      " detected missed document deletes (purge)",
-	      [?set_name(State), ?type(State), ?group_id(State)]),
+              " detected missed document deletes (purge)",
+              [?set_name(State), ?type(State), ?group_id(State)]),
     {noreply, start_updater(State2), ?TIMEOUT};
 
 handle_info({'EXIT', Pid, {updater_error, Error}}, #state{updater_pid = Pid} = State) ->
