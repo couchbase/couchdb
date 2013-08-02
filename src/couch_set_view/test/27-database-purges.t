@@ -41,7 +41,7 @@ initial_num_docs() -> 17600.  % must be multiple of num_set_partitions()
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(21),
+    etap:plan(23),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -62,6 +62,9 @@ test() ->
 
     verify_btrees(ValueGenFun1, initial_num_docs()),
     test_get_indexed_document_ids(initial_num_docs()),
+    GroupMissesDeletes = couch_set_view:does_group_misses_deletes(
+        test_set_name(), ddoc_id()),
+    etap:is(GroupMissesDeletes, false, "Group doesn't miss deletes"),
 
     etap:diag("Deleting the last " ++ integer_to_list(num_set_partitions()) ++
 		  " documents"),
@@ -69,6 +72,10 @@ test() ->
 		     num_set_partitions(),
 		     true,
 		     ValueGenFun1),
+
+    GroupMissesDeletes2 = couch_set_view:does_group_misses_deletes(
+        test_set_name(), ddoc_id()),
+    etap:is(GroupMissesDeletes2, false, "Group doesn't miss deletes"),
 
     etap:diag("Purging the last document"),
     LastPurgedId = doc_id(initial_num_docs() - 1),
@@ -85,9 +92,9 @@ test() ->
     etap:is(DocLookup, {not_found, missing}, "Document was purged"),
     ok = couch_db:close(FirstPurgeDb2),
 
-    GroupMissesDeletes = couch_set_view:does_group_misses_deletes(
+    GroupMissesDeletes3 = couch_set_view:does_group_misses_deletes(
         test_set_name(), ddoc_id()),
-    etap:is(GroupMissesDeletes, true, "Group misses deletes"),
+    etap:is(GroupMissesDeletes3, true, "Group misses deletes"),
 
     GroupPid = couch_set_view:get_group_pid(test_set_name(), ddoc_id()),
     {ok, UpdaterPid1} = gen_server:call(GroupPid, {start_updater, []}, infinity),
@@ -112,6 +119,8 @@ test() ->
         etap:diag("Waiting for updater to exit normally"),
         receive
         {'DOWN', Ref2, _, _, {updater_finished, _}} ->
+            etap:diag("Updater finished");
+        {'DOWN', Ref2, _, _, noproc} ->
             etap:diag("Updater finished");
         {'DOWN', Ref2, _, _, Reason2} ->
             etap:bail("Updater finished with unexpected reason: " ++
