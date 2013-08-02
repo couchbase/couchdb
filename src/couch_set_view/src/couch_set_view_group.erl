@@ -860,6 +860,20 @@ handle_call(compact_log_files, _From, State) ->
     NewState = State#state{compact_log_files = nil},
     {reply, {ok, {Files, Seqs}}, NewState, ?GET_TIMEOUT(NewState)};
 
+handle_call(does_group_misses_deletes, _From, #state{group = Group} = State) ->
+    Pred = fun({P, S}) ->
+        {ok, Db} = couch_db:open_int(?dbname((?set_name(State)), P), []),
+        ok = couch_db:close(Db),
+        couch_db:get_purge_seq(Db) > S
+    end,
+    case lists:any(Pred, ?set_seqs(Group)) of
+    true ->
+        {reply, true, State, ?GET_TIMEOUT(State)};
+    false ->
+        MissesDeletes = lists:any(Pred, ?set_unindexable_seqs(Group)),
+        {reply, MissesDeletes, State, ?GET_TIMEOUT(State)}
+    end;
+
 handle_call(reset_utilization_stats, _From, #state{replica_group = RepPid} = State) ->
     reset_util_stats(),
     case is_pid(RepPid) of
@@ -1192,6 +1206,29 @@ handle_info({'EXIT', Pid, {updater_finished, Result}}, #state{updater_pid = Pid}
         State6 = maybe_start_cleaner(State5),
         {noreply, State6, ?GET_TIMEOUT(State6)}
     end;
+
+handle_info({'EXIT', Pid, {updater_error, purge}}, #state{updater_pid = Pid} = State) ->
+    Group = State#state.group,
+    Group2 = reset_file(Group#set_view_group.fd, Group),
+    #set_view_group{index_header = Header2} = Group2,
+    Header3 = Header2#set_view_index_header{
+        seqs = lists:map(fun({P, _S}) -> {P, 0} end,
+            Header2#set_view_index_header.seqs),
+        unindexable_seqs = lists:map(fun({P, _S}) -> {P, 0} end,
+            Header2#set_view_index_header.unindexable_seqs)
+    },
+    State2 = State#state{
+        updater_pid = nil,
+        initial_build = false,
+        updater_state = not_running,
+        group = Group2#set_view_group{index_header = Header3}
+    },
+    ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`, group reset because updater"
+              " detected missed document deletes (purge)",
+              [?set_name(State), ?type(State),
+               ?category(State), ?group_id(State)]),
+    State3 = start_updater(State2),
+    {noreply, State3, ?GET_TIMEOUT(State3)};
 
 handle_info({'EXIT', Pid, {updater_error, Error}}, #state{updater_pid = Pid} = State) ->
     ?LOG_ERROR("Set view `~s`, ~s (~s) group `~s`,"
