@@ -878,6 +878,7 @@ make_compactor_options(Acc, [Opt | Rest]) ->
     Out = case Opt of
         dropdeletes -> ["--dropdeletes" | Acc];
         {purge_before, Timestamp} -> ["--purge-before", erlang:integer_to_list(Timestamp) | Acc];
+        {purge_only_upto_seq, SeqNo} -> ["--purge-only-upto-seq", erlang:integer_to_list(SeqNo) | Acc];
         _ -> Acc
     end,
     make_compactor_options(Out, Rest).
