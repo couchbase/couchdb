@@ -849,13 +849,21 @@ maybe_update_btrees(WriterAcc0) ->
         last_seqs = LastSeqs
     } = WriterAcc0,
     IdTmpFileInfo = dict:fetch(ids_index, TmpFiles),
-    ShouldFlush = IsFinalBatch orelse
-        ((IdTmpFileInfo#set_view_tmp_file_info.size >= ?INC_MAX_TMP_FILE_SIZE) andalso
+    ShouldFlushViews = case Group0#set_view_group.mod of
+    mapreduce_view ->
         lists:any(
             fun({#set_view{id_num = Id}, _}) ->
                 ViewTmpFileInfo = dict:fetch(Id, TmpFiles),
                 ViewTmpFileInfo#set_view_tmp_file_info.size >= ?INC_MAX_TMP_FILE_SIZE
-            end, ViewEmptyKVs)),
+            end, ViewEmptyKVs);
+    % Currently the spatial views are updated through an code path within
+    % Erlang without using the new C based code.
+    spatial_view ->
+        true
+    end,
+    ShouldFlush = IsFinalBatch orelse
+        ((IdTmpFileInfo#set_view_tmp_file_info.size >= ?INC_MAX_TMP_FILE_SIZE) andalso
+        ShouldFlushViews),
     case ShouldFlush of
     false ->
         NewLastSeqs1 = LastSeqs,
@@ -940,7 +948,6 @@ send_log_compact_files(Owner, Files, Seqs) ->
     ok = gen_server:cast(Owner, {compact_log_files, Files, Seqs}).
 
 
-% XXX vmx 2013-05-08: This is still too MapReduce specific
 spawn_updater_worker(WriterAcc, PartIdSeqs) ->
     Parent = self(),
     Ref = make_ref(),
@@ -960,6 +967,8 @@ spawn_updater_worker(WriterAcc, PartIdSeqs) ->
         Mod:start_reduce_context(Group),
         {ok, NewBtrees, CleanupCount, NewStats, NewCompactFiles} = update_btrees(WriterAcc),
         couch_set_view_mapreduce:end_reduce_context(Group),
+        % NOTE vmx 2013-08-06: The following code works well with spatial view
+        %    as the `ViewBtrees2` will just be empty.
         [IdBtree2 | ViewBtrees2] = NewBtrees,
         case ?set_cbitmask(Group) of
         0 ->
@@ -986,27 +995,41 @@ spawn_updater_worker(WriterAcc, PartIdSeqs) ->
         end,
         NewSeqs = update_seqs(PartIdSeqs, ?set_seqs(Group)),
         Header = Group#set_view_group.index_header,
-        NewHeader = Header#set_view_index_header{
-            id_btree_state = couch_btree:get_state(IdBtree2),
-            view_states = lists:map(fun couch_btree:get_state/1, ViewBtrees2),
-            seqs = NewSeqs,
-            cbitmask = NewCbitmask
-        },
-        NewGroup0 = Group#set_view_group{
-            views = lists:zipwith(
-                fun(V, Bt) ->
-                    Indexer = V#set_view.indexer,
-                    V#set_view{
-                        indexer = Indexer#mapreduce_view{
-                            btree = Bt
+        case Mod of
+        mapreduce_view ->
+            NewHeader = Header#set_view_index_header{
+                id_btree_state = couch_btree:get_state(IdBtree2),
+                view_states = lists:map(fun couch_btree:get_state/1, ViewBtrees2),
+                seqs = NewSeqs,
+                cbitmask = NewCbitmask
+            },
+            NewGroup0 = Group#set_view_group{
+                views = lists:zipwith(
+                    fun(V, Bt) ->
+                        Indexer = V#set_view.indexer,
+                        V#set_view{
+                            indexer = Indexer#mapreduce_view{
+                                btree = Bt
+                            }
                         }
-                    }
-                end,
-                Group#set_view_group.views,
-                ViewBtrees2),
-            id_btree = IdBtree2,
-            index_header = NewHeader
-        },
+                    end,
+                    Group#set_view_group.views,
+                    ViewBtrees2),
+                id_btree = IdBtree2,
+                index_header = NewHeader
+            };
+        spatial_view ->
+            % The header and group is already updated, only the id-btree
+            % isn't yet
+            NewHeader = Header#set_view_index_header{
+                id_btree_state = couch_btree:get_state(IdBtree2),
+                seqs = NewSeqs
+            },
+            NewGroup0 = Group#set_view_group{
+                id_btree = IdBtree2,
+                index_header = NewHeader
+            }
+        end,
         NewGroup = update_transferred_replicas(NewGroup0, MaxSeqs, PartIdSeqs),
         NumChanges = count_seqs_done(Group, NewSeqs),
         NewStats2 = NewStats#set_view_updater_stats{
@@ -1029,11 +1052,19 @@ update_btrees(WriterAcc) ->
         compactor_running = CompactorRunning,
         max_insert_batch_size = MaxBatchSize
     } = WriterAcc,
-    ViewInfos = [
-        {ids_index, Group#set_view_group.id_btree} |
-        [{V#set_view.id_num, (V#set_view.indexer)#mapreduce_view.btree} ||
-            V <- Group#set_view_group.views]
-    ],
+    #set_view_group{
+        id_btree = IdBtree,
+        views = SetViews,
+        mod = Mod
+    } = Group,
+    ViewInfos0 = [{ids_index, IdBtree}],
+    ViewInfos = case Mod of
+    mapreduce_view ->
+        ViewInfos0 ++ [{V#set_view.id_num,
+            (V#set_view.indexer)#mapreduce_view.btree} || V <- SetViews];
+    spatial_view ->
+        ViewInfos0
+    end,
     CleanupAcc0 = {go, 0},
     case ?set_cbitmask(Group) of
     0 ->
@@ -1236,7 +1267,7 @@ count_seqs_done(Group, NewSeqs) ->
 -spec sort_tmp_files(dict(), string(), #set_view_group{}, boolean()) -> 'ok'.
 sort_tmp_files(TmpFiles, TmpDir, Group, InitialBuild) ->
     #set_view_group{
-        views = Views,
+        views = Views0,
         mod = Mod
     } = Group,
     case os:find_executable("couch_view_file_sorter") of
@@ -1254,9 +1285,20 @@ sort_tmp_files(TmpFiles, TmpDir, Group, InitialBuild) ->
             true = port_command(FileSorter, [TmpDir, $\n, "b", $\n]);
         false ->
             true = port_command(FileSorter, [TmpDir, $\n, "u", $\n])
-        end;
+        end,
+        Views = Views0;
     spatial_view ->
-        true = port_command(FileSorter, [TmpDir, $\n, "s", $\n])
+        case InitialBuild of
+        true ->
+            true = port_command(FileSorter, [TmpDir, $\n, "s", $\n]),
+            Views = Views0;
+        false ->
+            % TODO vmx 2013-08-05: Currently the incremental updates only
+            %    contain the id-btree that needs to be processed, hence
+            %    the same call as for views can be used.
+            true = port_command(FileSorter, [TmpDir, $\n, "u", $\n]),
+            Views = []
+        end
     end,
     NumViews = length(Views),
     true = port_command(FileSorter, [integer_to_list(NumViews), $\n]),
@@ -1273,7 +1315,7 @@ sort_tmp_files(TmpFiles, TmpDir, Group, InitialBuild) ->
     case Mod of
     mapreduce_view ->
         ok;
-    spatial_view ->
+    spatial_view when InitialBuild ->
         % Spatial indexes need the enclosing bounding box of the data that
         % is stored in the file
         ok = lists:foreach(
@@ -1287,7 +1329,9 @@ sort_tmp_files(TmpFiles, TmpDir, Group, InitialBuild) ->
                 Data = [<<NumValues:16/integer-native>>, Values, $\n],
                 true = port_command(FileSorter, Data)
             end,
-            Views)
+            Views);
+    spatial_view ->
+        ok
     end,
     try
         file_sorter_wait_loop(FileSorter, Group, [])
