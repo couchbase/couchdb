@@ -35,6 +35,9 @@
 -export([map_view_key_compare/2, reduce_view_key_compare/2]).
 -export([get_map_view0/2, get_reduce_view0/2]).
 
+% Exported for spatial index
+-export([modify_bitmasks/2]).
+
 % gen_server callbacks
 -export([init/1, terminate/2, handle_call/3, handle_cast/2, handle_info/2, code_change/3]).
 
