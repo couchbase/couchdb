@@ -23,6 +23,7 @@
 -export([monitor_partition_update/3, demonitor_partition_update/3]).
 -export([trigger_update/3, trigger_replica_update/3]).
 -export([does_group_misses_deletes/2, group_indexed_document_ids/4]).
+-export([get_indexed_seqs/2]).
 
 % Internal, not meant to be used by components other than the view engine.
 -export([get_group_pid/2, get_group/3, release_group/1, get_group_info/2]).
@@ -405,6 +406,30 @@ group_indexed_document_ids(SetName, DDocId, Callback, Acc0) ->
     {ok, _, FinalAcc} = couch_btree:fold(
         Group#set_view_group.id_btree, FoldFun, Acc0, []),
     {ok, FinalAcc}.
+
+
+-spec get_indexed_seqs(binary(), binary()) ->
+                              {ok, PartSeqs::partition_seqs()}.
+get_indexed_seqs(SetName, DDocId) ->
+    Pid = couch_set_view:get_group_pid(SetName, DDocId),
+    {ok, Group} = gen_server:call(Pid, request_group, infinity),
+    {ok, RepPid} = gen_server:call(Pid, replica_pid, infinity),
+    MainSeqs = ordsets:union(?set_seqs(Group), ?set_unindexable_seqs(Group)),
+    case is_pid(RepPid) of
+    false ->
+        {ok, MainSeqs};
+    true ->
+        {ok, RepGroup} = gen_server:call(RepPid, request_group, infinity),
+        RepSeqs0 = ordsets:union(?set_seqs(RepGroup),
+                                 ?set_unindexable_seqs(RepGroup)),
+        RepSeqs = case ?set_replicas_on_transfer(Group) of
+        [] ->
+            RepSeqs0;
+        OnTransfer ->
+            [{P, S} || {P, S} <- RepSeqs0, not lists:member(P, OnTransfer)]
+        end,
+        {ok, ordsets:union(MainSeqs, RepSeqs)}
+    end.
 
 
 -spec get_group_server(binary(), #set_view_group{}) -> pid().

@@ -59,7 +59,7 @@ num_docs() -> 70848.  % keep it a multiple of num_set_partitions()
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(154),
+    etap:plan(155),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -202,6 +202,16 @@ test() ->
     verify_main_group_btrees_2(Group5),
     verify_replica_group_btrees_2(Group5),
     compare_groups(Group5, Group6),
+
+    MainDbSeqs = couch_set_view_test_util:get_db_seqs(
+        test_set_name(), lists:seq(0, 31)),
+    ReplicaDbSeqs = couch_set_view_test_util:get_db_seqs(
+        test_set_name(), lists:seq(32, 63)),
+    AllDbSeqs = ordsets:union(MainDbSeqs, ReplicaDbSeqs),
+    etap:is(
+        couch_set_view:get_indexed_seqs(test_set_name(), ddoc_id()),
+        {ok, AllDbSeqs},
+        "couch_set_view:get_indexed_seqs/2 gave correct sequence numbers"),
 
     ExpectedView1Result2 = num_docs(),
     ExpectedView2Result2 = lists:sum([I * 2 || I <- lists:seq(0, num_docs() - 1)]),
