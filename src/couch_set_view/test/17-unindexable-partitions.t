@@ -33,7 +33,7 @@ num_docs() -> 16448.  % keep it a multiple of num_set_partitions()
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(150),
+    etap:plan(151),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -208,6 +208,10 @@ test() ->
         couch_set_view:mark_partitions_unindexable(test_set_name(), ddoc_id(), Unindexable2),
         ok,
         "Marked replica partition on transfer as unindexable again"),
+    etap:is(
+        couch_set_view:set_partition_states(test_set_name(), ddoc_id(), Unindexable2, [], []),
+        ok,
+        "Request to mark replicas on transfer to active didn't raise an error"),
     % Trigger the automatic transfer
     ok = gen_server:call(GroupPid, {set_auto_transfer_replicas, true}, infinity),
     trigger_main_update_and_wait(),
