@@ -159,6 +159,7 @@ $(COUCHDB_PLT):
 		-pa src/couch_index_merger \
 		-pa src/couch_view_parser \
 		-pa src/mapreduce \
+		-pa src/couch_upr \
 		--apps \
 			compiler \
 			crypto \
@@ -197,6 +198,7 @@ dialyzer: all $(COUCHDB_PLT)
 		-pa src/mapreduce \
 		-pa src/lhttpc \
 		-pa src/snappy \
+		-pa src/couch_upr \
 		-r \
 			src/couchdb \
 			src/couch_set_view \
@@ -204,4 +206,5 @@ dialyzer: all $(COUCHDB_PLT)
 			src/couch_view_parser \
 			src/snappy \
 			src/lhttpc \
-			src/mapreduce
+			src/mapreduce \
+			src/couch_upr

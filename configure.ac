@@ -552,6 +552,7 @@ AC_CONFIG_FILES([src/ejson/Makefile])
 AC_CONFIG_FILES([src/couch_set_view/Makefile])
 AC_CONFIG_FILES([src/couch_index_merger/Makefile])
 AC_CONFIG_FILES([src/couch_view_parser/Makefile])
+AC_CONFIG_FILES([src/couch_upr/Makefile])
 AS_IF([ test "x${ac_enable_v8}" = "xyes" ], [
     AC_CONFIG_FILES([src/mapreduce/Makefile])
 ])
