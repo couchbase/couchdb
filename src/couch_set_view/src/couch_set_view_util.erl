@@ -294,6 +294,7 @@ cleanup_group(Group) ->
     ok = couch_set_view_util:open_raw_read_fd(Group),
     {ok, NewIdBtree, {Go, IdPurgedCount}} =
         couch_btree:guided_purge(IdBtree, PurgeFun, {go, 0}),
+    lists:foreach(fun couch_set_view_mapreduce:start_reduce_context/1, Views),
     {TotalPurgedCount, NewViews} =
         clean_views(Go, PurgeFun, Views, IdPurgedCount, []),
     ok = couch_set_view_util:close_raw_read_fd(Group),
@@ -307,6 +308,7 @@ cleanup_group(Group) ->
             view_states = [couch_btree:get_state(V#set_view.btree) || V <- NewViews]
         }
     },
+    lists:foreach(fun couch_set_view_mapreduce:end_reduce_context/1, Views),
     ok = couch_file:flush(Group#set_view_group.fd),
     {ok, Group2, TotalPurgedCount}.
 
@@ -315,10 +317,8 @@ clean_views(_, _, [], Count, Acc) ->
 clean_views(stop, _, Rest, Count, Acc) ->
     {Count, lists:reverse(Acc, Rest)};
 clean_views(go, PurgeFun, [#set_view{btree = Btree} = View | Rest], Count, Acc) ->
-    couch_set_view_mapreduce:start_reduce_context(View),
     {ok, NewBtree, {Go, PurgedCount}} =
         couch_btree:guided_purge(Btree, PurgeFun, {go, Count}),
-    couch_set_view_mapreduce:end_reduce_context(View),
     NewAcc = [View#set_view{btree = NewBtree} | Acc],
     clean_views(Go, PurgeFun, Rest, PurgedCount, NewAcc).
 
