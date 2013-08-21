@@ -41,7 +41,7 @@ initial_num_docs() -> 17600.  % must be multiple of num_set_partitions()
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(23),
+    etap:plan(18),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -61,10 +61,6 @@ test() ->
     trigger_update(),
 
     verify_btrees(ValueGenFun1, initial_num_docs()),
-    test_get_indexed_document_ids(initial_num_docs()),
-    GroupMissesDeletes = couch_set_view:does_group_misses_deletes(
-        mapreduce_view, test_set_name(), ddoc_id()),
-    etap:is(GroupMissesDeletes, false, "Group doesn't miss deletes"),
 
     etap:diag("Deleting the last " ++ integer_to_list(num_set_partitions()) ++
 		  " documents"),
@@ -72,10 +68,6 @@ test() ->
 		     num_set_partitions(),
 		     true,
 		     ValueGenFun1),
-
-    GroupMissesDeletes2 = couch_set_view:does_group_misses_deletes(
-        mapreduce_view, test_set_name(), ddoc_id()),
-    etap:is(GroupMissesDeletes2, false, "Group doesn't miss deletes"),
 
     etap:diag("Purging the last document"),
     LastPurgedId = doc_id(initial_num_docs() - 1),
@@ -91,10 +83,6 @@ test() ->
     DocLookup = couch_db:open_doc(FirstPurgeDb2, LastPurgedId, [deleted]),
     etap:is(DocLookup, {not_found, missing}, "Document was purged"),
     ok = couch_db:close(FirstPurgeDb2),
-
-    GroupMissesDeletes3 = couch_set_view:does_group_misses_deletes(
-        mapreduce_view, test_set_name(), ddoc_id()),
-    etap:is(GroupMissesDeletes3, true, "Group misses deletes"),
 
     GroupPid = couch_set_view:get_group_pid(
         mapreduce_view, test_set_name(), ddoc_id(), prod),
@@ -131,41 +119,12 @@ test() ->
         end
     end,
 
-    test_get_indexed_document_ids(initial_num_docs() - num_set_partitions()),
-
     verify_btrees(ValueGenFun1, initial_num_docs() - num_set_partitions()),
 
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
     ok = timer:sleep(1000),
     couch_set_view_test_util:stop_server(),
     ok.
-
-
-test_get_indexed_document_ids(ExpectedDocCount) ->
-    MaxPerPart = ExpectedDocCount div num_set_partitions(),
-    FoldFun = fun(DocId, {P0, I0, C0, It}) ->
-        case C0 >= MaxPerPart of
-        true ->
-            P = P0 + 1,
-            I = P,
-            C = 1;
-        false ->
-            P = P0,
-            I = I0,
-            C = C0 + 1
-        end,
-        ExpectedDocId = doc_id(I),
-	case DocId of
-	ExpectedDocId ->
-            ok;
-        _ ->
-            etap:bail("Unexpected document ID at iteration " ++ integer_to_list(It))
-        end,
-        {ok, {P, I + num_set_partitions(), C, It + 1}}
-    end,
-    {ok, {_, _, _, Count}} = couch_set_view:group_indexed_document_ids(
-        mapreduce_view, test_set_name(), ddoc_id(), FoldFun, {0, 0, 0, 0}),
-    etap:is(Count, ExpectedDocCount, "Right number of document IDs listed").
 
 
 create_set() ->

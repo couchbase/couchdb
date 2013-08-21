@@ -860,20 +860,6 @@ handle_call(compact_log_files, _From, State) ->
     NewState = State#state{compact_log_files = nil},
     {reply, {ok, {Files, Seqs}}, NewState, ?GET_TIMEOUT(NewState)};
 
-handle_call(does_group_misses_deletes, _From, #state{group = Group} = State) ->
-    Pred = fun({P, S}) ->
-        {ok, Db} = couch_db:open_int(?dbname((?set_name(State)), P), []),
-        ok = couch_db:close(Db),
-        couch_db:get_purge_seq(Db) > S
-    end,
-    case lists:any(Pred, ?set_seqs(Group)) of
-    true ->
-        {reply, true, State, ?GET_TIMEOUT(State)};
-    false ->
-        MissesDeletes = lists:any(Pred, ?set_unindexable_seqs(Group)),
-        {reply, MissesDeletes, State, ?GET_TIMEOUT(State)}
-    end;
-
 handle_call(reset_utilization_stats, _From, #state{replica_group = RepPid} = State) ->
     reset_util_stats(),
     case is_pid(RepPid) of

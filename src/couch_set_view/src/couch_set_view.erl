@@ -23,7 +23,6 @@
 -export([mark_partitions_unindexable/4, mark_partitions_indexable/4]).
 -export([monitor_partition_update/4, demonitor_partition_update/4]).
 -export([trigger_update/4, trigger_replica_update/4]).
--export([does_group_misses_deletes/3, group_indexed_document_ids/5]).
 % Exported for ns_server
 -export([delete_index_dir/2]).
 
@@ -382,44 +381,6 @@ trigger_replica_update(Mod, SetName, DDocId, MinNumChanges) ->
     catch throw:{error, empty_group} ->
         ok
     end.
-
-
-% Check if a view group missed processing of any deleted documents that
-% got purged by database compaction. This performs an estimation only,
-% as a 'true' response really means 'maybe'. This is because after a
-% database compaction with purging enabled, it's impossible for a view
-% group to know exactly which deleted documents were purged.
-%
-% NOTE: use with moderation, as this call can cause delays to queries
-% if used too frequentely.
--spec does_group_misses_deletes(atom(), binary(), binary()) -> boolean().
-does_group_misses_deletes(Mod, SetName, DDocId) ->
-    try
-        Pid = get_group_pid(Mod, SetName, DDocId, prod),
-        gen_server:call(Pid, does_group_misses_deletes, infinity)
-    catch throw:{error, empty_group} ->
-        false
-    end.
-
-
--spec group_indexed_document_ids(atom(),
-				 binary(),
-				 binary(),
-				 fun((DocId::binary(), Acc::any()) ->
-					    {'ok', Acc2::any()} |
-					    {'stop', Acc2::any()}),
-				 Acc::any()) ->
-					{'ok', Acc3::any()}.
-group_indexed_document_ids(Mod, SetName, DDocId, Callback, Acc0) ->
-    Req = #set_view_group_req{stale = ok, category = prod},
-    {ok, Group} = get_group(Mod, SetName, DDocId, Req),
-    FoldFun = fun({Key, _Value}, _AccRed, Acc) ->
-        <<_PartId:16, DocId/binary>> = Key,
-        Callback(DocId, Acc)
-    end,
-    {ok, _, FinalAcc} = couch_btree:fold(
-        Group#set_view_group.id_btree, FoldFun, Acc0, []),
-    {ok, FinalAcc}.
 
 
 -spec get_group_server(binary(), #set_view_group{}) -> pid().
