@@ -300,7 +300,8 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts, Initial
     } = Group,
 
     FoldFun = fun(PartId, {AccCount, AccSeqs}) ->
-        case couch_set_view_util:has_part_seq(PartId, ?set_unindexable_seqs(Group)) of
+        case couch_set_view_util:has_part_seq(PartId, ?set_unindexable_seqs(Group))
+            andalso not lists:member(PartId, ?set_replicas_on_transfer(Group)) of
         true ->
             {AccCount, AccSeqs};
         false ->

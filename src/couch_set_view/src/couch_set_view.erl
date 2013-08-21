@@ -25,6 +25,7 @@
 -export([trigger_update/4, trigger_replica_update/4]).
 % Exported for ns_server
 -export([delete_index_dir/2]).
+-export([get_indexed_seqs/4]).
 
 % Internal, not meant to be used by components other than the view engine.
 -export([get_group_pid/4, get_group/4, release_group/1, get_group_info/4]).
@@ -380,6 +381,30 @@ trigger_replica_update(Mod, SetName, DDocId, MinNumChanges) ->
         ok = gen_server:cast(Pid, {update_replica, MinNumChanges})
     catch throw:{error, empty_group} ->
         ok
+    end.
+
+
+-spec get_indexed_seqs(atom(), binary(), binary(), dev | prod) ->
+                              {ok, PartSeqs::partition_seqs()}.
+get_indexed_seqs(Mod, SetName, DDocId, Category) ->
+    Pid = couch_set_view:get_group_pid(Mod, SetName, DDocId, Category),
+    {ok, Group} = gen_server:call(Pid, request_group, infinity),
+    {ok, RepPid} = gen_server:call(Pid, replica_pid, infinity),
+    MainSeqs = ordsets:union(?set_seqs(Group), ?set_unindexable_seqs(Group)),
+    case is_pid(RepPid) of
+    false ->
+        {ok, MainSeqs};
+    true ->
+        {ok, RepGroup} = gen_server:call(RepPid, request_group, infinity),
+        RepSeqs0 = ordsets:union(?set_seqs(RepGroup),
+                                 ?set_unindexable_seqs(RepGroup)),
+        RepSeqs = case ?set_replicas_on_transfer(Group) of
+        [] ->
+            RepSeqs0;
+        OnTransfer ->
+            [{P, S} || {P, S} <- RepSeqs0, not lists:member(P, OnTransfer)]
+        end,
+        {ok, ordsets:union(MainSeqs, RepSeqs)}
     end.
 
 
