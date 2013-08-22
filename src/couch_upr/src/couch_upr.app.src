@@ -14,7 +14,8 @@
     {description, "UPR for couch"},
     {vsn, "%version%"},
     {modules, [
-        couch_upr
+        couch_upr,
+        couch_upr_fake_server
     ]},
     {registered, []},
     {applications, [kernel, stdlib]}

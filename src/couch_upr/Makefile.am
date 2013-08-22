@@ -22,15 +22,18 @@ include_files = \
 
 source_files = \
     src/couch_upr.app.src \
-    src/couch_upr.erl
+    src/couch_upr.erl \
+    src/couch_upr_fake_server.erl
 
 test_files = \
     test/00-prepare.t \
-    test/01-load.t
+    test/01-load.t \
+    test/02-couch-upr.t
 
 compiled_files = \
     ebin/couch_upr.app \
-    ebin/couch_upr.beam
+    ebin/couch_upr.beam \
+    ebin/couch_upr_fake_server.beam
 
 EXTRA_DIST = $(include_files) $(source_files) $(test_files) test/run.tpl
 CLEANFILES = $(compiled_files) test/run

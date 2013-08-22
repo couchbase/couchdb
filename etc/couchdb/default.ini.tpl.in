@@ -238,3 +238,6 @@ indexer_max_doc_size = 1048576
 vtree_kv_node_threshold = 2000
 vtree_kp_node_threshold = 2000
 vtree_min_fill_rate = 0.4
+
+[upr]
+connection_timeout = 5000
