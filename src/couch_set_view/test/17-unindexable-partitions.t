@@ -215,11 +215,11 @@ test() ->
 
     % Test for MB-8677
     etap:is(
-        couch_set_view:mark_partitions_unindexable(test_set_name(), ddoc_id(), Unindexable2),
+        couch_set_view:mark_partitions_unindexable(mapreduce_view, test_set_name(), ddoc_id(), Unindexable2),
         ok,
         "Marked replica partition on transfer as unindexable again"),
     etap:is(
-        couch_set_view:set_partition_states(test_set_name(), ddoc_id(), Unindexable2, [], []),
+        couch_set_view:set_partition_states(mapreduce_view, test_set_name(), ddoc_id(), Unindexable2, [], []),
         ok,
         "Request to mark replicas on transfer to active didn't raise an error"),
     % Trigger the automatic transfer
@@ -232,7 +232,7 @@ test() ->
 
     % Mark it as indexable again, so that it can be cleanup
     etap:is(
-        couch_set_view:mark_partitions_indexable(test_set_name(), ddoc_id(), Unindexable2),
+        couch_set_view:mark_partitions_indexable(mapreduce_view, test_set_name(), ddoc_id(), Unindexable2),
         ok,
         "Marked replica partition on transfer as indexable again"),
 
