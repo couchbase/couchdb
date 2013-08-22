@@ -384,10 +384,8 @@ clean_views(stop, _, Rest, Count, Acc) ->
 clean_views(go, PurgeFun, [SetView | Rest], Count, Acc) ->
     View = SetView#set_view.indexer,
     Btree = View#mapreduce_view.btree,
-    couch_set_view_mapreduce:start_reduce_context(SetView),
     {ok, NewBtree, {Go, PurgedCount}} =
         couch_btree:guided_purge(Btree, PurgeFun, {go, Count}),
-    couch_set_view_mapreduce:end_reduce_context(SetView),
     NewAcc = [SetView#set_view{
         indexer = View#mapreduce_view{btree = NewBtree}
     } | Acc],
