@@ -788,6 +788,10 @@ map_set_view_folder(ViewSpec, MergeParams, UserCtx, DDoc, Queue) ->
             ok = couch_view_merger_queue:queue(
                 Queue, {error, ?LOCAL,
                     couch_index_merger:ddoc_not_found_msg(DDocDbName, DDocId)});
+        throw:queue_shutdown ->
+            % The merger process shutdown our queue, limit was reached and this is
+            % expected, so don't long unnecessary error message and stack trace.
+            ok;
         _Tag:Error ->
             Stack = erlang:get_stacktrace(),
             ?LOG_ERROR("Caught unexpected error "
@@ -1106,6 +1110,10 @@ reduce_set_view_folder(ViewSpec, MergeParams, DDoc, Queue) ->
             ok = couch_view_merger_queue:queue(
                 Queue, {error, ?LOCAL,
                     couch_index_merger:ddoc_not_found_msg(DDocDbName, DDocId)});
+        throw:queue_shutdown ->
+            % The merger process shutdown our queue, limit was reached and this is
+            % expected, so don't long unnecessary error message and stack trace.
+            ok;
         _Tag:Error ->
             Stack = erlang:get_stacktrace(),
             ?LOG_ERROR("Caught unexpected error "
