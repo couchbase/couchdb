@@ -223,6 +223,8 @@ handle_request(MochiReq, DbFrontendModule, DefaultFun,
     catch
         throw:{http_head_abort, Resp0} ->
             {ok, Resp0};
+        throw:{not_found, _} = Error ->
+            send_error(HttpReq, Error);
         throw:{invalid_json, S} ->
             ?LOG_ERROR("attempted upload of invalid JSON (set log_level to debug to log it)", []),
             ?LOG_DEBUG("Invalid JSON: ~p",[S]),
