@@ -484,7 +484,7 @@ handle_call({define_view, NumPartitions, ActiveList, ActiveBitmask,
         },
         State3 = monitor_partitions(State2, ActiveList),
         State4 = monitor_partitions(State3, PassiveList),
-        ok = commit_header(NewGroup),
+        {ok, HeaderPos} = commit_header(NewGroup),
         ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`, signature `~s',"
                   " configured with:~n"
                   "~p partitions~n"
@@ -498,7 +498,13 @@ handle_call({define_view, NumPartitions, ActiveList, ActiveBitmask,
                    false -> "no "
                    end,
             ActiveList, PassiveList]),
-        {reply, ok, State4, ?GET_TIMEOUT(State4)};
+        NewGroup2 = (State4#state.group)#set_view_group{
+            header_pos = HeaderPos
+        },
+        State5 = State4#state{
+            group = NewGroup2
+        },
+        {reply, ok, State5, ?GET_TIMEOUT(State5)};
     Error ->
         {reply, Error, State, ?GET_TIMEOUT(State)}
     end;
@@ -726,7 +732,8 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
         % Compactor might have received a group snapshot from an updater.
         NewGroup = fix_updater_group(NewGroup0, Group),
         HeaderBin = couch_set_view_util:group_to_header_bin(NewGroup),
-        {ok, _Pos} = couch_file:write_header_bin(NewGroup#set_view_group.fd, HeaderBin),
+        {ok, NewHeaderPos} = couch_file:write_header_bin(
+            NewGroup#set_view_group.fd, HeaderBin),
         if is_pid(UpdaterPid) ->
             ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`, compact group"
                       " up to date - restarting updater",
@@ -755,14 +762,15 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
                     pbitmask = ?set_pbitmask(Group)
                 }
             },
-            ok = commit_header(NewGroup2);
+            {ok, NewHeaderPos2} = commit_header(NewGroup2);
         false ->
             % The compactor process committed an header with up to date state information and
             % did an fsync before calling us. No need to commit a new header here (and fsync).
             NewGroup2 = NewGroup#set_view_group{
                 ref_counter = NewRefCounter,
                 filepath = NewFilepath
-            }
+	    },
+	    NewHeaderPos2 = NewHeaderPos
         end,
         ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`, compaction complete"
                   " in ~.3f seconds, filtered ~p key-value pairs",
@@ -803,7 +811,9 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
                 true -> starting;
                 false -> not_running
             end,
-            group = NewGroup2
+            group = NewGroup2#set_view_group{
+                header_pos = NewHeaderPos2
+            }
         },
         inc_compactions(Result),
         {reply, ok, maybe_apply_pending_transition(State2), ?GET_TIMEOUT(State2)};
@@ -1455,16 +1465,17 @@ prepare_group({RootDir, SetName, Group0}, ForceReset)->
             {ok, reset_file(Fd, Group)};
         true ->
             case (catch couch_file:read_header_bin(Fd)) of
-            {ok, HeaderBin, _Pos} ->
+            {ok, HeaderBin, HeaderPos} ->
                 HeaderSig = couch_set_view_util:header_bin_sig(HeaderBin);
             _ ->
+                HeaderPos = 0,  % keep dialyzer happy
                 HeaderSig = <<>>,
                 HeaderBin = <<>>
             end,
             case HeaderSig == Sig of
             true ->
                 HeaderInfo = couch_set_view_util:header_bin_to_term(HeaderBin),
-                {ok, init_group(Fd, Group, HeaderInfo)};
+                {ok, init_group(Fd, Group, HeaderInfo, HeaderPos)};
             _ ->
                 % this happens on a new file
                 case (not ForceReset) andalso (Type =:= main) of
@@ -1753,14 +1764,15 @@ reset_file(Fd, #set_view_group{views = Views, index_header = Header} = Group) ->
     },
     EmptyGroup = Group#set_view_group{index_header = EmptyHeader},
     EmptyHeaderBin = couch_set_view_util:group_to_header_bin(EmptyGroup),
-    {ok, _Pos} = couch_file:write_header_bin(Fd, EmptyHeaderBin),
-    init_group(Fd, reset_group(EmptyGroup), EmptyHeader).
+    {ok, Pos} = couch_file:write_header_bin(Fd, EmptyHeaderBin),
+    init_group(Fd, reset_group(EmptyGroup), EmptyHeader, Pos).
 
 
 -spec init_group(pid(),
                  #set_view_group{},
-                 #set_view_index_header{}) -> #set_view_group{}.
-init_group(Fd, Group, IndexHeader) ->
+                 #set_view_index_header{},
+                 non_neg_integer()) -> #set_view_group{}.
+init_group(Fd, Group, IndexHeader, HeaderPos) ->
     #set_view_group{
         views = Views0,
         mod = Mod
@@ -1793,23 +1805,25 @@ init_group(Fd, Group, IndexHeader) ->
         fd = Fd,
         id_btree = IdBtree,
         views = Views2,
-        index_header = IndexHeader
+        index_header = IndexHeader,
+        header_pos = HeaderPos
     }.
 
 
 commit_header(Group) ->
     commit_header(Group, true).
 
--spec commit_header(#set_view_group{}, boolean()) -> 'ok'.
+-spec commit_header(#set_view_group{}, boolean()) -> {'ok', non_neg_integer()}.
 commit_header(Group, Fsync) ->
     HeaderBin = couch_set_view_util:group_to_header_bin(Group),
-    {ok, _Pos} = couch_file:write_header_bin(Group#set_view_group.fd, HeaderBin),
+    {ok, Pos} = couch_file:write_header_bin(Group#set_view_group.fd, HeaderBin),
     case Fsync of
     true ->
         ok = couch_file:sync(Group#set_view_group.fd);
     false ->
         ok = couch_file:flush(Group#set_view_group.fd)
-    end.
+    end,
+    {ok, Pos}.
 
 -spec filter_out_bitmask_partitions(ordsets:ordset(partition_id()),
                                     bitmask()) -> ordsets:ordset(partition_id()).
@@ -2417,7 +2431,10 @@ update_header(State, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs, NewUnindexa
     },
     NewState = monitor_partitions(NewState0, PartitionsList),
     FsyncHeader = (NewCbitmask /= Cbitmask),
-    ok = commit_header(NewState#state.group, FsyncHeader),
+    {ok, HeaderPos} = commit_header(NewState#state.group, FsyncHeader),
+    NewGroup2 = (NewState#state.group)#set_view_group{
+        header_pos = HeaderPos
+    },
     ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`, partition states updated~n"
               "active partitions before:    ~w~n"
               "active partitions after:     ~w~n"
@@ -2457,7 +2474,7 @@ update_header(State, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs, NewUnindexa
                ?pending_transition_active(NewPendingTrans),
                ?pending_transition_passive(NewPendingTrans),
                ?pending_transition_unindexable(NewPendingTrans)]),
-    NewState.
+    NewState#state{group = NewGroup2}.
 
 
 -spec maybe_start_cleaner(#state{}) -> #state{}.
@@ -2890,10 +2907,10 @@ process_partial_update(State, NewGroup0) ->
     set_last_updater_checkpoint_ts(),
     ReplicasTransferred = ordsets:subtract(
         ?set_replicas_on_transfer(Group), ?set_replicas_on_transfer(NewGroup0)),
-    NewState = case ReplicasTransferred of
+    case ReplicasTransferred of
     [] ->
-        NewGroup1 = fix_updater_group(NewGroup0, Group),
-        State#state{group = NewGroup1};
+        NewRepParts = State#state.replica_partitions,
+        NewGroup1 = fix_updater_group(NewGroup0, Group);
     _ ->
         ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`,"
                   " completed transferral of replica partitions ~w~n"
@@ -2902,16 +2919,24 @@ process_partial_update(State, NewGroup0) ->
                    ?group_id(State), ReplicasTransferred,
                    ?set_replicas_on_transfer(NewGroup0)]),
         ok = set_state(State#state.replica_group, [], [], ReplicasTransferred),
-        State#state{
-            group = NewGroup0,
-            replica_partitions = ordsets:subtract(State#state.replica_partitions, ReplicasTransferred)
-        }
+        NewRepParts = ordsets:subtract(State#state.replica_partitions, ReplicasTransferred),
+        NewGroup1 = NewGroup0
     end,
-    HeaderBin = couch_set_view_util:group_to_header_bin(NewState#state.group),
-    {ok, _Pos} = couch_file:write_header_bin(Fd, HeaderBin),
+    HeaderBin = couch_set_view_util:group_to_header_bin(NewGroup1),
+    {ok, NewHeaderPos} = couch_file:write_header_bin(Fd, HeaderBin),
+    NewState = State#state{
+        group = NewGroup1,
+        replica_partitions = NewRepParts
+    },
     Listeners2 = notify_update_listeners(NewState, Listeners, NewState#state.group),
+    NewGroup2 = NewGroup1#set_view_group{
+        header_pos = NewHeaderPos
+    },
     ok = couch_file:flush(Fd),
-    NewState#state{update_listeners = Listeners2}.
+    NewState#state{
+        update_listeners = Listeners2,
+        group = NewGroup2
+    }.
 
 
 -spec notify_update_listeners(#state{}, dict(), #set_view_group{}) -> dict().

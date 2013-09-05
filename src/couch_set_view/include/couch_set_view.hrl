@@ -248,7 +248,8 @@
     extension = ""                          :: string(), %".view" | ".spatial"
     % Used to distinguish production and development set view groups
     category = nil                          :: 'nil' | 'prod' | 'dev',
-    stats_ets = nil                         :: atom()
+    stats_ets = nil                         :: atom(),
+    header_pos = 0                          :: non_neg_integer()
 }).
 
 -record(set_view_updater_stats, {
