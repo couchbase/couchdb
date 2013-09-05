@@ -726,7 +726,7 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
         % Compactor might have received a group snapshot from an updater.
         NewGroup = fix_updater_group(NewGroup0, Group),
         HeaderBin = couch_set_view_util:group_to_header_bin(NewGroup),
-        ok = couch_file:write_header_bin(NewGroup#set_view_group.fd, HeaderBin),
+        {ok, _Pos} = couch_file:write_header_bin(NewGroup#set_view_group.fd, HeaderBin),
         if is_pid(UpdaterPid) ->
             ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`, compact group"
                       " up to date - restarting updater",
@@ -1455,7 +1455,7 @@ prepare_group({RootDir, SetName, Group0}, ForceReset)->
             {ok, reset_file(Fd, Group)};
         true ->
             case (catch couch_file:read_header_bin(Fd)) of
-            {ok, HeaderBin} ->
+            {ok, HeaderBin, _Pos} ->
                 HeaderSig = couch_set_view_util:header_bin_sig(HeaderBin);
             _ ->
                 HeaderSig = <<>>,
@@ -1753,7 +1753,7 @@ reset_file(Fd, #set_view_group{views = Views, index_header = Header} = Group) ->
     },
     EmptyGroup = Group#set_view_group{index_header = EmptyHeader},
     EmptyHeaderBin = couch_set_view_util:group_to_header_bin(EmptyGroup),
-    ok = couch_file:write_header_bin(Fd, EmptyHeaderBin),
+    {ok, _Pos} = couch_file:write_header_bin(Fd, EmptyHeaderBin),
     init_group(Fd, reset_group(EmptyGroup), EmptyHeader).
 
 
@@ -1803,7 +1803,7 @@ commit_header(Group) ->
 -spec commit_header(#set_view_group{}, boolean()) -> 'ok'.
 commit_header(Group, Fsync) ->
     HeaderBin = couch_set_view_util:group_to_header_bin(Group),
-    ok = couch_file:write_header_bin(Group#set_view_group.fd, HeaderBin),
+    {ok, _Pos} = couch_file:write_header_bin(Group#set_view_group.fd, HeaderBin),
     case Fsync of
     true ->
         ok = couch_file:sync(Group#set_view_group.fd);
@@ -2908,7 +2908,7 @@ process_partial_update(State, NewGroup0) ->
         }
     end,
     HeaderBin = couch_set_view_util:group_to_header_bin(NewState#state.group),
-    ok = couch_file:write_header_bin(Fd, HeaderBin),
+    {ok, _Pos} = couch_file:write_header_bin(Fd, HeaderBin),
     Listeners2 = notify_update_listeners(NewState, Listeners, NewState#state.group),
     ok = couch_file:flush(Fd),
     NewState#state{update_listeners = Listeners2}.

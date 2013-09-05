@@ -294,7 +294,7 @@ handle_info(delayed_commit, #group_state{db_name=DbName,group=Group}=State) ->
     if CommittedSeq >= Group#group.current_seq ->
         % save the header
         Header = {Group#group.sig, get_index_header_data(Group)},
-        ok = couch_file:write_header(Group#group.fd, Header),
+        {ok, _Pos} = couch_file:write_header(Group#group.fd, Header),
         {noreply, State#group_state{waiting_commit=false}};
     true ->
         % We can't commit the header because the database seq that's fully
@@ -418,7 +418,7 @@ prepare_group({RootDir, DbName, #group{sig=Sig}=Group}, ForceReset)->
                 {ok, Db, reset_file(Db, Fd, DDocDbName, Group)};
             true ->
                 case (catch couch_file:read_header(Fd)) of
-                {ok, {Sig, HeaderInfo}} ->
+                {ok, {Sig, HeaderInfo}, _Pos} ->
                     % sigs match!
                     {ok, Db, init_group(Db, Fd, Group, HeaderInfo)};
                 _ ->
@@ -639,7 +639,7 @@ reset_group(#group{views=Views}=Group) ->
 reset_file(Db, Fd, DbName, #group{sig=Sig,name=Name} = Group) ->
     ?LOG_DEBUG("Resetting group index \"~s\" in db ~s", [Name, DbName]),
     ok = couch_file:truncate(Fd, 0),
-    ok = couch_file:write_header(Fd, {Sig, nil}),
+    {ok, _Pos} = couch_file:write_header(Fd, {Sig, nil}),
     init_group(Db, Fd, reset_group(Group), nil).
 
 delete_index_file(RootDir, DbName, GroupSig) ->

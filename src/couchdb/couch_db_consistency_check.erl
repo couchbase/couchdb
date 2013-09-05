@@ -24,7 +24,7 @@ check_db_file(Filename) when is_list(Filename) or is_binary(Filename)->
         fatal_error("Couldn't open file ~s:~p", [Filename, Error])
     end,
     Header = try
-        {ok, NewHeaderBin} = couch_file:read_header_bin(Fd),
+        {ok, NewHeaderBin, _Pos} = couch_file:read_header_bin(Fd),
         couch_db_updater:header_bin_to_db_header(NewHeaderBin)
     catch
     Type0:Error0 ->

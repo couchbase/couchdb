@@ -39,17 +39,17 @@ test() ->
     etap:is({ok, 0}, couch_file:bytes(Fd),
         "File should be initialized to contain zero bytes."),
 
-    etap:is(ok, couch_file:write_header(Fd, {<<"some_data">>, 32}),
+    etap:is({ok, 0}, couch_file:write_header(Fd, {<<"some_data">>, 32}),
         "Writing a header succeeds."),
     ok = couch_file:flush(Fd),
     {ok, Size1} = couch_file:bytes(Fd),
     etap:is_greater(Size1, 0,
         "Writing a header allocates space in the file."),
 
-    etap:is({ok, {<<"some_data">>, 32}}, couch_file:read_header(Fd),
+    etap:is({ok, {<<"some_data">>, 32}, 0}, couch_file:read_header(Fd),
         "Reading the header returns what we wrote."),
 
-    etap:is(ok, couch_file:write_header(Fd, [foo, <<"more">>]),
+    etap:is({ok, 4096}, couch_file:write_header(Fd, [foo, <<"more">>]),
         "Writing a second header succeeds."),
 
     {ok, Size2} = couch_file:bytes(Fd),
@@ -57,13 +57,13 @@ test() ->
         "Writing a second header allocates more space."),
 
     ok = couch_file:flush(Fd),
-    etap:is({ok, [foo, <<"more">>]}, couch_file:read_header(Fd),
+    etap:is({ok, [foo, <<"more">>], 4096}, couch_file:read_header(Fd),
         "Reading the second header does not return the first header."),
 
     % Delete the second header.
     ok = couch_file:truncate(Fd, Size1),
 
-    etap:is({ok, {<<"some_data">>, 32}}, couch_file:read_header(Fd),
+    etap:is({ok, {<<"some_data">>, 32}, 0}, couch_file:read_header(Fd),
         "Reading the header after a truncation returns a previous header."),
 
     couch_file:write_header(Fd, [foo, <<"more">>]),
@@ -74,7 +74,7 @@ test() ->
     ok = couch_file:flush(Fd),
     etap:is(
         couch_file:read_header(Fd),
-        {ok, erlang:make_tuple(5000, <<"CouchDB">>)},
+        {ok, erlang:make_tuple(5000, <<"CouchDB">>), 8192},
         "Headers larger than the block size can be saved (COUCHDB-1319)"
     ),
 
@@ -134,12 +134,12 @@ check_header_recovery(CheckFun) ->
 
     {ok, _} = write_random_data(Fd),
     ExpectHeader = {some_atom, <<"a binary">>, 756},
-    ok = couch_file:write_header(Fd, ExpectHeader),
+    {ok, ValidHeaderPos} = couch_file:write_header(Fd, ExpectHeader),
 
     {ok, HeaderPos} = write_random_data(Fd),
-    ok = couch_file:write_header(Fd, {2342, <<"corruption! greed!">>}),
+    {ok, _} = couch_file:write_header(Fd, {2342, <<"corruption! greed!">>}),
 
-    CheckFun(Fd, RawFd, {ok, ExpectHeader}, HeaderPos),
+    CheckFun(Fd, RawFd, {ok, ExpectHeader, ValidHeaderPos}, HeaderPos),
 
     ok = file:close(RawFd),
     ok = couch_file:close(Fd),

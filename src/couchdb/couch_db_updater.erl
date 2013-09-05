@@ -28,19 +28,19 @@ init({MainPid, DbName, Filepath, Fd, Options}) ->
     true ->
         % create a new header and writes it to the file
         Header =  #db_header{},
-        ok = couch_file:write_header_bin(Fd, db_header_to_header_bin(Header)),
+        {ok, _Pos} = couch_file:write_header_bin(Fd, db_header_to_header_bin(Header)),
         % delete any old compaction files that might be hanging around
         RootDir = couch_config:get("couchdb", "database_dir", "."),
         couch_file:delete(RootDir, Filepath ++ ".compact");
     false ->
         case couch_file:read_header_bin(Fd) of
-        {ok, BinHeader} ->
+        {ok, BinHeader, _Pos} ->
             Header = header_bin_to_db_header(BinHeader),
             ok;
         no_valid_header ->
             % create a new header and writes it to the file
             Header =  #db_header{},
-            ok = couch_file:write_header_bin(Fd,
+            {ok, _Pos} = couch_file:write_header_bin(Fd,
                     db_header_to_header_bin(Header)),
             % delete any old compaction files that might be hanging around
             file2:delete(Filepath ++ ".compact")
@@ -194,7 +194,7 @@ handle_call({compact_done, _Path}, _From, #db{compactor_info = nil} = Db) ->
 handle_call({compact_done, CompactFilepath}, _From, Db) ->
     #db{filepath = Filepath, fd = OldFd} = Db,
     {ok, NewFd} = couch_file:open(CompactFilepath),
-    {ok, NewHeaderBin} = couch_file:read_header_bin(NewFd),
+    {ok, NewHeaderBin, _Pos} = couch_file:read_header_bin(NewFd),
     NewHeader = header_bin_to_db_header(NewHeaderBin),
     #db{update_seq=NewSeq} = NewDb =
         init_db(Db#db.name, Filepath, NewFd, NewHeader, Db#db.options),
@@ -643,7 +643,7 @@ commit_data(Db, _) ->
         _    -> ok
         end,
 
-        ok = couch_file:write_header_bin(Fd, db_header_to_header_bin(Header)),
+        {ok, _Pos} = couch_file:write_header_bin(Fd, db_header_to_header_bin(Header)),
         ok = couch_file:flush(Fd),
 
         case lists:member(after_header, FsyncOptions) of
@@ -827,7 +827,7 @@ make_target_db(Db, CompactFile) ->
     case couch_file:open(CompactFile) of
         {ok, Fd} ->
             case couch_file:read_header_bin(Fd) of
-                {ok, NewHeaderBin} ->
+                {ok, NewHeaderBin, _Pos} ->
                     Header = header_bin_to_db_header(NewHeaderBin),
                     {ok, fd_to_db(Db, CompactFile, Header, Fd)};
                 no_valid_header ->
@@ -837,7 +837,7 @@ make_target_db(Db, CompactFile) ->
             {ok, Fd} = couch_file:open(CompactFile, [create]),
             Header=#db_header{},
             HeaderBin = db_header_to_header_bin(Header),
-            ok = couch_file:write_header_bin(Fd, HeaderBin),
+            {ok, _Pos} = couch_file:write_header_bin(Fd, HeaderBin),
             {ok, fd_to_db(Db, CompactFile, Header, Fd)}
     end.
 

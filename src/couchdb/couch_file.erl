@@ -253,8 +253,8 @@ init_delete_dir(RootDir) ->
 
 read_header(Fd) ->
     case gen_server:call(Fd, find_header, infinity) of
-    {ok, Bin} ->
-        {ok, binary_to_term(Bin)};
+    {ok, Bin, Pos} ->
+        {ok, binary_to_term(Bin), Pos};
     Else ->
         Else
     end.
@@ -286,7 +286,7 @@ write_header_bin(Fd, Bin) ->
     Crc32 = erlang:crc32(Bin),
     % now we assemble the final header binary and write to disk
     FinalBin = <<Crc32:32, Bin/binary>>,
-    ok = gen_server:call(Fd, {write_header, FinalBin}, infinity).
+    {ok, _Pos} = gen_server:call(Fd, {write_header, FinalBin}, infinity).
 
 
 % server functions
@@ -382,16 +382,16 @@ handle_call({append_bin, Bin}, From, #file{writer = W, eof = Pos} = File) ->
     {noreply, File#file{eof = Pos + Size}};
 
 handle_call({write_header, Bin}, From, #file{writer = W, eof = Pos} = File) ->
-    gen_server:reply(From, ok),
     W ! {header, Bin},
     Pos2 = case Pos rem ?SIZE_BLOCK of
     0 ->
-        Pos + 5;
+        Pos;
     BlockOffset ->
-        Pos + 5 + (?SIZE_BLOCK - BlockOffset)
+        Pos + (?SIZE_BLOCK - BlockOffset)
     end,
+    gen_server:reply(From, {ok, Pos2}),
     File2 = File#file{
-        eof = Pos2 + calculate_total_read_len(5, byte_size(Bin))
+        eof = Pos2 + 5 + calculate_total_read_len(5, byte_size(Bin))
     },
     {noreply, File2};
 
@@ -491,7 +491,7 @@ find_header(_Fd, -1) ->
 find_header(Fd, Block) ->
     case (catch load_header(Fd, Block)) of
     {ok, Bin} ->
-        {ok, Bin};
+        {ok, Bin, Block * ?SIZE_BLOCK};
     _Error ->
         find_header(Fd, Block -1)
     end.

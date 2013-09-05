@@ -86,9 +86,9 @@ test() ->
     etap:is({ok, BigBin}, couch_file:pread_binary(Fd, BigBinPos),
         "Reading a large term from a written representation succeeds."),
     
-    ok = couch_file:write_header(Fd, hello),
+    {ok, HeaderPos} = couch_file:write_header(Fd, hello),
     ok = couch_file:flush(Fd),
-    etap:is({ok, hello}, couch_file:read_header(Fd),
+    etap:is({ok, hello, HeaderPos}, couch_file:read_header(Fd),
         "Reading a header succeeds."),
         
     {ok, BigBinPos2, _} = couch_file:append_binary(Fd, BigBin),
