@@ -267,7 +267,8 @@
 -record(set_view_updater_result, {
     group = #set_view_group{}          :: #set_view_group{},
     state = updating_active            :: set_view_updater_state(),
-    stats = #set_view_updater_stats{}  :: #set_view_updater_stats{}
+    stats = #set_view_updater_stats{}  :: #set_view_updater_stats{},
+    tmp_file = nil                     :: 'nil' | pid()
 }).
 
 -record(set_view_compactor_result, {

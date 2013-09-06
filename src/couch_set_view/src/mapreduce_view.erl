@@ -30,6 +30,8 @@
 -export([stats_ets/1, server_name/1, sig_to_pid_ets/1, name_to_sig_ets/1,
          pid_to_sig_ets/1]).
 
+-export([send_group_info/2]).
+
 
 -include("couch_db.hrl").
 -include("couch_set_view_updater.hrl").
@@ -106,27 +108,101 @@ convert_primary_index_kvs_to_binary([{{Key, DocId}, {PartId, V0}} | Rest], Group
     convert_primary_index_kvs_to_binary(Rest, Group, [{KeyBin, V} | Acc]).
 
 
-% Build the tree out of the sorted files
-finish_build(SetView, GroupFd, TmpFiles) ->
-    #set_view{
-        id_num = Id,
-        indexer = View
-    } = SetView,
+-spec finish_build(#set_view_group{}, dict(), string()) ->
+                          {#set_view_group{}, pid()}.
+finish_build(Group, TmpFiles, TmpDir) ->
+    #set_view_group{
+        sig = Sig,
+        id_btree = IdBtree,
+        views = Views
+    } = Group,
 
-    #mapreduce_view{
-        btree = Bt
-    } = View,
+    case os:find_executable("couch_view_index_builder") of
+    false ->
+        Cmd = nil,
+        throw(<<"couch_view_index_builder command not found">>);
+    Cmd ->
+        ok
+    end,
+    Options = [exit_status, use_stdio, stderr_to_stdout, {line, 4096}, binary],
+    Port = open_port({spawn_executable, Cmd}, Options),
+    send_group_info(Group, Port),
+    #set_view_tmp_file_info{name = IdFile} = dict:fetch(ids_index, TmpFiles),
+    DestPath = couch_set_view_util:new_sort_file_path(TmpDir, updater),
+    true = port_command(Port, [DestPath, $\n, IdFile, $\n]),
+    lists:foreach(
+        fun(#set_view{id_num = Id}) ->
+            #set_view_tmp_file_info{
+                name = ViewFile
+            } = dict:fetch(Id, TmpFiles),
+            true = port_command(Port, [ViewFile, $\n])
+        end,
+        Views),
 
-    #set_view_tmp_file_info{name = ViewFile} = dict:fetch(Id, TmpFiles),
-    {ok, NewBtRoot} = couch_btree_copy:from_sorted_file(
-        Bt, ViewFile, GroupFd,
-        fun couch_set_view_updater:file_sorter_initial_build_format_fun/1),
-    ok = file2:delete(ViewFile),
-    SetView#set_view{
-        indexer = View#mapreduce_view{
-            btree = Bt#btree{root = NewBtRoot}
-        }
-    }.
+    try
+        index_builder_wait_loop(Port, Group, [])
+    after
+        catch port_close(Port)
+    end,
+
+    {ok, NewFd} = couch_file:open(DestPath),
+    unlink(NewFd),
+    {ok, HeaderBin, NewHeaderPos} = couch_file:read_header_bin(NewFd),
+    HeaderSig = couch_set_view_util:header_bin_sig(HeaderBin),
+    case HeaderSig == Sig of
+    true ->
+        ok;
+    false ->
+        couch_file:close(NewFd),
+        ok = file2:delete(DestPath),
+        throw({error, <<"Corrupted initial build destination file.\n">>})
+    end,
+    NewHeader = couch_set_view_util:header_bin_to_term(HeaderBin),
+    #set_view_index_header{
+        id_btree_state = NewIdBtreeRoot,
+        view_states = NewViewRoots
+    } = NewHeader,
+
+    NewIdBtree = couch_btree:set_state(IdBtree#btree{fd = NewFd}, NewIdBtreeRoot),
+    NewViews = lists:zipwith(
+        fun(#set_view{indexer = View} = V, NewRoot) ->
+            #mapreduce_view{btree = Bt} = View,
+            NewBt = couch_btree:set_state(Bt#btree{fd = NewFd}, NewRoot),
+            NewView = View#mapreduce_view{btree = NewBt},
+            V#set_view{indexer = NewView}
+        end,
+        Views, NewViewRoots),
+
+    NewGroup = Group#set_view_group{
+        id_btree = NewIdBtree,
+        views = NewViews,
+        index_header = NewHeader,
+        header_pos = NewHeaderPos
+    },
+    {NewGroup, NewFd}.
+
+index_builder_wait_loop(Port, Group, Acc) ->
+    receive
+    {Port, {exit_status, 0}} ->
+        ok;
+    {Port, {exit_status, Status}} ->
+        throw({index_builder_exit, Status});
+    {Port, {data, {noeol, Data}}} ->
+        index_builder_wait_loop(Port, Group, [Data | Acc]);
+    {Port, {data, {eol, Data}}} ->
+        #set_view_group{
+            set_name = SetName,
+            name = DDocId,
+            type = Type
+        } = Group,
+        Msg = lists:reverse([Data | Acc]),
+        ?LOG_ERROR("Set view `~s`, ~s group `~s`, received error from index builder: ~s",
+                   [SetName, Type, DDocId, Msg]),
+        index_builder_wait_loop(Port, Group, []);
+    {Port, Error} ->
+        throw({index_builder_error, Error})
+    end.
+
 
 
 % Return the state of a view (which will be stored in the header)
@@ -545,3 +621,34 @@ pid_to_sig_ets(prod) ->
     ?SET_VIEW_PID_TO_SIG_ETS_PROD;
 pid_to_sig_ets(dev) ->
     ?SET_VIEW_PID_TO_SIG_ETS_DEV.
+
+
+-spec send_group_info(#set_view_group{}, port()) -> 'ok'.
+send_group_info(#set_view_group{mod = mapreduce_view} = Group, Port) ->
+    #set_view_group{
+        views = Views,
+        filepath = IndexFile,
+        header_pos = HeaderPos
+    } = Group,
+    Data1 = [
+        IndexFile, $\n,
+        integer_to_list(HeaderPos), $\n,
+        integer_to_list(length(Views)), $\n
+    ],
+    true = port_command(Port, Data1),
+    ok = lists:foreach(
+        fun(#set_view{indexer = View}) ->
+            true = port_command(Port, view_info(View))
+        end,
+        Views).
+
+view_info(#mapreduce_view{reduce_funs = []}) ->
+    [<<"0">>, $\n];
+view_info(#mapreduce_view{reduce_funs = Funs}) ->
+    Prefix = [integer_to_list(length(Funs)), $\n],
+    Acc2 = lists:foldr(
+        fun({Name, RedFun}, Acc) ->
+            [Name, $\n, RedFun, $\n | Acc]
+        end,
+        [], Funs),
+    [Prefix | Acc2].

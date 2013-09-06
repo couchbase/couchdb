@@ -1148,7 +1148,8 @@ handle_info({'EXIT', Pid, Reason},
 handle_info({'EXIT', Pid, {updater_finished, Result}}, #state{updater_pid = Pid} = State) ->
     #set_view_updater_result{
         stats = Stats,
-        group = NewGroup
+        group = #set_view_group{filepath = Path} = NewGroup0,
+        tmp_file = BuildFile
     } = Result,
     #set_view_updater_stats{
         indexing_time = IndexingTime,
@@ -1160,6 +1161,20 @@ handle_info({'EXIT', Pid, {updater_finished, Result}}, #state{updater_pid = Pid}
         cleanup_kv_count = CleanupKVCount,
         seqs = SeqsDone
     } = Stats,
+    case State#state.initial_build of
+    true ->
+        NewRefCounter = new_fd_ref_counter(BuildFile),
+        ok = couch_file:only_snapshot_reads(NewGroup0#set_view_group.fd),
+        ok = couch_file:delete(?root_dir(State), Path),
+        ok = couch_file:rename(BuildFile, Path),
+        couch_ref_counter:drop(NewGroup0#set_view_group.ref_counter),
+        NewGroup = NewGroup0#set_view_group{
+            ref_counter = NewRefCounter,
+            fd = BuildFile
+        };
+    false ->
+        NewGroup = NewGroup0
+    end,
     State2 = process_partial_update(State, NewGroup),
     #state{
         waiting_list = WaitList,
@@ -1244,12 +1259,17 @@ handle_info({'EXIT', Pid, {updater_error, Error}}, #state{updater_pid = Pid} = S
     true ->
         {stop, normal, reply_all(State2, {error, Error})};
     false ->
-        case Error of
+        Error2 = case Error of
+        {index_builder_exit, 86} ->
+            {error, <<"reducer failure">>};
+        {index_builder_exit, 87} ->
+            {error, <<"reduction too large">>};
         {error, _Reason} ->
-            State3 = reply_all(State2, Error);
+            Error;
         _ ->
-            State3 = reply_all(State2, {error, Error})
+            {error, Error}
         end,
+        State3 = reply_all(State2, Error2),
         {noreply, maybe_start_cleaner(State3), ?GET_TIMEOUT(State3)}
     end;
 
@@ -2901,7 +2921,7 @@ maybe_fix_replica_group(ReplicaPid, Group) ->
 -spec process_partial_update(#state{}, #set_view_group{}) -> #state{}.
 process_partial_update(State, NewGroup0) ->
     #state{
-        group = #set_view_group{fd = Fd} = Group,
+        group = Group,
         update_listeners = Listeners
     } = State,
     set_last_updater_checkpoint_ts(),
@@ -2923,7 +2943,8 @@ process_partial_update(State, NewGroup0) ->
         NewGroup1 = NewGroup0
     end,
     HeaderBin = couch_set_view_util:group_to_header_bin(NewGroup1),
-    {ok, NewHeaderPos} = couch_file:write_header_bin(Fd, HeaderBin),
+    {ok, NewHeaderPos} = couch_file:write_header_bin(
+        NewGroup1#set_view_group.fd, HeaderBin),
     NewState = State#state{
         group = NewGroup1,
         replica_partitions = NewRepParts
@@ -2932,7 +2953,7 @@ process_partial_update(State, NewGroup0) ->
     NewGroup2 = NewGroup1#set_view_group{
         header_pos = NewHeaderPos
     },
-    ok = couch_file:flush(Fd),
+    ok = couch_file:flush(NewGroup1#set_view_group.fd),
     NewState#state{
         update_listeners = Listeners2,
         group = NewGroup2

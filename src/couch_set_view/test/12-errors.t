@@ -443,7 +443,7 @@ test_builtin_reduce_sum_runtime_error() ->
     end,
 
     etap:is(QueryResult,
-            {error, <<"Builtin _sum function requires map values to be numbers">>},
+            {error, <<"reducer failure">>},
             "Received error response"),
 
     receive
@@ -487,7 +487,7 @@ test_builtin_reduce_stats_runtime_error() ->
     end,
 
     etap:is(QueryResult,
-            {error, <<"Builtin _stats function requires map values to be numbers">>},
+            {error, <<"reducer failure">>},
             "Received error response"),
 
     receive
@@ -635,7 +635,8 @@ test_reduce_too_large_reduction() ->
         Error
     end,
 
-    etap:is(QueryResult, {error, <<"Reduction too large (98306 bytes)">>},
+    etap:is(QueryResult,
+            {error, <<"reduction too large">>},
             "Received error response with too large reduce value"),
 
     receive
@@ -683,7 +684,8 @@ test_reduce_too_large_rereduction() ->
         Error
     end,
 
-    etap:is(QueryResult, {error, <<"Reduction too large (98306 bytes)">>},
+    etap:is(QueryResult,
+            {error, <<"reduction too large">>},
             "Received error response with too large rereduce value"),
 
     receive

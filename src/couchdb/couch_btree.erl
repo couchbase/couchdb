@@ -15,7 +15,7 @@
 -export([open/2, open/3, query_modify/4, add/2, add_remove/3]).
 -export([query_modify_raw/2, query_modify_raw/4]).
 -export([fold/4, full_reduce/1, final_reduce/2, size/1, foldl/3, foldl/4, lookup_sorted/2]).
--export([modify/3, fold_reduce/4, lookup/2, get_state/1, set_options/2]).
+-export([modify/3, fold_reduce/4, lookup/2, get_state/1, set_state/2, set_options/2]).
 -export([add_remove/5, query_modify/6]).
 -export([guided_purge/3]).
 -export([less/3]).
@@ -84,6 +84,15 @@ get_state(#btree{root={Pointer, Reduction, Size}, binary_mode=true}) ->
     <<Pointer:?POINTER_BITS, Size:?TREE_SIZE_BITS, Reduction/binary>>;
 get_state(#btree{root=Root}) ->
     Root.
+
+set_state(Btree, State) when is_binary(State) ->
+    <<Pointer:?POINTER_BITS, Size:?TREE_SIZE_BITS, Red0/binary>> = State,
+    Red = binary:copy(Red0),
+    Btree#btree{root = {Pointer, Red, Size}};
+set_state(Btree, {_Pointer, _Red, _Size} = State) ->
+    Btree#btree{root = State};
+set_state(Btree, nil = State) ->
+    Btree#btree{root = State}.
 
 final_reduce(#btree{reduce=Reduce}, Val) ->
     final_reduce(Reduce, Val);

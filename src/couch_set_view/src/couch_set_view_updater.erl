@@ -14,7 +14,7 @@
 
 -export([update/6]).
 % Exported for the MapReduce specific stuff
--export([file_sorter_initial_build_format_fun/1, new_sort_file_name/1]).
+-export([new_sort_file_name/1]).
 % Exported for unit tests only.
 -export([convert_back_index_kvs_to_binary/2]).
 
@@ -267,7 +267,13 @@ wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup) ->
             stats = Stats0#set_view_updater_stats{
                 indexing_time = timer:now_diff(os:timestamp(), StartTime) / 1000000,
                 blocked_time = BlockedTime
-            }
+            },
+            tmp_file = case WriterAcc#writer_acc.initial_build of
+                true ->
+                    dict:fetch(build_file, WriterAcc#writer_acc.tmp_files);
+                false ->
+                    ""
+                end
         },
         {updater_finished, Result};
     {compactor_started, Pid, Ref} ->
@@ -576,11 +582,9 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
         stats = Stats
     } = WriterAcc,
     #set_view_group{
-        id_btree = IdBtree,
         set_name = SetName,
         type = Type,
         name = DDocId,
-        fd = GroupFd,
         mod = Mod
     } = Group,
     {ViewKVs, DocIdViewIdKeys, MaxSeqs2} = process_map_results(Kvs, ViewEmptyKVs, MaxSeqs),
@@ -594,8 +598,7 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
                 [[<<(iolist_size(KvBin)):32>>, KvBin] | Acc]
         end,
         [], DocIdViewIdKeys),
-    #set_view_tmp_file_info{fd = IdFd, name = IdFile} =
-        dict:fetch(ids_index, TmpFiles),
+    #set_view_tmp_file_info{fd = IdFd} = dict:fetch(ids_index, TmpFiles),
     ok = file:write(IdFd, IdRecords),
 
     {InsertKVCount, TmpFiles2} = Mod:write_kvs(Group, TmpFiles, ViewKVs),
@@ -617,32 +620,21 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
         update_task(1),
         ?LOG_INFO("Updater for set view `~s`, ~s group `~s`, starting btree "
                   "build phase" , [SetName, Type, DDocId]),
-        {ok, NewIdBtreeRoot} = couch_btree_copy:from_sorted_file(
-            IdBtree, IdFile, GroupFd, fun file_sorter_initial_build_format_fun/1),
-        NewIdBtree = IdBtree#btree{root = NewIdBtreeRoot},
-        ok = file2:delete(IdFile),
-        NewViews = lists:map(
-            fun(View) ->
-                Mod:finish_build(View, GroupFd, TmpFiles2)
-            end,
-            Group#set_view_group.views),
-        Header = Group#set_view_group.index_header,
+        {Group2, BuildFd} = Mod:finish_build(Group, TmpFiles2, TmpDir),
+        Header = Group2#set_view_group.index_header,
         NewHeader = Header#set_view_index_header{
-            id_btree_state = couch_btree:get_state(NewIdBtree),
-            view_states = [Mod:get_state(V#set_view.indexer) || V <- NewViews],
             seqs = MaxSeqs2
         },
         update_task(1),
         WriterAcc#writer_acc{
+            tmp_files = dict:store(build_file, BuildFd, TmpFiles2),
             max_seqs = MaxSeqs2,
             stats = Stats#set_view_updater_stats{
                 inserted_kvs = Stats#set_view_updater_stats.inserted_kvs + InsertKVCount,
                 inserted_ids = Stats#set_view_updater_stats.inserted_ids + length(DocIdViewIdKeys),
                 seqs = lists:sum([S || {_, S} <- MaxSeqs2])
             },
-            group = Group#set_view_group{
-                id_btree = NewIdBtree,
-                views = NewViews,
+            group = Group2#set_view_group{
                 index_header = NewHeader
             }
         }
@@ -1245,11 +1237,6 @@ convert_back_index_kvs_to_binary([{DocId, {PartId, ViewIdKeys}} | Rest], Acc) ->
 
 make_back_index_key(DocId, PartId) ->
     <<PartId:16, DocId/binary>>.
-
-
-% initial build
-file_sorter_initial_build_format_fun(<<KeyLen:16, Key:KeyLen/binary, Value/binary>>) ->
-    {Key, Value}.
 
 
 count_seqs_done(Group, NewSeqs) ->
