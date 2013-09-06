@@ -18,7 +18,8 @@ couch_set_viewinclude_DATA = $(include_files)
 couch_set_viewebin_DATA = $(compiled_files)
 
 include_files = \
-    include/couch_set_view.hrl
+    include/couch_set_view.hrl \
+    src/couch_set_view_updater.hrl
 
 source_files = \
     src/couch_set_view.app.src \
