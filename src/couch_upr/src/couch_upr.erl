@@ -228,65 +228,28 @@ parse_header(<<?UPR_WIRE_MAGIC_RESPONSE,
                0:?UPR_WIRE_SIZES_CAS>>) ->
     {stream_ok, Status, RequestId};
 parse_header(<<?UPR_WIRE_MAGIC_REQUEST,
-               ?UPR_WIRE_OPCODE_STREAM_START,
-               0:?UPR_WIRE_SIZES_KEY_LENGTH,
-               0,
-               0,
-               PartId:?UPR_WIRE_SIZES_PARTITION,
-               0:?UPR_WIRE_SIZES_BODY,
-               RequestId:?UPR_WIRE_SIZES_OPAQUE,
-               0:?UPR_WIRE_SIZES_CAS>>) ->
-    {stream_start, PartId, RequestId};
-parse_header(<<?UPR_WIRE_MAGIC_REQUEST,
-               ?UPR_WIRE_OPCODE_STREAM_END,
-               0:?UPR_WIRE_SIZES_KEY_LENGTH,
-               _ExtraLength,
-               0,
-               PartId:?UPR_WIRE_SIZES_PARTITION,
-               BodyLength:?UPR_WIRE_SIZES_BODY,
-               RequestId:?UPR_WIRE_SIZES_OPAQUE,
-               0:?UPR_WIRE_SIZES_CAS>>) ->
-    {stream_end, PartId, RequestId, BodyLength};
-parse_header(<<?UPR_WIRE_MAGIC_REQUEST,
-               ?UPR_WIRE_OPCODE_SNAPSHOT_START,
-               0:?UPR_WIRE_SIZES_KEY_LENGTH,
-               0,
-               0,
-               PartId:?UPR_WIRE_SIZES_PARTITION,
-               0:?UPR_WIRE_SIZES_BODY,
-               RequestId:?UPR_WIRE_SIZES_OPAQUE,
-               0:?UPR_WIRE_SIZES_CAS>>) ->
-    {snapshot_start, PartId, RequestId};
-parse_header(<<?UPR_WIRE_MAGIC_REQUEST,
-               ?UPR_WIRE_OPCODE_SNAPSHOT_END,
-               0:?UPR_WIRE_SIZES_KEY_LENGTH,
-               0,
-               0,
-               PartId:?UPR_WIRE_SIZES_PARTITION,
-               0:?UPR_WIRE_SIZES_BODY,
-               RequestId:?UPR_WIRE_SIZES_OPAQUE,
-               0:?UPR_WIRE_SIZES_CAS>>) ->
-    {snapshot_end, PartId, RequestId};
-parse_header(<<?UPR_WIRE_MAGIC_REQUEST,
-               ?UPR_WIRE_OPCODE_MUTATION,
+               Opcode,
                KeyLength:?UPR_WIRE_SIZES_KEY_LENGTH,
                _ExtraLength,
-               0,
+               _DataType,
                PartId:?UPR_WIRE_SIZES_PARTITION,
                BodyLength:?UPR_WIRE_SIZES_BODY,
                RequestId:?UPR_WIRE_SIZES_OPAQUE,
                _Cas:?UPR_WIRE_SIZES_CAS>>) ->
-    {snapshot_mutation, PartId, RequestId, KeyLength, BodyLength};
-parse_header(<<?UPR_WIRE_MAGIC_REQUEST,
-               ?UPR_WIRE_OPCODE_DELETION,
-               KeyLength:?UPR_WIRE_SIZES_KEY_LENGTH,
-               _ExtraLength,
-               0,
-               PartId:?UPR_WIRE_SIZES_PARTITION,
-               BodyLength:?UPR_WIRE_SIZES_BODY,
-               RequestId:?UPR_WIRE_SIZES_OPAQUE,
-               _Cas:?UPR_WIRE_SIZES_CAS>>) ->
-    {snapshot_deletion, PartId, RequestId, KeyLength, BodyLength}.
+    case Opcode of
+    ?UPR_WIRE_OPCODE_STREAM_START ->
+        {stream_start, PartId, RequestId};
+    ?UPR_WIRE_OPCODE_STREAM_END ->
+        {stream_end, PartId, RequestId, BodyLength};
+    ?UPR_WIRE_OPCODE_SNAPSHOT_START ->
+        {snapshot_start, PartId, RequestId};
+    ?UPR_WIRE_OPCODE_SNAPSHOT_END ->
+        {snapshot_end, PartId, RequestId};
+    ?UPR_WIRE_OPCODE_MUTATION ->
+        {snapshot_mutation, PartId, RequestId, KeyLength, BodyLength};
+    ?UPR_WIRE_OPCODE_DELETION ->
+        {snapshot_deletion, PartId, RequestId, KeyLength, BodyLength}
+    end.
 
 parse_snapshot_mutation(KeyLength, Body) ->
     <<Seq:?UPR_WIRE_SIZES_BY_SEQ,
