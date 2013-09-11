@@ -82,7 +82,8 @@ enum_docs_since(Pid, PartId, StartSeq, EndSeq, InFun, InAcc) ->
 
 get_sequence_number(PartId) ->
     % NOTE vmx 2013-09-06: In the future this will be a stat from ep-engine
-    couch_upr_fake_server:get_sequence_number(PartId).
+    Seq = couch_upr_fake_server:get_sequence_number(PartId),
+    {ok, Seq}.
 
 
 % gen_server callbacks

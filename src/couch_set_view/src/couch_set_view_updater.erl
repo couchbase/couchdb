@@ -139,6 +139,8 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
     {ok, MapQueue} = couch_work_queue:new(MapQueueOptions),
     {ok, WriteQueue} = couch_work_queue:new(WriteQueueOptions),
 
+    {ok, UprPid} = couch_upr:start(),
+
     Mapper = spawn_link(fun() ->
         try
             couch_set_view_mapreduce:start_map_context(Group),
@@ -222,7 +224,7 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
             ok
         end,
         try
-            load_changes(Owner, Parent, Group, MapQueue,
+            load_changes(Owner, Parent, UprPid, Group, MapQueue,
                          ActiveParts, PassiveParts,
                          WriterAcc#writer_acc.initial_build)
         catch
@@ -306,7 +308,8 @@ wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup) ->
     end.
 
 
-load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts, InitialBuild) ->
+load_changes(Owner, Updater, UprPid, Group, MapQueue, ActiveParts,
+             PassiveParts, InitialBuild) ->
     #set_view_group{
         set_name = SetName,
         name = DDocId,
@@ -343,14 +346,13 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts, Initial
                 ok
             end,
             try
-                ChangesWrapper = fun(DocInfo, _, AccCount2) ->
-                    load_doc(Db, PartId, DocInfo, MapQueue,
-                             Group, MaxDocSize, InitialBuild),
-                    {ok, AccCount2 + 1}
+                ChangesWrapper = fun(Item, AccCount2) ->
+                    queue_doc(Item, MapQueue, Group, MaxDocSize, InitialBuild),
+                    AccCount2 + 1
                 end,
-                {ok, _, AccCount3} = couch_db:fast_reads(Db, fun() ->
-                    couch_db:enum_docs_since(Db, Since, ChangesWrapper, AccCount, [])
-                end),
+                {ok, EndSeq} = couch_upr:get_sequence_number(PartId),
+                AccCount3 = couch_upr:enum_docs_since(
+                    UprPid, PartId, Since, EndSeq, ChangesWrapper, AccCount),
                 {AccCount3, orddict:store(PartId, Db#db.update_seq, AccSeqs)}
             after
                 ok = couch_db:close(Db)
@@ -422,54 +424,45 @@ notify_owner(Owner, Msg, UpdaterPid) ->
     Owner ! {updater_info, UpdaterPid, Msg}.
 
 
-load_doc(Db, PartitionId, DocInfo, MapQueue, Group, MaxDocSize, InitialBuild) ->
-    #set_view_group{
-        set_name = SetName,
-        name = DDocId,
-        type = GroupType
-    } = Group,
-    #doc_info{id=DocId, local_seq=Seq, deleted=Deleted} = DocInfo,
-    case DocId of
-    <<?DESIGN_DOC_PREFIX, _/binary>> ->
+queue_doc({Seq, Doc, PartId}=Entry, MapQueue, Group, MaxDocSize,
+        InitialBuild) ->
+    case Doc#doc.deleted of
+    true when InitialBuild ->
         ok;
-    _ ->
-        case Deleted of
-        true when InitialBuild ->
-            ok;
+    true ->
+        couch_work_queue:queue(MapQueue, Entry),
+        update_task(1);
+    false ->
+        #set_view_group{
+           set_name = SetName,
+           name = DDocId,
+           type = GroupType
+        } = Group,
+        case couch_util:validate_utf8(Doc#doc.id) of
         true ->
-            Entry = {Seq, #doc{id = DocId, deleted = true}, PartitionId},
-            couch_work_queue:queue(MapQueue, Entry),
-            update_task(1);
-        false ->
-            case couch_util:validate_utf8(DocId) of
+            case (MaxDocSize > 0) andalso
+                (iolist_size(Doc#doc.body) > MaxDocSize) of
             true ->
-                {ok, Doc} = couch_db:open_doc_int(Db, DocInfo, []),
-                % TODO: avoid reading whole doc to determine its size, requires
-                % a minor storage layer change.
-                case (MaxDocSize > 0) andalso
-                    (iolist_size(Doc#doc.body) > MaxDocSize) of
-                true ->
-                    ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, skipping "
-                        "document with ID `~s`: too large body (~p bytes)",
-                        [SetName, GroupType, DDocId,
-                         DocId, iolist_size(Doc#doc.body)]);
-                false ->
-                    couch_work_queue:queue(MapQueue, {Seq, Doc, PartitionId}),
-                    update_task(1)
-                end;
-            false ->
-                % If the id isn't utf8 (memcached allows it), then log an error
-                % message and skip the doc. Send it through the queue anyway
-                % so we record the high seq num in case there are a bunch of
-                % these at the end, we want to keep track of the high seq and
-                % not reprocess again.
                 ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, skipping "
-                    "document with non-utf8 id. Doc id bytes: ~w",
-                    [SetName, GroupType, DDocId, ?b2l(DocId)]),
-                Entry = {Seq, #doc{id = DocId, deleted = true}, PartitionId},
+                    "document with ID `~s`: too large body (~p bytes)",
+                    [SetName, GroupType, DDocId,
+                     ?b2l(Doc#doc.id), iolist_size(Doc#doc.body)]);
+            false ->
                 couch_work_queue:queue(MapQueue, Entry),
                 update_task(1)
-            end
+            end;
+        false ->
+            % If the id isn't utf8 (memcached allows it), then log an error
+            % message and skip the doc. Send it through the queue anyway
+            % so we record the high seq num in case there are a bunch of
+            % these at the end, we want to keep track of the high seq and
+            % not reprocess again.
+            ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, skipping "
+                "document with non-utf8 id. Doc id bytes: ~w",
+                [SetName, GroupType, DDocId, ?b2l(Doc#doc.id)]),
+            Entry2 = {Seq, Doc#doc{deleted = true}, PartId},
+            couch_work_queue:queue(MapQueue, Entry2),
+            update_task(1)
         end
     end.
 
