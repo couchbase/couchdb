@@ -89,15 +89,6 @@ check-no-dialyzer: dev
 	rm -fr $(top_builddir)/tmp/lib/*
 	$(top_builddir)/test/etap/run test/etap
 
-cover: dev
-	rm -f cover/*.coverdata
-	COVER=1 COVER_BIN=./src/couchdb/ $(top_builddir)/test/etap/run
-	SRC=./src/couchdb/ \
-	    $(ERL) -noshell \
-		-pa src/etap \
-		-eval 'etap_report:create()' \
-	    -s init stop > /dev/null 2>&1
-
 dev: all
 	@echo "This command is intended for developers to use;"
 	@echo "it creates development ini files as well as a"
