@@ -55,7 +55,7 @@ main(_) ->
 
     lists:foreach(
         fun(Module) ->
-            etap_can:loaded_ok(
+            etap:loaded_ok(
                 Module,
                 lists:concat(["Loaded: ", Module])
             )
