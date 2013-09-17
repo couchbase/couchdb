@@ -595,7 +595,7 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
             (Kv, Acc) ->
                 [{KeyBin, ValBin}] = convert_back_index_kvs_to_binary([Kv], []),
                 KvBin = [<<(byte_size(KeyBin)):16>>, KeyBin, ValBin],
-                [[<<(iolist_size(KvBin)):32>>, KvBin] | Acc]
+                [[<<(iolist_size(KvBin)):32/native>>, KvBin] | Acc]
         end,
         [], DocIdViewIdKeys),
     #set_view_tmp_file_info{fd = IdFd} = dict:fetch(ids_index, TmpFiles),

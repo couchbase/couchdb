@@ -72,7 +72,7 @@ write_kvs(Group, TmpFiles, ViewKVs) ->
             ViewRecords = lists:foldr(
                 fun({KeyBin, ValBin}, Acc) ->
                     KvBin = [<<(byte_size(KeyBin)):16>>, KeyBin, ValBin],
-                    [[<<(iolist_size(KvBin)):32>>, KvBin] | Acc]
+                    [[<<(iolist_size(KvBin)):32/native>>, KvBin] | Acc]
                 end,
                 [], KvBins),
             ok = file:write(ViewFd, ViewRecords),

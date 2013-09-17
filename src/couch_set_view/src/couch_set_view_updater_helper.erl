@@ -47,7 +47,7 @@ update_btree(Bt, FilePath, BufferSize, PurgeFun, PurgeAcc) ->
 update_btree_loop(Fd, Bt, BufferSize, PurgeFun, PurgeAcc,
                   Acc, AccSize, Inserted, Deleted, FlushStartOffset, FlushEndOffset) ->
     case file:read(Fd, 4) of
-    {ok, <<Len:32>>} ->
+    {ok, <<Len:32/native>>} ->
         {ok, ActionBin} = file:read(Fd, Len),
         Action = file_sorter_batch_format_fun(ActionBin),
         Acc2 = [Action | Acc],
@@ -90,14 +90,14 @@ update_btree_loop(Fd, Bt, BufferSize, PurgeFun, PurgeAcc,
 -spec encode_btree_op('remove', binary()) -> binary().
 encode_btree_op(remove = Op, Key) ->
     Data = <<(btree_op_to_code(Op)):8, (byte_size(Key)):16, Key/binary>>,
-    <<(byte_size(Data)):32, Data/binary>>.
+    <<(byte_size(Data)):32/native, Data/binary>>.
 
 
 -spec encode_btree_op('insert', binary(), binary()) -> binary().
 encode_btree_op(insert = Op, Key, Value) ->
     Data = <<(btree_op_to_code(Op)):8,
              (byte_size(Key)):16, Key/binary, Value/binary>>,
-    <<(byte_size(Data)):32, Data/binary>>.
+    <<(byte_size(Data)):32/native, Data/binary>>.
 
 
 btree_op_to_code(remove) ->
