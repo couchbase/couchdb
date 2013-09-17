@@ -1,5 +1,5 @@
 #!/usr/bin/env escript
-%% -*- erlang -*-
+%% -*- Mode: Erlang; tab-width: 4; c-basic-offset: 4; indent-tabs-mode: nil -*- */
 %%! -smp enable
 
 % Licensed under the Apache License, Version 2.0 (the "License"); you may not

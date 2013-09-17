@@ -1,5 +1,5 @@
 #!/usr/bin/env escript
-%% -*- erlang -*-
+%% -*- Mode: Erlang; tab-width: 4; c-basic-offset: 4; indent-tabs-mode: nil -*- */
 %%! -smp enable
 
 % @copyright 2012 Couchbase, Inc.

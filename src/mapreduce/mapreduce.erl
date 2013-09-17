@@ -1,3 +1,5 @@
+% -*- Mode: Erlang; tab-width: 4; c-basic-offset: 4; indent-tabs-mode: nil -*- */
+
 %% @copyright 2012 Couchbase, Inc.
 %%
 %% @author Filipe Manana  <filipe@couchbase.com>
