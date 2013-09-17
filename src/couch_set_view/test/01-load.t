@@ -18,12 +18,17 @@ main(_) ->
     test_util:init_code_path(),
     Modules = [
         couch_set_view,
+        couch_set_view_dev,
+        couch_set_view_ddoc_cache,
         couch_set_view_http,
         couch_set_view_group,
         couch_set_view_updater,
+        couch_set_view_updater_helper,
         couch_set_view_compactor,
         couch_set_view_util,
-        couch_db_set
+        couch_set_view_mapreduce,
+        couch_db_set,
+        mapreduce_view
     ],
 
     etap:plan(length(Modules)),
