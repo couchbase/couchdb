@@ -393,10 +393,12 @@ yajl_do_parse(yajl_handle hand, const unsigned char * jsonText,
                     goto around_again;
                 case yajl_tok_string_with_escapes:
                     if (hand->callbacks && hand->callbacks->yajl_map_key) {
-                        yajl_buf_clear(hand->decodeBuf);
-                        yajl_string_decode(hand->decodeBuf, buf, bufLen);
-                        buf = yajl_buf_data(hand->decodeBuf);
-                        bufLen = yajl_buf_len(hand->decodeBuf);
+                        if (!(hand->flags & yajl_dont_unescape_strings)) {
+                                yajl_buf_clear(hand->decodeBuf);
+                                yajl_string_decode(hand->decodeBuf, buf, bufLen);
+                                buf = yajl_buf_data(hand->decodeBuf);
+                                bufLen = yajl_buf_len(hand->decodeBuf);
+                        }
                     }
                     /* intentional fall-through */
                 case yajl_tok_string:

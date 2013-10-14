@@ -28,7 +28,7 @@ num_iterations() -> 666.
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(164 * num_iterations()),
+    etap:plan(168 * num_iterations()),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -69,6 +69,7 @@ run_tests() ->
     test_debug_info_4_rows_and_errors(),
     test_all_docs_rows(),
     test_quotes_in_string(),
+    test_backslash_in_string(),
     test_MB_6013(),
     ok.
 
@@ -988,6 +989,33 @@ test_quotes_in_string() ->
     io:format("State2 is: ~p~n", [State2]),
     ExpectedState2 = {ok, rows, [
         {{<<"\"doc_001\"">>, <<"\"doc_001\"">>}, <<"1">>, <<"{\"string\":\"foo \\\"bar\\\"\"}">>}
+    ]},
+    etap:is(State2, ExpectedState2, "State2 has expected row"),
+    State3 = couch_view_parser:next_state(Ctx),
+    etap:is(State3, {ok, done}, "State3 is {ok, done}"),
+    ok.
+
+
+test_backslash_in_string() ->
+    etap:diag("Testing backslash inside strings (and object keys) are escaped"),
+    {ok, Ctx} = couch_view_parser:start_context(),
+    Json = [
+        <<"{">>,
+        <<"\"total_r">>, <<"ows\": 100,">>,
+        <<"\"rows\": [">>,
+            <<"{\"id\":\"doc_001\\\\d\",\"key\":\"doc_001\\\\d\",\"value\":1, "
+              "\"doc\": {\"\\\\dstring\": \"foo \\\\d\"}}">>,
+        <<"]}">>
+    ],
+    etap:is(couch_view_parser:parse_chunk(Ctx, Json),
+            ok,
+            "Success parsing row"),
+    State1 = couch_view_parser:next_state(Ctx),
+    etap:is(State1, {ok, row_count, "100"}, "State1 has row count"),
+    State2 = couch_view_parser:next_state(Ctx),
+    ExpectedState2 = {ok, rows, [
+        {{<<"\"doc_001\\\\d\"">>, <<"\"doc_001\\\\d\"">>}, <<"1">>,
+         <<"{\"\\\\dstring\":\"foo \\\\d\"}">>}
     ]},
     etap:is(State2, ExpectedState2, "State2 has expected row"),
     State3 = couch_view_parser:next_state(Ctx),
