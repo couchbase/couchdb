@@ -650,7 +650,7 @@ view_info(#mapreduce_view{reduce_funs = Funs}) ->
     Prefix = [integer_to_list(length(Funs)), $\n],
     Acc2 = lists:foldr(
         fun({Name, RedFun}, Acc) ->
-            [Name, $\n, RedFun, $\n | Acc]
+            [Name, $\n, integer_to_list(byte_size(RedFun)), $\n, RedFun | Acc]
         end,
         [], Funs),
     [Prefix | Acc2].
