@@ -33,6 +33,7 @@
 -export([append_term/2]).
 -export([write_header/2,write_header_bin/2, read_header/1,read_header/2]).
 -export([read_header_bin/1,read_header_bin/2]).
+-export([find_header_bin/2]).
 -export([only_snapshot_reads/1]).
 -export([delete/2, delete/3, init_delete_dir/1,get_delete_dir/1]).
 
@@ -266,7 +267,7 @@ read_header_bin(Fd) ->
 
 read_header(Fd, Pos) ->
     case read_header_bin(Fd, Pos) of
-    {ok, Bin} ->
+    {ok, Bin, _Size} ->
         {ok, binary_to_term(Bin)};
     Else ->
         Else
@@ -275,6 +276,15 @@ read_header(Fd, Pos) ->
 
 read_header_bin(Fd, Pos) ->
     gen_server:call(Fd, {read_header, Pos}, infinity).
+
+
+% Find a header backwards from this position. In case there
+% is a header at exactly the given position return that one
+% immmediately.
+find_header_bin(Fd, eof) ->
+    gen_server:call(Fd, find_header, infinity);
+find_header_bin(Fd, Pos) ->
+    gen_server:call(Fd, {find_header, Pos}, infinity).
 
 
 write_header(Fd, Data) ->
@@ -405,6 +415,9 @@ handle_call(flush, From, #file{writer =  W} = File) ->
 handle_call(find_header, From, #file{reader = Reader, eof = Eof} = File) ->
     Reader ! {find_header, Eof, From},
     {noreply, File};
+handle_call({find_header, Pos}, From, #file{reader = Reader} = File) ->
+    Reader ! {find_header, Pos, From},
+    {noreply, File};
 
 handle_call({read_header, Pos}, From, #file{reader = R} = File) ->
     R ! {read_header, Pos, From},
@@ -486,14 +499,14 @@ do_read(Fd, Pos) ->
         read_iolist(ReaderFd, Pos)
     end.
 
-find_header(_Fd, -1) ->
+do_find_header(_Fd, -1) ->
     no_valid_header;
-find_header(Fd, Block) ->
+do_find_header(Fd, Block) ->
     case (catch load_header(Fd, Block)) of
-    {ok, Bin} ->
+    {ok, Bin, _Size} ->
         {ok, Bin, Block * ?SIZE_BLOCK};
     _Error ->
-        find_header(Fd, Block -1)
+        do_find_header(Fd, Block -1)
     end.
 
 load_header(Fd, Block) ->
@@ -512,7 +525,7 @@ load_header(Fd, Block) ->
     <<Crc32:32, HeaderBin/binary>> =
         iolist_to_binary(remove_block_prefixes(RawBin, 5)),
     Crc32 = erlang:crc32(HeaderBin),
-    {ok, HeaderBin}.
+    {ok, HeaderBin, TotalBytes + 5}.
 
 maybe_read_more_iolist(Buffer, DataSize, NextPos, Fd) ->
     case iolist_size(Buffer) of
@@ -760,8 +773,8 @@ handle_reader_message(Msg, Fd, FilePath, CloseTimeout) ->
     {read, Pos, From} ->
         gen_server:reply(From, read_iolist(Fd, Pos)),
         reader_loop(Fd, FilePath, CloseTimeout);
-    {find_header, Eof, From} ->
-        gen_server:reply(From, find_header(Fd, Eof div ?SIZE_BLOCK)),
+    {find_header, Pos, From} ->
+        gen_server:reply(From, do_find_header(Fd, Pos div ?SIZE_BLOCK)),
         reader_loop(Fd, FilePath, CloseTimeout);
     {read_header, Pos, From} ->
         Result = (catch load_header(Fd, Pos div ?SIZE_BLOCK)),

@@ -245,7 +245,7 @@ handle_call({update_header_pos, FileVersion, NewPos}, _From, Db) ->
     ExistingFileVersion = file_version(Db#db.filepath),
     if FileVersion == ExistingFileVersion ->
         case couch_file:read_header_bin(Db#db.fd, NewPos) of
-        {ok, NewHeaderBin} ->
+        {ok, NewHeaderBin, _Size} ->
             NewHeader = header_bin_to_db_header(NewHeaderBin),
             if Db#db.update_seq > NewHeader#db_header.update_seq ->
                 ?LOG_INFO("Database ~s, received pointer to header with a "

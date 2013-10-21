@@ -22,7 +22,7 @@ main(_) ->
     {S1, S2, S3} = now(),
     random:seed(S1, S2, S3),
 
-    etap:plan(18),
+    etap:plan(34),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -34,6 +34,11 @@ main(_) ->
 
 test() ->
     couch_file_write_guard:sup_start_link(),
+    test_couchdb(),
+    test_find_header(),
+    ok.
+
+test_couchdb() ->
     {ok, Fd} = couch_file:open(filename(), [create,overwrite]),
 
     etap:is({ok, 0}, couch_file:bytes(Fd),
@@ -124,9 +129,79 @@ test() ->
         file:pwrite(RawFd, HeaderPos+21, <<"some data goes here!">>),
         etap:is(Expect, couch_file:read_header(CouchFd),
             "Corrupting the header data should read the previous header.")
-    end),
+    end).
 
-    ok.
+test_find_header() ->
+    {ok, Fd} = couch_file:open(filename(), [create, overwrite]),
+
+    etap:is({ok, 0}, couch_file:bytes(Fd),
+        "File should be initialized to contain zero bytes."),
+    etap:is({ok, 0}, couch_file:write_header(Fd, {<<"some_data">>, 32}),
+        "Writing a header succeeds."),
+    ok = couch_file:flush(Fd),
+
+    etap:is(couch_file:find_header_bin(Fd, 0),
+        {ok, term_to_binary({<<"some_data">>, 32}), 0},
+        "Found header at the beginning of the file."),
+
+    etap:is(couch_file:find_header_bin(Fd, eof),
+        {ok, term_to_binary({<<"some_data">>, 32}), 0},
+        "Found header at the beginning of the file when searching from "
+        "the end of the file."),
+
+    etap:is({ok, 4096}, couch_file:write_header(Fd, [foo, <<"more">>]),
+        "Writing a second header succeeds."),
+    ok = couch_file:flush(Fd),
+
+    etap:is(couch_file:find_header_bin(Fd, 0),
+        {ok, term_to_binary({<<"some_data">>, 32}), 0},
+        "Finding header at the beginning of the file still works."),
+
+    etap:is(couch_file:find_header_bin(Fd, 4096),
+        {ok, term_to_binary([foo, <<"more">>]), 4096},
+        "Finding second header by supplying its exact position works."),
+
+    etap:is(couch_file:find_header_bin(Fd, eof),
+        {ok, term_to_binary([foo, <<"more">>]), 4096},
+        "Finding second header by searching from the end of the file works."),
+
+    etap:is(couch_file:find_header_bin(Fd, 4095),
+        {ok, term_to_binary({<<"some_data">>, 32}), 0},
+        "Finding first header by supplying a position just one byte before "
+        "the second header."),
+
+    etap:is(couch_file:find_header_bin(Fd, 3000),
+        {ok, term_to_binary({<<"some_data">>, 32}), 0},
+        "Finding first header by supplying a position between the first and "
+        "the first and the second header."),
+
+    etap:is(couch_file:find_header_bin(Fd, 5000),
+        {ok, term_to_binary([foo, <<"more">>]), 4096},
+        "Finding second header by supplying a position that is within the "
+        "second header."),
+
+    {ok, Size1} = couch_file:bytes(Fd),
+    etap:is(couch_file:find_header_bin(Fd, Size1 + 1000),
+        {ok, term_to_binary([foo, <<"more">>]), 4096},
+        "Finding second header by supplying a position that is bigger than "
+        "the file size."),
+
+    etap:is({ok, 8192},
+        couch_file:write_header(Fd, erlang:make_tuple(5000, <<"Data">>)),
+        "Writing a third header that is > 4KB succeeds."),
+    ok = couch_file:flush(Fd),
+    {ok, Header1, 8192} = couch_file:find_header_bin(Fd, 8192),
+    etap:ok(byte_size(Header1) > 4096, "Header is really > 4KB."),
+
+    etap:is(couch_file:find_header_bin(Fd, 8000),
+        {ok, term_to_binary([foo, <<"more">>]), 4096},
+        "Finding second header by supplying a position that is between the "
+        "second and the third header."),
+
+    etap:is(couch_file:find_header_bin(Fd, eof),
+        {ok, term_to_binary(erlang:make_tuple(5000, <<"Data">>)), 8192},
+        "Finding third header by searching from the end of the file works.").
+
 
 check_header_recovery(CheckFun) ->
     {ok, Fd} = couch_file:open(filename(), [create,overwrite]),
