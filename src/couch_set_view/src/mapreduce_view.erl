@@ -15,7 +15,7 @@
 -module(mapreduce_view).
 
 % For the updater
--export([write_kvs/3, finish_build/3, get_state/1,
+-export([write_kvs/3, finish_build/3, get_state/1, set_state/2,
          start_reduce_context/1, end_reduce_context/1, view_name/2,
          update_tmp_files/3, view_bitmap/1]).
 -export([update_index/5]).
@@ -210,6 +210,11 @@ index_builder_wait_loop(Port, Group, Acc) ->
 % Return the state of a view (which will be stored in the header)
 get_state(View) ->
     couch_btree:get_state(View#mapreduce_view.btree).
+
+set_state(View, State) ->
+    Btree = couch_btree:set_state(View#mapreduce_view.btree, State),
+    View#mapreduce_view{btree = Btree}.
+
 
 view_bitmap(View) ->
     {ok, <<_Size:40, Bm:?MAX_NUM_PARTITIONS, _/binary>>} =

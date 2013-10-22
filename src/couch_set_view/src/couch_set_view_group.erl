@@ -25,6 +25,7 @@
 -export([mark_as_unindexable/2, mark_as_indexable/2]).
 -export([monitor_partition_update/4, demonitor_partition_update/2]).
 -export([reset_utilization_stats/1, get_utilization_stats/1]).
+-export([rollback/3]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -205,6 +206,11 @@ get_data_size(Pid) ->
     Error ->
         throw(Error)
     end.
+
+
+-spec rollback(pid(), partition_id(), update_seq()) -> 'ok' | {'error', 'cannot_rollback'}.
+rollback(Pid, PartId, RollbackSeq) ->
+    gen_server:call(Pid, {rollback, PartId, RollbackSeq}, infinity).
 
 
 -spec define_view(pid(), #set_view_params{}) -> 'ok' | {'error', term()}.
@@ -698,6 +704,41 @@ handle_call(request_group_info, _From, State) ->
 handle_call(get_data_size, _From, State) ->
     DataSizeInfo = get_data_size_info(State),
     {reply, {ok, DataSizeInfo}, State, ?GET_TIMEOUT(State)};
+
+
+handle_call({rollback, PartId, RollbackSeq}, _From, State) ->
+    #state{
+        group = #set_view_group{
+            fd = Fd,
+            index_header = _Header,
+            views = Views,
+            mod = Mod,
+            id_btree = IdBtree
+        } = Group
+    } = State,
+    case rollback_file(Fd, PartId, RollbackSeq) of
+    {ok, HeaderBin, HeaderPos} ->
+        NewHeader = couch_set_view_util:header_bin_to_term(HeaderBin),
+        #set_view_index_header{
+            id_btree_state = IdBtreeState,
+            view_states = ViewStates
+        } = NewHeader,
+        NewIdBtree = couch_btree:set_state(IdBtree, IdBtreeState),
+        NewViews = lists:zipwith(fun(NewState, SetView) ->
+            View = SetView#set_view.indexer,
+            NewView = Mod:set_state(View, NewState),
+            SetView#set_view{indexer = NewView}
+        end, ViewStates, Views),
+        NewGroup = Group#set_view_group{
+            id_btree = NewIdBtree,
+            views = NewViews,
+            index_header = NewHeader,
+            header_pos = HeaderPos
+        },
+        {reply, ok, State#state{group = NewGroup}};
+    cannot_rollback ->
+        {reply, {error, cannot_rollback}, State}
+    end;
 
 handle_call({start_compact, _CompactFun}, _From,
             #state{updater_pid = UpPid, initial_build = true} = State) when is_pid(UpPid) ->
@@ -3665,3 +3706,34 @@ fix_updater_group(UpdaterGroup, OurGroup) ->
             seqs = Seqs2
         }
     }.
+
+
+% Find the first header that has a lower update sequence than the given
+% sequence number and return the position of the header
+find_header_by_seq(Fd, PartId, RollbackSeq) ->
+    find_header_by_seq(Fd, PartId, RollbackSeq, eof).
+find_header_by_seq(_, _, _, -1) ->
+    no_header_found;
+find_header_by_seq(Fd, PartId, RollbackSeq, StartPos) ->
+    {ok, HeaderBin, Pos} = couch_file:find_header_bin(Fd, StartPos),
+    Header = couch_set_view_util:header_bin_to_term(HeaderBin),
+    Seqs = Header#set_view_index_header.seqs,
+    HeaderPartSeq = couch_set_view_util:get_part_seq(PartId, Seqs),
+    case HeaderPartSeq =< RollbackSeq of
+    true ->
+        Pos;
+    false ->
+        find_header_by_seq(Fd, PartId, RollbackSeq, Pos - 1)
+    end.
+
+
+% Rolls back a file to a certain sequence number and returns the
+% current decoded header.
+rollback_file(Fd, PartId, RollbackSeq) ->
+    case find_header_by_seq(Fd, PartId, RollbackSeq) of
+    no_header_found ->
+        cannot_rollback;
+    Pos ->
+        {ok, HeaderBin} = couch_file:read_header_bin(Fd, Pos),
+        {ok, HeaderBin, Pos}
+    end.
