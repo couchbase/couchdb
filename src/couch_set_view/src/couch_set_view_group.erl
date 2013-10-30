@@ -724,6 +724,7 @@ handle_call({rollback, PartId, RollbackSeq}, _From, State) ->
                ?group_id(State)]),
 
     State2 = stop_compactor(State),
+    State3 = stop_cleaner(State2),
 
     case rollback_file(Fd, PartId, RollbackSeq) of
     {ok, HeaderBin} ->
@@ -771,9 +772,9 @@ handle_call({rollback, PartId, RollbackSeq}, _From, State) ->
         NewGroup2 = NewGroup#set_view_group{
             header_pos = NewHeaderPos
         },
-        {reply, ok, State2#state{group = NewGroup2}};
+        {reply, ok, State3#state{group = NewGroup2}, ?GET_TIMEOUT(State3)};
     cannot_rollback ->
-        {reply, {error, cannot_rollback}, State2}
+        {reply, {error, cannot_rollback}, State3, ?GET_TIMEOUT(State3)}
     end;
 
 handle_call({start_compact, _CompactFun}, _From,
