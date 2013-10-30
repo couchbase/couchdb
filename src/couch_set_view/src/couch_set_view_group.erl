@@ -710,18 +710,23 @@ handle_call({rollback, PartId, RollbackSeq}, _From, State) ->
     #state{
         group = #set_view_group{
             fd = Fd,
-            index_header = _Header,
+            index_header = #set_view_index_header{
+                seqs = GroupIndexable,
+                unindexable_seqs = GroupUnindexable
+            } = Header,
             views = Views,
             mod = Mod,
             id_btree = IdBtree
         } = Group
     } = State,
     case rollback_file(Fd, PartId, RollbackSeq) of
-    {ok, HeaderBin, HeaderPos} ->
+    {ok, HeaderBin} ->
         NewHeader = couch_set_view_util:header_bin_to_term(HeaderBin),
         #set_view_index_header{
             id_btree_state = IdBtreeState,
-            view_states = ViewStates
+            view_states = ViewStates,
+            seqs = NewIndexableSeqs,
+            unindexable_seqs = NewUnindexableSeqs
         } = NewHeader,
         NewIdBtree = couch_btree:set_state(IdBtree, IdBtreeState),
         NewViews = lists:zipwith(fun(NewState, SetView) ->
@@ -729,13 +734,38 @@ handle_call({rollback, PartId, RollbackSeq}, _From, State) ->
             NewView = Mod:set_state(View, NewState),
             SetView#set_view{indexer = NewView}
         end, ViewStates, Views),
+
+        % The header keeps track of indexable and unindexable partitions
+        % together with the current sequence number. When rolling back
+        % the old state and the new one needs to be merged. The state of
+        % partitions (indexable/unindexable) comes from the pre-rollback
+        % header, the sequence numbers of the partitions coms from the
+        % post-rollback header. If the partition isn't part of the
+        % post-rollback header, then the sequence number 0 is assigned.
+        % In short: replace the sequence numbers from the pre-rollback
+        % header with the ones of the post-rollback header.
+        NewSeqs = lists:ukeymerge(1, NewIndexableSeqs, NewUnindexableSeqs),
+        Indexable = merge_seqs(GroupIndexable, NewSeqs),
+        Unindexable = merge_seqs(GroupUnindexable, NewSeqs),
+
         NewGroup = Group#set_view_group{
             id_btree = NewIdBtree,
             views = NewViews,
-            index_header = NewHeader,
-            header_pos = HeaderPos
+            index_header = Header#set_view_index_header{
+                id_btree_state = NewHeader#set_view_index_header.id_btree_state,
+                view_states = NewHeader#set_view_index_header.view_states,
+                seqs = Indexable,
+                unindexable_seqs = Unindexable
+            }
         },
-        {reply, ok, State#state{group = NewGroup}};
+        NewHeaderBin = couch_set_view_util:group_to_header_bin(NewGroup),
+        {ok, NewHeaderPos} = couch_file:write_header_bin(
+            NewGroup#set_view_group.fd, NewHeaderBin),
+        couch_file:flush(NewGroup#set_view_group.fd),
+        NewGroup2 = NewGroup#set_view_group{
+            header_pos = NewHeaderPos
+        },
+        {reply, ok, State#state{group = NewGroup2}};
     cannot_rollback ->
         {reply, {error, cannot_rollback}, State}
     end;
@@ -3734,6 +3764,20 @@ rollback_file(Fd, PartId, RollbackSeq) ->
     no_header_found ->
         cannot_rollback;
     Pos ->
-        {ok, HeaderBin} = couch_file:read_header_bin(Fd, Pos),
-        {ok, HeaderBin, Pos}
+        couch_file:read_header_bin(Fd, Pos)
     end.
+
+
+% Use the partition ID from the `Original` list and the sequence number
+% of the `New` list. If the `New` list doesn't contain the element,
+% use 0 as sequence number.
+-spec merge_seqs(partition_seqs(), partition_seqs()) -> partition_seqs().
+merge_seqs(Original, New) ->
+    lists:map(fun({PartId, _}) ->
+        case couch_set_view_util:find_part_seq(PartId, New) of
+        {ok, Seq} ->
+            {PartId, Seq};
+        not_found ->
+            {PartId, 0}
+        end
+    end, Original).
