@@ -719,6 +719,12 @@ handle_call({rollback, PartId, RollbackSeq}, _From, State) ->
             id_btree = IdBtree
         } = Group
     } = State,
+    ?LOG_INFO("Rollback of set view `~s`, ~s (~s) group `~s`",
+              [?set_name(State), ?type(State), ?category(State),
+               ?group_id(State)]),
+
+    State2 = stop_compactor(State),
+
     case rollback_file(Fd, PartId, RollbackSeq) of
     {ok, HeaderBin} ->
         NewHeader = couch_set_view_util:header_bin_to_term(HeaderBin),
@@ -765,9 +771,9 @@ handle_call({rollback, PartId, RollbackSeq}, _From, State) ->
         NewGroup2 = NewGroup#set_view_group{
             header_pos = NewHeaderPos
         },
-        {reply, ok, State#state{group = NewGroup2}};
+        {reply, ok, State2#state{group = NewGroup2}};
     cannot_rollback ->
-        {reply, {error, cannot_rollback}, State}
+        {reply, {error, cannot_rollback}, State2}
     end;
 
 handle_call({start_compact, _CompactFun}, _From,

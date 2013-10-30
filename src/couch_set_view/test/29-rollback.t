@@ -26,7 +26,7 @@ num_docs() -> 128.  % keep it a multiple of num_set_partitions()
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(23),
+    etap:plan(28),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -51,6 +51,7 @@ test() ->
     test_rollback_different_seqs(1, 6),
     test_rollback_not_exactly(),
     test_rollback_not_possible(),
+    test_rollback_during_compaction(),
 
     couch_set_view_test_util:stop_server(),
     ok.
@@ -217,6 +218,40 @@ test_rollback_not_possible() ->
     RollbackResult = couch_set_view_group:rollback(GroupPid, PartId, PartSeq),
     etap:is(RollbackResult, {error, cannot_rollback},
         "The header wasn't found as expected"),
+    shutdown_group().
+
+
+test_rollback_during_compaction() ->
+    etap:diag("Testing rollback during compaction"),
+    setup_test(25),
+
+    Inserted = insert_data(10),
+
+    etap:diag("Triggering compaction"),
+    {ok, CompactPid} = couch_set_view_compactor:start_compact(
+        mapreduce_view, test_set_name(), ddoc_id(), main),
+    Ref = erlang:monitor(process, CompactPid),
+    CompactPid ! pause,
+    etap:diag("Waiting for main group compaction to finish"),
+    receive
+    {'DOWN', Ref, process, CompactPid, _Reason} ->
+        etap:bail("Compaction finished before it got paused")
+    after 0 ->
+        ok
+    end,
+    etap:is(is_process_alive(CompactPid), true, "Compactor is still running"),
+
+    rollback(Inserted, 5),
+    receive
+    {'DOWN', Ref, process, CompactPid, shutdown} ->
+        etap:ok(true, "Compaction was shutdown properly");
+    {'DOWN', Ref, process, CompactPid, Reason} ->
+        etap:bail("Compaction unexpectedly stopped")
+    after 0 ->
+        etap:bail("Compaction should have been stopped")
+    end,
+    etap:is(is_process_alive(CompactPid), false,
+        "Compactor is not running after the rollback"),
     shutdown_group().
 
 
