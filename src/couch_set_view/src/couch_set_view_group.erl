@@ -123,6 +123,10 @@
 -define(inc_updater_errors(Group), ?inc_stat(Group, #set_view_group_stats.update_errors)).
 -define(inc_accesses(Group), ?inc_stat(Group, #set_view_group_stats.accesses)).
 
+% Same as in couch_file. That's the offset where headers
+% are stored
+-define(SIZE_BLOCK, 4096).
+
 
 % api methods
 -spec request_group(pid(), #set_view_group_req{}) ->
@@ -3749,7 +3753,7 @@ fix_updater_group(UpdaterGroup, OurGroup) ->
 % sequence number and return the position of the header
 find_header_by_seq(Fd, PartId, RollbackSeq) ->
     find_header_by_seq(Fd, PartId, RollbackSeq, eof).
-find_header_by_seq(_, _, _, -1) ->
+find_header_by_seq(_, _, _, Pos) when Pos < 0 ->
     no_header_found;
 find_header_by_seq(Fd, PartId, RollbackSeq, StartPos) ->
     {ok, HeaderBin, Pos} = couch_file:find_header_bin(Fd, StartPos),
@@ -3760,7 +3764,7 @@ find_header_by_seq(Fd, PartId, RollbackSeq, StartPos) ->
     true ->
         Pos;
     false ->
-        find_header_by_seq(Fd, PartId, RollbackSeq, Pos - 1)
+        find_header_by_seq(Fd, PartId, RollbackSeq, Pos - ?SIZE_BLOCK)
     end.
 
 
