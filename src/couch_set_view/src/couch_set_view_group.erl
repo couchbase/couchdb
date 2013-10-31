@@ -3758,7 +3758,9 @@ find_header_by_seq(_, _, _, Pos) when Pos < 0 ->
 find_header_by_seq(Fd, PartId, RollbackSeq, StartPos) ->
     {ok, HeaderBin, Pos} = couch_file:find_header_bin(Fd, StartPos),
     Header = couch_set_view_util:header_bin_to_term(HeaderBin),
-    Seqs = Header#set_view_index_header.seqs,
+    Seqs = ordsets:union(
+        Header#set_view_index_header.seqs,
+        Header#set_view_index_header.unindexable_seqs),
     HeaderPartSeq = couch_set_view_util:get_part_seq(PartId, Seqs),
     case HeaderPartSeq =< RollbackSeq of
     true ->

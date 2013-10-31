@@ -26,7 +26,7 @@ num_docs() -> 128.  % keep it a multiple of num_set_partitions()
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(28),
+    etap:plan(32),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -52,6 +52,7 @@ test() ->
     test_rollback_not_exactly(),
     test_rollback_not_possible(),
     test_rollback_during_compaction(),
+    test_rollback_unindexable_seqs(),
 
     couch_set_view_test_util:stop_server(),
     ok.
@@ -255,6 +256,58 @@ test_rollback_during_compaction() ->
     shutdown_group().
 
 
+test_rollback_unindexable_seqs() ->
+    etap:diag("Testing rollback with header that contains unindexable "
+        "partitions"),
+    setup_test(30),
+
+    populate_set(1, num_docs()),
+    {ok, {_ViewResults1}} = couch_set_view_test_util:query_view(
+        test_set_name(), ddoc_id(), <<"testred">>, []),
+
+    % Mark a few partitions as unindexable, insert more data and make
+    % sure a new header is written.
+
+    Fd = get_fd(),
+    Unindexable = lists:seq(num_set_partitions() div 2, num_set_partitions() - 1),
+    ok = couch_set_view:mark_partitions_unindexable(
+        mapreduce_view, test_set_name(), ddoc_id(), Unindexable),
+    populate_set(num_docs() + 1, 2 * num_docs()),
+    trigger_updater(),
+    GroupSeqs = get_seq_from_group(),
+    GroupSeqsUnindexable = get_unindexable_seq_from_group(),
+    etap:is([PartId || {PartId, _} <- GroupSeqsUnindexable], Unindexable,
+        "Partitions were set to unindexable"),
+    {ok, HeaderBin1, _Pos1} = couch_file:read_header_bin(Fd),
+    Header1 = couch_set_view_util:header_bin_to_term(HeaderBin1),
+    HeaderSeqs1 = Header1#set_view_index_header.seqs,
+    HeaderSeqsUnindexable1 = Header1#set_view_index_header.unindexable_seqs,
+    etap:is(HeaderSeqs1, GroupSeqs,
+        "The on-disk header has the same indexable sequence numbers as the "
+        "group header"),
+    etap:is(HeaderSeqsUnindexable1, GroupSeqsUnindexable,
+        "The on-disk header has the same unindexable sequence numbers as the "
+        "group header"),
+
+    % The most current header now contains unindexable partitions with the
+    % same sequence number as the header before it. If it works correctly and
+    % takes the unindexable partitions into account, a rollback to that
+    % sequence number should keep the file as it is and not actually doing
+    % a roll back.
+
+    PartId = num_set_partitions() - 1,
+    PartSeq = couch_set_view_util:get_part_seq(PartId, GroupSeqsUnindexable),
+    GroupPid = get_group_pid(),
+    ok = couch_set_view_group:rollback(GroupPid, PartId, PartSeq),
+    {ok, HeaderBin2, _Pos2} = couch_file:read_header_bin(Fd),
+    Header2 = couch_set_view_util:header_bin_to_term(HeaderBin2),
+    HeaderSeqs2 = Header2#set_view_index_header.seqs,
+    etap:is(HeaderSeqs2, GroupSeqs,
+        "The most recent header of the truncated file has the correct "
+        "sequence numbers"),
+    shutdown_group().
+
+
 insert_data(NumBatches) ->
     insert_data(NumBatches, 1, []).
 insert_data(SameNum, SameNum, Acc) ->
@@ -400,11 +453,41 @@ get_group_snapshot() ->
     Group.
 
 
+get_group_info() ->
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
+    {ok, GroupInfo} = couch_set_view_group:request_group_info(GroupPid),
+    GroupInfo.
+
+
 get_seq_from_group() ->
-    Group = get_group_snapshot(),
-    (Group#set_view_group.index_header)#set_view_index_header.seqs.
+    GroupInfo = get_group_info(),
+    {update_seqs, {Seqs}} = lists:keyfind(update_seqs, 1, GroupInfo),
+    [{couch_util:to_integer(PartId), Seq} || {PartId, Seq} <- Seqs].
+
+
+get_unindexable_seq_from_group() ->
+    GroupInfo = get_group_info(),
+    {unindexable_partitions, {Seqs}} = lists:keyfind(
+        unindexable_partitions, 1, GroupInfo),
+    [{couch_util:to_integer(PartId), Seq} || {PartId, Seq} <- Seqs].
 
 
 get_fd() ->
     Group = get_group_snapshot(),
     Group#set_view_group.fd.
+
+
+trigger_updater() ->
+    GroupPid = get_group_pid(),
+    {ok, UpPid} = gen_server:call(GroupPid, {start_updater, []}, infinity),
+    UpRef = erlang:monitor(process, UpPid),
+    receive
+    {'DOWN', UpRef, process, UpPid, {updater_finished, _}} ->
+        ok;
+    {'DOWN', UpRef, process, UpPid, Reason} ->
+        etap:bail("Updater died with unexpected reason: " ++
+            couch_util:to_list(Reason))
+    after 5000 ->
+        etap:bail("Timeout waiting for updater to finish")
+    end.
