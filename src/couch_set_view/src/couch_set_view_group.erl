@@ -3761,12 +3761,17 @@ find_header_by_seq(Fd, PartId, RollbackSeq, StartPos) ->
     Seqs = ordsets:union(
         Header#set_view_index_header.seqs,
         Header#set_view_index_header.unindexable_seqs),
-    HeaderPartSeq = couch_set_view_util:get_part_seq(PartId, Seqs),
-    case HeaderPartSeq =< RollbackSeq of
-    true ->
-        Pos;
-    false ->
-        find_header_by_seq(Fd, PartId, RollbackSeq, Pos - ?SIZE_BLOCK)
+    try
+        HeaderPartSeq = couch_set_view_util:get_part_seq(PartId, Seqs),
+        case HeaderPartSeq =< RollbackSeq of
+        true ->
+            {Pos, HeaderPartSeq};
+        false ->
+            find_header_by_seq(Fd, PartId, RollbackSeq, Pos - ?SIZE_BLOCK)
+        end
+    catch
+    {missing_partition, PartId} ->
+        missing_partition
     end.
 
 
@@ -3774,9 +3779,15 @@ find_header_by_seq(Fd, PartId, RollbackSeq, StartPos) ->
 % current decoded header.
 rollback_file(Fd, PartId, RollbackSeq) ->
     case find_header_by_seq(Fd, PartId, RollbackSeq) of
+    missing_partition ->
+        cannot_rollback;
     no_header_found ->
         cannot_rollback;
-    Pos ->
+    % A rollback wouldn't make sense as sequence number == 0 equals
+    % a full rebuild
+    {_, 0} ->
+        cannot_rollback;
+    {Pos, _} ->
         couch_file:read_header_bin(Fd, Pos)
     end.
 

@@ -26,7 +26,7 @@ num_docs() -> 128.  % keep it a multiple of num_set_partitions()
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(32),
+    etap:plan(36),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -53,6 +53,8 @@ test() ->
     test_rollback_not_possible(),
     test_rollback_during_compaction(),
     test_rollback_unindexable_seqs(),
+    test_rollback_nonexistent(),
+    test_rollback_never_existed(),
 
     couch_set_view_test_util:stop_server(),
     ok.
@@ -308,6 +310,68 @@ test_rollback_unindexable_seqs() ->
     shutdown_group().
 
 
+test_rollback_nonexistent() ->
+    etap:diag("Testing rollback with old headers not containing the "
+      "requested partition (the most recent does)"),
+
+    % Create a view with the last partition missing
+
+    setup_test(30, num_set_partitions() - 1),
+    populate_set(1, num_docs()),
+    {ok, {_ViewResults1}} = couch_set_view_test_util:query_view(
+        test_set_name(), ddoc_id(), <<"testred">>, []),
+    GroupSeqs1 = get_seq_from_group(),
+
+    PartId = num_set_partitions() - 1,
+    etap:is(couch_set_view_util:has_part_seq(PartId, GroupSeqs1), false,
+        "Last Partition is currently not part of the index"),
+
+    % Add the last partition, insert more data and make sure a new header
+    % is written.
+
+    Fd = get_fd(),
+    AllPartitions = lists:seq(0, num_set_partitions() - 1),
+    ok = couch_set_view:set_partition_states(
+        mapreduce_view, test_set_name(), ddoc_id(), [], AllPartitions, []),
+    populate_set(num_docs() + 1, 2 * num_docs()),
+    trigger_updater(),
+    GroupSeqs2 = get_seq_from_group(),
+
+    % Rollback to a sequence number that is smaller than the current
+    % sequence number of the last partition
+
+    PartSeq = couch_set_view_util:get_part_seq(PartId, GroupSeqs2) - 1,
+    GroupPid = get_group_pid(),
+    Rollback = couch_set_view_group:rollback(GroupPid, PartId, PartSeq),
+    etap:is(Rollback, {error, cannot_rollback},
+        "The partition didn't exist before the current header, hence no "
+        "rollback is possible (a full rebuild would be required)"),
+    shutdown_group().
+
+
+test_rollback_never_existed() ->
+    etap:diag("Testing rollback with request a partition that the index"
+       "never contained"),
+
+    % Create a view with the last partition missing
+    setup_test(30, num_set_partitions() - 1),
+
+    Inserted = insert_data(3),
+    GroupSeqs = get_seq_from_group(),
+    PartId = num_set_partitions() - 1,
+    etap:is(couch_set_view_util:has_part_seq(PartId, GroupSeqs), false,
+        "Last Partition is not part of the index"),
+
+    GroupPid = get_group_pid(),
+    % Get a valid sequence number
+    Seq = couch_set_view_util:get_part_seq(PartId - 1, GroupSeqs),
+    Rollback = couch_set_view_group:rollback(GroupPid, PartId, Seq),
+    etap:is(Rollback, {error, cannot_rollback},
+        "The partition doesn't exist in the current header. Hence don't "
+        "rollback at all"),
+    shutdown_group().
+
+
 insert_data(NumBatches) ->
     insert_data(NumBatches, 1, []).
 insert_data(SameNum, SameNum, Acc) ->
@@ -351,6 +415,8 @@ rollback(Inserted, From) ->
 
 
 setup_test(ReduceSize) ->
+    setup_test(ReduceSize, num_set_partitions()).
+setup_test(ReduceSize, NumViewPartitions) ->
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
     couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
 
@@ -374,7 +440,7 @@ setup_test(ReduceSize) ->
         ]}}
     ]},
     ok = couch_set_view_test_util:update_ddoc(test_set_name(), DDoc),
-    ok = configure_view_group().
+    ok = configure_view_group(NumViewPartitions).
 
 random_binary(N) ->
     random:seed({1, 2, 3}),
@@ -424,11 +490,11 @@ generate_docs(From, To) ->
         lists:seq(From, To)).
 
 
-configure_view_group() ->
+configure_view_group(NumViewPartitions) ->
     etap:diag("Configuring view group"),
     Params = #set_view_params{
         max_partitions = num_set_partitions(),
-        active_partitions = lists:seq(0, num_set_partitions()-1),
+        active_partitions = lists:seq(0, NumViewPartitions-1),
         passive_partitions = [],
         use_replica_index = false
     },
