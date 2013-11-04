@@ -23,7 +23,7 @@
 -export([reduce/2, reduce/3]).
 -export([rereduce/3]).
 
--export([set_timeout/1]).
+-export([set_timeout/1, set_max_kv_size_per_doc/1]).
 
 -on_load(init/0).
 
@@ -80,4 +80,8 @@ rereduce(_Context, _ReduceFunNumber, _ReductionsList) ->
 
 
 set_timeout(_TimeoutMs) ->
+    erlang:nif_error(mapreduce_nif_not_loaded).
+
+
+set_max_kv_size_per_doc(_Max) ->
     erlang:nif_error(mapreduce_nif_not_loaded).

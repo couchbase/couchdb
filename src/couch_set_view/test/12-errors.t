@@ -363,7 +363,7 @@ test_too_long_map_key() ->
 test_too_long_map_value() ->
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
     couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
-
+    ok = mapreduce:set_max_kv_size_per_doc(0),
     DDocId = <<"_design/test">>,
     DDoc = {[
         {<<"meta">>, {[{<<"id">>, DDocId}]}},
@@ -398,6 +398,7 @@ test_too_long_map_value() ->
     after 5000 ->
         etap:is(is_process_alive(GroupPid), true, "View group is still alive")
     end,
+    ok = mapreduce:set_max_kv_size_per_doc(1 * 1024 * 1024),
     couch_util:shutdown_sync(GroupPid),
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()).
 

@@ -45,6 +45,7 @@ static ERL_NIF_TERM ATOM_ERROR;
 
 // maxTaskDuration is in seconds
 static volatile int                                maxTaskDuration = 5;
+static int                                         maxKvSize = 1 * 1024 * 1024;
 static ErlNifResourceType                          *MAP_REDUCE_CTX_RES;
 static ErlNifTid                                   terminatorThreadId;
 static ErlNifMutex                                 *terminatorMutex;
@@ -59,6 +60,7 @@ static ERL_NIF_TERM startReduceContext(ErlNifEnv *env, int argc, const ERL_NIF_T
 static ERL_NIF_TERM doReduce(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
 static ERL_NIF_TERM doRereduce(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
 static ERL_NIF_TERM setTimeout(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
+static ERL_NIF_TERM setMaxKvSize(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
 
 // NIF API callbacks
 static int onLoad(ErlNifEnv* env, void** priv, ERL_NIF_TERM info);
@@ -114,6 +116,7 @@ ERL_NIF_TERM doMapDoc(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         return enif_make_badarg(env);
     }
     ctx->env = env;
+    ctx->maxEmitKvSize = maxKvSize;
 
     ErlNifBinary docBin;
 
@@ -342,6 +345,20 @@ ERL_NIF_TERM setTimeout(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 }
 
 
+ERL_NIF_TERM setMaxKvSize(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    int max;
+
+    if (!enif_get_int(env, argv[0], &max)) {
+        return enif_make_badarg(env);
+    }
+
+    maxKvSize = max;
+
+    return ATOM_OK;
+}
+
+
 int onLoad(ErlNifEnv *env, void **priv, ERL_NIF_TERM info)
 {
     ATOM_OK = enif_make_atom(env, "ok");
@@ -493,7 +510,8 @@ static ErlNifFunc nif_functions[] = {
     {"reduce", 2, doReduce},
     {"reduce", 3, doReduce},
     {"rereduce", 3, doRereduce},
-    {"set_timeout", 1, setTimeout}
+    {"set_timeout", 1, setTimeout},
+    {"set_max_kv_size_per_doc", 1, setMaxKvSize}
 };
 
 
