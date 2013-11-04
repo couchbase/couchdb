@@ -26,7 +26,7 @@ num_docs() -> 128.  % keep it a multiple of num_set_partitions()
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(36),
+    etap:plan(45),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -55,6 +55,7 @@ test() ->
     test_rollback_unindexable_seqs(),
     test_rollback_nonexistent(),
     test_rollback_never_existed(),
+    test_rollback_mark_for_cleanup(),
 
     couch_set_view_test_util:stop_server(),
     ok.
@@ -369,6 +370,89 @@ test_rollback_never_existed() ->
     etap:is(Rollback, {error, cannot_rollback},
         "The partition doesn't exist in the current header. Hence don't "
         "rollback at all"),
+    shutdown_group().
+
+
+test_rollback_mark_for_cleanup() ->
+    etap:diag("Testing rollback with old headers containing more partitions "
+      "than the current one where the rollback starts"),
+
+    setup_test(30),
+    Fd = get_fd(),
+    MissingA = num_set_partitions() - 2,
+    MissingB = num_set_partitions() - 1,
+    MissingPartitions = [MissingA, MissingB],
+
+    populate_set(1, num_docs() div 2),
+    trigger_updater(),
+    GroupSeqs1 = get_seq_from_group(),
+    etap:is(length(GroupSeqs1), num_set_partitions(),
+        "All partitions are indexable"),
+
+    % Mark last partition as unindexable
+    ok = couch_set_view:mark_partitions_unindexable(
+        mapreduce_view, test_set_name(), ddoc_id(), [MissingB]),
+
+    % Several updates need to be happen in order to have a way to roll back
+    % to a header where there are unindexable partitions
+
+    populate_set(
+        (num_docs() div 2) + 1, (num_docs() div 2) + (num_docs() div 4)),
+    trigger_updater(),
+    GroupSeqs2 = get_seq_from_group(),
+    GroupSeqUnindexable2 = get_unindexable_seq_from_group(),
+    etap:is(length(GroupSeqs2), length(GroupSeqs1) - 1,
+        "One partitions is not indexable"),
+    etap:is(length(GroupSeqUnindexable2), 1, "One partitions is unindexable"),
+    populate_set((num_docs() div 2) + (num_docs() div 4) + 1, num_docs()),
+    trigger_updater(),
+    GroupSeqUnindexable3 = get_unindexable_seq_from_group(),
+    etap:is(length(GroupSeqUnindexable3), 1,
+        "One partitions is still unindexable"),
+
+    % Remove the two last partitions, insert more data and make sure a
+    % new header is written.
+
+    % A partition can only be removed (cleaned up) when it is indexable
+    ok = couch_set_view:mark_partitions_indexable(
+        mapreduce_view, test_set_name(), ddoc_id(),
+        [MissingB]),
+
+    ok = couch_set_view:set_partition_states(
+        mapreduce_view, test_set_name(), ddoc_id(), [], [],
+        MissingPartitions),
+
+    populate_set(num_docs() + 1, 2 * num_docs()),
+    trigger_updater(),
+    GroupSeqs4 = get_seq_from_group(),
+    etap:is(couch_set_view_util:has_part_seq(MissingA, GroupSeqs4),
+        false,
+        "The second to last partition is currently not part of the index"),
+    etap:is(couch_set_view_util:has_part_seq(MissingB, GroupSeqs4),
+        false,
+        "Last partition is currently not part of the index"),
+
+    % Rollback to a sequence where the last partition is part of and
+    % verify that the additional partition is marked for cleanup and
+    % not part of the sequences
+
+    PartId = 0,
+    PartSeq = couch_set_view_util:get_part_seq(PartId, GroupSeqs2),
+    GroupPid = get_group_pid(),
+    ok = couch_set_view_group:rollback(GroupPid, PartId, PartSeq),
+
+    GroupInfo = get_group_info(),
+    {cleanup_partitions, CleanupPartitions} = lists:keyfind(
+        cleanup_partitions, 1, GroupInfo),
+    etap:is(CleanupPartitions, MissingPartitions,
+        "Last partitions were correctly marked for cleanup"),
+    {update_seqs, {UpdateSeqs}} = lists:keyfind(update_seqs, 1, GroupInfo),
+    etap:is(couch_set_view_util:has_part_seq(MissingA, UpdateSeqs),
+        false,
+        "Second to last partition is currently not part of the index"),
+    etap:is(couch_set_view_util:has_part_seq(MissingB, UpdateSeqs),
+        false,
+        "Last Partition is currently not part of the index"),
     shutdown_group().
 
 

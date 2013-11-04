@@ -716,7 +716,9 @@ handle_call({rollback, PartId, RollbackSeq}, _From, State) ->
             fd = Fd,
             index_header = #set_view_index_header{
                 seqs = GroupIndexable,
-                unindexable_seqs = GroupUnindexable
+                unindexable_seqs = GroupUnindexable,
+                abitmask = ActiveBitmask,
+                pbitmask = PassiveBitmask
             } = Header,
             views = Views,
             mod = Mod,
@@ -737,7 +739,9 @@ handle_call({rollback, PartId, RollbackSeq}, _From, State) ->
             id_btree_state = IdBtreeState,
             view_states = ViewStates,
             seqs = NewIndexableSeqs,
-            unindexable_seqs = NewUnindexableSeqs
+            unindexable_seqs = NewUnindexableSeqs,
+            abitmask = HeaderActiveBitmask,
+            pbitmask = HeaderPassiveBitmask
         } = NewHeader,
         NewIdBtree = couch_btree:set_state(IdBtree, IdBtreeState),
         NewViews = lists:zipwith(fun(NewState, SetView) ->
@@ -755,9 +759,19 @@ handle_call({rollback, PartId, RollbackSeq}, _From, State) ->
         % post-rollback header, then the sequence number 0 is assigned.
         % In short: replace the sequence numbers from the pre-rollback
         % header with the ones of the post-rollback header.
-        NewSeqs = lists:ukeymerge(1, NewIndexableSeqs, NewUnindexableSeqs),
+        NewSeqs = ordsets:union(NewIndexableSeqs, NewUnindexableSeqs),
         Indexable = merge_seqs(GroupIndexable, NewSeqs),
         Unindexable = merge_seqs(GroupUnindexable, NewSeqs),
+
+        % Mark all partitions that the on-disk header contains, but
+        % are not part of the current group header for cleanup and
+        % remove them from the current partition sequences
+        IndexedBitmask = ActiveBitmask bor PassiveBitmask,
+        HeaderIndexedPartitions = couch_set_view_util:decode_bitmask(
+            HeaderActiveBitmask bor HeaderPassiveBitmask),
+        CleanupPartitions = filter_out_bitmask_partitions(
+            HeaderIndexedPartitions, IndexedBitmask),
+        CleanupBitmask = couch_set_view_util:build_bitmask(CleanupPartitions),
 
         NewGroup = Group#set_view_group{
             id_btree = NewIdBtree,
@@ -766,7 +780,8 @@ handle_call({rollback, PartId, RollbackSeq}, _From, State) ->
                 id_btree_state = NewHeader#set_view_index_header.id_btree_state,
                 view_states = NewHeader#set_view_index_header.view_states,
                 seqs = Indexable,
-                unindexable_seqs = Unindexable
+                unindexable_seqs = Unindexable,
+                cbitmask = CleanupBitmask
             }
         },
         NewHeaderBin = couch_set_view_util:group_to_header_bin(NewGroup),
