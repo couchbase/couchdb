@@ -205,13 +205,50 @@ AS_IF([ test "x${ac_enable_v8}" = "xyes" ], [
             V8_FLAGS="$V8_FLAGS -I/opt/local/include/v8"
     ])
     AC_SUBST(V8_INCLUDE)
-    CPPFLAGS="$V8_FLAGS $CPPFLAGS"
 
-    AC_CHECK_HEADER([v8.h], [], [AC_MSG_ERROR([Could not find the V8 JavaScript engine library.])])
     # V8 library has no exported C functions, so we can't use AC_CHECK_LIB
     # TODO: find an alternative
     # AC_CHECK_LIB([v8], [exported-C-function], [V8_LIB_BASE=v8],
     #     [AC_MSG_ERROR([Could not find the V8 JavaScript engine library.])])
+
+    SAVED_LDFLAGS=$LDFLAGS
+    if test "x$V8_LIB_DIR" != "x"; then
+        LDFLAGS="-L$V8_LIB_DIR -Wl,-rpath,$V8_LIB_DIR"
+    fi
+
+    SAVED_LIBS="$LIBS"
+    LIBS="-lv8"
+    AC_CHECK_HEADER([v8.h], [
+      AC_TRY_LINK([
+        #include <v8.h>
+      ],
+      [v8::V8::GetVersion();],
+      [], [AC_MSG_ERROR([Failed to link with libv8.])])
+
+      AC_RUN_IFELSE([AC_LANG_SOURCE([[
+        #include <v8.h>
+        #include <stdio.h>
+        int main() {
+          int major, minor;
+          sscanf(v8::V8::GetVersion(), "%d.%d", &major, &minor);
+          if (major >= 3 && minor > 19) {
+            return 0;
+          }
+          else {
+            return 1;
+          }
+        }
+      ]])],
+      [
+      AC_MSG_NOTICE([Found v8 version > 3.19.])
+      V8_POST_3_19_FLAG="-DV8_POST_3_19_API"],
+      [
+      AC_MSG_NOTICE([Found v8 version <= 3.19.])
+      ])
+    ], [AC_MSG_ERROR([Could not find the V8 JavaScript engine library.])])
+    LIBS="$SAVED_LIBS"
+    LDFLAGS="$SAVED_LDFLAGS"
+    CPPFLAGS="$V8_FLAGS $CPPFLAGS $V8_POST_3_19_FLAG"
 ])
 
 if test x${IS_WINDOWS} = xTRUE; then
