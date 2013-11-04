@@ -1448,7 +1448,17 @@ convert_back_index_kvs_to_binary([{DocId, {PartId, ViewIdKeys}} | Rest], Acc) ->
                     <<AccKeys/binary, (byte_size(Key)):16, Key/binary>>
                 end,
                 <<>>, Keys),
-            <<Acc2/binary, ViewId:8, (length(Keys)):16, KeyListBinary/binary>>
+            NumKeys = length(Keys),
+            case NumKeys >= (1 bsl 16) of
+            true ->
+                ErrorMsg = io_lib:format("Too many (~p) keys emitted for "
+                                         "document `~s` (maximum allowed is ~p",
+                                         [NumKeys, DocId, (1 bsl 16) - 1]),
+                throw({error, iolist_to_binary(ErrorMsg)});
+            false ->
+                ok
+            end,
+            <<Acc2/binary, ViewId:8, NumKeys:16, KeyListBinary/binary>>
         end,
         <<>>, ViewIdKeys),
     KvBin = {make_back_index_key(DocId, PartId), <<PartId:16, ViewIdKeysBinary/binary>>},
