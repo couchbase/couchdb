@@ -242,6 +242,9 @@ min_file_size = 131072
 ; functions in a design document against a single document (map function) or against
 ; a list of map values/reductions (reduce/rereduce function).
 function_timeout = 10000
+; The maximum byte size allowed to be emitted for a single document. This is the
+; sum of the sizes of all emitted keys and values. A maximum of 0 means no limit.
+max_kv_size_per_doc = 1048576
 
 [set_views]
 ddoc_cache_size = 1048576

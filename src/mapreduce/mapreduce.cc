@@ -21,6 +21,7 @@
 #include <vector>
 #include <string>
 #include <string.h>
+#include <sstream>
 #include <v8.h>
 #include <time.h>
 
@@ -193,6 +194,7 @@ map_results_list_t mapDoc(map_reduce_ctx_t *ctx,
 
         mapResult.result.kvs = new (mapResult.result.kvs) kv_pair_list_t();
         ctx->kvs = mapResult.result.kvs;
+        ctx->emitKvSize = 0;
         Handle<Value> result = fun->Call(fun, 2, funArgs);
 
         if (result.IsEmpty()) {
@@ -421,11 +423,22 @@ Handle<Value> emit(const Arguments& args)
 
         kv_pair_t result = kv_pair_t(keyJson, valueJson);
         isoData->ctx->kvs->push_back(result);
+        isoData->ctx->emitKvSize += keyJson.size;
+        isoData->ctx->emitKvSize += valueJson.size;
 
-        return Undefined();
     } catch(Handle<Value> &ex) {
         return ThrowException(ex);
     }
+
+    if ((isoData->ctx->maxEmitKvSize > 0) &&
+        (isoData->ctx->emitKvSize > isoData->ctx->maxEmitKvSize)) {
+        std::stringstream msg;
+        msg << "too much data emitted: " << isoData->ctx->emitKvSize << " bytes";
+
+        return ThrowException(Handle<Value>(String::New(msg.str().c_str())));
+    }
+
+    return Undefined();
 }
 
 
