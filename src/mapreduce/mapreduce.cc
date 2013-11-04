@@ -96,8 +96,14 @@ static const char *BASE64_FUNCTION_STRING =
     "})";
 
 static void doInitContext(map_reduce_ctx_t *ctx, const function_sources_list_t &funs);
+#ifdef V8_POST_3_19_API
+static Local<Context> createJsContext(map_reduce_ctx_t *ctx);
+static void emit(const v8::FunctionCallbackInfo<Value>& args);
+#else
 static Persistent<Context> createJsContext(map_reduce_ctx_t *ctx);
 static Handle<Value> emit(const Arguments& args);
+#endif
+
 static void loadFunctions(map_reduce_ctx_t *ctx, const function_sources_list_t &funs);
 static void freeJsonData(const json_results_list_t &data);
 static void freeMapResult(const map_result_t &data);
@@ -115,14 +121,20 @@ static std::string exceptionString(const TryCatch &tryCatch);
 
 void initContext(map_reduce_ctx_t *ctx, const function_sources_list_t &funs)
 {
+    ctx = new (ctx) map_reduce_ctx_t();
     doInitContext(ctx, funs);
 
     try {
         Locker locker(ctx->isolate);
         Isolate::Scope isolateScope(ctx->isolate);
+#ifdef V8_POST_3_19_API
+        HandleScope handleScope(ctx->isolate);
+        Context::Scope contextScope(ctx->isolate, ctx->jsContext);
+#else
         HandleScope handleScope;
         Context::Scope contextScope(ctx->jsContext);
 
+#endif
         loadFunctions(ctx, funs);
     } catch (...) {
         destroyContext(ctx);
@@ -136,12 +148,23 @@ void doInitContext(map_reduce_ctx_t *ctx, const function_sources_list_t &funs)
     ctx->isolate = Isolate::New();
     Locker locker(ctx->isolate);
     Isolate::Scope isolateScope(ctx->isolate);
+#ifdef V8_POST_3_19_API
+    HandleScope handleScope(ctx->isolate);
+
+    ctx->jsContext.Reset(ctx->isolate, createJsContext(ctx));
+    Local<Context> context = Local<Context>::New(ctx->isolate, ctx->jsContext);
+    Context::Scope contextScope(context);
+
+    Handle<Object> jsonObject = Local<Object>::Cast(context->Global()->Get(String::New("JSON")));
+#else
     HandleScope handleScope;
 
     ctx->jsContext = createJsContext(ctx);
     Context::Scope contextScope(ctx->jsContext);
 
     Handle<Object> jsonObject = Local<Object>::Cast(ctx->jsContext->Global()->Get(String::New("JSON")));
+#endif
+
     Handle<Function> parseFun = Local<Function>::Cast(jsonObject->Get(String::New("parse")));
     Handle<Function> stringifyFun = Local<Function>::Cast(jsonObject->Get(String::New("stringify")));
 
@@ -149,9 +172,18 @@ void doInitContext(map_reduce_ctx_t *ctx, const function_sources_list_t &funs)
     if (isoData == NULL) {
         throw std::bad_alloc();
     }
+
+    isoData = new (isoData) isolate_data_t();
+#ifdef V8_POST_3_19_API
+    isoData->jsonObject.Reset(ctx->isolate, jsonObject);
+    isoData->jsonParseFun.Reset(ctx->isolate, parseFun);
+    isoData->stringifyFun.Reset(ctx->isolate, stringifyFun);
+#else
     isoData->jsonObject = Persistent<Object>::New(jsonObject);
     isoData->jsonParseFun = Persistent<Function>::New(parseFun);
     isoData->stringifyFun = Persistent<Function>::New(stringifyFun);
+#endif
+
     isoData->ctx = ctx;
 
     ctx->isolate->SetData(isoData);
@@ -165,8 +197,13 @@ map_results_list_t mapDoc(map_reduce_ctx_t *ctx,
 {
     Locker locker(ctx->isolate);
     Isolate::Scope isolateScope(ctx->isolate);
+#ifdef V8_POST_3_19_API
+    HandleScope handleScope(ctx->isolate);
+    Context::Scope contextScope(ctx->isolate, ctx->jsContext);
+#else
     HandleScope handleScope;
     Context::Scope contextScope(ctx->jsContext);
+#endif
     Handle<Value> docObject = jsonParse(doc);
     Handle<Value> metaObject = jsonParse(meta);
 
@@ -181,7 +218,11 @@ map_results_list_t mapDoc(map_reduce_ctx_t *ctx,
 
     for (unsigned int i = 0; i < ctx->functions->size(); ++i) {
         map_result_t mapResult;
+#ifdef V8_POST_3_19_API
+        Local<Function> fun = Local<Function>::New(ctx->isolate, *(*ctx->functions)[i]);
+#else
         Handle<Function> fun = (*ctx->functions)[i];
+#endif
         TryCatch trycatch;
 
         mapResult.type = MAP_KVS;
@@ -236,8 +277,13 @@ json_results_list_t runReduce(map_reduce_ctx_t *ctx,
 {
     Locker locker(ctx->isolate);
     Isolate::Scope isolateScope(ctx->isolate);
+#ifdef V8_POST_3_19_API
+    HandleScope handleScope(ctx->isolate);
+    Context::Scope contextScope(ctx->isolate, ctx->jsContext);
+#else
     HandleScope handleScope;
     Context::Scope contextScope(ctx->jsContext);
+#endif
     Handle<Array> keysArray = jsonListToJsArray(keys);
     Handle<Array> valuesArray = jsonListToJsArray(values);
     json_results_list_t results;
@@ -247,7 +293,11 @@ json_results_list_t runReduce(map_reduce_ctx_t *ctx,
     taskStarted(ctx);
 
     for (unsigned int i = 0; i < ctx->functions->size(); ++i) {
+#ifdef V8_POST_3_19_API
+        Local<Function> fun = Local<Function>::New(ctx->isolate, *(*ctx->functions)[i]);
+#else
         Handle<Function> fun = (*ctx->functions)[i];
+#endif
         TryCatch trycatch;
         Handle<Value> result = fun->Call(fun, 3, args);
 
@@ -283,8 +333,13 @@ ErlNifBinary runReduce(map_reduce_ctx_t *ctx,
 {
     Locker locker(ctx->isolate);
     Isolate::Scope isolateScope(ctx->isolate);
+#ifdef V8_POST_3_19_API
+    HandleScope handleScope(ctx->isolate);
+    Context::Scope contextScope(ctx->isolate, ctx->jsContext);
+#else
     HandleScope handleScope;
     Context::Scope contextScope(ctx->jsContext);
+#endif
 
     reduceFunNum -= 1;
     if (reduceFunNum < 0 ||
@@ -292,7 +347,11 @@ ErlNifBinary runReduce(map_reduce_ctx_t *ctx,
         throw MapReduceError("invalid reduce function number");
     }
 
+#ifdef V8_POST_3_19_API
+    Local<Function> fun = Local<Function>::New(ctx->isolate, *(*ctx->functions)[reduceFunNum]);
+#else
     Handle<Function> fun = (*ctx->functions)[reduceFunNum];
+#endif
     Handle<Array> keysArray = jsonListToJsArray(keys);
     Handle<Array> valuesArray = jsonListToJsArray(values);
     Handle<Value> args[] = { keysArray, valuesArray, Boolean::New(false) };
@@ -322,8 +381,13 @@ ErlNifBinary runRereduce(map_reduce_ctx_t *ctx,
 {
     Locker locker(ctx->isolate);
     Isolate::Scope isolateScope(ctx->isolate);
+#ifdef V8_POST_3_19_API
+    HandleScope handleScope(ctx->isolate);
+    Context::Scope contextScope(ctx->isolate, ctx->jsContext);
+#else
     HandleScope handleScope;
     Context::Scope contextScope(ctx->jsContext);
+#endif
 
     reduceFunNum -= 1;
     if (reduceFunNum < 0 ||
@@ -331,7 +395,11 @@ ErlNifBinary runRereduce(map_reduce_ctx_t *ctx,
         throw MapReduceError("invalid reduce function number");
     }
 
+#ifdef V8_POST_3_19_API
+    Local<Function> fun = Local<Function>::New(ctx->isolate, *(*ctx->functions)[reduceFunNum]);
+#else
     Handle<Function> fun = (*ctx->functions)[reduceFunNum];
+#endif
     Handle<Array> valuesArray = jsonListToJsArray(reductions);
     Handle<Value> args[] = { Null(), valuesArray, Boolean::New(true) };
 
@@ -359,11 +427,22 @@ void destroyContext(map_reduce_ctx_t *ctx)
     {
         Locker locker(ctx->isolate);
         Isolate::Scope isolateScope(ctx->isolate);
+#ifdef V8_POST_3_19_API
+        HandleScope handleScope(ctx->isolate);
+        Context::Scope contextScope(ctx->isolate, ctx->jsContext);
+#else
         HandleScope handleScope;
         Context::Scope contextScope(ctx->jsContext);
+#endif
 
         for (unsigned int i = 0; i < ctx->functions->size(); ++i) {
+#ifdef V8_POST_3_19_API
+            (*ctx->functions)[i]->Dispose();
+            (*ctx->functions)[i]->~Persistent<v8::Function>();
+            enif_free((*ctx->functions)[i]);
+#else
             (*ctx->functions)[i].Dispose();
+#endif
         }
         ctx->functions->~function_vector_t();
         enif_free(ctx->functions);
@@ -375,6 +454,7 @@ void destroyContext(map_reduce_ctx_t *ctx)
         isoData->jsonParseFun.Clear();
         isoData->stringifyFun.Dispose();
         isoData->stringifyFun.Clear();
+        isoData->~isolate_data_t();
         enif_free(isoData);
 
         ctx->jsContext.Dispose();
@@ -382,17 +462,28 @@ void destroyContext(map_reduce_ctx_t *ctx)
     }
 
     ctx->isolate->Dispose();
+    ctx->~map_reduce_ctx_t();
 }
 
 
+#ifdef V8_POST_3_19_API
+static Local<Context> createJsContext(map_reduce_ctx_t *ctx)
+{
+    HandleScope handleScope(ctx->isolate);
+#else
 Persistent<Context> createJsContext(map_reduce_ctx_t *ctx)
 {
     HandleScope handleScope;
+#endif
     Handle<ObjectTemplate> global = ObjectTemplate::New();
 
     global->Set(String::New("emit"), FunctionTemplate::New(emit));
 
+#ifdef V8_POST_3_19_API
+    Handle<Context> context = Context::New(ctx->isolate, NULL, global);
+#else
     Persistent<Context> context = Context::New(NULL, global);
+#endif
     Context::Scope contextScope(context);
 
     Handle<Function> sumFun = compileFunction(SUM_FUNCTION_STRING);
@@ -404,16 +495,28 @@ Persistent<Context> createJsContext(map_reduce_ctx_t *ctx)
     Handle<Function> dateToArrayFun = compileFunction(DATE_FUNCTION_STRING);
     context->Global()->Set(String::New("dateToArray"), dateToArrayFun);
 
+#ifdef V8_POST_3_19_API
+    return handleScope.Close(context);
+#else
     return context;
+#endif
 }
 
 
+#ifdef V8_POST_3_19_API
+static void emit(const v8::FunctionCallbackInfo<Value>& args)
+#else
 Handle<Value> emit(const Arguments& args)
+#endif
 {
     isolate_data_t *isoData = getIsolateData();
 
     if (isoData->ctx->kvs == NULL) {
+#ifdef V8_POST_3_19_API
+        return;
+#else
         return Undefined();
+#endif
     }
 
     try {
@@ -423,9 +526,17 @@ Handle<Value> emit(const Arguments& args)
         kv_pair_t result = kv_pair_t(keyJson, valueJson);
         isoData->ctx->kvs->push_back(result);
 
+#ifdef V8_POST_3_19_API
+        return;
+#else
         return Undefined();
+#endif
     } catch(Handle<Value> &ex) {
+#ifdef V8_POST_3_19_API
+        ThrowException(ex);
+#else
         return ThrowException(ex);
+#endif
     }
 }
 
@@ -435,7 +546,13 @@ ErlNifBinary jsonStringify(const Handle<Value> &obj)
     isolate_data_t *isoData = getIsolateData();
     Handle<Value> args[] = { obj };
     TryCatch trycatch;
+#ifdef V8_POST_3_19_API
+    Local<Function> stringifyFun = Local<Function>::New(Isolate::GetCurrent(), isoData->stringifyFun);
+    Local<Object> jsonObject = Local<Object>::New(Isolate::GetCurrent(), isoData->jsonObject);
+    Handle<Value> result = stringifyFun->Call(jsonObject, 1, args);
+#else
     Handle<Value> result = isoData->stringifyFun->Call(isoData->jsonObject, 1, args);
+#endif
 
     if (result.IsEmpty()) {
         throw trycatch.Exception();
@@ -470,7 +587,13 @@ Handle<Value> jsonParse(const ErlNifBinary &thing)
     isolate_data_t *isoData = getIsolateData();
     Handle<Value> args[] = { String::New(reinterpret_cast<char *>(thing.data), thing.size) };
     TryCatch trycatch;
+#ifdef V8_POST_3_19_API
+    Local<Function> jsonParseFun = Local<Function>::New(Isolate::GetCurrent(), isoData->jsonParseFun);
+    Local<Object> jsonObject = Local<Object>::New(Isolate::GetCurrent(), isoData->jsonObject);
+    Handle<Value> result = jsonParseFun->Call(jsonObject, 1, args);
+#else
     Handle<Value> result = isoData->jsonParseFun->Call(isoData->jsonObject, 1, args);
+#endif
 
     if (result.IsEmpty()) {
         throw MapReduceError(exceptionString(trycatch));
@@ -482,7 +605,11 @@ Handle<Value> jsonParse(const ErlNifBinary &thing)
 
 void loadFunctions(map_reduce_ctx_t *ctx, const function_sources_list_t &funStrings)
 {
+#ifdef V8_POST_3_19_API
+    HandleScope handleScope(ctx->isolate);
+#else
     HandleScope handleScope;
+#endif
 
     ctx->functions = (function_vector_t *) enif_alloc(sizeof(function_vector_t));
 
@@ -495,15 +622,28 @@ void loadFunctions(map_reduce_ctx_t *ctx, const function_sources_list_t &funStri
 
     for ( ; it != funStrings.end(); ++it) {
         Handle<Function> fun = compileFunction(*it);
-
+#ifdef V8_POST_3_19_API
+        Persistent<Function> *perFn = (Persistent<Function> *) enif_alloc(sizeof(Persistent<Function>));
+        if (perFn == NULL) {
+            throw std::bad_alloc();
+        }
+        perFn = new (perFn) Persistent<Function>();
+        perFn->Reset(ctx->isolate, fun);
+        ctx->functions->push_back(perFn);
+#else
         ctx->functions->push_back(Persistent<Function>::New(fun));
+#endif
     }
 }
 
 
 Handle<Function> compileFunction(const function_source_t &funSource)
 {
+#ifdef V8_POST_3_19_API
+    HandleScope handleScope(Isolate::GetCurrent());
+#else
     HandleScope handleScope;
+#endif
     TryCatch trycatch;
     Handle<String> source = String::New(funSource.data(), funSource.length());
     Handle<Script> script = Script::Compile(source);
@@ -570,7 +710,11 @@ void terminateTask(map_reduce_ctx_t *ctx)
 
 std::string exceptionString(const TryCatch &tryCatch)
 {
+#ifdef V8_POST_3_19_API
+    HandleScope handleScope(Isolate::GetCurrent());
+#else
     HandleScope handleScope;
+#endif
     String::Utf8Value exception(tryCatch.Exception());
     const char *exceptionString = (*exception);
 
