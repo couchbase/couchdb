@@ -437,7 +437,13 @@ ErlNifBinary jsonStringify(const Handle<Value> &obj)
     Handle<Value> result = isoData->stringifyFun->Call(isoData->jsonObject, 1, args);
 
     if (result.IsEmpty()) {
-        throw trycatch.Exception();
+        if (trycatch.HasCaught()) {
+            Local<Message> m = trycatch.Message();
+            if (!m.IsEmpty()) {
+                throw Local<String>(m->Get());
+            }
+        }
+        throw Handle<Value>(String::New("JSON.stringify() error"));
     }
 
     unsigned len;
