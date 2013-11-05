@@ -25,7 +25,7 @@
 -export([mark_as_unindexable/2, mark_as_indexable/2]).
 -export([monitor_partition_update/4, demonitor_partition_update/2]).
 -export([reset_utilization_stats/1, get_utilization_stats/1]).
--export([rollback/3]).
+-export([rollback/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -212,9 +212,9 @@ get_data_size(Pid) ->
     end.
 
 
--spec rollback(pid(), partition_id(), update_seq()) -> 'ok' | {'error', 'cannot_rollback'}.
-rollback(Pid, PartId, RollbackSeq) ->
-    gen_server:call(Pid, {rollback, PartId, RollbackSeq}, infinity).
+-spec rollback(pid(), partition_seqs()) -> 'ok' | {'error', 'cannot_rollback'}.
+rollback(Pid, RollbackPartSeqs) ->
+    gen_server:call(Pid, {rollback, RollbackPartSeqs}, infinity).
 
 
 -spec define_view(pid(), #set_view_params{}) -> 'ok' | {'error', term()}.
@@ -709,8 +709,7 @@ handle_call(get_data_size, _From, State) ->
     DataSizeInfo = get_data_size_info(State),
     {reply, {ok, DataSizeInfo}, State, ?GET_TIMEOUT(State)};
 
-
-handle_call({rollback, PartId, RollbackSeq}, _From, State) ->
+handle_call({rollback, RollbackPartSeqs}, _From, State) ->
     #state{
         group = #set_view_group{
             fd = Fd,
@@ -732,7 +731,7 @@ handle_call({rollback, PartId, RollbackSeq}, _From, State) ->
     State2 = stop_compactor(State),
     State3 = stop_cleaner(State2),
 
-    case rollback_file(Fd, PartId, RollbackSeq) of
+    case rollback_file(Fd, RollbackPartSeqs) of
     {ok, HeaderBin} ->
         NewHeader = couch_set_view_util:header_bin_to_term(HeaderBin),
         #set_view_index_header{
@@ -3765,45 +3764,43 @@ fix_updater_group(UpdaterGroup, OurGroup) ->
 
 
 % Find the first header that has a lower update sequence than the given
-% sequence number and return the position of the header
-find_header_by_seq(Fd, PartId, RollbackSeq) ->
-    find_header_by_seq(Fd, PartId, RollbackSeq, eof).
-find_header_by_seq(_, _, _, Pos) when Pos < 0 ->
+% sequence numbers and return the position of the header
+find_header_by_seqs(Fd, RollbackPartSeqs) ->
+    find_header_by_seqs(Fd, RollbackPartSeqs, eof).
+find_header_by_seqs(_, _, Pos) when Pos < 0 ->
     no_header_found;
-find_header_by_seq(Fd, PartId, RollbackSeq, StartPos) ->
+find_header_by_seqs(Fd, RollbackPartSeqs, StartPos) ->
     {ok, HeaderBin, Pos} = couch_file:find_header_bin(Fd, StartPos),
     Header = couch_set_view_util:header_bin_to_term(HeaderBin),
     Seqs = ordsets:union(
         Header#set_view_index_header.seqs,
         Header#set_view_index_header.unindexable_seqs),
-    try
-        HeaderPartSeq = couch_set_view_util:get_part_seq(PartId, Seqs),
-        case HeaderPartSeq =< RollbackSeq of
-        true ->
-            {Pos, HeaderPartSeq};
-        false ->
-            find_header_by_seq(Fd, PartId, RollbackSeq, Pos - ?SIZE_BLOCK)
+    FoundHeader = lists:all(fun({PartId, RollbackSeq}) ->
+        case couch_set_view_util:find_part_seq(PartId, Seqs) of
+        {ok, HeaderSeq} ->
+            HeaderSeq =< RollbackSeq;
+        % If the partition is not part of the header, it's still
+        % a candidate to rollback to
+        not_found ->
+            true
         end
-    catch
-    {missing_partition, PartId} ->
-        missing_partition
+    end, RollbackPartSeqs),
+    case FoundHeader of
+    true ->
+        {ok, Pos};
+    false ->
+        find_header_by_seqs(Fd, RollbackPartSeqs, Pos - ?SIZE_BLOCK)
     end.
 
 
-% Rolls back a file to a certain sequence number and returns the
-% current decoded header.
-rollback_file(Fd, PartId, RollbackSeq) ->
-    case find_header_by_seq(Fd, PartId, RollbackSeq) of
-    missing_partition ->
-        cannot_rollback;
+% Rolls back a file to a certain header that matches the given partition
+% sequence numbers returns that header.
+rollback_file(Fd, RollbackPartSeqs) ->
+    case find_header_by_seqs(Fd, RollbackPartSeqs) of
+    {ok, Pos} ->
+        couch_file:read_header_bin(Fd, Pos);
     no_header_found ->
-        cannot_rollback;
-    % A rollback wouldn't make sense as sequence number == 0 equals
-    % a full rebuild
-    {_, 0} ->
-        cannot_rollback;
-    {Pos, _} ->
-        couch_file:read_header_bin(Fd, Pos)
+        cannot_rollback
     end.
 
 

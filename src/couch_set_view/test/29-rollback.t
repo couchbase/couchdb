@@ -26,7 +26,7 @@ num_docs() -> 128.  % keep it a multiple of num_set_partitions()
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(45),
+    etap:plan(54),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -56,6 +56,8 @@ test() ->
     test_rollback_nonexistent(),
     test_rollback_never_existed(),
     test_rollback_mark_for_cleanup(),
+    test_rollback_multiple_partitions(),
+    test_rollback_multiple_partitions_missing(),
 
     couch_set_view_test_util:stop_server(),
     ok.
@@ -89,9 +91,9 @@ test_rollback_once(ReduceSize) ->
 
     % Rollback the index
     PartId = 0,
+    PartSeq = couch_set_view_util:get_part_seq(PartId, GroupSeqs1),
     GroupPid = get_group_pid(),
-    ok = couch_set_view_group:rollback(
-        GroupPid, PartId, couch_set_view_util:get_part_seq(PartId, GroupSeqs1)),
+    ok = couch_set_view_group:rollback(GroupPid, [{PartId, PartSeq}]),
     {ok, HeaderBin3, _Pos3} = couch_file:read_header_bin(Fd),
     Header3 = couch_set_view_util:header_bin_to_term(HeaderBin3),
     HeaderSeqs3 = Header3#set_view_index_header.seqs,
@@ -146,9 +148,9 @@ test_rollback_not_exactly() ->
 
     % Rollback the index
     PartId = 0,
+    PartSeq = couch_set_view_util:get_part_seq(PartId, Seqs),
     GroupPid = get_group_pid(),
-    ok = couch_set_view_group:rollback(
-        GroupPid, PartId, couch_set_view_util:get_part_seq(PartId, Seqs)),
+    ok = couch_set_view_group:rollback(GroupPid, [{PartId, PartSeq}]),
     {ok, HeaderBin, _Pos3} = couch_file:read_header_bin(Fd),
     Header = couch_set_view_util:header_bin_to_term(HeaderBin),
     HeaderSeqs = Header#set_view_index_header.seqs,
@@ -219,7 +221,8 @@ test_rollback_not_possible() ->
     GroupPid = get_group_pid(),
 
     % Rollback the index
-    RollbackResult = couch_set_view_group:rollback(GroupPid, PartId, PartSeq),
+    RollbackResult = couch_set_view_group:rollback(
+        GroupPid, [{PartId, PartSeq}]),
     etap:is(RollbackResult, {error, cannot_rollback},
         "The header wasn't found as expected"),
     shutdown_group().
@@ -301,7 +304,7 @@ test_rollback_unindexable_seqs() ->
     PartId = num_set_partitions() - 1,
     PartSeq = couch_set_view_util:get_part_seq(PartId, GroupSeqsUnindexable),
     GroupPid = get_group_pid(),
-    ok = couch_set_view_group:rollback(GroupPid, PartId, PartSeq),
+    ok = couch_set_view_group:rollback(GroupPid, [{PartId, PartSeq}]),
     {ok, HeaderBin2, _Pos2} = couch_file:read_header_bin(Fd),
     Header2 = couch_set_view_util:header_bin_to_term(HeaderBin2),
     HeaderSeqs2 = Header2#set_view_index_header.seqs,
@@ -333,20 +336,37 @@ test_rollback_nonexistent() ->
     Fd = get_fd(),
     AllPartitions = lists:seq(0, num_set_partitions() - 1),
     ok = couch_set_view:set_partition_states(
-        mapreduce_view, test_set_name(), ddoc_id(), [], AllPartitions, []),
+        mapreduce_view, test_set_name(), ddoc_id(), AllPartitions, [], []),
     populate_set(num_docs() + 1, 2 * num_docs()),
     trigger_updater(),
     GroupSeqs2 = get_seq_from_group(),
 
     % Rollback to a sequence number that is smaller than the current
-    % sequence number of the last partition
+    % sequence number of the last partition. Verify that it got rolled back
+    % to the first header that doesn't contain the partition.
 
     PartSeq = couch_set_view_util:get_part_seq(PartId, GroupSeqs2) - 1,
     GroupPid = get_group_pid(),
-    Rollback = couch_set_view_group:rollback(GroupPid, PartId, PartSeq),
-    etap:is(Rollback, {error, cannot_rollback},
-        "The partition didn't exist before the current header, hence no "
-        "rollback is possible (a full rebuild would be required)"),
+    Rollback = couch_set_view_group:rollback(GroupPid, [{PartId, PartSeq}]),
+    {ok, HeaderBin, _Pos} = couch_file:read_header_bin(Fd),
+    Header = couch_set_view_util:header_bin_to_term(HeaderBin),
+    HeaderSeqs = Header#set_view_index_header.seqs,
+    % NOTE vmx 2013-11-05: Having the newly added partition as part of the
+    % header it was rolled back to, leverages an implementation detail of the
+    % the indexer. Whenever a new partition is added a new header with the
+    % same sequence numbers as before plus the new partition with sequence
+    % number 0 is written. In case that changes in the future this test fail.
+    Expected = GroupSeqs1 ++ [{3, 0}],
+    etap:is(HeaderSeqs, Expected, "Rollback contains all partitions"),
+    GroupSeqs3 = get_seq_from_group(),
+    etap:is(HeaderSeqs, GroupSeqs3,
+        "On-disk header has the same sequence numbers as the group"),
+    GroupInfo = get_group_info(),
+    {active_partitions, ActivePartitions} = lists:keyfind(
+        active_partitions, 1, GroupInfo),
+    etap:is(ActivePartitions, AllPartitions,
+        "The partition the on-disk header is missing is part of the active "
+        "partitions as expected"),
     shutdown_group().
 
 
@@ -363,13 +383,26 @@ test_rollback_never_existed() ->
     etap:is(couch_set_view_util:has_part_seq(PartId, GroupSeqs), false,
         "Last Partition is not part of the index"),
 
+    % Get header information before the rollback
+
+    Fd = get_fd(),
+    {ok, HeaderBin0, _Pos0} = couch_file:read_header_bin(Fd),
+
+    % Rollback
+
     GroupPid = get_group_pid(),
     % Get a valid sequence number
     Seq = couch_set_view_util:get_part_seq(PartId - 1, GroupSeqs),
-    Rollback = couch_set_view_group:rollback(GroupPid, PartId, Seq),
-    etap:is(Rollback, {error, cannot_rollback},
-        "The partition doesn't exist in the current header. Hence don't "
-        "rollback at all"),
+    Rollback = couch_set_view_group:rollback(GroupPid, [{PartId, Seq}]),
+
+    % Verify that no rollback happened
+
+    {ok, HeaderBin, _Pos} = couch_file:read_header_bin(Fd),
+    Header = couch_set_view_util:header_bin_to_term(HeaderBin),
+    HeaderSeqs = Header#set_view_index_header.seqs,
+    etap:is(HeaderBin, HeaderBin0, "Header is equal to the old one"),
+    etap:is(HeaderSeqs, GroupSeqs,
+        "On-disk header has the same sequence numbers as the group"),
     shutdown_group().
 
 
@@ -439,7 +472,7 @@ test_rollback_mark_for_cleanup() ->
     PartId = 0,
     PartSeq = couch_set_view_util:get_part_seq(PartId, GroupSeqs2),
     GroupPid = get_group_pid(),
-    ok = couch_set_view_group:rollback(GroupPid, PartId, PartSeq),
+    ok = couch_set_view_group:rollback(GroupPid, [{PartId, PartSeq}]),
 
     GroupInfo = get_group_info(),
     {cleanup_partitions, CleanupPartitions} = lists:keyfind(
@@ -453,6 +486,90 @@ test_rollback_mark_for_cleanup() ->
     etap:is(couch_set_view_util:has_part_seq(MissingB, UpdateSeqs),
         false,
         "Last Partition is currently not part of the index"),
+    shutdown_group().
+
+
+test_rollback_multiple_partitions() ->
+    etap:diag("Testing rollback with multiple partitions"),
+    setup_test(25),
+
+    random:seed({4, 5, 6}),
+    Inserted = insert_data_randomly(8),
+
+    {PartSeqs3, ViewResult3} = lists:nth(3, Inserted),
+    {PartSeqs5, ViewResult5} = lists:nth(5, Inserted),
+    {PartSeqs6, ViewResult6} = lists:nth(6, Inserted),
+    GroupPid = get_group_pid(),
+    PartSeqs = [
+        {0, couch_set_view_util:get_part_seq(0, PartSeqs5)},
+        {1, couch_set_view_util:get_part_seq(1, PartSeqs6)},
+        {2, couch_set_view_util:get_part_seq(2, PartSeqs3)}
+    ],
+
+    ok = couch_set_view_group:rollback(GroupPid, PartSeqs),
+
+    {ok, {ViewResultTruncated}} = couch_set_view_test_util:query_view(
+        test_set_name(), ddoc_id(), <<"testred">>, ["stale=ok"]),
+    etap:is(ViewResultTruncated, ViewResult3,
+            "View returns the correct value after trunction"),
+    GroupSeqs = get_seq_from_group(),
+    Found = lists:member(GroupSeqs, [Seqs || {Seqs, _} <- Inserted]),
+    etap:ok(Found, "The current header matches a previous state"),
+
+    shutdown_group().
+
+
+test_rollback_multiple_partitions_missing() ->
+    etap:diag("Testing rollback with multiple partitions where one partition "
+      "was not always part of the index"),
+
+    setup_test(30),
+    populate_set(1, num_docs()),
+    {ok, {_ViewResults1}} = couch_set_view_test_util:query_view(
+        test_set_name(), ddoc_id(), <<"testred">>, []),
+    GroupSeqs1 = get_seq_from_group(),
+    etap:is(length(GroupSeqs1), num_set_partitions(),
+        "All partitions are there"),
+
+    % Remove last partition, insert more data and make sure a new header
+    % is written.
+
+    Fd = get_fd(),
+    MissingPartition = num_set_partitions() - 1,
+    ok = couch_set_view:set_partition_states(
+        mapreduce_view, test_set_name(), ddoc_id(), [], [],
+        [MissingPartition]),
+    populate_set(num_docs() + 1, 2 * num_docs()),
+    trigger_updater(),
+    GroupSeqs2 = get_seq_from_group(),
+    etap:is(couch_set_view_util:has_part_seq(MissingPartition, GroupSeqs2),
+        false,
+        "Last Partition is currently not part of the index"),
+
+    % Add last partition again, insert more data and make sure a new header
+    % is written.
+
+    Fd = get_fd(),
+    ok = couch_set_view:set_partition_states(
+        mapreduce_view, test_set_name(), ddoc_id(),
+        [MissingPartition], [], []),
+    populate_set(num_docs() + 1, 2 * num_docs()),
+    trigger_updater(),
+    GroupSeqs3 = get_seq_from_group(),
+    etap:is(couch_set_view_util:has_part_seq(MissingPartition, GroupSeqs3),
+        true,
+        "Last Partition is again part of the index"),
+
+    % Rollback to a sequence that was prior to the removal of the last
+    % partition and verify that it did rollback
+
+    GroupPid = get_group_pid(),
+    ok = couch_set_view_group:rollback(GroupPid, GroupSeqs1),
+    % As the last partition is part of the group, it will be added
+    % after the rollback with sequence number 0.
+    Expected = lists:keydelete(MissingPartition, 1, GroupSeqs1) ++
+        [{MissingPartition, 0}],
+    etap:is(get_seq_from_group(), Expected, "Rollback is correct"),
     shutdown_group().
 
 
@@ -487,7 +604,7 @@ rollback(Inserted, From) ->
     PartId = 1,
     PartSeq = couch_set_view_util:get_part_seq(PartId, PartSeqs),
     GroupPid = get_group_pid(),
-    ok = couch_set_view_group:rollback(GroupPid, PartId, PartSeq),
+    ok = couch_set_view_group:rollback(GroupPid, [{PartId, PartSeq}]),
 
     {ok, {ViewResultTruncated}} = couch_set_view_test_util:query_view(
         test_set_name(), ddoc_id(), <<"testred">>, ["stale=ok"]),
