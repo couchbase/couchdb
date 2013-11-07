@@ -438,7 +438,8 @@ test_too_many_keys_per_doc() ->
     populate_set(DDoc, 1),
 
     ok = configure_view_group(DDocId, [0, 1, 2, 3], []),
-    GroupPid = couch_set_view:get_group_pid(test_set_name(), DDocId),
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), DDocId, prod),
     MonRef = erlang:monitor(process, GroupPid),
 
     QueryResult = (catch query_map_view(DDocId, <<"test">>, false)),
