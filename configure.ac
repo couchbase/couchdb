@@ -218,6 +218,7 @@ AS_IF([ test "x${ac_enable_v8}" = "xyes" ], [
 
     SAVED_LIBS="$LIBS"
     LIBS="-lv8"
+    CPPFLAGS="$V8_FLAGS $CPPFLAGS"
     AC_CHECK_HEADER([v8.h], [
       AC_TRY_LINK([
         #include <v8.h>
