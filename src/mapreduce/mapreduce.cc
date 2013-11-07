@@ -22,6 +22,7 @@
 #include <vector>
 #include <string>
 #include <string.h>
+#include <sstream>
 #include <v8.h>
 #include <time.h>
 
@@ -235,6 +236,7 @@ map_results_list_t mapDoc(map_reduce_ctx_t *ctx,
 
         mapResult.result.kvs = new (mapResult.result.kvs) kv_pair_list_t();
         ctx->kvs = mapResult.result.kvs;
+        ctx->emitKvSize = 0;
         Handle<Value> result = fun->Call(fun, 2, funArgs);
 
         if (result.IsEmpty()) {
@@ -525,12 +527,9 @@ Handle<Value> emit(const Arguments& args)
 
         kv_pair_t result = kv_pair_t(keyJson, valueJson);
         isoData->ctx->kvs->push_back(result);
+        isoData->ctx->emitKvSize += keyJson.size;
+        isoData->ctx->emitKvSize += valueJson.size;
 
-#ifdef V8_POST_3_19_API
-        return;
-#else
-        return Undefined();
-#endif
     } catch(Handle<Value> &ex) {
 #ifdef V8_POST_3_19_API
         ThrowException(ex);
@@ -538,6 +537,22 @@ Handle<Value> emit(const Arguments& args)
         return ThrowException(ex);
 #endif
     }
+
+    if ((isoData->ctx->maxEmitKvSize > 0) &&
+        (isoData->ctx->emitKvSize > isoData->ctx->maxEmitKvSize)) {
+        std::stringstream msg;
+        msg << "too much data emitted: " << isoData->ctx->emitKvSize << " bytes";
+
+#ifdef V8_POST_3_19_API
+        ThrowException(Handle<Value>(String::New(msg.str().c_str())));
+#else
+        return ThrowException(Handle<Value>(String::New(msg.str().c_str())));
+#endif
+    }
+
+#ifndef V8_POST_3_19_API
+    return Undefined();
+#endif
 }
 
 
@@ -555,7 +570,13 @@ ErlNifBinary jsonStringify(const Handle<Value> &obj)
 #endif
 
     if (result.IsEmpty()) {
-        throw trycatch.Exception();
+        if (trycatch.HasCaught()) {
+            Local<Message> m = trycatch.Message();
+            if (!m.IsEmpty()) {
+                throw Local<String>(m->Get());
+            }
+        }
+        throw Handle<Value>(String::New("JSON.stringify() error"));
     }
 
     unsigned len;

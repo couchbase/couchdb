@@ -58,7 +58,7 @@ num_docs() -> 1000.
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(27),
+    etap:plan(29),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -87,6 +87,9 @@ test() ->
 
     etap:diag("Testing case where map function emits a value that is too long"),
     test_too_long_map_value(),
+
+    etap:diag("Testing case where too many KV pairs are emitted for a single document"),
+    test_too_many_keys_per_doc(),
 
     etap:diag("Testing builtin reduce _sum function with a runtime error"),
     test_builtin_reduce_sum_runtime_error(),
@@ -372,7 +375,7 @@ test_too_long_map_key() ->
 test_too_long_map_value() ->
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
     couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
-
+    ok = mapreduce:set_max_kv_size_per_doc(0),
     DDocId = <<"_design/test">>,
     DDoc = {[
         {<<"meta">>, {[{<<"id">>, DDocId}]}},
@@ -401,6 +404,48 @@ test_too_long_map_value() ->
     ExpectedResult = {error, <<"value emitted for key `\"doc1\"`, document "
                                "`doc1`, is too big (16777218 bytes)">>},
     etap:is(QueryResult, ExpectedResult, "Got an error when a value is too long"),
+
+    receive
+    {'DOWN', MonRef, _, _, _} ->
+        etap:bail("view group died")
+    after 5000 ->
+        etap:is(is_process_alive(GroupPid), true, "View group is still alive")
+    end,
+    ok = mapreduce:set_max_kv_size_per_doc(1 * 1024 * 1024),
+    couch_util:shutdown_sync(GroupPid),
+    couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()).
+
+
+test_too_many_keys_per_doc() ->
+    couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
+    couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
+
+    DDocId = <<"_design/test">>,
+    DDoc = {[
+        {<<"meta">>, {[{<<"id">>, DDocId}]}},
+        {<<"json">>, {[
+        {<<"views">>, {[
+            {<<"test">>, {[
+                {<<"map">>, <<"function(doc, meta) {\n"
+                              "for (var i = 0; i < 70000; i++) {\n"
+                              "    emit(i, meta.id);\n"
+                              "}\n"
+                              "}">>}
+            ]}}
+        ]}}
+        ]}}
+    ]},
+    populate_set(DDoc, 1),
+
+    ok = configure_view_group(DDocId, [0, 1, 2, 3], []),
+    GroupPid = couch_set_view:get_group_pid(test_set_name(), DDocId),
+    MonRef = erlang:monitor(process, GroupPid),
+
+    QueryResult = (catch query_map_view(DDocId, <<"test">>, false)),
+    ExpectedResult = {error, <<"Too many (70000) keys emitted for document"
+                               " `doc1` (maximum allowed is 65535">>},
+    etap:is(QueryResult, ExpectedResult,
+            "Got an error when too many keys are emitted per document"),
 
     receive
     {'DOWN', MonRef, _, _, _} ->

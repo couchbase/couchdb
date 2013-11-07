@@ -76,6 +76,8 @@ typedef struct {
     unsigned int                                 key;
     ErlNifEnv                                    *env;
     volatile time_t                              taskStartTime;
+    int                                          emitKvSize;
+    int                                          maxEmitKvSize;
 } map_reduce_ctx_t;
 
 

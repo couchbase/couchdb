@@ -220,6 +220,9 @@ min_file_size = 131072
 ; functions in a design document against a single document (map function) or against
 ; a list of map values/reductions (reduce/rereduce function).
 function_timeout = 10000
+; The maximum byte size allowed to be emitted for a single document. This is the
+; sum of the sizes of all emitted keys and values. A maximum of 0 means no limit.
+max_kv_size_per_doc = 1048576
 
 [set_views]
 ddoc_cache_size = 1048576
@@ -227,6 +230,9 @@ btree_kv_node_threshold = 7168
 btree_kp_node_threshold = 6144
 ; For incremental updates (value in bytes).
 indexer_max_insert_batch_size = 1048576
+; Maximum size (in bytes) of documents sent to the JavaScript engine.
+; A value of 0 means no limit, any document is passed to the engine.
+indexer_max_doc_size = 1048576
 
 [spatial_views]
 vtree_kv_node_threshold = 2000

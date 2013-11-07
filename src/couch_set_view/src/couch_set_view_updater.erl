@@ -307,6 +307,8 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts, Initial
         index_header = #set_view_index_header{seqs = SinceSeqs}
     } = Group,
 
+    MaxDocSize = list_to_integer(
+        couch_config:get("set_views", "indexer_max_doc_size", "0")),
     FoldFun = fun(PartId, {AccCount, AccSeqs}) ->
         case couch_set_view_util:has_part_seq(PartId, ?set_unindexable_seqs(Group))
             andalso not lists:member(PartId, ?set_replicas_on_transfer(Group)) of
@@ -335,7 +337,8 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts, Initial
             end,
             try
                 ChangesWrapper = fun(DocInfo, _, AccCount2) ->
-                    load_doc(Db, PartId, DocInfo, MapQueue, Group, InitialBuild),
+                    load_doc(Db, PartId, DocInfo, MapQueue,
+                             Group, MaxDocSize, InitialBuild),
                     {ok, AccCount2 + 1}
                 end,
                 {ok, _, AccCount3} = couch_db:fast_reads(Db, fun() ->
@@ -412,7 +415,12 @@ notify_owner(Owner, Msg, UpdaterPid) ->
     Owner ! {updater_info, UpdaterPid, Msg}.
 
 
-load_doc(Db, PartitionId, DocInfo, MapQueue, Group, InitialBuild) ->
+load_doc(Db, PartitionId, DocInfo, MapQueue, Group, MaxDocSize, InitialBuild) ->
+    #set_view_group{
+        set_name = SetName,
+        name = DDocId,
+        type = GroupType
+    } = Group,
     #doc_info{id=DocId, local_seq=Seq, deleted=Deleted} = DocInfo,
     case DocId of
     <<?DESIGN_DOC_PREFIX, _/binary>> ->
@@ -428,13 +436,19 @@ load_doc(Db, PartitionId, DocInfo, MapQueue, Group, InitialBuild) ->
             case couch_util:validate_utf8(DocId) of
             true ->
                 {ok, Doc} = couch_db:open_doc_int(Db, DocInfo, []),
-                couch_work_queue:queue(MapQueue, {Seq, Doc, PartitionId});
+                % TODO: avoid reading whole doc to determine its size, requires
+                % a minor storage layer change.
+                case (MaxDocSize > 0) andalso
+                    (iolist_size(Doc#doc.body) > MaxDocSize) of
+                true ->
+                    ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, skipping "
+                        "document with ID `~s`: too large body (~p bytes)",
+                        [SetName, GroupType, DDocId,
+                         DocId, iolist_size(Doc#doc.body)]);
+                false ->
+                    couch_work_queue:queue(MapQueue, {Seq, Doc, PartitionId})
+                end;
             false ->
-                #set_view_group{
-                   set_name = SetName,
-                   name = DDocId,
-                   type = GroupType
-               } = Group,
                 % If the id isn't utf8 (memcached allows it), then log an error
                 % message and skip the doc. Send it through the queue anyway
                 % so we record the high seq num in case there are a bunch of
@@ -1230,7 +1244,17 @@ convert_back_index_kvs_to_binary([{DocId, {PartId, ViewIdKeys}} | Rest], Acc) ->
                     <<AccKeys/binary, (byte_size(Key)):16, Key/binary>>
                 end,
                 <<>>, Keys),
-            <<Acc2/binary, ViewId:8, (length(Keys)):16, KeyListBinary/binary>>
+            NumKeys = length(Keys),
+            case NumKeys >= (1 bsl 16) of
+            true ->
+                ErrorMsg = io_lib:format("Too many (~p) keys emitted for "
+                                         "document `~s` (maximum allowed is ~p",
+                                         [NumKeys, DocId, (1 bsl 16) - 1]),
+                throw({error, iolist_to_binary(ErrorMsg)});
+            false ->
+                ok
+            end,
+            <<Acc2/binary, ViewId:8, NumKeys:16, KeyListBinary/binary>>
         end,
         <<>>, ViewIdKeys),
     KvBin = {make_back_index_key(DocId, PartId), <<PartId:16, ViewIdKeysBinary/binary>>},

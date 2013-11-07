@@ -887,7 +887,9 @@ init({Category, Indexer}) ->
     RootDir = couch_config:get("couchdb", "view_index_dir"),
     ok = couch_config:register(
         fun("mapreduce", "function_timeout", NewTimeout) ->
-            ok = mapreduce:set_timeout(list_to_integer(NewTimeout))
+                ok = mapreduce:set_timeout(list_to_integer(NewTimeout));
+            ("mapreduce", "max_kv_size_per_doc", NewMax) ->
+                ok = mapreduce:set_max_kv_size_per_doc(list_to_integer(NewMax))
         end),
 
     ok = mapreduce:set_timeout(list_to_integer(

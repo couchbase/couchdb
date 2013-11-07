@@ -26,7 +26,7 @@
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(120),
+    etap:plan(121),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -51,6 +51,7 @@ test() ->
     test_multiple_results_multiple_functions(),
     test_consecutive_maps(),
     test_utf8(),
+    test_too_much_emit_data_per_doc(),
     test_burst(1000),
     test_burst(10000),
     test_burst(100000),
@@ -281,6 +282,29 @@ test_utf8() ->
     etap:is(Results3, ExpectedResults3, "Right map value with Z with acute"),
     etap:is(Results4, ExpectedResults4, "Right map value with Z with acute"),
     ok.
+
+
+test_too_much_emit_data_per_doc() ->
+    ok = mapreduce:set_max_kv_size_per_doc(500),
+    {ok, Ctx} = mapreduce:start_map_context([
+        <<"function(doc, meta) {",
+          "    for (var i = 0; i < 100; i++) {",
+          "        emit(doc.value, doc._id); ",
+          "    }",
+          "}">>,
+        <<"function(doc, meta) {",
+          "    emit(doc.value, doc._id); ",
+          "}">>
+    ]),
+
+    Results = mapreduce:map_doc(
+        Ctx, <<"{\"_id\": \"doc1\", \"value\": \"foobar\"}">>, <<"{}">>),
+    ExpectedResults = {ok, [
+        {error, <<"too much data emitted: 504 bytes">>},
+        [{<<"\"foobar\"">>, <<"\"doc1\"">>}]
+    ]},
+    etap:is(Results, ExpectedResults, "Got max emit kz size reached error"),
+    ok = mapreduce:set_max_kv_size_per_doc(1 * 1024 * 1024).
 
 
 test_many_timeouts(NumProcesses) ->
