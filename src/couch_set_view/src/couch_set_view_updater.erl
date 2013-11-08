@@ -159,21 +159,7 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
 
     Parent = self(),
     Writer = spawn_link(fun() ->
-        DDocIds = couch_set_view_util:get_ddoc_ids_with_sig(SetName, Group),
-        couch_task_status:add_task([
-            {type, indexer},
-            {set, SetName},
-            {signature, ?l2b(couch_util:to_hex(GroupSig))},
-            {design_documents, DDocIds},
-            {indexer_type, Type},
-            {progress, 0},
-            {changes_done, 0},
-            {initial_build, WriterAcc#writer_acc.initial_build},
-            {total_changes, NumChanges}
-        ]),
         BarrierEntryPid ! shutdown,
-        couch_task_status:set_update_frequency(5000),
-
         ViewEmptyKVs = [{View, []} || View <- Group#set_view_group.views],
         WriterAcc2 = init_tmp_files(WriterAcc#writer_acc{
             parent = Parent,
@@ -205,6 +191,19 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
     end),
 
     DocLoader = spawn_link(fun() ->
+        DDocIds = couch_set_view_util:get_ddoc_ids_with_sig(SetName, Group),
+        couch_task_status:add_task([
+            {type, indexer},
+            {set, SetName},
+            {signature, ?l2b(couch_util:to_hex(GroupSig))},
+            {design_documents, DDocIds},
+            {indexer_type, Type},
+            {progress, 0},
+            {changes_done, 0},
+            {initial_build, WriterAcc#writer_acc.initial_build},
+            {total_changes, NumChanges}
+        ]),
+        couch_task_status:set_update_frequency(5000),
         case lists:member(pause, Options) of
         true ->
             % For reliable unit testing, to verify that adding new partitions
@@ -431,7 +430,8 @@ load_doc(Db, PartitionId, DocInfo, MapQueue, Group, MaxDocSize, InitialBuild) ->
             ok;
         true ->
             Entry = {Seq, #doc{id = DocId, deleted = true}, PartitionId},
-            couch_work_queue:queue(MapQueue, Entry);
+            couch_work_queue:queue(MapQueue, Entry),
+            update_task(1);
         false ->
             case couch_util:validate_utf8(DocId) of
             true ->
@@ -446,7 +446,8 @@ load_doc(Db, PartitionId, DocInfo, MapQueue, Group, MaxDocSize, InitialBuild) ->
                         [SetName, GroupType, DDocId,
                          DocId, iolist_size(Doc#doc.body)]);
                 false ->
-                    couch_work_queue:queue(MapQueue, {Seq, Doc, PartitionId})
+                    couch_work_queue:queue(MapQueue, {Seq, Doc, PartitionId}),
+                    update_task(1)
                 end;
             false ->
                 % If the id isn't utf8 (memcached allows it), then log an error
@@ -458,7 +459,8 @@ load_doc(Db, PartitionId, DocInfo, MapQueue, Group, MaxDocSize, InitialBuild) ->
                     "document with non-utf8 id. Doc id bytes: ~w",
                     [SetName, GroupType, DDocId, ?b2l(DocId)]),
                 Entry = {Seq, #doc{id = DocId, deleted = true}, PartitionId},
-                couch_work_queue:queue(MapQueue, Entry)
+                couch_work_queue:queue(MapQueue, Entry),
+                update_task(1)
             end
         end
     end.
@@ -515,7 +517,6 @@ do_writes(Acc) ->
     #writer_acc{
         kvs = Kvs,
         kvs_size = KvsSize,
-        kvs_length = KvsLength,
         write_queue = WriteQueue
     } = Acc,
     case couch_work_queue:dequeue(WriteQueue) of
@@ -525,16 +526,14 @@ do_writes(Acc) ->
         Queue = lists:flatten(Queue0),
         Kvs2 = Kvs ++ Queue,
         KvsSize2 = KvsSize + QueueSize,
-        KvsLength2 = KvsLength + length(Queue),
         Acc2 = Acc#writer_acc{
             kvs = Kvs2,
-            kvs_size = KvsSize2,
-            kvs_length = KvsLength2
+            kvs_size = KvsSize2
         },
         case should_flush_writes(Acc2) of
         true ->
             Acc3 = flush_writes(Acc2),
-            Acc4 = Acc3#writer_acc{kvs = [], kvs_size = 0, kvs_length = 0};
+            Acc4 = Acc3#writer_acc{kvs = [], kvs_size = 0};
         false ->
             Acc4 = Acc2
         end,
@@ -588,7 +587,6 @@ flush_writes(#writer_acc{initial_build = false} = Acc0) ->
 flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
     #writer_acc{
         kvs = Kvs,
-        kvs_length = KvsLength,
         view_empty_kvs = ViewEmptyKVs,
         tmp_files = TmpFiles,
         tmp_dir = TmpDir,
@@ -619,7 +617,6 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
 
     {InsertKVCount, TmpFiles2} = Mod:write_kvs(Group, TmpFiles, ViewKVs),
 
-    update_task(KvsLength),
     case IsFinalBatch of
     false ->
         WriterAcc#writer_acc{
@@ -633,7 +630,6 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
         ?LOG_INFO("Updater for set view `~s`, ~s group `~s`, sorting view files",
                   [SetName, Type, DDocId]),
         ok = sort_tmp_files(TmpFiles2, TmpDir, Group, true),
-        update_task(1),
         ?LOG_INFO("Updater for set view `~s`, ~s group `~s`, starting btree "
                   "build phase" , [SetName, Type, DDocId]),
         {Group2, BuildFd} = Mod:finish_build(Group, TmpFiles2, TmpDir),
@@ -641,7 +637,6 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
         NewHeader = Header#set_view_index_header{
             seqs = MaxSeqs2
         },
-        update_task(1),
         WriterAcc#writer_acc{
             tmp_files = dict:store(build_file, BuildFd, TmpFiles2),
             max_seqs = MaxSeqs2,
@@ -851,7 +846,6 @@ maybe_update_btrees(WriterAcc0) ->
         view_empty_kvs = ViewEmptyKVs,
         tmp_files = TmpFiles,
         group = Group0,
-        stats = #set_view_updater_stats{seqs = SeqsDoneBefore},
         final_batch = IsFinalBatch,
         owner = Owner,
         last_seqs = LastSeqs
@@ -940,13 +934,6 @@ maybe_update_btrees(WriterAcc0) ->
         group = NewGroup,
         last_seqs = NewLastSeqs
     },
-    SeqsDone = NewStats#set_view_updater_stats.seqs - SeqsDoneBefore,
-    case SeqsDone of
-    _ when SeqsDone > 0 ->
-        update_task(SeqsDone);
-    0 ->
-        ok
-    end,
     NewWriterAcc.
 
 

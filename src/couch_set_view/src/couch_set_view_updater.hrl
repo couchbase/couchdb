@@ -27,7 +27,6 @@
     view_empty_kvs,
     kvs = [],
     kvs_size = 0,
-    kvs_length = 0,
     state = updating_active,
     final_batch = false,
     max_seqs,
