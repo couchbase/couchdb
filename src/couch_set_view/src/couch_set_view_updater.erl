@@ -190,6 +190,14 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
         end
     end),
 
+    InitialBuild = WriterAcc#writer_acc.initial_build,
+    NumChanges2 = case InitialBuild of
+        true ->
+            couch_set_view_updater_helper:count_items_from_set(Group, ActiveParts ++ PassiveParts);
+        false ->
+            NumChanges
+    end,
+
     DocLoader = spawn_link(fun() ->
         DDocIds = couch_set_view_util:get_ddoc_ids_with_sig(SetName, Group),
         couch_task_status:add_task([
@@ -200,8 +208,8 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
             {indexer_type, Type},
             {progress, 0},
             {changes_done, 0},
-            {initial_build, WriterAcc#writer_acc.initial_build},
-            {total_changes, NumChanges}
+            {initial_build, InitialBuild},
+            {total_changes, NumChanges2}
         ]),
         couch_task_status:set_update_frequency(5000),
         case lists:member(pause, Options) of

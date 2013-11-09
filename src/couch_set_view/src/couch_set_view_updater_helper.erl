@@ -17,6 +17,7 @@
 -export([update_btree/3, update_btree/5]).
 -export([encode_btree_op/2, encode_btree_op/3]).
 -export([file_sorter_batch_format_fun/1]).
+-export([count_items_from_set/2]).
 
 
 -include("couch_db.hrl").
@@ -122,3 +123,30 @@ file_sorter_batch_format_fun(<<Op:8, KeyLen:16, K:KeyLen/binary, Rest/binary>>) 
     insert ->
         {insert, K, Rest}
     end.
+
+% Aggregate non-deleted documents count from given list of vbuckets belonging to a bucket
+-spec count_items_from_set(#set_view_group{}, [integer()]) -> integer().
+count_items_from_set(Group, Parts) ->
+    Count = lists:foldr(
+              fun(PartId, CountAcc) ->
+                  case couch_set_view_util:has_part_seq(PartId, ?set_unindexable_seqs(Group))
+                      andalso not lists:member(PartId, ?set_replicas_on_transfer(Group)) of
+                   true ->
+                       CountAcc;
+                   false ->
+                       SetName = Group#set_view_group.set_name,
+                       Db = case couch_db:open_int(?dbname(SetName, PartId), []) of
+                       {ok, PartDb} ->
+                           PartDb;
+                       Error ->
+                           ErrorMsg = io_lib:format("Updater error opening database `~s': ~w",
+                                         [?dbname(SetName, PartId), Error]),
+                           throw({error, iolist_to_binary(ErrorMsg)})
+                       end,
+                       {ok, DbInfo} = couch_db:get_db_info(Db),
+                       ok = couch_db:close(Db),
+                       DocCount = couch_util:get_value(doc_count, DbInfo),
+                       CountAcc + DocCount
+                   end
+                end, 0, Parts),
+    Count.
