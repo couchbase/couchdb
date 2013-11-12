@@ -66,7 +66,7 @@ start_server(SetName) ->
     ok = couch_config:set("couchdb", "view_index_dir", NewIndexDir, false),
     start_server(),
     % Also start the fake UPR server that is needed for testing
-    {ok, _} = couch_upr_fake_server:start(?UPR_SERVER_PORT, SetName),
+    {ok, _} = couch_upr_fake_server:start(SetName),
     ok.
 
 

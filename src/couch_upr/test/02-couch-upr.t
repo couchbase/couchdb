@@ -14,9 +14,6 @@
 % License for the specific language governing permissions and limitations under
 % the License.
 
--define(SERVER_PORT, 12345).
--define(MAP_QUEUE_SIZE, 256 * 1024).
-
 test_set_name() -> <<"couch_test_couch_upr">>.
 num_set_partitions() -> 4.
 num_docs() -> 1000.
@@ -41,9 +38,6 @@ main(_) ->
 test() ->
     couch_set_view_test_util:start_server(test_set_name()),
     setup_test(),
-
-    etap:diag("Trying to start fake UPR server at port ~p~n", [?SERVER_PORT]),
-    couch_upr_fake_server:start(?SERVER_PORT, test_set_name()),
 
     TestFun = fun(Item, Acc) ->
         [Item|Acc]

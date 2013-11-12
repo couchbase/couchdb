@@ -24,9 +24,6 @@
 -include_lib("couch_upr/include/couch_upr.hrl").
 
 
--define(UPR_SERVER_PORT, 12345).
-
-
 -record(state, {
     socket = nil,
     timeout = 5000,
@@ -91,13 +88,13 @@ get_sequence_number(PartId) ->
 init([]) ->
     UprTimeout = list_to_integer(
         couch_config:get("upr", "connection_timeout")),
-    {ok, Socket} = gen_tcp:connect("localhost", ?UPR_SERVER_PORT,
+    UprPort = list_to_integer(couch_config:get("upr", "port")),
+    {ok, Socket} = gen_tcp:connect("localhost", UprPort,
         [binary, {packet, raw}, {active, false}, {reuseaddr, true}]),
     {ok, #state{
         socket = Socket,
         timeout = UprTimeout
     }}.
-
 
 
 handle_call(get_request_id, _From, State) ->

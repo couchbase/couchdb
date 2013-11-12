@@ -14,7 +14,7 @@
 -behaviour(gen_server).
 
 % Public API
--export([start/2]).
+-export([start/1]).
 % This will be implemented as ep-engine stat
 -export([get_sequence_number/1]).
 
@@ -92,8 +92,9 @@
 
 % Public API
 
-start(Port, SetName) ->
-    %spawn(?MODULE, server, [Port, SetName]).
+start(SetName) ->
+    % Start the fake UPR server where the original one is expected to be
+    Port = list_to_integer(couch_config:get("upr", "port", "0")),
     gen_server:start({local, ?MODULE}, ?MODULE, [Port, SetName], []).
 
 % Returns the current high sequence number of a partition
@@ -106,6 +107,16 @@ get_sequence_number(PartId) ->
 init([Port, SetName]) ->
     {ok, Listen} = gen_tcp:listen(Port,
         [binary, {packet, raw}, {active, false}, {reuseaddr, true}]),
+    case Port of
+    % In case the port was set to "0", the OS will decide which port to run
+    % the fake UPR server on. Update the configuration so that we know which
+    % port was chosen (that's only needed for the tests).
+    0 ->
+        {ok, RandomPort} = inet:port(Listen),
+        couch_config:set("upr", "port", integer_to_list(RandomPort), false);
+    _ ->
+        ok
+    end,
     accept(Listen),
     {ok, #state{
         streams = [],
