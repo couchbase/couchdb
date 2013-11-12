@@ -92,7 +92,7 @@ init([Name]) ->
     {ok, Socket} = gen_tcp:connect("localhost", UprPort,
         [binary, {packet, raw}, {active, false}, {reuseaddr, true}]),
     RequestId = 0,
-    OpenConnection = encode_open_connection_request(Name, RequestId),
+    OpenConnection = encode_open_connection(Name, RequestId),
     ok = gen_tcp:send(Socket, OpenConnection),
     case gen_tcp:recv(Socket, ?UPR_WIRE_HEADER_LEN, UprTimeout) of
     {ok, Header} ->
@@ -305,7 +305,7 @@ parse_snapshot_deletion(KeyLength, Body) ->
 %  seqno      (24-27): 0x00000000
 %  flags      (28-31): 0x00000000 (consumer)
 %Key          (32-55): bucketstream vb[100-105]
-encode_open_connection_request(Name, RequestId) ->
+encode_open_connection(Name, RequestId) ->
     Body = <<0:?UPR_WIRE_SIZES_SEQNO,
              ?UPR_WIRE_FLAG_CONSUMER:?UPR_WIRE_SIZES_FLAGS,
              Name/binary>>,
