@@ -220,19 +220,19 @@ read(Socket) ->
 
 parse_request(<<?UPR_WIRE_MAGIC_REQUEST,
                 ?UPR_WIRE_OPCODE_STREAM,
-                _KeyLength:(?UPR_WIRE_SIZES_KEY_LENGTH*8),
+                _KeyLength:?UPR_WIRE_SIZES_KEY_LENGTH,
                 _ExtraLength,
                 _Datatype,
-                PartId:(?UPR_WIRE_SIZES_PARTITION*8),
-                _BodyLength:(?UPR_WIRE_SIZES_BODY*8),
-                RequestId:(?UPR_WIRE_SIZES_OPAQUE*8),
-                _Cas:(?UPR_WIRE_SIZES_CAS*8),
-                _Flags:(?UPR_WIRE_SIZES_FLAGS*8),
-                _Reserved:(?UPR_WIRE_SIZES_RESERVED*8),
-                StartSeq:(?UPR_WIRE_SIZES_BY_SEQ*8),
-                EndSeq:(?UPR_WIRE_SIZES_BY_SEQ*8),
-                PartUuid:(?UPR_WIRE_SIZES_PARTITION_UUID*8),
-                HighSeq:(?UPR_WIRE_SIZES_BY_SEQ*8),
+                PartId:?UPR_WIRE_SIZES_PARTITION,
+                _BodyLength:?UPR_WIRE_SIZES_BODY,
+                RequestId:?UPR_WIRE_SIZES_OPAQUE,
+                _Cas:?UPR_WIRE_SIZES_CAS,
+                _Flags:?UPR_WIRE_SIZES_FLAGS,
+                _Reserved:?UPR_WIRE_SIZES_RESERVED,
+                StartSeq:?UPR_WIRE_SIZES_BY_SEQ,
+                EndSeq:?UPR_WIRE_SIZES_BY_SEQ,
+                PartUuid:?UPR_WIRE_SIZES_PARTITION_UUID,
+                HighSeq:?UPR_WIRE_SIZES_BY_SEQ,
                 GroupId/binary>>) ->
     % GroupId might be an empty binary if it wasn't set
     {stream_request, {PartId, RequestId, StartSeq, EndSeq, PartUuid, HighSeq,
@@ -325,20 +325,20 @@ encode_stream_start(PartId, RequestId) ->
 %  flag       (24-27): 0x0000000000000000
 encode_stream_end(PartId, RequestId) ->
     % XXX vmx 2013-09-11: For now we return only success
-    Body = <<?UPR_WIRE_FLAG_OK:(?UPR_WIRE_SIZES_FLAGS*8)>>,
+    Body = <<?UPR_WIRE_FLAG_OK:?UPR_WIRE_SIZES_FLAGS>>,
     BodyLength = byte_size(Body),
     % XXX vmx 2013-08-19: Still only 80% sure that ExtraLength has the correct
     %    value
     ExtraLength = BodyLength,
     Header = <<?UPR_WIRE_MAGIC_REQUEST,
                ?UPR_WIRE_OPCODE_STREAM_END,
-               0:(?UPR_WIRE_SIZES_KEY_LENGTH*8),
+               0:?UPR_WIRE_SIZES_KEY_LENGTH,
                ExtraLength,
                0,
-               PartId:(?UPR_WIRE_SIZES_PARTITION*8),
-               BodyLength:(?UPR_WIRE_SIZES_BODY*8),
-               RequestId:(?UPR_WIRE_SIZES_OPAQUE*8),
-               0:(?UPR_WIRE_SIZES_CAS*8)>>,
+               PartId:?UPR_WIRE_SIZES_PARTITION,
+               BodyLength:?UPR_WIRE_SIZES_BODY,
+               RequestId:?UPR_WIRE_SIZES_OPAQUE,
+               0:?UPR_WIRE_SIZES_CAS>>,
     <<Header/binary, Body/binary>>.
 
 %UPR_SNAPSHOT_START command
@@ -373,13 +373,13 @@ encode_snapshot_end(PartId, RequestId) ->
 encode_request_opcode(Opcode, PartId, RequestId) ->
     <<?UPR_WIRE_MAGIC_REQUEST,
       Opcode,
-      0:(?UPR_WIRE_SIZES_KEY_LENGTH*8),
+      0:?UPR_WIRE_SIZES_KEY_LENGTH,
       0,
       0,
-      PartId:(?UPR_WIRE_SIZES_PARTITION*8),
-      0:(?UPR_WIRE_SIZES_BODY*8),
-      RequestId:(?UPR_WIRE_SIZES_OPAQUE*8),
-      0:(?UPR_WIRE_SIZES_CAS*8)>>.
+      PartId:?UPR_WIRE_SIZES_PARTITION,
+      0:?UPR_WIRE_SIZES_BODY,
+      RequestId:?UPR_WIRE_SIZES_OPAQUE,
+      0:?UPR_WIRE_SIZES_CAS>>.
 
 %UPR_MUTATION command
 %Field        (offset) (value)
@@ -401,11 +401,11 @@ encode_request_opcode(Opcode, PartId, RequestId) ->
 %  value      (57-62): world
 encode_snapshot_mutation(PartId, RequestId, Cas, Seq, RevSeq, Flags,
                          Expiration, LockTime, Key, Value) ->
-    Body = <<Seq:(?UPR_WIRE_SIZES_BY_SEQ*8),
-             RevSeq:(?UPR_WIRE_SIZES_REV_SEQ*8),
-             Flags:(?UPR_WIRE_SIZES_FLAGS*8),
-             Expiration:(?UPR_WIRE_SIZES_EXPIRATION*8),
-             LockTime:(?UPR_WIRE_SIZES_LOCK*8),
+    Body = <<Seq:?UPR_WIRE_SIZES_BY_SEQ,
+             RevSeq:?UPR_WIRE_SIZES_REV_SEQ,
+             Flags:?UPR_WIRE_SIZES_FLAGS,
+             Expiration:?UPR_WIRE_SIZES_EXPIRATION,
+             LockTime:?UPR_WIRE_SIZES_LOCK,
              Key/binary,
              Value/binary>>,
 
@@ -418,13 +418,13 @@ encode_snapshot_mutation(PartId, RequestId, Cas, Seq, RevSeq, Flags,
 
     Header = <<?UPR_WIRE_MAGIC_REQUEST,
                ?UPR_WIRE_OPCODE_MUTATION,
-               KeyLength:(?UPR_WIRE_SIZES_KEY_LENGTH*8),
+               KeyLength:?UPR_WIRE_SIZES_KEY_LENGTH,
                ExtraLength,
                0,
-               PartId:(?UPR_WIRE_SIZES_PARTITION*8),
-               BodyLength:(?UPR_WIRE_SIZES_BODY*8),
-               RequestId:(?UPR_WIRE_SIZES_OPAQUE*8),
-               Cas:(?UPR_WIRE_SIZES_CAS*8)>>,
+               PartId:?UPR_WIRE_SIZES_PARTITION,
+               BodyLength:?UPR_WIRE_SIZES_BODY,
+               RequestId:?UPR_WIRE_SIZES_OPAQUE,
+               Cas:?UPR_WIRE_SIZES_CAS>>,
     <<Header/binary, Body/binary>>.
 
 
@@ -443,8 +443,8 @@ encode_snapshot_mutation(PartId, RequestId, Cas, Seq, RevSeq, Flags,
 %  rev seqno  (32-39): 0x0000000000000000
 %  key        (40-44): hello
 encode_snapshot_deletion(PartId, RequestId, Cas, Seq, RevSeq, Key) ->
-    Body = <<Seq:(?UPR_WIRE_SIZES_BY_SEQ*8),
-              RevSeq:(?UPR_WIRE_SIZES_REV_SEQ*8),
+    Body = <<Seq:?UPR_WIRE_SIZES_BY_SEQ,
+              RevSeq:?UPR_WIRE_SIZES_REV_SEQ,
               Key/binary>>,
 
     KeyLength = byte_size(Key),
@@ -455,13 +455,13 @@ encode_snapshot_deletion(PartId, RequestId, Cas, Seq, RevSeq, Key) ->
 
     Header = <<?UPR_WIRE_MAGIC_REQUEST,
                ?UPR_WIRE_OPCODE_DELETION,
-               KeyLength:(?UPR_WIRE_SIZES_KEY_LENGTH*8),
+               KeyLength:?UPR_WIRE_SIZES_KEY_LENGTH,
                ExtraLength,
                0,
-               PartId:(?UPR_WIRE_SIZES_PARTITION*8),
-               BodyLength:(?UPR_WIRE_SIZES_BODY*8),
-               RequestId:(?UPR_WIRE_SIZES_OPAQUE*8),
-               Cas:(?UPR_WIRE_SIZES_CAS*8)>>,
+               PartId:?UPR_WIRE_SIZES_PARTITION,
+               BodyLength:?UPR_WIRE_SIZES_BODY,
+               RequestId:?UPR_WIRE_SIZES_OPAQUE,
+               Cas:?UPR_WIRE_SIZES_CAS>>,
     <<Header/binary, Body/binary>>.
 
 %UPR_STREAM_REQ response
@@ -478,13 +478,13 @@ encode_snapshot_deletion(PartId, RequestId, Cas, Seq, RevSeq, Key) ->
 encode_stream_response_ok(RequestId) ->
     <<?UPR_WIRE_MAGIC_RESPONSE,
       ?UPR_WIRE_OPCODE_STREAM,
-      0:(?UPR_WIRE_SIZES_KEY_LENGTH*8),
+      0:?UPR_WIRE_SIZES_KEY_LENGTH,
       0,
       0,
-      ?UPR_WIRE_REQUEST_TYPE_OK:(?UPR_WIRE_SIZES_STATUS*8),
-      0:(?UPR_WIRE_SIZES_BODY*8),
-      RequestId:(?UPR_WIRE_SIZES_OPAQUE*8),
-      0:(?UPR_WIRE_SIZES_CAS*8)>>.
+      ?UPR_WIRE_REQUEST_TYPE_OK:?UPR_WIRE_SIZES_STATUS,
+      0:?UPR_WIRE_SIZES_BODY,
+      RequestId:?UPR_WIRE_SIZES_OPAQUE,
+      0:?UPR_WIRE_SIZES_CAS>>.
 
 
 open_db(SetName, PartId) ->

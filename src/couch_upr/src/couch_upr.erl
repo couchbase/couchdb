@@ -99,7 +99,7 @@ init([]) ->
 
 handle_call(get_request_id, _From, State) ->
     RequestId = case State#state.request_id of
-    RequestId0 when RequestId0 < 1 bsl (?UPR_WIRE_SIZES_OPAQUE * 8) ->
+    RequestId0 when RequestId0 < 1 bsl ?UPR_WIRE_SIZES_OPAQUE ->
         RequestId0;
     _ ->
         0
@@ -219,81 +219,81 @@ receive_stream_end(Socket, Timeout, BodyLength) ->
 % TODO vmx 2013-08-22: Bad match error handling
 parse_header(<<?UPR_WIRE_MAGIC_RESPONSE,
                ?UPR_WIRE_OPCODE_STREAM,
-               0:(?UPR_WIRE_SIZES_KEY_LENGTH*8),
+               0:?UPR_WIRE_SIZES_KEY_LENGTH,
                0,
                0,
-               Status:(?UPR_WIRE_SIZES_STATUS*8),
-               0:(?UPR_WIRE_SIZES_BODY*8),
-               RequestId:(?UPR_WIRE_SIZES_OPAQUE*8),
-               0:(?UPR_WIRE_SIZES_CAS*8)>>) ->
+               Status:?UPR_WIRE_SIZES_STATUS,
+               0:?UPR_WIRE_SIZES_BODY,
+               RequestId:?UPR_WIRE_SIZES_OPAQUE,
+               0:?UPR_WIRE_SIZES_CAS>>) ->
     {stream_ok, Status, RequestId};
 parse_header(<<?UPR_WIRE_MAGIC_REQUEST,
                ?UPR_WIRE_OPCODE_STREAM_START,
-               0:(?UPR_WIRE_SIZES_KEY_LENGTH*8),
+               0:?UPR_WIRE_SIZES_KEY_LENGTH,
                0,
                0,
-               PartId:(?UPR_WIRE_SIZES_PARTITION*8),
-               0:(?UPR_WIRE_SIZES_BODY*8),
-               RequestId:(?UPR_WIRE_SIZES_OPAQUE*8),
-               0:(?UPR_WIRE_SIZES_CAS*8)>>) ->
+               PartId:?UPR_WIRE_SIZES_PARTITION,
+               0:?UPR_WIRE_SIZES_BODY,
+               RequestId:?UPR_WIRE_SIZES_OPAQUE,
+               0:?UPR_WIRE_SIZES_CAS>>) ->
     {stream_start, PartId, RequestId};
 parse_header(<<?UPR_WIRE_MAGIC_REQUEST,
                ?UPR_WIRE_OPCODE_STREAM_END,
-               0:(?UPR_WIRE_SIZES_KEY_LENGTH*8),
+               0:?UPR_WIRE_SIZES_KEY_LENGTH,
                _ExtraLength,
                0,
-               PartId:(?UPR_WIRE_SIZES_PARTITION*8),
-               BodyLength:(?UPR_WIRE_SIZES_BODY*8),
-               RequestId:(?UPR_WIRE_SIZES_OPAQUE*8),
-               0:(?UPR_WIRE_SIZES_CAS*8)>>) ->
+               PartId:?UPR_WIRE_SIZES_PARTITION,
+               BodyLength:?UPR_WIRE_SIZES_BODY,
+               RequestId:?UPR_WIRE_SIZES_OPAQUE,
+               0:?UPR_WIRE_SIZES_CAS>>) ->
     {stream_end, PartId, RequestId, BodyLength};
 parse_header(<<?UPR_WIRE_MAGIC_REQUEST,
                ?UPR_WIRE_OPCODE_SNAPSHOT_START,
-               0:(?UPR_WIRE_SIZES_KEY_LENGTH*8),
+               0:?UPR_WIRE_SIZES_KEY_LENGTH,
                0,
                0,
-               PartId:(?UPR_WIRE_SIZES_PARTITION*8),
-               0:(?UPR_WIRE_SIZES_BODY*8),
-               RequestId:(?UPR_WIRE_SIZES_OPAQUE*8),
-               0:(?UPR_WIRE_SIZES_CAS*8)>>) ->
+               PartId:?UPR_WIRE_SIZES_PARTITION,
+               0:?UPR_WIRE_SIZES_BODY,
+               RequestId:?UPR_WIRE_SIZES_OPAQUE,
+               0:?UPR_WIRE_SIZES_CAS>>) ->
     {snapshot_start, PartId, RequestId};
 parse_header(<<?UPR_WIRE_MAGIC_REQUEST,
                ?UPR_WIRE_OPCODE_SNAPSHOT_END,
-               0:(?UPR_WIRE_SIZES_KEY_LENGTH*8),
+               0:?UPR_WIRE_SIZES_KEY_LENGTH,
                0,
                0,
-               PartId:(?UPR_WIRE_SIZES_PARTITION*8),
-               0:(?UPR_WIRE_SIZES_BODY*8),
-               RequestId:(?UPR_WIRE_SIZES_OPAQUE*8),
-               0:(?UPR_WIRE_SIZES_CAS*8)>>) ->
+               PartId:?UPR_WIRE_SIZES_PARTITION,
+               0:?UPR_WIRE_SIZES_BODY,
+               RequestId:?UPR_WIRE_SIZES_OPAQUE,
+               0:?UPR_WIRE_SIZES_CAS>>) ->
     {snapshot_end, PartId, RequestId};
 parse_header(<<?UPR_WIRE_MAGIC_REQUEST,
                ?UPR_WIRE_OPCODE_MUTATION,
-               KeyLength:(?UPR_WIRE_SIZES_KEY_LENGTH*8),
+               KeyLength:?UPR_WIRE_SIZES_KEY_LENGTH,
                _ExtraLength,
                0,
-               PartId:(?UPR_WIRE_SIZES_PARTITION*8),
-               BodyLength:(?UPR_WIRE_SIZES_BODY*8),
-               RequestId:(?UPR_WIRE_SIZES_OPAQUE*8),
-               _Cas:(?UPR_WIRE_SIZES_CAS*8)>>) ->
+               PartId:?UPR_WIRE_SIZES_PARTITION,
+               BodyLength:?UPR_WIRE_SIZES_BODY,
+               RequestId:?UPR_WIRE_SIZES_OPAQUE,
+               _Cas:?UPR_WIRE_SIZES_CAS>>) ->
     {snapshot_mutation, PartId, RequestId, KeyLength, BodyLength};
 parse_header(<<?UPR_WIRE_MAGIC_REQUEST,
                ?UPR_WIRE_OPCODE_DELETION,
-               KeyLength:(?UPR_WIRE_SIZES_KEY_LENGTH*8),
+               KeyLength:?UPR_WIRE_SIZES_KEY_LENGTH,
                _ExtraLength,
                0,
-               PartId:(?UPR_WIRE_SIZES_PARTITION*8),
-               BodyLength:(?UPR_WIRE_SIZES_BODY*8),
-               RequestId:(?UPR_WIRE_SIZES_OPAQUE*8),
-               _Cas:(?UPR_WIRE_SIZES_CAS*8)>>) ->
+               PartId:?UPR_WIRE_SIZES_PARTITION,
+               BodyLength:?UPR_WIRE_SIZES_BODY,
+               RequestId:?UPR_WIRE_SIZES_OPAQUE,
+               _Cas:?UPR_WIRE_SIZES_CAS>>) ->
     {snapshot_deletion, PartId, RequestId, KeyLength, BodyLength}.
 
 parse_snapshot_mutation(KeyLength, Body) ->
-    <<Seq:(?UPR_WIRE_SIZES_BY_SEQ*8),
-      RevSeq:(?UPR_WIRE_SIZES_REV_SEQ*8),
-      Flags:(?UPR_WIRE_SIZES_FLAGS*8),
-      Expiration:(?UPR_WIRE_SIZES_EXPIRATION*8),
-      LockTime:(?UPR_WIRE_SIZES_LOCK*8),
+    <<Seq:?UPR_WIRE_SIZES_BY_SEQ,
+      RevSeq:?UPR_WIRE_SIZES_REV_SEQ,
+      Flags:?UPR_WIRE_SIZES_FLAGS,
+      Expiration:?UPR_WIRE_SIZES_EXPIRATION,
+      LockTime:?UPR_WIRE_SIZES_LOCK,
       Key:KeyLength/binary,
       Value/binary>> = Body,
     {snapshot_mutation, #mutation{
@@ -307,8 +307,8 @@ parse_snapshot_mutation(KeyLength, Body) ->
     }}.
 
 parse_snapshot_deletion(KeyLength, Body) ->
-    <<Seq:(?UPR_WIRE_SIZES_BY_SEQ*8),
-      RevSeq:(?UPR_WIRE_SIZES_REV_SEQ*8),
+    <<Seq:?UPR_WIRE_SIZES_BY_SEQ,
+      RevSeq:?UPR_WIRE_SIZES_REV_SEQ,
       Key:KeyLength/binary>> = Body,
     {snapshot_deletion, {Seq, RevSeq, Key}}.
 
@@ -332,12 +332,12 @@ parse_snapshot_deletion(KeyLength, Body) ->
 %  key        (64-73): vbstream-0
 % The view engine doesn't need a group id
 encode_stream_request(PartId, RequestId, Flags, StartSeq, EndSeq, PartUuid, HighSeq, GroupId) ->
-    Body = <<Flags:(?UPR_WIRE_SIZES_FLAGS*8),
-             0:(?UPR_WIRE_SIZES_RESERVED*8),
-             StartSeq:(?UPR_WIRE_SIZES_BY_SEQ*8),
-             EndSeq:(?UPR_WIRE_SIZES_BY_SEQ*8),
-             PartUuid:(?UPR_WIRE_SIZES_PARTITION_UUID*8),
-             HighSeq:(?UPR_WIRE_SIZES_BY_SEQ*8),
+    Body = <<Flags:?UPR_WIRE_SIZES_FLAGS,
+             0:?UPR_WIRE_SIZES_RESERVED,
+             StartSeq:?UPR_WIRE_SIZES_BY_SEQ,
+             EndSeq:?UPR_WIRE_SIZES_BY_SEQ,
+             PartUuid:?UPR_WIRE_SIZES_PARTITION_UUID,
+             HighSeq:?UPR_WIRE_SIZES_BY_SEQ,
              GroupId/binary>>,
 
     KeyLength = byte_size(GroupId),
@@ -349,11 +349,11 @@ encode_stream_request(PartId, RequestId, Flags, StartSeq, EndSeq, PartUuid, High
 
     Header = <<?UPR_WIRE_MAGIC_REQUEST,
                ?UPR_WIRE_OPCODE_STREAM,
-               KeyLength:(?UPR_WIRE_SIZES_KEY_LENGTH*8),
+               KeyLength:?UPR_WIRE_SIZES_KEY_LENGTH,
                ExtraLength,
                0,
-               PartId:(?UPR_WIRE_SIZES_PARTITION*8),
-               BodyLength:(?UPR_WIRE_SIZES_BODY*8),
-               RequestId:(?UPR_WIRE_SIZES_OPAQUE*8),
-               0:(?UPR_WIRE_SIZES_CAS*8)>>,
+               PartId:?UPR_WIRE_SIZES_PARTITION,
+               BodyLength:?UPR_WIRE_SIZES_BODY,
+               RequestId:?UPR_WIRE_SIZES_OPAQUE,
+               0:?UPR_WIRE_SIZES_CAS>>,
     <<Header/binary, Body/binary>>.
