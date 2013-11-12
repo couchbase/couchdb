@@ -130,8 +130,18 @@ receive_single_snapshot(Socket, Timeout, MutationFun, Acc) ->
     case gen_tcp:recv(Socket, ?UPR_WIRE_HEADER_LEN, Timeout) of
     {ok, Header} ->
         case parse_header(Header) of
-        {stream_ok, _Status, _RequestId} ->
-            receive_single_snapshot(Socket, Timeout, MutationFun, Acc);
+        {stream, Status, _RequestId, BodyLength} ->
+            case Status of
+            ?UPR_WIRE_REQUEST_TYPE_OK ->
+                receive_single_snapshot(Socket, Timeout, MutationFun, Acc);
+            ?UPR_WIRE_REQUEST_TYPE_ROLLBACK ->
+                case gen_tcp:recv(Socket, BodyLength, Timeout) of
+                {ok, <<RollbackSeq:?UPR_WIRE_SIZES_BY_SEQ>>} ->
+                    {rollback, RollbackSeq};
+                {error, closed} ->
+                    io:format("vmx: closed5~n", [])
+                end
+            end;
         {stream_start, _PartId, _RequestId} ->
             receive_single_snapshot(Socket, Timeout, MutationFun, Acc);
         {snapshot_start, _PartId, _RequestId} ->
@@ -150,7 +160,7 @@ receive_single_snapshot(Socket, Timeout, MutationFun, Acc) ->
             receive_single_snapshot(Socket, Timeout, MutationFun, Acc);
         {stream_end, _PartId, _RequestId, BodyLength} ->
             _Flag = receive_stream_end(Socket, Timeout, BodyLength),
-            Acc
+            {ok, Acc}
         end;
     {error, closed} ->
         io:format("vmx: closed~n", []),
@@ -218,13 +228,13 @@ receive_stream_end(Socket, Timeout, BodyLength) ->
 parse_header(<<?UPR_WIRE_MAGIC_RESPONSE,
                ?UPR_WIRE_OPCODE_STREAM,
                0:?UPR_WIRE_SIZES_KEY_LENGTH,
-               0,
+               _ExtraLength,
                0,
                Status:?UPR_WIRE_SIZES_STATUS,
-               0:?UPR_WIRE_SIZES_BODY,
+               BodyLength:?UPR_WIRE_SIZES_BODY,
                RequestId:?UPR_WIRE_SIZES_OPAQUE,
-               0:?UPR_WIRE_SIZES_CAS>>) ->
-    {stream_ok, Status, RequestId};
+               _Cas:?UPR_WIRE_SIZES_CAS>>) ->
+    {stream, Status, RequestId, BodyLength};
 parse_header(<<?UPR_WIRE_MAGIC_REQUEST,
                Opcode,
                KeyLength:?UPR_WIRE_SIZES_KEY_LENGTH,

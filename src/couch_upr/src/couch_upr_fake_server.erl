@@ -194,20 +194,31 @@ read(Socket) ->
     case gen_tcp:recv(Socket, 0) of
     {ok, Bin} ->
         case parse_request(Bin) of
+        % XXX vmx 2013-10-09: deal with high sequence number
         {stream_request, {PartId, RequestId, StartSeq, EndSeq, _PartUuid,
                           _HighSeq, _GroupId}} ->
-            StreamOk = encode_stream_response_ok(RequestId),
-            ok = gen_tcp:send(Socket, StreamOk),
-            ok = gen_server:call(?MODULE, {add_stream, PartId, RequestId, StartSeq}),
+            PartSeq = get_sequence_number(PartId),
+            case StartSeq =< PartSeq of
+            true ->
+                StreamOk = encode_stream_response_ok(RequestId),
+                ok = gen_tcp:send(Socket, StreamOk),
+                ok = gen_server:call(
+                    ?MODULE, {add_stream, PartId, RequestId, StartSeq}),
 
-            StreamStart = encode_stream_start(PartId, RequestId),
-            ok = gen_tcp:send(Socket, StreamStart),
+                StreamStart = encode_stream_start(PartId, RequestId),
+                ok = gen_tcp:send(Socket, StreamStart),
 
-            gen_server:call(?MODULE, {send_snapshot, PartId, EndSeq}),
+                gen_server:call(?MODULE, {send_snapshot, PartId, EndSeq}),
 
-            StreamEnd = encode_stream_end(PartId, RequestId),
-            ok = gen_tcp:send(Socket, StreamEnd),
-
+                StreamEnd = encode_stream_end(PartId, RequestId),
+                ok = gen_tcp:send(Socket, StreamEnd);
+            % requested sequence number is higher than the db contains
+            % => rollback
+            false ->
+                StreamRollback = encode_stream_response_rollback(
+                    RequestId, PartSeq),
+                ok = gen_tcp:send(Socket, StreamRollback)
+            end,
             read(Socket)
         end;
     {error, closed} ->
@@ -482,6 +493,31 @@ encode_stream_response_ok(RequestId) ->
       0:?UPR_WIRE_SIZES_BODY,
       RequestId:?UPR_WIRE_SIZES_OPAQUE,
       0:?UPR_WIRE_SIZES_CAS>>.
+
+
+%UPR_STREAM_REQ response
+%Field        (offset) (value)
+%Magic        (0)    : 0x81
+%Opcode       (1)    : 0x50
+%Key length   (2,3)  : 0x0000
+%Extra length (4)    : 0x00
+%Data type    (5)    : 0x00
+%Status       (6,7)  : 0x0023 (Rollback)
+%Total body   (8-11) : 0x00000008
+%Opaque       (12-15): 0xdeadbeef
+%CAS          (16-23): 0x0000000000000000
+%  rollback # (24-31): 0x0000000000000000
+encode_stream_response_rollback(RequestId, Seq) ->
+    <<?UPR_WIRE_MAGIC_RESPONSE,
+      ?UPR_WIRE_OPCODE_STREAM,
+      0:?UPR_WIRE_SIZES_KEY_LENGTH,
+      8,
+      0,
+      ?UPR_WIRE_REQUEST_TYPE_ROLLBACK:?UPR_WIRE_SIZES_STATUS,
+      8:?UPR_WIRE_SIZES_BODY,
+      RequestId:?UPR_WIRE_SIZES_OPAQUE,
+      0:?UPR_WIRE_SIZES_CAS,
+      Seq:?UPR_WIRE_SIZES_BY_SEQ>>.
 
 
 open_db(SetName, PartId) ->

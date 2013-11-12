@@ -22,7 +22,7 @@ num_docs() -> 1000.
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(4),
+    etap:plan(5),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -47,18 +47,24 @@ test() ->
 
     % First parameter is the partition, the second is the sequence number
     % to start at.
-    Docs1 = couch_upr:enum_docs_since(Pid, 0, 4, 10, TestFun, []),
+    {ok, Docs1} = couch_upr:enum_docs_since(Pid, 0, 4, 10, TestFun, []),
     etap:is(length(Docs1), 6, "Correct number of docs (6) in partition 0"),
 
-    Docs2 = couch_upr:enum_docs_since(Pid, 1, 46, 165, TestFun, []),
+    {ok, Docs2} = couch_upr:enum_docs_since(Pid, 1, 46, 165, TestFun, []),
     etap:is(length(Docs2), 119, "Correct number of docs (109) parition 1"),
-    Docs3 = couch_upr:enum_docs_since(
+    {ok, Docs3} = couch_upr:enum_docs_since(
         Pid, 2, 80, num_docs() div num_set_partitions(), TestFun, []),
     Expected3 = (num_docs() div num_set_partitions()) - 80,
     etap:is(length(Docs3), Expected3,
         io_lib:format("Correct number of docs (~p) parition 2", [Expected3])),
-    Docs4 = couch_upr:enum_docs_since(Pid, 3, 0, 5, TestFun, []),
+    {ok, Docs4} = couch_upr:enum_docs_since(Pid, 3, 0, 5, TestFun, []),
     etap:is(length(Docs4), 5, "Correct number of docs (5) parition 3"),
+
+    % Try a too high sequence number to get a rollback response
+    {rollback, RollbackSeq} = couch_upr:enum_docs_since(
+        Pid, 0, 400, 450, TestFun, []),
+    etap:is(RollbackSeq, num_docs() div num_set_partitions(),
+        "Correct rollback sequence number"),
 
     couch_set_view_test_util:stop_server(),
     ok.
