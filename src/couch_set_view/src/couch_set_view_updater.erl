@@ -129,7 +129,8 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
         type = Type,
         name = DDocId,
         sig = GroupSig,
-        mod = Mod
+        mod = Mod,
+        category = Category
     } = Group,
 
     StartTime = os:timestamp(),
@@ -138,8 +139,9 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
     WriteQueueOptions = [{max_size, ?WRITE_QUEUE_SIZE}, {max_items, infinity}],
     {ok, MapQueue} = couch_work_queue:new(MapQueueOptions),
     {ok, WriteQueue} = couch_work_queue:new(WriteQueueOptions),
-
-    {ok, UprPid} = couch_upr:start(),
+    Name = <<"Indexer: ", (atom_to_binary(Mod, latin1))/binary,
+        " (", (atom_to_binary(Category, latin1))/binary, ")">>,
+    {ok, UprPid} = couch_upr:start(Name),
 
     Mapper = spawn_link(fun() ->
         try

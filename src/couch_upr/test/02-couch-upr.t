@@ -43,7 +43,7 @@ test() ->
         [Item|Acc]
     end,
 
-    {ok, Pid} = couch_upr:start(),
+    {ok, Pid} = couch_upr:start(test_set_name()),
 
     % First parameter is the partition, the second is the sequence number
     % to start at.

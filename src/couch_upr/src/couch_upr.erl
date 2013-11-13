@@ -14,7 +14,7 @@
 -behaviour(gen_server).
 
 % Public API
--export([start/0]).
+-export([start/1]).
 -export([enum_docs_since/6]).
 -export([get_sequence_number/1]).
 
@@ -63,16 +63,16 @@
 
 % Public API
 
-start() ->
-    gen_server:start_link(?MODULE, [], []).
+start(Name) ->
+    gen_server:start_link(?MODULE, [Name], []).
 
 
 % XXX vmx 2013-09-04: Use the partition version instead of StartSeq
 enum_docs_since(Pid, PartId, StartSeq, EndSeq, InFun, InAcc) ->
     RequestId = gen_server:call(Pid, get_request_id),
     {Socket, Timeout} = gen_server:call(Pid, get_socket_and_timeout),
-    StreamRequest = encode_stream_request(
-        PartId, RequestId, 0, StartSeq, EndSeq, 5678, 0, <<>>),
+    StreamRequest = encode_stream_start_request(
+        PartId, RequestId, 0, StartSeq, EndSeq, 5678, 0),
     ok = gen_tcp:send(Socket, StreamRequest),
     receive_single_snapshot(Socket, Timeout, InFun, InAcc).
 
@@ -85,15 +85,23 @@ get_sequence_number(PartId) ->
 
 % gen_server callbacks
 
-init([]) ->
+init([Name]) ->
     UprTimeout = list_to_integer(
         couch_config:get("upr", "connection_timeout")),
     UprPort = list_to_integer(couch_config:get("upr", "port")),
     {ok, Socket} = gen_tcp:connect("localhost", UprPort,
         [binary, {packet, raw}, {active, false}, {reuseaddr, true}]),
+    RequestId = 0,
+    OpenConnection = encode_open_connection_request(Name, RequestId),
+    ok = gen_tcp:send(Socket, OpenConnection),
+    case gen_tcp:recv(Socket, ?UPR_WIRE_HEADER_LEN, UprTimeout) of
+    {ok, Header} ->
+        {open_connection, RequestId} = parse_header(Header)
+    end,
     {ok, #state{
         socket = Socket,
-        timeout = UprTimeout
+        timeout = UprTimeout,
+        request_id = RequestId + 1
     }}.
 
 
@@ -130,21 +138,20 @@ receive_single_snapshot(Socket, Timeout, MutationFun, Acc) ->
     case gen_tcp:recv(Socket, ?UPR_WIRE_HEADER_LEN, Timeout) of
     {ok, Header} ->
         case parse_header(Header) of
-        {stream, Status, _RequestId, BodyLength} ->
+        {stream_start, Status, _RequestId, BodyLength} ->
             case Status of
             ?UPR_WIRE_REQUEST_TYPE_OK ->
                 receive_single_snapshot(Socket, Timeout, MutationFun, Acc);
             ?UPR_WIRE_REQUEST_TYPE_ROLLBACK ->
-                case gen_tcp:recv(Socket, BodyLength, Timeout) of
+                case gen_tcp:recv(
+                        Socket, BodyLength, Timeout) of
                 {ok, <<RollbackSeq:?UPR_WIRE_SIZES_BY_SEQ>>} ->
                     {rollback, RollbackSeq};
                 {error, closed} ->
                     io:format("vmx: closed5~n", [])
                 end
             end;
-        {stream_start, _PartId, _RequestId} ->
-            receive_single_snapshot(Socket, Timeout, MutationFun, Acc);
-        {snapshot_start, _PartId, _RequestId} ->
+        {snapshot_marker, _PartId, _RequestId} ->
             receive_single_snapshot(Socket, Timeout, MutationFun, Acc);
         {snapshot_mutation, PartId, _RequestId, KeyLength, BodyLength} ->
             Mutation = receive_snapshot_mutation(
@@ -156,8 +163,6 @@ receive_single_snapshot(Socket, Timeout, MutationFun, Acc) ->
                 Socket, Timeout, PartId, KeyLength, BodyLength),
             Acc2 = MutationFun(Deletion, Acc),
             receive_single_snapshot(Socket, Timeout, MutationFun, Acc2);
-        {snapshot_end, _PartId, _RequestId} ->
-            receive_single_snapshot(Socket, Timeout, MutationFun, Acc);
         {stream_end, _PartId, _RequestId, BodyLength} ->
             _Flag = receive_stream_end(Socket, Timeout, BodyLength),
             {ok, Acc}
@@ -226,7 +231,7 @@ receive_stream_end(Socket, Timeout, BodyLength) ->
 
 % TODO vmx 2013-08-22: Bad match error handling
 parse_header(<<?UPR_WIRE_MAGIC_RESPONSE,
-               ?UPR_WIRE_OPCODE_STREAM,
+               Opcode,
                0:?UPR_WIRE_SIZES_KEY_LENGTH,
                _ExtraLength,
                0,
@@ -234,7 +239,12 @@ parse_header(<<?UPR_WIRE_MAGIC_RESPONSE,
                BodyLength:?UPR_WIRE_SIZES_BODY,
                RequestId:?UPR_WIRE_SIZES_OPAQUE,
                _Cas:?UPR_WIRE_SIZES_CAS>>) ->
-    {stream, Status, RequestId, BodyLength};
+    case Opcode of
+    ?UPR_WIRE_OPCODE_STREAM_START ->
+        {stream_start, Status, RequestId, BodyLength};
+    ?UPR_WIRE_OPCODE_OPEN_CONNECTION ->
+        {open_connection, RequestId}
+    end;
 parse_header(<<?UPR_WIRE_MAGIC_REQUEST,
                Opcode,
                KeyLength:?UPR_WIRE_SIZES_KEY_LENGTH,
@@ -245,14 +255,10 @@ parse_header(<<?UPR_WIRE_MAGIC_REQUEST,
                RequestId:?UPR_WIRE_SIZES_OPAQUE,
                _Cas:?UPR_WIRE_SIZES_CAS>>) ->
     case Opcode of
-    ?UPR_WIRE_OPCODE_STREAM_START ->
-        {stream_start, PartId, RequestId};
     ?UPR_WIRE_OPCODE_STREAM_END ->
         {stream_end, PartId, RequestId, BodyLength};
-    ?UPR_WIRE_OPCODE_SNAPSHOT_START ->
-        {snapshot_start, PartId, RequestId};
-    ?UPR_WIRE_OPCODE_SNAPSHOT_END ->
-        {snapshot_end, PartId, RequestId};
+    ?UPR_WIRE_OPCODE_SNAPSHOT_MARKER ->
+        {snapshot_marker, PartId, RequestId};
     ?UPR_WIRE_OPCODE_MUTATION ->
         {snapshot_mutation, PartId, RequestId, KeyLength, BodyLength};
     ?UPR_WIRE_OPCODE_DELETION ->
@@ -283,16 +289,52 @@ parse_snapshot_deletion(KeyLength, Body) ->
       Key:KeyLength/binary>> = Body,
     {snapshot_deletion, {Seq, RevSeq, Key}}.
 
-%UPR_STREAM_REQ command
+
+
+%UPR_OPEN command
 %Field        (offset) (value)
 %Magic        (0)    : 0x80
 %Opcode       (1)    : 0x50
-%Key length   (2,3)  : 0x000a
+%Key length   (2,3)  : 0x0018
+%Extra length (4)    : 0x08
+%Data type    (5)    : 0x00
+%Vbucket      (6,7)  : 0x0000
+%Total body   (8-11) : 0x00000020
+%Opaque       (12-15): 0x00000001
+%CAS          (16-23): 0x0000000000000000
+%  seqno      (24-27): 0x00000000
+%  flags      (28-31): 0x00000000 (consumer)
+%Key          (32-55): bucketstream vb[100-105]
+encode_open_connection_request(Name, RequestId) ->
+    Body = <<0:?UPR_WIRE_SIZES_SEQNO,
+             ?UPR_WIRE_FLAG_CONSUMER:?UPR_WIRE_SIZES_FLAGS,
+             Name/binary>>,
+
+    KeyLength = byte_size(Name),
+    BodyLength = byte_size(Body),
+    ExtraLength = BodyLength - KeyLength,
+
+    Header = <<?UPR_WIRE_MAGIC_REQUEST,
+               ?UPR_WIRE_OPCODE_OPEN_CONNECTION,
+               KeyLength:?UPR_WIRE_SIZES_KEY_LENGTH,
+               ExtraLength,
+               0,
+               0:?UPR_WIRE_SIZES_PARTITION,
+               BodyLength:?UPR_WIRE_SIZES_BODY,
+               RequestId:?UPR_WIRE_SIZES_OPAQUE,
+               0:?UPR_WIRE_SIZES_CAS>>,
+    <<Header/binary, Body/binary>>.
+
+%UPR_STREAM_REQ command
+%Field        (offset) (value)
+%Magic        (0)    : 0x80
+%Opcode       (1)    : 0x53
+%Key length   (2,3)  : 0x0000
 %Extra length (4)    : 0x28
 %Data type    (5)    : 0x00
 %Vbucket      (6,7)  : 0x0000
-%Total body   (8-11) : 0x00000032
-%Opaque       (12-15): 0xdeadbeef
+%Total body   (8-11) : 0x00000028
+%Opaque       (12-15): 0x00001000
 %CAS          (16-23): 0x0000000000000000
 %  flags      (24-27): 0x00000000
 %  reserved   (28-31): 0x00000000
@@ -300,27 +342,21 @@ parse_snapshot_deletion(KeyLength, Body) ->
 %  end seqno  (40-47): 0xffffffffffffffff
 %  vb UUID    (48-55): 0x00000000feeddeca
 %  high seqno (56-63): 0x0000000000000000
-%  key        (64-73): vbstream-0
-% The view engine doesn't need a group id
-encode_stream_request(PartId, RequestId, Flags, StartSeq, EndSeq, PartUuid, HighSeq, GroupId) ->
+encode_stream_start_request(PartId, RequestId, Flags, StartSeq, EndSeq,
+        PartUuid, HighSeq) ->
     Body = <<Flags:?UPR_WIRE_SIZES_FLAGS,
              0:?UPR_WIRE_SIZES_RESERVED,
              StartSeq:?UPR_WIRE_SIZES_BY_SEQ,
              EndSeq:?UPR_WIRE_SIZES_BY_SEQ,
              PartUuid:?UPR_WIRE_SIZES_PARTITION_UUID,
-             HighSeq:?UPR_WIRE_SIZES_BY_SEQ,
-             GroupId/binary>>,
+             HighSeq:?UPR_WIRE_SIZES_BY_SEQ>>,
 
-    KeyLength = byte_size(GroupId),
     BodyLength = byte_size(Body),
-
-    % XXX vmx 2013-08-19: Still only 80% sure that ExtraLength has the correct
-    %    value
-    ExtraLength = BodyLength - KeyLength,
+    ExtraLength = BodyLength,
 
     Header = <<?UPR_WIRE_MAGIC_REQUEST,
-               ?UPR_WIRE_OPCODE_STREAM,
-               KeyLength:?UPR_WIRE_SIZES_KEY_LENGTH,
+               ?UPR_WIRE_OPCODE_STREAM_START,
+               0:?UPR_WIRE_SIZES_KEY_LENGTH,
                ExtraLength,
                0,
                PartId:?UPR_WIRE_SIZES_PARTITION,
