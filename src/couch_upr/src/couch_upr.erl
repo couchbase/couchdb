@@ -140,11 +140,10 @@ receive_single_snapshot(Socket, Timeout, MutationFun, Acc) ->
         case parse_header(Header) of
         {stream_request, Status, _RequestId, BodyLength} ->
             case Status of
-            ?UPR_REQUEST_TYPE_OK ->
+            ?UPR_STATUS_OK ->
                 receive_single_snapshot(Socket, Timeout, MutationFun, Acc);
-            ?UPR_REQUEST_TYPE_ROLLBACK ->
-                case gen_tcp:recv(
-                        Socket, BodyLength, Timeout) of
+            ?UPR_STATUS_ROLLBACK ->
+                case gen_tcp:recv(Socket, BodyLength, Timeout) of
                 {ok, <<RollbackSeq:?UPR_SIZES_BY_SEQ>>} ->
                     {rollback, RollbackSeq};
                 {error, closed} ->

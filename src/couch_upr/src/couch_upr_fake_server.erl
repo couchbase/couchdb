@@ -461,7 +461,7 @@ encode_stream_request_ok(RequestId) ->
       0:?UPR_SIZES_KEY_LENGTH,
       0,
       0,
-      ?UPR_REQUEST_TYPE_OK:?UPR_SIZES_STATUS,
+      ?UPR_STATUS_OK:?UPR_SIZES_STATUS,
       0:?UPR_SIZES_BODY,
       RequestId:?UPR_SIZES_OPAQUE,
       0:?UPR_SIZES_CAS>>.
@@ -484,7 +484,7 @@ encode_stream_request_rollback(RequestId, Seq) ->
       0:?UPR_SIZES_KEY_LENGTH,
       (?UPR_SIZES_BY_SEQ div 8),
       0,
-      ?UPR_REQUEST_TYPE_ROLLBACK:?UPR_SIZES_STATUS,
+      ?UPR_STATUS_ROLLBACK:?UPR_SIZES_STATUS,
       (?UPR_SIZES_BY_SEQ div 8):?UPR_SIZES_BODY,
       RequestId:?UPR_SIZES_OPAQUE,
       0:?UPR_SIZES_CAS,
