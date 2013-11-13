@@ -15,7 +15,7 @@
 
 % Public API
 -export([start/1]).
--export([enum_docs_since/6]).
+-export([enum_docs_since/6, get_failover_log/2]).
 -export([get_sequence_number/1]).
 
 % gen_server callbacks
@@ -81,6 +81,25 @@ get_sequence_number(PartId) ->
     % NOTE vmx 2013-09-06: In the future this will be a stat from ep-engine
     Seq = couch_upr_fake_server:get_sequence_number(PartId),
     {ok, Seq}.
+
+
+% The failover log is a list of 2-tuples with the partition UUID and the
+% sequence number when it was created
+get_failover_log(Pid, PartId) ->
+    RequestId = gen_server:call(Pid, get_request_id),
+    {Socket, Timeout} = gen_server:call(Pid, get_socket_and_timeout),
+    FailoverLogRequest = encode_failover_log_request(PartId, RequestId),
+    ok = gen_tcp:send(Socket, FailoverLogRequest),
+    case gen_tcp:recv(Socket, ?UPR_HEADER_LEN, Timeout) of
+    {ok, Header} ->
+        case parse_header(Header) of
+        {failover_log, ?UPR_STATUS_OK, RequestId, BodyLength} ->
+            FailoverLog = receive_failover_log(Socket, Timeout, BodyLength),
+            {ok, FailoverLog};
+        {failover_log, Status, RequestId, 0} ->
+            {error, Status}
+        end
+    end.
 
 
 % gen_server callbacks
@@ -228,6 +247,17 @@ receive_stream_end(Socket, Timeout, BodyLength) ->
     end.
 
 
+% Returns the failover log as a list 2-tuple pairs with
+% partition UUID and sequence number
+receive_failover_log(Socket, Timeout, BodyLength) ->
+    case gen_tcp:recv(Socket, BodyLength, Timeout) of
+    {ok, Body} ->
+        parse_failover_log(Body);
+    {error, closed} ->
+        io:format("vmx: closed6~n", [])
+    end.
+
+
 % TODO vmx 2013-08-22: Bad match error handling
 parse_header(<<?UPR_MAGIC_RESPONSE,
                Opcode,
@@ -242,7 +272,9 @@ parse_header(<<?UPR_MAGIC_RESPONSE,
     ?UPR_OPCODE_STREAM_REQUEST ->
         {stream_request, Status, RequestId, BodyLength};
     ?UPR_OPCODE_OPEN_CONNECTION ->
-        {open_connection, RequestId}
+        {open_connection, RequestId};
+    ?UPR_OPCODE_FAILOVER_LOG_REQUEST ->
+        {failover_log, Status, RequestId, BodyLength}
     end;
 parse_header(<<?UPR_MAGIC_REQUEST,
                Opcode,
@@ -288,6 +320,16 @@ parse_snapshot_deletion(KeyLength, Body) ->
       Key:KeyLength/binary>> = Body,
     {snapshot_deletion, {Seq, RevSeq, Key}}.
 
+
+parse_failover_log(Body) ->
+    parse_failover_log(Body, []).
+parse_failover_log(<<>>, Acc) ->
+    lists:reverse(Acc);
+parse_failover_log(<<PartUuid:(?UPR_SIZES_PARTITION_UUID div 8)/binary,
+                     PartSeq:?UPR_SIZES_BY_SEQ,
+                     Rest/binary>>,
+                   Acc) ->
+    parse_failover_log(Rest, [{PartUuid, PartSeq}|Acc]).
 
 
 %UPR_OPEN command
@@ -363,3 +405,27 @@ encode_stream_request(PartId, RequestId, Flags, StartSeq, EndSeq,
                RequestId:?UPR_SIZES_OPAQUE,
                0:?UPR_SIZES_CAS>>,
     <<Header/binary, Body/binary>>.
+
+
+%UPR_GET_FAILOVER_LOG command
+%Field        (offset) (value)
+%Magic        (0)    : 0x80
+%Opcode       (1)    : 0x54
+%Key length   (2,3)  : 0x0000
+%Extra length (4)    : 0x00
+%Data type    (5)    : 0x00
+%Vbucket      (6,7)  : 0x0000
+%Total body   (8-11) : 0x00000000
+%Opaque       (12-15): 0xdeadbeef
+%CAS          (16-23): 0x0000000000000000
+encode_failover_log_request(PartId, RequestId) ->
+    Header = <<?UPR_MAGIC_REQUEST,
+               ?UPR_OPCODE_FAILOVER_LOG_REQUEST,
+               0:?UPR_SIZES_KEY_LENGTH,
+               0,
+               0,
+               PartId:?UPR_SIZES_PARTITION,
+               0:?UPR_SIZES_BODY,
+               RequestId:?UPR_SIZES_OPAQUE,
+               0:?UPR_SIZES_CAS>>,
+    <<Header/binary>>.

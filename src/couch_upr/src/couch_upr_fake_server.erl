@@ -18,6 +18,9 @@
 % This will be implemented as ep-engine stat
 -export([get_sequence_number/1]).
 
+% Only uses by tests
+-export([set_failover_log/2]).
+
 % Needed for internal process spawning
 -export([accept/1, accept_loop/1]).
 
@@ -86,7 +89,8 @@
 -record(state, {
     streams = [], %:: [{partition_id(), {request_id(), sequence_number()}}]
     socket = nil,
-    setname = nil
+    setname = nil,
+    failover_logs = dict:new()
 }).
 
 
@@ -100,6 +104,13 @@ start(SetName) ->
 % Returns the current high sequence number of a partition
 get_sequence_number(PartId) ->
     gen_server:call(?MODULE, {get_sequence_number, PartId}).
+
+get_failover_log(PartId) ->
+    gen_server:call(?MODULE, {get_failover_log, PartId}).
+
+% Only used by tests to populate the failover log
+set_failover_log(PartId, FailoverLog) ->
+    gen_server:call(?MODULE, {set_failover_log, PartId, FailoverLog}).
 
 
 % gen_server callbacks
@@ -153,11 +164,26 @@ handle_call({set_socket, Socket}, _From, State) ->
         socket = Socket
     }};
 
+handle_call({set_failover_log, PartId, FailoverLog}, _From, State) ->
+    FailoverLogs = dict:store(PartId, FailoverLog, State#state.failover_logs),
+    {reply, ok, State#state{
+        failover_logs = FailoverLogs
+    }};
+
 handle_call({get_sequence_number, PartId}, _From, State) ->
     Db = open_db(State#state.setname, PartId),
     Seq = Db#db.update_seq,
     couch_db:close(Db),
-    {reply, Seq, State}.
+    {reply, Seq, State};
+
+handle_call({get_failover_log, PartId}, _From, State) ->
+    case dict:find(PartId, State#state.failover_logs) of
+    {ok, FailoverLog} ->
+        ok;
+    error ->
+        FailoverLog = [{<<"initial0">>, 0}]
+    end,
+    {reply, FailoverLog, State}.
 
 
 handle_cast(Msg, State) ->
@@ -197,7 +223,9 @@ read(Socket) ->
         {open_connection, BodyLength, RequestId} ->
             handle_open_connection_body(Socket, BodyLength, RequestId);
         {stream_request, BodyLength, RequestId, PartId} ->
-            handle_stream_request_body(Socket, BodyLength, RequestId, PartId)
+            handle_stream_request_body(Socket, BodyLength, RequestId, PartId);
+        {failover_log, RequestId, PartId} ->
+            handle_failover_log(Socket, RequestId, PartId)
         end,
         read(Socket);
     {error, closed} ->
@@ -217,7 +245,9 @@ parse_header(<<?UPR_MAGIC_REQUEST,
     ?UPR_OPCODE_OPEN_CONNECTION ->
         {open_connection, BodyLength, RequestId};
     ?UPR_OPCODE_STREAM_REQUEST ->
-        {stream_request, BodyLength, RequestId, PartId}
+        {stream_request, BodyLength, RequestId, PartId};
+    ?UPR_OPCODE_FAILOVER_LOG_REQUEST ->
+        {failover_log, RequestId, PartId}
     end.
 
 
@@ -260,6 +290,11 @@ handle_stream_request_body(Socket, BodyLength, RequestId, PartId) ->
             ok = gen_tcp:send(Socket, StreamRollback)
         end
     end.
+
+handle_failover_log(Socket, RequestId, PartId) ->
+    FailoverLog = get_failover_log(PartId),
+    FailoverLogResponse = encode_failover_log(RequestId, FailoverLog),
+    ok = gen_tcp:send(Socket, FailoverLogResponse).
 
 
 % This function creates mutations for one snapshot of one partition of a
@@ -519,6 +554,41 @@ encode_stream_end(PartId, RequestId) ->
                RequestId:?UPR_SIZES_OPAQUE,
                0:?UPR_SIZES_CAS>>,
     <<Header/binary, Body/binary>>.
+
+%UPR_GET_FAILOVER_LOG response
+%Field        (offset) (value)
+%Magic        (0)    : 0x81
+%Opcode       (1)    : 0x54
+%Key length   (2,3)  : 0x0000
+%Extra length (4)    : 0x00
+%Data type    (5)    : 0x00
+%Status       (6,7)  : 0x0000
+%Total body   (8-11) : 0x00000040
+%Opaque       (12-15): 0xdeadbeef
+%CAS          (16-23): 0x0000000000000000
+%  vb UUID    (24-31): 0x00000000feeddeca
+%  vb seqno   (32-39): 0x0000000000005432
+%  vb UUID    (40-47): 0x0000000000decafe
+%  vb seqno   (48-55): 0x0000000001343214
+%  vb UUID    (56-63): 0x00000000feedface
+%  vb seqno   (64-71): 0x0000000000000004
+%  vb UUID    (72-79): 0x00000000deadbeef
+%  vb seqno   (80-87): 0x0000000000006524
+encode_failover_log(RequestId, FailoverLog) ->
+    FailoverLogBin = [[Uuid, <<Seq:64>>] || {Uuid, Seq} <- FailoverLog],
+    Value = list_to_binary(FailoverLogBin),
+    BodyLength = byte_size(Value),
+    ExtraLength = 0,
+    Header = <<?UPR_MAGIC_RESPONSE,
+               ?UPR_OPCODE_FAILOVER_LOG_REQUEST,
+               0:?UPR_SIZES_KEY_LENGTH,
+               ExtraLength,
+               0,
+               ?UPR_STATUS_OK:?UPR_SIZES_STATUS,
+               BodyLength:?UPR_SIZES_BODY,
+               RequestId:?UPR_SIZES_OPAQUE,
+               0:?UPR_SIZES_CAS>>,
+    <<Header/binary, Value/binary>>.
 
 
 open_db(SetName, PartId) ->

@@ -22,7 +22,7 @@ num_docs() -> 1000.
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(5),
+    etap:plan(6),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -38,6 +38,13 @@ main(_) ->
 test() ->
     couch_set_view_test_util:start_server(test_set_name()),
     setup_test(),
+    % Populate failover log
+    lists:foreach(fun(PartId) ->
+        FailoverLog = [
+            {<<"abcdefgh">>, PartId + 3}, {<<"b123xfqw">>, PartId + 2},
+            {<<"ccddeeff">>, 0}],
+        couch_upr_fake_server:set_failover_log(PartId, FailoverLog)
+    end, lists:seq(0, num_set_partitions() - 1)),
 
     TestFun = fun(Item, Acc) ->
         [Item|Acc]
@@ -45,20 +52,25 @@ test() ->
 
     {ok, Pid} = couch_upr:start(test_set_name()),
 
+    % Get the latest partition version first
+    {ok, InitialFailoverLog0} = couch_upr:get_failover_log(Pid, 0),
+    PartVersion0 = hd(InitialFailoverLog0),
+    etap:is(PartVersion0, {<<"abcdefgh">>, 3}, "Partition version is correct"),
+
     % First parameter is the partition, the second is the sequence number
     % to start at.
     {ok, Docs1} = couch_upr:enum_docs_since(Pid, 0, 4, 10, TestFun, []),
     etap:is(length(Docs1), 6, "Correct number of docs (6) in partition 0"),
 
     {ok, Docs2} = couch_upr:enum_docs_since(Pid, 1, 46, 165, TestFun, []),
-    etap:is(length(Docs2), 119, "Correct number of docs (109) parition 1"),
+    etap:is(length(Docs2), 119, "Correct number of docs (109) partition 1"),
     {ok, Docs3} = couch_upr:enum_docs_since(
         Pid, 2, 80, num_docs() div num_set_partitions(), TestFun, []),
     Expected3 = (num_docs() div num_set_partitions()) - 80,
     etap:is(length(Docs3), Expected3,
-        io_lib:format("Correct number of docs (~p) parition 2", [Expected3])),
+        io_lib:format("Correct number of docs (~p) partition 2", [Expected3])),
     {ok, Docs4} = couch_upr:enum_docs_since(Pid, 3, 0, 5, TestFun, []),
-    etap:is(length(Docs4), 5, "Correct number of docs (5) parition 3"),
+    etap:is(length(Docs4), 5, "Correct number of docs (5) partition 3"),
 
     % Try a too high sequence number to get a rollback response
     {rollback, RollbackSeq} = couch_upr:enum_docs_since(
