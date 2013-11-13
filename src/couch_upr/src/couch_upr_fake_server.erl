@@ -196,10 +196,18 @@ read(Socket) ->
         case parse_request(Bin) of
         {stream_request, {PartId, RequestId, StartSeq, EndSeq, _PartUuid,
                           _HighSeq, _GroupId}} ->
-            Reply = encode_stream_response_ok(PartId, RequestId),
-            ok = gen_tcp:send(Socket, Reply),
+            StreamOk = encode_stream_response_ok(RequestId),
+            ok = gen_tcp:send(Socket, StreamOk),
             ok = gen_server:call(?MODULE, {add_stream, PartId, RequestId, StartSeq}),
+
+            StreamStart = encode_stream_start(PartId, RequestId),
+            ok = gen_tcp:send(Socket, StreamStart),
+
             gen_server:call(?MODULE, {send_snapshot, PartId, EndSeq}),
+
+            StreamEnd = encode_stream_end(PartId, RequestId),
+            ok = gen_tcp:send(Socket, StreamEnd),
+
             read(Socket);
         _ ->
             Reply = {error, "Can't parse request"},
@@ -211,19 +219,22 @@ read(Socket) ->
 
 
 parse_request(<<?UPR_WIRE_MAGIC_REQUEST,
-                ?UPR_WIRE_OPCODE_REQUEST,
+                ?UPR_WIRE_OPCODE_STREAM,
                 _KeyLength:(?UPR_WIRE_SIZES_KEY_LENGTH*8),
                 _ExtraLength,
-                ?UPR_WIRE_REQUEST_TYPE_STREAM,
+                _Datatype,
                 PartId:(?UPR_WIRE_SIZES_PARTITION*8),
                 _BodyLength:(?UPR_WIRE_SIZES_BODY*8),
-                RequestId:(?UPR_WIRE_SIZES_REQUEST_ID*8),
+                RequestId:(?UPR_WIRE_SIZES_OPAQUE*8),
                 _Cas:(?UPR_WIRE_SIZES_CAS*8),
+                _Flags:(?UPR_WIRE_SIZES_FLAGS*8),
+                _Reserved:(?UPR_WIRE_SIZES_RESERVED*8),
                 StartSeq:(?UPR_WIRE_SIZES_BY_SEQ*8),
                 EndSeq:(?UPR_WIRE_SIZES_BY_SEQ*8),
                 PartUuid:(?UPR_WIRE_SIZES_PARTITION_UUID*8),
                 HighSeq:(?UPR_WIRE_SIZES_BY_SEQ*8),
                 GroupId/binary>>) ->
+    % GroupId might be an empty binary if it wasn't set
     {stream_request, {PartId, RequestId, StartSeq, EndSeq, PartUuid, HighSeq,
                       GroupId}}.
 
@@ -271,134 +282,209 @@ do_send_snapshot(Socket, SetName, PartId, RequestId, StartSeq, EndSeq) ->
     Start = encode_snapshot_start(PartId, RequestId),
     ok = gen_tcp:send(Socket, Start),
     Mutations = create_mutations(SetName, PartId, StartSeq, EndSeq),
-    lists:foreach(fun({Cas, Seq, RevSeq, Flags, Expiration, LockTime, Key, Value}) ->
-        Encoded = encode_snapshot_mutation(PartId, RequestId, Cas, Seq,
-            RevSeq, Flags, Expiration, LockTime, Key, Value),
-        ok = gen_tcp:send(Socket, Encoded)
+    lists:foreach(fun
+        ({Cas, Seq, RevSeq, _Flags, _Expiration, _LockTime, Key, deleted}) ->
+            Encoded = encode_snapshot_deletion(PartId, RequestId, Cas, Seq,
+                RevSeq, Key),
+            ok = gen_tcp:send(Socket, Encoded);
+        ({Cas, Seq, RevSeq, Flags, Expiration, LockTime, Key, Value}) ->
+            Encoded = encode_snapshot_mutation(PartId, RequestId, Cas, Seq,
+                RevSeq, Flags, Expiration, LockTime, Key, Value),
+            ok = gen_tcp:send(Socket, Encoded)
     end, Mutations),
     End = encode_snapshot_end(PartId, RequestId),
     ok = gen_tcp:send(Socket, End),
     length(Mutations).
 
 
+%UPR_STREAM_START command
 %Field        (offset) (value)
-%Magic          (0)     : 0x81                 (Response)
-%Opcode         (1)     : 0x04                 (UPR Stream Message)
-%Key Length     (2-3)   : 0x0000
-%Extra Length   (4)     : 0x00
-%Request Type   (5)     : 0x01                 (Snapshot Start)
-%VBucket        (6-7)   : 0x000C               (12)
-%Total Body     (8-11)  : 0x00000000
-%Request ID     (12-15) : 0x0000002D           (45)
-%Cas            (16-23) : 0x0000000000000000
+%Magic        (0)    : 0x80
+%Opcode       (1)    : 0x52
+%Key length   (2,3)  : 0x0000
+%Extra length (4)    : 0x00
+%Data type    (5)    : 0x00
+%Vbucket      (6,7)  : 0x0000
+%Total body   (8-11) : 0x00000000
+%Opaque       (12-15): 0xdeadbeef
+%CAS          (16-23): 0x0000000000000000
+encode_stream_start(PartId, RequestId) ->
+    encode_request_opcode(?UPR_WIRE_OPCODE_STREAM_START, PartId, RequestId).
+
+%UPR_STREAM_END command
+%Field        (offset) (value)
+%Magic        (0)    : 0x80
+%Opcode       (1)    : 0x53
+%Key length   (2,3)  : 0x0000
+%Extra length (4)    : 0x04
+%Data type    (5)    : 0x00
+%Vbucket      (6,7)  : 0x0000
+%Total body   (8-11) : 0x00000004
+%Opaque       (12-15): 0xdeadbeef
+%CAS          (16-23): 0x0000000000000000
+%  flag       (24-27): 0x0000000000000000
+encode_stream_end(PartId, RequestId) ->
+    % XXX vmx 2013-09-11: For now we return only success
+    Body = <<?UPR_WIRE_FLAG_OK:(?UPR_WIRE_SIZES_FLAGS*8)>>,
+    BodyLength = byte_size(Body),
+    % XXX vmx 2013-08-19: Still only 80% sure that ExtraLength has the correct
+    %    value
+    ExtraLength = BodyLength,
+    Header = <<?UPR_WIRE_MAGIC_REQUEST,
+               ?UPR_WIRE_OPCODE_STREAM_END,
+               0:(?UPR_WIRE_SIZES_KEY_LENGTH*8),
+               ExtraLength,
+               0,
+               PartId:(?UPR_WIRE_SIZES_PARTITION*8),
+               BodyLength:(?UPR_WIRE_SIZES_BODY*8),
+               RequestId:(?UPR_WIRE_SIZES_OPAQUE*8),
+               0:(?UPR_WIRE_SIZES_CAS*8)>>,
+    <<Header/binary, Body/binary>>.
+
+%UPR_SNAPSHOT_START command
+%Field        (offset) (value)
+%Magic        (0)    : 0x80
+%Opcode       (1)    : 0x54
+%Key length   (2,3)  : 0x0000
+%Extra length (4)    : 0x00
+%Data type    (5)    : 0x00
+%Vbucket      (6,7)  : 0x0000
+%Total body   (8-11) : 0x00000000
+%Opaque       (12-15): 0xdeadbeef
+%CAS          (16-23): 0x0000000000000000
 encode_snapshot_start(PartId, RequestId) ->
-    <<?UPR_WIRE_MAGIC_RESPONSE,
-      ?UPR_WIRE_OPCODE_STREAM_MESSAGE,
-      0:(?UPR_WIRE_SIZES_KEY_LENGTH*8),
-      0,
-      ?UPR_WIRE_REQUEST_TYPE_SNAPSHOT_START,
-      PartId:(?UPR_WIRE_SIZES_PARTITION*8),
-      0:(?UPR_WIRE_SIZES_BODY*8),
-      RequestId:(?UPR_WIRE_SIZES_REQUEST_ID*8),
-      0:(?UPR_WIRE_SIZES_CAS*8)>>.
+    encode_request_opcode(?UPR_WIRE_OPCODE_SNAPSHOT_START, PartId, RequestId).
 
+%UPR_SNAPSHOT_END command
 %Field        (offset) (value)
-%Magic          (0)     : 0x81                 (Response)
-%Opcode         (1)     : 0x04                 (UPR Stream Message)
-%Key Length     (2-3)   : 0x0000
-%Extra Length   (4)     : 0x00
-%Request Type   (5)     : 0x02                 (Snapshot End)
-%VBucket        (6-7)   : 0x000C               (12)
-%Total Body     (8-11)  : 0x00000000
-%Request ID     (12-15) : 0x0000002D           (45)
-%Cas            (16-23) : 0x0000000000000000
+%Magic        (0)    : 0x80
+%Opcode       (1)    : 0x55
+%Key length   (2,3)  : 0x0000
+%Extra length (4)    : 0x04
+%Data type    (5)    : 0x00
+%Vbucket      (6,7)  : 0x0000
+%Total body   (8-11) : 0x00000004
+%Opaque       (12-15): 0xdeadbeef
+%CAS          (16-23): 0x0000000000000000
 encode_snapshot_end(PartId, RequestId) ->
-    <<?UPR_WIRE_MAGIC_RESPONSE,
-      ?UPR_WIRE_OPCODE_STREAM_MESSAGE,
+    encode_request_opcode(?UPR_WIRE_OPCODE_SNAPSHOT_END, PartId, RequestId).
+
+% A lot of commands only differ in the opcode
+encode_request_opcode(Opcode, PartId, RequestId) ->
+    <<?UPR_WIRE_MAGIC_REQUEST,
+      Opcode,
       0:(?UPR_WIRE_SIZES_KEY_LENGTH*8),
       0,
-      ?UPR_WIRE_REQUEST_TYPE_SNAPSHOT_END,
+      0,
       PartId:(?UPR_WIRE_SIZES_PARTITION*8),
       0:(?UPR_WIRE_SIZES_BODY*8),
-      RequestId:(?UPR_WIRE_SIZES_REQUEST_ID*8),
+      RequestId:(?UPR_WIRE_SIZES_OPAQUE*8),
       0:(?UPR_WIRE_SIZES_CAS*8)>>.
 
+%UPR_MUTATION command
 %Field        (offset) (value)
-%Magic          (0)     : 0x81                 (Response)
-%Opcode         (1)     : 0x04                 (UPR Stream Message)
-%Key Length     (2-3)   : 0x0005               (5)
-%Extra Length   (4)     : 0x24                 (36)
-%Request Type   (5)     : 0x03                 (UPR Mutation)
-%VBucket        (6-7)   : 0x000C               (12)
-%Total Body     (8-11)  : 0x00000030           (48)
-%Request ID     (12-15) : 0x0000002D           (45)
-%Cas            (16-23) : 0x00000000000000A5   (165)
-%By Seqno       (24-31) : 0x00000000000008CB   (2251)
-%Rev Seqno      (32-39) : 0x0000000000000003   (3)
-%Item Flags     (40-43) : 0x00000000           (0)
-%Item Exp       (44-47) : 0x00000000           (0)
-%Lock time      (48-51) : 0x00000000           (0)
-%Key            (52-56) : "mykey"
-%Value          (57-63) : "myvalue"
-% It also encodes deletions
+%Magic        (0)    : 0x80
+%Opcode       (1)    : 0x56
+%Key length   (2,3)  : 0x0005
+%Extra length (4)    : 0x1c
+%Data type    (5)    : 0x00
+%Vbucket      (6,7)  : 0x0000
+%Total body   (8-11) : 0x00000027
+%Opaque       (12-15): 0xdeadbeef
+%CAS          (16-23): 0x0000000000000001
+%  by seqno   (24-31): 0x0000000000000000
+%  rev seqno  (32-39): 0x0000000000000000
+%  flags      (40-43): 0x00000000
+%  expiration (44-47): 0x00000000
+%  lock time  (48-51): 0x00000000
+%  key        (52-56): hello
+%  value      (57-62): world
 encode_snapshot_mutation(PartId, RequestId, Cas, Seq, RevSeq, Flags,
-                         ExpireTime, LockTime, Key, Value) ->
-    Body0 = <<Seq:(?UPR_WIRE_SIZES_BY_SEQ*8),
+                         Expiration, LockTime, Key, Value) ->
+    Body = <<Seq:(?UPR_WIRE_SIZES_BY_SEQ*8),
              RevSeq:(?UPR_WIRE_SIZES_REV_SEQ*8),
              Flags:(?UPR_WIRE_SIZES_FLAGS*8),
-             ExpireTime:(?UPR_WIRE_SIZES_EXPIRY*8),
+             Expiration:(?UPR_WIRE_SIZES_EXPIRATION*8),
              LockTime:(?UPR_WIRE_SIZES_LOCK*8),
-             Key/binary>>,
-             %Key:KeyLength/binary>>
-
-    case Value of
-    deleted ->
-        Body = Body0,
-        ValueLength = 0,
-        RequestType = ?UPR_WIRE_REQUEST_TYPE_DELETION;
-    _ ->
-        Body = <<Body0/binary, Value/binary>>,
-        ValueLength = byte_size(Value),
-        RequestType = ?UPR_WIRE_REQUEST_TYPE_MUTATION
-    end,
+             Key/binary,
+             Value/binary>>,
 
     KeyLength = byte_size(Key),
+    ValueLength = byte_size(Value),
     BodyLength = byte_size(Body),
     % XXX vmx 2013-08-19: Still only 80% sure that ExtraLength has the correct
     %    value
     ExtraLength = BodyLength - KeyLength - ValueLength,
 
-    Header = <<?UPR_WIRE_MAGIC_RESPONSE,
-               ?UPR_WIRE_OPCODE_STREAM_MESSAGE,
+    Header = <<?UPR_WIRE_MAGIC_REQUEST,
+               ?UPR_WIRE_OPCODE_MUTATION,
                KeyLength:(?UPR_WIRE_SIZES_KEY_LENGTH*8),
                ExtraLength,
-               RequestType,
+               0,
                PartId:(?UPR_WIRE_SIZES_PARTITION*8),
                BodyLength:(?UPR_WIRE_SIZES_BODY*8),
-               RequestId:(?UPR_WIRE_SIZES_REQUEST_ID*8),
+               RequestId:(?UPR_WIRE_SIZES_OPAQUE*8),
                Cas:(?UPR_WIRE_SIZES_CAS*8)>>,
     <<Header/binary, Body/binary>>.
 
+
+%UPR_DELETION command
 %Field        (offset) (value)
-%Magic          (0)     : 0x81                 (Response)
-%Opcode         (1)     : 0x02                 (UPR Response)
-%Key Length     (2-3)   : 0x0000
-%Extra Length   (4)     : 0x00
-%Request Type   (5)     : 0x01                 (OK)
-%VBucket        (6-7)   : 0x000C               (12)
-%Total Body     (8-11)  : 0x00000000
-%Request ID     (12-15) : 0x0000002D           (45)
-%Cas            (16-23) : 0x0000000000000000
-encode_stream_response_ok(PartId, RequestId) ->
+%Magic        (0)    : 0x80
+%Opcode       (1)    : 0x57
+%Key length   (2,3)  : 0x0005
+%Extra length (4)    : 0x10
+%Data type    (5)    : 0x00
+%Vbucket      (6,7)  : 0x0000
+%Total body   (8-11) : 0x00000015
+%Opaque       (12-15): 0xdeadbeef
+%CAS          (16-23): 0x0000000000000001
+%  by seqno   (24-31): 0x0000000000000000
+%  rev seqno  (32-39): 0x0000000000000000
+%  key        (40-44): hello
+encode_snapshot_deletion(PartId, RequestId, Cas, Seq, RevSeq, Key) ->
+    Body = <<Seq:(?UPR_WIRE_SIZES_BY_SEQ*8),
+              RevSeq:(?UPR_WIRE_SIZES_REV_SEQ*8),
+              Key/binary>>,
+
+    KeyLength = byte_size(Key),
+    BodyLength = byte_size(Body),
+    % XXX vmx 2013-08-19: Still only 80% sure that ExtraLength has the correct
+    %    value
+    ExtraLength = BodyLength - KeyLength,
+
+    Header = <<?UPR_WIRE_MAGIC_REQUEST,
+               ?UPR_WIRE_OPCODE_DELETION,
+               KeyLength:(?UPR_WIRE_SIZES_KEY_LENGTH*8),
+               ExtraLength,
+               0,
+               PartId:(?UPR_WIRE_SIZES_PARTITION*8),
+               BodyLength:(?UPR_WIRE_SIZES_BODY*8),
+               RequestId:(?UPR_WIRE_SIZES_OPAQUE*8),
+               Cas:(?UPR_WIRE_SIZES_CAS*8)>>,
+    <<Header/binary, Body/binary>>.
+
+%UPR_STREAM_REQ response
+%Field        (offset) (value)
+%Magic        (0)    : 0x81
+%Opcode       (1)    : 0x50
+%Key length   (2,3)  : 0x0000
+%Extra length (4)    : 0x00
+%Data type    (5)    : 0x00
+%Status       (6,7)  : 0x0000
+%Total body   (8-11) : 0x00000000
+%Opaque       (12-15): 0xdeadbeef
+%CAS          (16-23): 0x0000000000000000
+encode_stream_response_ok(RequestId) ->
     <<?UPR_WIRE_MAGIC_RESPONSE,
-      ?UPR_WIRE_OPCODE_RESPONSE,
+      ?UPR_WIRE_OPCODE_STREAM,
       0:(?UPR_WIRE_SIZES_KEY_LENGTH*8),
       0,
-      ?UPR_WIRE_REQUEST_TYPE_OK,
-      PartId:(?UPR_WIRE_SIZES_PARTITION*8),
+      0,
+      ?UPR_WIRE_REQUEST_TYPE_OK:(?UPR_WIRE_SIZES_STATUS*8),
       0:(?UPR_WIRE_SIZES_BODY*8),
-      RequestId:(?UPR_WIRE_SIZES_REQUEST_ID*8),
-            0:(?UPR_WIRE_SIZES_CAS*8)>>.
+      RequestId:(?UPR_WIRE_SIZES_OPAQUE*8),
+      0:(?UPR_WIRE_SIZES_CAS*8)>>.
 
 
 open_db(SetName, PartId) ->
