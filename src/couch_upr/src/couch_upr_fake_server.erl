@@ -196,8 +196,8 @@ read(Socket) ->
         case parse_header(Header) of
         {open_connection, BodyLength, RequestId} ->
             handle_open_connection_body(Socket, BodyLength, RequestId);
-        {stream_start, BodyLength, RequestId, PartId} ->
-            handle_stream_start_body(Socket, BodyLength, RequestId, PartId)
+        {stream_request, BodyLength, RequestId, PartId} ->
+            handle_stream_request_body(Socket, BodyLength, RequestId, PartId)
         end,
         read(Socket);
     {error, closed} ->
@@ -216,8 +216,8 @@ parse_header(<<?UPR_WIRE_MAGIC_REQUEST,
     case Opcode of
     ?UPR_WIRE_OPCODE_OPEN_CONNECTION ->
         {open_connection, BodyLength, RequestId};
-    ?UPR_WIRE_OPCODE_STREAM_START ->
-        {stream_start, BodyLength, RequestId, PartId}
+    ?UPR_WIRE_OPCODE_STREAM_REQUEST ->
+        {stream_request, BodyLength, RequestId, PartId}
     end.
 
 
@@ -232,7 +232,7 @@ handle_open_connection_body(Socket, BodyLength, RequestId) ->
         io:format("vmx: closed6~n", [])
     end.
 
-handle_stream_start_body(Socket, BodyLength, RequestId, PartId) ->
+handle_stream_request_body(Socket, BodyLength, RequestId, PartId) ->
     case gen_tcp:recv(Socket, BodyLength) of
     {ok, <<_Flags:?UPR_WIRE_SIZES_FLAGS,
            _Reserved:?UPR_WIRE_SIZES_RESERVED,
@@ -243,7 +243,7 @@ handle_stream_start_body(Socket, BodyLength, RequestId, PartId) ->
         PartSeq = get_sequence_number(PartId),
         case StartSeq =< PartSeq of
         true ->
-            StreamOk = encode_stream_start_ok(RequestId),
+            StreamOk = encode_stream_request_ok(RequestId),
             ok = gen_tcp:send(Socket, StreamOk),
             ok = gen_server:call(
                 ?MODULE, {add_stream, PartId, RequestId, StartSeq}),
@@ -255,7 +255,7 @@ handle_stream_start_body(Socket, BodyLength, RequestId, PartId) ->
         % requested sequence number is higher than the db contains
         % => rollback
         false ->
-            StreamRollback = encode_stream_start_rollback(
+            StreamRollback = encode_stream_request_rollback(
                 RequestId, PartSeq),
             ok = gen_tcp:send(Socket, StreamRollback)
         end
@@ -455,9 +455,9 @@ encode_snapshot_deletion(PartId, RequestId, Cas, Seq, RevSeq, Key) ->
 %Total body   (8-11) : 0x00000000
 %Opaque       (12-15): 0x00001000
 %CAS          (16-23): 0x0000000000000000
-encode_stream_start_ok(RequestId) ->
+encode_stream_request_ok(RequestId) ->
     <<?UPR_WIRE_MAGIC_RESPONSE,
-      ?UPR_WIRE_OPCODE_STREAM_START,
+      ?UPR_WIRE_OPCODE_STREAM_REQUEST,
       0:?UPR_WIRE_SIZES_KEY_LENGTH,
       0,
       0,
@@ -478,9 +478,9 @@ encode_stream_start_ok(RequestId) ->
 %Opaque       (12-15): 0x00001000
 %CAS          (16-23): 0x0000000000000000
 %  rollback # (24-31): 0x0000000000000000
-encode_stream_start_rollback(RequestId, Seq) ->
+encode_stream_request_rollback(RequestId, Seq) ->
     <<?UPR_WIRE_MAGIC_RESPONSE,
-      ?UPR_WIRE_OPCODE_STREAM_START,
+      ?UPR_WIRE_OPCODE_STREAM_REQUEST,
       0:?UPR_WIRE_SIZES_KEY_LENGTH,
       (?UPR_WIRE_SIZES_BY_SEQ div 8),
       0,

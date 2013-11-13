@@ -71,7 +71,7 @@ start(Name) ->
 enum_docs_since(Pid, PartId, StartSeq, EndSeq, InFun, InAcc) ->
     RequestId = gen_server:call(Pid, get_request_id),
     {Socket, Timeout} = gen_server:call(Pid, get_socket_and_timeout),
-    StreamRequest = encode_stream_start_request(
+    StreamRequest = encode_stream_request(
         PartId, RequestId, 0, StartSeq, EndSeq, 5678, 0),
     ok = gen_tcp:send(Socket, StreamRequest),
     receive_single_snapshot(Socket, Timeout, InFun, InAcc).
@@ -138,7 +138,7 @@ receive_single_snapshot(Socket, Timeout, MutationFun, Acc) ->
     case gen_tcp:recv(Socket, ?UPR_WIRE_HEADER_LEN, Timeout) of
     {ok, Header} ->
         case parse_header(Header) of
-        {stream_start, Status, _RequestId, BodyLength} ->
+        {stream_request, Status, _RequestId, BodyLength} ->
             case Status of
             ?UPR_WIRE_REQUEST_TYPE_OK ->
                 receive_single_snapshot(Socket, Timeout, MutationFun, Acc);
@@ -240,8 +240,8 @@ parse_header(<<?UPR_WIRE_MAGIC_RESPONSE,
                RequestId:?UPR_WIRE_SIZES_OPAQUE,
                _Cas:?UPR_WIRE_SIZES_CAS>>) ->
     case Opcode of
-    ?UPR_WIRE_OPCODE_STREAM_START ->
-        {stream_start, Status, RequestId, BodyLength};
+    ?UPR_WIRE_OPCODE_STREAM_REQUEST ->
+        {stream_request, Status, RequestId, BodyLength};
     ?UPR_WIRE_OPCODE_OPEN_CONNECTION ->
         {open_connection, RequestId}
     end;
@@ -342,7 +342,7 @@ encode_open_connection_request(Name, RequestId) ->
 %  end seqno  (40-47): 0xffffffffffffffff
 %  vb UUID    (48-55): 0x00000000feeddeca
 %  high seqno (56-63): 0x0000000000000000
-encode_stream_start_request(PartId, RequestId, Flags, StartSeq, EndSeq,
+encode_stream_request(PartId, RequestId, Flags, StartSeq, EndSeq,
         PartUuid, HighSeq) ->
     Body = <<Flags:?UPR_WIRE_SIZES_FLAGS,
              0:?UPR_WIRE_SIZES_RESERVED,
@@ -355,7 +355,7 @@ encode_stream_start_request(PartId, RequestId, Flags, StartSeq, EndSeq,
     ExtraLength = BodyLength,
 
     Header = <<?UPR_WIRE_MAGIC_REQUEST,
-               ?UPR_WIRE_OPCODE_STREAM_START,
+               ?UPR_WIRE_OPCODE_STREAM_REQUEST,
                0:?UPR_WIRE_SIZES_KEY_LENGTH,
                ExtraLength,
                0,
