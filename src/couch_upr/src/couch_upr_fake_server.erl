@@ -208,10 +208,7 @@ read(Socket) ->
             StreamEnd = encode_stream_end(PartId, RequestId),
             ok = gen_tcp:send(Socket, StreamEnd),
 
-            read(Socket);
-        _ ->
-            Reply = {error, "Can't parse request"},
-            ok = gen_tcp:send(Socket, Reply)
+            read(Socket)
         end;
     {error, closed} ->
         ok

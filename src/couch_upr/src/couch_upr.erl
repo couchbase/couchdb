@@ -150,9 +150,7 @@ receive_single_snapshot(Socket, Timeout, MutationFun, Acc) ->
             receive_single_snapshot(Socket, Timeout, MutationFun, Acc);
         {stream_end, _PartId, _RequestId, BodyLength} ->
             _Flag = receive_stream_end(Socket, Timeout, BodyLength),
-            Acc;
-        _ ->
-            {error, {"Can't parse header", Header}}
+            Acc
         end;
     {error, closed} ->
         io:format("vmx: closed~n", []),
