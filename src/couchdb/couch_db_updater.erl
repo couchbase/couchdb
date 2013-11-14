@@ -267,6 +267,19 @@ handle_call({update_header_pos, FileVersion, NewPos}, _From, Db) ->
         {reply, update_file_ahead_of_couchdb, Db}
     end;
 
+handle_call({jump_to_another_version, NewVersion, NewPos}, _From, Db) ->
+    NewFilePath = update_filepath_with_version(Db#db.filepath, NewVersion),
+    case jump_to_another_version(Db, NewFilePath, NewVersion, NewPos) of
+        {ok, NewDb} ->
+            {reply, ok, NewDb};
+        {Reply, Db} ->
+            %% compaction failed. delete the compacted file not to leave junk
+            RootDir = couch_config:get("couchdb", "database_dir", "."),
+            couch_file:delete(RootDir, NewFilePath),
+
+            {reply, Reply, Db}
+    end;
+
 handle_call({add_update_listener, Pid, Tag}, _From, Db) ->
     UpdateListeners = erlang:get(update_listeners),
     UpdateListeners2 = case dict:find(Pid, UpdateListeners) of
@@ -376,6 +389,10 @@ increment_filepath(FilePath) ->
     Tokens = string:tokens(FilePath, "."),
     NumStr = integer_to_list(list_to_integer(lists:last(Tokens)) + 1),
     string:join(lists:sublist(Tokens, length(Tokens) - 1) ++ [NumStr], ".").
+
+update_filepath_with_version(FilePath, Version) ->
+    Tokens = string:tokens(FilePath, "."),
+    string:join(lists:sublist(Tokens, length(Tokens) - 1) ++ [integer_to_list(Version)], ".").
 
 btree_by_seq_split(#doc_info{id=Id, local_seq=Seq, rev={RevPos, RevId},
         deleted=Deleted, body_ptr=Bp, content_meta=Meta, size=Size}) ->
@@ -955,4 +972,45 @@ notify_db_updated(NewDb) ->
         ok;
     {'EXIT', Pid, Reason} when Pid =:= NewDb#db.main_pid ->
         exit(Reason)
+    end.
+
+jump_to_another_version(Db, NewFilePath, NewVersion, NewPos) ->
+    #db{filepath = FilePath, fd = OldFd} = Db,
+    ExistingFileVersion = file_version(FilePath),
+    if NewVersion == ExistingFileVersion ->
+            {version_didnt_change, Db};
+       NewVersion < ExistingFileVersion ->
+            {update_behind_couchdb, Db};
+       Db#db.compactor_info =/= nil ->
+            {compacting, Db};
+       Db#db.waiting_delayed_commit =/= nil ->
+            {waiting_delayed_commit, Db};
+       true ->
+            {ok, NewFd} = couch_file:open(NewFilePath),
+            {ok, NewHeaderBin, _HdrSize} = couch_file:read_header_bin(NewFd, NewPos),
+            NewHeader = header_bin_to_db_header(NewHeaderBin),
+            #db{update_seq=NewSeq} = InitNewDb =
+                init_db(Db#db.name, NewFilePath, NewFd, NewHeader, Db#db.options),
+            unlink(NewFd),
+
+            case Db#db.update_seq of
+                NewSeq ->
+                    NewDb = InitNewDb#db{
+                              main_pid = Db#db.main_pid,
+                              instance_start_time = Db#db.instance_start_time
+                             },
+                    ok = notify_db_updated(NewDb),
+
+                    ok = couch_file:only_snapshot_reads(OldFd), % prevent writes to the fd
+                    close_db(Db),
+
+                    RootDir = couch_config:get("couchdb", "database_dir", "."),
+                    couch_file:delete(RootDir, FilePath),
+
+                    couch_db_update_notifier:notify({compacted, NewDb#db.name}),
+                    ?LOG_INFO("Compaction for db \"~s\" completed.", [NewDb#db.name]),
+                    {ok, NewDb};
+                _ ->
+                    {was_updated, Db}
+            end
     end.

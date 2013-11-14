@@ -16,7 +16,7 @@
 -export([open/2,open_int/2,close/1,create/2,get_db_info/1,get_design_docs/1]).
 -export([start_compact/1, start_compact/2, cancel_compact/1, get_design_docs/2]).
 -export([open_ref_counted/2,is_idle/1,monitor/1,count_changes_since/2]).
--export([update_doc/2,update_doc/3,update_header_pos/3]).
+-export([update_doc/2,update_doc/3,update_header_pos/3, jump_to_another_version/3]).
 -export([update_docs/2,update_docs/3]).
 -export([get_doc_info/2,open_doc/2,open_doc/3]).
 -export([get_missing_revs/2,name/1,get_update_seq/1,get_committed_update_seq/1]).
@@ -138,6 +138,9 @@ close(#db{fd_ref_counter=RefCntr}) ->
 
 update_header_pos(#db{update_pid=Pid}, FileVersion, NewPos) ->
     gen_server:call(Pid, {update_header_pos, FileVersion, NewPos}, infinity).
+
+jump_to_another_version(#db{update_pid=Pid}, FileVersion, NewPos) ->
+    gen_server:call(Pid, {jump_to_another_version, FileVersion, NewPos}, infinity).
 
 open_ref_counted(MainPid, OpenedPid) ->
     gen_server:call(MainPid, {open_ref_count, OpenedPid}, infinity).
