@@ -74,7 +74,13 @@ enum_docs_since(Pid, PartId, StartSeq, EndSeq, InFun, InAcc) ->
     StreamRequest = encode_stream_request(
         PartId, RequestId, 0, StartSeq, EndSeq, 5678, 0),
     ok = gen_tcp:send(Socket, StreamRequest),
-    receive_single_snapshot(Socket, Timeout, InFun, InAcc).
+    Result = receive_single_snapshot(Socket, Timeout, InFun, {nil, InAcc}),
+    case Result of
+    {ok, {FailoverLog, Mutations}} ->
+        {ok, Mutations, FailoverLog};
+    _ ->
+        Result
+    end.
 
 
 get_sequence_number(PartId) ->
@@ -160,7 +166,11 @@ receive_single_snapshot(Socket, Timeout, MutationFun, Acc) ->
         {stream_request, Status, _RequestId, BodyLength} ->
             case Status of
             ?UPR_STATUS_OK ->
-                receive_single_snapshot(Socket, Timeout, MutationFun, Acc);
+                 FailoverLog = receive_failover_log(
+                     Socket, Timeout, BodyLength),
+                 {_, MutationAcc} = Acc,
+                 Acc2 = {FailoverLog, MutationAcc},
+                 receive_single_snapshot(Socket, Timeout, MutationFun, Acc2);
             ?UPR_STATUS_ROLLBACK ->
                 case gen_tcp:recv(Socket, BodyLength, Timeout) of
                 {ok, <<RollbackSeq:?UPR_SIZES_BY_SEQ>>} ->
@@ -174,12 +184,16 @@ receive_single_snapshot(Socket, Timeout, MutationFun, Acc) ->
         {snapshot_mutation, PartId, _RequestId, KeyLength, BodyLength} ->
             Mutation = receive_snapshot_mutation(
                 Socket, Timeout, PartId, KeyLength, BodyLength),
-            Acc2 = MutationFun(Mutation, Acc),
+            {FailoverLog, MutationAcc} = Acc,
+            MutationAcc2 = MutationFun(Mutation, MutationAcc),
+            Acc2 = {FailoverLog, MutationAcc2},
             receive_single_snapshot(Socket, Timeout, MutationFun, Acc2);
         {snapshot_deletion, PartId, _RequestId, KeyLength, BodyLength} ->
             Deletion = receive_snapshot_deletion(
                 Socket, Timeout, PartId, KeyLength, BodyLength),
-            Acc2 = MutationFun(Deletion, Acc),
+            {FailoverLog, MutationAcc} = Acc,
+            MutationAcc2 = MutationFun(Deletion, MutationAcc),
+            Acc2 = {FailoverLog, MutationAcc2},
             receive_single_snapshot(Socket, Timeout, MutationFun, Acc2);
         {stream_end, _PartId, _RequestId, BodyLength} ->
             _Flag = receive_stream_end(Socket, Timeout, BodyLength),

@@ -262,10 +262,11 @@ handle_stream_request_body(Socket, BodyLength, RequestId, PartId) ->
            EndSeq:?UPR_SIZES_BY_SEQ,
            _PartUuid:?UPR_SIZES_PARTITION_UUID,
            _HighSeq:?UPR_SIZES_BY_SEQ>>} ->
+        FailoverLog = get_failover_log(PartId),
         PartSeq = get_sequence_number(PartId),
         case StartSeq =< PartSeq of
         true ->
-            StreamOk = encode_stream_request_ok(RequestId),
+            StreamOk = encode_stream_request_ok(RequestId, FailoverLog),
             ok = gen_tcp:send(Socket, StreamOk),
             ok = gen_server:call(
                 ?MODULE, {add_stream, PartId, RequestId, StartSeq}),
@@ -482,16 +483,19 @@ encode_snapshot_deletion(PartId, RequestId, Cas, Seq, RevSeq, Key) ->
 %Total body   (8-11) : 0x00000000
 %Opaque       (12-15): 0x00001000
 %CAS          (16-23): 0x0000000000000000
-encode_stream_request_ok(RequestId) ->
-    <<?UPR_MAGIC_RESPONSE,
-      ?UPR_OPCODE_STREAM_REQUEST,
-      0:?UPR_SIZES_KEY_LENGTH,
-      0,
-      0,
-      ?UPR_STATUS_OK:?UPR_SIZES_STATUS,
-      0:?UPR_SIZES_BODY,
-      RequestId:?UPR_SIZES_OPAQUE,
-      0:?UPR_SIZES_CAS>>.
+encode_stream_request_ok(RequestId, FailoverLog) ->
+    {BodyLength, Value} = failover_log_to_bin(FailoverLog),
+    ExtraLength = 0,
+    Header= <<?UPR_MAGIC_RESPONSE,
+              ?UPR_OPCODE_STREAM_REQUEST,
+              0:?UPR_SIZES_KEY_LENGTH,
+              ExtraLength,
+              0,
+              ?UPR_STATUS_OK:?UPR_SIZES_STATUS,
+              BodyLength:?UPR_SIZES_BODY,
+              RequestId:?UPR_SIZES_OPAQUE,
+              0:?UPR_SIZES_CAS>>,
+    <<Header/binary, Value/binary>>.
 
 %UPR_STREAM_REQ response
 %Field        (offset) (value)
@@ -567,9 +571,7 @@ encode_stream_end(PartId, RequestId) ->
 %  vb UUID    (72-79): 0x00000000deadbeef
 %  vb seqno   (80-87): 0x0000000000006524
 encode_failover_log(RequestId, FailoverLog) ->
-    FailoverLogBin = [[Uuid, <<Seq:64>>] || {Uuid, Seq} <- FailoverLog],
-    Value = list_to_binary(FailoverLogBin),
-    BodyLength = byte_size(Value),
+    {BodyLength, Value} = failover_log_to_bin(FailoverLog),
     ExtraLength = 0,
     Header = <<?UPR_MAGIC_RESPONSE,
                ?UPR_OPCODE_FAILOVER_LOG_REQUEST,
@@ -581,6 +583,11 @@ encode_failover_log(RequestId, FailoverLog) ->
                RequestId:?UPR_SIZES_OPAQUE,
                0:?UPR_SIZES_CAS>>,
     <<Header/binary, Value/binary>>.
+
+failover_log_to_bin(FailoverLog) ->
+    FailoverLogBin = [[Uuid, <<Seq:64>>] || {Uuid, Seq} <- FailoverLog],
+    Value = list_to_binary(FailoverLogBin),
+    {byte_size(Value), Value}.
 
 
 open_db(SetName, PartId) ->

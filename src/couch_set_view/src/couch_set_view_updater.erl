@@ -329,7 +329,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                 AccCount2 + 1
             end,
             {ok, EndSeq} = couch_upr:get_sequence_number(PartId),
-            {ok, AccCount3} = couch_upr:enum_docs_since(
+            {ok, AccCount3, _NewPartVersions} = couch_upr:enum_docs_since(
                 UprPid, PartId, Since, EndSeq, ChangesWrapper, AccCount),
             {AccCount3, orddict:store(PartId, EndSeq, AccSeqs)}
         end
