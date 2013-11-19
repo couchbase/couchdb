@@ -27,6 +27,7 @@
 -define(UPR_REQUEST_TYPE_MUTATION, 16#03).
 -define(UPR_REQUEST_TYPE_DELETION, 16#04).
 -define(UPR_STATUS_OK, 16#00).
+-define(UPR_STATUS_KEY_NOT_FOUND, 16#01).
 -define(UPR_STATUS_ROLLBACK, 16#23).
 % The sizes are in bits
 -define(UPR_SIZES_KEY_LENGTH, 16).

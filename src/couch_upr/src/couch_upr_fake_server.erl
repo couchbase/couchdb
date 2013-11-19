@@ -134,8 +134,6 @@ init([Port, SetName]) ->
     }}.
 
 
-% Returns 'ok' when the response contains mutations, returns 'done'
-% if there were no further mutations
 handle_call({send_snapshot, Socket, PartId, EndSeq}, _From, State) ->
     #state{
         streams = Streams,
@@ -143,14 +141,15 @@ handle_call({send_snapshot, Socket, PartId, EndSeq}, _From, State) ->
     } = State,
     {RequestId, Seq} = proplists:get_value(PartId, Streams),
     Num = do_send_snapshot(Socket, SetName, PartId, RequestId, Seq, EndSeq),
-    case Num of
+    State2 = case Num of
     0 ->
-        {reply, done, State};
+        State;
     _ ->
         Streams2 = lists:keyreplace(
             PartId, 1, Streams, {PartId, {RequestId, Seq+Num}}),
-        {reply, ok, State#state{streams = Streams2}}
-    end;
+        State#state{streams = Streams2}
+    end,
+    {reply, ok, State2};
 
 handle_call({add_stream, PartId, RequestId, StartSeq}, _From, State) ->
     {reply, ok, State#state{
@@ -260,28 +259,39 @@ handle_stream_request_body(Socket, BodyLength, RequestId, PartId) ->
            _Reserved:?UPR_SIZES_RESERVED,
            StartSeq:?UPR_SIZES_BY_SEQ,
            EndSeq:?UPR_SIZES_BY_SEQ,
-           _PartUuid:?UPR_SIZES_PARTITION_UUID,
-           _HighSeq:?UPR_SIZES_BY_SEQ>>} ->
+           PartUuid:(?UPR_SIZES_PARTITION_UUID div 8)/binary,
+           PartHighSeq:?UPR_SIZES_BY_SEQ>>} ->
         FailoverLog = get_failover_log(PartId),
-        PartSeq = get_sequence_number(PartId),
-        case StartSeq =< PartSeq of
+        case lists:member({PartUuid, PartHighSeq}, FailoverLog) orelse
+            StartSeq =:= 0 of
         true ->
-            StreamOk = encode_stream_request_ok(RequestId, FailoverLog),
-            ok = gen_tcp:send(Socket, StreamOk),
-            ok = gen_server:call(
-                ?MODULE, {add_stream, PartId, RequestId, StartSeq}),
-
-            gen_server:call(?MODULE, {send_snapshot, Socket, PartId, EndSeq}),
-
-            StreamEnd = encode_stream_end(PartId, RequestId),
-            ok = gen_tcp:send(Socket, StreamEnd);
-        % requested sequence number is higher than the db contains
-        % => rollback
+            send_ok_or_rollback(
+                Socket, RequestId, PartId, StartSeq, EndSeq, FailoverLog);
         false ->
-            StreamRollback = encode_stream_request_rollback(
-                RequestId, PartSeq),
-            ok = gen_tcp:send(Socket, StreamRollback)
+            StreamNotFound = encode_stream_request_not_found(RequestId),
+            ok = gen_tcp:send(Socket, StreamNotFound)
         end
+    end.
+
+send_ok_or_rollback(Socket, RequestId, PartId, StartSeq, EndSeq,
+        FailoverLog) ->
+    PartSeq = get_sequence_number(PartId),
+    case StartSeq =< PartSeq of
+    true ->
+        StreamOk = encode_stream_request_ok(RequestId, FailoverLog),
+        ok = gen_tcp:send(Socket, StreamOk),
+        ok = gen_server:call(
+            ?MODULE, {add_stream, PartId, RequestId, StartSeq}),
+
+        ok = gen_server:call(?MODULE, {send_snapshot, Socket, PartId, EndSeq}),
+
+        StreamEnd = encode_stream_end(PartId, RequestId),
+        ok = gen_tcp:send(Socket, StreamEnd);
+    % requested sequence number is higher than the db contains
+    % => rollback
+    false ->
+        StreamRollback = encode_stream_request_rollback(RequestId, PartSeq),
+        ok = gen_tcp:send(Socket, StreamRollback)
     end.
 
 handle_failover_log(Socket, RequestId, PartId) ->
@@ -496,6 +506,17 @@ encode_stream_request_ok(RequestId, FailoverLog) ->
               RequestId:?UPR_SIZES_OPAQUE,
               0:?UPR_SIZES_CAS>>,
     <<Header/binary, Value/binary>>.
+
+encode_stream_request_not_found(RequestId) ->
+    <<?UPR_MAGIC_RESPONSE,
+      ?UPR_OPCODE_STREAM_REQUEST,
+      0:?UPR_SIZES_KEY_LENGTH,
+      0,
+      0,
+      ?UPR_STATUS_KEY_NOT_FOUND:?UPR_SIZES_STATUS,
+      0:?UPR_SIZES_BODY,
+      RequestId:?UPR_SIZES_OPAQUE,
+      0:?UPR_SIZES_CAS>>.
 
 %UPR_STREAM_REQ response
 %Field        (offset) (value)

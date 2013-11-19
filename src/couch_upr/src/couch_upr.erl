@@ -15,7 +15,7 @@
 
 % Public API
 -export([start/1]).
--export([enum_docs_since/6, get_failover_log/2]).
+-export([enum_docs_since/7, get_failover_log/2]).
 -export([get_sequence_number/1]).
 
 % gen_server callbacks
@@ -67,12 +67,11 @@ start(Name) ->
     gen_server:start_link(?MODULE, [Name], []).
 
 
-% XXX vmx 2013-09-04: Use the partition version instead of StartSeq
-enum_docs_since(Pid, PartId, StartSeq, EndSeq, InFun, InAcc) ->
+enum_docs_since(Pid, PartId, PartVersion, StartSeq, EndSeq, InFun, InAcc) ->
     RequestId = gen_server:call(Pid, get_request_id),
     {Socket, Timeout} = gen_server:call(Pid, get_socket_and_timeout),
     StreamRequest = encode_stream_request(
-        PartId, RequestId, 0, StartSeq, EndSeq, 5678, 0),
+        PartId, RequestId, 0, StartSeq, EndSeq, PartVersion),
     ok = gen_tcp:send(Socket, StreamRequest),
     Result = receive_single_snapshot(Socket, Timeout, InFun, {nil, InAcc}),
     case Result of
@@ -177,7 +176,9 @@ receive_single_snapshot(Socket, Timeout, MutationFun, Acc) ->
                     {rollback, RollbackSeq};
                 {error, closed} ->
                     io:format("vmx: closed5~n", [])
-                end
+                end;
+            ?UPR_STATUS_KEY_NOT_FOUND ->
+                {error, wrong_partition_version}
             end;
         {snapshot_marker, _PartId, _RequestId} ->
             receive_single_snapshot(Socket, Timeout, MutationFun, Acc);
@@ -398,13 +399,13 @@ encode_open_connection(Name, RequestId) ->
 %  vb UUID    (48-55): 0x00000000feeddeca
 %  high seqno (56-63): 0x0000000000000000
 encode_stream_request(PartId, RequestId, Flags, StartSeq, EndSeq,
-        PartUuid, HighSeq) ->
+        {PartUuid, PartHighSeq}) ->
     Body = <<Flags:?UPR_SIZES_FLAGS,
              0:?UPR_SIZES_RESERVED,
              StartSeq:?UPR_SIZES_BY_SEQ,
              EndSeq:?UPR_SIZES_BY_SEQ,
-             PartUuid:?UPR_SIZES_PARTITION_UUID,
-             HighSeq:?UPR_SIZES_BY_SEQ>>,
+             PartUuid:(?UPR_SIZES_PARTITION_UUID div 8)/binary,
+             PartHighSeq:?UPR_SIZES_BY_SEQ>>,
 
     BodyLength = byte_size(Body),
     ExtraLength = BodyLength,
