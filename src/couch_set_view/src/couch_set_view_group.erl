@@ -347,7 +347,8 @@ do_init({_, SetName, _} = InitArgs) ->
             fd = Fd,
             index_header = Header,
             type = Type,
-            category = Category
+            category = Category,
+            mod = Mod
         } = Group,
         RefCounter = new_fd_ref_counter(Fd),
         PartitionsList = make_partitions_list(Group),
@@ -408,6 +409,11 @@ do_init({_, SetName, _} = InitArgs) ->
                            []
                        end)
         end,
+        UprName = <<"Indexer ", (atom_to_binary(Mod, latin1))/binary, ": ",
+            SetName/binary, " ", (Group#set_view_group.name)/binary,
+            " (", (atom_to_binary(Category, latin1))/binary, "/",
+            (atom_to_binary(Type, latin1))/binary, ")">>,
+        {ok, UprPid} = couch_upr:start(UprName),
         State = #state{
             init_args = InitArgs,
             replica_group = ReplicaPid,
@@ -415,7 +421,8 @@ do_init({_, SetName, _} = InitArgs) ->
             group = Group#set_view_group{
                 ref_counter = RefCounter,
                 db_set = DbSet,
-                replica_pid = ReplicaPid
+                replica_pid = ReplicaPid,
+                upr_pid = UprPid
             }
         },
         State2 = monitor_partitions(State, [master | PartitionsList]),
@@ -1313,6 +1320,14 @@ handle_info({'EXIT', Pid, Reason}, #state{compactor_pid = Pid} = State) ->
 
 handle_info({'EXIT', Pid, Reason}, #state{group = #set_view_group{db_set = Pid}} = State) ->
     {stop, {db_set_died, Reason}, State};
+
+handle_info({'EXIT', Pid, Reason},
+        #state{group = #set_view_group{upr_pid = Pid}} = State) ->
+    ?LOG_ERROR("Set view `~s`, ~s (~s) group `~s`,"
+               " UPR process ~p died with unexpected reason: ~p",
+               [?set_name(State), ?type(State), ?category(State),
+                ?group_id(State), Pid, Reason]),
+    {stop, {upr_died, Reason}, State};
 
 handle_info({'EXIT', Pid, Reason}, State) ->
     ?LOG_ERROR("Set view `~s`, ~s (~s) group `~s`,"

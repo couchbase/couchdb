@@ -129,8 +129,7 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
         type = Type,
         name = DDocId,
         sig = GroupSig,
-        mod = Mod,
-        category = Category
+        mod = Mod
     } = Group,
 
     StartTime = os:timestamp(),
@@ -139,9 +138,6 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
     WriteQueueOptions = [{max_size, ?WRITE_QUEUE_SIZE}, {max_items, infinity}],
     {ok, MapQueue} = couch_work_queue:new(MapQueueOptions),
     {ok, WriteQueue} = couch_work_queue:new(WriteQueueOptions),
-    Name = <<"Indexer: ", (atom_to_binary(Mod, latin1))/binary,
-        " (", (atom_to_binary(Category, latin1))/binary, ")">>,
-    {ok, UprPid} = couch_upr:start(Name),
 
     Mapper = spawn_link(fun() ->
         try
@@ -226,9 +222,8 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
             ok
         end,
         try
-            load_changes(Owner, Parent, UprPid, Group, MapQueue,
-                         ActiveParts, PassiveParts,
-                         WriterAcc#writer_acc.initial_build)
+            load_changes(Owner, Parent, Group, MapQueue, ActiveParts,
+                PassiveParts, WriterAcc#writer_acc.initial_build)
         catch
         throw:purge ->
             exit(purge);
@@ -310,13 +305,14 @@ wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup) ->
     end.
 
 
-load_changes(Owner, Updater, UprPid, Group, MapQueue, ActiveParts,
-             PassiveParts, InitialBuild) ->
+load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
+        InitialBuild) ->
     #set_view_group{
         set_name = SetName,
         name = DDocId,
         type = GroupType,
-        index_header = #set_view_index_header{seqs = SinceSeqs}
+        index_header = #set_view_index_header{seqs = SinceSeqs},
+        upr_pid = UprPid
     } = Group,
 
     MaxDocSize = list_to_integer(
