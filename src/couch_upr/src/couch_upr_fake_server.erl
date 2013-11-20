@@ -88,7 +88,6 @@
 
 -record(state, {
     streams = [], %:: [{partition_id(), {request_id(), sequence_number()}}]
-    socket = nil,
     setname = nil,
     failover_logs = dict:new()
 }).
@@ -137,9 +136,8 @@ init([Port, SetName]) ->
 
 % Returns 'ok' when the response contains mutations, returns 'done'
 % if there were no further mutations
-handle_call({send_snapshot, PartId, EndSeq}, _From, State) ->
+handle_call({send_snapshot, Socket, PartId, EndSeq}, _From, State) ->
     #state{
-        socket = Socket,
         streams = Streams,
         setname = SetName
     } = State,
@@ -157,11 +155,6 @@ handle_call({send_snapshot, PartId, EndSeq}, _From, State) ->
 handle_call({add_stream, PartId, RequestId, StartSeq}, _From, State) ->
     {reply, ok, State#state{
         streams = [{PartId, {RequestId, StartSeq}}|State#state.streams]
-    }};
-
-handle_call({set_socket, Socket}, _From, State) ->
-    {reply, ok, State#state{
-        socket = Socket
     }};
 
 handle_call({set_failover_log, PartId, FailoverLog}, _From, State) ->
@@ -209,7 +202,6 @@ accept(Listen) ->
 
 accept_loop(Listen) ->
     {ok, Socket} = gen_tcp:accept(Listen),
-    ok = gen_server:call(?MODULE, {set_socket, Socket}),
     % Let the server spawn a new process and replace this loop
     % with the read loop, to avoid blocking
     accept(Listen),
@@ -278,7 +270,7 @@ handle_stream_request_body(Socket, BodyLength, RequestId, PartId) ->
             ok = gen_server:call(
                 ?MODULE, {add_stream, PartId, RequestId, StartSeq}),
 
-            gen_server:call(?MODULE, {send_snapshot, PartId, EndSeq}),
+            gen_server:call(?MODULE, {send_snapshot, Socket, PartId, EndSeq}),
 
             StreamEnd = encode_stream_end(PartId, RequestId),
             ok = gen_tcp:send(Socket, StreamEnd);
