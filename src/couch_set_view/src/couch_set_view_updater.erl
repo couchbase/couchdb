@@ -325,38 +325,15 @@ load_changes(Owner, Updater, UprPid, Group, MapQueue, ActiveParts,
         true ->
             {AccCount, AccSeqs};
         false ->
-            Db = case couch_db:open_int(?dbname(SetName, PartId), []) of
-            {ok, PartDb} ->
-                PartDb;
-            Error ->
-                ErrorMsg = io_lib:format("Updater error opening database `~s': ~w",
-                                         [?dbname(SetName, PartId), Error]),
-                throw({error, iolist_to_binary(ErrorMsg)})
-            end,
-            PurgeSeq = couch_db:get_purge_seq(Db),
             Since = couch_util:get_value(PartId, SinceSeqs, 0),
-            case (PurgeSeq > Since) andalso (Since > 0) of
-            true ->
-                ?LOG_INFO("Updater ~s set view group `~s` from set `~s`, exiting"
-			  " with purge reason because partition ~p has purge seq"
-			  " ~p and last indexed seq is ~p",
-			  [GroupType, DDocId, SetName, PartId, PurgeSeq, Since]),
-                throw(purge);
-            false ->
-                ok
+            ChangesWrapper = fun(Item, AccCount2) ->
+                queue_doc(Item, MapQueue, Group, MaxDocSize, InitialBuild),
+                AccCount2 + 1
             end,
-            try
-                ChangesWrapper = fun(Item, AccCount2) ->
-                    queue_doc(Item, MapQueue, Group, MaxDocSize, InitialBuild),
-                    AccCount2 + 1
-                end,
-                {ok, EndSeq} = couch_upr:get_sequence_number(PartId),
-                AccCount3 = couch_upr:enum_docs_since(
-                    UprPid, PartId, Since, EndSeq, ChangesWrapper, AccCount),
-                {AccCount3, orddict:store(PartId, Db#db.update_seq, AccSeqs)}
-            after
-                ok = couch_db:close(Db)
-            end
+            {ok, EndSeq} = couch_upr:get_sequence_number(PartId),
+            AccCount3 = couch_upr:enum_docs_since(
+                UprPid, PartId, Since, EndSeq, ChangesWrapper, AccCount),
+            {AccCount3, orddict:store(PartId, EndSeq, AccSeqs)}
         end
     end,
 

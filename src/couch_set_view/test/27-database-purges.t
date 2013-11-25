@@ -41,14 +41,17 @@ initial_num_docs() -> 17600.  % must be multiple of num_set_partitions()
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(18),
-    case (catch test()) of
-        ok ->
-            etap:end_tests();
-        Other ->
-            etap:diag(io_lib:format("Test died abnormally: ~p", [Other])),
-            etap:bail(Other)
-    end,
+    etap:plan({skip, "WARNING: This test is disabled as the code "
+              "currently doesn't support purges."}),
+
+    %etap:plan(18),
+    %case (catch test()) of
+    %    ok ->
+    %        etap:end_tests();
+    %    Other ->
+    %        etap:diag(io_lib:format("Test died abnormally: ~p", [Other])),
+    %        etap:bail(Other)
+    %end,
     ok.
 
 
