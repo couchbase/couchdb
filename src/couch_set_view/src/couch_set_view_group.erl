@@ -1195,8 +1195,9 @@ handle_info({updater_info, _Pid, {state, _UpdaterState}}, State) ->
     % Message from an old updater, ignore.
     {noreply, State, ?GET_TIMEOUT(State)};
 
-handle_info({'EXIT', Pid, {clean_group, NewGroup0, Count, Time}}, #state{cleaner_pid = Pid} = State) ->
+handle_info({'EXIT', Pid, {clean_group, CleanGroup, Count, Time}}, #state{cleaner_pid = Pid} = State) ->
     #state{group = OldGroup} = State,
+    {ok, NewGroup0} = couch_set_view_util:refresh_viewgroup_header(CleanGroup),
     NewGroup = update_clean_group_seqs(OldGroup, NewGroup0),
     ?LOG_INFO("Cleanup finished for set view `~s`, ~s (~s) group `~s`~n"
               "Removed ~p values from the index in ~.3f seconds~n"
@@ -1211,7 +1212,7 @@ handle_info({'EXIT', Pid, {clean_group, NewGroup0, Count, Time}}, #state{cleaner
               "Current set of replica partitions: ~w~n"
               "Current set of replicas on transfer: ~w~n";
           false ->
-               []
+              []
           end,
           [?set_name(State), ?type(State), ?category(State), ?group_id(State),
            Count, Time,
@@ -1234,7 +1235,8 @@ handle_info({'EXIT', Pid, {clean_group, NewGroup0, Count, Time}}, #state{cleaner
     inc_cleanups(State2#state.group, Time, Count, false),
     {noreply, maybe_apply_pending_transition(State2)};
 
-handle_info({'EXIT', Pid, Reason}, #state{cleaner_pid = Pid} = State) ->
+handle_info({'EXIT', Pid, Reason}, #state{cleaner_pid = Pid, group = Group} = State) ->
+    ok = couch_file:refresh_eof(Group#set_view_group.fd),
     ?LOG_ERROR("Set view `~s`, ~s (~s) group `~s`, cleanup process ~p"
                " died with unexpected reason: ~p",
                [?set_name(State), ?type(State), ?category(State),
@@ -2624,7 +2626,7 @@ maybe_start_cleaner(#state{group = Group} = State) ->
 -spec stop_cleaner(#state{}) -> #state{}.
 stop_cleaner(#state{cleaner_pid = nil} = State) ->
     State;
-stop_cleaner(#state{cleaner_pid = Pid} = State) when is_pid(Pid) ->
+stop_cleaner(#state{cleaner_pid = Pid, group = Group} = State) when is_pid(Pid) ->
     MRef = erlang:monitor(process, Pid),
     Pid ! stop,
     unlink(Pid),
@@ -2638,6 +2640,7 @@ stop_cleaner(#state{cleaner_pid = Pid} = State) when is_pid(Pid) ->
         after_cleaner_stopped(State, Reason)
     after 5000 ->
         couch_util:shutdown_sync(Pid),
+        ok = couch_file:refresh_eof(Group#set_view_group.fd),
         ?LOG_ERROR("Timeout stopping cleanup process ~p for"
                    " set view `~s`, ~s (~s) group `~s`",
                    [Pid, ?set_name(State), ?type(State), ?category(State),
@@ -2648,8 +2651,9 @@ stop_cleaner(#state{cleaner_pid = Pid} = State) when is_pid(Pid) ->
     NewState.
 
 
-after_cleaner_stopped(State, {clean_group, NewGroup0, Count, Time}) ->
+after_cleaner_stopped(State, {clean_group, CleanGroup, Count, Time}) ->
     #state{group = OldGroup} = State,
+    {ok, NewGroup0} = couch_set_view_util:refresh_viewgroup_header(CleanGroup),
     NewGroup = update_clean_group_seqs(OldGroup, NewGroup0),
     ?LOG_INFO("Stopped cleanup process for"
               " set view `~s`, ~s (~s) group `~s`.~n"
@@ -2670,7 +2674,8 @@ after_cleaner_stopped(State, {clean_group, NewGroup0, Count, Time}) ->
         group = NewGroup,
         cleaner_pid = nil
     };
-after_cleaner_stopped(#state{cleaner_pid = Pid} = State, Reason) ->
+after_cleaner_stopped(#state{cleaner_pid = Pid, group = Group} = State, Reason) ->
+    ok = couch_file:refresh_eof(Group#set_view_group.fd),
     ?LOG_ERROR("Cleanup process ~p for set view `~s`, ~s (~s) group `~s`,"
                " died with reason: ~p",
                [Pid, ?set_name(State), ?type(State), ?category(State),
