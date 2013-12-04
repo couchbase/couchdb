@@ -370,7 +370,8 @@ group_to_header_bin(#set_view_group{index_header = Header, sig = Sig}) ->
         has_replica = HasReplica,
         replicas_on_transfer = RepsOnTransfer,
         pending_transition = PendingTrans,
-        unindexable_seqs = Unindexable
+        unindexable_seqs = Unindexable,
+        partition_versions = PartVersions
     } = Header,
     ViewStatesBin = lists:foldl(
         fun(State, Acc) ->
@@ -389,7 +390,8 @@ group_to_header_bin(#set_view_group{index_header = Header, sig = Sig}) ->
              (bool_to_bin(HasReplica))/binary,
              (length(RepsOnTransfer)):16, (partitions_to_bin(RepsOnTransfer, <<>>))/binary,
              (pending_trans_to_bin(PendingTrans))/binary,
-             (length(Unindexable)):16, (seqs_to_bin(Unindexable, <<>>))/binary
+             (length(Unindexable)):16, (seqs_to_bin(Unindexable, <<>>))/binary,
+             (length(PartVersions)):16, (partition_versions_to_bin(PartVersions, <<>>))/binary
            >>,
     <<Sig/binary, (couch_compress:compress(Base))/binary>>.
 
@@ -438,7 +440,12 @@ header_bin_to_term(HeaderBin) ->
       UnindexableCount:16,
       Rest8/binary
     >> = Rest7,
-    {Unindexable, <<>>} = bin_to_seqs(UnindexableCount, Rest8, []),
+    {Unindexable, Rest9} = bin_to_seqs(UnindexableCount, Rest8, []),
+    <<
+      NumPartVersions:16,
+      Rest10/binary
+    >> = Rest9,
+    {PartVersions, <<>>} = bin_to_partition_versions(NumPartVersions, Rest10, []),
     #set_view_index_header{
         version = Version,
         num_partitions = NumParts,
@@ -451,7 +458,8 @@ header_bin_to_term(HeaderBin) ->
         has_replica = case HasReplica of 1 -> true; 0 -> false end,
         replicas_on_transfer = ReplicasOnTransfer,
         pending_transition = PendingTrans,
-        unindexable_seqs = Unindexable
+        unindexable_seqs = Unindexable,
+        partition_versions = PartVersions
     }.
 
 
@@ -491,6 +499,19 @@ pending_trans_to_bin(#set_view_transition{active = A, passive = P, unindexable =
     <<(length(A)):16, (partitions_to_bin(A, <<>>))/binary,
       (length(P)):16, (partitions_to_bin(P, <<>>))/binary,
       (length(U)):16, (partitions_to_bin(U, <<>>))/binary>>.
+
+
+partition_versions_to_bin([], Acc) ->
+    Acc;
+partition_versions_to_bin([{P, F} | Rest], Acc0) ->
+    Bin = failoverlog_to_bin(F, <<>>),
+    Acc = <<Acc0/binary, P:16, (length(F)):16, Bin/binary>>,
+    partition_versions_to_bin(Rest, Acc).
+
+failoverlog_to_bin([], Acc) ->
+    Acc;
+failoverlog_to_bin([{Uuid, Seq}| Rest], Acc) ->
+    failoverlog_to_bin(Rest, <<Acc/binary, Uuid:8/binary, Seq:64>>).
 
 
 bin_to_pending_trans(<<NumActive:16, Rest/binary>>) ->
@@ -534,6 +555,19 @@ bin_to_partitions(0, Rest, Acc) ->
     {lists:reverse(Acc), Rest};
 bin_to_partitions(Count, <<P:16, Rest/binary>>, Acc) ->
     bin_to_partitions(Count - 1, Rest, [P | Acc]).
+
+
+bin_to_partition_versions(0, Rest, Acc) ->
+    {lists:reverse(Acc), Rest};
+bin_to_partition_versions(Count, <<P:16, NumFailoverLog:16, Rest0/binary>>,
+        Acc) ->
+    {FailoverLog, Rest} = bin_to_failoverlog(NumFailoverLog, Rest0, []),
+    bin_to_partition_versions(Count - 1, Rest, [{P, FailoverLog} | Acc]).
+
+bin_to_failoverlog(0, Rest, Acc) ->
+    {lists:reverse(Acc), Rest};
+bin_to_failoverlog(Count, <<Uuid:8/binary, Seq:64, Rest/binary>>, Acc) ->
+    bin_to_failoverlog(Count - 1, Rest, [{Uuid, Seq} | Acc]).
 
 
 -spec open_db(binary(), non_neg_integer() | 'master') -> #db{}.

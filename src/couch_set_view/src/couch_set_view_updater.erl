@@ -173,7 +173,19 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
         try
             Mod:start_reduce_context(Group),
             try
-                FinalWriterAcc = do_writes(WriterAcc2),
+                WriterAcc3 = do_writes(WriterAcc2),
+                receive
+                {new_partition_versions, PartVersions} ->
+                    WriterAccGroup = WriterAcc3#writer_acc.group,
+                    WriterAccHeader = WriterAccGroup#set_view_group.index_header,
+                    FinalWriterAcc = WriterAcc3#writer_acc{
+                        group = WriterAccGroup#set_view_group{
+                            index_header = WriterAccHeader#set_view_index_header{
+                                partition_versions = PartVersions
+                            }
+                        }
+                    }
+                end,
                 Parent ! {writer_finished, FinalWriterAcc}
             after
                 Mod:end_reduce_context(Group)
@@ -222,8 +234,10 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
             ok
         end,
         try
-            load_changes(Owner, Parent, Group, MapQueue, ActiveParts,
-                PassiveParts, WriterAcc#writer_acc.initial_build)
+            PartVersions = load_changes(
+                Owner, Parent, Group, MapQueue, ActiveParts, PassiveParts,
+                WriterAcc#writer_acc.initial_build),
+            Parent ! {new_partition_versions, PartVersions}
         catch
         throw:purge ->
             exit(purge);
@@ -266,6 +280,9 @@ wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup) ->
     continue ->
         % Used by unit tests.
         DocLoader ! continue,
+        wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup);
+    {new_partition_versions, PartVersions} ->
+        Writer ! {new_partition_versions, PartVersions},
         wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup);
     {writer_finished, WriterAcc} ->
         Stats0 = WriterAcc#writer_acc.stats,
@@ -311,27 +328,33 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
         set_name = SetName,
         name = DDocId,
         type = GroupType,
-        index_header = #set_view_index_header{seqs = SinceSeqs},
+        index_header = #set_view_index_header{
+            seqs = SinceSeqs,
+            partition_versions = PartVersions0
+        },
         upr_pid = UprPid
     } = Group,
 
     MaxDocSize = list_to_integer(
         couch_config:get("set_views", "indexer_max_doc_size", "0")),
-    FoldFun = fun(PartId, {AccCount, AccSeqs}) ->
+    FoldFun = fun(PartId, {AccCount, AccSeqs, AccVersions}) ->
         case couch_set_view_util:has_part_seq(PartId, ?set_unindexable_seqs(Group))
             andalso not lists:member(PartId, ?set_replicas_on_transfer(Group)) of
         true ->
-            {AccCount, AccSeqs};
+            {AccCount, AccSeqs, AccVersions};
         false ->
             Since = couch_util:get_value(PartId, SinceSeqs, 0),
+            PartVersion = hd(couch_util:get_value(PartId, AccVersions)),
             ChangesWrapper = fun(Item, AccCount2) ->
                 queue_doc(Item, MapQueue, Group, MaxDocSize, InitialBuild),
                 AccCount2 + 1
             end,
             {ok, EndSeq} = couch_upr:get_sequence_number(PartId),
-            {ok, AccCount3, _NewPartVersions} = couch_upr:enum_docs_since(
-                UprPid, PartId, Since, EndSeq, ChangesWrapper, AccCount),
-            {AccCount3, orddict:store(PartId, EndSeq, AccSeqs)}
+            {ok, AccCount3, NewPartVersions} = couch_upr:enum_docs_since(
+                UprPid, PartId, PartVersion, Since, EndSeq, ChangesWrapper,
+                AccCount),
+            {AccCount3, orddict:store(PartId, EndSeq, AccSeqs),
+                lists:ukeymerge(1, [{PartId, NewPartVersions}], AccVersions)}
         end
     end,
 
@@ -339,35 +362,40 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
     case ActiveParts of
     [] ->
         ActiveChangesCount = 0,
-        MaxSeqs = orddict:new();
+        MaxSeqs = orddict:new(),
+        PartVersions = PartVersions0;
     _ ->
         ?LOG_INFO("Updater reading changes from active partitions to "
                   "update ~s set view group `~s` from set `~s`",
                   [GroupType, DDocId, SetName]),
-        {ActiveChangesCount, MaxSeqs} = lists:foldl(
-            FoldFun, {0, orddict:new()}, ActiveParts)
+        {ActiveChangesCount, MaxSeqs, PartVersions} = lists:foldl(
+            FoldFun, {0, orddict:new(), PartVersions0}, ActiveParts)
     end,
     case PassiveParts of
     [] ->
         FinalChangesCount = ActiveChangesCount,
-        MaxSeqs2 = MaxSeqs;
+        MaxSeqs2 = MaxSeqs,
+        PartVersions2 = PartVersions;
     _ ->
         ?LOG_INFO("Updater reading changes from passive partitions to "
                   "update ~s set view group `~s` from set `~s`",
                   [GroupType, DDocId, SetName]),
-        {FinalChangesCount, MaxSeqs2} = lists:foldl(
-            FoldFun, {ActiveChangesCount, MaxSeqs}, PassiveParts)
+        {FinalChangesCount, MaxSeqs2, PartVersions2} = lists:foldl(
+            FoldFun, {ActiveChangesCount, MaxSeqs, PartVersions}, PassiveParts)
     end,
-    {FinalChangesCount3, MaxSeqs3} = load_changes_from_passive_parts_in_mailbox(
-        Group, FoldFun, FinalChangesCount, MaxSeqs2),
+    {FinalChangesCount3, MaxSeqs3, PartVersions3} =
+        load_changes_from_passive_parts_in_mailbox(
+            Group, FoldFun, FinalChangesCount, MaxSeqs2, PartVersions2),
     couch_work_queue:close(MapQueue),
     ?LOG_INFO("Updater for ~s set view group `~s`, set `~s`, read a total of ~p changes",
               [GroupType, DDocId, SetName, FinalChangesCount3]),
     ?LOG_DEBUG("Updater for ~s set view group `~s`, set `~s`, max partition seqs found:~n~w",
-               [GroupType, DDocId, SetName, MaxSeqs3]).
+               [GroupType, DDocId, SetName, MaxSeqs3]),
+    PartVersions3.
 
 
-load_changes_from_passive_parts_in_mailbox(Group, FoldFun, ChangesCount, MaxSeqs) ->
+load_changes_from_passive_parts_in_mailbox(
+        Group, FoldFun, ChangesCount, MaxSeqs, PartVersions0) ->
     #set_view_group{
         set_name = SetName,
         name = DDocId,
@@ -376,13 +404,17 @@ load_changes_from_passive_parts_in_mailbox(Group, FoldFun, ChangesCount, MaxSeqs
     receive
     {new_passive_partitions, Parts0} ->
         Parts = get_more_passive_partitions(Parts0),
+        AddPartVersions = [{P, [{<<0,0,0,0,0,0,0,0>>, 0}]} || P <- Parts],
+        PartVersions = lists:ukeymerge(1, AddPartVersions, PartVersions0),
         ?LOG_INFO("Updater reading changes from new passive partitions ~w to "
                   "update ~s set view group `~s` from set `~s`",
                   [Parts, GroupType, DDocId, SetName]),
-        {ChangesCount2, MaxSeqs2} = lists:foldl(FoldFun, {ChangesCount, MaxSeqs}, Parts),
-        load_changes_from_passive_parts_in_mailbox(Group, FoldFun, ChangesCount2, MaxSeqs2)
+        {ChangesCount2, MaxSeqs2, PartVersions2} = lists:foldl(
+            FoldFun, {ChangesCount, MaxSeqs, PartVersions}, Parts),
+        load_changes_from_passive_parts_in_mailbox(
+            Group, FoldFun, ChangesCount2, MaxSeqs2, PartVersions2)
     after 0 ->
-        {ChangesCount, MaxSeqs}
+        {ChangesCount, MaxSeqs, PartVersions0}
     end.
 
 
