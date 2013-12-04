@@ -26,7 +26,7 @@ num_docs() -> 128.  % keep it a multiple of num_set_partitions()
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(54),
+    etap:plan(63),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -58,6 +58,7 @@ test() ->
     test_rollback_mark_for_cleanup(),
     test_rollback_multiple_partitions(),
     test_rollback_multiple_partitions_missing(),
+    test_rollback_unindexable_now_indexable_seqs(),
 
     couch_set_view_test_util:stop_server(),
     ok.
@@ -570,6 +571,90 @@ test_rollback_multiple_partitions_missing() ->
     Expected = lists:keydelete(MissingPartition, 1, GroupSeqs1) ++
         [{MissingPartition, 0}],
     etap:is(get_seq_from_group(), Expected, "Rollback is correct"),
+    shutdown_group().
+
+
+test_rollback_unindexable_now_indexable_seqs() ->
+    etap:diag("Testing rollback with header that contains unindexable "
+        "partitions which are then made indexable"),
+    setup_test(30),
+
+    % Mark a few partitions as unindexable, insert data and make
+    % sure a new header is written.
+
+    populate_set(1, num_docs() div 2),
+    {ok, {_ViewResults1}} = couch_set_view_test_util:query_view(
+        test_set_name(), ddoc_id(), <<"testred">>, []),
+    Fd = get_fd(),
+    Unindexable = lists:seq(num_set_partitions() div 2, num_set_partitions() - 1),
+    ok = couch_set_view:mark_partitions_unindexable(
+        mapreduce_view, test_set_name(), ddoc_id(), Unindexable),
+
+    populate_set((num_docs() div 2) + 1, num_docs()),
+    trigger_updater(),
+
+    GroupSeqs = get_seq_from_group(),
+    GroupSeqsUnindexable = get_unindexable_seq_from_group(),
+    etap:is([PartId || {PartId, _} <- GroupSeqsUnindexable], Unindexable,
+        "Partitions were set to unindexable"),
+
+    % Mark one partition indexable that was previously marked as unindexable,
+    % insert more data and make sure a new header is written.
+
+    Indexable = lists:seq(0, num_set_partitions() div 2),
+    ok = couch_set_view:mark_partitions_indexable(
+        mapreduce_view, test_set_name(), ddoc_id(), Indexable),
+    populate_set(num_docs() + 1, 2 * num_docs()),
+    trigger_updater(),
+    GroupSeqs2 = get_seq_from_group(),
+    GroupSeqsUnindexable2 = get_unindexable_seq_from_group(),
+    etap:is([PartId || {PartId, _} <- GroupSeqs2], Indexable,
+        "The expected partitions are indexable"),
+    etap:is(GroupSeqsUnindexable2, tl(GroupSeqsUnindexable),
+        "The expected partitions are unindexable"),
+
+    {ok, HeaderBin1, _Pos1} = couch_file:read_header_bin(Fd),
+    Header1 = couch_set_view_util:header_bin_to_term(HeaderBin1),
+    HeaderSeqs1 = Header1#set_view_index_header.seqs,
+    HeaderSeqsUnindexable1 = Header1#set_view_index_header.unindexable_seqs,
+    etap:is(HeaderSeqs1, GroupSeqs2,
+        "The on-disk header has the same indexable sequence numbers as the "
+        "group header"),
+    etap:is(HeaderSeqsUnindexable1, GroupSeqsUnindexable2,
+        "The on-disk header has the same unindexable sequence numbers as the "
+        "group header"),
+
+    % Rollback to the state when more unindexable partitions existed
+
+    PartId = num_set_partitions() div 2,
+    PartSeq = couch_set_view_util:get_part_seq(PartId, GroupSeqsUnindexable),
+    GroupPid = get_group_pid(),
+    ok = couch_set_view_group:rollback(GroupPid, [{PartId, PartSeq}]),
+
+    % Check that the new header contains the same indexable and unindexable
+    % partitions as before the rollback. Only their sequence numbers should
+    % be different.
+
+    {ok, HeaderBin2, _Pos2} = couch_file:read_header_bin(Fd),
+    Header2 = couch_set_view_util:header_bin_to_term(HeaderBin2),
+    HeaderSeqs2 = Header2#set_view_index_header.seqs,
+    HeaderSeqsUnindexable2 = Header2#set_view_index_header.unindexable_seqs,
+    etap:is([PartId || {PartId, _} <- HeaderSeqs2],
+        [PartId || {PartId, _} <- GroupSeqs2],
+        "The most recent header of the truncated file has the correct "
+        "indexable partition IDs"),
+    etap:is([PartId || {PartId, _} <- HeaderSeqsUnindexable2],
+        [PartId || {PartId, _} <- GroupSeqsUnindexable2],
+        "The most recent header of the truncated file has the correct "
+        "unindexable partition IDs"),
+    etap:isnt([Seq || {_, Seq} <- HeaderSeqs2],
+        [Seq || {_, Seq} <- GroupSeqs2],
+        "The most recent header of the truncated file has different "
+        "indexable partition sequence numbers than the original header"),
+    etap:is([Seq || {_, Seq} <- HeaderSeqsUnindexable2],
+        [Seq || {_, Seq} <- GroupSeqsUnindexable2],
+        "The most recent header of the truncated file has the same "
+        "unindexable partition sequence numbers than the original header"),
     shutdown_group().
 
 
