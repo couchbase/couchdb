@@ -267,7 +267,7 @@ read_header_bin(Fd) ->
 
 read_header(Fd, Pos) ->
     case read_header_bin(Fd, Pos) of
-    {ok, Bin, _Size} ->
+    {ok, Bin} ->
         {ok, binary_to_term(Bin)};
     Else ->
         Else
@@ -503,7 +503,7 @@ do_find_header(_Fd, -1) ->
     no_valid_header;
 do_find_header(Fd, Block) ->
     case (catch load_header(Fd, Block)) of
-    {ok, Bin, _Size} ->
+    {ok, Bin} ->
         {ok, Bin, Block * ?SIZE_BLOCK};
     _Error ->
         do_find_header(Fd, Block -1)
@@ -525,7 +525,7 @@ load_header(Fd, Block) ->
     <<Crc32:32, HeaderBin/binary>> =
         iolist_to_binary(remove_block_prefixes(RawBin, 5)),
     Crc32 = erlang:crc32(HeaderBin),
-    {ok, HeaderBin, TotalBytes + 5}.
+    {ok, HeaderBin}.
 
 maybe_read_more_iolist(Buffer, DataSize, NextPos, Fd) ->
     case iolist_size(Buffer) of
