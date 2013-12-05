@@ -710,6 +710,9 @@ handle_call(get_data_size, _From, State) ->
     {reply, {ok, DataSizeInfo}, State, ?GET_TIMEOUT(State)};
 
 handle_call({rollback, RollbackPartSeqs}, _From, State) ->
+    State2 = stop_compactor(State),
+    State3 = stop_cleaner(State2),
+
     #state{
         group = #set_view_group{
             fd = Fd,
@@ -723,13 +726,7 @@ handle_call({rollback, RollbackPartSeqs}, _From, State) ->
             mod = Mod,
             id_btree = IdBtree
         } = Group
-    } = State,
-    ?LOG_INFO("Rollback of set view `~s`, ~s (~s) group `~s`",
-              [?set_name(State), ?type(State), ?category(State),
-               ?group_id(State)]),
-
-    State2 = stop_compactor(State),
-    State3 = stop_cleaner(State2),
+    } = State3,
 
     case rollback_file(Fd, RollbackPartSeqs) of
     {ok, HeaderBin} ->
@@ -761,6 +758,15 @@ handle_call({rollback, RollbackPartSeqs}, _From, State) ->
         NewSeqs = ordsets:union(NewIndexableSeqs, NewUnindexableSeqs),
         Indexable = merge_seqs(GroupIndexable, NewSeqs),
         Unindexable = merge_seqs(GroupUnindexable, NewSeqs),
+
+        ?LOG_INFO("Rollback of set view `~s`, ~s (~s) group `~s` to ~w~n"
+                  "indexable partitions before:   ~w~n"
+                  "indexable partitions after:    ~w~n"
+                  "unindexable partitions before: ~w~n"
+                  "unindexable partitions after:  ~w~n",
+                  [?set_name(State3), ?type(State3), ?category(State3),
+                   ?group_id(State3), RollbackPartSeqs,
+                   GroupIndexable, Indexable, GroupUnindexable, Unindexable]),
 
         % Mark all partitions that the on-disk header contains, but
         % are not part of the current group header for cleanup and
