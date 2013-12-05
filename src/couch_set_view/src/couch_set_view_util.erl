@@ -32,6 +32,7 @@
 -export([set_view_sig/1]).
 -export([check_primary_key_size/5, check_primary_value_size/5]).
 -export([refresh_viewgroup_header/1]).
+-export([shutdown_cleaner/2]).
 
 
 -include("couch_db.hrl").
@@ -652,3 +653,21 @@ refresh_viewgroup_header(Group) ->
         index_header = NewHeader
     },
     {ok, NewGroup}.
+
+
+% Stop cleaner process synchronously
+-spec shutdown_cleaner(#set_view_group{}, pid()) -> 'ok'.
+shutdown_cleaner(#set_view_group{mod = Mod}, Pid) ->
+    case Mod of
+    % For mapreduce view, we have already sent native process stop message
+    % Just wait for the process to die
+    mapreduce_view ->
+        receive
+        {'EXIT', Pid, _} ->
+            ok;
+        {'DOWN', _, process, Pid, _} ->
+            ok
+        end;
+    _ ->
+        couch_util:shutdown_sync(Pid)
+    end.

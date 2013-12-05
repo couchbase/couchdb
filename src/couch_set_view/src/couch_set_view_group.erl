@@ -2639,7 +2639,7 @@ stop_cleaner(#state{cleaner_pid = Pid, group = Group} = State) when is_pid(Pid) 
         receive {'EXIT', Pid, _} -> ok after 0 -> ok end,
         after_cleaner_stopped(State, Reason)
     after 5000 ->
-        couch_util:shutdown_sync(Pid),
+        couch_set_view_util:shutdown_cleaner(Group, Pid),
         ok = couch_file:refresh_eof(Group#set_view_group.fd),
         ?LOG_ERROR("Timeout stopping cleanup process ~p for"
                    " set view `~s`, ~s (~s) group `~s`",

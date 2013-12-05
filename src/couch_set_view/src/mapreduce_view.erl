@@ -482,9 +482,18 @@ cleanup_view_group(Group) ->
     {ok, Group, PurgedCount}.
 
 cleanup_view_group_wait_loop(Port, Group, Acc, PurgedCount) ->
+    #set_view_group{
+        set_name = SetName,
+        name = DDocId,
+        type = Type
+    } = Group,
     receive
     {Port, {exit_status, 0}} ->
         {ok, PurgedCount};
+    {Port, {exit_status, 1}} ->
+        ?LOG_INFO("Set view `~s`, ~s group `~s`, index cleaner stopped successfully.",
+                   [SetName, Type, DDocId]),
+        throw(stopped);
     {Port, {exit_status, Status}} ->
         throw({view_group_cleanup_exit, Status});
     {Port, {data, {noeol, Data}}} ->
@@ -493,17 +502,17 @@ cleanup_view_group_wait_loop(Port, Group, Acc, PurgedCount) ->
         {Count,[]} = string:to_integer(erlang:binary_to_list(Data)),
         cleanup_view_group_wait_loop(Port, Group, Acc, Count);
     {Port, {data, {eol, Data}}} ->
-        #set_view_group{
-            set_name = SetName,
-            name = DDocId,
-            type = Type
-        } = Group,
         Msg = lists:reverse([Data | Acc]),
         ?LOG_ERROR("Set view `~s`, ~s group `~s`, received error from index cleanup: ~s",
                    [SetName, Type, DDocId, Msg]),
         cleanup_view_group_wait_loop(Port, Group, [], PurgedCount);
     {Port, Error} ->
-        throw({view_group_cleanup_error, Error})
+        throw({view_group_cleanup_error, Error});
+    stop ->
+        ?LOG_INFO("Set view `~s`, ~s group `~s`, sending stop message to index cleaner.",
+                   [SetName, Type, DDocId]),
+        true = port_command(Port, "exit"),
+        cleanup_view_group_wait_loop(Port, Group, [Acc], PurgedCount)
     end.
 
 compact_view(Fd, SetView, EmptySetView, FilterFun, BeforeKVWriteFun, Acc0) ->
