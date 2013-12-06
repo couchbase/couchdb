@@ -99,8 +99,7 @@ get_failover_log(Pid, PartId) ->
     {ok, Header} ->
         case parse_header(Header) of
         {failover_log, ?UPR_STATUS_OK, RequestId, BodyLength} ->
-            FailoverLog = receive_failover_log(Socket, Timeout, BodyLength),
-            {ok, FailoverLog};
+            receive_failover_log(Socket, Timeout, BodyLength);
         {failover_log, Status, RequestId, 0} ->
             {error, Status}
         end
@@ -165,7 +164,7 @@ receive_single_snapshot(Socket, Timeout, MutationFun, Acc) ->
         {stream_request, Status, _RequestId, BodyLength} ->
             case Status of
             ?UPR_STATUS_OK ->
-                 FailoverLog = receive_failover_log(
+                 {ok, FailoverLog} = receive_failover_log(
                      Socket, Timeout, BodyLength),
                  {_, MutationAcc} = Acc,
                  Acc2 = {FailoverLog, MutationAcc},
@@ -264,6 +263,8 @@ receive_stream_end(Socket, Timeout, BodyLength) ->
 
 % Returns the failover log as a list 2-tuple pairs with
 % partition UUID and sequence number
+receive_failover_log(_Socket, _Timeout, 0) ->
+    {error, no_failover_log_found};
 receive_failover_log(Socket, Timeout, BodyLength) ->
     case gen_tcp:recv(Socket, BodyLength, Timeout) of
     {ok, Body} ->
@@ -339,7 +340,7 @@ parse_snapshot_deletion(KeyLength, Body) ->
 parse_failover_log(Body) ->
     parse_failover_log(Body, []).
 parse_failover_log(<<>>, Acc) ->
-    lists:reverse(Acc);
+    {ok, lists:reverse(Acc)};
 parse_failover_log(<<PartUuid:(?UPR_SIZES_PARTITION_UUID div 8)/binary,
                      PartSeq:?UPR_SIZES_BY_SEQ,
                      Rest/binary>>,
