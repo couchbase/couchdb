@@ -131,7 +131,7 @@ init([Name]) ->
 
 handle_call(get_request_id, _From, State) ->
     RequestId = case State#state.request_id of
-    RequestId0 when RequestId0 < 1 bsl ?UPR_SIZES_OPAQUE ->
+    RequestId0 when RequestId0 < 1 bsl (?UPR_SIZES_OPAQUE + 1) ->
         RequestId0;
     _ ->
         0
