@@ -245,7 +245,7 @@ parse_header(<<?UPR_MAGIC_REQUEST,
 handle_open_connection_body(Socket, BodyLength, RequestId) ->
     case gen_tcp:recv(Socket, BodyLength) of
     {ok, <<_SeqNo:?UPR_SIZES_SEQNO,
-           ?UPR_FLAG_CONSUMER:?UPR_SIZES_FLAGS,
+           ?UPR_FLAG_PRODUCER:?UPR_SIZES_FLAGS,
            _Name/binary>>} ->
         OpenConnection = encode_open_connection(RequestId),
         ok = gen_tcp:send(Socket, OpenConnection);

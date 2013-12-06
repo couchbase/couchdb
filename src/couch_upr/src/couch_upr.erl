@@ -363,7 +363,7 @@ parse_failover_log(<<PartUuid:(?UPR_SIZES_PARTITION_UUID div 8)/binary,
 %Key          (32-55): bucketstream vb[100-105]
 encode_open_connection(Name, RequestId) ->
     Body = <<0:?UPR_SIZES_SEQNO,
-             ?UPR_FLAG_CONSUMER:?UPR_SIZES_FLAGS,
+             ?UPR_FLAG_PRODUCER:?UPR_SIZES_FLAGS,
              Name/binary>>,
 
     KeyLength = byte_size(Name),
