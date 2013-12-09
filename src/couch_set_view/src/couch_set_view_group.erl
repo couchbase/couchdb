@@ -3771,8 +3771,13 @@ fix_updater_group(UpdaterGroup, OurGroup) ->
 
 % Find the first header that has a lower update sequence than the given
 % sequence numbers and return the position of the header
+-spec find_header_by_seqs(pid(), partition_seqs()) ->
+                                 {'ok', non_neg_integer()} | 'no_header_found'.
 find_header_by_seqs(Fd, RollbackPartSeqs) ->
     find_header_by_seqs(Fd, RollbackPartSeqs, eof).
+-spec find_header_by_seqs(pid(), partition_seqs(),
+                          non_neg_integer() | 'eof') ->
+                                 {'ok', non_neg_integer()} | 'no_header_found'.
 find_header_by_seqs(_, _, Pos) when Pos < 0 ->
     no_header_found;
 find_header_by_seqs(Fd, RollbackPartSeqs, StartPos) ->
@@ -3801,6 +3806,8 @@ find_header_by_seqs(Fd, RollbackPartSeqs, StartPos) ->
 
 % Rolls back a file to a certain header that matches the given partition
 % sequence numbers returns that header.
+-spec rollback_file(pid(), partition_seqs()) -> {'ok', binary()} |
+                                                'cannot_rollback'.
 rollback_file(Fd, RollbackPartSeqs) ->
     case find_header_by_seqs(Fd, RollbackPartSeqs) of
     {ok, Pos} ->
