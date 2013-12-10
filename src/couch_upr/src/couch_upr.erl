@@ -16,7 +16,7 @@
 % Public API
 -export([start/1]).
 -export([enum_docs_since/7, get_failover_log/2]).
--export([get_sequence_number/1]).
+-export([get_sequence_number/2]).
 
 % gen_server callbacks
 -export([init/1, terminate/2, handle_call/3, handle_cast/2, handle_info/2, code_change/3]).
@@ -82,10 +82,16 @@ enum_docs_since(Pid, PartId, PartVersion, StartSeq, EndSeq, InFun, InAcc) ->
     end.
 
 
-get_sequence_number(PartId) ->
-    % NOTE vmx 2013-09-06: In the future this will be a stat from ep-engine
-    Seq = couch_upr_fake_server:get_sequence_number(PartId),
-    {ok, Seq}.
+get_sequence_number(Pid, PartId) ->
+    RequestId = gen_server:call(Pid, get_request_id),
+    {Socket, Timeout} = gen_server:call(Pid, get_socket_and_timeout),
+    SeqStatRequest = encode_seq_stat_request(PartId, RequestId),
+    ok = gen_tcp:send(Socket, SeqStatRequest),
+    {ok, Stats} = receive_stats(Socket, Timeout, []),
+    % The stats return the sequence number as well as the partition UUID, but
+    % we care only about the sequence number
+    [{_, SeqBin} | _] = Stats,
+    {ok, list_to_integer(binary_to_list(SeqBin))}.
 
 
 % The failover log is a list of 2-tuples with the partition UUID and the
@@ -274,10 +280,44 @@ receive_failover_log(Socket, Timeout, BodyLength) ->
     end.
 
 
+receive_stats(Socket, Timeout, Acc) ->
+    case gen_tcp:recv(Socket, ?UPR_HEADER_LEN, Timeout) of
+    {ok, Header} ->
+        case parse_header(Header) of
+        {stats, ?UPR_STATUS_OK, _RequestId, BodyLength, KeyLength} when
+                BodyLength > 0 andalso KeyLength > 0 ->
+            {ok, Stat} = receive_stat(Socket, Timeout, BodyLength, KeyLength),
+            receive_stats(Socket, Timeout, [Stat|Acc]);
+        {stats, ?UPR_STATUS_OK, _RequestId, 0, 0} ->
+            {ok, lists:reverse(Acc)};
+        {stats, Status, _RequestId, BodyLength, 0} ->
+            case gen_tcp:recv(Socket, BodyLength, Timeout) of
+            {ok, Msg} ->
+                {error, {Status, Msg}};
+            {error, closed} ->
+                {error, closed}
+            end
+        end;
+    {error, closed} ->
+        io:format("vmx: closed7~n", []),
+        {error, closed}
+    end.
+
+
+receive_stat(Socket, Timeout, BodyLength, KeyLength) ->
+    case gen_tcp:recv(Socket, BodyLength, Timeout) of
+    {ok, Body} ->
+        parse_stat(Body, KeyLength, BodyLength - KeyLength);
+    {error, closed} ->
+        io:format("vmx: closed8~n", []),
+        {error, closed}
+    end.
+
+
 % TODO vmx 2013-08-22: Bad match error handling
 parse_header(<<?UPR_MAGIC_RESPONSE,
                Opcode,
-               0:?UPR_SIZES_KEY_LENGTH,
+               KeyLength:?UPR_SIZES_KEY_LENGTH,
                _ExtraLength,
                0,
                Status:?UPR_SIZES_STATUS,
@@ -290,7 +330,9 @@ parse_header(<<?UPR_MAGIC_RESPONSE,
     ?UPR_OPCODE_OPEN_CONNECTION ->
         {open_connection, RequestId};
     ?UPR_OPCODE_FAILOVER_LOG_REQUEST ->
-        {failover_log, Status, RequestId, BodyLength}
+        {failover_log, Status, RequestId, BodyLength};
+    ?UPR_OPCODE_STATS ->
+        {stats, Status, RequestId, BodyLength, KeyLength}
     end;
 parse_header(<<?UPR_MAGIC_REQUEST,
                Opcode,
@@ -346,6 +388,11 @@ parse_failover_log(<<PartUuid:(?UPR_SIZES_PARTITION_UUID div 8)/binary,
                      Rest/binary>>,
                    Acc) ->
     parse_failover_log(Rest, [{PartUuid, PartSeq}|Acc]).
+
+
+parse_stat(Body, KeyLength, ValueLength) ->
+    <<Key:KeyLength/binary, Value:ValueLength/binary>> = Body,
+    {ok, {Key, Value}}.
 
 
 %UPR_OPEN command
@@ -445,3 +492,33 @@ encode_failover_log_request(PartId, RequestId) ->
                RequestId:?UPR_SIZES_OPAQUE,
                0:?UPR_SIZES_CAS>>,
     <<Header/binary>>.
+
+
+%Field        (offset) (value)
+%Magic        (0)    : 0x80
+%Opcode       (1)    : 0x10
+%Key length   (2,3)  : 0x000e
+%Extra length (4)    : 0x00
+%Data type    (5)    : 0x00
+%VBucket      (6,7)  : 0x0001
+%Total body   (8-11) : 0x0000000e
+%Opaque       (12-15): 0x00000000
+%CAS          (16-23): 0x0000000000000000
+%Key                 : vbucket-seqno 1
+encode_seq_stat_request(PartId, RequestId) ->
+    Body = <<"vbucket-seqno ",
+        (list_to_binary(integer_to_list(PartId)))/binary>>,
+
+    KeyLength = BodyLength = byte_size(Body),
+    ExtraLength = 0,
+
+    Header = <<?UPR_MAGIC_REQUEST,
+               ?UPR_OPCODE_STATS,
+               KeyLength:?UPR_SIZES_KEY_LENGTH,
+               ExtraLength,
+               0,
+               PartId:?UPR_SIZES_PARTITION,
+               BodyLength:?UPR_SIZES_BODY,
+               RequestId:?UPR_SIZES_OPAQUE,
+               0:?UPR_SIZES_CAS>>,
+    <<Header/binary, Body/binary>>.

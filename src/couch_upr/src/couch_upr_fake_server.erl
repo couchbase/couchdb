@@ -15,8 +15,6 @@
 
 % Public API
 -export([start/1]).
-% This will be implemented as ep-engine stat
--export([get_sequence_number/1]).
 
 % Only uses by tests
 -export([set_failover_log/2]).
@@ -100,13 +98,6 @@ start(SetName) ->
     Port = list_to_integer(couch_config:get("upr", "port", "0")),
     gen_server:start({local, ?MODULE}, ?MODULE, [Port, SetName], []).
 
-% Returns the current high sequence number of a partition
-get_sequence_number(PartId) ->
-    gen_server:call(?MODULE, {get_sequence_number, PartId}).
-
-get_failover_log(PartId) ->
-    gen_server:call(?MODULE, {get_failover_log, PartId}).
-
 % Only used by tests to populate the failover log
 set_failover_log(PartId, FailoverLog) ->
     gen_server:call(?MODULE, {set_failover_log, PartId, FailoverLog}).
@@ -166,7 +157,7 @@ handle_call({get_sequence_number, PartId}, _From, State) ->
     Db = open_db(State#state.setname, PartId),
     Seq = Db#db.update_seq,
     couch_db:close(Db),
-    {reply, Seq, State};
+    {reply, {ok, Seq}, State};
 
 handle_call({get_failover_log, PartId}, _From, State) ->
     case dict:find(PartId, State#state.failover_logs) of
@@ -195,6 +186,15 @@ code_change(_OldVsn, State, _Extra) ->
 
 % Internal functions
 
+get_failover_log(PartId) ->
+    gen_server:call(?MODULE, {get_failover_log, PartId}).
+
+
+% Returns the current high sequence number of a partition
+get_sequence_number(PartId) ->
+    gen_server:call(?MODULE, {get_sequence_number, PartId}).
+
+
 accept(Listen) ->
     process_flag(trap_exit, true),
     spawn_link(?MODULE, accept_loop, [Listen]).
@@ -216,7 +216,9 @@ read(Socket) ->
         {stream_request, BodyLength, RequestId, PartId} ->
             handle_stream_request_body(Socket, BodyLength, RequestId, PartId);
         {failover_log, RequestId, PartId} ->
-            handle_failover_log(Socket, RequestId, PartId)
+            handle_failover_log(Socket, RequestId, PartId);
+        {stats, BodyLength, RequestId} ->
+            handle_stats_body(Socket, BodyLength, RequestId)
         end,
         read(Socket);
     {error, closed} ->
@@ -238,7 +240,9 @@ parse_header(<<?UPR_MAGIC_REQUEST,
     ?UPR_OPCODE_STREAM_REQUEST ->
         {stream_request, BodyLength, RequestId, PartId};
     ?UPR_OPCODE_FAILOVER_LOG_REQUEST ->
-        {failover_log, RequestId, PartId}
+        {failover_log, RequestId, PartId};
+    ?UPR_OPCODE_STATS ->
+        {stats, BodyLength, RequestId}
     end.
 
 
@@ -275,7 +279,7 @@ handle_stream_request_body(Socket, BodyLength, RequestId, PartId) ->
 
 send_ok_or_rollback(Socket, RequestId, PartId, StartSeq, EndSeq,
         FailoverLog) ->
-    PartSeq = get_sequence_number(PartId),
+    {ok, PartSeq} = get_sequence_number(PartId),
     case StartSeq =< PartSeq of
     true ->
         StreamOk = encode_stream_request_ok(RequestId, FailoverLog),
@@ -298,6 +302,40 @@ handle_failover_log(Socket, RequestId, PartId) ->
     FailoverLog = get_failover_log(PartId),
     FailoverLogResponse = encode_failover_log(RequestId, FailoverLog),
     ok = gen_tcp:send(Socket, FailoverLogResponse).
+
+
+handle_stats_body(Socket, BodyLength, RequestId) ->
+    case gen_tcp:recv(Socket, BodyLength) of
+    {ok, Stat} ->
+        case binary:split(Stat, <<" ">>) of
+        [<<"vbucket-seqno">>] ->
+                % XXX vmx 2013-12-09: Return all seq numbers
+                not_yet_implemented;
+        [<<"vbucket-seqno">>, PartId0] ->
+            PartId = list_to_integer(binary_to_list(PartId0)),
+            case get_sequence_number(PartId) of
+            {ok, Seq} ->
+                SeqKey = <<"vb_", PartId0/binary ,"_high_seqno">>,
+                SeqValue = list_to_binary(integer_to_list(Seq)),
+                SeqStat = encode_stat(RequestId, SeqKey, SeqValue),
+                ok = gen_tcp:send(Socket, SeqStat),
+
+                UuidKey = <<"vb_", PartId0/binary ,"_vb_uuid">>,
+                FailoverLog = get_failover_log(PartId),
+                {UuidValue, _} = hd(FailoverLog),
+                UuidStat = encode_stat(RequestId, UuidKey, UuidValue),
+                ok = gen_tcp:send(Socket, UuidStat),
+
+                EndStat = encode_stat(RequestId, <<>>, <<>>),
+                ok = gen_tcp:send(Socket, EndStat);
+            {error, not_my_partition} ->
+                encode_stat_error(RequestId, ?UPR_STATUS_NOT_MY_VBUCKET)
+            end
+        end;
+    {error, closed} ->
+        io:format("vmx: closed7~n", []),
+        {error, closed}
+    end.
 
 
 % This function creates mutations for one snapshot of one partition of a
@@ -609,6 +647,47 @@ failover_log_to_bin(FailoverLog) ->
     FailoverLogBin = [[Uuid, <<Seq:64>>] || {Uuid, Seq} <- FailoverLog],
     Value = list_to_binary(FailoverLogBin),
     {byte_size(Value), Value}.
+
+
+%Field        (offset) (value)
+%Magic        (0)    : 0x81
+%Opcode       (1)    : 0x10
+%Key length   (2,3)  : 0x0003
+%Extra length (4)    : 0x00
+%Data type    (5)    : 0x00
+%Status       (6,7)  : 0x0000
+%Total body   (8-11) : 0x00000007
+%Opaque       (12-15): 0x00000000
+%CAS          (16-23): 0x0000000000000000
+%Key                 : The textual string "pid"
+%Value               : The textual string "3078"
+encode_stat(RequestId, Key, Value) ->
+    Body = <<Key/binary, Value/binary>>,
+    KeyLength = byte_size(Key),
+    BodyLength = byte_size(Body),
+    ExtraLength = 0,
+    Header = <<?UPR_MAGIC_RESPONSE,
+               ?UPR_OPCODE_STATS,
+               KeyLength:?UPR_SIZES_KEY_LENGTH,
+               ExtraLength,
+               0,
+               ?UPR_STATUS_OK:?UPR_SIZES_STATUS,
+               BodyLength:?UPR_SIZES_BODY,
+               RequestId:?UPR_SIZES_OPAQUE,
+               0:?UPR_SIZES_CAS>>,
+    <<Header/binary, Body/binary>>.
+
+encode_stat_error(RequestId, Status) ->
+    ExtraLength = 0,
+    <<?UPR_MAGIC_RESPONSE,
+      ?UPR_OPCODE_STATS,
+      0:?UPR_SIZES_KEY_LENGTH,
+      ExtraLength,
+      0,
+      Status:?UPR_SIZES_STATUS,
+      0:?UPR_SIZES_BODY,
+      RequestId:?UPR_SIZES_OPAQUE,
+      0:?UPR_SIZES_CAS>>.
 
 
 open_db(SetName, PartId) ->

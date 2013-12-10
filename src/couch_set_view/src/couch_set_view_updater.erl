@@ -349,7 +349,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                 queue_doc(Item, MapQueue, Group, MaxDocSize, InitialBuild),
                 AccCount2 + 1
             end,
-            {ok, EndSeq} = couch_upr:get_sequence_number(PartId),
+            {ok, EndSeq} = couch_upr:get_sequence_number(UprPid, PartId),
             {ok, AccCount3, NewPartVersions} = couch_upr:enum_docs_since(
                 UprPid, PartId, PartVersion, Since, EndSeq, ChangesWrapper,
                 AccCount),

@@ -22,7 +22,7 @@ num_docs() -> 1000.
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(11),
+    etap:plan(15),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -103,6 +103,19 @@ test() ->
         Pid, 1, {<<"wrong123">>, 1243}, 46, 165, TestFun, []),
     etap:is(Error, wrong_partition_version,
         "Correct error for wrong partition version"),
+
+    {ok, Seq0} = couch_upr:get_sequence_number(Pid, 0),
+    etap:is(Seq0, num_docs() div num_set_partitions(),
+        "Sequence number of partition 0 is correct"),
+    {ok, Seq1} = couch_upr:get_sequence_number(Pid, 1),
+    etap:is(Seq1, num_docs() div num_set_partitions(),
+        "Sequence number of partition 1 is correct"),
+    {ok, Seq2} = couch_upr:get_sequence_number(Pid, 2),
+    etap:is(Seq2, num_docs() div num_set_partitions(),
+         "Sequence number of partition 2 is correct"),
+    {ok, Seq3} = couch_upr:get_sequence_number(Pid, 3),
+    etap:is(Seq3, num_docs() div num_set_partitions(),
+        "Sequence number of partition 3 is correct"),
 
     couch_set_view_test_util:stop_server(),
     ok.
