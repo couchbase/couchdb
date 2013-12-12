@@ -535,7 +535,6 @@ test_rollback_multiple_partitions_missing() ->
     % Remove last partition, insert more data and make sure a new header
     % is written.
 
-    Fd = get_fd(),
     MissingPartition = num_set_partitions() - 1,
     ok = couch_set_view:set_partition_states(
         mapreduce_view, test_set_name(), ddoc_id(), [], [],
@@ -550,7 +549,6 @@ test_rollback_multiple_partitions_missing() ->
     % Add last partition again, insert more data and make sure a new header
     % is written.
 
-    Fd = get_fd(),
     ok = couch_set_view:set_partition_states(
         mapreduce_view, test_set_name(), ddoc_id(),
         [MissingPartition], [], []),
