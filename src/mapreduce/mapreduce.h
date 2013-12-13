@@ -54,7 +54,7 @@ typedef std::list< map_result_t,
 
 #ifdef V8_POST_3_19_API
 typedef std::vector< v8::Persistent<v8::Function>*,
-                     NifStlAllocator< v8::Persistent<v8::Function> > >  function_vector_t;
+                     NifStlAllocator< v8::Persistent<v8::Function>* > >  function_vector_t;
 #else
 typedef std::vector< v8::Persistent<v8::Function>,
                      NifStlAllocator< v8::Persistent<v8::Function> > >  function_vector_t;
