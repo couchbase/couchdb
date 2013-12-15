@@ -992,6 +992,7 @@ jump_to_another_version(Db, NewFilePath, NewVersion, NewPos) ->
             #db{update_seq=NewSeq} = InitNewDb =
                 init_db(Db#db.name, NewFilePath, NewFd, NewHeader, Db#db.options),
             unlink(NewFd),
+            ok = couch_file:set_close_after(NewFd, ?FD_CLOSE_TIMEOUT_MS),
 
             case Db#db.update_seq of
                 NewSeq ->
@@ -1011,6 +1012,7 @@ jump_to_another_version(Db, NewFilePath, NewVersion, NewPos) ->
                     ?LOG_INFO("Compaction for db \"~s\" completed.", [NewDb#db.name]),
                     {ok, NewDb};
                 _ ->
+                    close_db(InitNewDb),
                     {was_updated, Db}
             end
     end.
