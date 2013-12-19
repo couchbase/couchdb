@@ -94,7 +94,7 @@ test_rollback_once(ReduceSize) ->
     PartId = 0,
     PartSeq = couch_set_view_util:get_part_seq(PartId, GroupSeqs1),
     GroupPid = get_group_pid(),
-    ok = couch_set_view_group:rollback(GroupPid, [{PartId, PartSeq}]),
+    {ok, _} = couch_set_view_group:rollback(GroupPid, [{PartId, PartSeq}]),
     {ok, HeaderBin3, _Pos3} = couch_file:read_header_bin(Fd),
     Header3 = couch_set_view_util:header_bin_to_term(HeaderBin3),
     HeaderSeqs3 = Header3#set_view_index_header.seqs,
@@ -151,7 +151,7 @@ test_rollback_not_exactly() ->
     PartId = 0,
     PartSeq = couch_set_view_util:get_part_seq(PartId, Seqs),
     GroupPid = get_group_pid(),
-    ok = couch_set_view_group:rollback(GroupPid, [{PartId, PartSeq}]),
+    {ok, _} = couch_set_view_group:rollback(GroupPid, [{PartId, PartSeq}]),
     {ok, HeaderBin, _Pos3} = couch_file:read_header_bin(Fd),
     Header = couch_set_view_util:header_bin_to_term(HeaderBin),
     HeaderSeqs = Header#set_view_index_header.seqs,
@@ -305,7 +305,7 @@ test_rollback_unindexable_seqs() ->
     PartId = num_set_partitions() - 1,
     PartSeq = couch_set_view_util:get_part_seq(PartId, GroupSeqsUnindexable),
     GroupPid = get_group_pid(),
-    ok = couch_set_view_group:rollback(GroupPid, [{PartId, PartSeq}]),
+    {ok, _} = couch_set_view_group:rollback(GroupPid, [{PartId, PartSeq}]),
     {ok, HeaderBin2, _Pos2} = couch_file:read_header_bin(Fd),
     Header2 = couch_set_view_util:header_bin_to_term(HeaderBin2),
     HeaderSeqs2 = Header2#set_view_index_header.seqs,
@@ -473,7 +473,7 @@ test_rollback_mark_for_cleanup() ->
     PartId = 0,
     PartSeq = couch_set_view_util:get_part_seq(PartId, GroupSeqs2),
     GroupPid = get_group_pid(),
-    ok = couch_set_view_group:rollback(GroupPid, [{PartId, PartSeq}]),
+    {ok, _} = couch_set_view_group:rollback(GroupPid, [{PartId, PartSeq}]),
 
     GroupInfo = get_group_info(),
     {cleanup_partitions, CleanupPartitions} = lists:keyfind(
@@ -507,7 +507,7 @@ test_rollback_multiple_partitions() ->
         {2, couch_set_view_util:get_part_seq(2, PartSeqs3)}
     ],
 
-    ok = couch_set_view_group:rollback(GroupPid, PartSeqs),
+    {ok, _} = couch_set_view_group:rollback(GroupPid, PartSeqs),
 
     {ok, {ViewResultTruncated}} = couch_set_view_test_util:query_view(
         test_set_name(), ddoc_id(), <<"testred">>, ["stale=ok"]),
@@ -563,7 +563,7 @@ test_rollback_multiple_partitions_missing() ->
     % partition and verify that it did rollback
 
     GroupPid = get_group_pid(),
-    ok = couch_set_view_group:rollback(GroupPid, GroupSeqs1),
+    {ok, _} = couch_set_view_group:rollback(GroupPid, GroupSeqs1),
     % As the last partition is part of the group, it will be added
     % after the rollback with sequence number 0.
     Expected = lists:keydelete(MissingPartition, 1, GroupSeqs1) ++
@@ -627,7 +627,7 @@ test_rollback_unindexable_now_indexable_seqs() ->
     PartId = num_set_partitions() div 2,
     PartSeq = couch_set_view_util:get_part_seq(PartId, GroupSeqsUnindexable),
     GroupPid = get_group_pid(),
-    ok = couch_set_view_group:rollback(GroupPid, [{PartId, PartSeq}]),
+    {ok, _} = couch_set_view_group:rollback(GroupPid, [{PartId, PartSeq}]),
 
     % Check that the new header contains the same indexable and unindexable
     % partitions as before the rollback. Only their sequence numbers should
@@ -687,7 +687,7 @@ rollback(Inserted, From) ->
     PartId = 1,
     PartSeq = couch_set_view_util:get_part_seq(PartId, PartSeqs),
     GroupPid = get_group_pid(),
-    ok = couch_set_view_group:rollback(GroupPid, [{PartId, PartSeq}]),
+    {ok, _} = couch_set_view_group:rollback(GroupPid, [{PartId, PartSeq}]),
 
     {ok, {ViewResultTruncated}} = couch_set_view_test_util:query_view(
         test_set_name(), ddoc_id(), <<"testred">>, ["stale=ok"]),

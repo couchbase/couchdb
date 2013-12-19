@@ -212,7 +212,8 @@ get_data_size(Pid) ->
     end.
 
 
--spec rollback(pid(), partition_seqs()) -> 'ok' | {'error', 'cannot_rollback'}.
+-spec rollback(pid(), partition_seqs()) -> {'ok', partition_versions()} |
+                                           {'error', 'cannot_rollback'}.
 rollback(Pid, RollbackPartSeqs) ->
     gen_server:call(Pid, {rollback, RollbackPartSeqs}, infinity).
 
@@ -799,7 +800,9 @@ handle_call({rollback, RollbackPartSeqs}, _From, State) ->
                 view_states = NewHeader#set_view_index_header.view_states,
                 seqs = Indexable,
                 unindexable_seqs = Unindexable,
-                cbitmask = CleanupBitmask
+                cbitmask = CleanupBitmask,
+                partition_versions =
+                    NewHeader#set_view_index_header.partition_versions
             }
         },
         NewHeaderBin = couch_set_view_util:group_to_header_bin(NewGroup),
@@ -809,7 +812,9 @@ handle_call({rollback, RollbackPartSeqs}, _From, State) ->
         NewGroup2 = NewGroup#set_view_group{
             header_pos = NewHeaderPos
         },
-        {reply, ok, State3#state{group = NewGroup2}, ?GET_TIMEOUT(State3)};
+        PartVersions = NewHeader#set_view_index_header.partition_versions,
+        State4 = State3#state{group = NewGroup2},
+        {reply, {ok, PartVersions}, State4, ?GET_TIMEOUT(State4)};
     cannot_rollback ->
         {reply, {error, cannot_rollback}, State3, ?GET_TIMEOUT(State3)}
     end;
