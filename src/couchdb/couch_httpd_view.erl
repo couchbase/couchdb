@@ -253,6 +253,7 @@ parse_view_params(Req, Keys, ViewType) ->
     parse_view_params(Req, Keys, ViewType, fun couch_view:less_json/2).
 parse_view_params(Req, Keys, ViewType, LessThan) ->
     QueryList = couch_httpd:qs(Req),
+    warn_on_group_and_group_level(QueryList),
     QueryParams =
     lists:foldl(fun({K, V}, Acc) ->
         parse_view_param(K, V) ++ Acc
@@ -362,6 +363,18 @@ parse_view_param("_type", Value) ->
     end;
 parse_view_param(Key, Value) ->
     [{extra, {Key, Value}}].
+
+warn_on_group_and_group_level(QueryList) ->
+    Group = couch_util:get_value("group", QueryList, nil),
+    GroupLevel = couch_util:get_value("group_level", QueryList, nil),
+    case Group =/= nil andalso GroupLevel =/= nil of
+    true ->
+        Msg = <<"Query parameter `group_level` is "
+                "not compatible with `group`">>,
+        throw({query_parse_error, Msg});
+    false ->
+        ok
+    end.
 
 warn_on_empty_key_range(#view_query_args{start_key=undefined}, _Lt) ->
     ok;
