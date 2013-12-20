@@ -25,6 +25,9 @@
 -export([mark_as_unindexable/2, mark_as_indexable/2]).
 -export([monitor_partition_update/4, demonitor_partition_update/2]).
 -export([reset_utilization_stats/1, get_utilization_stats/1]).
+
+% XXX vmx 2013-12-20: rollback/2 is only exported to make the compiler happy
+% the next commit will fix this.
 -export([rollback/2]).
 
 %% gen_server callbacks
@@ -210,12 +213,6 @@ get_data_size(Pid) ->
     Error ->
         throw(Error)
     end.
-
-
--spec rollback(pid(), partition_seqs()) -> {'ok', partition_versions()} |
-                                           {'error', 'cannot_rollback'}.
-rollback(Pid, RollbackPartSeqs) ->
-    gen_server:call(Pid, {rollback, RollbackPartSeqs}, infinity).
 
 
 -spec define_view(pid(), #set_view_params{}) -> 'ok' | {'error', term()}.
@@ -722,102 +719,6 @@ handle_call(request_group_info, _From, State) ->
 handle_call(get_data_size, _From, State) ->
     DataSizeInfo = get_data_size_info(State),
     {reply, {ok, DataSizeInfo}, State, ?GET_TIMEOUT(State)};
-
-handle_call({rollback, RollbackPartSeqs}, _From, State) ->
-    State2 = stop_compactor(State),
-    State3 = stop_cleaner(State2),
-
-    #state{
-        group = #set_view_group{
-            fd = Fd,
-            index_header = #set_view_index_header{
-                seqs = GroupIndexable,
-                unindexable_seqs = GroupUnindexable,
-                abitmask = ActiveBitmask,
-                pbitmask = PassiveBitmask
-            } = Header,
-            views = Views,
-            mod = Mod,
-            id_btree = IdBtree
-        } = Group
-    } = State3,
-
-    case rollback_file(Fd, RollbackPartSeqs) of
-    {ok, HeaderBin} ->
-        NewHeader = couch_set_view_util:header_bin_to_term(HeaderBin),
-        #set_view_index_header{
-            id_btree_state = IdBtreeState,
-            view_states = ViewStates,
-            seqs = NewIndexableSeqs,
-            unindexable_seqs = NewUnindexableSeqs,
-            abitmask = HeaderActiveBitmask,
-            pbitmask = HeaderPassiveBitmask
-        } = NewHeader,
-        NewIdBtree = couch_btree:set_state(IdBtree, IdBtreeState),
-        NewViews = lists:zipwith(fun(NewState, SetView) ->
-            View = SetView#set_view.indexer,
-            NewView = Mod:set_state(View, NewState),
-            SetView#set_view{indexer = NewView}
-        end, ViewStates, Views),
-
-        % The header keeps track of indexable and unindexable partitions
-        % together with the current sequence number. When rolling back
-        % the old state and the new one needs to be merged. The state of
-        % partitions (indexable/unindexable) comes from the pre-rollback
-        % header, the sequence numbers of the partitions coms from the
-        % post-rollback header. If the partition isn't part of the
-        % post-rollback header, then the sequence number 0 is assigned.
-        % In short: replace the sequence numbers from the pre-rollback
-        % header with the ones of the post-rollback header.
-        NewSeqs = ordsets:union(NewIndexableSeqs, NewUnindexableSeqs),
-        Indexable = merge_seqs(GroupIndexable, NewSeqs),
-        Unindexable = merge_seqs(GroupUnindexable, NewSeqs),
-
-        ?LOG_INFO("Rollback of set view `~s`, ~s (~s) group `~s` to ~w~n"
-                  "indexable partitions before:   ~w~n"
-                  "indexable partitions after:    ~w~n"
-                  "unindexable partitions before: ~w~n"
-                  "unindexable partitions after:  ~w~n",
-                  [?set_name(State3), ?type(State3), ?category(State3),
-                   ?group_id(State3), RollbackPartSeqs,
-                   GroupIndexable, Indexable, GroupUnindexable, Unindexable]),
-
-        % Mark all partitions that the on-disk header contains, but
-        % are not part of the current group header for cleanup and
-        % remove them from the current partition sequences
-        IndexedBitmask = ActiveBitmask bor PassiveBitmask,
-        HeaderIndexedPartitions = couch_set_view_util:decode_bitmask(
-            HeaderActiveBitmask bor HeaderPassiveBitmask),
-        CleanupPartitions = filter_out_bitmask_partitions(
-            HeaderIndexedPartitions, IndexedBitmask),
-        CleanupBitmask = couch_set_view_util:build_bitmask(CleanupPartitions),
-
-        NewGroup = Group#set_view_group{
-            id_btree = NewIdBtree,
-            views = NewViews,
-            index_header = Header#set_view_index_header{
-                id_btree_state = NewHeader#set_view_index_header.id_btree_state,
-                view_states = NewHeader#set_view_index_header.view_states,
-                seqs = Indexable,
-                unindexable_seqs = Unindexable,
-                cbitmask = CleanupBitmask,
-                partition_versions =
-                    NewHeader#set_view_index_header.partition_versions
-            }
-        },
-        NewHeaderBin = couch_set_view_util:group_to_header_bin(NewGroup),
-        {ok, NewHeaderPos} = couch_file:write_header_bin(
-            NewGroup#set_view_group.fd, NewHeaderBin),
-        couch_file:flush(NewGroup#set_view_group.fd),
-        NewGroup2 = NewGroup#set_view_group{
-            header_pos = NewHeaderPos
-        },
-        PartVersions = NewHeader#set_view_index_header.partition_versions,
-        State4 = State3#state{group = NewGroup2},
-        {reply, {ok, PartVersions}, State4, ?GET_TIMEOUT(State4)};
-    cannot_rollback ->
-        {reply, {error, cannot_rollback}, State3, ?GET_TIMEOUT(State3)}
-    end;
 
 handle_call({start_compact, _CompactFun}, _From,
             #state{updater_pid = UpPid, initial_build = true} = State) when is_pid(UpPid) ->
@@ -3901,3 +3802,101 @@ merge_seqs(Original, New) ->
             {PartId, 0}
         end
     end, Original).
+
+
+-spec rollback(#state{}, partition_seqs()) ->
+                      {'ok', #state{}} |
+                      {'error', {'cannot_rollback', #state{}}}.
+rollback(State, RollbackPartSeqs) ->
+    State2 = stop_compactor(State),
+    State3 = stop_cleaner(State2),
+
+    #state{
+        group = #set_view_group{
+            fd = Fd,
+            index_header = #set_view_index_header{
+                seqs = GroupIndexable,
+                unindexable_seqs = GroupUnindexable,
+                abitmask = ActiveBitmask,
+                pbitmask = PassiveBitmask
+            } = Header,
+            views = Views,
+            mod = Mod,
+            id_btree = IdBtree
+        } = Group
+    } = State3,
+
+    case rollback_file(Fd, RollbackPartSeqs) of
+    {ok, HeaderBin} ->
+        NewHeader = couch_set_view_util:header_bin_to_term(HeaderBin),
+        #set_view_index_header{
+            id_btree_state = IdBtreeState,
+            view_states = ViewStates,
+            seqs = NewIndexableSeqs,
+            unindexable_seqs = NewUnindexableSeqs,
+            abitmask = HeaderActiveBitmask,
+            pbitmask = HeaderPassiveBitmask
+        } = NewHeader,
+        NewIdBtree = couch_btree:set_state(IdBtree, IdBtreeState),
+        NewViews = lists:zipwith(fun(NewState, SetView) ->
+            View = SetView#set_view.indexer,
+            NewView = Mod:set_state(View, NewState),
+            SetView#set_view{indexer = NewView}
+        end, ViewStates, Views),
+
+        % The header keeps track of indexable and unindexable partitions
+        % together with the current sequence number. When rolling back
+        % the old state and the new one needs to be merged. The state of
+        % partitions (indexable/unindexable) comes from the pre-rollback
+        % header, the sequence numbers of the partitions coms from the
+        % post-rollback header. If the partition isn't part of the
+        % post-rollback header, then the sequence number 0 is assigned.
+        % In short: replace the sequence numbers from the pre-rollback
+        % header with the ones of the post-rollback header.
+        NewSeqs = ordsets:union(NewIndexableSeqs, NewUnindexableSeqs),
+        Indexable = merge_seqs(GroupIndexable, NewSeqs),
+        Unindexable = merge_seqs(GroupUnindexable, NewSeqs),
+
+        ?LOG_INFO("Rollback of set view `~s`, ~s (~s) group `~s` to ~w~n"
+                  "indexable partitions before:   ~w~n"
+                  "indexable partitions after:    ~w~n"
+                  "unindexable partitions before: ~w~n"
+                  "unindexable partitions after:  ~w~n",
+                  [?set_name(State3), ?type(State3), ?category(State3),
+                   ?group_id(State3), RollbackPartSeqs,
+                   GroupIndexable, Indexable, GroupUnindexable, Unindexable]),
+
+        % Mark all partitions that the on-disk header contains, but
+        % are not part of the current group header for cleanup and
+        % remove them from the current partition sequences
+        IndexedBitmask = ActiveBitmask bor PassiveBitmask,
+        HeaderIndexedPartitions = couch_set_view_util:decode_bitmask(
+            HeaderActiveBitmask bor HeaderPassiveBitmask),
+        CleanupPartitions = filter_out_bitmask_partitions(
+            HeaderIndexedPartitions, IndexedBitmask),
+        CleanupBitmask = couch_set_view_util:build_bitmask(CleanupPartitions),
+
+        NewGroup = Group#set_view_group{
+            id_btree = NewIdBtree,
+            views = NewViews,
+            index_header = Header#set_view_index_header{
+                id_btree_state = NewHeader#set_view_index_header.id_btree_state,
+                view_states = NewHeader#set_view_index_header.view_states,
+                seqs = Indexable,
+                unindexable_seqs = Unindexable,
+                cbitmask = CleanupBitmask,
+                partition_versions =
+                    NewHeader#set_view_index_header.partition_versions
+            }
+        },
+        NewHeaderBin = couch_set_view_util:group_to_header_bin(NewGroup),
+        {ok, NewHeaderPos} = couch_file:write_header_bin(
+            NewGroup#set_view_group.fd, NewHeaderBin),
+        couch_file:flush(NewGroup#set_view_group.fd),
+        NewGroup2 = NewGroup#set_view_group{
+            header_pos = NewHeaderPos
+        },
+        {ok, State3#state{group = NewGroup2}};
+    cannot_rollback ->
+        {error, {cannot_rollback, State3}}
+    end.
