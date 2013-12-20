@@ -55,29 +55,26 @@ test() ->
 
     % Get the latest partition version first
     {ok, InitialFailoverLog0} = couch_upr:get_failover_log(Pid, 0),
-    PartVersion0 = hd(InitialFailoverLog0),
-    etap:is(PartVersion0, {<<"abcdefgh">>, 3}, "Partition version is correct"),
+    etap:is(InitialFailoverLog0, hd(FailoverLogs), "Failover log is correct"),
 
     % First parameter is the partition, the second is the sequence number
     % to start at.
     {ok, Docs1, FailoverLog1} = couch_upr:enum_docs_since(
-        Pid, 0, PartVersion0, 4, 10, TestFun, []),
+        Pid, 0, InitialFailoverLog0, 4, 10, TestFun, []),
     etap:is(length(Docs1), 6, "Correct number of docs (6) in partition 0"),
     etap:is(FailoverLog1, lists:nth(1, FailoverLogs),
         "Failoverlog from partition 0 is correct"),
 
     {ok, InitialFailoverLog1} = couch_upr:get_failover_log(Pid, 1),
-    PartVersion1 = hd(InitialFailoverLog1),
     {ok, Docs2, FailoverLog2} = couch_upr:enum_docs_since(
-        Pid, 1, PartVersion1, 46, 165, TestFun, []),
+        Pid, 1, InitialFailoverLog1, 46, 165, TestFun, []),
     etap:is(length(Docs2), 119, "Correct number of docs (109) partition 1"),
     etap:is(FailoverLog2, lists:nth(2, FailoverLogs),
         "Failoverlog from partition 1 is correct"),
 
     {ok, InitialFailoverLog2} = couch_upr:get_failover_log(Pid, 2),
-    PartVersion2 = hd(InitialFailoverLog2),
     {ok, Docs3, FailoverLog3} = couch_upr:enum_docs_since(
-        Pid, 2, PartVersion2, 80, num_docs() div num_set_partitions(),
+        Pid, 2, InitialFailoverLog2, 80, num_docs() div num_set_partitions(),
         TestFun, []),
     Expected3 = (num_docs() div num_set_partitions()) - 80,
     etap:is(length(Docs3), Expected3,
@@ -86,23 +83,22 @@ test() ->
         "Failoverlog from partition 2 is correct"),
 
     {ok, InitialFailoverLog3} = couch_upr:get_failover_log(Pid, 3),
-    PartVersion3 = hd(InitialFailoverLog3),
     {ok, Docs4, FailoverLog4} = couch_upr:enum_docs_since(
-        Pid, 3, PartVersion3, 0, 5, TestFun, []),
+        Pid, 3, InitialFailoverLog3, 0, 5, TestFun, []),
     etap:is(length(Docs4), 5, "Correct number of docs (5) partition 3"),
     etap:is(FailoverLog4, lists:nth(4, FailoverLogs),
         "Failoverlog from partition 3 is correct"),
 
     % Try a too high sequence number to get a rollback response
     {rollback, RollbackSeq} = couch_upr:enum_docs_since(
-        Pid, 0, PartVersion0, 400, 450, TestFun, []),
+        Pid, 0, InitialFailoverLog0, 400, 450, TestFun, []),
     etap:is(RollbackSeq, num_docs() div num_set_partitions(),
         "Correct rollback sequence number"),
 
-    {error, Error} = couch_upr:enum_docs_since(
-        Pid, 1, {<<"wrong123">>, 1243}, 46, 165, TestFun, []),
-    etap:is(Error, wrong_partition_version,
-        "Correct error for wrong partition version"),
+    Error = couch_upr:enum_docs_since(
+        Pid, 1, [{<<"wrong123">>, 1243}], 46, 165, TestFun, []),
+    etap:is(Error, {rollback, 0},
+        "Correct error for wrong failover log"),
 
     {ok, Seq0} = couch_upr:get_sequence_number(Pid, 0),
     etap:is(Seq0, num_docs() div num_set_partitions(),

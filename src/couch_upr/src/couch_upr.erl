@@ -67,7 +67,11 @@ start(Name) ->
     gen_server:start_link(?MODULE, [Name], []).
 
 
-enum_docs_since(Pid, PartId, PartVersion, StartSeq, EndSeq, InFun, InAcc) ->
+enum_docs_since(_, _, [], _, _, _, _) ->
+    % No matching partition version found. Recreate the index from scratch
+    {rollback, 0};
+enum_docs_since(Pid, PartId, [PartVersion|PartVersions], StartSeq, EndSeq,
+        InFun, InAcc) ->
     RequestId = gen_server:call(Pid, get_request_id),
     {Socket, Timeout} = gen_server:call(Pid, get_socket_and_timeout),
     StreamRequest = encode_stream_request(
@@ -77,8 +81,14 @@ enum_docs_since(Pid, PartId, PartVersion, StartSeq, EndSeq, InFun, InAcc) ->
     case Result of
     {ok, {FailoverLog, Mutations}} ->
         {ok, Mutations, FailoverLog};
-    _ ->
-        Result
+    % The failover log doesn't match. Try a previous partition version. The
+    % last partition in the list will work as it requests with a partition
+    % version sequence number of 0, which means requesting from the beginning.
+    {error, wrong_partition_version} ->
+        enum_docs_since(
+            Pid, PartId, PartVersions, StartSeq, EndSeq, InFun, InAcc);
+    {rollback, RollbackSeq} ->
+        {rollback, RollbackSeq}
     end.
 
 
