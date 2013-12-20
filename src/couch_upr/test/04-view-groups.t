@@ -20,13 +20,14 @@
 test_set_name() -> <<"couch_test_upr_view_groups">>.
 num_set_partitions() -> 4.
 ddoc_id() -> <<"_design/test">>.
-num_docs() -> 128.  % keep it a multiple of num_set_partitions()
+num_docs() -> 1024.  % keep it a multiple of num_set_partitions()
+num_docs_pp() -> 1024 div num_set_partitions().
 
 
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(4),
+    etap:plan(10),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -44,7 +45,7 @@ test() ->
     etap:diag("Testing UPR in regards to view groups"),
 
     test_partition_versions_update(),
-
+    test_rollback_different_heads(),
 
     couch_set_view_test_util:stop_server(),
     ok.
@@ -87,6 +88,77 @@ test_partition_versions_update() ->
     shutdown_group().
 
 
+test_rollback_different_heads() ->
+    % The testcase is: server and client have a shared history. The most
+    % recent failover log entry differs. The most recent entry from the server
+    % has a lower high squence number than the client has. The client needs
+    % to retry with an older version of its failover log. Then a rollback
+    % should happen. And finally the indexing should catch up again.
+    etap:diag("Testing a rollback where the server and the client have "
+        "a common history except for the most recent one, where both differ"),
+
+    % Give the UPR server a failover log we can diverge from
+    FailoverLog = [
+        {<<"cdefghij">>, (num_docs_pp() * 2)},
+        {<<"bcdefghi">>, num_docs_pp()},
+        {<<"abcdefgh">>, 0}],
+
+    {ViewResultNoRollback, FailoverLogNoRollback} = rollback_different_heads(
+        dont_force_a_rollback, FailoverLog),
+    {ViewResultRollback, FailoverLogRollback} = rollback_different_heads(
+        force_a_rollback, FailoverLog),
+    etap:is(ViewResultRollback, ViewResultNoRollback,
+        "View results are the same with and without a rollback"),
+    etap:isnt(FailoverLogRollback, FailoverLogNoRollback,
+        "The failover log is different between the two runs"),
+    ok.
+
+rollback_different_heads(DoRollback, FailoverLog) ->
+    Msg = case DoRollback of
+    dont_force_a_rollback ->
+        "Query data without rollback";
+    force_a_rollback ->
+        "Query data with rollback"
+    end,
+    etap:diag(Msg),
+
+    setup_test(),
+    PartId = 1,
+    couch_upr_fake_server:set_failover_log(PartId, FailoverLog),
+
+    % Update index twice, so that there are header to roll back to
+    {ok, {_ViewResults1}} = couch_set_view_test_util:query_view(
+        test_set_name(), ddoc_id(), <<"test">>, []),
+    populate_set(num_docs() + 1, 2 * num_docs()),
+    {ok, {_ViewResults2}} = couch_set_view_test_util:query_view(
+        test_set_name(), ddoc_id(), <<"test">>, []),
+    GroupFailoverLog = get_group_failover_log(PartId),
+    etap:is(GroupFailoverLog, FailoverLog,
+        "Group has initially the correct failover log"),
+
+    case DoRollback of
+    dont_force_a_rollback ->
+        FailoverLog2 = FailoverLog;
+    force_a_rollback ->
+        % Change the failover log on the server that is different from what
+        % The client has, so that a rollback is needed
+        FailoverLog2 = [{<<"defghijk">>, num_docs_pp() + 10}] ++
+            tl(FailoverLog),
+        couch_upr_fake_server:set_failover_log(PartId, FailoverLog2)
+    end,
+
+    % Insert new docs so that the updater is run on the new query
+    populate_set((num_docs() * 2) + 1, 3 * num_docs()),
+    {ok, {ViewResults3}} = couch_set_view_test_util:query_view(
+        test_set_name(), ddoc_id(), <<"test">>, []),
+    GroupFailoverLog2 = get_group_failover_log(PartId),
+    etap:is(GroupFailoverLog2, FailoverLog2,
+        "Group has correct failover log after it might have changed"),
+
+    shutdown_group(),
+    {ViewResults3, FailoverLog2}.
+
+
 setup_test() ->
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
     couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
@@ -106,6 +178,7 @@ setup_test() ->
     ok = configure_view_group().
 
 shutdown_group() ->
+    couch_upr_fake_server:reset(),
     GroupPid = couch_set_view:get_group_pid(
         mapreduce_view, test_set_name(), ddoc_id(), prod),
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),

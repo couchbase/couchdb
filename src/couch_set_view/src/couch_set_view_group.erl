@@ -26,10 +26,6 @@
 -export([monitor_partition_update/4, demonitor_partition_update/2]).
 -export([reset_utilization_stats/1, get_utilization_stats/1]).
 
-% XXX vmx 2013-12-20: rollback/2 is only exported to make the compiler happy
-% the next commit will fix this.
--export([rollback/2]).
-
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
@@ -712,6 +708,16 @@ handle_call(cleaner_pid, _From, #state{cleaner_pid = Pid} = State) ->
     % To be used only by unit tests.
     {reply, {ok, Pid}, State, ?GET_TIMEOUT(State)};
 
+handle_call({test_rollback, RollbackSeqs}, _From, State0) ->
+    % To be used only by unit tests.
+    Response = case rollback(State0, RollbackSeqs) of
+    {ok, State} ->
+        ok;
+    {error, {cannot_rollback, State}} ->
+        cannot_rollback
+    end,
+    {reply, Response, State, ?GET_TIMEOUT(State)};
+
 handle_call(request_group_info, _From, State) ->
     GroupInfo = get_group_info(State),
     {reply, {ok, GroupInfo}, State, ?GET_TIMEOUT(State)};
@@ -1249,6 +1255,31 @@ handle_info({'EXIT', Pid, {updater_error, purge}}, #state{updater_pid = Pid} = S
               " detected missed document deletes (purge)",
               [?set_name(State), ?type(State),
                ?category(State), ?group_id(State)]),
+    State3 = start_updater(State2),
+    {noreply, State3, ?GET_TIMEOUT(State3)};
+
+handle_info({'EXIT', Pid, {updater_error, {rollback, RollbackSeqs}}},
+        #state{updater_pid = Pid} = State0) ->
+    Rollback = rollback(State0, RollbackSeqs),
+    State2 = case Rollback of
+    {ok, State} ->
+        ?LOG_INFO(
+            "Set view `~s`, ~s (~s) group `~s`, group update because group"
+            " needed to be rolled back",
+            [?set_name(State), ?type(State),
+             ?category(State), ?group_id(State)]),
+        State#state{
+            updater_pid = nil,
+            initial_build = false,
+            updater_state = not_running
+        };
+    {error, {cannot_rollback, State}} ->
+        ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`, group reset because "
+            "a rollback wasn't possible",
+            [?set_name(State), ?type(State),
+             ?category(State), ?group_id(State)]),
+        reset_group_from_state(State)
+    end,
     State3 = start_updater(State2),
     {noreply, State3, ?GET_TIMEOUT(State3)};
 

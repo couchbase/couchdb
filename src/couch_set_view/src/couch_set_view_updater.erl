@@ -241,6 +241,8 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
         catch
         throw:purge ->
             exit(purge);
+        throw:{rollback, RollbackSeqs} ->
+            exit({rollback, RollbackSeqs});
         _:Error ->
             Stacktrace = erlang:get_stacktrace(),
             ?LOG_ERROR("Set view `~s`, ~s group `~s`, doc loader error~n"
@@ -337,24 +339,55 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
 
     MaxDocSize = list_to_integer(
         couch_config:get("set_views", "indexer_max_doc_size", "0")),
-    FoldFun = fun(PartId, {AccCount, AccSeqs, AccVersions}) ->
+    FoldFun = fun(PartId, {AccCount, AccSeqs, AccVersions, AccRollbacks}) ->
         case couch_set_view_util:has_part_seq(PartId, ?set_unindexable_seqs(Group))
             andalso not lists:member(PartId, ?set_replicas_on_transfer(Group)) of
         true ->
-            {AccCount, AccSeqs, AccVersions};
+            {AccCount, AccSeqs, AccVersions, AccRollbacks};
         false ->
             Since = couch_util:get_value(PartId, SinceSeqs, 0),
             PartVersions = couch_util:get_value(PartId, AccVersions),
-            ChangesWrapper = fun(Item, AccCount2) ->
-                queue_doc(Item, MapQueue, Group, MaxDocSize, InitialBuild),
-                AccCount2 + 1
-            end,
-            {ok, EndSeq} = couch_upr:get_sequence_number(UprPid, PartId),
-            {ok, AccCount3, NewPartVersions} = couch_upr:enum_docs_since(
-                UprPid, PartId, PartVersions, Since, EndSeq, ChangesWrapper,
-                AccCount),
-            {AccCount3, orddict:store(PartId, EndSeq, AccSeqs),
-                lists:ukeymerge(1, [{PartId, NewPartVersions}], AccVersions)}
+            case AccRollbacks of
+            [] ->
+                ChangesWrapper = fun(Item, AccCount2) ->
+                    queue_doc(Item, MapQueue, Group, MaxDocSize, InitialBuild),
+                    AccCount2 + 1
+                end,
+                {ok, EndSeq} = couch_upr:get_sequence_number(UprPid, PartId),
+                Result = couch_upr:enum_docs_since(
+                    UprPid, PartId, PartVersions, Since, EndSeq, ChangesWrapper,
+                    AccCount),
+                case Result of
+                {ok, AccCount3, NewPartVersions} ->
+                    AccSeqs2 = orddict:store(PartId, EndSeq, AccSeqs),
+                    AccVersions2 = lists:ukeymerge(
+                        1, [{PartId, NewPartVersions}], AccVersions),
+                    AccRollbacks2 = AccRollbacks;
+                {rollback, RollbackSeq} ->
+                    AccCount3 = AccCount,
+                    AccSeqs2 = AccSeqs,
+                    AccVersions2 = AccVersions,
+                    AccRollbacks2 = ordsets:add_element(
+                        {PartId, RollbackSeq}, AccRollbacks)
+                end,
+                {AccCount3, AccSeqs2, AccVersions2, AccRollbacks2};
+            _ ->
+                % If there is a rollback needed, don't store any new documents
+                % in the index, but just check for a rollback of another
+                % partition
+                ChangesWrapper = fun(_, _) -> ok end,
+                Result = couch_upr:enum_docs_since(
+                    UprPid, PartId, PartVersions, Since, Since, ChangesWrapper,
+                    AccCount),
+                case Result of
+                {ok, _, _} ->
+                    AccRollbacks2 = AccRollbacks;
+                {rollback, RollbackSeq} ->
+                    AccRollbacks2 = ordsets:add_element(
+                        {PartId, RollbackSeq}, AccRollbacks)
+                end,
+                {AccCount, AccSeqs, AccVersions, AccRollbacks2}
+            end
         end
     end,
 
@@ -363,29 +396,41 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
     [] ->
         ActiveChangesCount = 0,
         MaxSeqs = orddict:new(),
-        PartVersions = PartVersions0;
+        PartVersions = PartVersions0,
+        Rollbacks = [];
     _ ->
         ?LOG_INFO("Updater reading changes from active partitions to "
                   "update ~s set view group `~s` from set `~s`",
                   [GroupType, DDocId, SetName]),
-        {ActiveChangesCount, MaxSeqs, PartVersions} = lists:foldl(
-            FoldFun, {0, orddict:new(), PartVersions0}, ActiveParts)
+        {ActiveChangesCount, MaxSeqs, PartVersions, Rollbacks} = lists:foldl(
+            FoldFun, {0, orddict:new(), PartVersions0, ordsets:new()},
+            ActiveParts)
     end,
     case PassiveParts of
     [] ->
         FinalChangesCount = ActiveChangesCount,
         MaxSeqs2 = MaxSeqs,
-        PartVersions2 = PartVersions;
+        PartVersions2 = PartVersions,
+        Rollbacks2 = Rollbacks;
     _ ->
         ?LOG_INFO("Updater reading changes from passive partitions to "
                   "update ~s set view group `~s` from set `~s`",
                   [GroupType, DDocId, SetName]),
-        {FinalChangesCount, MaxSeqs2, PartVersions2} = lists:foldl(
-            FoldFun, {ActiveChangesCount, MaxSeqs, PartVersions}, PassiveParts)
+        {FinalChangesCount, MaxSeqs2, PartVersions2, Rollbacks2} = lists:foldl(
+            FoldFun, {ActiveChangesCount, MaxSeqs, PartVersions, Rollbacks},
+            PassiveParts)
     end,
-    {FinalChangesCount3, MaxSeqs3, PartVersions3} =
+    {FinalChangesCount3, MaxSeqs3, PartVersions3, Rollbacks3} =
         load_changes_from_passive_parts_in_mailbox(
-            Group, FoldFun, FinalChangesCount, MaxSeqs2, PartVersions2),
+            Group, FoldFun, FinalChangesCount, MaxSeqs2, PartVersions2, Rollbacks2),
+
+    case Rollbacks3 of
+    [] ->
+        ok;
+    _ ->
+        throw({rollback, Rollbacks3})
+    end,
+
     couch_work_queue:close(MapQueue),
     ?LOG_INFO("Updater for ~s set view group `~s`, set `~s`, read a total of ~p changes",
               [GroupType, DDocId, SetName, FinalChangesCount3]),
@@ -395,7 +440,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
 
 
 load_changes_from_passive_parts_in_mailbox(
-        Group, FoldFun, ChangesCount, MaxSeqs, PartVersions0) ->
+        Group, FoldFun, ChangesCount, MaxSeqs, PartVersions0, Rollbacks) ->
     #set_view_group{
         set_name = SetName,
         name = DDocId,
@@ -409,12 +454,12 @@ load_changes_from_passive_parts_in_mailbox(
         ?LOG_INFO("Updater reading changes from new passive partitions ~w to "
                   "update ~s set view group `~s` from set `~s`",
                   [Parts, GroupType, DDocId, SetName]),
-        {ChangesCount2, MaxSeqs2, PartVersions2} = lists:foldl(
-            FoldFun, {ChangesCount, MaxSeqs, PartVersions}, Parts),
+        {ChangesCount2, MaxSeqs2, PartVersions2, Rollbacks2} = lists:foldl(
+            FoldFun, {ChangesCount, MaxSeqs, PartVersions, Rollbacks}, Parts),
         load_changes_from_passive_parts_in_mailbox(
-            Group, FoldFun, ChangesCount2, MaxSeqs2, PartVersions2)
+            Group, FoldFun, ChangesCount2, MaxSeqs2, PartVersions2, Rollbacks2)
     after 0 ->
-        {ChangesCount, MaxSeqs, PartVersions0}
+        {ChangesCount, MaxSeqs, PartVersions0, Rollbacks}
     end.
 
 
