@@ -14,7 +14,7 @@
 -behaviour(gen_server).
 
 % Public API
--export([start/1]).
+-export([start/1, reset/0]).
 
 % Only uses by tests
 -export([set_failover_log/2]).
@@ -98,6 +98,9 @@ start(SetName) ->
     Port = list_to_integer(couch_config:get("upr", "port", "0")),
     gen_server:start({local, ?MODULE}, ?MODULE, [Port, SetName], []).
 
+reset() ->
+    gen_server:call(?MODULE, reset).
+
 % Only used by tests to populate the failover log
 set_failover_log(PartId, FailoverLog) ->
     gen_server:call(?MODULE, {set_failover_log, PartId, FailoverLog}).
@@ -166,7 +169,13 @@ handle_call({get_failover_log, PartId}, _From, State) ->
     error ->
         FailoverLog = [{<<"initial0">>, 0}]
     end,
-    {reply, FailoverLog, State}.
+    {reply, FailoverLog, State};
+
+handle_call(reset, _From, State0) ->
+    State = #state{
+        setname = State0#state.setname
+    },
+    {reply, ok, State}.
 
 
 handle_cast(Msg, State) ->
