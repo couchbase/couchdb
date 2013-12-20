@@ -279,7 +279,8 @@ handle_stream_request_body(Socket, BodyLength, RequestId, PartId) ->
             StartSeq =:= 0 of
         true ->
             send_ok_or_rollback(
-                Socket, RequestId, PartId, StartSeq, EndSeq, FailoverLog);
+                Socket, RequestId, PartId, StartSeq, EndSeq, PartUuid,
+                PartHighSeq, FailoverLog);
         false ->
             StreamNotFound = encode_stream_request_not_found(RequestId),
             ok = gen_tcp:send(Socket, StreamNotFound)
@@ -287,25 +288,59 @@ handle_stream_request_body(Socket, BodyLength, RequestId, PartId) ->
     end.
 
 send_ok_or_rollback(Socket, RequestId, PartId, StartSeq, EndSeq,
-        FailoverLog) ->
-    {ok, PartSeq} = get_sequence_number(PartId),
-    case StartSeq =< PartSeq of
+        PartVersionUuid, PartVersionSeq, FailoverLog) ->
+    {ok, HighSeq} = get_sequence_number(PartId),
+
+    case StartSeq =:= 0 of
     true ->
-        StreamOk = encode_stream_request_ok(RequestId, FailoverLog),
-        ok = gen_tcp:send(Socket, StreamOk),
-        ok = gen_server:call(
-            ?MODULE, {add_stream, PartId, RequestId, StartSeq}),
-
-        ok = gen_server:call(?MODULE, {send_snapshot, Socket, PartId, EndSeq}),
-
-        StreamEnd = encode_stream_end(PartId, RequestId),
-        ok = gen_tcp:send(Socket, StreamEnd);
-    % requested sequence number is higher than the db contains
-    % => rollback
+        send_ok(Socket, RequestId, PartId, StartSeq, EndSeq, FailoverLog);
     false ->
-        StreamRollback = encode_stream_request_rollback(RequestId, PartSeq),
-        ok = gen_tcp:send(Socket, StreamRollback)
+        % The server might already have a different future than the client
+        % has (the client and the server have a common history, but the server
+        % is ahead with new failover log entries). We need to make sure the
+        % requested `StartSeq` is lower than the sequence number of the
+        % failover log entry that comes next (if there is any).
+        DiffFailoverLog = lists:takewhile(fun({LogPartUuid, _}) ->
+            LogPartUuid =/= PartVersionUuid
+        end, FailoverLog),
+
+        case DiffFailoverLog of
+        % Same history
+        [] ->
+            case StartSeq =< HighSeq of
+            true ->
+                send_ok(
+                    Socket, RequestId, PartId, StartSeq, EndSeq, FailoverLog);
+            false ->
+                % The client tries to get items from the future, which
+                % means that it got ahead of the server somehow. Rollback
+                % to the sequence the sever currently has
+                send_rollback(Socket, RequestId, HighSeq)
+            end;
+        _ ->
+            {_, NextHighSeqNum} = lists:last(DiffFailoverLog),
+            case StartSeq < NextHighSeqNum of
+            true ->
+                send_ok(
+                    Socket, RequestId, PartId, StartSeq, EndSeq, FailoverLog);
+            false ->
+                send_rollback(Socket, RequestId, PartVersionSeq)
+            end
+        end
     end.
+
+send_ok(Socket, RequestId, PartId, StartSeq, EndSeq, FailoverLog) ->
+    StreamOk = encode_stream_request_ok(RequestId, FailoverLog),
+    ok = gen_tcp:send(Socket, StreamOk),
+    ok = gen_server:call(?MODULE, {add_stream, PartId, RequestId, StartSeq}),
+    ok = gen_server:call(?MODULE, {send_snapshot, Socket, PartId, EndSeq}),
+    StreamEnd = encode_stream_end(PartId, RequestId),
+    ok = gen_tcp:send(Socket, StreamEnd).
+
+send_rollback(Socket, RequestId, RollbackSeq) ->
+    StreamRollback = encode_stream_request_rollback(RequestId, RollbackSeq),
+    ok = gen_tcp:send(Socket, StreamRollback).
+
 
 handle_failover_log(Socket, RequestId, PartId) ->
     FailoverLog = get_failover_log(PartId),
