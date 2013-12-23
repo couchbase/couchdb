@@ -461,44 +461,41 @@ load_doc(Db, PartitionId, DocInfo, MapQueue, Group, MaxDocSize, InitialBuild) ->
         type = GroupType
     } = Group,
     #doc_info{id=DocId, local_seq=Seq, deleted=Deleted} = DocInfo,
-    case DocId of
-    <<?DESIGN_DOC_PREFIX, _/binary>> ->
+    case Deleted of
+    true when InitialBuild ->
         ok;
-    _ ->
-        case Deleted of
-        true when InitialBuild ->
-            ok;
+    true ->
+        Entry = {Seq, #doc{id = DocId, deleted = true}, PartitionId},
+        couch_work_queue:queue(MapQueue, Entry);
+    false ->
+        case couch_util:validate_utf8(DocId) of
         true ->
-            Entry = {Seq, #doc{id = DocId, deleted = true}, PartitionId},
-            couch_work_queue:queue(MapQueue, Entry);
-        false ->
-            case couch_util:validate_utf8(DocId) of
+            {ok, Doc} = couch_db:open_doc_int(Db, DocInfo, []),
+            % TODO: avoid reading whole doc to determine its size, requires
+            % a minor storage layer change.
+            case (MaxDocSize > 0) andalso
+                (iolist_size(Doc#doc.body) > MaxDocSize) of
             true ->
-                {ok, Doc} = couch_db:open_doc_int(Db, DocInfo, []),
-                % TODO: avoid reading whole doc to determine its size, requires
-                % a minor storage layer change.
-                case (MaxDocSize > 0) andalso
-                    (iolist_size(Doc#doc.body) > MaxDocSize) of
-                true ->
-                    ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, skipping "
-                        "document with ID `~s`: too large body (~p bytes)",
-                        [SetName, GroupType, DDocId,
-                         DocId, iolist_size(Doc#doc.body)]);
-                false ->
-                    couch_work_queue:queue(MapQueue, {Seq, Doc, PartitionId})
-                end;
-            false ->
-                % If the id isn't utf8 (memcached allows it), then log an error
-                % message and skip the doc. Send it through the queue anyway
-                % so we record the high seq num in case there are a bunch of
-                % these at the end, we want to keep track of the high seq and
-                % not reprocess again.
                 ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, skipping "
-                    "document with non-utf8 id. Doc id bytes: ~w",
-                    [SetName, GroupType, DDocId, ?b2l(DocId)]),
+                    "document with ID `~s`: too large body (~p bytes)",
+                    [SetName, GroupType, DDocId,
+                     DocId, iolist_size(Doc#doc.body)]),
                 Entry = {Seq, #doc{id = DocId, deleted = true}, PartitionId},
-                couch_work_queue:queue(MapQueue, Entry)
-            end
+                couch_work_queue:queue(MapQueue, Entry);
+            false ->
+                couch_work_queue:queue(MapQueue, {Seq, Doc, PartitionId})
+            end;
+        false ->
+            % If the id isn't utf8 (memcached allows it), then log an error
+            % message and skip the doc. Send it through the queue anyway
+            % so we record the high seq num in case there are a bunch of
+            % these at the end, we want to keep track of the high seq and
+            % not reprocess again.
+            ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, skipping "
+                                 "document with non-utf8 id. Doc id bytes: ~w",
+                                 [SetName, GroupType, DDocId, ?b2l(DocId)]),
+            Entry = {Seq, #doc{id = DocId, deleted = true}, PartitionId},
+            couch_work_queue:queue(MapQueue, Entry)
         end
     end.
 
