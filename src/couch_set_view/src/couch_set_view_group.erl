@@ -1279,6 +1279,7 @@ handle_info({'EXIT', Pid, {updater_finished, Result}}, #state{updater_pid = Pid}
             fd = BuildFile
         };
     false ->
+        ok = couch_file:refresh_eof(NewGroup0#set_view_group.fd),
         NewGroup = NewGroup0
     end,
     State2 = process_partial_update(State, NewGroup),
@@ -1347,7 +1348,8 @@ handle_info({'EXIT', Pid, {updater_error, purge}}, #state{updater_pid = Pid} = S
     State3 = start_updater(State2),
     {noreply, State3, ?GET_TIMEOUT(State3)};
 
-handle_info({'EXIT', Pid, {updater_error, Error}}, #state{updater_pid = Pid} = State) ->
+handle_info({'EXIT', Pid, {updater_error, Error}}, #state{updater_pid = Pid, group = Group} = State) ->
+    ok = couch_file:refresh_eof(Group#set_view_group.fd),
     ?LOG_ERROR("Set view `~s`, ~s (~s) group `~s`,"
                " received error from updater: ~p",
                [?set_name(State), ?type(State), ?category(State),
@@ -2793,7 +2795,7 @@ stop_updater(#state{updater_pid = Pid, initial_build = true} = State) when is_pi
     };
 stop_updater(#state{updater_pid = Pid} = State) when is_pid(Pid) ->
     MRef = erlang:monitor(process, Pid),
-    exit(Pid, shutdown),
+    Pid ! stop,
     unlink(Pid),
     ?LOG_INFO("Stopping updater for set view `~s`, ~s (~s) group `~s`",
               [?set_name(State), ?type(State), ?category(State),
@@ -2806,6 +2808,7 @@ stop_updater(#state{updater_pid = Pid} = State) when is_pid(Pid) ->
         receive {'EXIT', Pid, _} -> ok after 0 -> ok end,
         after_updater_stopped(State2, Reason)
     end,
+    ok = couch_file:refresh_eof((State#state.group)#set_view_group.fd),
     erlang:demonitor(MRef, [flush]),
     NewState.
 

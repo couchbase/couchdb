@@ -33,6 +33,7 @@
 -export([check_primary_key_size/5, check_primary_value_size/5]).
 -export([refresh_viewgroup_header/1]).
 -export([shutdown_cleaner/2]).
+-export([send_group_header/2, receive_group_header/2]).
 
 
 -include("couch_db.hrl").
@@ -670,4 +671,42 @@ shutdown_cleaner(#set_view_group{mod = Mod}, Pid) ->
         end;
     _ ->
         couch_util:shutdown_sync(Pid)
+    end.
+
+% Send binary group header data to a external process via stdin
+-spec send_group_header(#set_view_group{}, port()) -> 'ok'.
+send_group_header(Group, Port) ->
+    HeaderBin = couch_set_view_util:group_to_header_bin(Group),
+    Len = integer_to_list(byte_size(HeaderBin)),
+    true = port_command(Port, [Len, $\n, HeaderBin]),
+    ok.
+
+% Read group header from stdout of external process
+-spec receive_group_header(port(), integer()) -> {'ok', binary()} | {'error', term()}.
+receive_group_header(Port, Len) ->
+    receive_group_header(Port, Len, []).
+
+receive_group_header(_, 0, HeaderData) ->
+    {ok, HeaderData};
+receive_group_header(Port, Len, HeaderData) ->
+    receive
+    {Port, {data, {noeol, Data}}} ->
+        Data2 = ?l2b([HeaderData, Data]),
+        receive_group_header(Port, Len - byte_size(Data), Data2);
+    {Port, {data, {eol, Data}}} ->
+        Len2 = Len - byte_size(Data),
+        case Len2 of
+        0 ->
+            Data2 = ?l2b([HeaderData, Data]),
+            Len3 = Len2;
+        _ ->
+            Data2 = ?l2b([HeaderData, Data, $\n]),
+            Len3 = Len2 - 1
+        end,
+        receive_group_header(Port, Len3, Data2);
+    {Port, {exit_status, 0}} ->
+        self() ! {Port, {exit_status, 0}},
+        receive_group_header(Port, Len, HeaderData);
+    Error ->
+        {error, Error}
     end.
