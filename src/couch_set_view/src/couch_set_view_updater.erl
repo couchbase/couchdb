@@ -921,7 +921,13 @@ maybe_update_btrees(WriterAcc0) ->
             end
         end;
     true ->
-        ok = sort_tmp_files(TmpFiles, WriterAcc0#writer_acc.tmp_dir, Group0, false),
+        % Mapreduce view ops sorting is performed by native updater
+        case Group0#set_view_group.mod of
+        spatial_view ->
+            ok = sort_tmp_files(TmpFiles, WriterAcc0#writer_acc.tmp_dir, Group0, false);
+        _ ->
+            ok
+        end,
         case erlang:erase(updater_worker) of
         undefined ->
             WriterAcc1 = WriterAcc0;
@@ -1069,6 +1075,8 @@ update_btrees(WriterAcc) ->
     end,
     Options = [exit_status, use_stdio, stderr_to_stdout, {line, 4096}, binary],
     Port = open_port({spawn_executable, Cmd}, Options),
+
+    true = port_command(Port, [TmpDir, $\n]),
     mapreduce_view:send_group_info(Group, Port),
 
     % Send tmp oplist file paths
