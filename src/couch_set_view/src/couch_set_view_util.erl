@@ -33,7 +33,8 @@
 -export([check_primary_key_size/5, check_primary_value_size/5]).
 -export([refresh_viewgroup_header/1]).
 -export([shutdown_cleaner/2, shutdown_wait/1]).
--export([send_group_header/2, receive_group_header/2]).
+-export([try_read_line/1]).
+-export([send_group_header/2, receive_group_header/3]).
 
 
 -include("couch_db.hrl").
@@ -673,6 +674,17 @@ shutdown_cleaner(#set_view_group{mod = Mod}, Pid) ->
         couch_util:shutdown_sync(Pid)
     end.
 
+
+-spec try_read_line(binary()) -> {binary() | nil, binary()}.
+try_read_line(Data) ->
+    case binary:split(Data, <<"\n">>) of
+    [Line, Rest] ->
+        {Line, Rest};
+    [Rest] ->
+        {nil, Rest}
+    end.
+
+
 % Send binary group header data to a external process via stdin
 -spec send_group_header(#set_view_group{}, port()) -> 'ok'.
 send_group_header(Group, Port) ->
@@ -681,34 +693,27 @@ send_group_header(Group, Port) ->
     true = port_command(Port, [Len, $\n, HeaderBin]),
     ok.
 
-% Read group header from stdout of external process
--spec receive_group_header(port(), integer()) -> {'ok', binary()} | {'error', term()}.
-receive_group_header(Port, Len) ->
-    receive_group_header(Port, Len, []).
 
-receive_group_header(_, 0, HeaderData) ->
-    {ok, HeaderData};
-receive_group_header(Port, Len, HeaderData) ->
-    receive
-    {Port, {data, {noeol, Data}}} ->
-        Data2 = ?l2b([HeaderData, Data]),
-        receive_group_header(Port, Len - byte_size(Data), Data2);
-    {Port, {data, {eol, Data}}} ->
-        Len2 = Len - byte_size(Data),
-        case Len2 of
-        0 ->
-            Data2 = ?l2b([HeaderData, Data]),
-            Len3 = Len2;
-        _ ->
-            Data2 = ?l2b([HeaderData, Data, $\n]),
-            Len3 = Len2 - 1
-        end,
-        receive_group_header(Port, Len3, Data2);
-    {Port, {exit_status, 0}} ->
-        self() ! {Port, {exit_status, 0}},
-        receive_group_header(Port, Len, HeaderData);
-    Error ->
-        {error, Error}
+% Read group header from stdout of external process
+-spec receive_group_header(port(), integer(), binary()) ->
+    {'ok', binary(), binary()} | {'error', term(), binary()}.
+receive_group_header(Port, Len, HeaderAcc) ->
+    case byte_size(HeaderAcc) of
+    Sz when Sz >= Len + 1 ->
+        HeaderBin = binary:part(HeaderAcc, 0, Len),
+        % Remaining data excluding a \n character
+        Remaining = binary:part(HeaderAcc, Len + 1, Sz - Len - 1),
+        {ok, HeaderBin, Remaining};
+    _ ->
+        receive
+        {Port, {data, Data}} ->
+            receive_group_header(Port, Len, Data);
+        {Port, {exit_status, 0}} ->
+            self() ! {Port, {exit_status, 0}},
+            receive_group_header(Port, Len, HeaderAcc);
+        Error ->
+            {error, Error, HeaderAcc}
+        end
     end.
 
 

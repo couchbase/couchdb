@@ -1073,7 +1073,7 @@ update_btrees(WriterAcc) ->
     Cmd ->
         ok
     end,
-    Options = [exit_status, use_stdio, stderr_to_stdout, {line, 4096}, binary],
+    Options = [exit_status, use_stdio, stderr_to_stdout, stream, binary],
     Port = open_port({spawn_executable, Cmd}, Options),
 
     true = port_command(Port, [TmpDir, $\n]),
@@ -1091,7 +1091,8 @@ update_btrees(WriterAcc) ->
         end, SetViews),
     true = port_command(Port, [integer_to_list(MaxBatchSize), $\n]),
     ok = couch_set_view_util:send_group_header(Group, Port),
-    {NewGroup, Result} = try update_view_group_wait_loop(Port, Group, [], {0, 0, 0, 0, 0}) of
+    {NewGroup, Result} =
+    try update_view_group_wait_loop(Port, Group, <<>>, {0, 0, 0, 0, 0}) of
     {ok, Resp} ->
         Resp
     catch
@@ -1133,29 +1134,41 @@ update_btrees(WriterAcc) ->
         end, [], ViewInfos),
     {ok, NewGroup, CleanupCount, NewStats, CompactFiles}.
 
-update_view_group_wait_loop(Port, Group, Acc, Result) ->
+update_view_group_wait_loop(Port, Group, Acc0, Result) ->
     #set_view_group{
         set_name = SetName,
         name = DDocId,
         type = Type
     } = Group,
-    receive
-    {Port, {exit_status, 0}} ->
-        {ok, {Group, Result}};
-    {Port, {exit_status, 1}} ->
-        ?LOG_INFO("Set view `~s`, ~s group `~s`, index updater stopped successfully.",
-                   [SetName, Type, DDocId]),
-        throw(stopped);
-    {Port, {exit_status, Status}} ->
-        throw({view_group_index_updater_exit, Status});
-    {Port, {data, {noeol, Data}}} ->
-        update_view_group_wait_loop(Port, Group, [Data | Acc], Result);
-    {Port, {data, {eol, <<"Header Len : ", Data/binary>>}}} ->
+    {Line, Acc} = couch_set_view_util:try_read_line(Acc0),
+    case Line of
+    nil ->
+        receive
+        {Port, {data, Data}} ->
+            Acc2 = iolist_to_binary([Acc, Data]),
+            update_view_group_wait_loop(Port, Group, Acc2, Result);
+        {Port, {exit_status, 0}} ->
+            {ok, {Group, Result}};
+        {Port, {exit_status, 1}} ->
+            ?LOG_INFO("Set view `~s`, ~s group `~s`, index updater stopped successfully.",
+                       [SetName, Type, DDocId]),
+            throw(stopped);
+        {Port, {exit_status, Status}} ->
+            throw({view_group_index_updater_exit, Status});
+        {Port, Error} ->
+            throw({view_group_index_updater_error, Error});
+        stop ->
+            ?LOG_INFO("Set view `~s`, ~s group `~s`, sending stop message to index updater.",
+                       [SetName, Type, DDocId]),
+            true = port_command(Port, "exit"),
+            update_view_group_wait_loop(Port, Group, Acc, Result)
+        end;
+    <<"Header Len : ", Data/binary>> ->
         % Read resulting group from stdout
         {ok, [HeaderLen], []} = io_lib:fread("~d", binary_to_list(Data)),
-
-        NewGroup = case couch_set_view_util:receive_group_header(Port, HeaderLen) of
-        {ok, HeaderBin} ->
+        {NewGroup, Acc2} =
+        case couch_set_view_util:receive_group_header(Port, HeaderLen, Acc) of
+        {ok, HeaderBin, Rest} ->
             #set_view_group{
                 id_btree = IdBtree,
                 views = Views
@@ -1175,17 +1188,18 @@ update_view_group_wait_loop(Port, Group, Acc, Result) ->
                 end,
                 Views, NewViewRoots),
 
-            Group#set_view_group{
+            NewGroup0 = Group#set_view_group{
                 id_btree = NewIdBtree,
                 views = NewViews,
                 index_header = Header
-            };
-        {error, Error} ->
+            },
+            {NewGroup0, Rest};
+        {error, Error, Rest} ->
             self() ! Error,
-            Group
+            {Group, Rest}
         end,
-        update_view_group_wait_loop(Port, NewGroup, Acc, Result);
-    {Port, {data, {eol, <<"Results = ", Data/binary>>}}} ->
+        update_view_group_wait_loop(Port, NewGroup, Acc2, Result);
+    <<"Results = ", Data/binary>> ->
         {ok, [IdInserted, IdDeleted, ViewInserted, ViewDeleted, Cleanups], []} =
             io_lib:fread("id_inserts : ~d, "
                          "id_deletes : ~d, "
@@ -1195,18 +1209,15 @@ update_view_group_wait_loop(Port, Group, Acc, Result) ->
                          binary_to_list(Data)),
         Result2 = {IdInserted, IdDeleted, ViewInserted, ViewDeleted, Cleanups},
         update_view_group_wait_loop(Port, Group, Acc, Result2);
-    {Port, {data, {eol, Data}}} ->
-        Msg = lists:reverse([Data | Acc]),
+    Msg ->
+        #set_view_group{
+            set_name = SetName,
+            name = DDocId,
+            type = Type
+        } = Group,
         ?LOG_ERROR("Set view `~s`, ~s group `~s`, received error from index updater: ~s",
                    [SetName, Type, DDocId, Msg]),
-        update_view_group_wait_loop(Port, Group, [], Result);
-    {Port, Error} ->
-        throw({view_group_index_updater_error, Error});
-    stop ->
-        ?LOG_INFO("Set view `~s`, ~s group `~s`, sending stop message to index updater.",
-                   [SetName, Type, DDocId]),
-        true = port_command(Port, "exit"),
-        update_view_group_wait_loop(Port, Group, Acc, Result)
+        update_view_group_wait_loop(Port, Group, <<>>, Result)
     end.
 
 update_seqs(PartIdSeqs, Seqs) ->
