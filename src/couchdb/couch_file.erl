@@ -44,6 +44,9 @@
 % for proc_lib
 -export([spawn_reader/2, spawn_writer/2]).
 
+% for hibernate
+-export([reader_loop_wakeup/2]).
+
 %%----------------------------------------------------------------------
 %% Args:   Valid Options are [create] and [create,overwrite].
 %%  and [{fd_close_after, Ms}].
@@ -784,7 +787,11 @@ reader_loop(Fd, FilePath, CloseTimeout) ->
     after CloseTimeout ->
         % after nonuse timeout we close the Fd.
         file:close(Fd),
-        receive
+        erlang:hibernate(?MODULE, reader_loop_wakeup, [FilePath, CloseTimeout])
+    end.
+
+reader_loop_wakeup(FilePath, CloseTimeout) ->
+    receive
         {'EXIT', _From, Reason} ->
             exit(Reason);
         Msg ->
@@ -795,7 +802,6 @@ reader_loop(Fd, FilePath, CloseTimeout) ->
             Other ->
                 erlang:exit({problem_reopening_file, Other, Msg, self(), FilePath, CloseTimeout})
             end
-        end
     end.
 
 handle_reader_message(Msg, Fd, FilePath, CloseTimeout) ->

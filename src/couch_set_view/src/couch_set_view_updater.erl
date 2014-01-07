@@ -429,18 +429,16 @@ load_doc(Db, PartitionId, DocInfo, MapQueue, Group, MaxDocSize, InitialBuild) ->
         type = GroupType
     } = Group,
     #doc_info{id=DocId, local_seq=Seq, deleted=Deleted} = DocInfo,
-    case DocId of
-    <<?DESIGN_DOC_PREFIX, _/binary>> ->
-        ok;
-    _ ->
-        case Deleted of
-        true when InitialBuild ->
-            ok;
-        true ->
-            Entry = {Seq, #doc{id = DocId, deleted = true}, PartitionId},
-            couch_work_queue:queue(MapQueue, Entry),
-            update_task(1);
+    case Deleted of
+    true when InitialBuild ->
+        Entry = nil;
+    true ->
+        Entry = {Seq, #doc{id = DocId, deleted = true}, PartitionId};
+    false ->
+        case couch_util:validate_utf8(DocId) of
         false ->
+            Entry = {Seq, #doc{id = DocId, deleted = true}, PartitionId};
+        true ->
             case couch_util:validate_utf8(DocId) of
             true ->
                 {ok, Doc} = couch_db:open_doc_int(Db, DocInfo, []),
@@ -452,10 +450,10 @@ load_doc(Db, PartitionId, DocInfo, MapQueue, Group, MaxDocSize, InitialBuild) ->
                     ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, skipping "
                         "document with ID `~s`: too large body (~p bytes)",
                         [SetName, GroupType, DDocId,
-                         DocId, iolist_size(Doc#doc.body)]);
+                         DocId, iolist_size(Doc#doc.body)]),
+                    Entry = {Seq, #doc{id = DocId, deleted = true}, PartitionId};
                 false ->
-                    couch_work_queue:queue(MapQueue, {Seq, Doc, PartitionId}),
-                    update_task(1)
+                    Entry = {Seq, Doc, PartitionId}
                 end;
             false ->
                 % If the id isn't utf8 (memcached allows it), then log an error
@@ -464,13 +462,18 @@ load_doc(Db, PartitionId, DocInfo, MapQueue, Group, MaxDocSize, InitialBuild) ->
                 % these at the end, we want to keep track of the high seq and
                 % not reprocess again.
                 ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, skipping "
-                    "document with non-utf8 id. Doc id bytes: ~w",
-                    [SetName, GroupType, DDocId, ?b2l(DocId)]),
-                Entry = {Seq, #doc{id = DocId, deleted = true}, PartitionId},
-                couch_work_queue:queue(MapQueue, Entry),
-                update_task(1)
+                                     "document with non-utf8 id. Doc id bytes: ~w",
+                                     [SetName, GroupType, DDocId, ?b2l(DocId)]),
+                Entry = {Seq, #doc{id = DocId, deleted = true}, PartitionId}
             end
         end
+    end,
+    case Entry of
+    nil ->
+        ok;
+    _ ->
+        couch_work_queue:queue(MapQueue, Entry),
+        update_task(1)
     end.
 
 
