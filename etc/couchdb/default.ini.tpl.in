@@ -240,5 +240,5 @@ vtree_kp_node_threshold = 2000
 vtree_min_fill_rate = 0.4
 
 [upr]
-port = 12345
+port = 12000
 connection_timeout = 5000
