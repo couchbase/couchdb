@@ -512,7 +512,7 @@ cleanup_view_group_wait_loop(Port, Group, Acc, PurgedCount) ->
         ?LOG_INFO("Set view `~s`, ~s group `~s`, sending stop message to index cleaner.",
                    [SetName, Type, DDocId]),
         true = port_command(Port, "exit"),
-        cleanup_view_group_wait_loop(Port, Group, [Acc], PurgedCount)
+        cleanup_view_group_wait_loop(Port, Group, Acc, PurgedCount)
     end.
 
 compact_view(Fd, SetView, EmptySetView, FilterFun, BeforeKVWriteFun, Acc0) ->
