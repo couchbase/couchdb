@@ -34,13 +34,14 @@
 }).
 
 -record(mutation, {
-    seq = 0        :: non_neg_integer(),
-    rev_seq = 0    :: non_neg_integer(),
-    flags = 0      :: non_neg_integer(),
-    expiration = 0 :: non_neg_integer(),
-    locktime = 0   :: non_neg_integer(),
-    key = <<>>     :: binary(),
-    value = <<>>   :: binary()
+    seq = 0         :: non_neg_integer(),
+    rev_seq = 0     :: non_neg_integer(),
+    flags = 0       :: non_neg_integer(),
+    expiration = 0  :: non_neg_integer(),
+    locktime = 0    :: non_neg_integer(),
+    key = <<>>      :: binary(),
+    value = <<>>    :: binary(),
+    metadata = <<>> :: binary()
 }).
 
 % #doc{} is from couch_db.hrl. They are copy & pasted here
@@ -197,9 +198,10 @@ receive_single_snapshot(Socket, Timeout, MutationFun, Acc) ->
             end;
         {snapshot_marker, _PartId, _RequestId} ->
             receive_single_snapshot(Socket, Timeout, MutationFun, Acc);
-        {snapshot_mutation, PartId, _RequestId, KeyLength, BodyLength} ->
+        {snapshot_mutation, PartId, _RequestId, KeyLength, BodyLength,
+                ExtraLength} ->
             Mutation = receive_snapshot_mutation(
-                Socket, Timeout, PartId, KeyLength, BodyLength),
+                Socket, Timeout, PartId, KeyLength, BodyLength, ExtraLength),
             {FailoverLog, MutationAcc} = Acc,
             MutationAcc2 = MutationFun(Mutation, MutationAcc),
             Acc2 = {FailoverLog, MutationAcc2},
@@ -221,10 +223,12 @@ receive_single_snapshot(Socket, Timeout, MutationFun, Acc) ->
     end.
 
 
-receive_snapshot_mutation(Socket, Timeout, PartId, KeyLength, BodyLength) ->
+receive_snapshot_mutation(Socket, Timeout, PartId, KeyLength, BodyLength,
+        ExtraLength) ->
     case gen_tcp:recv(Socket, BodyLength, Timeout) of
     {ok, Body} ->
-         {snapshot_mutation, Mutation} = parse_snapshot_mutation(KeyLength, Body),
+         {snapshot_mutation, Mutation} = parse_snapshot_mutation(
+             KeyLength, Body, BodyLength, ExtraLength),
          % XXX vmx 2013-08-23: For now, queue in items in the way the current
          %     updater expects them. This can be changed later to a simpler
          %     format.
@@ -255,7 +259,7 @@ receive_snapshot_deletion(Socket, Timeout, PartId, KeyLength, BodyLength) ->
          % XXX vmx 2013-08-23: For now, queue in items in the way the current
          %     updater expects them. This can be changed later to a simpler
          %     format.
-         {Seq, RevSeq, Key} = Deletion,
+         {Seq, RevSeq, Key, _Metadata} = Deletion,
          % XXX vmx 2013-08-23: Use correct CAS value
          Cas = 0,
          Doc = #doc{
@@ -347,7 +351,7 @@ parse_header(<<?UPR_MAGIC_RESPONSE,
 parse_header(<<?UPR_MAGIC_REQUEST,
                Opcode,
                KeyLength:?UPR_SIZES_KEY_LENGTH,
-               _ExtraLength,
+               ExtraLength,
                _DataType,
                PartId:?UPR_SIZES_PARTITION,
                BodyLength:?UPR_SIZES_BODY,
@@ -359,19 +363,24 @@ parse_header(<<?UPR_MAGIC_REQUEST,
     ?UPR_OPCODE_SNAPSHOT_MARKER ->
         {snapshot_marker, PartId, RequestId};
     ?UPR_OPCODE_MUTATION ->
-        {snapshot_mutation, PartId, RequestId, KeyLength, BodyLength};
+        {snapshot_mutation, PartId, RequestId, KeyLength, BodyLength,
+            ExtraLength};
     ?UPR_OPCODE_DELETION ->
         {snapshot_deletion, PartId, RequestId, KeyLength, BodyLength}
     end.
 
-parse_snapshot_mutation(KeyLength, Body) ->
+parse_snapshot_mutation(KeyLength, Body, BodyLength, ExtraLength) ->
     <<Seq:?UPR_SIZES_BY_SEQ,
       RevSeq:?UPR_SIZES_REV_SEQ,
       Flags:?UPR_SIZES_FLAGS,
       Expiration:?UPR_SIZES_EXPIRATION,
       LockTime:?UPR_SIZES_LOCK,
+      MetadataLength:?UPR_SIZES_METADATA_LENGTH,
       Key:KeyLength/binary,
-      Value/binary>> = Body,
+      Rest/binary>> = Body,
+    ValueLength = BodyLength - ExtraLength - KeyLength - MetadataLength,
+    <<Value:ValueLength/binary,
+      Metadata:MetadataLength/binary>> = Rest,
     {snapshot_mutation, #mutation{
         seq = Seq,
         rev_seq = RevSeq,
@@ -379,14 +388,20 @@ parse_snapshot_mutation(KeyLength, Body) ->
         expiration = Expiration,
         locktime = LockTime,
         key = Key,
-        value = Value
+        value = Value,
+        metadata = Metadata
     }}.
 
 parse_snapshot_deletion(KeyLength, Body) ->
+    % XXX vmx 2014-01-07: No metadata support for now. Make it so it breaks
+    % once it's there.
+    MetadataLength = 0,
     <<Seq:?UPR_SIZES_BY_SEQ,
       RevSeq:?UPR_SIZES_REV_SEQ,
-      Key:KeyLength/binary>> = Body,
-    {snapshot_deletion, {Seq, RevSeq, Key}}.
+      MetadataLength:?UPR_SIZES_METADATA_LENGTH,
+      Key:KeyLength/binary,
+      Metadata:MetadataLength/binary>> = Body,
+    {snapshot_deletion, {Seq, RevSeq, Key, Metadata}}.
 
 
 parse_failover_log(Body) ->
