@@ -105,15 +105,13 @@ compact_group(Group0, EmptyGroup, TmpDir, UpdaterPid, Owner, UserStatus) ->
     end,
 
     #set_view_group{
-        id_btree = IdBtree,
         views = Views,
-        index_header = Header,
         sig = GroupSig
     } = Group,
 
     #set_view_group{
-        id_btree = EmptyIdBtree,
         views = EmptyViews,
+        filepath = TargetFile,
         fd = Fd
     } = EmptyGroup,
 
@@ -136,45 +134,48 @@ compact_group(Group0, EmptyGroup, TmpDir, UpdaterPid, Owner, UserStatus) ->
     couch_task_status:add_task(Status),
     couch_task_status:set_update_frequency(5000),
 
-    ok = couch_set_view_util:open_raw_read_fd(Group),
+    % Use native compactor for id_btrees and mapreduce views
+    ok = couch_file:flush(Fd),
+    {ok, NewGroup0, Acc1} = compact_btrees(Group, EmptyGroup, TargetFile, Acc0),
+    ok = couch_file:refresh_eof(Fd),
 
-    BeforeKVWriteFun = fun(KV, Acc) ->
-        {KV, update_task(Acc, 1)}
+    % For spatial, use erlang view compactor
+    NewGroup = case Mod of
+    spatial_view ->
+        FilterFun = case ?set_cbitmask(Group) of
+        0 ->
+            fun(_Kv) -> true end;
+        _ ->
+            fun({_Key, <<PartId:16, _/binary>>}) ->
+                ((1 bsl PartId) band ?set_cbitmask(Group)) =:= 0
+            end
+        end,
+
+        BeforeKVWriteFun = fun(KV, Acc) ->
+            {KV, update_task(Acc, 1)}
+        end,
+
+        ok = couch_set_view_util:open_raw_read_fd(Group),
+        {NewViews, _} = lists:mapfoldl(fun({View, EmptyView}, Acc) ->
+            Mod:compact_view(Fd, View, EmptyView, FilterFun, BeforeKVWriteFun, Acc)
+        end, Acc1, lists:zip(Views, EmptyViews)),
+        ok = couch_set_view_util:close_raw_read_fd(Group),
+        Header = NewGroup0#set_view_group.index_header,
+        NewGroup0#set_view_group{
+            views = NewViews,
+            index_header = Header#set_view_index_header{
+                view_states = [Mod:get_state(V#set_view.indexer) || V <- NewViews]
+            }
+        };
+    mapreduce_view ->
+        NewGroup0
     end,
-
-    FilterFun = case ?set_cbitmask(Group) of
-    0 ->
-        fun(_Kv) -> true end;
-    _ ->
-        fun({_Key, <<PartId:16, _/binary>>}) ->
-            ((1 bsl PartId) band ?set_cbitmask(Group)) =:= 0
-        end
-    end,
-
-    {ok, NewIdBtreeRoot, Acc1} = couch_btree_copy:copy(
-        IdBtree, Fd,
-        [{before_kv_write, {BeforeKVWriteFun, Acc0}}, {filter, FilterFun}]),
-    NewIdBtree = EmptyIdBtree#btree{root = NewIdBtreeRoot},
-
-    {NewViews, _} = lists:mapfoldl(fun({View, EmptyView}, Acc) ->
-        Mod:compact_view(Fd, View, EmptyView, FilterFun, BeforeKVWriteFun, Acc)
-    end, Acc1, lists:zip(Views, EmptyViews)),
-
-    ok = couch_set_view_util:close_raw_read_fd(Group),
-
-    NewGroup = EmptyGroup#set_view_group{
-        id_btree = NewIdBtree,
-        views = NewViews,
-        index_header = Header#set_view_index_header{
-            cbitmask = 0,
-            id_btree_state = couch_btree:get_state(NewIdBtree),
-            view_states = [Mod:get_state(V#set_view.indexer) || V <- NewViews]
-        }
-    },
 
     CleanupKVCount = TotalChanges - total_kv_count(NewGroup),
     CompactResult = #set_view_compactor_result{
-        group = NewGroup,
+        group = NewGroup#set_view_group{
+            fd = Fd
+        },
         cleanup_kv_count = CleanupKVCount
     },
     maybe_retry_compact(CompactResult, StartTime, TmpDir, Owner, 1).
@@ -321,3 +322,115 @@ get_file_batch(LogFiles) ->
         end,
         {[], []},
         LogFiles).
+
+% Compact a view group by rewriting all btrees to a new file
+% Invokes a native view compacter process to do the compaction.
+-spec compact_btrees(#set_view_group{}, #set_view_group{}, list(), #acc{}) ->
+                                               {ok, #set_view_group{}, #acc{}}.
+compact_btrees(Group0, EmptyGroup, TargetFile, ResultAcc) ->
+    #set_view_group{
+        mod = Mod
+    } = Group0,
+    % For spatialview, only process id_btree
+    Group = case Mod of
+    mapreduce_view ->
+        Group0;
+    spatial_view ->
+        Group0#set_view_group{views = []}
+    end,
+    case os:find_executable("couch_view_group_compactor") of
+    false ->
+        Cmd = nil,
+        throw(<<"couch_view_group_compactor command not found">>);
+    Cmd ->
+        ok
+    end,
+    Options = [exit_status, use_stdio, stderr_to_stdout, stream, binary],
+    Port = open_port({spawn_executable, Cmd}, Options),
+
+    % Send compaction destination filename
+    true = port_command(Port, [TargetFile, $\n]),
+    % Send viewgroup info
+    mapreduce_view:send_group_info(Group, Port),
+    % Send group binary header
+    ok = couch_set_view_util:send_group_header(Group, Port),
+
+    {NewGroup, ResultAcc2} =
+    try compact_btrees_wait_loop(Port, Group, EmptyGroup, <<>>, ResultAcc) of
+    {ok, Resp} ->
+        Resp
+    catch
+    Error ->
+        exit(Error)
+    after
+        catch port_close(Port)
+    end,
+    {ok, NewGroup, ResultAcc2}.
+
+compact_btrees_wait_loop(Port, Group, EmptyGroup, Acc0, ResultAcc) ->
+    #set_view_group{
+        set_name = SetName,
+        name = DDocId,
+        type = Type
+    } = Group,
+    {Line, Acc} = couch_set_view_util:try_read_line(Acc0),
+    case Line of
+    nil ->
+        receive
+        {Port, {data, Data}} ->
+            Acc2 = iolist_to_binary([Acc, Data]),
+            compact_btrees_wait_loop(Port, Group, EmptyGroup, Acc2, ResultAcc);
+        {Port, {exit_status, 0}} ->
+            {ok, {Group, ResultAcc}};
+        {Port, {exit_status, Status}} ->
+            throw({view_group_index_compactor_exit, Status});
+        {Port, Error} ->
+            throw({view_group_index_compactor_error, Error})
+        end;
+    <<"Header Len : ", Data/binary>> ->
+        % Read resulting group from stdout
+        {ok, [HeaderLen], []} = io_lib:fread("~d", binary_to_list(Data)),
+        {NewGroup, Acc2} =
+        case couch_set_view_util:receive_group_header(Port, HeaderLen, Acc) of
+        {ok, HeaderBin, Rest} ->
+            #set_view_group{
+                id_btree = IdBtree,
+                views = Views
+            } = EmptyGroup,
+            Header  = couch_set_view_util:header_bin_to_term(HeaderBin),
+            #set_view_index_header{
+                id_btree_state = NewIdBtreeRoot,
+                view_states = NewViewRoots
+            } = Header,
+            NewIdBtree = couch_btree:set_state(IdBtree, NewIdBtreeRoot),
+            NewViews = lists:zipwith(
+                fun(#set_view{indexer = View} = V, NewRoot) ->
+                    #mapreduce_view{btree = Bt} = View,
+                    NewBt = couch_btree:set_state(Bt, NewRoot),
+                    NewView = View#mapreduce_view{btree = NewBt},
+                    V#set_view{indexer = NewView}
+                end,
+                Views, NewViewRoots),
+
+            NewGroup0 = EmptyGroup#set_view_group{
+                id_btree = NewIdBtree,
+                views = NewViews,
+                index_header = Header
+            },
+            {NewGroup0, Rest};
+        {error, Error, Rest} ->
+            self() ! Error,
+            {Group, Rest}
+        end,
+        compact_btrees_wait_loop(Port, NewGroup, EmptyGroup, Acc2, ResultAcc);
+    <<"Results = ", Data/binary>> ->
+        % Read resulting stats from stdout
+        {ok, [Inserts], []} = io_lib:fread("inserts : ~d", binary_to_list(Data)),
+        ResultAcc2 = update_task(ResultAcc, Inserts),
+        compact_btrees_wait_loop(Port, Group, EmptyGroup, Acc, ResultAcc2);
+    Msg ->
+        ?LOG_ERROR("Set view `~s`, ~s group `~s`, received error from index compactor: ~s",
+                   [SetName, Type, DDocId, Msg]),
+        compact_btrees_wait_loop(Port, Group, EmptyGroup, <<>>, ResultAcc)
+    end.
+
