@@ -14,6 +14,8 @@
 % License for the specific language governing permissions and limitations under
 % the License.
 
+-include_lib("couch_upr/include/couch_upr.hrl").
+
 test_set_name() -> <<"couch_test_couch_upr">>.
 num_set_partitions() -> 4.
 num_docs() -> 1000.
@@ -22,7 +24,7 @@ num_docs() -> 1000.
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(15),
+    etap:plan(16),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -112,6 +114,19 @@ test() ->
     {ok, Seq3} = couch_upr:get_sequence_number(Pid, 3),
     etap:is(Seq3, num_docs() div num_set_partitions(),
         "Sequence number of partition 3 is correct"),
+
+    % Test with too large failover log
+
+    TooLargeFailoverLog = lists:map(fun(I) ->
+        {list_to_binary(string:right(integer_to_list(I), 8, $a)), I}
+    end, lists:seq(0, ?UPR_MAX_FAILOVER_LOG_SIZE)),
+    PartId = 1,
+    couch_upr_fake_server:set_failover_log(PartId, TooLargeFailoverLog),
+    etap:throws_ok(
+      fun() -> couch_upr:enum_docs_since(
+          Pid, PartId, [{<<"aaaaaaa0">>, 0}], 0, 100, TestFun, []) end,
+      {error, <<"Failover log contains too many entries">>},
+      "Throw exception when failover contains too many items"),
 
     couch_set_view_test_util:stop_server(),
     ok.

@@ -81,6 +81,12 @@ enum_docs_since(Pid, PartId, [PartVersion|PartVersions], StartSeq, EndSeq,
     Result = receive_single_snapshot(Socket, Timeout, InFun, {nil, InAcc}),
     case Result of
     {ok, {FailoverLog, Mutations}} ->
+        case length(FailoverLog) > ?UPR_MAX_FAILOVER_LOG_SIZE of
+        true ->
+            throw({error, <<"Failover log contains too many entries">>});
+        false ->
+            ok
+        end,
         {ok, Mutations, FailoverLog};
     % The failover log doesn't match. Try a previous partition version. The
     % last partition in the list will work as it requests with a partition
