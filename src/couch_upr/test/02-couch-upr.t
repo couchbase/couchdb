@@ -24,7 +24,7 @@ num_docs() -> 1000.
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(16),
+    etap:plan(17),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -91,11 +91,17 @@ test() ->
     etap:is(FailoverLog4, lists:nth(4, FailoverLogs),
         "Failoverlog from partition 3 is correct"),
 
-    % Try a too high sequence number to get a rollback response
-    {rollback, RollbackSeq} = couch_upr:enum_docs_since(
+    % Try a too high sequence number to get a erange error response
+    {error, ErangeError} = couch_upr:enum_docs_since(
         Pid, 0, InitialFailoverLog0, 400, 450, TestFun, []),
-    etap:is(RollbackSeq, num_docs() div num_set_partitions(),
-        "Correct rollback sequence number"),
+    etap:is(ErangeError, wrong_start_sequence_number,
+        "Correct error message for too high sequence number"),
+    % Start sequence is bigger than end sequence
+    {error, ErangeError2} = couch_upr:enum_docs_since(
+        Pid, 0, InitialFailoverLog0, 5, 2, TestFun, []),
+    etap:is(ErangeError2, wrong_start_sequence_number,
+        "Correct error message for start sequence > end sequence"),
+
 
     Error = couch_upr:enum_docs_since(
         Pid, 1, [{<<"wrong123">>, 1243}], 46, 165, TestFun, []),

@@ -275,19 +275,23 @@ handle_stream_request_body(Socket, BodyLength, RequestId, PartId) ->
            PartUuid:(?UPR_SIZES_PARTITION_UUID div 8)/binary,
            PartHighSeq:?UPR_SIZES_BY_SEQ>>} ->
         FailoverLog = get_failover_log(PartId),
-        case lists:member({PartUuid, PartHighSeq}, FailoverLog) orelse
-            StartSeq =:= 0 of
+        case StartSeq > EndSeq of
         true ->
-            send_ok_or_rollback(
-                Socket, RequestId, PartId, StartSeq, EndSeq, PartUuid,
-                PartHighSeq, FailoverLog);
+            send_error(Socket, RequestId, ?UPR_STATUS_ERANGE);
         false ->
-            StreamNotFound = encode_stream_request_not_found(RequestId),
-            ok = gen_tcp:send(Socket, StreamNotFound)
+            case lists:member({PartUuid, PartHighSeq}, FailoverLog) orelse
+                 StartSeq =:= 0 of
+            true ->
+                send_ok_or_error(
+                    Socket, RequestId, PartId, StartSeq, EndSeq, PartUuid,
+                    PartHighSeq, FailoverLog);
+            false ->
+                send_error(Socket, RequestId, ?UPR_STATUS_KEY_NOT_FOUND)
+            end
         end
     end.
 
-send_ok_or_rollback(Socket, RequestId, PartId, StartSeq, EndSeq,
+send_ok_or_error(Socket, RequestId, PartId, StartSeq, EndSeq,
         PartVersionUuid, PartVersionSeq, FailoverLog) ->
     {ok, HighSeq} = get_sequence_number(PartId),
 
@@ -313,9 +317,8 @@ send_ok_or_rollback(Socket, RequestId, PartId, StartSeq, EndSeq,
                     Socket, RequestId, PartId, StartSeq, EndSeq, FailoverLog);
             false ->
                 % The client tries to get items from the future, which
-                % means that it got ahead of the server somehow. Rollback
-                % to the sequence the sever currently has
-                send_rollback(Socket, RequestId, HighSeq)
+                % means that it got ahead of the server somehow.
+                send_error(Socket, RequestId, ?UPR_STATUS_ERANGE)
             end;
         _ ->
             {_, NextHighSeqNum} = lists:last(DiffFailoverLog),
@@ -340,6 +343,10 @@ send_ok(Socket, RequestId, PartId, StartSeq, EndSeq, FailoverLog) ->
 send_rollback(Socket, RequestId, RollbackSeq) ->
     StreamRollback = encode_stream_request_rollback(RequestId, RollbackSeq),
     ok = gen_tcp:send(Socket, StreamRollback).
+
+send_error(Socket, RequestId, Status) ->
+    StreamError = encode_stream_request_error(RequestId, Status),
+    ok = gen_tcp:send(Socket, StreamError).
 
 
 handle_failover_log(Socket, RequestId, PartId) ->
@@ -593,13 +600,13 @@ encode_stream_request_ok(RequestId, FailoverLog) ->
               0:?UPR_SIZES_CAS>>,
     <<Header/binary, Value/binary>>.
 
-encode_stream_request_not_found(RequestId) ->
+encode_stream_request_error(RequestId, Status) ->
     <<?UPR_MAGIC_RESPONSE,
       ?UPR_OPCODE_STREAM_REQUEST,
       0:?UPR_SIZES_KEY_LENGTH,
       0,
       0,
-      ?UPR_STATUS_KEY_NOT_FOUND:?UPR_SIZES_STATUS,
+      Status:?UPR_SIZES_STATUS,
       0:?UPR_SIZES_BODY,
       RequestId:?UPR_SIZES_OPAQUE,
       0:?UPR_SIZES_CAS>>.

@@ -32,6 +32,7 @@
 -define(UPR_STATUS_KEY_NOT_FOUND, 16#01).
 -define(UPR_STATUS_ROLLBACK, 16#23).
 -define(UPR_STATUS_NOT_MY_VBUCKET, 16#07).
+-define(UPR_STATUS_ERANGE, 16#22).
 % The sizes are in bits
 -define(UPR_SIZES_KEY_LENGTH, 16).
 -define(UPR_SIZES_PARTITION, 16).

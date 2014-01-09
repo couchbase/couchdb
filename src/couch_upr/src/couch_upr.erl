@@ -94,6 +94,8 @@ enum_docs_since(Pid, PartId, [PartVersion|PartVersions], StartSeq, EndSeq,
     {error, wrong_partition_version} ->
         enum_docs_since(
             Pid, PartId, PartVersions, StartSeq, EndSeq, InFun, InAcc);
+    {error, _} = Error ->
+        Error;
     {rollback, RollbackSeq} ->
         {rollback, RollbackSeq}
     end.
@@ -200,7 +202,9 @@ receive_single_snapshot(Socket, Timeout, MutationFun, Acc) ->
                     io:format("vmx: closed5~n", [])
                 end;
             ?UPR_STATUS_KEY_NOT_FOUND ->
-                {error, wrong_partition_version}
+                {error, wrong_partition_version};
+            ?UPR_STATUS_ERANGE ->
+                {error, wrong_start_sequence_number}
             end;
         {snapshot_marker, _PartId, _RequestId} ->
             receive_single_snapshot(Socket, Timeout, MutationFun, Acc);
