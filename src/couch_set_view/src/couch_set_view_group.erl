@@ -843,7 +843,7 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
                       " up to date - restarting updater",
                       [?set_name(State), ?type(State), ?category(State),
                        ?group_id(State)]),
-            couch_util:shutdown_sync(UpdaterPid);
+            couch_set_view_util:shutdown_wait(UpdaterPid);
         true ->
             ok
         end,
@@ -1470,8 +1470,8 @@ terminate(Reason, #state{group = #set_view_group{sig = Sig} = Group} = State) ->
     State2 = reply_all(State#state{update_listeners = Listeners2}, Reason),
     State3 = notify_pending_transition_waiters(State2, {shutdown, Reason}),
     catch couch_db_set:close(?db_set(State3)),
-    couch_util:shutdown_sync(State3#state.cleaner_pid),
-    couch_util:shutdown_sync(State3#state.updater_pid),
+    couch_set_view_util:shutdown_wait(State3#state.cleaner_pid),
+    couch_set_view_util:shutdown_wait(State3#state.updater_pid),
     couch_util:shutdown_sync(State3#state.compactor_pid),
     couch_util:shutdown_sync(State3#state.compactor_file),
     couch_util:shutdown_sync(State3#state.replica_group),

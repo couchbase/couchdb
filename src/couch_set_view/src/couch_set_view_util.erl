@@ -32,7 +32,7 @@
 -export([set_view_sig/1]).
 -export([check_primary_key_size/5, check_primary_value_size/5]).
 -export([refresh_viewgroup_header/1]).
--export([shutdown_cleaner/2]).
+-export([shutdown_cleaner/2, shutdown_wait/1]).
 -export([send_group_header/2, receive_group_header/2]).
 
 
@@ -709,4 +709,29 @@ receive_group_header(Port, Len, HeaderData) ->
         receive_group_header(Port, Len, HeaderData);
     Error ->
         {error, Error}
+    end.
+
+
+% Send stop message to the process and wait for it to exit gracefully
+% This is similar to couch_util:shutdown_sync(Pid)
+% Instead of force kill, sends stop message
+-spec shutdown_wait(pid() | nil) -> 'ok'.
+shutdown_wait(nil) ->
+    ok;
+shutdown_wait(Pid) ->
+    MRef = erlang:monitor(process, Pid),
+    try
+        unlink(Pid),
+        Pid ! stop,
+        receive
+        {'DOWN', MRef, _, _, _} ->
+            receive
+            {'EXIT', Pid, _} ->
+                ok
+            after 0 ->
+                ok
+            end
+        end
+    after
+        erlang:demonitor(MRef, [flush])
     end.
