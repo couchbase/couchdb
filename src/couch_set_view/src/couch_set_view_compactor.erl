@@ -305,26 +305,41 @@ apply_log(Group, [[] | _], NewSeqs, _TmpDir) ->
             view_states = [Mod:get_state(V#set_view.indexer) || V <- Views]
         }
     };
-apply_log(Group, LogFiles, NewSeqs, TmpDir) ->
+apply_log(Group0, LogFiles, NewSeqs, TmpDir) ->
     #set_view_group{
-        id_btree = IdBtree,
         mod = Mod
-    } = Group,
+    } = Group0,
 
     {Batch, LogFiles2} = get_file_batch(LogFiles),
 
     [IdMergeFile | ViewLogFiles] = Batch,
-    {ok, NewIdBtree, _, _} = couch_set_view_updater_helper:update_btree(
-        IdBtree, IdMergeFile, ?SORTED_CHUNK_SIZE),
+
+    % Remove spatial views since native updater cannot handle them
+    Group = couch_set_view_util:remove_group_views(Group0, spatial_view),
+    {ok, NewGroup0, _} = couch_set_view_updater_helper:update_btrees(
+        Group, TmpDir, Batch, ?SORTED_CHUNK_SIZE),
+
+    % Add back spatial views
+    NewGroup = couch_set_view_util:update_group_views(
+        NewGroup0, Group0, spatial_view),
+
     ok = file2:delete(IdMergeFile),
 
-    NewViews = Mod:apply_log(Group, ViewLogFiles),
-
-    Group2 = Group#set_view_group{
-        id_btree = NewIdBtree,
-        views = NewViews
-    },
-    apply_log(Group2, LogFiles2, NewSeqs, TmpDir).
+    % For spatial views, execute erlang code for view compaction
+    NewGroup2 = case Mod of
+    mapreduce_view ->
+        lists:foreach(
+          fun(LogFile) ->
+            ok = file2:delete(LogFile)
+          end, ViewLogFiles),
+        NewGroup;
+    _ ->
+        NewViews = Mod:apply_log(Group, ViewLogFiles),
+        NewGroup#set_view_group{
+          views = NewViews
+         }
+    end,
+    apply_log(NewGroup2, LogFiles2, NewSeqs, TmpDir).
 
 
 get_file_batch(LogFiles) ->
