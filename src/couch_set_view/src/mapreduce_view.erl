@@ -31,8 +31,7 @@
         make_key_options/1, should_filter/1]).
 -export([stats_ets/1, server_name/1, sig_to_pid_ets/1, name_to_sig_ets/1,
          pid_to_sig_ets/1]).
-
--export([send_group_info/2]).
+-export([view_info/1]).
 
 
 -include("couch_db.hrl").
@@ -128,7 +127,7 @@ finish_build(Group, TmpFiles, TmpDir) ->
     end,
     Options = [exit_status, use_stdio, stderr_to_stdout, {line, 4096}, binary],
     Port = open_port({spawn_executable, Cmd}, Options),
-    send_group_info(Group, Port),
+    couch_set_view_util:send_group_info(Group, Port),
     #set_view_tmp_file_info{name = IdFile} = dict:fetch(ids_index, TmpFiles),
     DestPath = couch_set_view_util:new_sort_file_path(TmpDir, updater),
     true = port_command(Port, [DestPath, $\n, IdFile, $\n]),
@@ -469,7 +468,7 @@ cleanup_view_group(Group) ->
     end,
     Options = [exit_status, use_stdio, stderr_to_stdout, {line, 4096}, binary],
     Port = open_port({spawn_executable, Cmd}, Options),
-    send_group_info(Group, Port),
+    couch_set_view_util:send_group_info(Group, Port),
     PurgedCount = try cleanup_view_group_wait_loop(Port, Group, [], 0) of
     {ok, Count0} ->
         Count0
@@ -668,26 +667,6 @@ pid_to_sig_ets(prod) ->
     ?SET_VIEW_PID_TO_SIG_ETS_PROD;
 pid_to_sig_ets(dev) ->
     ?SET_VIEW_PID_TO_SIG_ETS_DEV.
-
-
--spec send_group_info(#set_view_group{}, port()) -> 'ok'.
-send_group_info(#set_view_group{mod = mapreduce_view} = Group, Port) ->
-    #set_view_group{
-        views = Views,
-        filepath = IndexFile,
-        header_pos = HeaderPos
-    } = Group,
-    Data1 = [
-        IndexFile, $\n,
-        integer_to_list(HeaderPos), $\n,
-        integer_to_list(length(Views)), $\n
-    ],
-    true = port_command(Port, Data1),
-    ok = lists:foreach(
-        fun(#set_view{indexer = View}) ->
-            true = port_command(Port, view_info(View))
-        end,
-        Views).
 
 view_info(#mapreduce_view{reduce_funs = []}) ->
     [<<"0">>, $\n];

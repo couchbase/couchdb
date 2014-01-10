@@ -364,7 +364,7 @@ compact_btrees(Group0, EmptyGroup, TargetFile, ResultAcc) ->
     % Send compaction destination filename
     true = port_command(Port, [TargetFile, $\n]),
     % Send viewgroup info
-    mapreduce_view:send_group_info(Group, Port),
+    couch_set_view_util:send_group_info(Group, Port),
     % Send group binary header
     ok = couch_set_view_util:send_group_header(Group, Port),
 

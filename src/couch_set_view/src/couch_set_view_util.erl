@@ -35,6 +35,8 @@
 -export([shutdown_cleaner/2, shutdown_wait/1]).
 -export([try_read_line/1]).
 -export([send_group_header/2, receive_group_header/3]).
+-export([remove_group_views/2, update_group_views/3]).
+-export([send_group_info/2]).
 
 
 -include("couch_db.hrl").
@@ -740,3 +742,45 @@ shutdown_wait(Pid) ->
     after
         erlang:demonitor(MRef, [flush])
     end.
+
+
+-spec remove_group_views(#set_view_group{}, atom()) -> #set_view_group{}.
+remove_group_views(#set_view_group{mod = Mod} = Group, Type) ->
+    case Mod of
+    Type ->
+        Group#set_view_group{views = []};
+    _ ->
+        Group
+    end.
+
+
+-spec update_group_views(#set_view_group{},
+                         #set_view_group{}, atom()) -> #set_view_group{}.
+update_group_views(#set_view_group{mod = Mod} = Group, SrcGroup, Type) ->
+    case Mod of
+    Type ->
+        Group#set_view_group{views = SrcGroup#set_view_group.views};
+    _ ->
+        Group
+    end.
+
+
+-spec send_group_info(#set_view_group{}, port()) -> 'ok'.
+send_group_info(Group, Port) ->
+    #set_view_group{
+        views = Views,
+        filepath = IndexFile,
+        header_pos = HeaderPos,
+        mod = Mod
+    } = Group,
+    Data1 = [
+        IndexFile, $\n,
+        integer_to_list(HeaderPos), $\n,
+        integer_to_list(length(Views)), $\n
+    ],
+    true = port_command(Port, Data1),
+    ok = lists:foreach(
+        fun(#set_view{indexer = View}) ->
+            true = port_command(Port, Mod:view_info(View))
+        end,
+        Views).

@@ -18,6 +18,7 @@
 -export([encode_btree_op/2, encode_btree_op/3]).
 -export([file_sorter_batch_format_fun/1]).
 -export([count_items_from_set/2]).
+-export([update_btrees/4]).
 
 
 -include("couch_db.hrl").
@@ -150,3 +151,121 @@ count_items_from_set(Group, Parts) ->
                    end
                 end, 0, Parts),
     Count.
+
+% For a view group, perform btree updates for idbtree and view btrees
+update_btrees(Group, TmpDir, LogFiles, MaxBatchSize) ->
+    case os:find_executable("couch_view_index_updater") of
+    false ->
+        Cmd = nil,
+        throw(<<"couch_view_index_updater command not found">>);
+    Cmd ->
+        ok
+    end,
+    Options = [exit_status, use_stdio, stderr_to_stdout, stream, binary],
+    Port = open_port({spawn_executable, Cmd}, Options),
+
+    true = port_command(Port, [TmpDir, $\n]),
+    couch_set_view_util:send_group_info(Group, Port),
+
+    % Send operations log file paths
+    [IdFile | ViewFiles] = LogFiles,
+    true = port_command(Port, [IdFile, $\n]),
+    lists:foreach(
+            fun(ViewFile) ->
+            true = port_command(Port, [ViewFile, $\n])
+            end,
+        ViewFiles),
+    true = port_command(Port, [integer_to_list(MaxBatchSize), $\n]),
+    ok = couch_set_view_util:send_group_header(Group, Port),
+    {NewGroup, Stats} =
+    try update_btrees_wait_loop(Port, Group, <<>>, {0, 0, 0, 0, 0}) of
+    {ok, Resp} ->
+        Resp
+    catch
+    Error ->
+        exit(Error)
+    after
+        catch port_close(Port)
+    end,
+    {ok, NewGroup, Stats}.
+
+update_btrees_wait_loop(Port, Group, Acc0, Stats) ->
+    #set_view_group{
+        set_name = SetName,
+        name = DDocId,
+        type = Type
+    } = Group,
+    {Line, Acc} = couch_set_view_util:try_read_line(Acc0),
+    case Line of
+    nil ->
+        receive
+        {Port, {data, Data}} ->
+            Acc2 = iolist_to_binary([Acc, Data]),
+            update_btrees_wait_loop(Port, Group, Acc2, Stats);
+        {Port, {exit_status, 0}} ->
+            {ok, {Group, Stats}};
+        {Port, {exit_status, 1}} ->
+            ?LOG_INFO("Set view `~s`, ~s group `~s`, index updater stopped successfully.",
+                       [SetName, Type, DDocId]),
+            exit(shutdown);
+        {Port, {exit_status, Status}} ->
+            throw({view_group_index_updater_exit, Status});
+        {Port, Error} ->
+            throw({view_group_index_updater_error, Error});
+        stop ->
+            ?LOG_INFO("Set view `~s`, ~s group `~s`, sending stop message to index updater.",
+                       [SetName, Type, DDocId]),
+            true = port_command(Port, "exit"),
+            update_btrees_wait_loop(Port, Group, Acc, Stats)
+        end;
+    <<"Header Len : ", Data/binary>> ->
+        % Read resulting group from stdout
+        {ok, [HeaderLen], []} = io_lib:fread("~d", binary_to_list(Data)),
+        {NewGroup, Acc2} =
+        case couch_set_view_util:receive_group_header(Port, HeaderLen, Acc) of
+        {ok, HeaderBin, Rest} ->
+            #set_view_group{
+                id_btree = IdBtree,
+                views = Views
+            } = Group,
+            Header  = couch_set_view_util:header_bin_to_term(HeaderBin),
+            #set_view_index_header{
+                id_btree_state = NewIdBtreeRoot,
+                view_states = NewViewRoots
+            } = Header,
+            NewIdBtree = couch_btree:set_state(IdBtree, NewIdBtreeRoot),
+            NewViews = lists:zipwith(
+                fun(#set_view{indexer = View} = V, NewRoot) ->
+                    #mapreduce_view{btree = Bt} = View,
+                    NewBt = couch_btree:set_state(Bt, NewRoot),
+                    NewView = View#mapreduce_view{btree = NewBt},
+                    V#set_view{indexer = NewView}
+                end,
+                Views, NewViewRoots),
+
+            NewGroup0 = Group#set_view_group{
+                id_btree = NewIdBtree,
+                views = NewViews,
+                index_header = Header
+            },
+            {NewGroup0, Rest};
+        {error, Error, Rest} ->
+            self() ! Error,
+            {Group, Rest}
+        end,
+        update_btrees_wait_loop(Port, NewGroup, Acc2, Stats);
+    <<"Results = ", Data/binary>> ->
+        {ok, [IdInserted, IdDeleted, ViewInserted, ViewDeleted, Cleanups], []} =
+            io_lib:fread("id_inserts : ~d, "
+                         "id_deletes : ~d, "
+                         "kv_inserts : ~d, "
+                         "kv_deletes : ~d, "
+                         "cleanups : ~d",
+                         binary_to_list(Data)),
+        Stats2 = {IdInserted, IdDeleted, ViewInserted, ViewDeleted, Cleanups},
+        update_btrees_wait_loop(Port, Group, Acc, Stats2);
+    Msg ->
+        ?LOG_ERROR("Set view `~s`, ~s group `~s`, received error from index updater: ~s",
+                   [SetName, Type, DDocId, Msg]),
+        update_btrees_wait_loop(Port, Group, <<>>, Stats)
+    end.

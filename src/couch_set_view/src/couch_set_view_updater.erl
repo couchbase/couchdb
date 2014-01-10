@@ -1054,171 +1054,57 @@ update_btrees(WriterAcc) ->
         compactor_running = CompactorRunning,
         max_insert_batch_size = MaxBatchSize
     } = WriterAcc,
-    #set_view_group{
-        views = SetViews,
-        mod = Mod
-    } = Group0,
-    ViewInfos0 = [ids_index],
-    {ViewInfos, Group} = case Mod of
-    mapreduce_view ->
-        {ViewInfos0 ++ [V#set_view.id_num || V <- SetViews], Group0};
-    spatial_view ->
-        {ViewInfos0, Group0#set_view_group{views = []}}
-    end,
+    % Remove spatial views from group
+    % The native updater can currently handle mapreduce views only
+    Group = couch_set_view_util:remove_group_views(Group0, spatial_view),
 
-    case os:find_executable("couch_view_index_updater") of
-    false ->
-        Cmd = nil,
-        throw(<<"couch_view_index_updater command not found">>);
-    Cmd ->
-        ok
-    end,
-    Options = [exit_status, use_stdio, stderr_to_stdout, stream, binary],
-    Port = open_port({spawn_executable, Cmd}, Options),
-
-    true = port_command(Port, [TmpDir, $\n]),
-    mapreduce_view:send_group_info(Group, Port),
-
-    % Send tmp oplist file paths
+    % Prepare list of operation logs for each btree
     #set_view_tmp_file_info{name = IdFile} = dict:fetch(ids_index, TmpFiles),
-    true = port_command(Port, [IdFile, $\n]),
-    lists:foreach(
+    ViewFiles = lists:map(
         fun(#set_view{id_num = Id}) ->
             #set_view_tmp_file_info{
                 name = ViewFile
             } = dict:fetch(Id, TmpFiles),
-            true = port_command(Port, [ViewFile, $\n])
-        end, SetViews),
-    true = port_command(Port, [integer_to_list(MaxBatchSize), $\n]),
-    ok = couch_set_view_util:send_group_header(Group, Port),
-    {NewGroup, Result} =
-    try update_view_group_wait_loop(Port, Group, <<>>, {0, 0, 0, 0, 0}) of
-    {ok, Resp} ->
-        Resp
-    catch
-    Error ->
-        exit(Error)
-    after
-        catch port_close(Port)
-    end,
-    {IdInserted, IdDeleted, ViewInserted, ViewDeleted, CleanupCount} = Result,
+            ViewFile
+        end, Group#set_view_group.views),
+    LogFiles = [IdFile | ViewFiles],
+
+    {ok, NewGroup0, Stats2} = couch_set_view_updater_helper:update_btrees(
+        Group, TmpDir, LogFiles, MaxBatchSize),
+    {IdsInserted, IdsDeleted, KVsInserted, KVsDeleted, CleanupCount} = Stats2,
+
+    % Add back spatial views
+    NewGroup = couch_set_view_util:update_group_views(
+        NewGroup0, Group0, spatial_view),
+
     NewStats = Stats#set_view_updater_stats{
-     inserted_ids = Stats#set_view_updater_stats.inserted_ids + IdInserted,
-     deleted_ids = Stats#set_view_updater_stats.deleted_ids + IdDeleted,
-     inserted_kvs = Stats#set_view_updater_stats.inserted_kvs + ViewInserted,
-     deleted_kvs = Stats#set_view_updater_stats.deleted_kvs + ViewDeleted
+     inserted_ids = Stats#set_view_updater_stats.inserted_ids + IdsInserted,
+     deleted_ids = Stats#set_view_updater_stats.deleted_ids + IdsDeleted,
+     inserted_kvs = Stats#set_view_updater_stats.inserted_kvs + KVsInserted,
+     deleted_kvs = Stats#set_view_updater_stats.deleted_kvs + KVsDeleted
     },
+
+    % Remove files if compactor is not running
+    % Otherwise send them to compactor to apply deltas
     CompactFiles = lists:foldr(
-        fun(ViewId, AccCompactFiles) ->
-            #set_view_tmp_file_info{name = SortedFile} = dict:fetch(ViewId, TmpFiles),
-            case SortedFile of
-            nil ->
-                AccCompactFiles;
-            _ ->
-                AccCompactFiles2 = case CompactorRunning of
-                true ->
-                    case filename:extension(SortedFile) of
-                    ".compact" ->
-                        [SortedFile | AccCompactFiles];
-                    _ ->
-                        SortedFile2 = new_sort_file_name(TmpDir, true),
-                        ok = file2:rename(SortedFile, SortedFile2),
-                        [SortedFile2 | AccCompactFiles]
-                    end;
-                false ->
-                    ok = file2:delete(SortedFile),
-                    AccCompactFiles
-                end,
-                AccCompactFiles2
+        fun(SortedFile, AccCompactFiles) ->
+            case CompactorRunning of
+            true ->
+                case filename:extension(SortedFile) of
+                ".compact" ->
+                     [SortedFile | AccCompactFiles];
+                _ ->
+                    SortedFile2 = new_sort_file_name(TmpDir, true),
+                    ok = file2:rename(SortedFile, SortedFile2),
+                    [SortedFile2 | AccCompactFiles]
+                end;
+            false ->
+                ok = file2:delete(SortedFile),
+                AccCompactFiles
             end
-        end, [], ViewInfos),
+        end, [], LogFiles),
     {ok, NewGroup, CleanupCount, NewStats, CompactFiles}.
 
-update_view_group_wait_loop(Port, Group, Acc0, Result) ->
-    #set_view_group{
-        set_name = SetName,
-        name = DDocId,
-        type = Type
-    } = Group,
-    {Line, Acc} = couch_set_view_util:try_read_line(Acc0),
-    case Line of
-    nil ->
-        receive
-        {Port, {data, Data}} ->
-            Acc2 = iolist_to_binary([Acc, Data]),
-            update_view_group_wait_loop(Port, Group, Acc2, Result);
-        {Port, {exit_status, 0}} ->
-            {ok, {Group, Result}};
-        {Port, {exit_status, 1}} ->
-            ?LOG_INFO("Set view `~s`, ~s group `~s`, index updater stopped successfully.",
-                       [SetName, Type, DDocId]),
-            throw(stopped);
-        {Port, {exit_status, Status}} ->
-            throw({view_group_index_updater_exit, Status});
-        {Port, Error} ->
-            throw({view_group_index_updater_error, Error});
-        stop ->
-            ?LOG_INFO("Set view `~s`, ~s group `~s`, sending stop message to index updater.",
-                       [SetName, Type, DDocId]),
-            true = port_command(Port, "exit"),
-            update_view_group_wait_loop(Port, Group, Acc, Result)
-        end;
-    <<"Header Len : ", Data/binary>> ->
-        % Read resulting group from stdout
-        {ok, [HeaderLen], []} = io_lib:fread("~d", binary_to_list(Data)),
-        {NewGroup, Acc2} =
-        case couch_set_view_util:receive_group_header(Port, HeaderLen, Acc) of
-        {ok, HeaderBin, Rest} ->
-            #set_view_group{
-                id_btree = IdBtree,
-                views = Views
-            } = Group,
-            Header  = couch_set_view_util:header_bin_to_term(HeaderBin),
-            #set_view_index_header{
-                id_btree_state = NewIdBtreeRoot,
-                view_states = NewViewRoots
-            } = Header,
-            NewIdBtree = couch_btree:set_state(IdBtree, NewIdBtreeRoot),
-            NewViews = lists:zipwith(
-                fun(#set_view{indexer = View} = V, NewRoot) ->
-                    #mapreduce_view{btree = Bt} = View,
-                    NewBt = couch_btree:set_state(Bt, NewRoot),
-                    NewView = View#mapreduce_view{btree = NewBt},
-                    V#set_view{indexer = NewView}
-                end,
-                Views, NewViewRoots),
-
-            NewGroup0 = Group#set_view_group{
-                id_btree = NewIdBtree,
-                views = NewViews,
-                index_header = Header
-            },
-            {NewGroup0, Rest};
-        {error, Error, Rest} ->
-            self() ! Error,
-            {Group, Rest}
-        end,
-        update_view_group_wait_loop(Port, NewGroup, Acc2, Result);
-    <<"Results = ", Data/binary>> ->
-        {ok, [IdInserted, IdDeleted, ViewInserted, ViewDeleted, Cleanups], []} =
-            io_lib:fread("id_inserts : ~d, "
-                         "id_deletes : ~d, "
-                         "kv_inserts : ~d, "
-                         "kv_deletes : ~d, "
-                         "cleanups : ~d",
-                         binary_to_list(Data)),
-        Result2 = {IdInserted, IdDeleted, ViewInserted, ViewDeleted, Cleanups},
-        update_view_group_wait_loop(Port, Group, Acc, Result2);
-    Msg ->
-        #set_view_group{
-            set_name = SetName,
-            name = DDocId,
-            type = Type
-        } = Group,
-        ?LOG_ERROR("Set view `~s`, ~s group `~s`, received error from index updater: ~s",
-                   [SetName, Type, DDocId, Msg]),
-        update_view_group_wait_loop(Port, Group, <<>>, Result)
-    end.
 
 update_seqs(PartIdSeqs, Seqs) ->
     orddict:fold(
