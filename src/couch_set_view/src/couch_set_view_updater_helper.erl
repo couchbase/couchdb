@@ -18,7 +18,7 @@
 -export([encode_btree_op/2, encode_btree_op/3]).
 -export([file_sorter_batch_format_fun/1]).
 -export([count_items_from_set/2]).
--export([update_btrees/4]).
+-export([update_btrees/5]).
 
 
 -include("couch_db.hrl").
@@ -153,7 +153,7 @@ count_items_from_set(Group, Parts) ->
     Count.
 
 % For a view group, perform btree updates for idbtree and view btrees
-update_btrees(Group, TmpDir, LogFiles, MaxBatchSize) ->
+update_btrees(Group, TmpDir, LogFiles, MaxBatchSize, IsSorted) ->
     case os:find_executable("couch_view_index_updater") of
     false ->
         Cmd = nil,
@@ -166,6 +166,14 @@ update_btrees(Group, TmpDir, LogFiles, MaxBatchSize) ->
 
     true = port_command(Port, [TmpDir, $\n]),
     couch_set_view_util:send_group_info(Group, Port),
+
+    % Send is_sorted flag
+    case IsSorted of
+    false ->
+        true = port_command(Port, [$u, $\n]);
+    true ->
+        true = port_command(Port, [$s, $\n])
+    end,
 
     % Send operations log file paths
     [IdFile | ViewFiles] = LogFiles,

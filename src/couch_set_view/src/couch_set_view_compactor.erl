@@ -317,7 +317,7 @@ apply_log(Group0, LogFiles, NewSeqs, TmpDir) ->
     % Remove spatial views since native updater cannot handle them
     Group = couch_set_view_util:remove_group_views(Group0, spatial_view),
     {ok, NewGroup0, _} = couch_set_view_updater_helper:update_btrees(
-        Group, TmpDir, Batch, ?SORTED_CHUNK_SIZE),
+        Group, TmpDir, Batch, ?SORTED_CHUNK_SIZE, true),
 
     % Add back spatial views
     NewGroup = couch_set_view_util:update_group_views(

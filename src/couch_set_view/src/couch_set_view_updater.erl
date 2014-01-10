@@ -1070,7 +1070,7 @@ update_btrees(WriterAcc) ->
     LogFiles = [IdFile | ViewFiles],
 
     {ok, NewGroup0, Stats2} = couch_set_view_updater_helper:update_btrees(
-        Group, TmpDir, LogFiles, MaxBatchSize),
+        Group, TmpDir, LogFiles, MaxBatchSize, false),
     {IdsInserted, IdsDeleted, KVsInserted, KVsDeleted, CleanupCount} = Stats2,
 
     % Add back spatial views
