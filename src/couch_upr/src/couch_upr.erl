@@ -14,7 +14,7 @@
 -behaviour(gen_server).
 
 % Public API
--export([start/1]).
+-export([start/2]).
 -export([enum_docs_since/7, get_failover_log/2]).
 -export([get_sequence_number/2]).
 
@@ -64,8 +64,8 @@
 
 % Public API
 
-start(Name) ->
-    gen_server:start_link(?MODULE, [Name], []).
+start(Name, Bucket) ->
+    gen_server:start_link(?MODULE, [Name, Bucket], []).
 
 
 enum_docs_since(_, _, [], _, _, _, _) ->
@@ -133,24 +133,64 @@ get_failover_log(Pid, PartId) ->
 
 % gen_server callbacks
 
-init([Name]) ->
+init([Name, Bucket]) ->
     UprTimeout = list_to_integer(
         couch_config:get("upr", "connection_timeout")),
     UprPort = list_to_integer(couch_config:get("upr", "port")),
     {ok, Socket} = gen_tcp:connect("localhost", UprPort,
         [binary, {packet, raw}, {active, false}, {reuseaddr, true}]),
-    RequestId = 0,
+    State = #state{
+        socket = Socket,
+        timeout = UprTimeout,
+        request_id = 0
+    },
+    % Authentication is used to specify from which bucket the data should
+    % come from
+    case sasl_auth(Bucket, State) of
+    {ok, State2} ->
+        State3 = open_connection(Name, State2),
+        {ok, State3};
+    {stop, sasl_auth_failed} = Stop ->
+        Stop
+    end.
+
+sasl_auth(Bucket, State) ->
+    #state{
+        socket = Socket,
+        timeout = UprTimeout,
+        request_id = RequestId
+    } = State,
+    Authenticate = encode_sasl_auth(Bucket, RequestId),
+    ok = gen_tcp:send(Socket, Authenticate),
+    case gen_tcp:recv(Socket, ?UPR_HEADER_LEN, UprTimeout) of
+    {ok, Header} ->
+        {sasl_auth, Status, RequestId, BodyLength} = parse_header(Header),
+        % Receive the body so that it is not mangled with the next request,
+        % we care about the status only though
+        {ok, _} = gen_tcp:recv(Socket, BodyLength, UprTimeout),
+        case Status of
+        ?UPR_STATUS_OK ->
+            {ok, State#state{request_id = RequestId + 1}};
+        ?UPR_STATUS_SASL_AUTH_FAILED ->
+            {stop, sasl_auth_failed}
+        end
+    end.
+
+open_connection(Name, State) ->
+    #state{
+        socket = Socket,
+        timeout = UprTimeout,
+        request_id = RequestId
+    } = State,
     OpenConnection = encode_open_connection(Name, RequestId),
     ok = gen_tcp:send(Socket, OpenConnection),
     case gen_tcp:recv(Socket, ?UPR_HEADER_LEN, UprTimeout) of
     {ok, Header} ->
         {open_connection, RequestId} = parse_header(Header)
     end,
-    {ok, #state{
-        socket = Socket,
-        timeout = UprTimeout,
+    State#state{
         request_id = RequestId + 1
-    }}.
+    }.
 
 
 handle_call(get_request_id, _From, State) ->
@@ -356,7 +396,9 @@ parse_header(<<?UPR_MAGIC_RESPONSE,
     ?UPR_OPCODE_FAILOVER_LOG_REQUEST ->
         {failover_log, Status, RequestId, BodyLength};
     ?UPR_OPCODE_STATS ->
-        {stats, Status, RequestId, BodyLength, KeyLength}
+        {stats, Status, RequestId, BodyLength, KeyLength};
+    ?UPR_OPCODE_SASL_AUTH ->
+        {sasl_auth, Status, RequestId, BodyLength}
     end;
 parse_header(<<?UPR_MAGIC_REQUEST,
                Opcode,
@@ -429,6 +471,26 @@ parse_stat(Body, KeyLength, ValueLength) ->
     <<Key:KeyLength/binary, Value:ValueLength/binary>> = Body,
     {ok, {Key, Value}}.
 
+
+encode_sasl_auth(Bucket, RequestId) ->
+    AuthType = <<"PLAIN">>,
+    Body = <<AuthType/binary, $\0,
+             Bucket/binary, $\0, $\0>>,
+
+    KeyLength = byte_size(AuthType),
+    BodyLength = byte_size(Body),
+    ExtraLength = 0,
+
+    Header = <<?UPR_MAGIC_REQUEST,
+               ?UPR_OPCODE_SASL_AUTH,
+               KeyLength:?UPR_SIZES_KEY_LENGTH,
+               ExtraLength,
+               0,
+               0:?UPR_SIZES_PARTITION,
+               BodyLength:?UPR_SIZES_BODY,
+               RequestId:?UPR_SIZES_OPAQUE,
+               0:?UPR_SIZES_CAS>>,
+    <<Header/binary, Body/binary>>.
 
 %UPR_OPEN command
 %Field        (offset) (value)

@@ -417,7 +417,7 @@ do_init({_, SetName, _} = InitArgs) ->
             SetName/binary, " ", (Group#set_view_group.name)/binary,
             " (", (atom_to_binary(Category, latin1))/binary, "/",
             (atom_to_binary(Type, latin1))/binary, ")">>,
-        {ok, UprPid} = couch_upr:start(UprName),
+        {ok, UprPid} = couch_upr:start(UprName, SetName),
         State = #state{
             init_args = InitArgs,
             replica_group = ReplicaPid,

@@ -54,7 +54,7 @@ test_partition_versions_update() ->
     etap:diag("Testing whether the view partition versions are updated or not"),
 
     setup_test(),
-    {ok, Pid} = couch_upr:start(test_set_name()),
+    {ok, Pid} = couch_upr:start(test_set_name(), test_set_name()),
 
     {ok, InitialFailoverLog1} = couch_upr:get_failover_log(Pid, 1),
     {ok, InitialFailoverLog2} = couch_upr:get_failover_log(Pid, 2),

@@ -53,7 +53,7 @@ test() ->
         [Item|Acc]
     end,
 
-    {ok, Pid} = couch_upr:start(test_set_name()),
+    {ok, Pid} = couch_upr:start(test_set_name(), test_set_name()),
 
     % Get the latest partition version first
     {ok, InitialFailoverLog0} = couch_upr:get_failover_log(Pid, 0),

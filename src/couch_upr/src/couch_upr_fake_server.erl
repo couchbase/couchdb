@@ -227,7 +227,9 @@ read(Socket) ->
         {failover_log, RequestId, PartId} ->
             handle_failover_log(Socket, RequestId, PartId);
         {stats, BodyLength, RequestId} ->
-            handle_stats_body(Socket, BodyLength, RequestId)
+            handle_stats_body(Socket, BodyLength, RequestId);
+        {sasl_auth, BodyLength, RequestId} ->
+            handle_sasl_auth_body(Socket, BodyLength, RequestId)
         end,
         read(Socket);
     {error, closed} ->
@@ -251,7 +253,9 @@ parse_header(<<?UPR_MAGIC_REQUEST,
     ?UPR_OPCODE_FAILOVER_LOG_REQUEST ->
         {failover_log, RequestId, PartId};
     ?UPR_OPCODE_STATS ->
-        {stats, BodyLength, RequestId}
+        {stats, BodyLength, RequestId};
+    ?UPR_OPCODE_SASL_AUTH ->
+        {sasl_auth, BodyLength, RequestId}
     end.
 
 
@@ -386,6 +390,19 @@ handle_stats_body(Socket, BodyLength, RequestId) ->
     {error, closed} ->
         io:format("vmx: closed7~n", []),
         {error, closed}
+    end.
+
+
+handle_sasl_auth_body(Socket, BodyLength, RequestId) ->
+    case gen_tcp:recv(Socket, BodyLength) of
+    % NOTE vmx 2014-01-10: Currently there's no real authentication
+    % implemented in the fake server. Just always send back the authentication
+    % was successful
+    {ok, _} ->
+        Authenticated = encode_sasl_auth(RequestId),
+        ok = gen_tcp:send(Socket, Authenticated);
+    {error, closed} ->
+        io:format("vmx: closed8~n", [])
     end.
 
 
@@ -743,6 +760,21 @@ encode_stat_error(RequestId, Status) ->
       0:?UPR_SIZES_BODY,
       RequestId:?UPR_SIZES_OPAQUE,
       0:?UPR_SIZES_CAS>>.
+
+encode_sasl_auth(RequestId) ->
+    Body = <<"Authenticated">>,
+    BodyLength = byte_size(Body),
+    ExtraLength = 0,
+    Header = <<?UPR_MAGIC_RESPONSE,
+               ?UPR_OPCODE_SASL_AUTH,
+               0:?UPR_SIZES_KEY_LENGTH,
+               ExtraLength,
+               0,
+               0:?UPR_SIZES_STATUS,
+               BodyLength:?UPR_SIZES_BODY,
+               RequestId:?UPR_SIZES_OPAQUE,
+               0:?UPR_SIZES_CAS>>,
+    <<Header/binary, Body/binary>>.
 
 
 open_db(SetName, PartId) ->
