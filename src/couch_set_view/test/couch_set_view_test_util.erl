@@ -17,7 +17,8 @@
 -export([start_server/0, start_server/1, stop_server/0]).
 -export([create_set_dbs/2, delete_set_dbs/2, doc_count/2]).
 -export([open_set_db/2, get_db_main_pid/1, delete_set_db/2]).
--export([populate_set_alternated/3, populate_set_sequentially/3, update_ddoc/2, delete_ddoc/2]).
+-export([populate_set_alternated/3, populate_set_sequentially/3]).
+-export([populate_set_randomly/3, update_ddoc/2, delete_ddoc/2]).
 -export([define_set_view/5]).
 -export([query_view/3, query_view/4]).
 -export([are_view_keys_sorted/2]).
@@ -185,6 +186,21 @@ populate_set_sequentially(SetName, [PartId | Rest], DocList, N) when N > 0 ->
     ok = couch_db:update_docs(Db, [couch_doc:from_json_obj(Doc) || Doc <- Docs], [sort_docs]),
     ok = couch_db:close(Db),
     populate_set_sequentially(SetName, Rest, DocList2, N).
+
+
+% The goal of this function is to have the partitions filled
+% with a different amount of documents
+populate_set_randomly(SetName, Partitions, DocList) ->
+    Dbs = open_set_dbs(SetName, Partitions),
+    NumDbs = length(Dbs),
+    lists:foreach(
+        fun(DocJson) ->
+            Db = lists:nth(random:uniform(NumDbs), Dbs),
+            Doc = couch_doc:from_json_obj(DocJson),
+            ok = couch_db:update_doc(Db, Doc, [])
+        end,
+        DocList),
+    lists:foreach(fun couch_db:close/1, Dbs).
 
 
 update_ddoc(SetName, DDoc) ->

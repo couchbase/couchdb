@@ -245,7 +245,7 @@ handle_call({update_header_pos, FileVersion, NewPos}, _From, Db) ->
     ExistingFileVersion = file_version(Db#db.filepath),
     if FileVersion == ExistingFileVersion ->
         case couch_file:read_header_bin(Db#db.fd, NewPos) of
-        {ok, NewHeaderBin, _Size} ->
+        {ok, NewHeaderBin} ->
             NewHeader = header_bin_to_db_header(NewHeaderBin),
             if Db#db.update_seq > NewHeader#db_header.update_seq ->
                 ?LOG_INFO("Database ~s, received pointer to header with a "
@@ -987,11 +987,12 @@ jump_to_another_version(Db, NewFilePath, NewVersion, NewPos) ->
             {waiting_delayed_commit, Db};
        true ->
             {ok, NewFd} = couch_file:open(NewFilePath),
-            {ok, NewHeaderBin, _HdrSize} = couch_file:read_header_bin(NewFd, NewPos),
+            {ok, NewHeaderBin} = couch_file:read_header_bin(NewFd, NewPos),
             NewHeader = header_bin_to_db_header(NewHeaderBin),
             #db{update_seq=NewSeq} = InitNewDb =
                 init_db(Db#db.name, NewFilePath, NewFd, NewHeader, Db#db.options),
             unlink(NewFd),
+            ok = couch_file:set_close_after(NewFd, ?FD_CLOSE_TIMEOUT_MS),
 
             case Db#db.update_seq of
                 NewSeq ->
@@ -1011,6 +1012,7 @@ jump_to_another_version(Db, NewFilePath, NewVersion, NewPos) ->
                     ?LOG_INFO("Compaction for db \"~s\" completed.", [NewDb#db.name]),
                     {ok, NewDb};
                 _ ->
+                    close_db(InitNewDb),
                     {was_updated, Db}
             end
     end.

@@ -31,6 +31,8 @@
 -export([get_part_seq/2, has_part_seq/2, find_part_seq/2]).
 -export([set_view_sig/1]).
 -export([check_primary_key_size/5, check_primary_value_size/5]).
+-export([refresh_viewgroup_header/1]).
+-export([shutdown_cleaner/2]).
 
 
 -include("couch_db.hrl").
@@ -230,11 +232,20 @@ compute_indexed_bitmap(Mod, IdBtree, Views) ->
 cleanup_group(Group) when ?set_cbitmask(Group) == 0 ->
     {ok, Group, 0};
 cleanup_group(Group) ->
+    #set_view_group{mod = Mod} = Group,
+    case Mod of
+    mapreduce_view ->
+        Mod:cleanup_view_group(Group);
+    _ ->
+        cleanup_group(Mod, Group)
+    end.
+
+
+cleanup_group(Mod, Group) ->
     #set_view_group{
         index_header = Header,
         id_btree = IdBtree,
-        views = Views,
-        mod = Mod
+        views = Views
     } = Group,
     PurgeFun = make_btree_purge_fun(Group),
     ok = couch_set_view_util:open_raw_read_fd(Group),
@@ -645,3 +656,52 @@ check_primary_value_size(Bin, Max, Key, DocId, Group) when byte_size(Bin) > Max 
     throw({error, Error});
 check_primary_value_size(_Bin, _Max, _Key, _DocId, _Group) ->
     ok.
+
+
+% Read latest header from index file and update viewgroup
+-spec refresh_viewgroup_header(#set_view_group{}) -> {'ok', #set_view_group{}}.
+refresh_viewgroup_header(Group) ->
+    #set_view_group{
+        fd = Fd,
+        mod = Mod,
+        id_btree = IdBtree,
+        views = Views
+    } = Group,
+    ok = couch_file:refresh_eof(Fd),
+    {ok, HeaderBin, NewHeaderPos} = couch_file:read_header_bin(Fd),
+    NewHeader = couch_set_view_util:header_bin_to_term(HeaderBin),
+    #set_view_index_header{
+        id_btree_state = IdBtreeState,
+        view_states = ViewStates
+    } = NewHeader,
+    NewIdBtree = couch_btree:set_state(IdBtree, IdBtreeState),
+    NewViews = lists:zipwith(fun(NewState, SetView) ->
+        View = SetView#set_view.indexer,
+        NewView = Mod:set_state(View, NewState),
+        SetView#set_view{indexer = NewView}
+    end, ViewStates, Views),
+    NewGroup = Group#set_view_group{
+        header_pos = NewHeaderPos,
+        id_btree = NewIdBtree,
+        views = NewViews,
+        index_header = NewHeader
+    },
+    {ok, NewGroup}.
+
+
+% Stop cleaner process synchronously
+-spec shutdown_cleaner(#set_view_group{}, pid()) -> 'ok'.
+shutdown_cleaner(#set_view_group{mod = Mod}, Pid) ->
+    case Mod of
+    % For mapreduce view, we have already sent native process stop message
+    % Just wait for the process to die
+    mapreduce_view ->
+        receive
+        {'EXIT', Pid, _} ->
+            ok;
+        {'DOWN', _, process, Pid, _} ->
+            ok
+        end;
+    _ ->
+        couch_util:shutdown_sync(Pid)
+    end.

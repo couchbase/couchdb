@@ -34,7 +34,7 @@
 -export([write_header/2,write_header_bin/2, read_header/1,read_header/2]).
 -export([read_header_bin/1,read_header_bin/2]).
 -export([find_header_bin/2]).
--export([only_snapshot_reads/1]).
+-export([only_snapshot_reads/1, refresh_eof/1]).
 -export([delete/2, delete/3, init_delete_dir/1,get_delete_dir/1]).
 
 % gen_server callbacks
@@ -219,6 +219,14 @@ rename(Fd, NewFilepath) ->
     gen_server:call(Fd, {rename, NewFilepath}, infinity).
 
 
+%%---------------------------------------------------------------------------
+%% Purpose: Reopens the backing file and refreshes write fd to obtain new eof
+%% Returns: ok
+%%---------------------------------------------------------------------------
+refresh_eof(Fd) ->
+    gen_server:call(Fd, reopen_file, infinity).
+
+
 delete(RootDir, Filepath) ->
     delete(RootDir, Filepath, true).
 
@@ -267,7 +275,7 @@ read_header_bin(Fd) ->
 
 read_header(Fd, Pos) ->
     case read_header_bin(Fd, Pos) of
-    {ok, Bin, _Size} ->
+    {ok, Bin} ->
         {ok, binary_to_term(Bin)};
     Else ->
         Else
@@ -441,6 +449,16 @@ handle_call(snapshot_reads, _From, #file{reader = R, writer = W} = File) ->
     end,
     {reply, ok, File#file{writer=nil}};
 
+handle_call(reopen_file, _From, #file{writer = W} = File) ->
+    W ! {reopen_file, self()},
+    {ok, Eof} = receive
+    {ok, W, Pos} ->
+        {ok, Pos};
+    {'EXIT', W, Reason2} ->
+        exit({writer_loop_died, Reason2})
+    end,
+    {reply, ok, File#file{eof=Eof}};
+
 handle_call({set_close_after, Ms}, _From, #file{reader = R, writer = W} = File) ->
     R ! {set_close_after, Ms, self()},
     case W of
@@ -503,7 +521,7 @@ do_find_header(_Fd, -1) ->
     no_valid_header;
 do_find_header(Fd, Block) ->
     case (catch load_header(Fd, Block)) of
-    {ok, Bin, _Size} ->
+    {ok, Bin} ->
         {ok, Bin, Block * ?SIZE_BLOCK};
     _Error ->
         do_find_header(Fd, Block -1)
@@ -525,7 +543,7 @@ load_header(Fd, Block) ->
     <<Crc32:32, HeaderBin/binary>> =
         iolist_to_binary(remove_block_prefixes(RawBin, 5)),
     Crc32 = erlang:crc32(HeaderBin),
-    {ok, HeaderBin, TotalBytes + 5}.
+    {ok, HeaderBin}.
 
 maybe_read_more_iolist(Buffer, DataSize, NextPos, Fd) ->
     case iolist_size(Buffer) of
@@ -682,6 +700,18 @@ writer_loop(Fd, FilePath, Eof, CloseTimeout) ->
 
 handle_write_message(Msg, Fd, FilePath, Eof, CloseTimeout) ->
     case Msg of
+    {reopen_file, From} ->
+        file:close(Fd),
+        case try_open_fd(FilePath, [binary, append, raw], ?RETRY_TIME_MS,
+            ?MAX_RETRY_TIME_MS) of
+        {ok, Fd2} ->
+            {ok, Eof2} = file:position(Fd2, eof),
+            From ! {ok, self(), Eof2},
+            writer_loop(Fd2, FilePath, Eof2, CloseTimeout);
+        Other ->
+            erlang:exit({problem_reopening_file, Other, reopen_file,
+                                         self(), FilePath, Eof, CloseTimeout})
+        end;
     {chunk, Chunk} ->
         writer_collect_chunks(Fd, FilePath, Eof, CloseTimeout, [Chunk]);
     {header, Header} ->

@@ -25,6 +25,7 @@
 -export([mark_as_unindexable/2, mark_as_indexable/2]).
 -export([monitor_partition_update/4, demonitor_partition_update/2]).
 -export([reset_utilization_stats/1, get_utilization_stats/1]).
+-export([rollback/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -122,6 +123,10 @@
 -define(inc_updater_errors(Group), ?inc_stat(Group, #set_view_group_stats.update_errors)).
 -define(inc_accesses(Group), ?inc_stat(Group, #set_view_group_stats.accesses)).
 
+% Same as in couch_file. That's the offset where headers
+% are stored
+-define(SIZE_BLOCK, 4096).
+
 
 % api methods
 -spec request_group(pid(), #set_view_group_req{}) ->
@@ -205,6 +210,11 @@ get_data_size(Pid) ->
     Error ->
         throw(Error)
     end.
+
+
+-spec rollback(pid(), partition_seqs()) -> 'ok' | {'error', 'cannot_rollback'}.
+rollback(Pid, RollbackPartSeqs) ->
+    gen_server:call(Pid, {rollback, RollbackPartSeqs}, infinity).
 
 
 -spec define_view(pid(), #set_view_params{}) -> 'ok' | {'error', term()}.
@@ -712,6 +722,98 @@ handle_call(get_data_size, _From, State) ->
     DataSizeInfo = get_data_size_info(State),
     {reply, {ok, DataSizeInfo}, State, ?GET_TIMEOUT(State)};
 
+handle_call({rollback, RollbackPartSeqs}, _From, State) ->
+    State2 = stop_compactor(State),
+    State3 = stop_cleaner(State2),
+
+    #state{
+        group = #set_view_group{
+            fd = Fd,
+            index_header = #set_view_index_header{
+                seqs = GroupIndexable,
+                unindexable_seqs = GroupUnindexable,
+                abitmask = ActiveBitmask,
+                pbitmask = PassiveBitmask
+            } = Header,
+            views = Views,
+            mod = Mod,
+            id_btree = IdBtree
+        } = Group
+    } = State3,
+
+    case rollback_file(Fd, RollbackPartSeqs) of
+    {ok, HeaderBin} ->
+        NewHeader = couch_set_view_util:header_bin_to_term(HeaderBin),
+        #set_view_index_header{
+            id_btree_state = IdBtreeState,
+            view_states = ViewStates,
+            seqs = NewIndexableSeqs,
+            unindexable_seqs = NewUnindexableSeqs,
+            abitmask = HeaderActiveBitmask,
+            pbitmask = HeaderPassiveBitmask
+        } = NewHeader,
+        NewIdBtree = couch_btree:set_state(IdBtree, IdBtreeState),
+        NewViews = lists:zipwith(fun(NewState, SetView) ->
+            View = SetView#set_view.indexer,
+            NewView = Mod:set_state(View, NewState),
+            SetView#set_view{indexer = NewView}
+        end, ViewStates, Views),
+
+        % The header keeps track of indexable and unindexable partitions
+        % together with the current sequence number. When rolling back
+        % the old state and the new one needs to be merged. The state of
+        % partitions (indexable/unindexable) comes from the pre-rollback
+        % header, the sequence numbers of the partitions coms from the
+        % post-rollback header. If the partition isn't part of the
+        % post-rollback header, then the sequence number 0 is assigned.
+        % In short: replace the sequence numbers from the pre-rollback
+        % header with the ones of the post-rollback header.
+        NewSeqs = ordsets:union(NewIndexableSeqs, NewUnindexableSeqs),
+        Indexable = merge_seqs(GroupIndexable, NewSeqs),
+        Unindexable = merge_seqs(GroupUnindexable, NewSeqs),
+
+        ?LOG_INFO("Rollback of set view `~s`, ~s (~s) group `~s` to ~w~n"
+                  "indexable partitions before:   ~w~n"
+                  "indexable partitions after:    ~w~n"
+                  "unindexable partitions before: ~w~n"
+                  "unindexable partitions after:  ~w~n",
+                  [?set_name(State3), ?type(State3), ?category(State3),
+                   ?group_id(State3), RollbackPartSeqs,
+                   GroupIndexable, Indexable, GroupUnindexable, Unindexable]),
+
+        % Mark all partitions that the on-disk header contains, but
+        % are not part of the current group header for cleanup and
+        % remove them from the current partition sequences
+        IndexedBitmask = ActiveBitmask bor PassiveBitmask,
+        HeaderIndexedPartitions = couch_set_view_util:decode_bitmask(
+            HeaderActiveBitmask bor HeaderPassiveBitmask),
+        CleanupPartitions = filter_out_bitmask_partitions(
+            HeaderIndexedPartitions, IndexedBitmask),
+        CleanupBitmask = couch_set_view_util:build_bitmask(CleanupPartitions),
+
+        NewGroup = Group#set_view_group{
+            id_btree = NewIdBtree,
+            views = NewViews,
+            index_header = Header#set_view_index_header{
+                id_btree_state = NewHeader#set_view_index_header.id_btree_state,
+                view_states = NewHeader#set_view_index_header.view_states,
+                seqs = Indexable,
+                unindexable_seqs = Unindexable,
+                cbitmask = CleanupBitmask
+            }
+        },
+        NewHeaderBin = couch_set_view_util:group_to_header_bin(NewGroup),
+        {ok, NewHeaderPos} = couch_file:write_header_bin(
+            NewGroup#set_view_group.fd, NewHeaderBin),
+        couch_file:flush(NewGroup#set_view_group.fd),
+        NewGroup2 = NewGroup#set_view_group{
+            header_pos = NewHeaderPos
+        },
+        {reply, ok, State3#state{group = NewGroup2}, ?GET_TIMEOUT(State3)};
+    cannot_rollback ->
+        {reply, {error, cannot_rollback}, State3, ?GET_TIMEOUT(State3)}
+    end;
+
 handle_call({start_compact, _CompactFun}, _From,
             #state{updater_pid = UpPid, initial_build = true} = State) when is_pid(UpPid) ->
     {reply, {error, initial_build}, State, ?GET_TIMEOUT(State)};
@@ -1106,8 +1208,9 @@ handle_info({updater_info, _Pid, {state, _UpdaterState}}, State) ->
     % Message from an old updater, ignore.
     {noreply, State, ?GET_TIMEOUT(State)};
 
-handle_info({'EXIT', Pid, {clean_group, NewGroup0, Count, Time}}, #state{cleaner_pid = Pid} = State) ->
+handle_info({'EXIT', Pid, {clean_group, CleanGroup, Count, Time}}, #state{cleaner_pid = Pid} = State) ->
     #state{group = OldGroup} = State,
+    {ok, NewGroup0} = couch_set_view_util:refresh_viewgroup_header(CleanGroup),
     NewGroup = update_clean_group_seqs(OldGroup, NewGroup0),
     ?LOG_INFO("Cleanup finished for set view `~s`, ~s (~s) group `~s`~n"
               "Removed ~p values from the index in ~.3f seconds~n"
@@ -1122,7 +1225,7 @@ handle_info({'EXIT', Pid, {clean_group, NewGroup0, Count, Time}}, #state{cleaner
               "Current set of replica partitions: ~w~n"
               "Current set of replicas on transfer: ~w~n";
           false ->
-               []
+              []
           end,
           [?set_name(State), ?type(State), ?category(State), ?group_id(State),
            Count, Time,
@@ -1145,7 +1248,8 @@ handle_info({'EXIT', Pid, {clean_group, NewGroup0, Count, Time}}, #state{cleaner
     inc_cleanups(State2#state.group, Time, Count, false),
     {noreply, maybe_apply_pending_transition(State2)};
 
-handle_info({'EXIT', Pid, Reason}, #state{cleaner_pid = Pid} = State) ->
+handle_info({'EXIT', Pid, Reason}, #state{cleaner_pid = Pid, group = Group} = State) ->
+    ok = couch_file:refresh_eof(Group#set_view_group.fd),
     ?LOG_ERROR("Set view `~s`, ~s (~s) group `~s`, cleanup process ~p"
                " died with unexpected reason: ~p",
                [?set_name(State), ?type(State), ?category(State),
@@ -2578,7 +2682,7 @@ maybe_start_cleaner(#state{group = Group} = State) ->
 -spec stop_cleaner(#state{}) -> #state{}.
 stop_cleaner(#state{cleaner_pid = nil} = State) ->
     State;
-stop_cleaner(#state{cleaner_pid = Pid} = State) when is_pid(Pid) ->
+stop_cleaner(#state{cleaner_pid = Pid, group = Group} = State) when is_pid(Pid) ->
     MRef = erlang:monitor(process, Pid),
     Pid ! stop,
     unlink(Pid),
@@ -2591,7 +2695,8 @@ stop_cleaner(#state{cleaner_pid = Pid} = State) when is_pid(Pid) ->
         receive {'EXIT', Pid, _} -> ok after 0 -> ok end,
         after_cleaner_stopped(State, Reason)
     after 5000 ->
-        couch_util:shutdown_sync(Pid),
+        couch_set_view_util:shutdown_cleaner(Group, Pid),
+        ok = couch_file:refresh_eof(Group#set_view_group.fd),
         ?LOG_ERROR("Timeout stopping cleanup process ~p for"
                    " set view `~s`, ~s (~s) group `~s`",
                    [Pid, ?set_name(State), ?type(State), ?category(State),
@@ -2602,8 +2707,9 @@ stop_cleaner(#state{cleaner_pid = Pid} = State) when is_pid(Pid) ->
     NewState.
 
 
-after_cleaner_stopped(State, {clean_group, NewGroup0, Count, Time}) ->
+after_cleaner_stopped(State, {clean_group, CleanGroup, Count, Time}) ->
     #state{group = OldGroup} = State,
+    {ok, NewGroup0} = couch_set_view_util:refresh_viewgroup_header(CleanGroup),
     NewGroup = update_clean_group_seqs(OldGroup, NewGroup0),
     ?LOG_INFO("Stopped cleanup process for"
               " set view `~s`, ~s (~s) group `~s`.~n"
@@ -2624,7 +2730,8 @@ after_cleaner_stopped(State, {clean_group, NewGroup0, Count, Time}) ->
         group = NewGroup,
         cleaner_pid = nil
     };
-after_cleaner_stopped(#state{cleaner_pid = Pid} = State, Reason) ->
+after_cleaner_stopped(#state{cleaner_pid = Pid, group = Group} = State, Reason) ->
+    ok = couch_file:refresh_eof(Group#set_view_group.fd),
     ?LOG_ERROR("Cleanup process ~p for set view `~s`, ~s (~s) group `~s`,"
                " died with reason: ~p",
                [Pid, ?set_name(State), ?type(State), ?category(State),
@@ -3721,3 +3828,66 @@ fix_updater_group(UpdaterGroup, OurGroup) ->
             seqs = Seqs2
         }
     }.
+
+
+% Find the first header that has a lower update sequence than the given
+% sequence numbers and return the position of the header
+-spec find_header_by_seqs(pid(), partition_seqs()) ->
+                                 {'ok', non_neg_integer()} | 'no_header_found'.
+find_header_by_seqs(Fd, RollbackPartSeqs) ->
+    find_header_by_seqs(Fd, RollbackPartSeqs, eof).
+-spec find_header_by_seqs(pid(), partition_seqs(),
+                          non_neg_integer() | 'eof') ->
+                                 {'ok', non_neg_integer()} | 'no_header_found'.
+find_header_by_seqs(_, _, Pos) when Pos < 0 ->
+    no_header_found;
+find_header_by_seqs(Fd, RollbackPartSeqs, StartPos) ->
+    {ok, HeaderBin, Pos} = couch_file:find_header_bin(Fd, StartPos),
+    Header = couch_set_view_util:header_bin_to_term(HeaderBin),
+    Seqs = ordsets:union(
+        Header#set_view_index_header.seqs,
+        Header#set_view_index_header.unindexable_seqs),
+    FoundHeader = lists:all(fun({PartId, RollbackSeq}) ->
+        case couch_set_view_util:find_part_seq(PartId, Seqs) of
+        {ok, HeaderSeq} ->
+            HeaderSeq =< RollbackSeq;
+        % If the partition is not part of the header, it's still
+        % a candidate to rollback to
+        not_found ->
+            true
+        end
+    end, RollbackPartSeqs),
+    case FoundHeader of
+    true ->
+        {ok, Pos};
+    false ->
+        find_header_by_seqs(Fd, RollbackPartSeqs, Pos - ?SIZE_BLOCK)
+    end.
+
+
+% Rolls back a file to a certain header that matches the given partition
+% sequence numbers returns that header.
+-spec rollback_file(pid(), partition_seqs()) -> {'ok', binary()} |
+                                                'cannot_rollback'.
+rollback_file(Fd, RollbackPartSeqs) ->
+    case find_header_by_seqs(Fd, RollbackPartSeqs) of
+    {ok, Pos} ->
+        couch_file:read_header_bin(Fd, Pos);
+    no_header_found ->
+        cannot_rollback
+    end.
+
+
+% Use the partition ID from the `Original` list and the sequence number
+% of the `New` list. If the `New` list doesn't contain the element,
+% use 0 as sequence number.
+-spec merge_seqs(partition_seqs(), partition_seqs()) -> partition_seqs().
+merge_seqs(Original, New) ->
+    lists:map(fun({PartId, _}) ->
+        case couch_set_view_util:find_part_seq(PartId, New) of
+        {ok, Seq} ->
+            {PartId, Seq};
+        not_found ->
+            {PartId, 0}
+        end
+    end, Original).

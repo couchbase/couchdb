@@ -15,7 +15,7 @@
 -module(mapreduce_view).
 
 % For the updater
--export([write_kvs/3, finish_build/3, get_state/1,
+-export([write_kvs/3, finish_build/3, get_state/1, set_state/2,
          start_reduce_context/1, end_reduce_context/1, view_name/2,
          update_tmp_files/3, view_bitmap/1]).
 -export([update_index/5]).
@@ -23,7 +23,7 @@
 -export([design_doc_to_set_view_group/2, view_group_data_size/2,
          reset_view/1, setup_views/5]).
 % For the utils
--export([clean_views/5]).
+-export([cleanup_view_group/1]).
 % For the compactor
 -export([compact_view/6, apply_log/2]).
 % For the main module
@@ -210,6 +210,11 @@ index_builder_wait_loop(Port, Group, Acc) ->
 % Return the state of a view (which will be stored in the header)
 get_state(View) ->
     couch_btree:get_state(View#mapreduce_view.btree).
+
+set_state(View, State) ->
+    Btree = couch_btree:set_state(View#mapreduce_view.btree, State),
+    View#mapreduce_view{btree = Btree}.
+
 
 view_bitmap(View) ->
     {ok, <<_Size:40, Bm:?MAX_NUM_PARTITIONS, _/binary>>} =
@@ -453,22 +458,62 @@ setup_views(Fd, BtreeOptions, Group, ViewStates, Views) ->
     ViewStates, Views).
 
 
-% XXX vmx 2013-01-04: Check if we really need the full function, or just the
-%    `guided_purge` in this indexer specific module
-clean_views(_, _, [], Count, Acc) ->
-    {Count, lists:reverse(Acc)};
-clean_views(stop, _, Rest, Count, Acc) ->
-    {Count, lists:reverse(Acc, Rest)};
-clean_views(go, PurgeFun, [SetView | Rest], Count, Acc) ->
-    View = SetView#set_view.indexer,
-    Btree = View#mapreduce_view.btree,
-    {ok, NewBtree, {Go, PurgedCount}} =
-        couch_btree:guided_purge(Btree, PurgeFun, {go, Count}),
-    NewAcc = [SetView#set_view{
-        indexer = View#mapreduce_view{btree = NewBtree}
-    } | Acc],
-    clean_views(Go, PurgeFun, Rest, PurgedCount, NewAcc).
+% Native viewgroup cleanup
+cleanup_view_group(Group) ->
+    case os:find_executable("couch_view_group_cleanup") of
+    false ->
+        Cmd = nil,
+        throw(<<"couch_view_group_cleanup command not found">>);
+    Cmd ->
+        ok
+    end,
+    Options = [exit_status, use_stdio, stderr_to_stdout, {line, 4096}, binary],
+    Port = open_port({spawn_executable, Cmd}, Options),
+    send_group_info(Group, Port),
+    PurgedCount = try cleanup_view_group_wait_loop(Port, Group, [], 0) of
+    {ok, Count0} ->
+        Count0
+    catch
+    Error ->
+        exit(Error)
+    after
+        catch port_close(Port)
+    end,
+    {ok, Group, PurgedCount}.
 
+cleanup_view_group_wait_loop(Port, Group, Acc, PurgedCount) ->
+    #set_view_group{
+        set_name = SetName,
+        name = DDocId,
+        type = Type
+    } = Group,
+    receive
+    {Port, {exit_status, 0}} ->
+        {ok, PurgedCount};
+    {Port, {exit_status, 1}} ->
+        ?LOG_INFO("Set view `~s`, ~s group `~s`, index cleaner stopped successfully.",
+                   [SetName, Type, DDocId]),
+        throw(stopped);
+    {Port, {exit_status, Status}} ->
+        throw({view_group_cleanup_exit, Status});
+    {Port, {data, {noeol, Data}}} ->
+        cleanup_view_group_wait_loop(Port, Group, [Data | Acc], PurgedCount);
+    {Port, {data, {eol, <<"PurgedCount ", Data/binary>>}}} ->
+        {Count,[]} = string:to_integer(erlang:binary_to_list(Data)),
+        cleanup_view_group_wait_loop(Port, Group, Acc, Count);
+    {Port, {data, {eol, Data}}} ->
+        Msg = lists:reverse([Data | Acc]),
+        ?LOG_ERROR("Set view `~s`, ~s group `~s`, received error from index cleanup: ~s",
+                   [SetName, Type, DDocId, Msg]),
+        cleanup_view_group_wait_loop(Port, Group, [], PurgedCount);
+    {Port, Error} ->
+        throw({view_group_cleanup_error, Error});
+    stop ->
+        ?LOG_INFO("Set view `~s`, ~s group `~s`, sending stop message to index cleaner.",
+                   [SetName, Type, DDocId]),
+        true = port_command(Port, "exit"),
+        cleanup_view_group_wait_loop(Port, Group, [Acc], PurgedCount)
+    end.
 
 compact_view(Fd, SetView, EmptySetView, FilterFun, BeforeKVWriteFun, Acc0) ->
     EmptyView = EmptySetView#set_view.indexer,
