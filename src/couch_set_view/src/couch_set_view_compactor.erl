@@ -257,15 +257,10 @@ update_task(#acc{total_changes = 0} = Acc, _ChangesInc) ->
     Acc;
 update_task(#acc{changes = Changes, total_changes = Total} = Acc, ChangesInc) ->
     Changes2 = Changes + ChangesInc,
-    case (Changes2 rem 10000) == 0 of
-    true ->
-        couch_task_status:update([
-            {changes_done, Changes2},
-            {progress, (Changes2 * 100) div Total}
-        ]);
-    false ->
-        ok
-    end,
+    couch_task_status:update([
+        {changes_done, Changes2},
+        {progress, (Changes2 * 100) div Total}
+    ]),
     Acc#acc{changes = Changes2}.
 
 
@@ -363,11 +358,12 @@ compact_btrees(Group0, EmptyGroup, TargetFile, ResultAcc) ->
     Options = [exit_status, use_stdio, stderr_to_stdout, stream, binary],
     Port = open_port({spawn_executable, Cmd}, Options),
 
-    % Send compaction destination filename
     true = port_command(Port, [TargetFile, $\n]),
-    % Send viewgroup info
+
+    true = port_command(Port, [integer_to_list(ResultAcc#acc.total_changes), $\n]),
+
     couch_set_view_util:send_group_info(Group, Port),
-    % Send group binary header
+
     ok = couch_set_view_util:send_group_header(Group, Port),
 
     {NewGroup, ResultAcc2} =
@@ -402,6 +398,11 @@ compact_btrees_wait_loop(Port, Group, EmptyGroup, Acc0, ResultAcc) ->
         {Port, Error} ->
             throw({view_group_index_compactor_error, Error})
         end;
+    <<"Stats = ", Data/binary>> ->
+        % Read incremental stats progress update
+        {ok, [Inserts], []} = io_lib:fread("inserted : ~d", binary_to_list(Data)),
+        ResultAcc2 = update_task(ResultAcc, Inserts),
+        compact_btrees_wait_loop(Port, Group, EmptyGroup, Acc, ResultAcc2);
     <<"Header Len : ", Data/binary>> ->
         % Read resulting group from stdout
         {ok, [HeaderLen], []} = io_lib:fread("~d", binary_to_list(Data)),
@@ -441,8 +442,9 @@ compact_btrees_wait_loop(Port, Group, EmptyGroup, Acc0, ResultAcc) ->
     <<"Results = ", Data/binary>> ->
         % Read resulting stats from stdout
         {ok, [Inserts], []} = io_lib:fread("inserts : ~d", binary_to_list(Data)),
-        ResultAcc2 = update_task(ResultAcc, Inserts),
-        compact_btrees_wait_loop(Port, Group, EmptyGroup, Acc, ResultAcc2);
+        ?LOG_INFO("Set view `~s`, ~s group `~s`, view compactor inserted ~p kvs.",
+                   [SetName, Type, DDocId, Inserts]),
+        compact_btrees_wait_loop(Port, Group, EmptyGroup, Acc, ResultAcc);
     Msg ->
         ?LOG_ERROR("Set view `~s`, ~s group `~s`, received error from index compactor: ~s",
                    [SetName, Type, DDocId, Msg]),
