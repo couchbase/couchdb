@@ -128,6 +128,7 @@ finish_build(Group, TmpFiles, TmpDir) ->
     Options = [exit_status, use_stdio, stderr_to_stdout, {line, 4096}, binary],
     Port = open_port({spawn_executable, Cmd}, Options),
     couch_set_view_util:send_group_info(Group, Port),
+    true = port_command(Port, [TmpDir, $\n]),
     #set_view_tmp_file_info{name = IdFile} = dict:fetch(ids_index, TmpFiles),
     DestPath = couch_set_view_util:new_sort_file_path(TmpDir, updater),
     true = port_command(Port, [DestPath, $\n, IdFile, $\n]),

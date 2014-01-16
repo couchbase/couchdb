@@ -671,9 +671,15 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
             }
         };
     true ->
-        ?LOG_INFO("Updater for set view `~s`, ~s group `~s`, sorting view files",
+        % For mapreduce view, sorting is performed by native btree builder
+        case Mod of
+        spatial_view ->
+            ?LOG_INFO("Updater for set view `~s`, ~s group `~s`, sorting view files",
                   [SetName, Type, DDocId]),
-        ok = sort_tmp_files(TmpFiles2, TmpDir, Group, true),
+            ok = sort_tmp_files(TmpFiles2, TmpDir, Group, true);
+        _ ->
+            ok
+        end,
         ?LOG_INFO("Updater for set view `~s`, ~s group `~s`, starting btree "
                   "build phase" , [SetName, Type, DDocId]),
         {Group2, BuildFd} = Mod:finish_build(Group, TmpFiles2, TmpDir),
