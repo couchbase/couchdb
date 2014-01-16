@@ -183,9 +183,18 @@ finish_build(Group, TmpFiles, TmpDir) ->
     {NewGroup, NewFd}.
 
 index_builder_wait_loop(Port, Group, Acc) ->
+    #set_view_group{
+        set_name = SetName,
+        name = DDocId,
+        type = Type
+    } = Group,
     receive
     {Port, {exit_status, 0}} ->
         ok;
+    {Port, {exit_status, 1}} ->
+        ?LOG_INFO("Set view `~s`, ~s group `~s`, index builder stopped successfully.",
+                   [SetName, Type, DDocId]),
+        exit(shutdown);
     {Port, {exit_status, Status}} ->
         throw({index_builder_exit, Status});
     {Port, {data, {noeol, Data}}} ->
@@ -201,9 +210,13 @@ index_builder_wait_loop(Port, Group, Acc) ->
                    [SetName, Type, DDocId, Msg]),
         index_builder_wait_loop(Port, Group, []);
     {Port, Error} ->
-        throw({index_builder_error, Error})
+        throw({index_builder_error, Error});
+    stop ->
+        ?LOG_INFO("Set view `~s`, ~s group `~s`, sending stop message to index builder.",
+                   [SetName, Type, DDocId]),
+        true = port_command(Port, "exit"),
+        index_builder_wait_loop(Port, Group, Acc)
     end.
-
 
 
 % Return the state of a view (which will be stored in the header)

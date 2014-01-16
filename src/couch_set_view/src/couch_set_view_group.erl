@@ -2785,7 +2785,7 @@ stop_updater(#state{updater_pid = Pid, initial_build = true} = State) when is_pi
               " wasted indexing time ~.3f seconds.",
               [?set_name(State), ?type(State), ?category(State),
                ?group_id(State), LostTime]),
-    couch_util:shutdown_sync(Pid),
+    couch_set_view_util:shutdown_wait(Pid),
     inc_util_stat(#util_stats.updater_interruptions, 1),
     inc_util_stat(#util_stats.wasted_indexing_time, LostTime),
     State#state{
