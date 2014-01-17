@@ -349,32 +349,37 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
             PartVersions = couch_util:get_value(PartId, AccVersions),
             case AccRollbacks of
             [] ->
-                ChangesWrapper = fun(Item, AccCount2) ->
-                    queue_doc(Item, MapQueue, Group, MaxDocSize, InitialBuild),
-                    AccCount2 + 1
-                end,
                 {ok, EndSeq} = couch_upr:get_sequence_number(UprPid, PartId),
-                Result = couch_upr:enum_docs_since(
-                    UprPid, PartId, PartVersions, Since, EndSeq, ChangesWrapper,
-                    AccCount),
-                case Result of
-                {ok, AccCount3, NewPartVersions} ->
-                    AccSeqs2 = orddict:store(PartId, EndSeq, AccSeqs),
-                    AccVersions2 = lists:ukeymerge(
-                        1, [{PartId, NewPartVersions}], AccVersions),
-                    AccRollbacks2 = AccRollbacks;
-                {rollback, RollbackSeq} ->
-                    AccCount3 = AccCount,
-                    AccSeqs2 = AccSeqs,
-                    AccVersions2 = AccVersions,
-                    AccRollbacks2 = ordsets:add_element(
-                        {PartId, RollbackSeq}, AccRollbacks)
-                end,
-                {AccCount3, AccSeqs2, AccVersions2, AccRollbacks2};
+                case EndSeq =:= Since of
+                true ->
+                    {AccCount, AccSeqs, AccVersions, AccRollbacks};
+                false ->
+                    ChangesWrapper = fun(Item, AccCount2) ->
+                        queue_doc(Item, MapQueue, Group, MaxDocSize, InitialBuild),
+                        AccCount2 + 1
+                    end,
+                    Result = couch_upr:enum_docs_since(
+                        UprPid, PartId, PartVersions, Since, EndSeq,
+                        ChangesWrapper, AccCount),
+                    case Result of
+                    {ok, AccCount3, NewPartVersions} ->
+                        AccSeqs2 = orddict:store(PartId, EndSeq, AccSeqs),
+                        AccVersions2 = lists:ukeymerge(
+                            1, [{PartId, NewPartVersions}], AccVersions),
+                        AccRollbacks2 = AccRollbacks;
+                    {rollback, RollbackSeq} ->
+                        AccCount3 = AccCount,
+                        AccSeqs2 = AccSeqs,
+                        AccVersions2 = AccVersions,
+                        AccRollbacks2 = ordsets:add_element(
+                            {PartId, RollbackSeq}, AccRollbacks)
+                    end,
+                    {AccCount3, AccSeqs2, AccVersions2, AccRollbacks2}
+                end;
             _ ->
                 % If there is a rollback needed, don't store any new documents
                 % in the index, but just check for a rollback of another
-                % partition
+                % partition (i.e. a request with start seq == end seq)
                 ChangesWrapper = fun(_, _) -> ok end,
                 Result = couch_upr:enum_docs_since(
                     UprPid, PartId, PartVersions, Since, Since, ChangesWrapper,
