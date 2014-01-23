@@ -511,30 +511,35 @@ encode_snapshot_marker(PartId, RequestId) ->
 %Magic        (0)    : 0x80
 %Opcode       (1)    : 0x57
 %Key length   (2,3)  : 0x0005
-%Extra length (4)    : 0x1e
+%Extra length (4)    : 0x1f
 %Data type    (5)    : 0x00
 %Vbucket      (6,7)  : 0x0210
-%Total body   (8-11) : 0x00000028
+%Total body   (8-11) : 0x00000029
 %Opaque       (12-15): 0x00001210
-%CAS          (16-23): 0x000064a5acec8a56
+%CAS          (16-23): 0x0000000000000000
 %  by seqno   (24-31): 0x0000000000000004
 %  rev seqno  (32-39): 0x0000000000000001
 %  flags      (40-43): 0x00000000
 %  expiration (44-47): 0x00000000
 %  lock time  (48-51): 0x00000000
 %  nmeta      (52-53): 0x0000
-%Key          (54-58): hello
-%Value        (59-63): world
+%  nru        (54)   : 0x00
+%Key          (55-59): hello
+%Value        (60-64): world
 encode_snapshot_mutation(PartId, RequestId, Cas, Seq, RevSeq, Flags,
                          Expiration, LockTime, Key, Value) ->
     % XXX vmx 2014-01-08: No metadata support for now
     MetadataLength = 0,
+    % NRU is set intentionally to some strange value, to simulate
+    % that it could be anything and should be ignored.
+    Nru = 87,
     Body = <<Seq:?UPR_SIZES_BY_SEQ,
              RevSeq:?UPR_SIZES_REV_SEQ,
              Flags:?UPR_SIZES_FLAGS,
              Expiration:?UPR_SIZES_EXPIRATION,
              LockTime:?UPR_SIZES_LOCK,
              MetadataLength:?UPR_SIZES_METADATA_LENGTH,
+             Nru:?UPR_SIZES_NRU_LENGTH,
              Key/binary,
              Value/binary>>,
 

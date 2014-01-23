@@ -428,6 +428,7 @@ parse_snapshot_mutation(KeyLength, Body, BodyLength, ExtraLength) ->
       Expiration:?UPR_SIZES_EXPIRATION,
       LockTime:?UPR_SIZES_LOCK,
       MetadataLength:?UPR_SIZES_METADATA_LENGTH,
+      _Nru:?UPR_SIZES_NRU_LENGTH,
       Key:KeyLength/binary,
       Rest/binary>> = Body,
     ValueLength = BodyLength - ExtraLength - KeyLength - MetadataLength,

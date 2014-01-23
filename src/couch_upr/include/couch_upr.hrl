@@ -53,6 +53,7 @@
 -define(UPR_SIZES_STATUS, 16).
 -define(UPR_SIZES_SEQNO, 32).
 -define(UPR_SIZES_METADATA_LENGTH, 16).
+-define(UPR_SIZES_NRU_LENGTH, 8).
 
 % NOTE vmx 2014-01-16: In ep-engine the maximum size is currently 25
 -define(UPR_MAX_FAILOVER_LOG_SIZE, 25).
