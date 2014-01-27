@@ -106,11 +106,15 @@ get_sequence_number(Pid, PartId) ->
     {Socket, Timeout} = gen_server:call(Pid, get_socket_and_timeout),
     SeqStatRequest = encode_seq_stat_request(PartId, RequestId),
     ok = gen_tcp:send(Socket, SeqStatRequest),
-    {ok, Stats} = receive_stats(Socket, Timeout, []),
-    % The stats return the sequence number as well as the partition UUID, but
-    % we care only about the sequence number
-    [{_, SeqBin} | _] = Stats,
-    {ok, list_to_integer(binary_to_list(SeqBin))}.
+    case receive_stats(Socket, Timeout, []) of
+    {ok, [{error, {?UPR_STATUS_NOT_MY_VBUCKET, _}}]} ->
+        {error, not_my_vbucket};
+    {ok, Stats} ->
+        % The stats return the sequence number as well as the partition UUID,
+        % but we care only about the sequence number
+        [{_, SeqBin} | _] = Stats,
+        {ok, list_to_integer(binary_to_list(SeqBin))}
+    end.
 
 
 % The failover log is a list of 2-tuples with the partition UUID and the
@@ -348,19 +352,18 @@ receive_stats(Socket, Timeout, Acc) ->
     case gen_tcp:recv(Socket, ?UPR_HEADER_LEN, Timeout) of
     {ok, Header} ->
         case parse_header(Header) of
-        {stats, ?UPR_STATUS_OK, _RequestId, BodyLength, KeyLength} when
-                BodyLength > 0 andalso KeyLength > 0 ->
-            {ok, Stat} = receive_stat(Socket, Timeout, BodyLength, KeyLength),
-            receive_stats(Socket, Timeout, [Stat|Acc]);
+        {stats, Status, _RequestId, BodyLength, KeyLength} when
+                BodyLength > 0 ->
+            {ok, Stat} = receive_stat(
+                Socket, Timeout, Status, BodyLength, KeyLength),
+            case Stat of
+            {error, _} ->
+                {ok, lists:reverse([Stat|Acc])};
+            _ ->
+                receive_stats(Socket, Timeout, [Stat|Acc])
+            end;
         {stats, ?UPR_STATUS_OK, _RequestId, 0, 0} ->
-            {ok, lists:reverse(Acc)};
-        {stats, Status, _RequestId, BodyLength, 0} ->
-            case gen_tcp:recv(Socket, BodyLength, Timeout) of
-            {ok, Msg} ->
-                {error, {Status, Msg}};
-            {error, closed} ->
-                {error, closed}
-            end
+            {ok, lists:reverse(Acc)}
         end;
     {error, closed} ->
         io:format("vmx: closed7~n", []),
@@ -368,10 +371,10 @@ receive_stats(Socket, Timeout, Acc) ->
     end.
 
 
-receive_stat(Socket, Timeout, BodyLength, KeyLength) ->
+receive_stat(Socket, Timeout, Status, BodyLength, KeyLength) ->
     case gen_tcp:recv(Socket, BodyLength, Timeout) of
     {ok, Body} ->
-        parse_stat(Body, KeyLength, BodyLength - KeyLength);
+        parse_stat(Body, Status, KeyLength, BodyLength - KeyLength);
     {error, closed} ->
         io:format("vmx: closed8~n", []),
         {error, closed}
@@ -468,7 +471,9 @@ parse_failover_log(<<PartUuid:(?UPR_SIZES_PARTITION_UUID div 8)/binary,
     parse_failover_log(Rest, [{PartUuid, PartSeq}|Acc]).
 
 
-parse_stat(Body, KeyLength, ValueLength) ->
+parse_stat(Body, Status, 0, _ValueLength) ->
+    {ok, {error, {Status, Body}}};
+parse_stat(Body, ?UPR_STATUS_OK, KeyLength, ValueLength) ->
     <<Key:KeyLength/binary, Value:ValueLength/binary>> = Body,
     {ok, {Key, Value}}.
 

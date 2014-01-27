@@ -24,7 +24,7 @@ num_docs() -> 1000.
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(17),
+    etap:plan(18),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -120,6 +120,9 @@ test() ->
     {ok, Seq3} = couch_upr:get_sequence_number(Pid, 3),
     etap:is(Seq3, num_docs() div num_set_partitions(),
         "Sequence number of partition 3 is correct"),
+    SeqError = couch_upr:get_sequence_number(Pid, 100000),
+    etap:is(SeqError, {error, not_my_vbucket},
+        "Too high partition number returns correct error"),
 
     % Test with too large failover log
 

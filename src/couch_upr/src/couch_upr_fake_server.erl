@@ -157,10 +157,15 @@ handle_call({set_failover_log, PartId, FailoverLog}, _From, State) ->
     }};
 
 handle_call({get_sequence_number, PartId}, _From, State) ->
-    Db = open_db(State#state.setname, PartId),
-    Seq = Db#db.update_seq,
-    couch_db:close(Db),
-    {reply, {ok, Seq}, State};
+    case open_db(State#state.setname, PartId) of
+    {ok, Db} ->
+        Seq = Db#db.update_seq,
+        couch_db:close(Db),
+        {reply, {ok, Seq}, State};
+    {error, cannot_open_db} ->
+        {reply, {error, not_my_partition}, State}
+    end;
+
 
 handle_call({get_failover_log, PartId}, _From, State) ->
     case dict:find(PartId, State#state.failover_logs) of
@@ -384,7 +389,13 @@ handle_stats_body(Socket, BodyLength, RequestId) ->
                 EndStat = encode_stat(RequestId, <<>>, <<>>),
                 ok = gen_tcp:send(Socket, EndStat);
             {error, not_my_partition} ->
-                encode_stat_error(RequestId, ?UPR_STATUS_NOT_MY_VBUCKET)
+                % The real response contains the vBucket map so that
+                % clients can adapt. It's not easy to simulate, hence
+                % we return an empty JSON object to keep things simple.
+                StatError = encode_stat_error(
+                    RequestId, ?UPR_STATUS_NOT_MY_VBUCKET,
+                    <<"{}">>),
+                ok = gen_tcp:send(Socket, StatError)
             end
         end;
     {error, closed} ->
@@ -409,7 +420,7 @@ handle_sasl_auth_body(Socket, BodyLength, RequestId) ->
 % This function creates mutations for one snapshot of one partition of a
 % given size
 create_mutations(SetName, PartId, StartSeq, EndSeq) ->
-    Db = open_db(SetName, PartId),
+    {ok, Db} = open_db(SetName, PartId),
     DocsFun = fun(DocInfo, Acc) ->
         #doc_info{
             id = DocId,
@@ -754,17 +765,19 @@ encode_stat(RequestId, Key, Value) ->
                0:?UPR_SIZES_CAS>>,
     <<Header/binary, Body/binary>>.
 
-encode_stat_error(RequestId, Status) ->
+encode_stat_error(RequestId, Status, Message) ->
     ExtraLength = 0,
+    BodyLength = byte_size(Message),
     <<?UPR_MAGIC_RESPONSE,
       ?UPR_OPCODE_STATS,
       0:?UPR_SIZES_KEY_LENGTH,
       ExtraLength,
       0,
       Status:?UPR_SIZES_STATUS,
-      0:?UPR_SIZES_BODY,
+      BodyLength:?UPR_SIZES_BODY,
       RequestId:?UPR_SIZES_OPAQUE,
-      0:?UPR_SIZES_CAS>>.
+      0:?UPR_SIZES_CAS,
+      Message/binary>>.
 
 encode_sasl_auth(RequestId) ->
     Body = <<"Authenticated">>,
@@ -785,9 +798,7 @@ encode_sasl_auth(RequestId) ->
 open_db(SetName, PartId) ->
     case couch_db:open_int(?dbname(SetName, PartId), []) of
     {ok, PartDb} ->
-        PartDb;
-    Error ->
-        ErrorMsg = io_lib:format("UPR error opening database `~s': ~w",
-                                 [?dbname(SetName, PartId), Error]),
-        throw({error, iolist_to_binary(ErrorMsg)})
+        {ok, PartDb};
+    _Error ->
+        {error, cannot_open_db}
     end.
