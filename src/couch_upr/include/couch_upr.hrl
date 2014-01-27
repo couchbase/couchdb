@@ -57,3 +57,17 @@
 
 % NOTE vmx 2014-01-16: In ep-engine the maximum size is currently 25
 -define(UPR_MAX_FAILOVER_LOG_SIZE, 25).
+
+
+-type upr_status() :: non_neg_integer().
+-type request_id() :: non_neg_integer().
+-type size()       :: non_neg_integer().
+-type socket()     :: port().
+
+% Those types are duplicates from couch_set_view.hrl
+-type partition_id()             :: non_neg_integer().
+-type update_seq()               :: non_neg_integer().
+-type uuid()                     :: <<_:64>>.
+-type partition_version()        :: [{uuid(), update_seq()}].
+% Manipulate via ordsets or orddict, keep it ordered by partition id.
+-type partition_versions()       :: ordsets:ordset({partition_id(), partition_version()}).

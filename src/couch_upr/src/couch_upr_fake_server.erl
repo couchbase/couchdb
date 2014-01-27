@@ -93,21 +93,26 @@
 
 % Public API
 
+-spec start(binary()) -> {ok, pid()} | ignore |
+                         {error, {already_started, pid()} | term()}.
 start(SetName) ->
     % Start the fake UPR server where the original one is expected to be
     Port = list_to_integer(couch_config:get("upr", "port", "0")),
     gen_server:start({local, ?MODULE}, ?MODULE, [Port, SetName], []).
 
+-spec reset() -> ok.
 reset() ->
     gen_server:call(?MODULE, reset).
 
 % Only used by tests to populate the failover log
+-spec set_failover_log(partition_id(), partition_version()) -> ok.
 set_failover_log(PartId, FailoverLog) ->
     gen_server:call(?MODULE, {set_failover_log, PartId, FailoverLog}).
 
 
 % gen_server callbacks
 
+-spec init([port() | binary()]) -> {ok, #state{}}.
 init([Port, SetName]) ->
     {ok, Listen} = gen_tcp:listen(Port,
         [binary, {packet, raw}, {active, false}, {reuseaddr, true}]),
@@ -128,6 +133,8 @@ init([Port, SetName]) ->
     }}.
 
 
+-spec handle_call(tuple() | atom(), {pid(), reference()}, #state{}) ->
+                         {reply, any(), #state{}}.
 handle_call({send_snapshot, Socket, PartId, EndSeq}, _From, State) ->
     #state{
         streams = Streams,
@@ -183,36 +190,47 @@ handle_call(reset, _From, State0) ->
     {reply, ok, State}.
 
 
+-spec handle_cast(any(), #state{}) ->
+                         {stop, {unexpected_cast, any()}, #state{}}.
 handle_cast(Msg, State) ->
     {stop, {unexpected_cast, Msg}, State}.
 
 
+-spec handle_info({'EXIT', {pid(), reference()}, normal}, #state{}) ->
+                         {noreply, #state{}}.
 handle_info({'EXIT', _From, normal}, State)  ->
     {noreply, State}.
 
 
+-spec terminate(any(), #state{}) -> ok.
 terminate(_Reason, _State) ->
     ok.
 
+-spec code_change(any(), #state{}, any()) -> {ok, #state{}}.
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 
 % Internal functions
 
+-spec get_failover_log(partition_id()) -> partition_version().
 get_failover_log(PartId) ->
     gen_server:call(?MODULE, {get_failover_log, PartId}).
 
 
 % Returns the current high sequence number of a partition
+-spec get_sequence_number(partition_id()) -> {ok, update_seq()} |
+                                             {error, not_my_partition}.
 get_sequence_number(PartId) ->
     gen_server:call(?MODULE, {get_sequence_number, PartId}).
 
 
+-spec accept(socket()) -> pid().
 accept(Listen) ->
     process_flag(trap_exit, true),
     spawn_link(?MODULE, accept_loop, [Listen]).
 
+-spec accept_loop(socket()) -> ok.
 accept_loop(Listen) ->
     {ok, Socket} = gen_tcp:accept(Listen),
     % Let the server spawn a new process and replace this loop
@@ -221,6 +239,7 @@ accept_loop(Listen) ->
     read(Socket).
 
 
+-spec read(socket()) -> ok.
 read(Socket) ->
     case gen_tcp:recv(Socket, ?UPR_HEADER_LEN) of
     {ok, Header} ->
@@ -241,6 +260,11 @@ read(Socket) ->
         ok
     end.
 
+
+-spec parse_header(<<_:192>>) ->
+                          {atom(), request_id(), partition_id()} |
+                          {atom(), size(), request_id()} |
+                          {atom(), size(), request_id(), partition_id()}.
 parse_header(<<?UPR_MAGIC_REQUEST,
                Opcode,
                _KeyLength:?UPR_SIZES_KEY_LENGTH,
@@ -264,6 +288,8 @@ parse_header(<<?UPR_MAGIC_REQUEST,
     end.
 
 
+% XXX vmx: 2014-01-24: Proper logging/error handling is missing
+-spec handle_open_connection_body(socket(), size(), request_id()) -> ok.
 handle_open_connection_body(Socket, BodyLength, RequestId) ->
     case gen_tcp:recv(Socket, BodyLength) of
     {ok, <<_SeqNo:?UPR_SIZES_SEQNO,
@@ -275,6 +301,8 @@ handle_open_connection_body(Socket, BodyLength, RequestId) ->
         io:format("vmx: closed6~n", [])
     end.
 
+-spec handle_stream_request_body(socket(), size(), request_id(),
+                                 partition_id()) -> ok.
 handle_stream_request_body(Socket, BodyLength, RequestId, PartId) ->
     case gen_tcp:recv(Socket, BodyLength) of
     {ok, <<_Flags:?UPR_SIZES_FLAGS,
@@ -300,6 +328,9 @@ handle_stream_request_body(Socket, BodyLength, RequestId, PartId) ->
         end
     end.
 
+-spec send_ok_or_error(socket(), request_id(), partition_id(), update_seq(),
+                       update_seq(), uuid(), update_seq(),
+                       partition_version()) -> ok.
 send_ok_or_error(Socket, RequestId, PartId, StartSeq, EndSeq,
         PartVersionUuid, PartVersionSeq, FailoverLog) ->
     {ok, HighSeq} = get_sequence_number(PartId),
@@ -341,6 +372,8 @@ send_ok_or_error(Socket, RequestId, PartId, StartSeq, EndSeq,
         end
     end.
 
+-spec send_ok(socket(), request_id(), partition_id(), update_seq(),
+              update_seq(), partition_version()) -> ok.
 send_ok(Socket, RequestId, PartId, StartSeq, EndSeq, FailoverLog) ->
     StreamOk = encode_stream_request_ok(RequestId, FailoverLog),
     ok = gen_tcp:send(Socket, StreamOk),
@@ -349,21 +382,27 @@ send_ok(Socket, RequestId, PartId, StartSeq, EndSeq, FailoverLog) ->
     StreamEnd = encode_stream_end(PartId, RequestId),
     ok = gen_tcp:send(Socket, StreamEnd).
 
+-spec send_rollback(socket(), request_id(), update_seq()) -> ok.
 send_rollback(Socket, RequestId, RollbackSeq) ->
     StreamRollback = encode_stream_request_rollback(RequestId, RollbackSeq),
     ok = gen_tcp:send(Socket, StreamRollback).
 
+-spec send_error(socket(), request_id(), upr_status()) -> ok.
 send_error(Socket, RequestId, Status) ->
     StreamError = encode_stream_request_error(RequestId, Status),
     ok = gen_tcp:send(Socket, StreamError).
 
 
+-spec handle_failover_log(socket(), request_id(), partition_id()) -> ok.
 handle_failover_log(Socket, RequestId, PartId) ->
     FailoverLog = get_failover_log(PartId),
     FailoverLogResponse = encode_failover_log(RequestId, FailoverLog),
     ok = gen_tcp:send(Socket, FailoverLogResponse).
 
 
+-spec handle_stats_body(socket(), size(), request_id()) ->
+                               ok | not_yet_implemented |
+                               {error, closed | not_my_partition}.
 handle_stats_body(Socket, BodyLength, RequestId) ->
     case gen_tcp:recv(Socket, BodyLength) of
     {ok, Stat} ->
@@ -404,6 +443,8 @@ handle_stats_body(Socket, BodyLength, RequestId) ->
     end.
 
 
+% XXX vmx: 2014-01-24: Proper logging/error handling is missing
+-spec handle_sasl_auth_body(socket(), size(), request_id()) -> ok.
 handle_sasl_auth_body(Socket, BodyLength, RequestId) ->
     case gen_tcp:recv(Socket, BodyLength) of
     % NOTE vmx 2014-01-10: Currently there's no real authentication
@@ -419,6 +460,8 @@ handle_sasl_auth_body(Socket, BodyLength, RequestId) ->
 
 % This function creates mutations for one snapshot of one partition of a
 % given size
+-spec create_mutations(binary(), partition_id(), update_seq(), update_seq()) ->
+                              [#doc{}].
 create_mutations(SetName, PartId, StartSeq, EndSeq) ->
     {ok, Db} = open_db(SetName, PartId),
     DocsFun = fun(DocInfo, Acc) ->
@@ -448,6 +491,9 @@ create_mutations(SetName, PartId, StartSeq, EndSeq) ->
 
 % Extract the CAS and flags out of thr revision
 % The couchdb unit tests don't fill in a proper revision, but an empty binary
+-spec extract_revision({non_neg_integer(), <<_:128>>}) ->
+                              {non_neg_integer(), non_neg_integer(),
+                               non_neg_integer(), non_neg_integer()}.
 extract_revision({RevSeq, <<>>}) ->
     {RevSeq, 0, 0, 0};
 % https://github.com/couchbase/ep-engine/blob/master/src/couch-kvstore/couch-kvstore.cc#L212-L216
@@ -456,6 +502,8 @@ extract_revision({RevSeq, RevMeta}) ->
     {RevSeq, Cas, Expiration, Flags}.
 
 
+-spec do_send_snapshot(socket(), binary(), partition_id(), request_id(),
+                       update_seq(), update_seq()) -> non_neg_integer().
 do_send_snapshot(Socket, SetName, PartId, RequestId, StartSeq, EndSeq) ->
     Mutations = create_mutations(SetName, PartId, StartSeq, EndSeq),
     lists:foreach(fun
@@ -484,6 +532,7 @@ do_send_snapshot(Socket, SetName, PartId, RequestId, StartSeq, EndSeq) ->
 %Total body   (8-11) : 0x00000000
 %Opaque       (12-15): 0x00000001
 %CAS          (16-23): 0x0000000000000000
+-spec encode_open_connection(request_id()) -> <<_:192>>.
 encode_open_connection(RequestId) ->
     <<?UPR_MAGIC_RESPONSE,
       ?UPR_OPCODE_OPEN_CONNECTION,
@@ -506,6 +555,7 @@ encode_open_connection(RequestId) ->
 %Total body   (8-11) : 0x00000000
 %Opaque       (12-15): 0xdeadbeef
 %CAS          (16-23): 0x0000000000000000
+-spec encode_snapshot_marker(partition_id(), request_id()) -> <<_:192>>.
 encode_snapshot_marker(PartId, RequestId) ->
     <<?UPR_MAGIC_REQUEST,
       ?UPR_OPCODE_SNAPSHOT_MARKER,
@@ -537,6 +587,11 @@ encode_snapshot_marker(PartId, RequestId) ->
 %  nru        (54)   : 0x00
 %Key          (55-59): hello
 %Value        (60-64): world
+-spec encode_snapshot_mutation(partition_id(), request_id(), non_neg_integer(),
+                               non_neg_integer(), non_neg_integer(),
+                               non_neg_integer(), non_neg_integer(),
+                               non_neg_integer(), binary(), binary()) ->
+                                      binary().
 encode_snapshot_mutation(PartId, RequestId, Cas, Seq, RevSeq, Flags,
                          Expiration, LockTime, Key, Value) ->
     % XXX vmx 2014-01-08: No metadata support for now
@@ -585,6 +640,9 @@ encode_snapshot_mutation(PartId, RequestId, Cas, Seq, RevSeq, Flags,
 %  rev seqno  (32-39): 0x0000000000000001
 %  nmeta      (40-41): 0x0000
 %Key          (42-46): hello
+-spec encode_snapshot_deletion(partition_id(), request_id(), non_neg_integer(),
+                               non_neg_integer(), non_neg_integer(),
+                               binary()) -> binary().
 encode_snapshot_deletion(PartId, RequestId, Cas, Seq, RevSeq, Key) ->
     % XXX vmx 2014-01-08: No metadata support for now
     MetadataLength = 0,
@@ -619,6 +677,7 @@ encode_snapshot_deletion(PartId, RequestId, Cas, Seq, RevSeq, Key) ->
 %Total body   (8-11) : 0x00000000
 %Opaque       (12-15): 0x00001000
 %CAS          (16-23): 0x0000000000000000
+-spec encode_stream_request_ok(request_id(), partition_version()) -> binary().
 encode_stream_request_ok(RequestId, FailoverLog) ->
     {BodyLength, Value} = failover_log_to_bin(FailoverLog),
     ExtraLength = 0,
@@ -633,6 +692,7 @@ encode_stream_request_ok(RequestId, FailoverLog) ->
               0:?UPR_SIZES_CAS>>,
     <<Header/binary, Value/binary>>.
 
+-spec encode_stream_request_error(request_id(), upr_status()) -> <<_:192>>.
 encode_stream_request_error(RequestId, Status) ->
     <<?UPR_MAGIC_RESPONSE,
       ?UPR_OPCODE_STREAM_REQUEST,
@@ -656,6 +716,7 @@ encode_stream_request_error(RequestId, Status) ->
 %Opaque       (12-15): 0x00001000
 %CAS          (16-23): 0x0000000000000000
 %  rollback # (24-31): 0x0000000000000000
+-spec encode_stream_request_rollback(request_id(), update_seq()) -> <<_:256>>.
 encode_stream_request_rollback(RequestId, Seq) ->
     <<?UPR_MAGIC_RESPONSE,
       ?UPR_OPCODE_STREAM_REQUEST,
@@ -680,6 +741,7 @@ encode_stream_request_rollback(RequestId, Seq) ->
 %Opaque       (12-15): 0xdeadbeef
 %CAS          (16-23): 0x0000000000000000
 %  flag       (24-27): 0x00000000 (OK)
+-spec encode_stream_end(partition_id(), request_id()) -> binary().
 encode_stream_end(PartId, RequestId) ->
     % XXX vmx 2013-09-11: For now we return only success
     Body = <<?UPR_FLAG_OK:?UPR_SIZES_FLAGS>>,
@@ -717,6 +779,7 @@ encode_stream_end(PartId, RequestId) ->
 %  vb seqno   (64-71): 0x0000000000000004
 %  vb UUID    (72-79): 0x00000000deadbeef
 %  vb seqno   (80-87): 0x0000000000006524
+-spec encode_failover_log(request_id(), partition_version()) -> binary().
 encode_failover_log(RequestId, FailoverLog) ->
     {BodyLength, Value} = failover_log_to_bin(FailoverLog),
     ExtraLength = 0,
@@ -731,6 +794,8 @@ encode_failover_log(RequestId, FailoverLog) ->
                0:?UPR_SIZES_CAS>>,
     <<Header/binary, Value/binary>>.
 
+-spec failover_log_to_bin(partition_version()) ->
+                                 {non_neg_integer(), binary()}.
 failover_log_to_bin(FailoverLog) ->
     FailoverLogBin = [[Uuid, <<Seq:64>>] || {Uuid, Seq} <- FailoverLog],
     Value = list_to_binary(FailoverLogBin),
@@ -749,6 +814,7 @@ failover_log_to_bin(FailoverLog) ->
 %CAS          (16-23): 0x0000000000000000
 %Key                 : The textual string "pid"
 %Value               : The textual string "3078"
+-spec encode_stat(request_id(), binary(), binary()) -> binary().
 encode_stat(RequestId, Key, Value) ->
     Body = <<Key/binary, Value/binary>>,
     KeyLength = byte_size(Key),
@@ -765,6 +831,7 @@ encode_stat(RequestId, Key, Value) ->
                0:?UPR_SIZES_CAS>>,
     <<Header/binary, Body/binary>>.
 
+-spec encode_stat_error(request_id(), upr_status(), binary()) -> binary().
 encode_stat_error(RequestId, Status, Message) ->
     ExtraLength = 0,
     BodyLength = byte_size(Message),
@@ -779,6 +846,7 @@ encode_stat_error(RequestId, Status, Message) ->
       0:?UPR_SIZES_CAS,
       Message/binary>>.
 
+-spec encode_sasl_auth(request_id()) -> binary().
 encode_sasl_auth(RequestId) ->
     Body = <<"Authenticated">>,
     BodyLength = byte_size(Body),
@@ -795,6 +863,8 @@ encode_sasl_auth(RequestId) ->
     <<Header/binary, Body/binary>>.
 
 
+-spec open_db(binary(), partition_id()) ->
+                     {ok, #db{}} | {error, cannot_open_db}.
 open_db(SetName, PartId) ->
     case couch_db:open_int(?dbname(SetName, PartId), []) of
     {ok, PartDb} ->

@@ -60,12 +60,10 @@ ebin/%.app: src/%.app.src
 #ebin/%.beam: src/%.erl $(include_files) $(top_srcdir)/src/couchdb/couch_db.hrl $(top_srcdir)/src/couch_index_merger/include/couch_index_merger.hrl $(top_srcdir)/src/couch_index_merger/include/couch_view_merger.hrl
 ebin/%.beam: src/%.erl $(include_files)
 	@mkdir -p ebin/
-#	$(ERLC) -Wall -I$(top_srcdir)/src -I$(top_srcdir)/src/couchdb
-	$(ERLC) -Wall -I$(top_srcdir)/src \
+	$(ERLC) -Wall -I$(top_srcdir)/src -I$(top_srcdir)/src/couchdb \
         -o ebin/ $(ERLC_FLAGS) ${TEST} $<;
 
 #test/%.beam: test/%.erl $(include_files) $(top_srcdir)/src/couchdb/couch_db.hrl $(top_srcdir)/src/couch_index_merger/include/couch_index_merger.hrl $(top_srcdir)/src/couch_index_merger/include/couch_view_merger.hrl
 test/%.beam: test/%.erl $(include_files)
-#	$(ERLC) -Wall -I$(top_srcdir)/src -I$(top_srcdir)/src/couchdb
-	$(ERLC) -Wall -I$(top_srcdir)/src \
+	$(ERLC) -Wall -I$(top_srcdir)/src -I$(top_srcdir)/src/couchdb \
         -o test/ $(ERLC_FLAGS) ${TEST} $<;

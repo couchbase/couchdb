@@ -21,20 +21,24 @@
 % gen_server callbacks
 -export([init/1, terminate/2, handle_call/3, handle_cast/2, handle_info/2, code_change/3]).
 
+-include("couch_db.hrl").
 -include_lib("couch_upr/include/couch_upr.hrl").
 
 
+-type mutations_fold_fun() :: fun().
+-type mutations_fold_acc() :: any().
+
 -record(state, {
-    socket = nil,
-    timeout = 5000,
-    request_id = 0,
-    callbacks = dict:new(),
+    socket = nil           :: socket(),
+    timeout = 5000         :: timeout(),
+    request_id = 0         :: request_id(),
+    callbacks = dict:new() :: dict(),
     % Data that was received but not parsed yet
-    data = <<>>
+    data = <<>>            :: binary()
 }).
 
 -record(mutation, {
-    seq = 0         :: non_neg_integer(),
+    seq = 0         :: update_seq(),
     rev_seq = 0     :: non_neg_integer(),
     flags = 0       :: non_neg_integer(),
     expiration = 0  :: non_neg_integer(),
@@ -44,30 +48,22 @@
     metadata = <<>> :: binary()
 }).
 
-% #doc{} is from couch_db.hrl. They are copy & pasted here
-% as they will go away once the proper UPR is in place.
--record(doc,
-    {
-    id = <<>>,
-    rev = {0, <<>>},
-
-    % the binary body
-    body = <<"{}">>,
-    content_meta = 0, % should be 0-255 only.
-
-    deleted = false,
-
-    % key/value tuple of meta information, provided when using special options:
-    % couch_db:open_doc(Db, Id, Options).
-    meta = []
-    }).
 
 % Public API
 
+-spec start(binary(), binary()) -> {ok, pid()} | ignore |
+                                   {error, {already_started, pid()} | term()}.
 start(Name, Bucket) ->
     gen_server:start_link(?MODULE, [Name, Bucket], []).
 
 
+-spec enum_docs_since(pid(), partition_id(), partition_version(), update_seq(),
+                      update_seq(), mutations_fold_fun(),
+                      mutations_fold_acc()) ->
+                             {error, wrong_partition_version |
+                              wrong_start_sequence_number} |
+                             {rollback, update_seq()} |
+                             {ok, mutations_fold_acc(), partition_version()}.
 enum_docs_since(_, _, [], _, _, _, _) ->
     % No matching partition version found. Recreate the index from scratch
     {rollback, 0};
@@ -101,6 +97,8 @@ enum_docs_since(Pid, PartId, [PartVersion|PartVersions], StartSeq, EndSeq,
     end.
 
 
+-spec get_sequence_number(pid(), partition_id()) ->
+                                 {ok, update_seq()} | {error, not_my_vbucket}.
 get_sequence_number(Pid, PartId) ->
     RequestId = gen_server:call(Pid, get_request_id),
     {Socket, Timeout} = gen_server:call(Pid, get_socket_and_timeout),
@@ -119,6 +117,9 @@ get_sequence_number(Pid, PartId) ->
 
 % The failover log is a list of 2-tuples with the partition UUID and the
 % sequence number when it was created
+-spec get_failover_log(pid(), partition_id()) ->
+                              {error, no_failover_log_found | upr_status()} |
+                              {ok, partition_version()}.
 get_failover_log(Pid, PartId) ->
     RequestId = gen_server:call(Pid, get_request_id),
     {Socket, Timeout} = gen_server:call(Pid, get_socket_and_timeout),
@@ -137,6 +138,7 @@ get_failover_log(Pid, PartId) ->
 
 % gen_server callbacks
 
+-spec init([binary()]) -> {ok, #state{}} | {stop, sasl_auth_failed}.
 init([Name, Bucket]) ->
     UprTimeout = list_to_integer(
         couch_config:get("upr", "connection_timeout")),
@@ -158,6 +160,8 @@ init([Name, Bucket]) ->
         Stop
     end.
 
+-spec sasl_auth(binary(), #state{}) -> {ok, #state{}} |
+                                       {stop, sasl_auth_failed}.
 sasl_auth(Bucket, State) ->
     #state{
         socket = Socket,
@@ -180,6 +184,7 @@ sasl_auth(Bucket, State) ->
         end
     end.
 
+-spec open_connection(binary(), #state{}) -> #state{}.
 open_connection(Name, State) ->
     #state{
         socket = Socket,
@@ -197,6 +202,8 @@ open_connection(Name, State) ->
     }.
 
 
+-spec handle_call(atom(), {pid(), reference()}, #state{}) ->
+                         {reply, any(), #state{}}.
 handle_call(get_request_id, _From, State) ->
     RequestId = case State#state.request_id of
     RequestId0 when RequestId0 < 1 bsl (?UPR_SIZES_OPAQUE + 1) ->
@@ -210,22 +217,37 @@ handle_call(get_socket_and_timeout, _From, State) ->
     {reply, {State#state.socket, State#state.timeout}, State}.
 
 
+-spec handle_cast(any(), #state{}) ->
+                         {stop, {unexpected_cast, any()}, #state{}}.
 handle_cast(Msg, State) ->
     {stop, {unexpected_cast, Msg}, State}.
 
+-spec handle_info(any(), #state{}) ->
+                         {stop, {unexpected_msg, any()}, #state{}}.
 handle_info(Msg, State) ->
     {stop, {unexpected_msg, Msg}, State}.
 
 
+-spec terminate(any(), #state{}) -> ok.
 terminate(_Reason, _State) ->
     ok.
 
+-spec code_change(any(), #state{}, any()) -> {ok, #state{}}.
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 
 % Internal functions
 
+% XXX vmx: 2014-01-24: The 'ok' comes from the io:format/2. This will be
+% cleaned up at a later stage, for now only the specs are added.
+-spec receive_single_snapshot(socket(), timeout(), mutations_fold_fun(),
+                              mutations_fold_acc()) ->
+                                     closed | ok |
+                                     {ok, mutations_fold_acc()} |
+                                     {error, wrong_partition_version |
+                                      wrong_start_sequence_number} |
+                                     {rollback, update_seq()}.
 receive_single_snapshot(Socket, Timeout, MutationFun, Acc) ->
     case gen_tcp:recv(Socket, ?UPR_HEADER_LEN, Timeout) of
     {ok, Header} ->
@@ -277,6 +299,12 @@ receive_single_snapshot(Socket, Timeout, MutationFun, Acc) ->
     end.
 
 
+% XXX vmx: 2014-01-24: The 'ok' comes from the io:format/2. This will be
+% cleaned up at a later stage, for now only the specs are added.
+-spec receive_snapshot_mutation(socket(), timeout(), partition_id(), size(),
+                                size(), size()) ->
+                                       ok |
+                                       {update_seq(), #doc{}, partition_id()}.
 receive_snapshot_mutation(Socket, Timeout, PartId, KeyLength, BodyLength,
         ExtraLength) ->
     case gen_tcp:recv(Socket, BodyLength, Timeout) of
@@ -306,6 +334,12 @@ receive_snapshot_mutation(Socket, Timeout, PartId, KeyLength, BodyLength,
         io:format("vmx: closed2~n", [])
     end.
 
+% XXX vmx: 2014-01-24: The 'ok' comes from the io:format/2. This will be
+% cleaned up at a later stage, for now only the specs are added.
+-spec receive_snapshot_deletion(socket(), timeout(), partition_id(), size(),
+                                size()) ->
+                                       ok |
+                                       {update_seq(), #doc{}, partition_id()}.
 receive_snapshot_deletion(Socket, Timeout, PartId, KeyLength, BodyLength) ->
     case gen_tcp:recv(Socket, BodyLength, Timeout) of
     {ok, Body} ->
@@ -326,6 +360,9 @@ receive_snapshot_deletion(Socket, Timeout, PartId, KeyLength, BodyLength) ->
         io:format("vmx: closed3~n", [])
     end.
 
+% XXX vmx: 2014-01-24: The 'ok' comes from the io:format/2. This will be
+% cleaned up at a later stage, for now only the specs are added.
+-spec receive_stream_end(socket(), timeout(), size()) -> ok | {ok, <<_:32>>}.
 receive_stream_end(Socket, Timeout, BodyLength) ->
     case gen_tcp:recv(Socket, BodyLength, Timeout) of
     {ok, Flag} ->
@@ -337,6 +374,10 @@ receive_stream_end(Socket, Timeout, BodyLength) ->
 
 % Returns the failover log as a list 2-tuple pairs with
 % partition UUID and sequence number
+% XXX vmx: 2014-01-24: The 'ok' comes from the io:format/2. This will be
+% cleaned up at a later stage, for now only the specs are added.
+-spec receive_failover_log(socket(), timeout(), size()) ->
+                                  ok | {ok, partition_version()}.
 receive_failover_log(_Socket, _Timeout, 0) ->
     {error, no_failover_log_found};
 receive_failover_log(Socket, Timeout, BodyLength) ->
@@ -348,6 +389,10 @@ receive_failover_log(Socket, Timeout, BodyLength) ->
     end.
 
 
+-spec receive_stats(socket(), timeout(), [any()]) ->
+                           {ok, [{binary(), binary()}] |
+                            [{error, {upr_status(), binary()}}]} |
+                           {error, closed}.
 receive_stats(Socket, Timeout, Acc) ->
     case gen_tcp:recv(Socket, ?UPR_HEADER_LEN, Timeout) of
     {ok, Header} ->
@@ -371,6 +416,10 @@ receive_stats(Socket, Timeout, Acc) ->
     end.
 
 
+-spec receive_stat(socket(), timeout(), upr_status(), size(), size()) ->
+                          {ok, {binary(), binary()} |
+                           {error, {upr_status(), binary()}}} |
+                          {error, closed}.
 receive_stat(Socket, Timeout, Status, BodyLength, KeyLength) ->
     case gen_tcp:recv(Socket, BodyLength, Timeout) of
     {ok, Body} ->
@@ -382,6 +431,17 @@ receive_stat(Socket, Timeout, Status, BodyLength, KeyLength) ->
 
 
 % TODO vmx 2013-08-22: Bad match error handling
+-spec parse_header(<<_:192>>) ->
+                          {atom(), size()} |
+                          {atom(), upr_status(), request_id(), size()} |
+                          {atom(), upr_status(), request_id(), size(),
+                           size()} |
+                          {atom(), partition_id(), request_id()} |
+                          {atom(), partition_id(), request_id(), size()} |
+                          {atom(), partition_id(), request_id(), size(),
+                           size()} |
+                          {atom(), partition_id(), request_id(), size(),
+                           size(), size()}.
 parse_header(<<?UPR_MAGIC_RESPONSE,
                Opcode,
                KeyLength:?UPR_SIZES_KEY_LENGTH,
@@ -424,6 +484,8 @@ parse_header(<<?UPR_MAGIC_REQUEST,
         {snapshot_deletion, PartId, RequestId, KeyLength, BodyLength}
     end.
 
+-spec parse_snapshot_mutation(size(), binary(), size(), size()) ->
+                                     {snapshot_mutation, #mutation{}}.
 parse_snapshot_mutation(KeyLength, Body, BodyLength, ExtraLength) ->
     <<Seq:?UPR_SIZES_BY_SEQ,
       RevSeq:?UPR_SIZES_REV_SEQ,
@@ -448,6 +510,10 @@ parse_snapshot_mutation(KeyLength, Body, BodyLength, ExtraLength) ->
         metadata = Metadata
     }}.
 
+-spec parse_snapshot_deletion(size(), binary()) ->
+                                     {snapshot_deletion,
+                                      {update_seq(), non_neg_integer(),
+                                       binary(), binary()}}.
 parse_snapshot_deletion(KeyLength, Body) ->
     % XXX vmx 2014-01-07: No metadata support for now. Make it so it breaks
     % once it's there.
@@ -460,6 +526,8 @@ parse_snapshot_deletion(KeyLength, Body) ->
     {snapshot_deletion, {Seq, RevSeq, Key, Metadata}}.
 
 
+-spec parse_failover_log(binary(), partition_version()) ->
+                                {ok, partition_version()}.
 parse_failover_log(Body) ->
     parse_failover_log(Body, []).
 parse_failover_log(<<>>, Acc) ->
@@ -471,6 +539,9 @@ parse_failover_log(<<PartUuid:(?UPR_SIZES_PARTITION_UUID div 8)/binary,
     parse_failover_log(Rest, [{PartUuid, PartSeq}|Acc]).
 
 
+-spec parse_stat(binary(), upr_status(), size(), size()) ->
+                        {ok, {binary(), binary()} |
+                         {error, {upr_status(), binary()}}}.
 parse_stat(Body, Status, 0, _ValueLength) ->
     {ok, {error, {Status, Body}}};
 parse_stat(Body, ?UPR_STATUS_OK, KeyLength, ValueLength) ->
@@ -478,6 +549,7 @@ parse_stat(Body, ?UPR_STATUS_OK, KeyLength, ValueLength) ->
     {ok, {Key, Value}}.
 
 
+-spec encode_sasl_auth(binary(), request_id()) -> binary().
 encode_sasl_auth(Bucket, RequestId) ->
     AuthType = <<"PLAIN">>,
     Body = <<AuthType/binary, $\0,
@@ -512,6 +584,7 @@ encode_sasl_auth(Bucket, RequestId) ->
 %  seqno      (24-27): 0x00000000
 %  flags      (28-31): 0x00000000 (consumer)
 %Key          (32-55): bucketstream vb[100-105]
+-spec encode_open_connection(binary(), request_id()) -> binary().
 encode_open_connection(Name, RequestId) ->
     Body = <<0:?UPR_SIZES_SEQNO,
              ?UPR_FLAG_PRODUCER:?UPR_SIZES_FLAGS,
@@ -549,6 +622,9 @@ encode_open_connection(Name, RequestId) ->
 %  end seqno  (40-47): 0xffffffffffffffff
 %  vb UUID    (48-55): 0x00000000feeddeca
 %  high seqno (56-63): 0x0000000000000000
+-spec encode_stream_request(partition_id(), request_id(), non_neg_integer(),
+                            update_seq(), update_seq(),
+                            {uuid(), update_seq()}) -> binary().
 encode_stream_request(PartId, RequestId, Flags, StartSeq, EndSeq,
         {PartUuid, PartHighSeq}) ->
     Body = <<Flags:?UPR_SIZES_FLAGS,
@@ -584,6 +660,7 @@ encode_stream_request(PartId, RequestId, Flags, StartSeq, EndSeq,
 %Total body   (8-11) : 0x00000000
 %Opaque       (12-15): 0xdeadbeef
 %CAS          (16-23): 0x0000000000000000
+-spec encode_failover_log_request(partition_id(), request_id()) -> binary().
 encode_failover_log_request(PartId, RequestId) ->
     Header = <<?UPR_MAGIC_REQUEST,
                ?UPR_OPCODE_FAILOVER_LOG_REQUEST,
@@ -608,6 +685,7 @@ encode_failover_log_request(PartId, RequestId) ->
 %Opaque       (12-15): 0x00000000
 %CAS          (16-23): 0x0000000000000000
 %Key                 : vbucket-seqno 1
+-spec encode_seq_stat_request(partition_id(), request_id()) -> binary().
 encode_seq_stat_request(PartId, RequestId) ->
     Body = <<"vbucket-seqno ",
         (list_to_binary(integer_to_list(PartId)))/binary>>,

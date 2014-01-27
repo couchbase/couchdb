@@ -91,9 +91,9 @@
 -type partition_seq()            :: {partition_id(), update_seq()}.
 % Manipulate via ordsets or orddict, keep it ordered by partition id.
 -type partition_seqs()           :: ordsets:ordset(partition_seq()).
--type partition_version()        :: {partition_id(), [{uuid(), update_seq()}]}.
+-type partition_version()        :: [{uuid(), update_seq()}].
 % Manipulate via ordsets or orddict, keep it ordered by partition id.
--type partition_versions()       :: ordsets:ordset(partition_version()).
+-type partition_versions()       :: ordsets:ordset({partition_id(), partition_version()}).
 -type view_state()               :: btree_state().
 -type set_view_group_type()      :: 'main' | 'replica'.
 -type set_view_ets_stats_key()   :: {binary(), binary(), binary(), set_view_group_type()}.
