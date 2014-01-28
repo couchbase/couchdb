@@ -239,14 +239,12 @@ code_change(_OldVsn, State, _Extra) ->
 
 % Internal functions
 
-% XXX vmx: 2014-01-24: The 'ok' comes from the io:format/2. This will be
-% cleaned up at a later stage, for now only the specs are added.
 -spec receive_single_snapshot(socket(), timeout(), mutations_fold_fun(),
                               mutations_fold_acc()) ->
-                                     closed | ok |
                                      {ok, mutations_fold_acc()} |
                                      {error, wrong_partition_version |
-                                      wrong_start_sequence_number} |
+                                      wrong_start_sequence_number |
+                                      closed} |
                                      {rollback, update_seq()}.
 receive_single_snapshot(Socket, Timeout, MutationFun, Acc) ->
     case gen_tcp:recv(Socket, ?UPR_HEADER_LEN, Timeout) of
@@ -265,7 +263,7 @@ receive_single_snapshot(Socket, Timeout, MutationFun, Acc) ->
                 {ok, <<RollbackSeq:?UPR_SIZES_BY_SEQ>>} ->
                     {rollback, RollbackSeq};
                 {error, closed} ->
-                    io:format("vmx: closed5~n", [])
+                    {error, closed}
                 end;
             ?UPR_STATUS_KEY_NOT_FOUND ->
                 {error, wrong_partition_version};
@@ -294,17 +292,14 @@ receive_single_snapshot(Socket, Timeout, MutationFun, Acc) ->
             {ok, Acc}
         end;
     {error, closed} ->
-        io:format("vmx: closed~n", []),
-        closed
+        {error, closed}
     end.
 
 
-% XXX vmx: 2014-01-24: The 'ok' comes from the io:format/2. This will be
-% cleaned up at a later stage, for now only the specs are added.
 -spec receive_snapshot_mutation(socket(), timeout(), partition_id(), size(),
                                 size(), size()) ->
-                                       ok |
-                                       {update_seq(), #doc{}, partition_id()}.
+                                       {update_seq(), #doc{}, partition_id()} |
+                                       {error, closed}.
 receive_snapshot_mutation(Socket, Timeout, PartId, KeyLength, BodyLength,
         ExtraLength) ->
     case gen_tcp:recv(Socket, BodyLength, Timeout) of
@@ -331,15 +326,13 @@ receive_snapshot_mutation(Socket, Timeout, PartId, KeyLength, BodyLength,
          },
          {Seq, Doc, PartId};
     {error, closed} ->
-        io:format("vmx: closed2~n", [])
+        {error, closed}
     end.
 
-% XXX vmx: 2014-01-24: The 'ok' comes from the io:format/2. This will be
-% cleaned up at a later stage, for now only the specs are added.
 -spec receive_snapshot_deletion(socket(), timeout(), partition_id(), size(),
                                 size()) ->
-                                       ok |
-                                       {update_seq(), #doc{}, partition_id()}.
+                                       {update_seq(), #doc{}, partition_id()} |
+                                       {error, closed}.
 receive_snapshot_deletion(Socket, Timeout, PartId, KeyLength, BodyLength) ->
     case gen_tcp:recv(Socket, BodyLength, Timeout) of
     {ok, Body} ->
@@ -357,27 +350,24 @@ receive_snapshot_deletion(Socket, Timeout, PartId, KeyLength, BodyLength) ->
          },
          {Seq, Doc, PartId};
     {error, closed} ->
-        io:format("vmx: closed3~n", [])
+        {error, closed}
     end.
 
-% XXX vmx: 2014-01-24: The 'ok' comes from the io:format/2. This will be
-% cleaned up at a later stage, for now only the specs are added.
--spec receive_stream_end(socket(), timeout(), size()) -> ok | {ok, <<_:32>>}.
+-spec receive_stream_end(socket(), timeout(), size()) ->
+                                {ok, <<_:32>>} | {error, closed}.
 receive_stream_end(Socket, Timeout, BodyLength) ->
     case gen_tcp:recv(Socket, BodyLength, Timeout) of
     {ok, Flag} ->
         Flag;
     {error, closed} ->
-        io:format("vmx: closed4~n", [])
+        {error, closed}
     end.
 
 
 % Returns the failover log as a list 2-tuple pairs with
 % partition UUID and sequence number
-% XXX vmx: 2014-01-24: The 'ok' comes from the io:format/2. This will be
-% cleaned up at a later stage, for now only the specs are added.
 -spec receive_failover_log(socket(), timeout(), size()) ->
-                                  ok | {ok, partition_version()}.
+                                  {ok, partition_version()} | {error, closed}.
 receive_failover_log(_Socket, _Timeout, 0) ->
     {error, no_failover_log_found};
 receive_failover_log(Socket, Timeout, BodyLength) ->
@@ -385,7 +375,7 @@ receive_failover_log(Socket, Timeout, BodyLength) ->
     {ok, Body} ->
         parse_failover_log(Body);
     {error, closed} ->
-        io:format("vmx: closed6~n", [])
+        {error, closed}
     end.
 
 
@@ -411,7 +401,6 @@ receive_stats(Socket, Timeout, Acc) ->
             {ok, lists:reverse(Acc)}
         end;
     {error, closed} ->
-        io:format("vmx: closed7~n", []),
         {error, closed}
     end.
 
@@ -425,7 +414,6 @@ receive_stat(Socket, Timeout, Status, BodyLength, KeyLength) ->
     {ok, Body} ->
         parse_stat(Body, Status, KeyLength, BodyLength - KeyLength);
     {error, closed} ->
-        io:format("vmx: closed8~n", []),
         {error, closed}
     end.
 

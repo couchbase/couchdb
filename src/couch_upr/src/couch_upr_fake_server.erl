@@ -289,7 +289,8 @@ parse_header(<<?UPR_MAGIC_REQUEST,
 
 
 % XXX vmx: 2014-01-24: Proper logging/error handling is missing
--spec handle_open_connection_body(socket(), size(), request_id()) -> ok.
+-spec handle_open_connection_body(socket(), size(), request_id()) ->
+                                         ok | {error, closed}.
 handle_open_connection_body(Socket, BodyLength, RequestId) ->
     case gen_tcp:recv(Socket, BodyLength) of
     {ok, <<_SeqNo:?UPR_SIZES_SEQNO,
@@ -298,11 +299,11 @@ handle_open_connection_body(Socket, BodyLength, RequestId) ->
         OpenConnection = encode_open_connection(RequestId),
         ok = gen_tcp:send(Socket, OpenConnection);
     {error, closed} ->
-        io:format("vmx: closed6~n", [])
+        {error, closed}
     end.
 
 -spec handle_stream_request_body(socket(), size(), request_id(),
-                                 partition_id()) -> ok.
+                                 partition_id()) -> ok | {error, closed}.
 handle_stream_request_body(Socket, BodyLength, RequestId, PartId) ->
     case gen_tcp:recv(Socket, BodyLength) of
     {ok, <<_Flags:?UPR_SIZES_FLAGS,
@@ -325,7 +326,9 @@ handle_stream_request_body(Socket, BodyLength, RequestId, PartId) ->
             false ->
                 send_error(Socket, RequestId, ?UPR_STATUS_KEY_NOT_FOUND)
             end
-        end
+        end;
+    {error, closed} ->
+        {error, closed}
     end.
 
 -spec send_ok_or_error(socket(), request_id(), partition_id(), update_seq(),
@@ -438,13 +441,13 @@ handle_stats_body(Socket, BodyLength, RequestId) ->
             end
         end;
     {error, closed} ->
-        io:format("vmx: closed7~n", []),
         {error, closed}
     end.
 
 
 % XXX vmx: 2014-01-24: Proper logging/error handling is missing
--spec handle_sasl_auth_body(socket(), size(), request_id()) -> ok.
+-spec handle_sasl_auth_body(socket(), size(), request_id()) ->
+                                   ok | {error, closed}.
 handle_sasl_auth_body(Socket, BodyLength, RequestId) ->
     case gen_tcp:recv(Socket, BodyLength) of
     % NOTE vmx 2014-01-10: Currently there's no real authentication
@@ -454,7 +457,7 @@ handle_sasl_auth_body(Socket, BodyLength, RequestId) ->
         Authenticated = encode_sasl_auth(RequestId),
         ok = gen_tcp:send(Socket, Authenticated);
     {error, closed} ->
-        io:format("vmx: closed8~n", [])
+        {error, closed}
     end.
 
 
