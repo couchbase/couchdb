@@ -10,6 +10,9 @@
 % License for the specific language governing permissions and limitations under
 % the License.
 
+% TODO vmx 2014-01-24: get rid of #doc{}, with UPR it doesn't need to be tied
+% to the original #doc{} record
+
 -module(couch_upr).
 -behaviour(gen_server).
 
@@ -37,17 +40,6 @@
     data = <<>>            :: binary()
 }).
 
--record(mutation, {
-    seq = 0         :: update_seq(),
-    rev_seq = 0     :: non_neg_integer(),
-    flags = 0       :: non_neg_integer(),
-    expiration = 0  :: non_neg_integer(),
-    locktime = 0    :: non_neg_integer(),
-    key = <<>>      :: binary(),
-    value = <<>>    :: binary(),
-    metadata = <<>> :: binary()
-}).
-
 
 % Public API
 
@@ -71,7 +63,7 @@ enum_docs_since(Pid, PartId, [PartVersion|PartVersions], StartSeq, EndSeq,
         InFun, InAcc) ->
     RequestId = gen_server:call(Pid, get_request_id),
     {Socket, Timeout} = gen_server:call(Pid, get_socket_and_timeout),
-    StreamRequest = encode_stream_request(
+    StreamRequest = couch_upr_consumer:encode_stream_request(
         PartId, RequestId, 0, StartSeq, EndSeq, PartVersion),
     ok = gen_tcp:send(Socket, StreamRequest),
     Result = receive_single_snapshot(Socket, Timeout, InFun, {nil, InAcc}),
@@ -102,7 +94,8 @@ enum_docs_since(Pid, PartId, [PartVersion|PartVersions], StartSeq, EndSeq,
 get_sequence_number(Pid, PartId) ->
     RequestId = gen_server:call(Pid, get_request_id),
     {Socket, Timeout} = gen_server:call(Pid, get_socket_and_timeout),
-    SeqStatRequest = encode_seq_stat_request(PartId, RequestId),
+    SeqStatRequest = couch_upr_consumer:encode_seq_stat_request(
+        PartId, RequestId),
     ok = gen_tcp:send(Socket, SeqStatRequest),
     case receive_stats(Socket, Timeout, []) of
     {ok, [{error, {?UPR_STATUS_NOT_MY_VBUCKET, _}}]} ->
@@ -123,11 +116,12 @@ get_sequence_number(Pid, PartId) ->
 get_failover_log(Pid, PartId) ->
     RequestId = gen_server:call(Pid, get_request_id),
     {Socket, Timeout} = gen_server:call(Pid, get_socket_and_timeout),
-    FailoverLogRequest = encode_failover_log_request(PartId, RequestId),
+    FailoverLogRequest = couch_upr_consumer:encode_failover_log_request(
+        PartId, RequestId),
     ok = gen_tcp:send(Socket, FailoverLogRequest),
     case gen_tcp:recv(Socket, ?UPR_HEADER_LEN, Timeout) of
     {ok, Header} ->
-        case parse_header(Header) of
+        case couch_upr_consumer:parse_header(Header) of
         {failover_log, ?UPR_STATUS_OK, RequestId, BodyLength} ->
             receive_failover_log(Socket, Timeout, BodyLength);
         {failover_log, Status, RequestId, 0} ->
@@ -168,11 +162,12 @@ sasl_auth(Bucket, State) ->
         timeout = UprTimeout,
         request_id = RequestId
     } = State,
-    Authenticate = encode_sasl_auth(Bucket, RequestId),
+    Authenticate = couch_upr_consumer:encode_sasl_auth(Bucket, RequestId),
     ok = gen_tcp:send(Socket, Authenticate),
     case gen_tcp:recv(Socket, ?UPR_HEADER_LEN, UprTimeout) of
     {ok, Header} ->
-        {sasl_auth, Status, RequestId, BodyLength} = parse_header(Header),
+        {sasl_auth, Status, RequestId, BodyLength} =
+            couch_upr_consumer:parse_header(Header),
         % Receive the body so that it is not mangled with the next request,
         % we care about the status only though
         {ok, _} = gen_tcp:recv(Socket, BodyLength, UprTimeout),
@@ -191,11 +186,12 @@ open_connection(Name, State) ->
         timeout = UprTimeout,
         request_id = RequestId
     } = State,
-    OpenConnection = encode_open_connection(Name, RequestId),
+    OpenConnection = couch_upr_consumer:encode_open_connection(
+        Name, RequestId),
     ok = gen_tcp:send(Socket, OpenConnection),
     case gen_tcp:recv(Socket, ?UPR_HEADER_LEN, UprTimeout) of
     {ok, Header} ->
-        {open_connection, RequestId} = parse_header(Header)
+        {open_connection, RequestId} = couch_upr_consumer:parse_header(Header)
     end,
     State#state{
         request_id = RequestId + 1
@@ -249,7 +245,7 @@ code_change(_OldVsn, State, _Extra) ->
 receive_single_snapshot(Socket, Timeout, MutationFun, Acc) ->
     case gen_tcp:recv(Socket, ?UPR_HEADER_LEN, Timeout) of
     {ok, Header} ->
-        case parse_header(Header) of
+        case couch_upr_consumer:parse_header(Header) of
         {stream_request, Status, _RequestId, BodyLength} ->
             case Status of
             ?UPR_STATUS_OK ->
@@ -304,8 +300,9 @@ receive_snapshot_mutation(Socket, Timeout, PartId, KeyLength, BodyLength,
         ExtraLength) ->
     case gen_tcp:recv(Socket, BodyLength, Timeout) of
     {ok, Body} ->
-         {snapshot_mutation, Mutation} = parse_snapshot_mutation(
-             KeyLength, Body, BodyLength, ExtraLength),
+         {snapshot_mutation, Mutation} =
+             couch_upr_consumer:parse_snapshot_mutation(KeyLength, Body,
+                 BodyLength, ExtraLength),
          % XXX vmx 2013-08-23: For now, queue in items in the way the current
          %     updater expects them. This can be changed later to a simpler
          %     format.
@@ -336,7 +333,8 @@ receive_snapshot_mutation(Socket, Timeout, PartId, KeyLength, BodyLength,
 receive_snapshot_deletion(Socket, Timeout, PartId, KeyLength, BodyLength) ->
     case gen_tcp:recv(Socket, BodyLength, Timeout) of
     {ok, Body} ->
-         {snapshot_deletion, Deletion} = parse_snapshot_deletion(KeyLength, Body),
+         {snapshot_deletion, Deletion} =
+             couch_upr_consumer:parse_snapshot_deletion(KeyLength, Body),
          % XXX vmx 2013-08-23: For now, queue in items in the way the current
          %     updater expects them. This can be changed later to a simpler
          %     format.
@@ -373,7 +371,7 @@ receive_failover_log(_Socket, _Timeout, 0) ->
 receive_failover_log(Socket, Timeout, BodyLength) ->
     case gen_tcp:recv(Socket, BodyLength, Timeout) of
     {ok, Body} ->
-        parse_failover_log(Body);
+        couch_upr_consumer:parse_failover_log(Body);
     {error, closed} ->
         {error, closed}
     end.
@@ -386,7 +384,7 @@ receive_failover_log(Socket, Timeout, BodyLength) ->
 receive_stats(Socket, Timeout, Acc) ->
     case gen_tcp:recv(Socket, ?UPR_HEADER_LEN, Timeout) of
     {ok, Header} ->
-        case parse_header(Header) of
+        case couch_upr_consumer:parse_header(Header) of
         {stats, Status, _RequestId, BodyLength, KeyLength} when
                 BodyLength > 0 ->
             {ok, Stat} = receive_stat(
@@ -412,282 +410,8 @@ receive_stats(Socket, Timeout, Acc) ->
 receive_stat(Socket, Timeout, Status, BodyLength, KeyLength) ->
     case gen_tcp:recv(Socket, BodyLength, Timeout) of
     {ok, Body} ->
-        parse_stat(Body, Status, KeyLength, BodyLength - KeyLength);
+        couch_upr_consumer:parse_stat(
+            Body, Status, KeyLength, BodyLength - KeyLength);
     {error, closed} ->
         {error, closed}
     end.
-
-
-% TODO vmx 2013-08-22: Bad match error handling
--spec parse_header(<<_:192>>) ->
-                          {atom(), size()} |
-                          {atom(), upr_status(), request_id(), size()} |
-                          {atom(), upr_status(), request_id(), size(),
-                           size()} |
-                          {atom(), partition_id(), request_id()} |
-                          {atom(), partition_id(), request_id(), size()} |
-                          {atom(), partition_id(), request_id(), size(),
-                           size()} |
-                          {atom(), partition_id(), request_id(), size(),
-                           size(), size()}.
-parse_header(<<?UPR_MAGIC_RESPONSE,
-               Opcode,
-               KeyLength:?UPR_SIZES_KEY_LENGTH,
-               _ExtraLength,
-               0,
-               Status:?UPR_SIZES_STATUS,
-               BodyLength:?UPR_SIZES_BODY,
-               RequestId:?UPR_SIZES_OPAQUE,
-               _Cas:?UPR_SIZES_CAS>>) ->
-    case Opcode of
-    ?UPR_OPCODE_STREAM_REQUEST ->
-        {stream_request, Status, RequestId, BodyLength};
-    ?UPR_OPCODE_OPEN_CONNECTION ->
-        {open_connection, RequestId};
-    ?UPR_OPCODE_FAILOVER_LOG_REQUEST ->
-        {failover_log, Status, RequestId, BodyLength};
-    ?UPR_OPCODE_STATS ->
-        {stats, Status, RequestId, BodyLength, KeyLength};
-    ?UPR_OPCODE_SASL_AUTH ->
-        {sasl_auth, Status, RequestId, BodyLength}
-    end;
-parse_header(<<?UPR_MAGIC_REQUEST,
-               Opcode,
-               KeyLength:?UPR_SIZES_KEY_LENGTH,
-               ExtraLength,
-               _DataType,
-               PartId:?UPR_SIZES_PARTITION,
-               BodyLength:?UPR_SIZES_BODY,
-               RequestId:?UPR_SIZES_OPAQUE,
-               _Cas:?UPR_SIZES_CAS>>) ->
-    case Opcode of
-    ?UPR_OPCODE_STREAM_END ->
-        {stream_end, PartId, RequestId, BodyLength};
-    ?UPR_OPCODE_SNAPSHOT_MARKER ->
-        {snapshot_marker, PartId, RequestId};
-    ?UPR_OPCODE_MUTATION ->
-        {snapshot_mutation, PartId, RequestId, KeyLength, BodyLength,
-            ExtraLength};
-    ?UPR_OPCODE_DELETION ->
-        {snapshot_deletion, PartId, RequestId, KeyLength, BodyLength}
-    end.
-
--spec parse_snapshot_mutation(size(), binary(), size(), size()) ->
-                                     {snapshot_mutation, #mutation{}}.
-parse_snapshot_mutation(KeyLength, Body, BodyLength, ExtraLength) ->
-    <<Seq:?UPR_SIZES_BY_SEQ,
-      RevSeq:?UPR_SIZES_REV_SEQ,
-      Flags:?UPR_SIZES_FLAGS,
-      Expiration:?UPR_SIZES_EXPIRATION,
-      LockTime:?UPR_SIZES_LOCK,
-      MetadataLength:?UPR_SIZES_METADATA_LENGTH,
-      _Nru:?UPR_SIZES_NRU_LENGTH,
-      Key:KeyLength/binary,
-      Rest/binary>> = Body,
-    ValueLength = BodyLength - ExtraLength - KeyLength - MetadataLength,
-    <<Value:ValueLength/binary,
-      Metadata:MetadataLength/binary>> = Rest,
-    {snapshot_mutation, #mutation{
-        seq = Seq,
-        rev_seq = RevSeq,
-        flags = Flags,
-        expiration = Expiration,
-        locktime = LockTime,
-        key = Key,
-        value = Value,
-        metadata = Metadata
-    }}.
-
--spec parse_snapshot_deletion(size(), binary()) ->
-                                     {snapshot_deletion,
-                                      {update_seq(), non_neg_integer(),
-                                       binary(), binary()}}.
-parse_snapshot_deletion(KeyLength, Body) ->
-    % XXX vmx 2014-01-07: No metadata support for now. Make it so it breaks
-    % once it's there.
-    MetadataLength = 0,
-    <<Seq:?UPR_SIZES_BY_SEQ,
-      RevSeq:?UPR_SIZES_REV_SEQ,
-      MetadataLength:?UPR_SIZES_METADATA_LENGTH,
-      Key:KeyLength/binary,
-      Metadata:MetadataLength/binary>> = Body,
-    {snapshot_deletion, {Seq, RevSeq, Key, Metadata}}.
-
-
--spec parse_failover_log(binary(), partition_version()) ->
-                                {ok, partition_version()}.
-parse_failover_log(Body) ->
-    parse_failover_log(Body, []).
-parse_failover_log(<<>>, Acc) ->
-    {ok, lists:reverse(Acc)};
-parse_failover_log(<<PartUuid:?UPR_SIZES_PARTITION_UUID/integer,
-                     PartSeq:?UPR_SIZES_BY_SEQ,
-                     Rest/binary>>,
-                   Acc) ->
-    parse_failover_log(Rest, [{PartUuid, PartSeq}|Acc]).
-
-
--spec parse_stat(binary(), upr_status(), size(), size()) ->
-                        {ok, {binary(), binary()} |
-                         {error, {upr_status(), binary()}}}.
-parse_stat(Body, Status, 0, _ValueLength) ->
-    {ok, {error, {Status, Body}}};
-parse_stat(Body, ?UPR_STATUS_OK, KeyLength, ValueLength) ->
-    <<Key:KeyLength/binary, Value:ValueLength/binary>> = Body,
-    {ok, {Key, Value}}.
-
-
--spec encode_sasl_auth(binary(), request_id()) -> binary().
-encode_sasl_auth(Bucket, RequestId) ->
-    AuthType = <<"PLAIN">>,
-    Body = <<AuthType/binary, $\0,
-             Bucket/binary, $\0, $\0>>,
-
-    KeyLength = byte_size(AuthType),
-    BodyLength = byte_size(Body),
-    ExtraLength = 0,
-
-    Header = <<?UPR_MAGIC_REQUEST,
-               ?UPR_OPCODE_SASL_AUTH,
-               KeyLength:?UPR_SIZES_KEY_LENGTH,
-               ExtraLength,
-               0,
-               0:?UPR_SIZES_PARTITION,
-               BodyLength:?UPR_SIZES_BODY,
-               RequestId:?UPR_SIZES_OPAQUE,
-               0:?UPR_SIZES_CAS>>,
-    <<Header/binary, Body/binary>>.
-
-%UPR_OPEN command
-%Field        (offset) (value)
-%Magic        (0)    : 0x80
-%Opcode       (1)    : 0x50
-%Key length   (2,3)  : 0x0018
-%Extra length (4)    : 0x08
-%Data type    (5)    : 0x00
-%Vbucket      (6,7)  : 0x0000
-%Total body   (8-11) : 0x00000020
-%Opaque       (12-15): 0x00000001
-%CAS          (16-23): 0x0000000000000000
-%  seqno      (24-27): 0x00000000
-%  flags      (28-31): 0x00000000 (consumer)
-%Key          (32-55): bucketstream vb[100-105]
--spec encode_open_connection(binary(), request_id()) -> binary().
-encode_open_connection(Name, RequestId) ->
-    Body = <<0:?UPR_SIZES_SEQNO,
-             ?UPR_FLAG_PRODUCER:?UPR_SIZES_FLAGS,
-             Name/binary>>,
-
-    KeyLength = byte_size(Name),
-    BodyLength = byte_size(Body),
-    ExtraLength = BodyLength - KeyLength,
-
-    Header = <<?UPR_MAGIC_REQUEST,
-               ?UPR_OPCODE_OPEN_CONNECTION,
-               KeyLength:?UPR_SIZES_KEY_LENGTH,
-               ExtraLength,
-               0,
-               0:?UPR_SIZES_PARTITION,
-               BodyLength:?UPR_SIZES_BODY,
-               RequestId:?UPR_SIZES_OPAQUE,
-               0:?UPR_SIZES_CAS>>,
-    <<Header/binary, Body/binary>>.
-
-%UPR_STREAM_REQ command
-%Field        (offset) (value)
-%Magic        (0)    : 0x80
-%Opcode       (1)    : 0x53
-%Key length   (2,3)  : 0x0000
-%Extra length (4)    : 0x28
-%Data type    (5)    : 0x00
-%Vbucket      (6,7)  : 0x0000
-%Total body   (8-11) : 0x00000028
-%Opaque       (12-15): 0x00001000
-%CAS          (16-23): 0x0000000000000000
-%  flags      (24-27): 0x00000000
-%  reserved   (28-31): 0x00000000
-%  start seqno(32-39): 0x0000000000ffeedd
-%  end seqno  (40-47): 0xffffffffffffffff
-%  vb UUID    (48-55): 0x00000000feeddeca
-%  high seqno (56-63): 0x0000000000000000
--spec encode_stream_request(partition_id(), request_id(), non_neg_integer(),
-                            update_seq(), update_seq(),
-                            {uuid(), update_seq()}) -> binary().
-encode_stream_request(PartId, RequestId, Flags, StartSeq, EndSeq,
-        {PartUuid, PartHighSeq}) ->
-    Body = <<Flags:?UPR_SIZES_FLAGS,
-             0:?UPR_SIZES_RESERVED,
-             StartSeq:?UPR_SIZES_BY_SEQ,
-             EndSeq:?UPR_SIZES_BY_SEQ,
-             PartUuid:?UPR_SIZES_PARTITION_UUID/integer,
-             PartHighSeq:?UPR_SIZES_BY_SEQ>>,
-
-    BodyLength = byte_size(Body),
-    ExtraLength = BodyLength,
-
-    Header = <<?UPR_MAGIC_REQUEST,
-               ?UPR_OPCODE_STREAM_REQUEST,
-               0:?UPR_SIZES_KEY_LENGTH,
-               ExtraLength,
-               0,
-               PartId:?UPR_SIZES_PARTITION,
-               BodyLength:?UPR_SIZES_BODY,
-               RequestId:?UPR_SIZES_OPAQUE,
-               0:?UPR_SIZES_CAS>>,
-    <<Header/binary, Body/binary>>.
-
-
-%UPR_GET_FAILOVER_LOG command
-%Field        (offset) (value)
-%Magic        (0)    : 0x80
-%Opcode       (1)    : 0x54
-%Key length   (2,3)  : 0x0000
-%Extra length (4)    : 0x00
-%Data type    (5)    : 0x00
-%Vbucket      (6,7)  : 0x0000
-%Total body   (8-11) : 0x00000000
-%Opaque       (12-15): 0xdeadbeef
-%CAS          (16-23): 0x0000000000000000
--spec encode_failover_log_request(partition_id(), request_id()) -> binary().
-encode_failover_log_request(PartId, RequestId) ->
-    Header = <<?UPR_MAGIC_REQUEST,
-               ?UPR_OPCODE_FAILOVER_LOG_REQUEST,
-               0:?UPR_SIZES_KEY_LENGTH,
-               0,
-               0,
-               PartId:?UPR_SIZES_PARTITION,
-               0:?UPR_SIZES_BODY,
-               RequestId:?UPR_SIZES_OPAQUE,
-               0:?UPR_SIZES_CAS>>,
-    <<Header/binary>>.
-
-
-%Field        (offset) (value)
-%Magic        (0)    : 0x80
-%Opcode       (1)    : 0x10
-%Key length   (2,3)  : 0x000e
-%Extra length (4)    : 0x00
-%Data type    (5)    : 0x00
-%VBucket      (6,7)  : 0x0001
-%Total body   (8-11) : 0x0000000e
-%Opaque       (12-15): 0x00000000
-%CAS          (16-23): 0x0000000000000000
-%Key                 : vbucket-seqno 1
--spec encode_seq_stat_request(partition_id(), request_id()) -> binary().
-encode_seq_stat_request(PartId, RequestId) ->
-    Body = <<"vbucket-seqno ",
-        (list_to_binary(integer_to_list(PartId)))/binary>>,
-
-    KeyLength = BodyLength = byte_size(Body),
-    ExtraLength = 0,
-
-    Header = <<?UPR_MAGIC_REQUEST,
-               ?UPR_OPCODE_STATS,
-               KeyLength:?UPR_SIZES_KEY_LENGTH,
-               ExtraLength,
-               0,
-               PartId:?UPR_SIZES_PARTITION,
-               BodyLength:?UPR_SIZES_BODY,
-               RequestId:?UPR_SIZES_OPAQUE,
-               0:?UPR_SIZES_CAS>>,
-    <<Header/binary, Body/binary>>.

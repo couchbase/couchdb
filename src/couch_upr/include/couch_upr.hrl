@@ -72,3 +72,15 @@
 -type partition_version()        :: [{uuid(), update_seq()}].
 % Manipulate via ordsets or orddict, keep it ordered by partition id.
 -type partition_versions()       :: ordsets:ordset({partition_id(), partition_version()}).
+
+
+-record(mutation, {
+    seq = 0         :: update_seq(),
+    rev_seq = 0     :: non_neg_integer(),
+    flags = 0       :: non_neg_integer(),
+    expiration = 0  :: non_neg_integer(),
+    locktime = 0    :: non_neg_integer(),
+    key = <<>>      :: binary(),
+    value = <<>>    :: binary(),
+    metadata = <<>> :: binary()
+}).
