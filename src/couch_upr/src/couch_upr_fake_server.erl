@@ -179,7 +179,7 @@ handle_call({get_failover_log, PartId}, _From, State) ->
     {ok, FailoverLog} ->
         ok;
     error ->
-        FailoverLog = [{<<"initial0">>, 0}]
+        FailoverLog = [{0, 0}]
     end,
     {reply, FailoverLog, State};
 
@@ -310,7 +310,7 @@ handle_stream_request_body(Socket, BodyLength, RequestId, PartId) ->
            _Reserved:?UPR_SIZES_RESERVED,
            StartSeq:?UPR_SIZES_BY_SEQ,
            EndSeq:?UPR_SIZES_BY_SEQ,
-           PartUuid:(?UPR_SIZES_PARTITION_UUID div 8)/binary,
+           PartUuid:?UPR_SIZES_PARTITION_UUID/integer,
            PartHighSeq:?UPR_SIZES_BY_SEQ>>} ->
         FailoverLog = get_failover_log(PartId),
         case StartSeq > EndSeq of
@@ -425,7 +425,8 @@ handle_stats_body(Socket, BodyLength, RequestId) ->
                 UuidKey = <<"vb_", PartId0/binary ,"_vb_uuid">>,
                 FailoverLog = get_failover_log(PartId),
                 {UuidValue, _} = hd(FailoverLog),
-                UuidStat = encode_stat(RequestId, UuidKey, UuidValue),
+                UuidStat = encode_stat(
+                    RequestId, UuidKey, <<UuidValue:64/integer>>),
                 ok = gen_tcp:send(Socket, UuidStat),
 
                 EndStat = encode_stat(RequestId, <<>>, <<>>),
@@ -800,7 +801,8 @@ encode_failover_log(RequestId, FailoverLog) ->
 -spec failover_log_to_bin(partition_version()) ->
                                  {non_neg_integer(), binary()}.
 failover_log_to_bin(FailoverLog) ->
-    FailoverLogBin = [[Uuid, <<Seq:64>>] || {Uuid, Seq} <- FailoverLog],
+    FailoverLogBin = [[<<Uuid:64/integer>>, <<Seq:64>>] ||
+                         {Uuid, Seq} <- FailoverLog],
     Value = list_to_binary(FailoverLogBin),
     {byte_size(Value), Value}.
 

@@ -65,9 +65,10 @@
 -type socket()     :: port().
 
 % Those types are duplicates from couch_set_view.hrl
+-type uint64()                   :: 0..18446744073709551615.
 -type partition_id()             :: non_neg_integer().
 -type update_seq()               :: non_neg_integer().
--type uuid()                     :: <<_:64>>.
+-type uuid()                     :: uint64().
 -type partition_version()        :: [{uuid(), update_seq()}].
 % Manipulate via ordsets or orddict, keep it ordered by partition id.
 -type partition_versions()       :: ordsets:ordset({partition_id(), partition_version()}).

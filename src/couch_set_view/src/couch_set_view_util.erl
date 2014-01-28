@@ -522,7 +522,7 @@ partition_versions_to_bin([{P, F} | Rest], Acc0) ->
 failoverlog_to_bin([], Acc) ->
     Acc;
 failoverlog_to_bin([{Uuid, Seq}| Rest], Acc) ->
-    failoverlog_to_bin(Rest, <<Acc/binary, Uuid:8/binary, Seq:64>>).
+    failoverlog_to_bin(Rest, <<Acc/binary, Uuid:64/integer, Seq:64>>).
 
 
 bin_to_pending_trans(<<NumActive:16, Rest/binary>>) ->
@@ -577,7 +577,7 @@ bin_to_partition_versions(Count, <<P:16, NumFailoverLog:16, Rest0/binary>>,
 
 bin_to_failoverlog(0, Rest, Acc) ->
     {lists:reverse(Acc), Rest};
-bin_to_failoverlog(Count, <<Uuid:8/binary, Seq:64, Rest/binary>>, Acc) ->
+bin_to_failoverlog(Count, <<Uuid:64/integer, Seq:64, Rest/binary>>, Acc) ->
     bin_to_failoverlog(Count - 1, Rest, [{Uuid, Seq} | Acc]).
 
 

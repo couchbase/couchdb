@@ -43,8 +43,7 @@ test() ->
     % Populate failover log
     FailoverLogs = lists:map(fun(PartId) ->
         FailoverLog = [
-            {<<"abcdefgh">>, PartId + 3}, {<<"b123xfqw">>, PartId + 2},
-            {<<"ccddeeff">>, 0}],
+            {10001, PartId + 3}, {10002, PartId + 2}, {10003, 0}],
         couch_upr_fake_server:set_failover_log(PartId, FailoverLog),
         FailoverLog
     end, lists:seq(0, num_set_partitions() - 1)),
@@ -104,7 +103,7 @@ test() ->
 
 
     Error = couch_upr:enum_docs_since(
-        Pid, 1, [{<<"wrong123">>, 1243}], 46, 165, TestFun, []),
+        Pid, 1, [{4455667788, 1243}], 46, 165, TestFun, []),
     etap:is(Error, {rollback, 0},
         "Correct error for wrong failover log"),
 
@@ -126,14 +125,13 @@ test() ->
 
     % Test with too large failover log
 
-    TooLargeFailoverLog = lists:map(fun(I) ->
-        {list_to_binary(string:right(integer_to_list(I), 8, $a)), I}
-    end, lists:seq(0, ?UPR_MAX_FAILOVER_LOG_SIZE)),
+    TooLargeFailoverLog = [{I, I} ||
+        I <- lists:seq(0, ?UPR_MAX_FAILOVER_LOG_SIZE)],
     PartId = 1,
     couch_upr_fake_server:set_failover_log(PartId, TooLargeFailoverLog),
     etap:throws_ok(
       fun() -> couch_upr:enum_docs_since(
-          Pid, PartId, [{<<"aaaaaaa0">>, 0}], 0, 100, TestFun, []) end,
+          Pid, PartId, [{0, 0}], 0, 100, TestFun, []) end,
       {error, <<"Failover log contains too many entries">>},
       "Throw exception when failover contains too many items"),
 

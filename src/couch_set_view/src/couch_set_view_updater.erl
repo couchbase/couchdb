@@ -454,7 +454,7 @@ load_changes_from_passive_parts_in_mailbox(
     receive
     {new_passive_partitions, Parts0} ->
         Parts = get_more_passive_partitions(Parts0),
-        AddPartVersions = [{P, [{<<0,0,0,0,0,0,0,0>>, 0}]} || P <- Parts],
+        AddPartVersions = [{P, [{0, 0}]} || P <- Parts],
         PartVersions = lists:ukeymerge(1, AddPartVersions, PartVersions0),
         ?LOG_INFO("Updater reading changes from new passive partitions ~w to "
                   "update ~s set view group `~s` from set `~s`",

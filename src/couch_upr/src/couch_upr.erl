@@ -520,7 +520,7 @@ parse_failover_log(Body) ->
     parse_failover_log(Body, []).
 parse_failover_log(<<>>, Acc) ->
     {ok, lists:reverse(Acc)};
-parse_failover_log(<<PartUuid:(?UPR_SIZES_PARTITION_UUID div 8)/binary,
+parse_failover_log(<<PartUuid:?UPR_SIZES_PARTITION_UUID/integer,
                      PartSeq:?UPR_SIZES_BY_SEQ,
                      Rest/binary>>,
                    Acc) ->
@@ -619,7 +619,7 @@ encode_stream_request(PartId, RequestId, Flags, StartSeq, EndSeq,
              0:?UPR_SIZES_RESERVED,
              StartSeq:?UPR_SIZES_BY_SEQ,
              EndSeq:?UPR_SIZES_BY_SEQ,
-             PartUuid:(?UPR_SIZES_PARTITION_UUID div 8)/binary,
+             PartUuid:?UPR_SIZES_PARTITION_UUID/integer,
              PartHighSeq:?UPR_SIZES_BY_SEQ>>,
 
     BodyLength = byte_size(Body),

@@ -57,8 +57,7 @@ test() ->
         has_replica = true,
         replicas_on_transfer = [600, 701, 702],
         unindexable_seqs = [{510, 1048576}, {511, 1048576012}, {512, 321}],
-        partition_versions = [
-            {1, [{<<"abcdefgh">>, 123}, {<<"ijklmnop">>, 76}]}]
+        partition_versions = [{1, [{1122334455, 123}, {66778899, 76}]}]
     },
     Group1 = #set_view_group{
         sig = couch_util:md5(<<"foobar_1">>),
@@ -87,8 +86,7 @@ test() ->
             active = [60],
             passive = [61, 62, 63]
         },
-        partition_versions = [{4, [{<<"ijklmnop">>, 87621}]},
-            {17, [{<<"qrstuvwx">>, 3713}]}]
+        partition_versions = [{4, [{445566, 87621}]}, {17, [{556677, 3713}]}]
     },
     Group2 = #set_view_group{
         sig = couch_util:md5(<<"foobar_2">>),

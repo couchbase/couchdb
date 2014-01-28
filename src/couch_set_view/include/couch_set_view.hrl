@@ -81,13 +81,14 @@
         end)).
 
 
+-type uint64()                   :: 0..18446744073709551615.
 -type partition_id()             :: non_neg_integer().
 -type staleness()                :: 'update_after' | 'ok' | 'false'.
 -type bitmask()                  :: non_neg_integer().
 -type bitmap()                   :: non_neg_integer().
 -type update_seq()               :: non_neg_integer().
 -type btree_state()              :: 'nil' | binary().
--type uuid()                     :: <<_:64>>.
+-type uuid()                     :: uint64().
 -type partition_seq()            :: {partition_id(), update_seq()}.
 % Manipulate via ordsets or orddict, keep it ordered by partition id.
 -type partition_seqs()           :: ordsets:ordset(partition_seq()).

@@ -468,7 +468,7 @@ handle_call({define_view, NumPartitions, ActiveList, ActiveBitmask,
     Seqs = lists:map(
         fun(PartId) -> {PartId, 0} end, PartitionsList),
     PartVersions = lists:map(
-        fun(PartId) -> {PartId, [{<<"notdefed">>, 0}]} end, PartitionsList),
+        fun(PartId) -> {PartId, [{0, 0}]} end, PartitionsList),
     #set_view_group{
         name = DDocId,
         index_header = Header
@@ -2419,8 +2419,7 @@ set_passive_partitions([PartId | Rest], Abitmask, Pbitmask, Seqs, Versions) ->
             set_passive_partitions(Rest, Abitmask, Pbitmask, Seqs, Versions);
         0 ->
             NewSeqs = lists:ukeymerge(1, [{PartId, 0}], Seqs),
-            NewVersions = lists:ukeymerge(
-                1, [{PartId, [{<<0,0,0,0,0,0,0,0>>, 0}]}], Versions),
+            NewVersions = lists:ukeymerge(1, [{PartId, [{0, 0}]}], Versions),
             set_passive_partitions(
                 Rest, Abitmask, Pbitmask bor PartMask, NewSeqs, NewVersions)
         end;
@@ -2450,8 +2449,7 @@ set_active_partitions([PartId | Rest], Abitmask, Pbitmask, Seqs, Versions) ->
             set_active_partitions(Rest, Abitmask, Pbitmask, Seqs, Versions);
         0 ->
             NewSeqs = lists:ukeymerge(1, Seqs, [{PartId, 0}]),
-            NewVersions = lists:ukeymerge(
-                1, [{PartId, [{<<0,0,0,0,0,0,0,0>>, 0}]}], Versions),
+            NewVersions = lists:ukeymerge(1, [{PartId, [{0, 0}]}], Versions),
             set_active_partitions(Rest, Abitmask bor PartMask, Pbitmask,
                 NewSeqs, NewVersions)
         end;

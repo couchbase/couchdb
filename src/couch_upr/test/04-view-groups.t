@@ -70,7 +70,7 @@ test_partition_versions_update() ->
         "Group failover log of partition 2 is the same as "
         "initial failover log"),
 
-    FailoverLog2 = InitialFailoverLog2 ++ [{<<"another1">>, 10}],
+    FailoverLog2 = InitialFailoverLog2 ++ [{222331, 10}],
     couch_upr_fake_server:set_failover_log(2, FailoverLog2),
     % Insert new docs so that the updater is run on the new query
     populate_set(num_docs() + 1, 2 * num_docs()),
@@ -99,9 +99,9 @@ test_rollback_different_heads() ->
 
     % Give the UPR server a failover log we can diverge from
     FailoverLog = [
-        {<<"cdefghij">>, (num_docs_pp() * 2)},
-        {<<"bcdefghi">>, num_docs_pp()},
-        {<<"abcdefgh">>, 0}],
+        {10001, (num_docs_pp() * 2)},
+        {10002, num_docs_pp()},
+        {10003, 0}],
 
     {ViewResultNoRollback, FailoverLogNoRollback} = rollback_different_heads(
         dont_force_a_rollback, FailoverLog),
@@ -142,7 +142,7 @@ rollback_different_heads(DoRollback, FailoverLog) ->
     force_a_rollback ->
         % Change the failover log on the server that is different from what
         % The client has, so that a rollback is needed
-        FailoverLog2 = [{<<"defghijk">>, num_docs_pp() + 10}] ++
+        FailoverLog2 = [{777888999, num_docs_pp() + 10}] ++
             tl(FailoverLog),
         couch_upr_fake_server:set_failover_log(PartId, FailoverLog2)
     end,
