@@ -75,7 +75,9 @@ parse_header(<<?UPR_MAGIC_REQUEST,
         {snapshot_mutation, PartId, RequestId, KeyLength, BodyLength,
             ExtraLength, Cas};
     ?UPR_OPCODE_DELETION ->
-        {snapshot_deletion, PartId, RequestId, KeyLength, BodyLength, Cas}
+        {snapshot_deletion, PartId, RequestId, KeyLength, BodyLength, Cas};
+    ?UPR_OPCODE_EXPIRATION ->
+        {snapshot_expiration, PartId, RequestId, KeyLength, BodyLength, Cas}
     end.
 
 -spec parse_snapshot_mutation(size(), binary(), size(), size()) ->

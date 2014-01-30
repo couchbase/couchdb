@@ -277,7 +277,13 @@ receive_single_snapshot(Socket, Timeout, MutationFun, Acc) ->
             MutationAcc2 = MutationFun(Mutation, MutationAcc),
             Acc2 = {FailoverLog, MutationAcc2},
             receive_single_snapshot(Socket, Timeout, MutationFun, Acc2);
-        {snapshot_deletion, PartId, _RequestId, KeyLength, BodyLength, Cas} ->
+        % For the indexer and XDCR there's no difference between a deletion
+        % end an expiration. In both cases the items should get removed.
+        % Hence the same code can be used after the initial header
+        % parsing (the body is the same).
+        {OpCode, PartId, _RequestId, KeyLength, BodyLength, Cas} when
+                OpCode =:= snapshot_deletion orelse
+                OpCode =:= snapshot_expiration ->
             Deletion = receive_snapshot_deletion(
                 Socket, Timeout, PartId, KeyLength, BodyLength, Cas),
             {FailoverLog, MutationAcc} = Acc,
@@ -339,6 +345,8 @@ receive_snapshot_deletion(Socket, Timeout, PartId, KeyLength, BodyLength,
          %     updater expects them. This can be changed later to a simpler
          %     format.
          {Seq, RevSeq, Key, _Metadata} = Deletion,
+         % XXX vmx 2013-08-23: Use correct CAS value
+         Cas = 0,
          Doc = #doc{
              id = Key,
              rev = {RevSeq, <<Cas:64, 0:32, 0:32>>},
