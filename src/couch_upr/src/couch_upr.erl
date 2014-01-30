@@ -269,16 +269,17 @@ receive_single_snapshot(Socket, Timeout, MutationFun, Acc) ->
         {snapshot_marker, _PartId, _RequestId} ->
             receive_single_snapshot(Socket, Timeout, MutationFun, Acc);
         {snapshot_mutation, PartId, _RequestId, KeyLength, BodyLength,
-                ExtraLength} ->
+                ExtraLength, Cas} ->
             Mutation = receive_snapshot_mutation(
-                Socket, Timeout, PartId, KeyLength, BodyLength, ExtraLength),
+                Socket, Timeout, PartId, KeyLength, BodyLength, ExtraLength,
+                Cas),
             {FailoverLog, MutationAcc} = Acc,
             MutationAcc2 = MutationFun(Mutation, MutationAcc),
             Acc2 = {FailoverLog, MutationAcc2},
             receive_single_snapshot(Socket, Timeout, MutationFun, Acc2);
-        {snapshot_deletion, PartId, _RequestId, KeyLength, BodyLength} ->
+        {snapshot_deletion, PartId, _RequestId, KeyLength, BodyLength, Cas} ->
             Deletion = receive_snapshot_deletion(
-                Socket, Timeout, PartId, KeyLength, BodyLength),
+                Socket, Timeout, PartId, KeyLength, BodyLength, Cas),
             {FailoverLog, MutationAcc} = Acc,
             MutationAcc2 = MutationFun(Deletion, MutationAcc),
             Acc2 = {FailoverLog, MutationAcc2},
@@ -293,11 +294,11 @@ receive_single_snapshot(Socket, Timeout, MutationFun, Acc) ->
 
 
 -spec receive_snapshot_mutation(socket(), timeout(), partition_id(), size(),
-                                size(), size()) ->
+                                size(), size(), uint64()) ->
                                        {update_seq(), #doc{}, partition_id()} |
                                        {error, closed}.
 receive_snapshot_mutation(Socket, Timeout, PartId, KeyLength, BodyLength,
-        ExtraLength) ->
+        ExtraLength, Cas) ->
     case gen_tcp:recv(Socket, BodyLength, Timeout) of
     {ok, Body} ->
          {snapshot_mutation, Mutation} =
@@ -314,8 +315,6 @@ receive_snapshot_mutation(Socket, Timeout, PartId, KeyLength, BodyLength,
              key = Key,
              value = Value
          } = Mutation,
-         % XXX vmx 2013-08-23: Use correct CAS value
-         Cas = 0,
          Doc = #doc{
              id = Key,
              rev = {RevSeq, <<Cas:64, Expiration:32, Flags:32>>},
@@ -327,10 +326,11 @@ receive_snapshot_mutation(Socket, Timeout, PartId, KeyLength, BodyLength,
     end.
 
 -spec receive_snapshot_deletion(socket(), timeout(), partition_id(), size(),
-                                size()) ->
+                                size(), uint64()) ->
                                        {update_seq(), #doc{}, partition_id()} |
                                        {error, closed}.
-receive_snapshot_deletion(Socket, Timeout, PartId, KeyLength, BodyLength) ->
+receive_snapshot_deletion(Socket, Timeout, PartId, KeyLength, BodyLength,
+        Cas) ->
     case gen_tcp:recv(Socket, BodyLength, Timeout) of
     {ok, Body} ->
          {snapshot_deletion, Deletion} =
@@ -339,8 +339,6 @@ receive_snapshot_deletion(Socket, Timeout, PartId, KeyLength, BodyLength) ->
          %     updater expects them. This can be changed later to a simpler
          %     format.
          {Seq, RevSeq, Key, _Metadata} = Deletion,
-         % XXX vmx 2013-08-23: Use correct CAS value
-         Cas = 0,
          Doc = #doc{
              id = Key,
              rev = {RevSeq, <<Cas:64, 0:32, 0:32>>},

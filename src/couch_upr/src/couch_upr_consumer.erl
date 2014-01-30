@@ -33,7 +33,9 @@
                           {atom(), partition_id(), request_id(), size(),
                            size()} |
                           {atom(), partition_id(), request_id(), size(),
-                           size(), size()}.
+                           size(), uint64()} |
+                          {atom(), partition_id(), request_id(), size(),
+                           size(), size(), uint64()}.
 parse_header(<<?UPR_MAGIC_RESPONSE,
                Opcode,
                KeyLength:?UPR_SIZES_KEY_LENGTH,
@@ -63,7 +65,7 @@ parse_header(<<?UPR_MAGIC_REQUEST,
                PartId:?UPR_SIZES_PARTITION,
                BodyLength:?UPR_SIZES_BODY,
                RequestId:?UPR_SIZES_OPAQUE,
-               _Cas:?UPR_SIZES_CAS>>) ->
+               Cas:?UPR_SIZES_CAS>>) ->
     case Opcode of
     ?UPR_OPCODE_STREAM_END ->
         {stream_end, PartId, RequestId, BodyLength};
@@ -71,9 +73,9 @@ parse_header(<<?UPR_MAGIC_REQUEST,
         {snapshot_marker, PartId, RequestId};
     ?UPR_OPCODE_MUTATION ->
         {snapshot_mutation, PartId, RequestId, KeyLength, BodyLength,
-            ExtraLength};
+            ExtraLength, Cas};
     ?UPR_OPCODE_DELETION ->
-        {snapshot_deletion, PartId, RequestId, KeyLength, BodyLength}
+        {snapshot_deletion, PartId, RequestId, KeyLength, BodyLength, Cas}
     end.
 
 -spec parse_snapshot_mutation(size(), binary(), size(), size()) ->
