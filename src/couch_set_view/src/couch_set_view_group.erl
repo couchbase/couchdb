@@ -1472,7 +1472,7 @@ terminate(Reason, #state{group = #set_view_group{sig = Sig} = Group} = State) ->
     catch couch_db_set:close(?db_set(State3)),
     couch_set_view_util:shutdown_wait(State3#state.cleaner_pid),
     couch_set_view_util:shutdown_wait(State3#state.updater_pid),
-    couch_set_view_util:shutdown_wait(State3#state.compactor_pid),
+    couch_util:shutdown_sync(State3#state.compactor_pid),
     couch_util:shutdown_sync(State3#state.compactor_file),
     couch_util:shutdown_sync(State3#state.replica_group),
     Group = State#state.group,
@@ -2754,7 +2754,7 @@ start_compactor(State, CompactFun) ->
 stop_compactor(#state{compactor_pid = nil} = State) ->
     State;
 stop_compactor(#state{compactor_pid = Pid, compactor_file = CompactFd} = State) ->
-    couch_set_view_util:shutdown_wait(Pid),
+    couch_util:shutdown_sync(Pid),
     couch_util:shutdown_sync(CompactFd),
     CompactFile = compact_file_name(State),
     ok = couch_file:delete(?root_dir(State), CompactFile),

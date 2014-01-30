@@ -142,44 +142,31 @@ compact_group(Group0, EmptyGroup, TmpDir, UpdaterPid, Owner, UserStatus) ->
     % For spatial, use erlang view compactor
     NewGroup = case Mod of
     spatial_view ->
-        Parent = self(),
-        ChildPid = spawn_link(fun() ->
-            FilterFun = case ?set_cbitmask(Group) of
-            0 ->
-                fun(_Kv) -> true end;
-            _ ->
-                fun({_Key, <<PartId:16, _/binary>>}) ->
-                    ((1 bsl PartId) band ?set_cbitmask(Group)) =:= 0
-                end
-            end,
+        FilterFun = case ?set_cbitmask(Group) of
+        0 ->
+            fun(_Kv) -> true end;
+        _ ->
+            fun({_Key, <<PartId:16, _/binary>>}) ->
+                ((1 bsl PartId) band ?set_cbitmask(Group)) =:= 0
+            end
+        end,
 
-            BeforeKVWriteFun = fun(KV, Acc) ->
-                {KV, update_task(Acc, 1)}
-            end,
+        BeforeKVWriteFun = fun(KV, Acc) ->
+            {KV, update_task(Acc, 1)}
+        end,
 
-            ok = couch_set_view_util:open_raw_read_fd(Group),
-            {NewViews, _} = lists:mapfoldl(fun({View, EmptyView}, Acc) ->
-                Mod:compact_view(Fd, View, EmptyView, FilterFun, BeforeKVWriteFun, Acc)
-            end, Acc1, lists:zip(Views, EmptyViews)),
-            ok = couch_set_view_util:close_raw_read_fd(Group),
-            Header = NewGroup0#set_view_group.index_header,
-            SpatialGroup0 = NewGroup0#set_view_group{
-                views = NewViews,
-                index_header = Header#set_view_index_header{
-                    view_states = [Mod:get_state(V#set_view.indexer) || V <- NewViews]
-                }
-            },
-            Parent ! {spatial_group, self(), SpatialGroup0}
-        end),
-
-        receive
-        % Handle force compactor stop
-        stop ->
-            couch_util:shutdown_sync(ChildPid),
-            exit(shutdown);
-        {spatial_group, ChildPid, SpatialGroup} ->
-            SpatialGroup
-        end;
+        ok = couch_set_view_util:open_raw_read_fd(Group),
+        {NewViews, _} = lists:mapfoldl(fun({View, EmptyView}, Acc) ->
+            Mod:compact_view(Fd, View, EmptyView, FilterFun, BeforeKVWriteFun, Acc)
+        end, Acc1, lists:zip(Views, EmptyViews)),
+        ok = couch_set_view_util:close_raw_read_fd(Group),
+        Header = NewGroup0#set_view_group.index_header,
+        NewGroup0#set_view_group{
+            views = NewViews,
+            index_header = Header#set_view_index_header{
+                view_states = [Mod:get_state(V#set_view.indexer) || V <- NewViews]
+            }
+        };
     mapreduce_view ->
         NewGroup0
     end,
@@ -410,19 +397,10 @@ compact_btrees_wait_loop(Port, Group, EmptyGroup, Acc0, ResultAcc) ->
             compact_btrees_wait_loop(Port, Group, EmptyGroup, Acc2, ResultAcc);
         {Port, {exit_status, 0}} ->
             {ok, {Group, ResultAcc}};
-        {Port, {exit_status, 1}} ->
-            ?LOG_INFO("Set view `~s`, ~s group `~s`, index compactor stopped successfully.",
-                       [SetName, Type, DDocId]),
-            exit(shutdown);
         {Port, {exit_status, Status}} ->
             throw({view_group_index_compactor_exit, Status});
         {Port, Error} ->
-            throw({view_group_index_compactor_error, Error});
-        stop ->
-            ?LOG_INFO("Set view `~s`, ~s group `~s`, sending stop message to index compactor.",
-                       [SetName, Type, DDocId]),
-            true = port_command(Port, "exit"),
-            compact_btrees_wait_loop(Port, Group, EmptyGroup, Acc, ResultAcc)
+            throw({view_group_index_compactor_error, Error})
         end;
     <<"Header Len : ", Data/binary>> ->
         % Read resulting group from stdout
