@@ -709,7 +709,7 @@ receive_group_header(Port, Len, HeaderAcc) ->
     _ ->
         receive
         {Port, {data, Data}} ->
-            receive_group_header(Port, Len, Data);
+            receive_group_header(Port, Len, iolist_to_binary([HeaderAcc, Data]));
         {Port, {exit_status, 0}} ->
             self() ! {Port, {exit_status, 0}},
             receive_group_header(Port, Len, HeaderAcc);
