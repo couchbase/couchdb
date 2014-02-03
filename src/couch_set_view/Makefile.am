@@ -69,7 +69,6 @@ test_files = \
     test/25-util-stats.t \
     test/26-multiple-reductions.t \
     test/27-dev-views.t \
-    test/27-database-purges.t \
     test/28-rollback.t
 
 compiled_files = \
