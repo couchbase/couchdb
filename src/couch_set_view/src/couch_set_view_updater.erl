@@ -235,6 +235,12 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
                 "stacktrace: ~p~n",
                 [SetName, Type, DDocId, Error, Stacktrace]),
             exit(Error)
+        end,
+        % Since updater progress stats is added from docloader,
+        % this process has to stay till updater has completed.
+        receive
+        updater_finished ->
+            ok
         end
     end),
 
@@ -254,6 +260,7 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
     _ ->
         ok
     end,
+    DocLoader ! updater_finished,
     exit(Result).
 
 
