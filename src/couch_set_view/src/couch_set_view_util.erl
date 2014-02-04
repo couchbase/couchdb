@@ -713,8 +713,8 @@ receive_group_header(Port, Len, HeaderAcc) ->
         {Port, {exit_status, 0}} ->
             self() ! {Port, {exit_status, 0}},
             receive_group_header(Port, Len, HeaderAcc);
-        Error ->
-            {error, Error, HeaderAcc}
+        {Port, Others} ->
+            {error, {Port, Others}, HeaderAcc}
         end
     end.
 
