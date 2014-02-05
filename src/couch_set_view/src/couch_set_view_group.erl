@@ -768,7 +768,7 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
                       " up to date - restarting updater",
                       [?set_name(State), ?type(State), ?category(State),
                        ?group_id(State)]),
-            couch_util:shutdown_sync(UpdaterPid);
+            couch_set_view_util:shutdown_wait(UpdaterPid);
         true ->
             ok
         end,
@@ -1204,6 +1204,7 @@ handle_info({'EXIT', Pid, {updater_finished, Result}}, #state{updater_pid = Pid}
             fd = BuildFile
         };
     false ->
+        ok = couch_file:refresh_eof(NewGroup0#set_view_group.fd),
         NewGroup = NewGroup0
     end,
     State2 = process_partial_update(State, NewGroup),
@@ -1283,7 +1284,8 @@ handle_info({'EXIT', Pid, {updater_error, {rollback, RollbackSeqs}}},
     State3 = start_updater(State2),
     {noreply, State3, ?GET_TIMEOUT(State3)};
 
-handle_info({'EXIT', Pid, {updater_error, Error}}, #state{updater_pid = Pid} = State) ->
+handle_info({'EXIT', Pid, {updater_error, Error}}, #state{updater_pid = Pid, group = Group} = State) ->
+    ok = couch_file:refresh_eof(Group#set_view_group.fd),
     ?LOG_ERROR("Set view `~s`, ~s (~s) group `~s`,"
                " received error from updater: ~p",
                [?set_name(State), ?type(State), ?category(State),
@@ -1412,8 +1414,8 @@ terminate(Reason, #state{group = #set_view_group{sig = Sig} = Group} = State) ->
     State2 = reply_all(State#state{update_listeners = Listeners2}, Reason),
     State3 = notify_pending_transition_waiters(State2, {shutdown, Reason}),
     catch couch_db_set:close(?db_set(State3)),
-    couch_util:shutdown_sync(State3#state.cleaner_pid),
-    couch_util:shutdown_sync(State3#state.updater_pid),
+    couch_set_view_util:shutdown_wait(State3#state.cleaner_pid),
+    couch_set_view_util:shutdown_wait(State3#state.updater_pid),
     couch_util:shutdown_sync(State3#state.compactor_pid),
     couch_util:shutdown_sync(State3#state.compactor_file),
     couch_util:shutdown_sync(State3#state.replica_group),
@@ -2779,7 +2781,7 @@ stop_updater(#state{updater_pid = Pid, initial_build = true} = State) when is_pi
               " wasted indexing time ~.3f seconds.",
               [?set_name(State), ?type(State), ?category(State),
                ?group_id(State), LostTime]),
-    couch_util:shutdown_sync(Pid),
+    couch_set_view_util:shutdown_wait(Pid),
     inc_util_stat(#util_stats.updater_interruptions, 1),
     inc_util_stat(#util_stats.wasted_indexing_time, LostTime),
     State#state{
@@ -2789,7 +2791,7 @@ stop_updater(#state{updater_pid = Pid, initial_build = true} = State) when is_pi
     };
 stop_updater(#state{updater_pid = Pid} = State) when is_pid(Pid) ->
     MRef = erlang:monitor(process, Pid),
-    exit(Pid, shutdown),
+    Pid ! stop,
     unlink(Pid),
     ?LOG_INFO("Stopping updater for set view `~s`, ~s (~s) group `~s`",
               [?set_name(State), ?type(State), ?category(State),
@@ -2802,6 +2804,7 @@ stop_updater(#state{updater_pid = Pid} = State) when is_pid(Pid) ->
         receive {'EXIT', Pid, _} -> ok after 0 -> ok end,
         after_updater_stopped(State2, Reason)
     end,
+    ok = couch_file:refresh_eof((State#state.group)#set_view_group.fd),
     erlang:demonitor(MRef, [flush]),
     NewState.
 

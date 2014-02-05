@@ -21,6 +21,10 @@
 
 -include("couch_db.hrl").
 
+% The metadata can now be extended with additional custom fields. But for
+% XDCR we only need the default ones.
+-define(DEFAULT_META_LEN, 16).
+
 
 init({MainPid, DbName, Filepath, Fd, Options}) ->
     process_flag(trap_exit, true),
@@ -403,7 +407,8 @@ btree_by_seq_split(#doc_info{id=Id, local_seq=Seq, rev={RevPos, RevId},
 
 btree_by_seq_join({<<Seq:48>>, Val}) ->
     <<SizeId:12,SizeBody:28,Deleted:1,Bp:47,RevPos0:48,Meta:8,
-        Id:SizeId/binary,RevId/binary>> = Val,
+        Id:SizeId/binary,RevId0/binary>> = Val,
+    RevId = binary_trim_max(RevId0, ?DEFAULT_META_LEN),
     % It is possible when upgrading from 1.8.x to 2.0.0 to create items
     % on disk with a revision number of 0, which is not a valid revision
     % number. We fix this on load here and in ep-engine.
@@ -424,7 +429,9 @@ btree_by_id_split(#doc_info{id=Id, local_seq=Seq, rev={RevPos,RevId},
     {Id, Val}.
 
 btree_by_id_join({Id, Bin}) ->
-    <<Seq:48,Size:32,DeletedBit:1,Bp:47,RevPos0:48,Meta:8,RevId/binary>> = Bin,
+    <<Seq:48,Size:32,DeletedBit:1,Bp:47,RevPos0:48,Meta:8,
+        RevId0/binary>> = Bin,
+    RevId = binary_trim_max(RevId0, ?DEFAULT_META_LEN),
     % It is possible when upgrading from 1.8.x to 2.0.0 to create items
     % on disk with a revision number of 0, which is not a valid revision
     % number. We fix this on load here and in ep-engine.
@@ -1015,4 +1022,16 @@ jump_to_another_version(Db, NewFilePath, NewVersion, NewPos) ->
                     close_db(InitNewDb),
                     {was_updated, Db}
             end
+    end.
+
+
+% Trims a binary if it is longer than the given value, returns the original
+% if it is smaller.
+-spec binary_trim_max(binary(), non_neg_integer()) -> binary().
+binary_trim_max(Bin0, Max) ->
+    case Bin0 of
+    <<Bin:Max/binary, _/binary>> when byte_size(Bin0) > Max ->
+        Bin;
+    Bin0 ->
+        Bin0
     end.

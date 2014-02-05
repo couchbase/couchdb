@@ -32,7 +32,11 @@
 -export([set_view_sig/1]).
 -export([check_primary_key_size/5, check_primary_value_size/5]).
 -export([refresh_viewgroup_header/1]).
--export([shutdown_cleaner/2]).
+-export([shutdown_cleaner/2, shutdown_wait/1]).
+-export([try_read_line/1]).
+-export([send_group_header/2, receive_group_header/3]).
+-export([remove_group_views/2, update_group_views/3]).
+-export([send_group_info/2]).
 
 
 -include("couch_db.hrl").
@@ -705,3 +709,112 @@ shutdown_cleaner(#set_view_group{mod = Mod}, Pid) ->
     _ ->
         couch_util:shutdown_sync(Pid)
     end.
+
+
+-spec try_read_line(binary()) -> {binary() | nil, binary()}.
+try_read_line(Data) ->
+    case binary:split(Data, <<"\n">>) of
+    [Line, Rest] ->
+        {Line, Rest};
+    [Rest] ->
+        {nil, Rest}
+    end.
+
+
+% Send binary group header data to a external process via stdin
+-spec send_group_header(#set_view_group{}, port()) -> 'ok'.
+send_group_header(Group, Port) ->
+    HeaderBin = couch_set_view_util:group_to_header_bin(Group),
+    Len = integer_to_list(byte_size(HeaderBin)),
+    true = port_command(Port, [Len, $\n, HeaderBin]),
+    ok.
+
+
+% Read group header from stdout of external process
+-spec receive_group_header(port(), integer(), binary()) ->
+    {'ok', binary(), binary()} | {'error', term(), binary()}.
+receive_group_header(Port, Len, HeaderAcc) ->
+    case byte_size(HeaderAcc) of
+    Sz when Sz >= Len + 1 ->
+        HeaderBin = binary:part(HeaderAcc, 0, Len),
+        % Remaining data excluding a \n character
+        Remaining = binary:part(HeaderAcc, Len + 1, Sz - Len - 1),
+        {ok, HeaderBin, Remaining};
+    _ ->
+        receive
+        {Port, {data, Data}} ->
+            receive_group_header(Port, Len, iolist_to_binary([HeaderAcc, Data]));
+        {Port, {exit_status, 0}} ->
+            self() ! {Port, {exit_status, 0}},
+            receive_group_header(Port, Len, HeaderAcc);
+        {Port, Others} ->
+            {error, {Port, Others}, HeaderAcc}
+        end
+    end.
+
+
+% Send stop message to the process and wait for it to exit gracefully
+% This is similar to couch_util:shutdown_sync(Pid)
+% Instead of force kill, sends stop message
+-spec shutdown_wait(pid() | nil) -> 'ok'.
+shutdown_wait(nil) ->
+    ok;
+shutdown_wait(Pid) ->
+    MRef = erlang:monitor(process, Pid),
+    try
+        unlink(Pid),
+        Pid ! stop,
+        receive
+        {'DOWN', MRef, _, _, _} ->
+            receive
+            {'EXIT', Pid, _} ->
+                ok
+            after 0 ->
+                ok
+            end
+        end
+    after
+        erlang:demonitor(MRef, [flush])
+    end.
+
+
+-spec remove_group_views(#set_view_group{}, atom()) -> #set_view_group{}.
+remove_group_views(#set_view_group{mod = Mod} = Group, Type) ->
+    case Mod of
+    Type ->
+        Group#set_view_group{views = []};
+    _ ->
+        Group
+    end.
+
+
+-spec update_group_views(#set_view_group{},
+                         #set_view_group{}, atom()) -> #set_view_group{}.
+update_group_views(#set_view_group{mod = Mod} = Group, SrcGroup, Type) ->
+    case Mod of
+    Type ->
+        Group#set_view_group{views = SrcGroup#set_view_group.views};
+    _ ->
+        Group
+    end.
+
+
+-spec send_group_info(#set_view_group{}, port()) -> 'ok'.
+send_group_info(Group, Port) ->
+    #set_view_group{
+        views = Views,
+        filepath = IndexFile,
+        header_pos = HeaderPos,
+        mod = Mod
+    } = Group,
+    Data1 = [
+        IndexFile, $\n,
+        integer_to_list(HeaderPos), $\n,
+        integer_to_list(length(Views)), $\n
+    ],
+    true = port_command(Port, Data1),
+    ok = lists:foreach(
+        fun(#set_view{indexer = View}) ->
+            true = port_command(Port, Mod:view_info(View))
+        end,
+        Views).

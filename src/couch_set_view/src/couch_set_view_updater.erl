@@ -250,6 +250,12 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
                 "stacktrace: ~p~n",
                 [SetName, Type, DDocId, Error, Stacktrace]),
             exit(Error)
+        end,
+        % Since updater progress stats is added from docloader,
+        % this process has to stay till updater has completed.
+        receive
+        updater_finished ->
+            ok
         end
     end),
 
@@ -269,6 +275,7 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
     _ ->
         ok
     end,
+    DocLoader ! updater_finished,
     exit(Result).
 
 
@@ -320,7 +327,33 @@ wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup) ->
         couch_util:shutdown_sync(DocLoader),
         couch_util:shutdown_sync(Mapper),
         couch_util:shutdown_sync(Writer),
-        {updater_error, Reason}
+        {updater_error, Reason};
+    {native_updater_start, Writer} ->
+        % We need control over spawning native updater process
+        % This helps to terminate native os processes correctly
+        Writer ! {ok, native_updater_start},
+        receive
+        {native_updater_pid, NativeUpdater} ->
+            erlang:put(native_updater, NativeUpdater)
+        end,
+        wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup);
+    stop ->
+        case erlang:erase(native_updater) of
+        undefined ->
+            couch_util:shutdown_sync(DocLoader),
+            couch_util:shutdown_sync(Mapper),
+            couch_util:shutdown_sync(Writer);
+        NativeUpdater ->
+            MRef = erlang:monitor(process, NativeUpdater),
+            NativeUpdater ! stop,
+            receive
+            {'DOWN', MRef, process, NativeUpdater, _} ->
+                couch_util:shutdown_sync(DocLoader),
+                couch_util:shutdown_sync(Mapper),
+                couch_util:shutdown_sync(Writer)
+            end
+        end,
+        exit({updater_error, shutdown})
     end.
 
 
@@ -481,14 +514,12 @@ notify_owner(Owner, Msg, UpdaterPid) ->
     Owner ! {updater_info, UpdaterPid, Msg}.
 
 
-queue_doc({Seq, Doc, PartId}=Entry, MapQueue, Group, MaxDocSize,
-        InitialBuild) ->
+queue_doc({Seq, Doc, PartId}, MapQueue, Group, MaxDocSize, InitialBuild) ->
     case Doc#doc.deleted of
     true when InitialBuild ->
-        ok;
+        Entry = nil;
     true ->
-        couch_work_queue:queue(MapQueue, Entry),
-        update_task(1);
+        Entry = {Seq, Doc, PartId};
     false ->
         #set_view_group{
            set_name = SetName,
@@ -503,10 +534,10 @@ queue_doc({Seq, Doc, PartId}=Entry, MapQueue, Group, MaxDocSize,
                 ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, skipping "
                     "document with ID `~s`: too large body (~p bytes)",
                     [SetName, GroupType, DDocId,
-                     ?b2l(Doc#doc.id), iolist_size(Doc#doc.body)]);
+                     ?b2l(Doc#doc.id), iolist_size(Doc#doc.body)]),
+                Entry = {Seq, Doc#doc{deleted = true}, PartId};
             false ->
-                couch_work_queue:queue(MapQueue, Entry),
-                update_task(1)
+                Entry = {Seq, Doc, PartId}
             end;
         false ->
             % If the id isn't utf8 (memcached allows it), then log an error
@@ -517,10 +548,15 @@ queue_doc({Seq, Doc, PartId}=Entry, MapQueue, Group, MaxDocSize,
             ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, skipping "
                 "document with non-utf8 id. Doc id bytes: ~w",
                 [SetName, GroupType, DDocId, ?b2l(Doc#doc.id)]),
-            Entry2 = {Seq, Doc#doc{deleted = true}, PartId},
-            couch_work_queue:queue(MapQueue, Entry2),
-            update_task(1)
+            Entry = {Seq, Doc#doc{deleted = true}, PartId}
         end
+    end,
+    case Entry of
+    nil ->
+        ok;
+    _ ->
+        couch_work_queue:queue(MapQueue, Entry),
+        update_task(1)
     end.
 
 
@@ -685,9 +721,15 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
             }
         };
     true ->
-        ?LOG_INFO("Updater for set view `~s`, ~s group `~s`, sorting view files",
+        % For mapreduce view, sorting is performed by native btree builder
+        case Mod of
+        spatial_view ->
+            ?LOG_INFO("Updater for set view `~s`, ~s group `~s`, sorting view files",
                   [SetName, Type, DDocId]),
-        ok = sort_tmp_files(TmpFiles2, TmpDir, Group, true),
+            ok = sort_tmp_files(TmpFiles2, TmpDir, Group, true);
+        _ ->
+            ok
+        end,
         ?LOG_INFO("Updater for set view `~s`, ~s group `~s`, starting btree "
                   "build phase" , [SetName, Type, DDocId]),
         {Group2, BuildFd} = Mod:finish_build(Group, TmpFiles2, TmpDir),
@@ -942,7 +984,13 @@ maybe_update_btrees(WriterAcc0) ->
             end
         end;
     true ->
-        ok = sort_tmp_files(TmpFiles, WriterAcc0#writer_acc.tmp_dir, Group0, false),
+        % Mapreduce view ops sorting is performed by native updater
+        case Group0#set_view_group.mod of
+        spatial_view ->
+            ok = sort_tmp_files(TmpFiles, WriterAcc0#writer_acc.tmp_dir, Group0, false);
+        _ ->
+            ok
+        end,
         case erlang:erase(updater_worker) of
         undefined ->
             WriterAcc1 = WriterAcc0;
@@ -1005,37 +1053,28 @@ spawn_updater_worker(WriterAcc, PartIdSeqs) ->
     Parent = self(),
     Ref = make_ref(),
     #writer_acc{
-        group = #set_view_group{
-            mod = Mod
-        } = Group,
+        group = Group,
+        parent = UpdaterPid,
         max_seqs = MaxSeqs
     } = WriterAcc,
-    _Pid = spawn_link(fun() ->
+    % Wait for main updater process to ack
+    UpdaterPid ! {native_updater_start, self()},
+    receive
+    {ok, native_updater_start} ->
+        ok
+    end,
+    Pid = spawn_link(fun() ->
         case ?set_cbitmask(Group) of
         0 ->
             CleanupStart = 0;
         _ ->
             CleanupStart = os:timestamp()
         end,
-        Mod:start_reduce_context(Group),
-        {ok, NewBtrees, CleanupCount, NewStats, NewCompactFiles} = update_btrees(WriterAcc),
-        couch_set_view_mapreduce:end_reduce_context(Group),
-        % NOTE vmx 2013-08-06: The following code works well with spatial view
-        %    as the `ViewBtrees2` will just be empty.
-        [IdBtree2 | ViewBtrees2] = NewBtrees,
+        {ok, NewGroup0, CleanupCount, NewStats, NewCompactFiles} = update_btrees(WriterAcc),
         case ?set_cbitmask(Group) of
         0 ->
-            NewCbitmask = 0,
             CleanupTime = 0.0;
         _ ->
-            {ok, <<_:40, IdBitmap:?MAX_NUM_PARTITIONS>>} = couch_btree:full_reduce(IdBtree2),
-            CombinedBitmap = lists:foldl(
-                fun(Bt, AccMap) ->
-                    {ok, <<_:40, Bm:?MAX_NUM_PARTITIONS, _/binary>>} = couch_btree:full_reduce(Bt),
-                    AccMap bor Bm
-                end,
-                IdBitmap, ViewBtrees2),
-            NewCbitmask = ?set_cbitmask(Group) band CombinedBitmap,
             CleanupTime = timer:now_diff(os:timestamp(), CleanupStart) / 1000000,
             #set_view_group{
                 set_name = SetName,
@@ -1047,127 +1086,85 @@ spawn_updater_worker(WriterAcc, PartIdSeqs) ->
                       [SetName, GroupType, DDocId, CleanupCount, CleanupTime])
         end,
         NewSeqs = update_seqs(PartIdSeqs, ?set_seqs(Group)),
-        Header = Group#set_view_group.index_header,
-        case Mod of
-        mapreduce_view ->
-            NewHeader = Header#set_view_index_header{
-                id_btree_state = couch_btree:get_state(IdBtree2),
-                view_states = lists:map(fun couch_btree:get_state/1, ViewBtrees2),
-                seqs = NewSeqs,
-                cbitmask = NewCbitmask
-            },
-            NewGroup0 = Group#set_view_group{
-                views = lists:zipwith(
-                    fun(V, Bt) ->
-                        Indexer = V#set_view.indexer,
-                        V#set_view{
-                            indexer = Indexer#mapreduce_view{
-                                btree = Bt
-                            }
-                        }
-                    end,
-                    Group#set_view_group.views,
-                    ViewBtrees2),
-                id_btree = IdBtree2,
-                index_header = NewHeader
-            };
-        spatial_view ->
-            % The header and group is already updated, only the id-btree
-            % isn't yet
-            NewHeader = Header#set_view_index_header{
-                id_btree_state = couch_btree:get_state(IdBtree2),
-                seqs = NewSeqs
-            },
-            NewGroup0 = Group#set_view_group{
-                id_btree = IdBtree2,
-                index_header = NewHeader
-            }
-        end,
-        NewGroup = update_transferred_replicas(NewGroup0, MaxSeqs, PartIdSeqs),
+        Header = NewGroup0#set_view_group.index_header,
+        NewHeader = Header#set_view_index_header{
+            seqs = NewSeqs
+        },
+        NewGroup = NewGroup0#set_view_group{
+            index_header = NewHeader
+        },
+        NewGroup2 = update_transferred_replicas(NewGroup, MaxSeqs, PartIdSeqs),
         NumChanges = count_seqs_done(Group, NewSeqs),
         NewStats2 = NewStats#set_view_updater_stats{
            seqs = NewStats#set_view_updater_stats.seqs + NumChanges,
            cleanup_time = NewStats#set_view_updater_stats.seqs + CleanupTime,
            cleanup_kv_count = NewStats#set_view_updater_stats.cleanup_kv_count + CleanupCount
         },
-        Parent ! {Ref, NewGroup, NewStats2, NewCompactFiles}
+        Parent ! {Ref, NewGroup2, NewStats2, NewCompactFiles}
     end),
+    UpdaterPid ! {native_updater_pid, Pid},
     Ref.
 
-
-% For incremental index updates.
+% Update id btree and view btrees with current batch of changes
 update_btrees(WriterAcc) ->
     #writer_acc{
         stats = Stats,
-        group = Group,
+        group = Group0,
         tmp_dir = TmpDir,
         tmp_files = TmpFiles,
         compactor_running = CompactorRunning,
         max_insert_batch_size = MaxBatchSize
     } = WriterAcc,
-    #set_view_group{
-        id_btree = IdBtree,
-        views = SetViews,
-        mod = Mod
-    } = Group,
-    ViewInfos0 = [{ids_index, IdBtree}],
-    ViewInfos = case Mod of
-    mapreduce_view ->
-        ViewInfos0 ++ [{V#set_view.id_num,
-            (V#set_view.indexer)#mapreduce_view.btree} || V <- SetViews];
-    spatial_view ->
-        ViewInfos0
-    end,
-    CleanupAcc0 = {go, 0},
-    case ?set_cbitmask(Group) of
-    0 ->
-        CleanupFun = nil;
-    _ ->
-        CleanupFun = couch_set_view_util:make_btree_purge_fun(Group)
-    end,
-    ok = couch_set_view_util:open_raw_read_fd(Group),
-    {NewBtrees, {{_, CleanupCount}, NewStats, CompactFiles}} = lists:mapfoldl(
-        fun({ViewId, Bt}, {CleanupAcc, StatsAcc, AccCompactFiles}) ->
-            #set_view_tmp_file_info{name = SortedFile} = dict:fetch(ViewId, TmpFiles),
-            case SortedFile of
-            nil ->
-                {Bt, {CleanupAcc, StatsAcc, AccCompactFiles}};
-            _ ->
-                {ok, CleanupAcc2, Bt2, Inserted, Deleted} =
-                    couch_set_view_updater_helper:update_btree(
-                        Bt, SortedFile, MaxBatchSize, CleanupFun, CleanupAcc),
-                StatsAcc2 = case ViewId of
-                ids_index ->
-                    StatsAcc#set_view_updater_stats{
-                        inserted_ids = StatsAcc#set_view_updater_stats.inserted_ids + Inserted,
-                        deleted_ids = StatsAcc#set_view_updater_stats.deleted_ids + Deleted
-                    };
+    % Remove spatial views from group
+    % The native updater can currently handle mapreduce views only
+    Group = couch_set_view_util:remove_group_views(Group0, spatial_view),
+
+    % Prepare list of operation logs for each btree
+    #set_view_tmp_file_info{name = IdFile} = dict:fetch(ids_index, TmpFiles),
+    ViewFiles = lists:map(
+        fun(#set_view{id_num = Id}) ->
+            #set_view_tmp_file_info{
+                name = ViewFile
+            } = dict:fetch(Id, TmpFiles),
+            ViewFile
+        end, Group#set_view_group.views),
+    LogFiles = [IdFile | ViewFiles],
+
+    {ok, NewGroup0, Stats2} = couch_set_view_updater_helper:update_btrees(
+        Group, TmpDir, LogFiles, MaxBatchSize, false),
+    {IdsInserted, IdsDeleted, KVsInserted, KVsDeleted, CleanupCount} = Stats2,
+
+    % Add back spatial views
+    NewGroup = couch_set_view_util:update_group_views(
+        NewGroup0, Group0, spatial_view),
+
+    NewStats = Stats#set_view_updater_stats{
+     inserted_ids = Stats#set_view_updater_stats.inserted_ids + IdsInserted,
+     deleted_ids = Stats#set_view_updater_stats.deleted_ids + IdsDeleted,
+     inserted_kvs = Stats#set_view_updater_stats.inserted_kvs + KVsInserted,
+     deleted_kvs = Stats#set_view_updater_stats.deleted_kvs + KVsDeleted
+    },
+
+    % Remove files if compactor is not running
+    % Otherwise send them to compactor to apply deltas
+    CompactFiles = lists:foldr(
+        fun(SortedFile, AccCompactFiles) ->
+            case CompactorRunning of
+            true ->
+                case filename:extension(SortedFile) of
+                ".compact" ->
+                     [SortedFile | AccCompactFiles];
                 _ ->
-                    StatsAcc#set_view_updater_stats{
-                        inserted_kvs = StatsAcc#set_view_updater_stats.inserted_kvs + Inserted,
-                        deleted_kvs = StatsAcc#set_view_updater_stats.deleted_kvs + Deleted
-                    }
-                end,
-                case CompactorRunning of
-                true ->
-                    case filename:extension(SortedFile) of
-                    ".compact" ->
-                        AccCompactFiles2 = [SortedFile | AccCompactFiles];
-                    _ ->
-                        SortedFile2 = new_sort_file_name(TmpDir, true),
-                        ok = file2:rename(SortedFile, SortedFile2),
-                        AccCompactFiles2 = [SortedFile2 | AccCompactFiles]
-                    end;
-                false ->
-                    ok = file2:delete(SortedFile),
-                    AccCompactFiles2 = AccCompactFiles
-                end,
-                {Bt2, {CleanupAcc2, StatsAcc2, AccCompactFiles2}}
+                    SortedFile2 = new_sort_file_name(TmpDir, true),
+                    ok = file2:rename(SortedFile, SortedFile2),
+                    [SortedFile2 | AccCompactFiles]
+                end;
+            false ->
+                ok = file2:delete(SortedFile),
+                AccCompactFiles
             end
-        end,
-        {CleanupAcc0, Stats, []}, ViewInfos),
-    ok = couch_set_view_util:close_raw_read_fd(Group),
-    {ok, NewBtrees, CleanupCount, NewStats, lists:reverse(CompactFiles)}.
+        end, [], LogFiles),
+    {ok, NewGroup, CleanupCount, NewStats, CompactFiles}.
 
 
 update_seqs(PartIdSeqs, Seqs) ->

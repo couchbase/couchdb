@@ -31,8 +31,7 @@
         make_key_options/1, should_filter/1]).
 -export([stats_ets/1, server_name/1, sig_to_pid_ets/1, name_to_sig_ets/1,
          pid_to_sig_ets/1]).
-
--export([send_group_info/2]).
+-export([view_info/1]).
 
 
 -include("couch_db.hrl").
@@ -128,7 +127,8 @@ finish_build(Group, TmpFiles, TmpDir) ->
     end,
     Options = [exit_status, use_stdio, stderr_to_stdout, {line, 4096}, binary],
     Port = open_port({spawn_executable, Cmd}, Options),
-    send_group_info(Group, Port),
+    couch_set_view_util:send_group_info(Group, Port),
+    true = port_command(Port, [TmpDir, $\n]),
     #set_view_tmp_file_info{name = IdFile} = dict:fetch(ids_index, TmpFiles),
     DestPath = couch_set_view_util:new_sort_file_path(TmpDir, updater),
     true = port_command(Port, [DestPath, $\n, IdFile, $\n]),
@@ -184,9 +184,18 @@ finish_build(Group, TmpFiles, TmpDir) ->
     {NewGroup, NewFd}.
 
 index_builder_wait_loop(Port, Group, Acc) ->
+    #set_view_group{
+        set_name = SetName,
+        name = DDocId,
+        type = Type
+    } = Group,
     receive
     {Port, {exit_status, 0}} ->
         ok;
+    {Port, {exit_status, 1}} ->
+        ?LOG_INFO("Set view `~s`, ~s group `~s`, index builder stopped successfully.",
+                   [SetName, Type, DDocId]),
+        exit(shutdown);
     {Port, {exit_status, Status}} ->
         throw({index_builder_exit, Status});
     {Port, {data, {noeol, Data}}} ->
@@ -202,9 +211,13 @@ index_builder_wait_loop(Port, Group, Acc) ->
                    [SetName, Type, DDocId, Msg]),
         index_builder_wait_loop(Port, Group, []);
     {Port, Error} ->
-        throw({index_builder_error, Error})
+        throw({index_builder_error, Error});
+    stop ->
+        ?LOG_INFO("Set view `~s`, ~s group `~s`, sending stop message to index builder.",
+                   [SetName, Type, DDocId]),
+        true = port_command(Port, "exit"),
+        index_builder_wait_loop(Port, Group, Acc)
     end.
-
 
 
 % Return the state of a view (which will be stored in the header)
@@ -469,7 +482,7 @@ cleanup_view_group(Group) ->
     end,
     Options = [exit_status, use_stdio, stderr_to_stdout, {line, 4096}, binary],
     Port = open_port({spawn_executable, Cmd}, Options),
-    send_group_info(Group, Port),
+    couch_set_view_util:send_group_info(Group, Port),
     PurgedCount = try cleanup_view_group_wait_loop(Port, Group, [], 0) of
     {ok, Count0} ->
         Count0
@@ -512,7 +525,7 @@ cleanup_view_group_wait_loop(Port, Group, Acc, PurgedCount) ->
         ?LOG_INFO("Set view `~s`, ~s group `~s`, sending stop message to index cleaner.",
                    [SetName, Type, DDocId]),
         true = port_command(Port, "exit"),
-        cleanup_view_group_wait_loop(Port, Group, [Acc], PurgedCount)
+        cleanup_view_group_wait_loop(Port, Group, Acc, PurgedCount)
     end.
 
 compact_view(Fd, SetView, EmptySetView, FilterFun, BeforeKVWriteFun, Acc0) ->
@@ -668,26 +681,6 @@ pid_to_sig_ets(prod) ->
     ?SET_VIEW_PID_TO_SIG_ETS_PROD;
 pid_to_sig_ets(dev) ->
     ?SET_VIEW_PID_TO_SIG_ETS_DEV.
-
-
--spec send_group_info(#set_view_group{}, port()) -> 'ok'.
-send_group_info(#set_view_group{mod = mapreduce_view} = Group, Port) ->
-    #set_view_group{
-        views = Views,
-        filepath = IndexFile,
-        header_pos = HeaderPos
-    } = Group,
-    Data1 = [
-        IndexFile, $\n,
-        integer_to_list(HeaderPos), $\n,
-        integer_to_list(length(Views)), $\n
-    ],
-    true = port_command(Port, Data1),
-    ok = lists:foreach(
-        fun(#set_view{indexer = View}) ->
-            true = port_command(Port, view_info(View))
-        end,
-        Views).
 
 view_info(#mapreduce_view{reduce_funs = []}) ->
     [<<"0">>, $\n];
