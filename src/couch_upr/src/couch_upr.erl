@@ -345,8 +345,6 @@ receive_snapshot_deletion(Socket, Timeout, PartId, KeyLength, BodyLength,
          %     updater expects them. This can be changed later to a simpler
          %     format.
          {Seq, RevSeq, Key, _Metadata} = Deletion,
-         % XXX vmx 2013-08-23: Use correct CAS value
-         Cas = 0,
          Doc = #doc{
              id = Key,
              rev = {RevSeq, <<Cas:64, 0:32, 0:32>>},
