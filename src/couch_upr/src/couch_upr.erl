@@ -68,7 +68,7 @@ enum_docs_since(Pid, PartId, [PartVersion|PartVersions], StartSeq, EndSeq,
     StreamRequest = couch_upr_consumer:encode_stream_request(
         PartId, RequestId, 0, StartSeq, EndSeq, PartVersion),
     ok = gen_tcp:send(Socket, StreamRequest),
-    Result = receive_single_snapshot(Socket, Timeout, InFun, {nil, InAcc}),
+    Result = receive_snapshots(Socket, Timeout, InFun, {nil, InAcc}),
     case Result of
     {ok, {FailoverLog, Mutations}} ->
         case length(FailoverLog) > ?UPR_MAX_FAILOVER_LOG_SIZE of
@@ -232,14 +232,14 @@ code_change(_OldVsn, State, _Extra) ->
 
 % Internal functions
 
--spec receive_single_snapshot(socket(), timeout(), mutations_fold_fun(),
-                              mutations_fold_acc()) ->
-                                     {ok, mutations_fold_acc()} |
-                                     {error, wrong_partition_version |
-                                      wrong_start_sequence_number |
-                                      closed} |
-                                     {rollback, update_seq()}.
-receive_single_snapshot(Socket, Timeout, MutationFun, Acc) ->
+-spec receive_snapshots(socket(), timeout(), mutations_fold_fun(),
+                        mutations_fold_acc()) ->
+                               {ok, mutations_fold_acc()} |
+                               {error, wrong_partition_version |
+                                wrong_start_sequence_number |
+                                closed} |
+                               {rollback, update_seq()}.
+receive_snapshots(Socket, Timeout, MutationFun, Acc) ->
     case gen_tcp:recv(Socket, ?UPR_HEADER_LEN, Timeout) of
     {ok, Header} ->
         case couch_upr_consumer:parse_header(Header) of
@@ -250,7 +250,7 @@ receive_single_snapshot(Socket, Timeout, MutationFun, Acc) ->
                      Socket, Timeout, BodyLength),
                  {_, MutationAcc} = Acc,
                  Acc2 = {FailoverLog, MutationAcc},
-                 receive_single_snapshot(Socket, Timeout, MutationFun, Acc2);
+                 receive_snapshots(Socket, Timeout, MutationFun, Acc2);
             ?UPR_STATUS_ROLLBACK ->
                 case gen_tcp:recv(Socket, BodyLength, Timeout) of
                 {ok, <<RollbackSeq:?UPR_SIZES_BY_SEQ>>} ->
@@ -270,7 +270,7 @@ receive_single_snapshot(Socket, Timeout, MutationFun, Acc) ->
                 {error, wrong_start_sequence_number}
             end;
         {snapshot_marker, _PartId, _RequestId} ->
-            receive_single_snapshot(Socket, Timeout, MutationFun, Acc);
+            receive_snapshots(Socket, Timeout, MutationFun, Acc);
         {snapshot_mutation, PartId, _RequestId, KeyLength, BodyLength,
                 ExtraLength, Cas} ->
             Mutation = receive_snapshot_mutation(
@@ -279,7 +279,7 @@ receive_single_snapshot(Socket, Timeout, MutationFun, Acc) ->
             {FailoverLog, MutationAcc} = Acc,
             MutationAcc2 = MutationFun(Mutation, MutationAcc),
             Acc2 = {FailoverLog, MutationAcc2},
-            receive_single_snapshot(Socket, Timeout, MutationFun, Acc2);
+            receive_snapshots(Socket, Timeout, MutationFun, Acc2);
         % For the indexer and XDCR there's no difference between a deletion
         % end an expiration. In both cases the items should get removed.
         % Hence the same code can be used after the initial header
@@ -292,7 +292,7 @@ receive_single_snapshot(Socket, Timeout, MutationFun, Acc) ->
             {FailoverLog, MutationAcc} = Acc,
             MutationAcc2 = MutationFun(Deletion, MutationAcc),
             Acc2 = {FailoverLog, MutationAcc2},
-            receive_single_snapshot(Socket, Timeout, MutationFun, Acc2);
+            receive_snapshots(Socket, Timeout, MutationFun, Acc2);
         {stream_end, _PartId, _RequestId, BodyLength} ->
             _Flag = receive_stream_end(Socket, Timeout, BodyLength),
             {ok, Acc}
