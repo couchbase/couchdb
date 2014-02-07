@@ -287,9 +287,7 @@ receive_snapshots(Socket, Timeout, MutationFun, Acc) ->
             Mutation = receive_snapshot_mutation(
                 Socket, Timeout, PartId, KeyLength, BodyLength, ExtraLength,
                 Cas),
-            {FailoverLog, MutationAcc} = Acc,
-            MutationAcc2 = MutationFun(Mutation, MutationAcc),
-            Acc2 = {FailoverLog, MutationAcc2},
+            Acc2 = process_item(Mutation, MutationFun, Acc),
             receive_snapshots(Socket, Timeout, MutationFun, Acc2);
         % For the indexer and XDCR there's no difference between a deletion
         % end an expiration. In both cases the items should get removed.
@@ -300,9 +298,7 @@ receive_snapshots(Socket, Timeout, MutationFun, Acc) ->
                 OpCode =:= snapshot_expiration ->
             Deletion = receive_snapshot_deletion(
                 Socket, Timeout, PartId, KeyLength, BodyLength, Cas),
-            {FailoverLog, MutationAcc} = Acc,
-            MutationAcc2 = MutationFun(Deletion, MutationAcc),
-            Acc2 = {FailoverLog, MutationAcc2},
+            Acc2 = process_item(Deletion, MutationFun, Acc),
             receive_snapshots(Socket, Timeout, MutationFun, Acc2);
         {stream_end, _PartId, _RequestId, BodyLength} ->
             _Flag = receive_stream_end(Socket, Timeout, BodyLength),
@@ -311,6 +307,15 @@ receive_snapshots(Socket, Timeout, MutationFun, Acc) ->
     {error, closed} ->
         {error, closed}
     end.
+
+
+-spec process_item({update_seq(), #doc{}, partition_id()},
+                   mutations_fold_fun(), mutations_fold_acc()) ->
+                          mutations_fold_acc().
+process_item(Item, MutationFun, Acc) ->
+    {FailoverLog, ItemsAcc} = Acc,
+    ItemsAcc2 = MutationFun(Item, ItemsAcc),
+    {FailoverLog, ItemsAcc2}.
 
 
 -spec receive_snapshot_mutation(socket(), timeout(), partition_id(), size(),
