@@ -16,7 +16,7 @@
 
 %% XXX: Figure out how to -include("couch_db.hrl")
 -record(doc, {id= <<"">>, rev={0, <<>>}, body= <<"{}">>,
-        content_meta=0, deleted=false, meta=[]}).
+        content_meta=0, deleted=false, meta=[], seq=0, partition=0}).
 -define(CONTENT_META_JSON, 0).
 -define(CONTENT_META_INVALID_JSON, 1).
 -define(CONTENT_META_NON_JSON_MODE, 3).

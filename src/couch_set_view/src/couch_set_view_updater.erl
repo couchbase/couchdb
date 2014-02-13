@@ -518,12 +518,12 @@ notify_owner(Owner, Msg, UpdaterPid) ->
     Owner ! {updater_info, UpdaterPid, Msg}.
 
 
-queue_doc({Seq, Doc, PartId}, MapQueue, Group, MaxDocSize, InitialBuild) ->
+queue_doc(Doc, MapQueue, Group, MaxDocSize, InitialBuild) ->
     case Doc#doc.deleted of
     true when InitialBuild ->
         Entry = nil;
     true ->
-        Entry = {Seq, Doc, PartId};
+        Entry = Doc;
     false ->
         #set_view_group{
            set_name = SetName,
@@ -539,9 +539,9 @@ queue_doc({Seq, Doc, PartId}, MapQueue, Group, MaxDocSize, InitialBuild) ->
                     "document with ID `~s`: too large body (~p bytes)",
                     [SetName, GroupType, DDocId,
                      ?b2l(Doc#doc.id), iolist_size(Doc#doc.body)]),
-                Entry = {Seq, Doc#doc{deleted = true}, PartId};
+                Entry = Doc#doc{deleted = true};
             false ->
-                Entry = {Seq, Doc, PartId}
+                Entry = Doc
             end;
         false ->
             % If the id isn't utf8 (memcached allows it), then log an error
@@ -552,7 +552,7 @@ queue_doc({Seq, Doc, PartId}, MapQueue, Group, MaxDocSize, InitialBuild) ->
             ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, skipping "
                 "document with non-utf8 id. Doc id bytes: ~w",
                 [SetName, GroupType, DDocId, ?b2l(Doc#doc.id)]),
-            Entry = {Seq, Doc#doc{deleted = true}, PartId}
+            Entry = Doc#doc{deleted = true}
         end
     end,
     case Entry of
@@ -577,10 +577,20 @@ do_maps(Group, MapQueue, WriteQueue) ->
     {ok, Queue, _QueueSize} ->
         ViewCount = length(Group#set_view_group.views),
         Items = lists:foldr(
-            fun({Seq, #doc{id = Id, deleted = true}, PartitionId}, Acc) ->
+            fun(#doc{deleted = true} = Doc, Acc) ->
+                #doc{
+                    id = Id,
+                    seq = Seq,
+                    partition = PartitionId
+                } = Doc,
                 Item = {Seq, Id, PartitionId, []},
                 [Item | Acc];
-            ({Seq, #doc{id = Id, deleted = false} = Doc, PartitionId}, Acc) ->
+            (#doc{deleted = false} = Doc, Acc) ->
+                #doc{
+                    id = Id,
+                    seq = Seq,
+                    partition = PartitionId
+                } = Doc,
                 try
                     {ok, Result} = couch_set_view_mapreduce:map(Doc),
                     {Result2, _} = lists:foldr(
