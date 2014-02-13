@@ -391,27 +391,43 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                 true ->
                     {AccCount, AccSeqs, AccVersions, AccRollbacks};
                 false ->
-                    ChangesWrapper = fun(Item, AccCount2) ->
-                        queue_doc(Item, MapQueue, Group, MaxDocSize, InitialBuild),
-                        AccCount2 + 1
+                    ChangesWrapper = fun(Item, {Items, SingleSnapshot}) ->
+                        case Item of
+                        snapshot_marker ->
+                            {Items, false};
+                        _ ->
+                            Items2 = case SingleSnapshot of
+                            true ->
+                                [Item|Items];
+                            false ->
+                                lists:keystore(Item#doc.id, #doc.id, Items, Item)
+                            end,
+                            {Items2, SingleSnapshot}
+                        end
                     end,
                     Result = couch_upr:enum_docs_since(
                         UprPid, PartId, PartVersions, Since, EndSeq,
-                        ChangesWrapper, AccCount),
+                        ChangesWrapper, {[], true}),
                     case Result of
-                    {ok, AccCount3, NewPartVersions} ->
+                    {ok, {Items, _}, NewPartVersions} ->
+                        AccCount2 = lists:foldl(fun(Item, Acc) ->
+                            queue_doc(
+                                Item, MapQueue, Group, MaxDocSize,
+                                InitialBuild),
+                            Acc + 1
+                        end, AccCount, Items),
                         AccSeqs2 = orddict:store(PartId, EndSeq, AccSeqs),
                         AccVersions2 = lists:ukeymerge(
                             1, [{PartId, NewPartVersions}], AccVersions),
                         AccRollbacks2 = AccRollbacks;
                     {rollback, RollbackSeq} ->
-                        AccCount3 = AccCount,
+                        AccCount2= AccCount,
                         AccSeqs2 = AccSeqs,
                         AccVersions2 = AccVersions,
                         AccRollbacks2 = ordsets:add_element(
                             {PartId, RollbackSeq}, AccRollbacks)
                     end,
-                    {AccCount3, AccSeqs2, AccVersions2, AccRollbacks2}
+                    {AccCount2, AccSeqs2, AccVersions2, AccRollbacks2}
                 end;
             _ ->
                 % If there is a rollback needed, don't store any new documents
@@ -420,7 +436,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                 ChangesWrapper = fun(_, _) -> ok end,
                 Result = couch_upr:enum_docs_since(
                     UprPid, PartId, PartVersions, Since, Since, ChangesWrapper,
-                    AccCount),
+                    ok),
                 case Result of
                 {ok, _, _} ->
                     AccRollbacks2 = AccRollbacks;
