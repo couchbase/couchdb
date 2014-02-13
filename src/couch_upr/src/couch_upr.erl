@@ -20,6 +20,8 @@
 -export([start/2]).
 -export([enum_docs_since/7, get_failover_log/2]).
 -export([get_sequence_number/2]).
+% API for XDCR
+-export([sasl_auth/4, open_connection/4]).
 
 % gen_server callbacks
 -export([init/1, terminate/2, handle_call/3, handle_cast/2, handle_info/2, code_change/3]).
@@ -130,6 +132,45 @@ get_failover_log(Pid, PartId) ->
     end.
 
 
+-spec sasl_auth(binary(), request_id(), socket(), timeout()) ->
+                       ok | {stop, sasl_auth_failed} |
+                       {error, closed | inet:posix()}.
+sasl_auth(Bucket, RequestId, Socket, Timeout) ->
+    Authenticate = couch_upr_consumer:encode_sasl_auth(Bucket, RequestId),
+    ok = gen_tcp:send(Socket, Authenticate),
+    case gen_tcp:recv(Socket, ?UPR_HEADER_LEN, Timeout) of
+    {ok, Header} ->
+        {sasl_auth, Status, RequestId, BodyLength} =
+            couch_upr_consumer:parse_header(Header),
+        % Receive the body so that it is not mangled with the next request,
+        % we care about the status only though
+        {ok, _} = gen_tcp:recv(Socket, BodyLength, Timeout),
+        case Status of
+        ?UPR_STATUS_OK ->
+            ok;
+        ?UPR_STATUS_SASL_AUTH_FAILED ->
+            {stop, sasl_auth_failed}
+        end;
+    {error, _} = Error ->
+        Error
+    end.
+
+
+-spec open_connection(binary(), request_id(), socket(), timeout()) ->
+                             ok | {error, closed | inet:posix()}.
+open_connection(Name, RequestId, Socket, Timeout) ->
+    OpenConnection = couch_upr_consumer:encode_open_connection(
+        Name, RequestId),
+    ok = gen_tcp:send(Socket, OpenConnection),
+    case gen_tcp:recv(Socket, ?UPR_HEADER_LEN, Timeout) of
+    {ok, Header} ->
+        {open_connection, RequestId} = couch_upr_consumer:parse_header(Header),
+        ok;
+    {error, _} = Error ->
+        Error
+    end.
+
+
 % gen_server callbacks
 
 -spec init([binary()]) -> {ok, #state{}} | {stop, sasl_auth_failed}.
@@ -139,63 +180,19 @@ init([Name, Bucket]) ->
     UprPort = list_to_integer(couch_config:get("upr", "port")),
     {ok, Socket} = gen_tcp:connect("localhost", UprPort,
         [binary, {packet, raw}, {active, false}, {reuseaddr, true}]),
-    State = #state{
-        socket = Socket,
-        timeout = UprTimeout,
-        request_id = 0
-    },
     % Authentication is used to specify from which bucket the data should
     % come from
-    case sasl_auth(Bucket, State) of
-    {ok, State2} ->
-        State3 = open_connection(Name, State2),
-        {ok, State3};
+    case sasl_auth(Bucket, 0, Socket, UprTimeout) of
+    ok ->
+        ok = open_connection(Name, 1, Socket, UprTimeout),
+        {ok, #state{
+            socket = Socket,
+            timeout = UprTimeout,
+            request_id = 2
+        }};
     {stop, sasl_auth_failed} = Stop ->
         Stop
     end.
-
--spec sasl_auth(binary(), #state{}) -> {ok, #state{}} |
-                                       {stop, sasl_auth_failed}.
-sasl_auth(Bucket, State) ->
-    #state{
-        socket = Socket,
-        timeout = UprTimeout,
-        request_id = RequestId
-    } = State,
-    Authenticate = couch_upr_consumer:encode_sasl_auth(Bucket, RequestId),
-    ok = gen_tcp:send(Socket, Authenticate),
-    case gen_tcp:recv(Socket, ?UPR_HEADER_LEN, UprTimeout) of
-    {ok, Header} ->
-        {sasl_auth, Status, RequestId, BodyLength} =
-            couch_upr_consumer:parse_header(Header),
-        % Receive the body so that it is not mangled with the next request,
-        % we care about the status only though
-        {ok, _} = gen_tcp:recv(Socket, BodyLength, UprTimeout),
-        case Status of
-        ?UPR_STATUS_OK ->
-            {ok, State#state{request_id = RequestId + 1}};
-        ?UPR_STATUS_SASL_AUTH_FAILED ->
-            {stop, sasl_auth_failed}
-        end
-    end.
-
--spec open_connection(binary(), #state{}) -> #state{}.
-open_connection(Name, State) ->
-    #state{
-        socket = Socket,
-        timeout = UprTimeout,
-        request_id = RequestId
-    } = State,
-    OpenConnection = couch_upr_consumer:encode_open_connection(
-        Name, RequestId),
-    ok = gen_tcp:send(Socket, OpenConnection),
-    case gen_tcp:recv(Socket, ?UPR_HEADER_LEN, UprTimeout) of
-    {ok, Header} ->
-        {open_connection, RequestId} = couch_upr_consumer:parse_header(Header)
-    end,
-    State#state{
-        request_id = RequestId + 1
-    }.
 
 
 -spec handle_call(atom(), {pid(), reference()}, #state{}) ->
