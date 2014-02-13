@@ -1151,17 +1151,19 @@ handle_info(timeout, #state{group = Group} = State) ->
         {noreply, maybe_start_cleaner(State)}
     end;
 
-handle_info({partial_update, Pid, NewGroup}, #state{updater_pid = Pid} = State) ->
+handle_info({partial_update, Pid, AckTo, NewGroup}, #state{updater_pid = Pid} = State) ->
     case ?have_pending_transition(State) andalso
         (?set_cbitmask(NewGroup) =:= 0) andalso
         (?set_cbitmask(State#state.group) =/= 0) andalso
         (State#state.waiting_list =:= []) of
     true ->
         State2 = process_partial_update(State, NewGroup),
+        AckTo ! update_processed,
         State3 = stop_updater(State2),
         NewState = maybe_apply_pending_transition(State3);
     false ->
-        NewState = process_partial_update(State, NewGroup)
+        NewState = process_partial_update(State, NewGroup),
+        AckTo ! update_processed
     end,
     {noreply, NewState};
 handle_info({partial_update, _, _}, State) ->

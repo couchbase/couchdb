@@ -1155,7 +1155,14 @@ checkpoint(#writer_acc{owner = Owner, parent = Parent, group = Group} = Acc) ->
     ?LOG_INFO("Updater checkpointing set view `~s` update for ~s group `~s`",
               [SetName, Type, DDocId]),
     NewGroup = maybe_fix_group(Group),
-    Owner ! {partial_update, Parent, NewGroup},
+    ok = couch_file:refresh_eof(NewGroup#set_view_group.fd),
+    Owner ! {partial_update, Parent, self(), NewGroup},
+    receive
+    update_processed ->
+        ok;
+    stop ->
+        exit(shutdown)
+    end,
     Acc#writer_acc{group = NewGroup}.
 
 
