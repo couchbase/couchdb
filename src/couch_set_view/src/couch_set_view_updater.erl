@@ -90,7 +90,8 @@ update(Owner, Group, CurSeqs, CompactorRunning, TmpDir, Options) ->
               "    unindexable:      ~w~n"
               "Initial build:        ~s~n"
               "Compactor running:    ~s~n"
-              "Min # changes:        ~p~n",
+              "Min # changes:        ~p~n"
+              "Partition versions:   ~w~n",
               [SetName, Type, DDocId,
                ActiveParts,
                PassiveParts,
@@ -101,7 +102,8 @@ update(Owner, Group, CurSeqs, CompactorRunning, TmpDir, Options) ->
                ?pending_transition_unindexable(?set_pending_transition(Group)),
                InitialBuild,
                CompactorRunning,
-               NumChanges
+               NumChanges,
+               ?set_partition_versions(Group)
               ]),
 
     WriterAcc0 = #writer_acc{
@@ -175,9 +177,11 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
             try
                 WriterAcc3 = do_writes(WriterAcc2),
                 receive
-                {new_partition_versions, PartVersions} ->
+                {new_partition_versions, PartVersions0} ->
                     WriterAccGroup = WriterAcc3#writer_acc.group,
                     WriterAccHeader = WriterAccGroup#set_view_group.index_header,
+                    PartVersions = lists:ukeymerge(1, PartVersions0,
+                        WriterAccHeader#set_view_index_header.partition_versions),
                     FinalWriterAcc = WriterAcc3#writer_acc{
                         group = WriterAccGroup#set_view_group{
                             index_header = WriterAccHeader#set_view_index_header{
@@ -1218,20 +1222,23 @@ maybe_fix_group(#set_view_group{index_header = Header} = Group) ->
     receive
     {new_passive_partitions, Parts} ->
         Bitmask = couch_set_view_util:build_bitmask(Parts),
-        Seqs2 = lists:foldl(
-            fun(PartId, Acc) ->
-                case couch_set_view_util:has_part_seq(PartId, Acc) of
+        {Seqs, PartVersions} = lists:foldl(
+            fun(PartId, {SeqAcc, PartVersionsAcc} = Acc) ->
+                case couch_set_view_util:has_part_seq(PartId, SeqAcc) of
                 true ->
                     Acc;
                 false ->
-                    ordsets:add_element({PartId, 0}, Acc)
+                    {ordsets:add_element({PartId, 0}, SeqAcc),
+                        ordsets:add_element({PartId, [{0, 0}]},
+                            PartVersionsAcc)}
                 end
             end,
-            ?set_seqs(Group), Parts),
+            {?set_seqs(Group), ?set_partition_versions(Group)}, Parts),
         Group#set_view_group{
             index_header = Header#set_view_index_header{
-                seqs = Seqs2,
-                pbitmask = ?set_pbitmask(Group) bor Bitmask
+                seqs = Seqs,
+                pbitmask = ?set_pbitmask(Group) bor Bitmask,
+                partition_versions = PartVersions
             }
         }
     after 0 ->
