@@ -223,17 +223,26 @@ encode_stream_request_ok(RequestId, FailoverLog) ->
               0:?UPR_SIZES_CAS>>,
     <<Header/binary, Value/binary>>.
 
--spec encode_stream_request_error(request_id(), upr_status()) -> <<_:192>>.
+-spec encode_stream_request_error(request_id(), upr_status()) -> binary().
 encode_stream_request_error(RequestId, Status) ->
+    Message = case Status of
+    ?UPR_STATUS_KEY_NOT_FOUND ->
+        <<"Not found">>;
+    ?UPR_STATUS_ERANGE ->
+        <<"Outside range">>
+    end,
+    ExtraLength = 0,
+    BodyLength = byte_size(Message),
     <<?UPR_MAGIC_RESPONSE,
       ?UPR_OPCODE_STREAM_REQUEST,
       0:?UPR_SIZES_KEY_LENGTH,
-      0,
+      ExtraLength,
       0,
       Status:?UPR_SIZES_STATUS,
-      0:?UPR_SIZES_BODY,
+      BodyLength:?UPR_SIZES_BODY,
       RequestId:?UPR_SIZES_OPAQUE,
-      0:?UPR_SIZES_CAS>>.
+      0:?UPR_SIZES_CAS,
+      Message/binary>>.
 
 %UPR_STREAM_REQ response
 %Field        (offset) (value)

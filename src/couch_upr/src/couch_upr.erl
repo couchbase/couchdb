@@ -259,8 +259,14 @@ receive_single_snapshot(Socket, Timeout, MutationFun, Acc) ->
                     {error, closed}
                 end;
             ?UPR_STATUS_KEY_NOT_FOUND ->
+                % Receive the body so that it is not mangled with the next
+                % request
+                {ok, _} = gen_tcp:recv(Socket, BodyLength, Timeout),
                 {error, wrong_partition_version};
             ?UPR_STATUS_ERANGE ->
+                % Receive the body so that it is not mangled with the next
+                % request
+                {ok, _} = gen_tcp:recv(Socket, BodyLength, Timeout),
                 {error, wrong_start_sequence_number}
             end;
         {snapshot_marker, _PartId, _RequestId} ->
