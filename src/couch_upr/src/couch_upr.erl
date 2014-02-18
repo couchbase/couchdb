@@ -18,7 +18,7 @@
 
 % Public API
 -export([start/2]).
--export([enum_docs_since/7, get_failover_log/2]).
+-export([enum_docs_since/7, get_failover_log/2, drain/1]).
 -export([get_sequence_number/2]).
 % API for XDCR
 -export([sasl_auth/4, open_connection/4]).
@@ -129,6 +129,17 @@ get_failover_log(Pid, PartId) ->
         {failover_log, Status, RequestId, 0} ->
             {error, Status}
         end
+    end.
+
+
+-spec drain(pid()) -> ok.
+drain(Pid) ->
+    {Socket, _} = gen_server:call(Pid, get_socket_and_timeout),
+    case gen_tcp:recv(Socket, 0, 0) of
+    {ok, _} ->
+        ok;
+    {error, timeout} ->
+        ok
     end.
 
 
