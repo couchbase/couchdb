@@ -252,30 +252,26 @@ receive_snapshots(Socket, Timeout, MutationFun, Acc, SnapshotEnd) ->
     {ok, Header} ->
         case couch_upr_consumer:parse_header(Header) of
         {stream_request, Status, _RequestId, BodyLength} ->
+            case gen_tcp:recv(Socket, BodyLength, Timeout) of
+            {ok, Body} ->
             case Status of
-            ?UPR_STATUS_OK ->
-                 {ok, FailoverLog} = receive_failover_log(
-                     Socket, Timeout, BodyLength),
-                 {_, MutationAcc} = Acc,
-                 Acc2 = {FailoverLog, MutationAcc},
-                 receive_snapshots(Socket, Timeout, MutationFun, Acc2, false);
-            ?UPR_STATUS_ROLLBACK ->
-                case gen_tcp:recv(Socket, BodyLength, Timeout) of
-                {ok, <<RollbackSeq:?UPR_SIZES_BY_SEQ>>} ->
+                ?UPR_STATUS_OK ->
+                    {ok, FailoverLog} =
+                        couch_upr_consumer:parse_failover_log(Body),
+                    {_, MutationAcc} = Acc,
+                    Acc2 = {FailoverLog, MutationAcc},
+                    receive_snapshots(
+                        Socket, Timeout, MutationFun, Acc2, false);
+                ?UPR_STATUS_ROLLBACK ->
+                    <<RollbackSeq:?UPR_SIZES_BY_SEQ>> = Body,
                     {rollback, RollbackSeq};
-                {error, closed} ->
-                    {error, closed}
+                ?UPR_STATUS_KEY_NOT_FOUND ->
+                    {error, wrong_partition_version};
+                ?UPR_STATUS_ERANGE ->
+                    {error, wrong_start_sequence_number}
                 end;
-            ?UPR_STATUS_KEY_NOT_FOUND ->
-                % Receive the body so that it is not mangled with the next
-                % request
-                {ok, _} = gen_tcp:recv(Socket, BodyLength, Timeout),
-                {error, wrong_partition_version};
-            ?UPR_STATUS_ERANGE ->
-                % Receive the body so that it is not mangled with the next
-                % request
-                {ok, _} = gen_tcp:recv(Socket, BodyLength, Timeout),
-                {error, wrong_start_sequence_number}
+            {error, closed} ->
+                {error, closed}
             end;
         {snapshot_marker, _PartId, _RequestId} ->
             % A snapshot marker is a special item, don't take it into
