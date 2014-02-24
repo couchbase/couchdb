@@ -1091,8 +1091,9 @@ handle_info({partial_update, Pid, AckTo, NewGroup}, #state{updater_pid = Pid} = 
         AckTo ! update_processed
     end,
     {noreply, NewState};
-handle_info({partial_update, _, _}, State) ->
+handle_info({partial_update, _, AckTo, _}, State) ->
     %% message from an old (probably pre-compaction) updater; ignore
+    AckTo ! update_processed,
     {noreply, State, ?GET_TIMEOUT(State)};
 
 handle_info({updater_info, Pid, {state, UpdaterState}}, #state{updater_pid = Pid} = State) ->
@@ -2880,7 +2881,8 @@ after_updater_stopped(State, _Reason) ->
 -spec process_last_updater_group(#state{}, 'nil' | #set_view_group{}) -> #state{}.
 process_last_updater_group(#state{updater_pid = Pid} = State, Group) ->
     receive
-    {partial_update, Pid, NewGroup} ->
+    {partial_update, Pid, AckTo, NewGroup} ->
+         AckTo ! update_processed,
          process_last_updater_group(State, NewGroup)
     after 0 ->
          case Group of
