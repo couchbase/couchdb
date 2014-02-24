@@ -100,8 +100,10 @@ get_sequence_number(Pid, PartId) ->
         PartId, RequestId),
     ok = gen_tcp:send(Socket, SeqStatRequest),
     case receive_stats(Socket, Timeout, []) of
-    {ok, [{error, {?UPR_STATUS_NOT_MY_VBUCKET, _}}]} ->
+    {error, {?UPR_STATUS_NOT_MY_VBUCKET, _}} ->
         {error, not_my_vbucket};
+    {error, _} = Error ->
+        Error;
     {ok, Stats} ->
         % The stats return the sequence number as well as the partition UUID,
         % but we care only about the sequence number
@@ -401,8 +403,8 @@ receive_failover_log(Socket, Timeout, BodyLength) ->
 
 
 -spec receive_stats(socket(), timeout(), [any()]) ->
-                           {ok, [{binary(), binary()}] |
-                            [{error, {upr_status(), binary()}}]} |
+                           {ok, [{binary(), binary()}]} |
+                           {error, {upr_status(), binary()}} |
                            {error, closed}.
 receive_stats(Socket, Timeout, Acc) ->
     case gen_tcp:recv(Socket, ?UPR_HEADER_LEN, Timeout) of
@@ -410,13 +412,12 @@ receive_stats(Socket, Timeout, Acc) ->
         case couch_upr_consumer:parse_header(Header) of
         {stats, Status, _RequestId, BodyLength, KeyLength} when
                 BodyLength > 0 ->
-            {ok, Stat} = receive_stat(
-                Socket, Timeout, Status, BodyLength, KeyLength),
-            case Stat of
-            {error, _} ->
-                {ok, lists:reverse([Stat|Acc])};
-            _ ->
-                receive_stats(Socket, Timeout, [Stat|Acc])
+            case receive_stat(
+                Socket, Timeout, Status, BodyLength, KeyLength) of
+            {ok, Stat} ->
+                receive_stats(Socket, Timeout, [Stat|Acc]);
+            {error, Reason} ->
+                {error, Reason}
             end;
         {stats, ?UPR_STATUS_OK, _RequestId, 0, 0} ->
             {ok, lists:reverse(Acc)}
@@ -427,8 +428,8 @@ receive_stats(Socket, Timeout, Acc) ->
 
 
 -spec receive_stat(socket(), timeout(), upr_status(), size(), size()) ->
-                          {ok, {binary(), binary()} |
-                           {error, {upr_status(), binary()}}} |
+                          {ok, {binary(), binary()}} |
+                          {error, {upr_status(), binary()}} |
                           {error, closed}.
 receive_stat(Socket, Timeout, Status, BodyLength, KeyLength) ->
     case gen_tcp:recv(Socket, BodyLength, Timeout) of

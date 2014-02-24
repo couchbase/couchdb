@@ -23,6 +23,7 @@ include_files = \
 source_files = \
     src/couch_upr.app.src \
     src/couch_upr.erl \
+    src/couch_upr_client.erl \
     src/couch_upr_consumer.erl \
     src/couch_upr_fake_server.erl \
     src/couch_upr_producer.erl
@@ -35,6 +36,7 @@ test_files = \
 compiled_files = \
     ebin/couch_upr.app \
     ebin/couch_upr.beam \
+    ebin/couch_upr_client.beam \
     ebin/couch_upr_consumer.beam \
     ebin/couch_upr_fake_server.beam \
     ebin/couch_upr_producer.beam

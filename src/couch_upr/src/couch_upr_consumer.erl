@@ -136,11 +136,10 @@ parse_failover_log(<<PartUuid:?UPR_SIZES_PARTITION_UUID/integer,
 
 
 -spec parse_stat(binary(), upr_status(), size(), size()) ->
-                        {ok, {binary(), binary()} |
-                         {error, {upr_status(), binary()}}}.
+                        {ok, {binary(), binary()}} |
+                        {error, {upr_status(), binary()}}.
 parse_stat(Body, Status, 0, _ValueLength) ->
-io:format("vmx: parse_stat: error ~p: ~p~n", [Status, Body]),
-    {ok, {error, {Status, Body}}};
+    {error, {Status, Body}};
 parse_stat(Body, ?UPR_STATUS_OK, KeyLength, ValueLength) ->
     <<Key:KeyLength/binary, Value:ValueLength/binary>> = Body,
     {ok, {Key, Value}}.
