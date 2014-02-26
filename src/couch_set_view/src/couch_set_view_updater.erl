@@ -167,7 +167,14 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
             write_queue = WriteQueue,
             view_empty_kvs = ViewEmptyKVs,
             compactor_running = CompactorRunning,
-            initial_seqs = ?set_seqs(Group)
+            initial_seqs = ?set_seqs(Group),
+            throttle = case lists:member(throttle, Options) of
+                true ->
+                    list_to_integer(
+                        couch_config:get("set_views", "throttle_period", "100"));
+                false ->
+                    0
+                end
         }),
         ok = couch_set_view_util:open_raw_read_fd(Group),
         try
@@ -561,8 +568,10 @@ do_writes(Acc) ->
     #writer_acc{
         kvs = Kvs,
         kvs_size = KvsSize,
-        write_queue = WriteQueue
+        write_queue = WriteQueue,
+        throttle = Throttle
     } = Acc,
+    ok = timer:sleep(Throttle),
     case couch_work_queue:dequeue(WriteQueue) of
     closed ->
         flush_writes(Acc#writer_acc{final_batch = true});

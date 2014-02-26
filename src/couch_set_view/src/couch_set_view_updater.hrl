@@ -34,5 +34,6 @@
     tmp_dir = nil,
     initial_seqs,
     max_insert_batch_size,
-    tmp_files = dict:new()
+    tmp_files = dict:new(),
+    throttle = 0
 }).
