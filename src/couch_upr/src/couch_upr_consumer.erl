@@ -17,7 +17,7 @@
 -export([parse_header/1, parse_snapshot_mutation/4, parse_snapshot_deletion/2,
     parse_failover_log/1, parse_stat/4]).
 -export([encode_sasl_auth/2, encode_open_connection/2, encode_stream_request/6,
-    encode_failover_log_request/2, encode_seq_stat_request/2]).
+    encode_failover_log_request/2, encode_seq_stat_request/2, encode_stream_close/2]).
 
 -include_lib("couch_upr/include/couch_upr.hrl").
 
@@ -55,7 +55,9 @@ parse_header(<<?UPR_MAGIC_RESPONSE,
     ?UPR_OPCODE_STATS ->
         {stats, Status, RequestId, BodyLength, KeyLength};
     ?UPR_OPCODE_SASL_AUTH ->
-        {sasl_auth, Status, RequestId, BodyLength}
+        {sasl_auth, Status, RequestId, BodyLength};
+    ?UPR_OPCODE_STREAM_CLOSE ->
+        {stream_close, Status, RequestId, BodyLength}
     end;
 parse_header(<<?UPR_MAGIC_REQUEST,
                Opcode,
@@ -244,6 +246,29 @@ encode_stream_request(PartId, RequestId, Flags, StartSeq, EndSeq,
                0:?UPR_SIZES_CAS>>,
     <<Header/binary, Body/binary>>.
 
+
+%UPR_CLOSE_STREAM command
+%Field        (offset) (value)
+%Magic        (0)    : 0x80
+%Opcode       (1)    : 0x52
+%Key length   (2,3)  : 0x0000
+%Extra length (4)    : 0x00
+%Data type    (5)    : 0x00
+%Vbucket      (6,7)  : 0x0005
+%Total body   (8-11) : 0x00000000
+%Opaque       (12-15): 0xdeadbeef
+%CAS          (16-23): 0x0000000000000000
+encode_stream_close(PartId, RequestId) ->
+    Header = <<?UPR_MAGIC_REQUEST,
+               ?UPR_OPCODE_STREAM_CLOSE,
+               0:?UPR_SIZES_KEY_LENGTH,
+               0,
+               0,
+               PartId:?UPR_SIZES_PARTITION,
+               0:?UPR_SIZES_BODY,
+               RequestId:?UPR_SIZES_OPAQUE,
+               0:?UPR_SIZES_CAS>>,
+    Header.
 
 %UPR_GET_FAILOVER_LOG command
 %Field        (offset) (value)

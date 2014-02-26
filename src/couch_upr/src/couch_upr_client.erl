@@ -16,7 +16,7 @@
 % Public API
 -export([start/2]).
 -export([add_stream/5, get_sequence_number/2, get_failover_log/2]).
--export([get_stream_event/2]).
+-export([get_stream_event/2, remove_stream/2, list_streams/1]).
 -export([enum_docs_since/7]).
 
 % gen_server callbacks
@@ -29,12 +29,13 @@
 -type mutations_fold_acc() :: any().
 
 -record(state, {
-    socket = nil                   :: socket(),
-    timeout = 5000                 :: timeout(),
-    request_id = 0                 :: request_id(),
-    pending_requests = dict:new()  :: dict(),
-    stream_queues = dict:new()     :: dict(),
-    worker_pid                     :: pid()
+    socket = nil                    :: socket(),
+    timeout = 5000                  :: timeout(),
+    request_id = 0                  :: request_id(),
+    pending_requests = dict:new()   :: dict(),
+    stream_queues = dict:new()      :: dict(),
+    active_streams = []             :: list(),
+    worker_pid                      :: pid()
 }).
 
 % This gen server implements a UPR client with vbucket stream multiplexing
@@ -62,6 +63,16 @@ start(Name, Bucket) ->
 add_stream(Pid, PartId, PartVersion, StartSeq, EndSeq) ->
     gen_server:call(Pid, {add_stream, PartId, PartVersion, StartSeq, EndSeq}).
 
+
+-spec remove_stream(pid(), partition_id()) ->
+                            'ok' | {'error', term()}.
+remove_stream(Pid, PartId) ->
+    gen_server:call(Pid, {remove_stream, PartId}).
+
+
+-spec list_streams(pid()) -> list().
+list_streams(Pid) ->
+    gen_server:call(Pid, list_streams).
 
 -spec get_sequence_number(pid(), partition_id()) ->
                                  {ok, update_seq()} | {error, not_my_vbucket}.
@@ -155,8 +166,27 @@ handle_call({add_stream, PartId, PartVersion, StartSeq, EndSeq}, From, State) ->
         PartId, RequestId, 0, StartSeq, EndSeq, PartVersion),
     ok = gen_tcp:send(Socket, StreamRequest),
     State2 = next_request_id(State),
-    State3 = add_pending_request(State2, RequestId, add_stream, From),
+    State3 = add_pending_request(State2, RequestId, {add_stream, PartId}, From),
     {noreply, State3};
+
+handle_call({remove_stream, PartId}, From, State) ->
+    #state{
+       request_id = RequestId,
+       socket = Socket
+    } = State,
+    StreamCloseRequest = couch_upr_consumer:encode_stream_close(
+        PartId, RequestId),
+    ok = gen_tcp:send(Socket, StreamCloseRequest),
+    State2 = next_request_id(State),
+    State3 = add_pending_request(State2, RequestId, {remove_stream, PartId}, From),
+    {noreply, State3};
+
+handle_call(list_streams, _From, State) ->
+    #state{
+       active_streams = ActiveStreams
+    } = State,
+    Reply = lists:foldl(fun({PartId, _}, Acc) -> [PartId|Acc] end, [], ActiveStreams),
+    {reply, Reply, State};
 
 handle_call({get_stats, PartId}, From, State) ->
     #state{
@@ -187,7 +217,8 @@ handle_call({get_failover_log, PartId}, From, State) ->
 % Else, put the caller into the stream queue waiter list
 handle_call({get_stream_event, RequestId}, From ,State) ->
     #state{
-       stream_queues = StreamQueues
+       stream_queues = StreamQueues,
+       active_streams = ActiveStreams
     } = State,
     case dict:find(RequestId, StreamQueues) of
     {ok, {Waiters, EvQueue}} ->
@@ -199,13 +230,24 @@ handle_call({get_stream_event, RequestId}, From ,State) ->
             {noreply, State#state{stream_queues = StreamQueues2}};
         _ ->
             [{Optype, _} = StreamEvent|Rest] = EvQueue,
-            StreamQueues2 = case Optype of
+            {ActiveStreams2, StreamQueues2} = case Optype of
             stream_end ->
-                dict:erase(RequestId, StreamQueues);
+                {
+                lists:keydelete(RequestId, 2, ActiveStreams),
+                dict:erase(RequestId, StreamQueues)
+                };
             _ ->
+                {
+                ActiveStreams,
                 dict:store(RequestId, {Waiters, Rest}, StreamQueues)
+                }
             end,
-            {reply, StreamEvent, State#state{stream_queues = StreamQueues2}}
+            State2 =
+            State#state{
+                active_streams = ActiveStreams2,
+                stream_queues = StreamQueues2
+            },
+            {reply, StreamEvent, State2}
         end;
     error ->
         {reply, {error, stream_not_found}, State}
@@ -217,25 +259,41 @@ handle_call({get_stream_event, RequestId}, From ,State) ->
 handle_info({stream_response, RequestId, Msg}, State) ->
     #state{
        pending_requests = PendingRequests,
+       active_streams = ActiveStreams,
        stream_queues = StreamQueues
     } = State,
     State2 = case dict:find(RequestId, PendingRequests) of
-    {ok, {ReqType, SendTo}} ->
+    {ok, {ReqInfo, SendTo}} ->
         gen_server:reply(SendTo, Msg),
         % Initialize stream queue if it is a successful add_stream response
-        StreamQueues2 = case ReqType of
-        add_stream ->
+        {ActiveStreams2, StreamQueues2} = case ReqInfo of
+        {add_stream, PartId} ->
             case Msg of
             {_, {failoverlog, _}} ->
-                dict:store(RequestId, {[], []}, StreamQueues);
+                {
+                 [{PartId, RequestId} | ActiveStreams],
+                 dict:store(RequestId, {[], []}, StreamQueues)
+                };
             _ ->
-                StreamQueues
+                {ActiveStreams, StreamQueues}
+            end;
+        {remove_stream, PartId} ->
+            case Msg of
+            ok ->
+                {PartId, StreamReqId} = lists:keyfind(PartId, 1, ActiveStreams),
+                {
+                 lists:keydelete(StreamReqId, 2, ActiveStreams),
+                 dict:erase(StreamReqId, StreamQueues)
+                };
+            _ ->
+            {ActiveStreams, StreamQueues}
             end;
         _ ->
-            StreamQueues
+            {ActiveStreams, StreamQueues}
         end,
         State#state{
             pending_requests = dict:erase(RequestId, PendingRequests),
+            active_streams = ActiveStreams2,
             stream_queues =  StreamQueues2
         };
     error ->
@@ -248,27 +306,38 @@ handle_info({stream_response, RequestId, Msg}, State) ->
 % Else, queue the event into the stream queue
 handle_info({stream_event, RequestId, {Optype, _} = Msg}, State) ->
     #state{
-       stream_queues = StreamQueues
+       stream_queues = StreamQueues,
+       active_streams = ActiveStreams
     } = State,
     case dict:find(RequestId, StreamQueues) of
     {ok, {Waiters, EvQueue}} ->
-        StreamQueues2 = case length(Waiters) of
+        {ActiveStreams2, StreamQueues2} = case length(Waiters) of
         0 ->
             EvQueue2 = EvQueue ++ [Msg],
-            dict:store(RequestId, {Waiters, EvQueue2}, StreamQueues);
+            {
+            ActiveStreams,
+            dict:store(RequestId, {Waiters, EvQueue2}, StreamQueues)
+            };
         _ ->
             [Waiter|Rest] = Waiters,
             gen_server:reply(Waiter, Msg),
             case Optype of
             stream_end ->
-                dict:erase(RequestId, StreamQueues);
+                {
+                lists:keydelete(RequestId, 2, ActiveStreams),
+                dict:erase(RequestId, StreamQueues)
+                };
             _ ->
+                {
+                ActiveStreams,
                 dict:store(RequestId, {Rest, EvQueue}, StreamQueues)
+                }
             end
         end,
         State2 =
         State#state{
-            stream_queues = StreamQueues2
+            stream_queues = StreamQueues2,
+            active_streams = ActiveStreams2
         },
         {noreply, State2};
     error ->
@@ -301,12 +370,11 @@ code_change(_OldVsn, State, _Extra) ->
 
 % Internal functions
 
--spec add_pending_request(#state{}, request_id(), atom(), {pid(), term()}) -> #state{}.
-add_pending_request(State, RequestId, ReqType, From) ->
+add_pending_request(State, RequestId, ReqInfo, From) ->
     #state{
        pending_requests = PendingRequests
     } = State,
-    PendingRequests2 = dict:store(RequestId, {ReqType, From}, PendingRequests),
+    PendingRequests2 = dict:store(RequestId, {ReqInfo, From}, PendingRequests),
     State#state{pending_requests = PendingRequests2}.
 
 -spec next_request_id(#state{}) -> #state{}.
@@ -330,13 +398,13 @@ sasl_auth(Bucket, State) ->
     } = State,
     Authenticate = couch_upr_consumer:encode_sasl_auth(Bucket, RequestId),
     ok = gen_tcp:send(Socket, Authenticate),
-    case gen_tcp:recv(Socket, ?UPR_HEADER_LEN, UprTimeout) of
+    case socket_recv(Socket, ?UPR_HEADER_LEN, UprTimeout) of
     {ok, Header} ->
         {sasl_auth, Status, RequestId, BodyLength} =
             couch_upr_consumer:parse_header(Header),
         % Receive the body so that it is not mangled with the next request,
         % we care about the status only though
-        {ok, _} = gen_tcp:recv(Socket, BodyLength, UprTimeout),
+        {ok, _} = socket_recv(Socket, BodyLength, UprTimeout),
         case Status of
         ?UPR_STATUS_OK ->
             {ok, State#state{request_id = RequestId + 1}};
@@ -355,7 +423,7 @@ open_connection(Name, State) ->
     OpenConnection = couch_upr_consumer:encode_open_connection(
         Name, RequestId),
     ok = gen_tcp:send(Socket, OpenConnection),
-    case gen_tcp:recv(Socket, ?UPR_HEADER_LEN, UprTimeout) of
+    case socket_recv(Socket, ?UPR_HEADER_LEN, UprTimeout) of
     {ok, Header} ->
         {open_connection, RequestId} = couch_upr_consumer:parse_header(Header)
     end,
@@ -368,7 +436,7 @@ open_connection(Name, State) ->
                                        {error, closed}.
 receive_snapshot_mutation(Socket, Timeout, PartId, KeyLength, BodyLength,
         ExtraLength, Cas) ->
-    case gen_tcp:recv(Socket, BodyLength, Timeout) of
+    case socket_recv(Socket, BodyLength, Timeout) of
     {ok, Body} ->
          {snapshot_mutation, Mutation} =
              couch_upr_consumer:parse_snapshot_mutation(KeyLength, Body,
@@ -400,7 +468,7 @@ receive_snapshot_mutation(Socket, Timeout, PartId, KeyLength, BodyLength,
                                        {error, closed}.
 receive_snapshot_deletion(Socket, Timeout, PartId, KeyLength, BodyLength,
         Cas) ->
-    case gen_tcp:recv(Socket, BodyLength, Timeout) of
+    case socket_recv(Socket, BodyLength, Timeout) of
     {ok, Body} ->
          {snapshot_deletion, Deletion} =
              couch_upr_consumer:parse_snapshot_deletion(KeyLength, Body),
@@ -421,7 +489,7 @@ receive_snapshot_deletion(Socket, Timeout, PartId, KeyLength, BodyLength,
 -spec receive_stream_end(socket(), timeout(), size()) ->
                                 {ok, <<_:32>>} | {error, closed}.
 receive_stream_end(Socket, Timeout, BodyLength) ->
-    case gen_tcp:recv(Socket, BodyLength, Timeout) of
+    case socket_recv(Socket, BodyLength, Timeout) of
     {ok, Flag} ->
         Flag;
     {error, closed} ->
@@ -436,7 +504,7 @@ receive_failover_log(_Socket, _Timeout, _Status, 0) ->
 receive_failover_log(Socket, Timeout, Status, BodyLength) ->
     case Status of
     ?UPR_STATUS_OK ->
-        case gen_tcp:recv(Socket, BodyLength, Timeout) of
+        case socket_recv(Socket, BodyLength, Timeout) of
         {ok, Body} ->
             couch_upr_consumer:parse_failover_log(Body);
         {error, _} = Error->
@@ -449,7 +517,7 @@ receive_failover_log(Socket, Timeout, Status, BodyLength) ->
 -spec receive_rollback_seq(socket(), timeout(), size()) ->
                                   {rollback, update_seq()} | {error, term()}.
 receive_rollback_seq(Socket, Timeout, BodyLength) ->
-    case gen_tcp:recv(Socket, BodyLength, Timeout) of
+    case socket_recv(Socket, BodyLength, Timeout) of
     {ok, <<RollbackSeq:?UPR_SIZES_BY_SEQ>>} ->
         {ok, RollbackSeq};
     {error, _} = Error->
@@ -462,7 +530,7 @@ receive_rollback_seq(Socket, Timeout, BodyLength) ->
                            {error, {upr_status(), binary()}}} |
                           {error, closed}.
 receive_stat(Socket, Timeout, Status, BodyLength, KeyLength) ->
-    case gen_tcp:recv(Socket, BodyLength, Timeout) of
+    case socket_recv(Socket, BodyLength, Timeout) of
     {ok, Body} ->
         couch_upr_consumer:parse_stat(
             Body, Status, KeyLength, BodyLength - KeyLength);
@@ -484,10 +552,35 @@ receive_events(Pid, RequestId, CallbackFn, InAcc) ->
     end.
 
 
+-spec socket_recv(socket(), size(), timeout()) ->
+    {ok, binary()} | {error, closed | inet:posix()}.
+socket_recv(_Socket, 0, _Timeout) ->
+    {ok, <<>>};
+socket_recv(Socket, Length, Timeout) ->
+    gen_tcp:recv(Socket, Length, Timeout).
+
+
+-spec parse_error_response(socket(), timeout(), integer(), integer()) ->
+                                     {'error', atom() | {'status', integer()}}.
+parse_error_response(Socket, Timeout, BodyLength, Status) ->
+    socket_recv(Socket, BodyLength, Timeout),
+    case Status of
+    ?UPR_STATUS_KEY_NOT_FOUND ->
+        {error, wrong_partition_version};
+    ?UPR_STATUS_ERANGE ->
+        {error, wrong_start_sequence_number};
+    ?UPR_STATUS_KEY_EEXISTS ->
+        {error, vbucket_stream_already_exists};
+    ?UPR_STATUS_NOT_MY_VBUCKET ->
+        {error, vbucket_stream_not_found};
+    _ ->
+        {error, {status, Status}}
+    end.
+
 % The worker process for handling upr connection downstream pipe
 % Read and parse downstream messages and send to the gen_server process
 receive_worker(Socket, Timeout, Parent, MsgAcc0) ->
-    case gen_tcp:recv(Socket, ?UPR_HEADER_LEN, infinity) of
+    case socket_recv(Socket, ?UPR_HEADER_LEN, infinity) of
     {ok, Header} ->
         {Action, MsgAcc} =
         case couch_upr_consumer:parse_header(Header) of
@@ -501,22 +594,20 @@ receive_worker(Socket, Timeout, Parent, MsgAcc0) ->
                 {ok, RollbackSeq} = receive_rollback_seq(
                      Socket, Timeout, BodyLength),
                 {rollback, RollbackSeq};
-            ?UPR_STATUS_KEY_NOT_FOUND ->
-                gen_tcp:recv(Socket, BodyLength, Timeout),
-                {error, wrong_partition_version};
-            ?UPR_STATUS_ERANGE ->
-                gen_tcp:recv(Socket, BodyLength, Timeout),
-                {error, wrong_start_sequence_number};
-            ?UPR_STATUS_KEY_EEXISTS ->
-                gen_tcp:recv(Socket, BodyLength, Timeout),
-                {error, vbucket_stream_already_exists};
             _ ->
-                gen_tcp:recv(Socket, BodyLength, Timeout),
-                {error, {status, Status}}
+                parse_error_response(Socket, Timeout, BodyLength, Status)
             end,
             {done, {stream_response, RequestId, {RequestId, Response}}};
         {failover_log, Status, RequestId, BodyLength} ->
             Response = receive_failover_log(Socket, Timeout, Status, BodyLength),
+            {done, {stream_response, RequestId, Response}};
+        {stream_close, Status, RequestId, BodyLength} ->
+            Response = case Status of
+            ?UPR_STATUS_OK ->
+                ok;
+            _ ->
+                parse_error_response(Socket, Timeout, BodyLength, Status)
+            end,
             {done, {stream_response, RequestId, Response}};
         {stats, Status, RequestId, BodyLength, KeyLength} ->
             case BodyLength of
