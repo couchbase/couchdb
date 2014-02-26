@@ -215,8 +215,10 @@ maybe_retry_compact(CompactResult0, StartTime, TmpDir, Owner, Retries) ->
         {ok, {LogFiles, NewSeqs}} = gen_server:call(
             Owner, compact_log_files, infinity),
         ?LOG_INFO("Compactor for set view `~s`, ~s group `~s`, "
-                  "applying delta of ~p changes (retry number ~p)",
-                  [SetName, Type, DDocId, MissingCount, Retries]),
+                  "applying delta of ~p changes (retry number ~p, "
+                  "max # of log files per btree ~p)",
+                  [SetName, Type, DDocId, MissingCount, Retries,
+                   length(hd(LogFiles))]),
         [TotalChanges] = couch_task_status:get([total_changes]),
         TotalChanges2 = TotalChanges + MissingCount,
         couch_task_status:update([
