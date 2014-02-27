@@ -28,14 +28,14 @@
     code_change/3]).
 
 -include_lib("couch_upr/include/couch_upr.hrl").
+-include_lib("couch_upr/include/couch_upr_typespecs.hrl").
 
 
 -define(dbname(SetName, PartId),
     <<SetName/binary, $/, (list_to_binary(integer_to_list(PartId)))/binary>>).
 
 
-% #doc_info{}, #doc{}, #db{} are from couch_db.hrl. They are copy & pasted here
-% as they will go away once the proper UPR is in place.
+% #doc_info{}, #doc{}, #db{} are copy & pasted from couch_db.hrl
 -record(doc_info,
     {
     id = <<"">>,
@@ -521,7 +521,7 @@ handle_sasl_auth_body(Socket, BodyLength, RequestId) ->
 % This function creates mutations for one snapshot of one partition of a
 % given size
 -spec create_mutations(binary(), partition_id(), update_seq(), update_seq()) ->
-                              [#doc{}].
+                              [tuple()].
 create_mutations(SetName, PartId, StartSeq, EndSeq) ->
     {ok, Db} = open_db(SetName, PartId),
     DocsFun = fun(DocInfo, Acc) ->

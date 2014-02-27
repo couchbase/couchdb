@@ -22,6 +22,7 @@
 
 -include("couch_db.hrl").
 -include("couch_set_view_updater.hrl").
+-include_lib("couch_upr/include/couch_upr.hrl").
 
 -define(MAP_QUEUE_SIZE, 256 * 1024).
 -define(WRITE_QUEUE_SIZE, 512 * 1024).
@@ -518,30 +519,30 @@ notify_owner(Owner, Msg, UpdaterPid) ->
     Owner ! {updater_info, UpdaterPid, Msg}.
 
 
-queue_doc({Seq, Doc, PartId}, MapQueue, Group, MaxDocSize, InitialBuild) ->
-    case Doc#doc.deleted of
+queue_doc(Doc, MapQueue, Group, MaxDocSize, InitialBuild) ->
+    case Doc#upr_doc.deleted of
     true when InitialBuild ->
         Entry = nil;
     true ->
-        Entry = {Seq, Doc, PartId};
+        Entry = Doc;
     false ->
         #set_view_group{
            set_name = SetName,
            name = DDocId,
            type = GroupType
         } = Group,
-        case couch_util:validate_utf8(Doc#doc.id) of
+        case couch_util:validate_utf8(Doc#upr_doc.id) of
         true ->
             case (MaxDocSize > 0) andalso
-                (iolist_size(Doc#doc.body) > MaxDocSize) of
+                (iolist_size(Doc#upr_doc.body) > MaxDocSize) of
             true ->
                 ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, skipping "
                     "document with ID `~s`: too large body (~p bytes)",
                     [SetName, GroupType, DDocId,
-                     ?b2l(Doc#doc.id), iolist_size(Doc#doc.body)]),
-                Entry = {Seq, Doc#doc{deleted = true}, PartId};
+                     ?b2l(Doc#upr_doc.id), iolist_size(Doc#upr_doc.body)]),
+                Entry = Doc#upr_doc{deleted = true};
             false ->
-                Entry = {Seq, Doc, PartId}
+                Entry = Doc
             end;
         false ->
             % If the id isn't utf8 (memcached allows it), then log an error
@@ -551,8 +552,8 @@ queue_doc({Seq, Doc, PartId}, MapQueue, Group, MaxDocSize, InitialBuild) ->
             % not reprocess again.
             ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, skipping "
                 "document with non-utf8 id. Doc id bytes: ~w",
-                [SetName, GroupType, DDocId, ?b2l(Doc#doc.id)]),
-            Entry = {Seq, Doc#doc{deleted = true}, PartId}
+                [SetName, GroupType, DDocId, ?b2l(Doc#upr_doc.id)]),
+            Entry = Doc#upr_doc{deleted = true}
         end
     end,
     case Entry of
@@ -577,10 +578,36 @@ do_maps(Group, MapQueue, WriteQueue) ->
     {ok, Queue, _QueueSize} ->
         ViewCount = length(Group#set_view_group.views),
         Items = lists:foldr(
-            fun({Seq, #doc{id = Id, deleted = true}, PartitionId}, Acc) ->
-                Item = {Seq, Id, PartitionId, []},
+            fun(#upr_doc{deleted = true} = UprDoc, Acc) ->
+                #upr_doc{
+                    id = Id,
+                    partition = PartId,
+                    seq = Seq
+                } = UprDoc,
+                Item = {Seq, Id, PartId, []},
                 [Item | Acc];
-            ({Seq, #doc{id = Id, deleted = false} = Doc, PartitionId}, Acc) ->
+            (#upr_doc{deleted = false} = UprDoc, Acc) ->
+                #upr_doc{
+                    id = Id,
+                    body = Body,
+                    partition = PartId,
+                    rev_seq = RevSeq,
+                    seq = Seq,
+                    cas = Cas,
+                    expiration = Expiration,
+                    flags = Flags,
+                    data_type = DataType
+                } = UprDoc,
+                Doc = #doc{
+                    id = Id,
+                    rev = {RevSeq, <<Cas:64, Expiration:32, Flags:32>>},
+                    body = Body,
+                    % XXX vmx 2014-02-26: Make sure the type is correct. I
+                    % guess UPR should provide us with the needed
+                    % information
+                    content_meta = DataType,
+                    deleted = false
+                },
                 try
                     {ok, Result} = couch_set_view_mapreduce:map(Doc),
                     {Result2, _} = lists:foldr(
@@ -596,13 +623,13 @@ do_maps(Group, MapQueue, WriteQueue) ->
                             {[KVs | AccRes], Pos - 1}
                         end,
                         {[], ViewCount}, Result),
-                    Item = {Seq, Id, PartitionId, Result2},
+                    Item = {Seq, Id, PartId, Result2},
                     [Item | Acc]
                 catch _:{error, Reason} ->
                     ErrorMsg = "Bucket `~s`, ~s group `~s`, error mapping document `~s`: ~s",
                     Args = [SetName, Type, DDocId, Id, couch_util:to_binary(Reason)],
                     ?LOG_MAPREDUCE_ERROR(ErrorMsg, Args),
-                    [{Seq, Id, PartitionId, []} | Acc]
+                    [{Seq, Id, PartId, []} | Acc]
                 end
             end,
             [], Queue),

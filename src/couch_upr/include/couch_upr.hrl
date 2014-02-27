@@ -62,21 +62,6 @@
 -define(UPR_MAX_FAILOVER_LOG_SIZE, 25).
 
 
--type upr_status() :: non_neg_integer().
--type request_id() :: non_neg_integer().
--type size()       :: non_neg_integer().
--type socket()     :: port().
-
-% Those types are duplicates from couch_set_view.hrl
--type uint64()                   :: 0..18446744073709551615.
--type partition_id()             :: non_neg_integer().
--type update_seq()               :: non_neg_integer().
--type uuid()                     :: uint64().
--type partition_version()        :: [{uuid(), update_seq()}].
-% Manipulate via ordsets or orddict, keep it ordered by partition id.
--type partition_versions()       :: ordsets:ordset({partition_id(), partition_version()}).
-
-
 -record(mutation, {
     seq = 0         :: update_seq(),
     rev_seq = 0     :: non_neg_integer(),
@@ -86,4 +71,18 @@
     key = <<>>      :: binary(),
     value = <<>>    :: binary(),
     metadata = <<>> :: binary()
+}).
+
+-record(upr_doc, {
+    id = <<>>       :: binary(),
+    body = <<>>     :: binary(),
+    % data_type corresponds to content_meta in #doc{} from couch_db.hrl
+    data_type = 0   :: 0..255,
+    partition = 0   :: partition_id(),
+    cas = 0         :: uint64(),
+    rev_seq = 0     :: uint64(),
+    seq = 0         :: update_seq(),
+    flags = 0       :: non_neg_integer(),
+    expiration = 0  :: non_neg_integer(),
+    deleted = false :: boolean()
 }).

@@ -23,6 +23,7 @@
     encode_sasl_auth/1, encode_stream_close_response/2]).
 
 -include_lib("couch_upr/include/couch_upr.hrl").
+-include_lib("couch_upr/include/couch_upr_typespecs.hrl").
 
 
 -spec parse_header(<<_:192>>) ->

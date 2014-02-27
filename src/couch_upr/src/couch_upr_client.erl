@@ -24,6 +24,7 @@
 
 -include("couch_db.hrl").
 -include_lib("couch_upr/include/couch_upr.hrl").
+-include_lib("couch_upr/include/couch_upr_typespecs.hrl").
 -define(MAX_BUF_SIZE, 10485760).
 
 -type mutations_fold_fun() :: fun().
@@ -96,7 +97,8 @@ get_failover_log(Pid, PartId) ->
     gen_server:call(Pid, {get_failover_log, PartId}).
 
 
--spec get_stream_event(pid(), request_id()) -> {atom(), #doc{}} | {'error', term()}.
+-spec get_stream_event(pid(), request_id()) ->
+                              {atom(), #upr_doc{}} | {'error', term()}.
 get_stream_event(Pid, ReqId) ->
     gen_server:call(Pid, {get_stream_event, ReqId}).
 
@@ -430,8 +432,7 @@ open_connection(Name, State) ->
 
 -spec receive_snapshot_mutation(socket(), timeout(), partition_id(), size(),
                                 size(), size(), uint64()) ->
-                                       {update_seq(), #doc{}, partition_id()} |
-                                       {error, closed}.
+                                       #upr_doc{} | {error, closed}.
 receive_snapshot_mutation(Socket, Timeout, PartId, KeyLength, BodyLength,
         ExtraLength, Cas) ->
     case socket_recv(Socket, BodyLength, Timeout) of
@@ -439,9 +440,6 @@ receive_snapshot_mutation(Socket, Timeout, PartId, KeyLength, BodyLength,
          {snapshot_mutation, Mutation} =
              couch_upr_consumer:parse_snapshot_mutation(KeyLength, Body,
                  BodyLength, ExtraLength),
-         % XXX vmx 2013-08-23: For now, queue in items in the way the current
-         %     updater expects them. This can be changed later to a simpler
-         %     format.
          #mutation{
              seq = Seq,
              rev_seq = RevSeq,
@@ -450,19 +448,26 @@ receive_snapshot_mutation(Socket, Timeout, PartId, KeyLength, BodyLength,
              key = Key,
              value = Value
          } = Mutation,
-         Doc = #doc{
+         #upr_doc{
              id = Key,
-             rev = {RevSeq, <<Cas:64, Expiration:32, Flags:32>>},
-             body = Value
-         },
-         {Seq, Doc, PartId};
+             body = Value,
+             % XXX vmx 2014-02-26: TODO: datatype
+             %data_type =
+             partition = PartId,
+             cas = Cas,
+             rev_seq = RevSeq,
+             seq = Seq,
+             flags = Flags,
+             expiration = Expiration,
+             deleted = false
+         };
     {error, _} = Error ->
         Error
     end.
 
 -spec receive_snapshot_deletion(socket(), timeout(), partition_id(), size(),
                                 size(), uint64()) ->
-                                       {update_seq(), #doc{}, partition_id()} |
+                                       #upr_doc{} |
                                        {error, closed | inet:posix()}.
 receive_snapshot_deletion(Socket, Timeout, PartId, KeyLength, BodyLength,
         Cas) ->
@@ -470,16 +475,20 @@ receive_snapshot_deletion(Socket, Timeout, PartId, KeyLength, BodyLength,
     {ok, Body} ->
          {snapshot_deletion, Deletion} =
              couch_upr_consumer:parse_snapshot_deletion(KeyLength, Body),
-         % XXX vmx 2013-08-23: For now, queue in items in the way the current
-         %     updater expects them. This can be changed later to a simpler
-         %     format.
          {Seq, RevSeq, Key, _Metadata} = Deletion,
-         Doc = #doc{
+         #upr_doc{
              id = Key,
-             rev = {RevSeq, <<Cas:64, 0:32, 0:32>>},
+             body = <<>>,
+             % XXX vmx 2014-02-26: TODO: datatype
+             %data_type =
+             partition = PartId,
+             cas = Cas,
+             rev_seq = RevSeq,
+             seq = Seq,
+             flags = 0,
+             expiration = 0,
              deleted = true
-         },
-         {Seq, Doc, PartId};
+         };
     {error, Reason} ->
         {error, Reason}
     end.

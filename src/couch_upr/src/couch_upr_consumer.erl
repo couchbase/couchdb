@@ -20,6 +20,7 @@
     encode_failover_log_request/2, encode_seq_stat_request/2, encode_stream_close/2]).
 
 -include_lib("couch_upr/include/couch_upr.hrl").
+-include_lib("couch_upr/include/couch_upr_typespecs.hrl").
 
 
 % TODO vmx 2013-08-22: Bad match error handling

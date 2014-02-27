@@ -248,9 +248,9 @@ setup_test() ->
     populate_set().
 
 is_same_partition(PartId, Docs) ->
-    lists:all(fun({_, {_,_, P}}) ->
+    lists:all(fun({_, #upr_doc{partition = P}}) ->
         P =:= PartId
-        end, Docs).
+    end, Docs).
 
 read_streams(Pid, StreamReqs) ->
     lists:foldr(fun(Request, Acc) ->
