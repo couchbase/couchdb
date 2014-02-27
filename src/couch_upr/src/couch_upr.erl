@@ -117,7 +117,7 @@ get_failover_log(Pid, PartId) ->
     FailoverLogRequest = couch_upr_consumer:encode_failover_log_request(
         PartId, RequestId),
     ok = gen_tcp:send(Socket, FailoverLogRequest),
-    case recv(Socket, ?UPR_HEADER_LEN, Timeout) of
+    case gen_tcp:recv(Socket, ?UPR_HEADER_LEN, Timeout) of
     {ok, Header} ->
         case couch_upr_consumer:parse_header(Header) of
         {failover_log, ?UPR_STATUS_OK, RequestId, BodyLength} ->
@@ -145,13 +145,13 @@ drain(Pid) ->
 sasl_auth(Bucket, RequestId, Socket, Timeout) ->
     Authenticate = couch_upr_consumer:encode_sasl_auth(Bucket, RequestId),
     ok = gen_tcp:send(Socket, Authenticate),
-    case recv(Socket, ?UPR_HEADER_LEN, Timeout) of
+    case gen_tcp:recv(Socket, ?UPR_HEADER_LEN, Timeout) of
     {ok, Header} ->
         {sasl_auth, Status, RequestId, BodyLength} =
             couch_upr_consumer:parse_header(Header),
         % Receive the body so that it is not mangled with the next request,
         % we care about the status only though
-        {ok, _} = recv(Socket, BodyLength, Timeout),
+        {ok, _} = gen_tcp:recv(Socket, BodyLength, Timeout),
         case Status of
         ?UPR_STATUS_OK ->
             ok;
@@ -169,7 +169,7 @@ open_connection(Name, RequestId, Socket, Timeout) ->
     OpenConnection = couch_upr_consumer:encode_open_connection(
         Name, RequestId),
     ok = gen_tcp:send(Socket, OpenConnection),
-    case recv(Socket, ?UPR_HEADER_LEN, Timeout) of
+    case gen_tcp:recv(Socket, ?UPR_HEADER_LEN, Timeout) of
     {ok, Header} ->
         {open_connection, RequestId} = couch_upr_consumer:parse_header(Header),
         ok;
@@ -247,11 +247,11 @@ code_change(_OldVsn, State, _Extra) ->
                                 closed} |
                                {rollback, update_seq()}.
 receive_snapshots(Socket, Timeout, MutationFun, Acc, SnapshotEnd) ->
-    case recv(Socket, ?UPR_HEADER_LEN, Timeout) of
+    case gen_tcp:recv(Socket, ?UPR_HEADER_LEN, Timeout) of
     {ok, Header} ->
         case couch_upr_consumer:parse_header(Header) of
         {stream_request, Status, _RequestId, BodyLength} ->
-            case recv(Socket, BodyLength, Timeout) of
+            case gen_tcp:recv(Socket, BodyLength, Timeout) of
             {ok, Body} ->
             case Status of
                 ?UPR_STATUS_OK ->
@@ -329,7 +329,7 @@ process_item(Item, MutationFun, Acc) ->
                                        #doc{} | {error, closed}.
 receive_snapshot_mutation(Socket, Timeout, PartId, KeyLength, BodyLength,
         ExtraLength, Cas) ->
-    case recv(Socket, BodyLength, Timeout) of
+    case gen_tcp:recv(Socket, BodyLength, Timeout) of
     {ok, Body} ->
          {snapshot_mutation, Mutation} =
              couch_upr_consumer:parse_snapshot_mutation(KeyLength, Body,
@@ -361,7 +361,7 @@ receive_snapshot_mutation(Socket, Timeout, PartId, KeyLength, BodyLength,
                                        #doc{} | {error, closed}.
 receive_snapshot_deletion(Socket, Timeout, PartId, KeyLength, BodyLength,
         Cas) ->
-    case recv(Socket, BodyLength, Timeout) of
+    case gen_tcp:recv(Socket, BodyLength, Timeout) of
     {ok, Body} ->
          {snapshot_deletion, Deletion} =
              couch_upr_consumer:parse_snapshot_deletion(KeyLength, Body),
@@ -383,7 +383,7 @@ receive_snapshot_deletion(Socket, Timeout, PartId, KeyLength, BodyLength,
 -spec receive_stream_end(socket(), timeout(), size()) ->
                                 {ok, <<_:32>>} | {error, closed}.
 receive_stream_end(Socket, Timeout, BodyLength) ->
-    case recv(Socket, BodyLength, Timeout) of
+    case gen_tcp:recv(Socket, BodyLength, Timeout) of
     {ok, Flag} ->
         Flag;
     {error, closed} ->
@@ -395,8 +395,10 @@ receive_stream_end(Socket, Timeout, BodyLength) ->
 % partition UUID and sequence number
 -spec receive_failover_log(socket(), timeout(), size()) ->
                                   {ok, partition_version()} | {error, closed}.
+receive_failover_log(_Socket, _Timeout, 0) ->
+    {error, no_failover_log_found};
 receive_failover_log(Socket, Timeout, BodyLength) ->
-    case recv(Socket, BodyLength, Timeout) of
+    case gen_tcp:recv(Socket, BodyLength, Timeout) of
     {ok, Body} ->
         couch_upr_consumer:parse_failover_log(Body);
     {error, closed} ->
@@ -409,7 +411,7 @@ receive_failover_log(Socket, Timeout, BodyLength) ->
                             [{error, {upr_status(), binary()}}]} |
                            {error, closed}.
 receive_stats(Socket, Timeout, Acc) ->
-    case recv(Socket, ?UPR_HEADER_LEN, Timeout) of
+    case gen_tcp:recv(Socket, ?UPR_HEADER_LEN, Timeout) of
     {ok, Header} ->
         case couch_upr_consumer:parse_header(Header) of
         {stats, Status, _RequestId, BodyLength, KeyLength} when
@@ -435,18 +437,10 @@ receive_stats(Socket, Timeout, Acc) ->
                            {error, {upr_status(), binary()}}} |
                           {error, closed}.
 receive_stat(Socket, Timeout, Status, BodyLength, KeyLength) ->
-    case recv(Socket, BodyLength, Timeout) of
+    case gen_tcp:recv(Socket, BodyLength, Timeout) of
     {ok, Body} ->
         couch_upr_consumer:parse_stat(
             Body, Status, KeyLength, BodyLength - KeyLength);
     {error, closed} ->
         {error, closed}
     end.
-
-
--spec recv(socket(), size(), timeout()) ->
-    {ok, binary()} | {error, closed | inet:posix()}.
-recv(_Socket, 0, _Timeout) ->
-    {ok, <<>>};
-recv(Socket, Length, Timeout) ->
-    gen_tcp:recv(Socket, Length, Timeout).
