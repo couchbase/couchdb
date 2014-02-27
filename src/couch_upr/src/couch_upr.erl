@@ -33,7 +33,10 @@
 -record(state, {
     socket = nil           :: socket(),
     timeout = 5000         :: timeout(),
-    request_id = 0         :: request_id()
+    request_id = 0         :: request_id(),
+    callbacks = dict:new() :: dict(),
+    % Data that was received but not parsed yet
+    data = <<>>            :: binary()
 }).
 
 
