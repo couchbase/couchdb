@@ -15,12 +15,10 @@
 
 % Public API
 -export([start/2]).
--export([enum_docs_since/7, get_sequence_number/2, drain/1]).
+-export([enum_docs_since/7, get_failover_log/2, drain/1]).
+-export([get_sequence_number/2]).
 % API for XDCR
 -export([sasl_auth/4, open_connection/4]).
-
-% Only used for testing
--export([get_failover_log/2]).
 
 % gen_server callbacks
 -export([init/1, terminate/2, handle_call/3, handle_cast/2, handle_info/2, code_change/3]).
