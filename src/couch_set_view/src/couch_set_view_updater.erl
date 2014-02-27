@@ -386,7 +386,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
             PartVersions = couch_util:get_value(PartId, AccVersions),
             case AccRollbacks of
             [] ->
-                {ok, EndSeq} = couch_upr:get_sequence_number(UprPid, PartId),
+                {ok, EndSeq} = couch_upr_client:get_sequence_number(UprPid, PartId),
                 case EndSeq =:= Since of
                 true ->
                     {AccCount, AccSeqs, AccVersions, AccRollbacks};
@@ -395,7 +395,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                         queue_doc(Item, MapQueue, Group, MaxDocSize, InitialBuild),
                         AccCount2 + 1
                     end,
-                    Result = couch_upr:enum_docs_since(
+                    Result = couch_upr_client:enum_docs_since(
                         UprPid, PartId, PartVersions, Since, EndSeq,
                         ChangesWrapper, AccCount),
                     case Result of
@@ -418,7 +418,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                 % in the index, but just check for a rollback of another
                 % partition (i.e. a request with start seq == end seq)
                 ChangesWrapper = fun(_, _) -> ok end,
-                Result = couch_upr:enum_docs_since(
+                Result = couch_upr_client:enum_docs_since(
                     UprPid, PartId, PartVersions, Since, Since, ChangesWrapper,
                     AccCount),
                 case Result of

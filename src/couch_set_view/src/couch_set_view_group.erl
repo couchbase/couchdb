@@ -417,7 +417,7 @@ do_init({_, SetName, _} = InitArgs) ->
             SetName/binary, " ", (Group#set_view_group.name)/binary,
             " (", (atom_to_binary(Category, latin1))/binary, "/",
             (atom_to_binary(Type, latin1))/binary, ")">>,
-        {ok, UprPid} = couch_upr:start(UprName, SetName),
+        {ok, UprPid} = couch_upr_client:start(UprName, SetName),
         State = #state{
             init_args = InitArgs,
             replica_group = ReplicaPid,
@@ -2785,7 +2785,6 @@ stop_updater(#state{updater_pid = Pid, initial_build = true} = State) when is_pi
               [?set_name(State), ?type(State), ?category(State),
                ?group_id(State), LostTime]),
     couch_set_view_util:shutdown_wait(Pid),
-    ok = couch_upr:drain((State#state.group)#set_view_group.upr_pid),
     inc_util_stat(#util_stats.updater_interruptions, 1),
     inc_util_stat(#util_stats.wasted_indexing_time, LostTime),
     State#state{
@@ -2808,7 +2807,6 @@ stop_updater(#state{updater_pid = Pid} = State) when is_pid(Pid) ->
         receive {'EXIT', Pid, _} -> ok after 0 -> ok end,
         after_updater_stopped(State2, Reason)
     end,
-    ok = couch_upr:drain((State#state.group)#set_view_group.upr_pid),
     ok = couch_file:refresh_eof((State#state.group)#set_view_group.fd),
     erlang:demonitor(MRef, [flush]),
     NewState.
