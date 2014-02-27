@@ -16,7 +16,7 @@
 
 %% XXX: Figure out how to -include("couch_db.hrl")
 -record(doc, {id= <<"">>, rev={0, <<>>}, body= <<"{}">>,
-        content_meta=0, deleted=false, meta=[], seq=0, partition=0}).
+        content_meta=0, deleted=false, meta=[]}).
 
 main(_) ->
     test_util:init_code_path(),

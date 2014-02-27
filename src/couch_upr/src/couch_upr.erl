@@ -10,6 +10,9 @@
 % License for the specific language governing permissions and limitations under
 % the License.
 
+% TODO vmx 2014-01-24: get rid of #doc{}, with UPR it doesn't need to be tied
+% to the original #doc{} record
+
 -module(couch_upr).
 -behaviour(gen_server).
 
@@ -306,7 +309,8 @@ receive_snapshots(Socket, Timeout, MutationFun, Acc) ->
     end.
 
 
--spec process_item(#doc{}, mutations_fold_fun(), mutations_fold_acc()) ->
+-spec process_item({update_seq(), #doc{}, partition_id()},
+                   mutations_fold_fun(), mutations_fold_acc()) ->
                           mutations_fold_acc().
 process_item(Item, MutationFun, Acc) ->
     {FailoverLog, ItemsAcc} = Acc,
@@ -316,7 +320,8 @@ process_item(Item, MutationFun, Acc) ->
 
 -spec receive_snapshot_mutation(socket(), timeout(), partition_id(), size(),
                                 size(), size(), uint64()) ->
-                                       #doc{} | {error, closed}.
+                                       {update_seq(), #doc{}, partition_id()} |
+                                       {error, closed}.
 receive_snapshot_mutation(Socket, Timeout, PartId, KeyLength, BodyLength,
         ExtraLength, Cas) ->
     case gen_tcp:recv(Socket, BodyLength, Timeout) of
@@ -335,20 +340,20 @@ receive_snapshot_mutation(Socket, Timeout, PartId, KeyLength, BodyLength,
              key = Key,
              value = Value
          } = Mutation,
-         #doc{
+         Doc = #doc{
              id = Key,
              rev = {RevSeq, <<Cas:64, Expiration:32, Flags:32>>},
-             body = Value,
-             seq = Seq,
-             partition = PartId
-         };
+             body = Value
+         },
+         {Seq, Doc, PartId};
     {error, closed} ->
         {error, closed}
     end.
 
 -spec receive_snapshot_deletion(socket(), timeout(), partition_id(), size(),
                                 size(), uint64()) ->
-                                       #doc{} | {error, closed}.
+                                       {update_seq(), #doc{}, partition_id()} |
+                                       {error, closed}.
 receive_snapshot_deletion(Socket, Timeout, PartId, KeyLength, BodyLength,
         Cas) ->
     case gen_tcp:recv(Socket, BodyLength, Timeout) of
@@ -359,13 +364,12 @@ receive_snapshot_deletion(Socket, Timeout, PartId, KeyLength, BodyLength,
          %     updater expects them. This can be changed later to a simpler
          %     format.
          {Seq, RevSeq, Key, _Metadata} = Deletion,
-         #doc{
+         Doc = #doc{
              id = Key,
              rev = {RevSeq, <<Cas:64, 0:32, 0:32>>},
-             deleted = true,
-             seq = Seq,
-             partition = PartId
-         };
+             deleted = true
+         },
+         {Seq, Doc, PartId};
     {error, closed} ->
         {error, closed}
     end.

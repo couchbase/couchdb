@@ -70,9 +70,7 @@
 
     % key/value tuple of meta information, provided when using special options:
     % couch_db:open_doc(Db, Id, Options).
-    meta = [],
-    seq = 0,
-    partition = 0
+    meta = []
     }).
 
 main(_) ->
