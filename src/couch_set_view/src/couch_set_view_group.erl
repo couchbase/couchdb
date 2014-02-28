@@ -2774,6 +2774,25 @@ compact_group(#state{group = Group} = State) ->
     reset_file(Fd, Group#set_view_group{filepath = CompactFilepath}).
 
 
+-spec stop_upr_streams(#state{}) -> ok.
+stop_upr_streams(State) ->
+    UprPid = (State#state.group)#set_view_group.upr_pid,
+    ActiveStreams = couch_upr_client:list_streams(UprPid),
+    lists:foreach(fun(ActiveStream) ->
+        case couch_upr_client:remove_stream(UprPid, ActiveStream) of
+        ok ->
+            ok;
+        {error, vbucket_stream_not_found} ->
+            ok;
+        Error ->
+            ?LOG_ERROR("Unexpected error for closing stream of partition ~p",
+                [ActiveStream]),
+            throw(Error)
+        end
+    end, ActiveStreams),
+    ok.
+
+
 -spec stop_updater(#state{}) -> #state{}.
 stop_updater(#state{updater_pid = nil} = State) ->
     State;
@@ -2785,6 +2804,7 @@ stop_updater(#state{updater_pid = Pid, initial_build = true} = State) when is_pi
               [?set_name(State), ?type(State), ?category(State),
                ?group_id(State), LostTime]),
     couch_set_view_util:shutdown_wait(Pid),
+    stop_upr_streams(State),
     inc_util_stat(#util_stats.updater_interruptions, 1),
     inc_util_stat(#util_stats.wasted_indexing_time, LostTime),
     State#state{
@@ -2807,6 +2827,7 @@ stop_updater(#state{updater_pid = Pid} = State) when is_pid(Pid) ->
         receive {'EXIT', Pid, _} -> ok after 0 -> ok end,
         after_updater_stopped(State2, Reason)
     end,
+    stop_upr_streams(State),
     ok = couch_file:refresh_eof((State#state.group)#set_view_group.fd),
     erlang:demonitor(MRef, [flush]),
     NewState.
