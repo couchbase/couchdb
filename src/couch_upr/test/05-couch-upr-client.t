@@ -49,7 +49,12 @@ test() ->
     end, lists:seq(0, num_set_partitions() - 1)),
 
     TestFun = fun(Item, Acc) ->
-        [Item|Acc]
+        case Item of
+        snapshot_marker ->
+            Acc;
+        _ ->
+            [Item|Acc]
+        end
     end,
 
     {ok, Pid} = couch_upr_client:start(test_set_name(), test_set_name()),

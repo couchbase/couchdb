@@ -281,7 +281,8 @@ receive_snapshots(Socket, Timeout, MutationFun, Acc) ->
                 {error, wrong_start_sequence_number}
             end;
         {snapshot_marker, _PartId, _RequestId} ->
-            receive_snapshots(Socket, Timeout, MutationFun, Acc);
+            Acc2 = process_item(snapshot_marker, MutationFun, Acc),
+            receive_snapshots(Socket, Timeout, MutationFun, Acc2);
         {snapshot_mutation, PartId, _RequestId, KeyLength, BodyLength,
                 ExtraLength, Cas} ->
             Mutation = receive_snapshot_mutation(

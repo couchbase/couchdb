@@ -557,7 +557,8 @@ receive_events(Pid, RequestId, CallbackFn, InAcc) ->
     stream_end ->
         InAcc;
     snapshot_marker ->
-        receive_events(Pid, RequestId, CallbackFn, InAcc);
+        InAcc2 = CallbackFn(snapshot_marker, InAcc),
+        receive_events(Pid, RequestId, CallbackFn, InAcc2);
     _ ->
         InAcc2 = CallbackFn(Doc, InAcc),
         receive_events(Pid, RequestId, CallbackFn, InAcc2)
