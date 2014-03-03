@@ -93,6 +93,7 @@ get_failover_log(Pid, PartId) ->
     gen_server:call(Pid, {get_failover_log, PartId}).
 
 
+-spec get_stream_event(pid(), request_id()) -> {atom(), #doc{}} | {'error', term()}.
 get_stream_event(Pid, ReqId) ->
     gen_server:call(Pid, {get_stream_event, ReqId}).
 
@@ -135,7 +136,7 @@ init([Name, Bucket]) ->
         couch_config:get("upr", "connection_timeout")),
     UprPort = list_to_integer(couch_config:get("upr", "port")),
     {ok, Socket} = gen_tcp:connect("localhost", UprPort,
-        [binary, {packet, raw}, {active, false}, {reuseaddr, true}]),
+        [binary, {packet, raw}, {active, false}]),
     State = #state{
         socket = Socket,
         timeout = UprTimeout,
@@ -185,7 +186,7 @@ handle_call(list_streams, _From, State) ->
     #state{
        active_streams = ActiveStreams
     } = State,
-    Reply = lists:foldl(fun({PartId, _}, Acc) -> [PartId|Acc] end, [], ActiveStreams),
+    Reply = lists:foldl(fun({PartId, _}, Acc) -> [PartId | Acc] end, [], ActiveStreams),
     {reply, Reply, State};
 
 handle_call({get_stats, PartId}, From, State) ->
@@ -215,41 +216,20 @@ handle_call({get_failover_log, PartId}, From, State) ->
 % If a stream event for this requestId is present in the queue,
 % dequeue it and reply back to the caller.
 % Else, put the caller into the stream queue waiter list
-handle_call({get_stream_event, RequestId}, From ,State) ->
-    #state{
-       stream_queues = StreamQueues,
-       active_streams = ActiveStreams
-    } = State,
-    case dict:find(RequestId, StreamQueues) of
-    {ok, {Waiters, EvQueue}} ->
-        case length(EvQueue) of
-        0 ->
-            Waiters2 = [From | Waiters],
-            StreamQueues2 =
-                dict:store(RequestId, {Waiters2, EvQueue}, StreamQueues),
-            {noreply, State#state{stream_queues = StreamQueues2}};
+handle_call({get_stream_event, RequestId}, From, State) ->
+    case stream_event_present(State, RequestId) of
+    true ->
+        {State2, Event} = dequeue_stream_event(State, RequestId),
+        State3 = case Event of
+        {stream_end, _} ->
+            remove_request_queue(State2, RequestId);
         _ ->
-            [{Optype, _} = StreamEvent|Rest] = EvQueue,
-            {ActiveStreams2, StreamQueues2} = case Optype of
-            stream_end ->
-                {
-                lists:keydelete(RequestId, 2, ActiveStreams),
-                dict:erase(RequestId, StreamQueues)
-                };
-            _ ->
-                {
-                ActiveStreams,
-                dict:store(RequestId, {Waiters, Rest}, StreamQueues)
-                }
-            end,
-            State2 =
-            State#state{
-                active_streams = ActiveStreams2,
-                stream_queues = StreamQueues2
-            },
-            {reply, StreamEvent, State2}
-        end;
-    error ->
+            State2
+        end,
+        {reply, Event, State3};
+    false ->
+        {noreply, add_stream_event_waiter(State, RequestId, From)};
+    nil ->
         {reply, {error, stream_not_found}, State}
     end.
 
@@ -257,90 +237,54 @@ handle_call({get_stream_event, RequestId}, From ,State) ->
 % Handle response message send by connection receiver worker
 % Reply back to waiting callers
 handle_info({stream_response, RequestId, Msg}, State) ->
-    #state{
-       pending_requests = PendingRequests,
-       active_streams = ActiveStreams,
-       stream_queues = StreamQueues
-    } = State,
-    State2 = case dict:find(RequestId, PendingRequests) of
-    {ok, {ReqInfo, SendTo}} ->
+    State3 = case find_pending_request(State, RequestId) of
+    {ReqInfo, SendTo} ->
         gen_server:reply(SendTo, Msg),
-        % Initialize stream queue if it is a successful add_stream response
-        {ActiveStreams2, StreamQueues2} = case ReqInfo of
+        State2 = case ReqInfo of
         {add_stream, PartId} ->
             case Msg of
             {_, {failoverlog, _}} ->
-                {
-                 [{PartId, RequestId} | ActiveStreams],
-                 dict:store(RequestId, {[], []}, StreamQueues)
-                };
+                add_request_queue(State, PartId, RequestId);
             _ ->
-                {ActiveStreams, StreamQueues}
+                State
             end;
         {remove_stream, PartId} ->
             case Msg of
             ok ->
-                {PartId, StreamReqId} = lists:keyfind(PartId, 1, ActiveStreams),
-                {
-                 lists:keydelete(StreamReqId, 2, ActiveStreams),
-                 dict:erase(StreamReqId, StreamQueues)
-                };
+                StreamReqId = find_stream_req_id(State, PartId),
+                remove_request_queue(State, StreamReqId);
             _ ->
-            {ActiveStreams, StreamQueues}
+                State
             end;
         _ ->
-            {ActiveStreams, StreamQueues}
+            State
         end,
-        State#state{
-            pending_requests = dict:erase(RequestId, PendingRequests),
-            active_streams = ActiveStreams2,
-            stream_queues =  StreamQueues2
-        };
-    error ->
+        remove_pending_request(State2, RequestId);
+    nil ->
         State
     end,
-    {noreply, State2};
+    {noreply, State3};
 
 % Handle events send by connection receiver worker
 % If there is a waiting caller for stream event, reply to them
 % Else, queue the event into the stream queue
-handle_info({stream_event, RequestId, {Optype, _} = Msg}, State) ->
-    #state{
-       stream_queues = StreamQueues,
-       active_streams = ActiveStreams
-    } = State,
-    case dict:find(RequestId, StreamQueues) of
-    {ok, {Waiters, EvQueue}} ->
-        {ActiveStreams2, StreamQueues2} = case length(Waiters) of
-        0 ->
-            EvQueue2 = EvQueue ++ [Msg],
-            {
-            ActiveStreams,
-            dict:store(RequestId, {Waiters, EvQueue2}, StreamQueues)
-            };
+handle_info({stream_event, RequestId, Event}, State) ->
+    case stream_event_waiters_present(State, RequestId) of
+    true ->
+        {State2, Waiter} = remove_stream_event_waiter(State, RequestId),
+        gen_server:reply(Waiter, Event),
+        State3 =
+        case Event of
+        {stream_end, _} ->
+            remove_request_queue(State2, RequestId);
         _ ->
-            [Waiter|Rest] = Waiters,
-            gen_server:reply(Waiter, Msg),
-            case Optype of
-            stream_end ->
-                {
-                lists:keydelete(RequestId, 2, ActiveStreams),
-                dict:erase(RequestId, StreamQueues)
-                };
-            _ ->
-                {
-                ActiveStreams,
-                dict:store(RequestId, {Rest, EvQueue}, StreamQueues)
-                }
-            end
+            State2
         end,
-        State2 =
-        State#state{
-            stream_queues = StreamQueues2,
-            active_streams = ActiveStreams2
-        },
+        {noreply, State3};
+    false ->
+        State2 = enqueue_stream_event(State, RequestId, Event),
         {noreply, State2};
-    error ->
+    nil ->
         {noreply, State}
     end;
 
@@ -369,24 +313,6 @@ code_change(_OldVsn, State, _Extra) ->
 
 
 % Internal functions
-
-add_pending_request(State, RequestId, ReqInfo, From) ->
-    #state{
-       pending_requests = PendingRequests
-    } = State,
-    PendingRequests2 = dict:store(RequestId, {ReqInfo, From}, PendingRequests),
-    State#state{pending_requests = PendingRequests2}.
-
--spec next_request_id(#state{}) -> #state{}.
-next_request_id(#state{request_id = RequestId} = State) ->
-    RequestId2 = case RequestId of
-    Id when Id + 1 < (1 bsl ?UPR_SIZES_OPAQUE) ->
-        Id + 1;
-    _ ->
-        0
-    end,
-    State#state{request_id = RequestId2}.
-
 
 -spec sasl_auth(binary(), #state{}) -> {ok, #state{}} |
                                        {stop, sasl_auth_failed}.
@@ -499,6 +425,8 @@ receive_stream_end(Socket, Timeout, BodyLength) ->
 
 % Returns the failover log as a list 2-tuple pairs with
 % partition UUID and sequence number
+-spec receive_failover_log(socket(), timeout(), char(), size()) ->
+                        {'ok', list(partition_version())} | {error, term()}.
 receive_failover_log(_Socket, _Timeout, _Status, 0) ->
     {error, no_failover_log_found};
 receive_failover_log(Socket, Timeout, Status, BodyLength) ->
@@ -539,6 +467,9 @@ receive_stat(Socket, Timeout, Status, BodyLength, KeyLength) ->
     end.
 
 
+-spec receive_events(pid(), request_id(), mutations_fold_fun(),
+                     mutations_fold_acc()) -> {ok, mutations_fold_acc()} |
+                                              {error, term()}.
 receive_events(Pid, RequestId, CallbackFn, InAcc) ->
     {Optype, Doc} = get_stream_event(Pid, RequestId),
     case Optype of
@@ -560,6 +491,171 @@ socket_recv(Socket, Length, Timeout) ->
     gen_tcp:recv(Socket, Length, Timeout).
 
 
+-spec add_pending_request(#state{}, request_id(), term(), {pid(), term()}) -> #state{}.
+add_pending_request(State, RequestId, ReqInfo, From) ->
+    #state{
+       pending_requests = PendingRequests
+    } = State,
+    PendingRequests2 = dict:store(RequestId, {ReqInfo, From}, PendingRequests),
+    State#state{pending_requests = PendingRequests2}.
+
+remove_pending_request(State, RequestId) ->
+    #state{
+       pending_requests = PendingRequests
+    } = State,
+    PendingRequests2 = dict:erase(RequestId, PendingRequests),
+    State#state{pending_requests = PendingRequests2}.
+
+
+-spec find_pending_request(#state{}, request_id()) -> nil | {term(), {pid(), term()}}.
+find_pending_request(State, RequestId) ->
+    #state{
+       pending_requests = PendingRequests
+    } = State,
+    case dict:find(RequestId, PendingRequests) of
+    error ->
+        nil;
+    {ok, Pending} ->
+        Pending
+    end.
+
+-spec next_request_id(#state{}) -> #state{}.
+next_request_id(#state{request_id = RequestId} = State) ->
+    RequestId2 = case RequestId of
+    Id when Id + 1 < (1 bsl ?UPR_SIZES_OPAQUE) ->
+        Id + 1;
+    _ ->
+        0
+    end,
+    State#state{request_id = RequestId2}.
+
+-spec remove_request_queue(#state{}, request_id()) -> #state{}.
+remove_request_queue(State, RequestId) ->
+    #state{
+       active_streams = ActiveStreams,
+       stream_queues = StreamQueues
+    } = State,
+    ActiveStreams2 = lists:keydelete(RequestId, 2, ActiveStreams),
+    StreamQueues2 = dict:erase(RequestId, StreamQueues),
+    State#state{
+       active_streams = ActiveStreams2,
+       stream_queues = StreamQueues2
+    }.
+
+
+-spec add_request_queue(#state{}, partition_id(), request_id()) -> #state{}.
+add_request_queue(State, PartId, RequestId) ->
+    #state{
+       active_streams = ActiveStreams,
+       stream_queues = StreamQueues
+    } = State,
+   ActiveStreams2 =  [{PartId, RequestId} | ActiveStreams],
+   StreamQueues2 = dict:store(RequestId, {[], []}, StreamQueues),
+   State#state{
+       active_streams = ActiveStreams2,
+       stream_queues = StreamQueues2
+    }.
+
+
+-spec enqueue_stream_event(#state{}, request_id(), tuple()) -> #state{}.
+enqueue_stream_event(State, RequestId, Event) ->
+    #state{
+       stream_queues = StreamQueues
+    } = State,
+    {ok, {Waiters, EvQueue}} = dict:find(RequestId, StreamQueues),
+    State#state{
+        stream_queues =
+            dict:store(RequestId, {Waiters, EvQueue ++ [Event]}, StreamQueues)
+    }.
+
+
+-spec dequeue_stream_event(#state{}, request_id()) -> {#state{}, tuple()}.
+dequeue_stream_event(State, RequestId) ->
+    #state{
+       stream_queues = StreamQueues
+    } = State,
+    {ok, {Waiters, [Event | Rest]}} = dict:find(RequestId, StreamQueues),
+    State2 = State#state{
+        stream_queues =
+            dict:store(RequestId, {Waiters, Rest}, StreamQueues)
+    },
+    {State2, Event}.
+
+
+-spec add_stream_event_waiter(#state{}, request_id(), term()) -> #state{}.
+add_stream_event_waiter(State, RequestId, Waiter) ->
+    #state{
+       stream_queues = StreamQueues
+    } = State,
+    {ok, {Waiters, EvQueue}} = dict:find(RequestId, StreamQueues),
+    Waiters2 = [Waiter | Waiters],
+    StreamQueues2 =
+    dict:store(RequestId, {Waiters2, EvQueue}, StreamQueues),
+    State#state{
+       stream_queues = StreamQueues2
+    }.
+
+
+-spec stream_event_present(#state{}, request_id()) -> nil | true | false.
+stream_event_present(State, RequestId) ->
+    #state{
+       stream_queues = StreamQueues
+    } = State,
+    case dict:find(RequestId, StreamQueues) of
+    error ->
+        nil;
+    {ok, {_, Events}} ->
+        case length(Events) of
+        0 ->
+            false;
+        _ ->
+            true
+        end
+    end.
+
+
+-spec stream_event_waiters_present(#state{}, request_id()) -> nil | true | false.
+stream_event_waiters_present(State, RequestId) ->
+    #state{
+       stream_queues = StreamQueues
+    } = State,
+    case dict:find(RequestId, StreamQueues) of
+    error ->
+        nil;
+    {ok, {Waiters, _}} ->
+        case length(Waiters) of
+        0 ->
+            false;
+        _ ->
+            true
+        end
+    end.
+
+
+-spec remove_stream_event_waiter(#state{}, request_id()) -> {#state{}, term()}.
+remove_stream_event_waiter(State, RequestId) ->
+    #state{
+       stream_queues = StreamQueues
+    } = State,
+    {ok, {[Waiter | Rest], EvQueue}} = dict:find(RequestId, StreamQueues),
+    State2 = State#state{
+        stream_queues = dict:store(RequestId, {Rest, EvQueue}, StreamQueues)
+    },
+    {State2, Waiter}.
+
+
+-spec find_stream_req_id(#state{}, partition_id()) -> request_id() | nil.
+find_stream_req_id(State, PartId) ->
+    #state{
+       active_streams = ActiveStreams
+    } = State,
+    case lists:keyfind(PartId, 1, ActiveStreams) of
+    {PartId, StreamReqId} ->
+        StreamReqId;
+    false ->
+        nil
+    end.
+
 -spec parse_error_response(socket(), timeout(), integer(), integer()) ->
                                      {'error', atom() | {'status', integer()}}.
 parse_error_response(Socket, Timeout, BodyLength, Status) ->
@@ -579,6 +675,7 @@ parse_error_response(Socket, Timeout, BodyLength, Status) ->
 
 % The worker process for handling upr connection downstream pipe
 % Read and parse downstream messages and send to the gen_server process
+-spec receive_worker(socket(), timeout(), pid(), list()) -> any().
 receive_worker(Socket, Timeout, Parent, MsgAcc0) ->
     case socket_recv(Socket, ?UPR_HEADER_LEN, infinity) of
     {ok, Header} ->
@@ -645,14 +742,13 @@ receive_worker(Socket, Timeout, Parent, MsgAcc0) ->
             Flag = receive_stream_end(Socket, Timeout, BodyLength),
             {done, {stream_event, RequestId, {stream_end, {RequestId, PartId, Flag}}}}
         end,
-        MsgAcc2 = case Action of
+        case Action of
         done ->
             Parent ! MsgAcc,
-            [];
+            receive_worker(Socket, Timeout, Parent, []);
         true ->
-            MsgAcc
-        end,
-        receive_worker(Socket, Timeout, Parent, MsgAcc2);
+            receive_worker(Socket, Timeout, Parent, MsgAcc)
+        end;
     {error, Reason} ->
         Reason
     end.
