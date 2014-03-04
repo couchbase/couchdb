@@ -146,14 +146,18 @@ init([Name, Bucket]) ->
     % come from
     case sasl_auth(Bucket, State) of
     {ok, State2} ->
-        State3 = open_connection(Name, State2),
-        Parent = self(),
-        process_flag(trap_exit, true),
-        WorkerPid = spawn_link(
-            fun() -> receive_worker(Socket, UprTimeout, Parent, []) end),
-        {ok, State3#state{worker_pid = WorkerPid}};
-    {stop, sasl_auth_failed} = Stop ->
-        Stop
+        case open_connection(Name, State2) of
+        {ok, State3} ->
+            Parent = self(),
+            process_flag(trap_exit, true),
+            WorkerPid = spawn_link(
+                fun() -> receive_worker(Socket, UprTimeout, Parent, []) end),
+            {ok, State3#state{worker_pid = WorkerPid}};
+        {error, Reason} ->
+            {stop, Reason}
+        end;
+    {error, Reason} ->
+        {stop, Reason}
     end.
 
 
@@ -165,10 +169,14 @@ handle_call({add_stream, PartId, PartVersion, StartSeq, EndSeq}, From, State) ->
     } = State,
     StreamRequest = couch_upr_consumer:encode_stream_request(
         PartId, RequestId, 0, StartSeq, EndSeq, PartVersion),
-    ok = gen_tcp:send(Socket, StreamRequest),
-    State2 = next_request_id(State),
-    State3 = add_pending_request(State2, RequestId, {add_stream, PartId}, From),
-    {noreply, State3};
+    case gen_tcp:send(Socket, StreamRequest) of
+    ok ->
+        State2 = next_request_id(State),
+        State3 = add_pending_request(State2, RequestId, {add_stream, PartId}, From),
+        {noreply, State3};
+    Error ->
+        {reply, Error, State}
+    end;
 
 handle_call({remove_stream, PartId}, From, State) ->
     #state{
@@ -177,10 +185,14 @@ handle_call({remove_stream, PartId}, From, State) ->
     } = State,
     StreamCloseRequest = couch_upr_consumer:encode_stream_close(
         PartId, RequestId),
-    ok = gen_tcp:send(Socket, StreamCloseRequest),
-    State2 = next_request_id(State),
-    State3 = add_pending_request(State2, RequestId, {remove_stream, PartId}, From),
-    {noreply, State3};
+    case gen_tcp:send(Socket, StreamCloseRequest) of
+    ok ->
+        State2 = next_request_id(State),
+        State3 = add_pending_request(State2, RequestId, {remove_stream, PartId}, From),
+        {noreply, State3};
+    Error ->
+        {reply, Error, State}
+    end;
 
 handle_call(list_streams, _From, State) ->
     #state{
@@ -196,10 +208,14 @@ handle_call({get_stats, PartId}, From, State) ->
     } = State,
     SeqStatRequest = couch_upr_consumer:encode_seq_stat_request(
         PartId, RequestId),
-    ok = gen_tcp:send(Socket, SeqStatRequest),
-    State2 = next_request_id(State),
-    State3 = add_pending_request(State2, RequestId, get_stats, From),
-    {noreply, State3};
+    case gen_tcp:send(Socket, SeqStatRequest) of
+    ok ->
+        State2 = next_request_id(State),
+        State3 = add_pending_request(State2, RequestId, get_stats, From),
+        {noreply, State3};
+    Error ->
+        {reply, Error, State}
+    end;
 
 handle_call({get_failover_log, PartId}, From, State) ->
     #state{
@@ -208,10 +224,14 @@ handle_call({get_failover_log, PartId}, From, State) ->
     } = State,
     FailoverLogRequest = couch_upr_consumer:encode_failover_log_request(
         PartId, RequestId),
-    ok = gen_tcp:send(Socket, FailoverLogRequest),
-    State2 = next_request_id(State),
-    State3 = add_pending_request(State2, RequestId, get_failover_log, From),
-    {noreply, State3};
+    case gen_tcp:send(Socket, FailoverLogRequest) of
+    ok ->
+        State2 = next_request_id(State),
+        State3 = add_pending_request(State2, RequestId, get_failover_log, From),
+        {noreply, State3};
+    Error ->
+        {reply, Error, State}
+    end;
 
 % If a stream event for this requestId is present in the queue,
 % dequeue it and reply back to the caller.
@@ -315,7 +335,7 @@ code_change(_OldVsn, State, _Extra) ->
 % Internal functions
 
 -spec sasl_auth(binary(), #state{}) -> {ok, #state{}} |
-                                       {stop, sasl_auth_failed}.
+                            {error, sasl_auth_failed | closed | inet:posix()}.
 sasl_auth(Bucket, State) ->
     #state{
         socket = Socket,
@@ -323,23 +343,33 @@ sasl_auth(Bucket, State) ->
         request_id = RequestId
     } = State,
     Authenticate = couch_upr_consumer:encode_sasl_auth(Bucket, RequestId),
-    ok = gen_tcp:send(Socket, Authenticate),
-    case socket_recv(Socket, ?UPR_HEADER_LEN, UprTimeout) of
-    {ok, Header} ->
-        {sasl_auth, Status, RequestId, BodyLength} =
-            couch_upr_consumer:parse_header(Header),
-        % Receive the body so that it is not mangled with the next request,
-        % we care about the status only though
-        {ok, _} = socket_recv(Socket, BodyLength, UprTimeout),
-        case Status of
-        ?UPR_STATUS_OK ->
-            {ok, State#state{request_id = RequestId + 1}};
-        ?UPR_STATUS_SASL_AUTH_FAILED ->
-            {stop, sasl_auth_failed}
-        end
+    case gen_tcp:send(Socket, Authenticate) of
+    ok ->
+        case socket_recv(Socket, ?UPR_HEADER_LEN, UprTimeout) of
+        {ok, Header} ->
+            {sasl_auth, Status, RequestId, BodyLength} =
+                couch_upr_consumer:parse_header(Header),
+            % Receive the body so that it is not mangled with the next request,
+            % we care about the status only though
+            case socket_recv(Socket, BodyLength, UprTimeout) of
+            {ok, _} ->
+                case Status of
+                ?UPR_STATUS_OK ->
+                    {ok, State#state{request_id = RequestId + 1}};
+                ?UPR_STATUS_SASL_AUTH_FAILED ->
+                    {error, sasl_auth_failed}
+                end;
+            {error, _} = Error ->
+                Error
+            end;
+        {error, _} = Error ->
+            Error
+        end;
+    {error, _} = Error ->
+        Error
     end.
 
--spec open_connection(binary(), #state{}) -> #state{}.
+-spec open_connection(binary(), #state{}) -> {ok, #state{}} | {error, term()}.
 open_connection(Name, State) ->
     #state{
         socket = Socket,
@@ -348,12 +378,18 @@ open_connection(Name, State) ->
     } = State,
     OpenConnection = couch_upr_consumer:encode_open_connection(
         Name, RequestId),
-    ok = gen_tcp:send(Socket, OpenConnection),
-    case socket_recv(Socket, ?UPR_HEADER_LEN, UprTimeout) of
-    {ok, Header} ->
-        {open_connection, RequestId} = couch_upr_consumer:parse_header(Header)
-    end,
-    next_request_id(State).
+    case gen_tcp:send(Socket, OpenConnection) of
+    ok ->
+        case socket_recv(Socket, ?UPR_HEADER_LEN, UprTimeout) of
+        {ok, Header} ->
+            {open_connection, RequestId} = couch_upr_consumer:parse_header(Header),
+            {ok, next_request_id(State)};
+        {error, _} = Error ->
+            Error
+        end;
+    {error, _} = Error ->
+        Error
+    end.
 
 
 -spec receive_snapshot_mutation(socket(), timeout(), partition_id(), size(),
@@ -384,14 +420,14 @@ receive_snapshot_mutation(Socket, Timeout, PartId, KeyLength, BodyLength,
              body = Value
          },
          {Seq, Doc, PartId};
-    {error, closed} ->
-        {error, closed}
+    {error, _} = Error ->
+        Error
     end.
 
 -spec receive_snapshot_deletion(socket(), timeout(), partition_id(), size(),
                                 size(), uint64()) ->
                                        {update_seq(), #doc{}, partition_id()} |
-                                       {error, closed}.
+                                       {error, closed | inet:posix()}.
 receive_snapshot_deletion(Socket, Timeout, PartId, KeyLength, BodyLength,
         Cas) ->
     case socket_recv(Socket, BodyLength, Timeout) of
@@ -408,25 +444,25 @@ receive_snapshot_deletion(Socket, Timeout, PartId, KeyLength, BodyLength,
              deleted = true
          },
          {Seq, Doc, PartId};
-    {error, closed} ->
-        {error, closed}
+    {error, Reason} ->
+        {error, Reason}
     end.
 
 -spec receive_stream_end(socket(), timeout(), size()) ->
-                                {ok, <<_:32>>} | {error, closed}.
+                            {ok, <<_:32>>} | {error, closed | inet:posix()}.
 receive_stream_end(Socket, Timeout, BodyLength) ->
     case socket_recv(Socket, BodyLength, Timeout) of
     {ok, Flag} ->
         Flag;
-    {error, closed} ->
-        {error, closed}
+    {error, Reason} ->
+        {error, Reason}
     end.
 
 
 % Returns the failover log as a list 2-tuple pairs with
 % partition UUID and sequence number
 -spec receive_failover_log(socket(), timeout(), char(), size()) ->
-                        {'ok', list(partition_version())} | {error, term()}.
+            {'ok', list(partition_version())} | {error, closed | inet:posix()}.
 receive_failover_log(_Socket, _Timeout, _Status, 0) ->
     {error, no_failover_log_found};
 receive_failover_log(Socket, Timeout, Status, BodyLength) ->
@@ -443,7 +479,7 @@ receive_failover_log(Socket, Timeout, Status, BodyLength) ->
     end.
 
 -spec receive_rollback_seq(socket(), timeout(), size()) ->
-                                  {rollback, update_seq()} | {error, term()}.
+                  {rollback, update_seq()} | {error, closed | inet:posix()}.
 receive_rollback_seq(Socket, Timeout, BodyLength) ->
     case socket_recv(Socket, BodyLength, Timeout) of
     {ok, <<RollbackSeq:?UPR_SIZES_BY_SEQ>>} ->
@@ -462,8 +498,8 @@ receive_stat(Socket, Timeout, Status, BodyLength, KeyLength) ->
     {ok, Body} ->
         couch_upr_consumer:parse_stat(
             Body, Status, KeyLength, BodyLength - KeyLength);
-    {error, closed} ->
-        {error, closed}
+    {error, Reason} ->
+        {error, Reason}
     end.
 
 
@@ -659,19 +695,24 @@ find_stream_req_id(State, PartId) ->
 -spec parse_error_response(socket(), timeout(), integer(), integer()) ->
                                      {'error', atom() | {'status', integer()}}.
 parse_error_response(Socket, Timeout, BodyLength, Status) ->
-    socket_recv(Socket, BodyLength, Timeout),
-    case Status of
-    ?UPR_STATUS_KEY_NOT_FOUND ->
-        {error, wrong_partition_version};
-    ?UPR_STATUS_ERANGE ->
-        {error, wrong_start_sequence_number};
-    ?UPR_STATUS_KEY_EEXISTS ->
-        {error, vbucket_stream_already_exists};
-    ?UPR_STATUS_NOT_MY_VBUCKET ->
-        {error, vbucket_stream_not_found};
-    _ ->
-        {error, {status, Status}}
+    case socket_recv(Socket, BodyLength, Timeout) of
+    {ok, _} ->
+        case Status of
+        ?UPR_STATUS_KEY_NOT_FOUND ->
+            {error, wrong_partition_version};
+        ?UPR_STATUS_ERANGE ->
+            {error, wrong_start_sequence_number};
+        ?UPR_STATUS_KEY_EEXISTS ->
+            {error, vbucket_stream_already_exists};
+        ?UPR_STATUS_NOT_MY_VBUCKET ->
+            {error, vbucket_stream_not_found};
+        _ ->
+            {error, {status, Status}}
+        end;
+    {error, _} = Error ->
+        Error
     end.
+
 
 % The worker process for handling upr connection downstream pipe
 % Read and parse downstream messages and send to the gen_server process
@@ -684,13 +725,21 @@ receive_worker(Socket, Timeout, Parent, MsgAcc0) ->
         {stream_request, Status, RequestId, BodyLength} ->
             Response = case Status of
             ?UPR_STATUS_OK ->
-                {ok, FailoverLog} = receive_failover_log(
-                     Socket, Timeout, Status, BodyLength),
-                {failoverlog, FailoverLog};
+                case receive_failover_log(
+                     Socket, Timeout, Status, BodyLength) of
+                {ok, FailoverLog} ->
+                    {failoverlog, FailoverLog};
+                Error ->
+                    Error
+                end;
             ?UPR_STATUS_ROLLBACK ->
-                {ok, RollbackSeq} = receive_rollback_seq(
-                     Socket, Timeout, BodyLength),
-                {rollback, RollbackSeq};
+                case receive_rollback_seq(
+                     Socket, Timeout, BodyLength) of
+                {ok, RollbackSeq} ->
+                    {rollback, RollbackSeq};
+                Error ->
+                    Error
+                end;
             _ ->
                 parse_error_response(Socket, Timeout, BodyLength, Status)
             end,
