@@ -769,8 +769,8 @@ receive_worker(Socket, Timeout, Parent, MsgAcc0) ->
                     {done, {stream_response, RequestId, Error}}
                 end
             end;
-        {snapshot_marker, RequestId, Flag} ->
-            {done, {stream_event, RequestId, {snapshot_marker, Flag}}};
+        {snapshot_marker, PartId, RequestId} ->
+            {done, {stream_event, RequestId, {snapshot_marker, PartId}}};
         {snapshot_mutation, PartId, RequestId, KeyLength, BodyLength,
                 ExtraLength, Cas} ->
             Mutation = receive_snapshot_mutation(
