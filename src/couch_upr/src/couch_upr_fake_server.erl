@@ -135,27 +135,20 @@ init([Port, SetName]) ->
 
 -spec handle_call(tuple() | atom(), {pid(), reference()}, #state{}) ->
                          {reply, any(), #state{}}.
-handle_call({send_snapshot, Socket, PartId, EndSeq}, _From, State) ->
-    #state{
-        streams = Streams,
-        setname = SetName
-    } = State,
-    {RequestId, Seq} = proplists:get_value(PartId, Streams),
-    Num = do_send_snapshot(Socket, SetName, PartId, RequestId, Seq, EndSeq),
+handle_call({add_stream, PartId, RequestId, StartSeq, EndSeq, Socket}, _From, State) ->
+    Streams = [{PartId, {RequestId, [], StartSeq}} | State#state.streams],
+    Mutations = create_mutations(State#state.setname, PartId, StartSeq, EndSeq),
+    Num = length(Mutations),
     State2 = case Num of
     0 ->
-        State;
+        State#state{streams = Streams};
     _ ->
         Streams2 = lists:keyreplace(
-            PartId, 1, Streams, {PartId, {RequestId, Seq+Num}}),
+            PartId, 1, Streams, {PartId, {RequestId, Mutations, StartSeq + Num}}),
         State#state{streams = Streams2}
     end,
+    self() ! {send_mutations, Socket},
     {reply, ok, State2};
-
-handle_call({add_stream, PartId, RequestId, StartSeq}, _From, State) ->
-    {reply, ok, State#state{
-        streams = [{PartId, {RequestId, StartSeq}}|State#state.streams]
-    }};
 
 handle_call({set_failover_log, PartId, FailoverLog}, _From, State) ->
     FailoverLogs = dict:store(PartId, FailoverLog, State#state.failover_logs),
@@ -195,11 +188,44 @@ handle_call(reset, _From, State0) ->
 handle_cast(Msg, State) ->
     {stop, {unexpected_cast, Msg}, State}.
 
-
--spec handle_info({'EXIT', {pid(), reference()}, normal}, #state{}) ->
-                         {noreply, #state{}}.
+-spec handle_info({'EXIT', {pid(), reference()}, normal} |
+                  {send_mutations, socket()},
+                  #state{}) -> {noreply, #state{}}.
 handle_info({'EXIT', _From, normal}, State)  ->
-    {noreply, State}.
+    {noreply, State};
+
+handle_info({send_mutations, Socket}, State) ->
+    #state{
+       streams = Streams
+    } = State,
+    Streams2 = lists:foldl(fun
+        ({VBucketId, {RequestId, [Mutation | Rest], HiSeq}}, Acc) ->
+            {Cas, Seq, RevSeq, Flags, Expiration, LockTime, Key, Value} = Mutation,
+            Encoded = case Value of
+            deleted ->
+                couch_upr_producer:encode_snapshot_deletion(
+                VBucketId, RequestId, Cas, Seq, RevSeq, Key);
+            _ ->
+                couch_upr_producer:encode_snapshot_mutation(
+                VBucketId, RequestId, Cas, Seq, RevSeq, Flags, Expiration,
+                LockTime, Key, Value)
+            end,
+            ok = gen_tcp:send(Socket, Encoded),
+            [{VBucketId, {RequestId, Rest, HiSeq}} | Acc];
+        ({VBucketId, {RequestId, [], _HiSeq}}, Acc) ->
+            Marker = couch_upr_producer:encode_snapshot_marker(VBucketId, RequestId),
+            ok = gen_tcp:send(Socket, Marker),
+            StreamEnd = couch_upr_producer:encode_stream_end(VBucketId, RequestId),
+            ok = gen_tcp:send(Socket, StreamEnd),
+            Acc
+        end, [], Streams),
+    case length(Streams2) of
+    0 ->
+        ok;
+    _ ->
+        self() ! {send_mutations, Socket}
+    end,
+    {noreply, State#state{streams = Streams2}}.
 
 
 -spec terminate(any(), #state{}) -> ok.
@@ -354,10 +380,7 @@ send_ok(Socket, RequestId, PartId, StartSeq, EndSeq, FailoverLog) ->
     StreamOk = couch_upr_producer:encode_stream_request_ok(
         RequestId, FailoverLog),
     ok = gen_tcp:send(Socket, StreamOk),
-    ok = gen_server:call(?MODULE, {add_stream, PartId, RequestId, StartSeq}),
-    ok = gen_server:call(?MODULE, {send_snapshot, Socket, PartId, EndSeq}),
-    StreamEnd = couch_upr_producer:encode_stream_end(PartId, RequestId),
-    ok = gen_tcp:send(Socket, StreamEnd).
+    ok = gen_server:call(?MODULE, {add_stream, PartId, RequestId, StartSeq, EndSeq, Socket}).
 
 -spec send_rollback(socket(), request_id(), update_seq()) -> ok.
 send_rollback(Socket, RequestId, RollbackSeq) ->
@@ -482,26 +505,6 @@ extract_revision({RevSeq, <<>>}) ->
 extract_revision({RevSeq, RevMeta}) ->
     <<Cas:64, Expiration:32, Flags:32>> = RevMeta,
     {RevSeq, Cas, Expiration, Flags}.
-
-
--spec do_send_snapshot(socket(), binary(), partition_id(), request_id(),
-                       update_seq(), update_seq()) -> non_neg_integer().
-do_send_snapshot(Socket, SetName, PartId, RequestId, StartSeq, EndSeq) ->
-    Mutations = create_mutations(SetName, PartId, StartSeq, EndSeq),
-    lists:foreach(fun
-        ({Cas, Seq, RevSeq, _Flags, _Expiration, _LockTime, Key, deleted}) ->
-            Encoded = couch_upr_producer:encode_snapshot_deletion(
-                PartId, RequestId, Cas, Seq, RevSeq, Key),
-            ok = gen_tcp:send(Socket, Encoded);
-        ({Cas, Seq, RevSeq, Flags, Expiration, LockTime, Key, Value}) ->
-            Encoded = couch_upr_producer:encode_snapshot_mutation(
-                PartId, RequestId, Cas, Seq, RevSeq, Flags, Expiration,
-                LockTime, Key, Value),
-            ok = gen_tcp:send(Socket, Encoded)
-    end, Mutations),
-    Marker = couch_upr_producer:encode_snapshot_marker(PartId, RequestId),
-    ok = gen_tcp:send(Socket, Marker),
-    length(Mutations).
 
 
 -spec open_db(binary(), partition_id()) ->
