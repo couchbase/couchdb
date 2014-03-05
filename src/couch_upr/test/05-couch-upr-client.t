@@ -24,7 +24,7 @@ num_docs() -> 1000.
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(18),
+    etap:plan(29),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -123,6 +123,72 @@ test() ->
     etap:is(SeqError, {error, not_my_vbucket},
         "Too high partition number returns correct error"),
 
+
+    % Test multiple streams in parallel
+    {StreamReq0, {failoverlog, InitialFailoverLog0}} =
+        couch_upr_client:add_stream(Pid, 0, hd(InitialFailoverLog0), 10, 100),
+
+    {StreamReq1, {failoverlog, InitialFailoverLog1}} =
+        couch_upr_client:add_stream(Pid, 1, hd(InitialFailoverLog1), 100, 200),
+
+    {StreamReq2, {failoverlog, InitialFailoverLog2}} =
+        couch_upr_client:add_stream(Pid, 2, hd(InitialFailoverLog2), 0, 10),
+
+    [MutationsPart0, MutationsPart1, MutationsPart2] = read_mutations(
+                    Pid, [StreamReq0, StreamReq1, StreamReq2], [[], [], []]),
+
+
+    etap:is(is_same_partition(0, MutationsPart0), true,
+        "Stream0 has only partition0 mutations"),
+    etap:is(is_same_partition(1, MutationsPart1), true,
+        "Stream1 has only partition1 mutations"),
+    etap:is(is_same_partition(2, MutationsPart2), true,
+        "Stream2 has only partition2 mutations"),
+
+    etap:is(length(MutationsPart0), 90,
+        "Stream0 has 90 mutations"),
+    etap:is(length(MutationsPart1), 100,
+        "Stream1 has 100 mutations"),
+    etap:is(length(MutationsPart2), 10,
+        "Stream2 has 10 mutations"),
+
+    StreamList0 = couch_upr_client:list_streams(Pid),
+    etap:is(StreamList0, [], "Stream list is empty"),
+
+    couch_upr_fake_server:pause_mutations(),
+    {StreamReq0_2, {failoverlog, InitialFailoverLog0}} =
+        couch_upr_client:add_stream(Pid, 0, hd(InitialFailoverLog0), 1, 100),
+
+    {StreamReq0_3, StreamResp0_3} =
+        couch_upr_client:add_stream(Pid, 0, hd(InitialFailoverLog0), 10, 100),
+    etap:is(StreamResp0_3, {error,vbucket_stream_already_exists},
+        "Stream for vbucket 0 already exists"),
+    couch_upr_fake_server:continue_mutations(),
+
+    % Drain all mutations
+    read_mutations(Pid, [StreamReq0_2], [[]]),
+
+    couch_upr_fake_server:pause_mutations(),
+    {StreamReq1_2, _} = couch_upr_client:add_stream(Pid, 1,
+        hd(InitialFailoverLog1), 10, 300),
+
+    {StreamReq2_2, _} = couch_upr_client:add_stream(Pid, 2,
+        hd(InitialFailoverLog2), 100, 200),
+
+    StreamList1 = couch_upr_client:list_streams(Pid),
+    etap:is(StreamList1, [1,2], "Stream list contains parititon 1,2"),
+
+    StreamRemoveResp0 = couch_upr_client:remove_stream(Pid, 1),
+    StreamList2 = couch_upr_client:list_streams(Pid),
+    etap:is({StreamRemoveResp0, StreamList2}, {ok, [2]},
+        "Removed parititon stream 1 and parition stream 2 is left"),
+
+    StreamRemoveResp1 = couch_upr_client:remove_stream(Pid, 1),
+    etap:is(StreamRemoveResp1, {error, vbucket_stream_not_found},
+        "Correct error on trying to remove non-existing stream"),
+
+    couch_upr_fake_server:continue_mutations(),
+
     % Test with too large failover log
 
     TooLargeFailoverLog = [{I, I} ||
@@ -143,6 +209,46 @@ setup_test() ->
     couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
     populate_set().
 
+is_same_partition(PartId, Docs) ->
+    lists:all(fun({_, {_,_, P}}) ->
+        P =:= PartId
+        end, Docs).
+
+read_streams(Pid, StreamReqs) ->
+    lists:foldr(fun(Request, Acc) ->
+        case couch_upr_client:get_stream_event(Pid, Request) of
+        {error, vbucket_stream_not_found} ->
+            [drained | Acc];
+        {Optype, _} = Item ->
+            case Optype of
+            stream_end ->
+                [[] | Acc];
+            snapshot_marker ->
+                [[] | Acc];
+            _ ->
+                [[Item] | Acc]
+            end;
+        _ ->
+            [[] | Acc]
+        end
+    end, [], StreamReqs).
+
+read_mutations(Pid, StreamReqs, Acc) ->
+    Items = read_streams(Pid, StreamReqs),
+    case lists:all(fun(Item) -> Item =:= drained end, Items) of
+    true ->
+        Acc;
+    false ->
+        Acc2 = lists:zipwith(fun(Item, Acc0) ->
+            case Item of
+            drained ->
+                Acc0;
+            _ ->
+                Item ++ Acc0
+            end
+        end, Items, Acc),
+        read_mutations(Pid, StreamReqs, Acc2)
+    end.
 
 doc_id(I) ->
     iolist_to_binary(io_lib:format("doc_~8..0b", [I])).
