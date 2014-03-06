@@ -17,7 +17,7 @@
 -export([parse_header/1, parse_snapshot_mutation/4, parse_snapshot_deletion/2,
     parse_failover_log/1, parse_stat/4]).
 -export([encode_sasl_auth/2, encode_open_connection/2, encode_stream_request/6,
-    encode_failover_log_request/2, encode_seq_stat_request/2, encode_stream_close/2]).
+    encode_failover_log_request/2, encode_stat_request/3, encode_stream_close/2]).
 
 -include_lib("couch_upr/include/couch_upr.hrl").
 -include_lib("couch_upr/include/couch_upr_typespecs.hrl").
@@ -307,9 +307,9 @@ encode_failover_log_request(PartId, RequestId) ->
 %Opaque       (12-15): 0x00000000
 %CAS          (16-23): 0x0000000000000000
 %Key                 : vbucket-seqno 1
--spec encode_seq_stat_request(partition_id(), request_id()) -> binary().
-encode_seq_stat_request(PartId, RequestId) ->
-    Body = <<"vbucket-seqno ",
+-spec encode_stat_request(binary(), partition_id(), request_id()) -> binary().
+encode_stat_request(Stat, PartId, RequestId) ->
+    Body = <<Stat/binary, " ",
         (list_to_binary(integer_to_list(PartId)))/binary>>,
 
     KeyLength = BodyLength = byte_size(Body),

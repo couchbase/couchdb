@@ -81,7 +81,7 @@ list_streams(Pid) ->
 -spec get_sequence_number(pid(), partition_id()) ->
                                  {ok, update_seq()} | {error, not_my_vbucket}.
 get_sequence_number(Pid, PartId) ->
-    case gen_server:call(Pid, {get_stats, PartId}) of
+    case gen_server:call(Pid, {get_stats, <<"vbucket-seqno">>, PartId}) of
     {ok, [Stats, _]} ->
         {_, SeqBin} = Stats,
         {ok, list_to_integer(binary_to_list(SeqBin))};
@@ -211,13 +211,13 @@ handle_call(list_streams, _From, State) ->
     Reply = lists:foldl(fun({PartId, _}, Acc) -> [PartId | Acc] end, [], ActiveStreams),
     {reply, Reply, State};
 
-handle_call({get_stats, PartId}, From, State) ->
+handle_call({get_stats, Stat, PartId}, From, State) ->
     #state{
        request_id = RequestId,
        socket = Socket
     } = State,
-    SeqStatRequest = couch_upr_consumer:encode_seq_stat_request(
-        PartId, RequestId),
+    SeqStatRequest = couch_upr_consumer:encode_stat_request(
+        Stat, PartId, RequestId),
     case gen_tcp:send(Socket, SeqStatRequest) of
     ok ->
         State2 = next_request_id(State),

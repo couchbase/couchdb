@@ -94,8 +94,8 @@ enum_docs_since(Pid, PartId, [PartVersion|PartVersions], StartSeq, EndSeq,
 get_sequence_number(Pid, PartId) ->
     RequestId = gen_server:call(Pid, get_request_id),
     {Socket, Timeout} = gen_server:call(Pid, get_socket_and_timeout),
-    SeqStatRequest = couch_upr_consumer:encode_seq_stat_request(
-        PartId, RequestId),
+    SeqStatRequest = couch_upr_consumer:encode_stat_request(
+        <<"vbucket-seqno">>, PartId, RequestId),
     ok = gen_tcp:send(Socket, SeqStatRequest),
     case receive_stats(Socket, Timeout, []) of
     {error, {?UPR_STATUS_NOT_MY_VBUCKET, _}} ->
