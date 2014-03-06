@@ -20,7 +20,7 @@
     encode_stream_request_ok/2, encode_stream_request_error/2,
     encode_stream_request_rollback/2, encode_stream_end/2,
     encode_failover_log/2, encode_stat/3, encode_stat_error/3,
-    encode_sasl_auth/1]).
+    encode_sasl_auth/1, encode_stream_close_response/2]).
 
 -include_lib("couch_upr/include/couch_upr.hrl").
 
@@ -48,7 +48,9 @@ parse_header(<<?UPR_MAGIC_REQUEST,
     ?UPR_OPCODE_STATS ->
         {stats, BodyLength, RequestId};
     ?UPR_OPCODE_SASL_AUTH ->
-        {sasl_auth, BodyLength, RequestId}
+        {sasl_auth, BodyLength, RequestId};
+    ?UPR_OPCODE_STREAM_CLOSE ->
+        {stream_close, RequestId, PartId}
     end.
 
 
@@ -229,7 +231,9 @@ encode_stream_request_error(RequestId, Status) ->
     ?UPR_STATUS_KEY_NOT_FOUND ->
         <<"Not found">>;
     ?UPR_STATUS_ERANGE ->
-        <<"Outside range">>
+        <<"Outside range">>;
+    _ ->
+        <<>>
     end,
     ExtraLength = 0,
     BodyLength = byte_size(Message),
@@ -402,3 +406,39 @@ encode_sasl_auth(RequestId) ->
                RequestId:?UPR_SIZES_OPAQUE,
                0:?UPR_SIZES_CAS>>,
     <<Header/binary, Body/binary>>.
+
+
+%UPR_STREAM_CLOSE response
+%Field        (offset) (value)
+%Magic        (0)    : 0x81
+%Opcode       (1)    : 0x53
+%Key length   (2,3)  : 0x0000
+%Extra length (4)    : 0x00
+%Data type    (5)    : 0x00
+%Status       (6,7)  : 0x10000000
+%Total body   (8-11) : 0x00000000
+%Opaque       (12-15): 0x00001000
+%CAS          (16-23): 0x0000000000000000
+
+-spec encode_stream_close_response(request_id(), upr_status()) -> binary().
+encode_stream_close_response(RequestId, Status) ->
+    Message = case Status of
+    ?UPR_STATUS_KEY_NOT_FOUND ->
+        <<"Not found">>;
+    ?UPR_STATUS_ERANGE ->
+        <<"Outside range">>;
+    _ ->
+        <<>>
+    end,
+    ExtraLength = 0,
+    BodyLength = byte_size(Message),
+    <<?UPR_MAGIC_RESPONSE,
+      ?UPR_OPCODE_STREAM_CLOSE,
+      0:?UPR_SIZES_KEY_LENGTH,
+      ExtraLength,
+      0,
+      Status:?UPR_SIZES_STATUS,
+      BodyLength:?UPR_SIZES_BODY,
+      RequestId:?UPR_SIZES_OPAQUE,
+      0:?UPR_SIZES_CAS,
+      Message/binary>>.

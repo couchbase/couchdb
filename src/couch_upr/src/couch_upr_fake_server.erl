@@ -17,7 +17,7 @@
 -export([start/1, reset/0]).
 
 % Only uses by tests
--export([set_failover_log/2]).
+-export([set_failover_log/2, pause_mutations/0, continue_mutations/0]).
 
 % Needed for internal process spawning
 -export([accept/1, accept_loop/1]).
@@ -87,7 +87,8 @@
 -record(state, {
     streams = [], %:: [{partition_id(), {request_id(), sequence_number()}}]
     setname = nil,
-    failover_logs = dict:new()
+    failover_logs = dict:new(),
+    pause_mutations = false
 }).
 
 
@@ -108,6 +109,16 @@ reset() ->
 -spec set_failover_log(partition_id(), partition_version()) -> ok.
 set_failover_log(PartId, FailoverLog) ->
     gen_server:call(?MODULE, {set_failover_log, PartId, FailoverLog}).
+
+-spec pause_mutations() -> ok.
+pause_mutations() ->
+    gen_server:call(?MODULE, {pause_mutations, true}).
+
+-spec continue_mutations() -> ok.
+continue_mutations() ->
+    ok = gen_server:call(?MODULE, {pause_mutations, false}),
+    ?MODULE ! send_mutations,
+    ok.
 
 
 % gen_server callbacks
@@ -135,20 +146,37 @@ init([Port, SetName]) ->
 
 -spec handle_call(tuple() | atom(), {pid(), reference()}, #state{}) ->
                          {reply, any(), #state{}}.
-handle_call({add_stream, PartId, RequestId, StartSeq, EndSeq, Socket}, _From, State) ->
-    Streams = [{PartId, {RequestId, [], StartSeq}} | State#state.streams],
-    Mutations = create_mutations(State#state.setname, PartId, StartSeq, EndSeq),
-    Num = length(Mutations),
-    State2 = case Num of
-    0 ->
-        State#state{streams = Streams};
+handle_call({add_stream, PartId, RequestId, StartSeq, EndSeq, Socket, FailoverLog}, _From, State) ->
+    #state{
+       streams = Streams
+    } = State,
+    case lists:keyfind(PartId, 1, State#state.streams) of
+    false ->
+        StreamOk = couch_upr_producer:encode_stream_request_ok(
+            RequestId, FailoverLog),
+        ok = gen_tcp:send(Socket, StreamOk),
+        Mutations = create_mutations(State#state.setname, PartId, StartSeq, EndSeq),
+        Num = length(Mutations),
+        Streams2 =
+            [{PartId, {RequestId, Mutations, Socket, StartSeq + Num}} | Streams],
+        self() ! send_mutations,
+        {reply, ok, State#state{streams = Streams2}};
     _ ->
-        Streams2 = lists:keyreplace(
-            PartId, 1, Streams, {PartId, {RequestId, Mutations, StartSeq + Num}}),
-        State#state{streams = Streams2}
+        StreamExists = couch_upr_producer:encode_stream_request_error(
+                         RequestId, ?UPR_STATUS_KEY_EEXISTS),
+        ok = gen_tcp:send(Socket, StreamExists),
+        {reply, ok, State}
+    end;
+
+handle_call({remove_stream, PartId}, _From, #state{streams = Streams} = State) ->
+    Streams2 = lists:keydelete(PartId, 1, Streams),
+    Reply = case length(Streams2) =:= length(Streams) of
+    true ->
+        vbucket_stream_not_found;
+    false ->
+        ok
     end,
-    self() ! {send_mutations, Socket},
-    {reply, ok, State2};
+    {reply, Reply, State#state{streams = Streams2}};
 
 handle_call({set_failover_log, PartId, FailoverLog}, _From, State) ->
     FailoverLogs = dict:store(PartId, FailoverLog, State#state.failover_logs),
@@ -176,6 +204,9 @@ handle_call({get_failover_log, PartId}, _From, State) ->
     end,
     {reply, FailoverLog, State};
 
+handle_call({pause_mutations, Flag}, _From, State) ->
+    {reply, ok, State#state{pause_mutations = Flag}};
+
 handle_call(reset, _From, State0) ->
     State = #state{
         setname = State0#state.setname
@@ -189,17 +220,18 @@ handle_cast(Msg, State) ->
     {stop, {unexpected_cast, Msg}, State}.
 
 -spec handle_info({'EXIT', {pid(), reference()}, normal} |
-                  {send_mutations, socket()},
+                  send_mutations,
                   #state{}) -> {noreply, #state{}}.
 handle_info({'EXIT', _From, normal}, State)  ->
     {noreply, State};
 
-handle_info({send_mutations, Socket}, State) ->
+handle_info(send_mutations, State) ->
     #state{
-       streams = Streams
+       streams = Streams,
+       pause_mutations = Pause
     } = State,
     Streams2 = lists:foldl(fun
-        ({VBucketId, {RequestId, [Mutation | Rest], HiSeq}}, Acc) ->
+        ({VBucketId, {RequestId, [Mutation | Rest], Socket, HiSeq}}, Acc) ->
             {Cas, Seq, RevSeq, Flags, Expiration, LockTime, Key, Value} = Mutation,
             Encoded = case Value of
             deleted ->
@@ -211,8 +243,8 @@ handle_info({send_mutations, Socket}, State) ->
                 LockTime, Key, Value)
             end,
             ok = gen_tcp:send(Socket, Encoded),
-            [{VBucketId, {RequestId, Rest, HiSeq}} | Acc];
-        ({VBucketId, {RequestId, [], _HiSeq}}, Acc) ->
+            [{VBucketId, {RequestId, Rest, Socket, HiSeq}} | Acc];
+        ({VBucketId, {RequestId, [], Socket, _HiSeq}}, Acc) ->
             Marker = couch_upr_producer:encode_snapshot_marker(VBucketId, RequestId),
             ok = gen_tcp:send(Socket, Marker),
             StreamEnd = couch_upr_producer:encode_stream_end(VBucketId, RequestId),
@@ -223,7 +255,12 @@ handle_info({send_mutations, Socket}, State) ->
     0 ->
         ok;
     _ ->
-        self() ! {send_mutations, Socket}
+        case Pause of
+        false ->
+            self() ! send_mutations;
+        true ->
+            ok
+        end
     end,
     {noreply, State#state{streams = Streams2}}.
 
@@ -279,7 +316,9 @@ read(Socket) ->
         {stats, BodyLength, RequestId} ->
             handle_stats_body(Socket, BodyLength, RequestId);
         {sasl_auth, BodyLength, RequestId} ->
-            handle_sasl_auth_body(Socket, BodyLength, RequestId)
+            handle_sasl_auth_body(Socket, BodyLength, RequestId);
+        {stream_close, RequestId, PartId} ->
+            handle_stream_close_body(Socket, RequestId, PartId)
         end,
         read(Socket);
     {error, closed} ->
@@ -330,6 +369,18 @@ handle_stream_request_body(Socket, BodyLength, RequestId, PartId) ->
         {error, closed}
     end.
 
+handle_stream_close_body(Socket, RequestId, PartId) ->
+    Status = case gen_server:call(?MODULE, {remove_stream, PartId}) of
+    ok ->
+        ?UPR_STATUS_OK;
+    vbucket_stream_not_found ->
+        ?UPR_STATUS_NOT_MY_VBUCKET
+    end,
+    Resp = couch_upr_producer:encode_stream_close_response(
+        RequestId, Status),
+    ok = gen_tcp:send(Socket, Resp).
+
+
 -spec send_ok_or_error(socket(), request_id(), partition_id(), update_seq(),
                        update_seq(), uuid(), update_seq(),
                        partition_version()) -> ok.
@@ -377,10 +428,8 @@ send_ok_or_error(Socket, RequestId, PartId, StartSeq, EndSeq,
 -spec send_ok(socket(), request_id(), partition_id(), update_seq(),
               update_seq(), partition_version()) -> ok.
 send_ok(Socket, RequestId, PartId, StartSeq, EndSeq, FailoverLog) ->
-    StreamOk = couch_upr_producer:encode_stream_request_ok(
-        RequestId, FailoverLog),
-    ok = gen_tcp:send(Socket, StreamOk),
-    ok = gen_server:call(?MODULE, {add_stream, PartId, RequestId, StartSeq, EndSeq, Socket}).
+        ok = gen_server:call(?MODULE, {add_stream, PartId, RequestId,
+                                       StartSeq, EndSeq, Socket, FailoverLog}).
 
 -spec send_rollback(socket(), request_id(), update_seq()) -> ok.
 send_rollback(Socket, RequestId, RollbackSeq) ->
