@@ -24,7 +24,7 @@ num_docs() -> 1000.
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(29),
+    etap:plan(31),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -159,7 +159,7 @@ test() ->
     {StreamReq0_2, {failoverlog, InitialFailoverLog0}} =
         couch_upr_client:add_stream(Pid, 0, hd(InitialFailoverLog0), 1, 100),
 
-    {StreamReq0_3, StreamResp0_3} =
+    {_, StreamResp0_3} =
         couch_upr_client:add_stream(Pid, 0, hd(InitialFailoverLog0), 10, 100),
     etap:is(StreamResp0_3, {error,vbucket_stream_already_exists},
         "Stream for vbucket 0 already exists"),
@@ -169,11 +169,9 @@ test() ->
     read_mutations(Pid, [StreamReq0_2], [[]]),
 
     couch_upr_fake_server:pause_mutations(),
-    {StreamReq1_2, _} = couch_upr_client:add_stream(Pid, 1,
-        hd(InitialFailoverLog1), 10, 300),
+    couch_upr_client:add_stream(Pid, 1, hd(InitialFailoverLog1), 10, 300),
 
-    {StreamReq2_2, _} = couch_upr_client:add_stream(Pid, 2,
-        hd(InitialFailoverLog2), 100, 200),
+    couch_upr_client:add_stream(Pid, 2, hd(InitialFailoverLog2), 100, 200),
 
     StreamList1 = couch_upr_client:list_streams(Pid),
     etap:is(StreamList1, [1,2], "Stream list contains parititon 1,2"),
@@ -186,11 +184,9 @@ test() ->
     StreamRemoveResp1 = couch_upr_client:remove_stream(Pid, 1),
     etap:is(StreamRemoveResp1, {error, vbucket_stream_not_found},
         "Correct error on trying to remove non-existing stream"),
-
     couch_upr_fake_server:continue_mutations(),
 
     % Test with too large failover log
-
     TooLargeFailoverLog = [{I, I} ||
         I <- lists:seq(0, ?UPR_MAX_FAILOVER_LOG_SIZE)],
     PartId = 1,
@@ -200,9 +196,51 @@ test() ->
     etap:is(TooLargeError, {error, too_large_failover_log},
         "Too large failover log returns correct error"),
 
+    % Remove existing streams
+    couch_upr_client:remove_stream(Pid, 1),
+    couch_upr_client:remove_stream(Pid, 2),
+
+    % Tests for flow control
+    couch_upr_fake_server:pause_mutations(),
+    couch_upr_client:set_buffer_size(Pid, 50),
+
+    {StreamReq0_4, _} = couch_upr_client:add_stream(Pid, 0,
+        hd(InitialFailoverLog0), 0, 500),
+
+    Throttled0 = try_until_throttled(Pid, 100),
+    etap:is(Throttled0, true, "Throttled stream events queue when buffer became full"),
+
+    Throttled1 = try_until_unthrottled(Pid, StreamReq0_4, 25),
+    etap:is(Throttled1, false, "Throttling disabled when drained buffered events queue"),
 
     couch_set_view_test_util:stop_server(),
     ok.
+
+try_until_throttled(_Pid, 0) ->
+    false;
+try_until_throttled(Pid, N) ->
+    Throttled = gen_server:call(Pid, throttled),
+    case Throttled of
+    true ->
+        true;
+    false ->
+        ok = couch_upr_fake_server:send_single_mutation(),
+        timer:sleep(1),
+        try_until_throttled(Pid, N-1)
+    end.
+
+try_until_unthrottled(_Pid, _ReqId, 0) ->
+    true;
+try_until_unthrottled(Pid, ReqId, N) ->
+    Throttled = gen_server:call(Pid, throttled),
+    case Throttled of
+    false ->
+        false;
+    true ->
+        couch_upr_client:get_stream_event(Pid, ReqId),
+        try_until_unthrottled(Pid, ReqId, N-1)
+    end.
+
 
 setup_test() ->
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
