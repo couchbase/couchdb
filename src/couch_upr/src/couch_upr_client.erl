@@ -250,7 +250,7 @@ handle_call({get_stream_event, RequestId}, From, State) ->
     false ->
         {noreply, add_stream_event_waiter(State, RequestId, From)};
     nil ->
-        {reply, {error, stream_not_found}, State}
+        {reply, {error, vbucket_stream_not_found}, State}
     end.
 
 
@@ -269,9 +269,11 @@ handle_info({stream_response, RequestId, Msg}, State) ->
                 State
             end;
         {remove_stream, PartId} ->
+            StreamReqId = find_stream_req_id(State, PartId),
             case Msg of
             ok ->
-                StreamReqId = find_stream_req_id(State, PartId),
+                remove_request_queue(State, StreamReqId);
+            {error, vbucket_stream_not_found} ->
                 remove_request_queue(State, StreamReqId);
             _ ->
                 State
