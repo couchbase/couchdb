@@ -822,8 +822,15 @@ receive_worker(Socket, Timeout, Parent, MsgAcc0) ->
         {stats, Status, RequestId, BodyLength, KeyLength} ->
             case BodyLength of
             0 ->
-                StatAcc = lists:reverse(MsgAcc0),
-                {done, {stream_response, RequestId, {ok, StatAcc}}};
+                case Status of
+                ?UPR_STATUS_OK ->
+                    StatAcc = lists:reverse(MsgAcc0),
+                    {done, {stream_response, RequestId, {ok, StatAcc}}};
+                % Some errors might not contain a body
+                _ ->
+                    Error = {error, {Status, <<>>}},
+                    {done, {stream_response, RequestId, Error}}
+                end;
             _ ->
                 case receive_stat(
                     Socket, Timeout, Status, BodyLength, KeyLength) of
