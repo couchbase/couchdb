@@ -16,7 +16,7 @@
 % Public API
 -export([start/2]).
 -export([add_stream/5, get_sequence_number/2, get_failover_log/2]).
--export([get_stream_event/2, remove_stream/2, list_streams/1]).
+-export([get_stream_event/2, remove_stream/2, list_streams/1, set_buffer_size/2]).
 -export([enum_docs_since/7]).
 
 % gen_server callbacks
@@ -24,6 +24,7 @@
 
 -include("couch_db.hrl").
 -include_lib("couch_upr/include/couch_upr.hrl").
+-define(MAX_BUF_SIZE, 10485760).
 
 -type mutations_fold_fun() :: fun().
 -type mutations_fold_acc() :: any().
@@ -35,7 +36,9 @@
     pending_requests = dict:new()   :: dict(),
     stream_queues = dict:new()      :: dict(),
     active_streams = []             :: list(),
-    worker_pid                      :: pid()
+    worker_pid                      :: pid(),
+    max_buffer_size = ?MAX_BUF_SIZE :: integer(),
+    throttled = false               :: boolean()
 }).
 
 % This gen server implements a UPR client with vbucket stream multiplexing
@@ -96,6 +99,11 @@ get_failover_log(Pid, PartId) ->
 -spec get_stream_event(pid(), request_id()) -> {atom(), #doc{}} | {'error', term()}.
 get_stream_event(Pid, ReqId) ->
     gen_server:call(Pid, {get_stream_event, ReqId}).
+
+
+-spec set_buffer_size(pid(), integer()) -> ok.
+set_buffer_size(Pid, Size) ->
+    gen_server:call(Pid, {set_buffer_size, Size}).
 
 
 -spec enum_docs_since(pid(), partition_id(), partition_version(), update_seq(),
@@ -237,21 +245,40 @@ handle_call({get_failover_log, PartId}, From, State) ->
 % dequeue it and reply back to the caller.
 % Else, put the caller into the stream queue waiter list
 handle_call({get_stream_event, RequestId}, From, State) ->
+    #state{
+       throttled = Throttled,
+       max_buffer_size = MaxBufSize,
+       worker_pid = Pid
+    } = State,
     case stream_event_present(State, RequestId) of
     true ->
-        {State2, Event} = dequeue_stream_event(State, RequestId),
-        State3 = case Event of
-        {stream_end, _} ->
-            remove_request_queue(State2, RequestId);
-        _ ->
+        {State2, Event, Size} = dequeue_stream_event(State, RequestId),
+        State3 = case Throttled andalso (Size < MaxBufSize) of
+        true ->
+            Pid ! continue,
+            State2#state{throttled = false};
+        false ->
             State2
         end,
-        {reply, Event, State3};
+        State4 = case Event of
+        {stream_end, _} ->
+            remove_request_queue(State3, RequestId);
+        _ ->
+            State3
+        end,
+        {reply, Event, State4};
     false ->
         {noreply, add_stream_event_waiter(State, RequestId, From)};
     nil ->
         {reply, {error, vbucket_stream_not_found}, State}
-    end.
+    end;
+
+handle_call({set_buffer_size, Size}, _From, State) ->
+    {reply, ok, State#state{max_buffer_size = Size}};
+
+% Only used by unit test
+handle_call(throttled, _From, #state{throttled = Throttled} = State) ->
+    {reply, Throttled, State}.
 
 
 % Handle response message send by connection receiver worker
@@ -304,8 +331,15 @@ handle_info({stream_event, RequestId, Event}, State) ->
         end,
         {noreply, State3};
     false ->
-        State2 = enqueue_stream_event(State, RequestId, Event),
-        {noreply, State2};
+        {State2, Size} = enqueue_stream_event(State, RequestId, Event),
+        State3 = case should_throttle(State2, Size) of
+        true ->
+            State2#state.worker_pid ! throttle,
+            State2#state{throttled = true};
+        false ->
+            State2
+        end,
+        {noreply, State3};
     nil ->
         {noreply, State}
     end;
@@ -588,36 +622,43 @@ add_request_queue(State, PartId, RequestId) ->
        stream_queues = StreamQueues
     } = State,
    ActiveStreams2 =  [{PartId, RequestId} | ActiveStreams],
-   StreamQueues2 = dict:store(RequestId, {[], []}, StreamQueues),
+   StreamQueues2 = dict:store(RequestId, {[], 0, []}, StreamQueues),
    State#state{
        active_streams = ActiveStreams2,
        stream_queues = StreamQueues2
     }.
 
 
--spec enqueue_stream_event(#state{}, request_id(), tuple()) -> #state{}.
+-spec enqueue_stream_event(#state{}, request_id(), tuple()) ->
+                                            {#state{}, non_neg_integer()}.
 enqueue_stream_event(State, RequestId, Event) ->
     #state{
        stream_queues = StreamQueues
     } = State,
-    {ok, {Waiters, EvQueue}} = dict:find(RequestId, StreamQueues),
-    State#state{
+    {ok, {Waiters, Size, EvQueue}} = dict:find(RequestId, StreamQueues),
+    Size2 = Size + erts_debug:size(Event),
+    State2 = State#state{
         stream_queues =
-            dict:store(RequestId, {Waiters, EvQueue ++ [Event]}, StreamQueues)
-    }.
+            dict:store(RequestId,
+                       {Waiters, Size2, EvQueue ++ [Event]},
+                       StreamQueues)
+    },
+    {State2, Size2}.
 
 
--spec dequeue_stream_event(#state{}, request_id()) -> {#state{}, tuple()}.
+-spec dequeue_stream_event(#state{}, request_id()) ->
+                               {#state{}, tuple(), non_neg_integer()}.
 dequeue_stream_event(State, RequestId) ->
     #state{
        stream_queues = StreamQueues
     } = State,
-    {ok, {Waiters, [Event | Rest]}} = dict:find(RequestId, StreamQueues),
+    {ok, {Waiters, Size, [Event | Rest]}} = dict:find(RequestId, StreamQueues),
+    Size2 = Size - erts_debug:size(Event),
     State2 = State#state{
         stream_queues =
-            dict:store(RequestId, {Waiters, Rest}, StreamQueues)
+            dict:store(RequestId, {Waiters, Size2, Rest}, StreamQueues)
     },
-    {State2, Event}.
+    {State2, Event, Size2}.
 
 
 -spec add_stream_event_waiter(#state{}, request_id(), term()) -> #state{}.
@@ -625,10 +666,10 @@ add_stream_event_waiter(State, RequestId, Waiter) ->
     #state{
        stream_queues = StreamQueues
     } = State,
-    {ok, {Waiters, EvQueue}} = dict:find(RequestId, StreamQueues),
+    {ok, {Waiters, Size, EvQueue}} = dict:find(RequestId, StreamQueues),
     Waiters2 = [Waiter | Waiters],
     StreamQueues2 =
-    dict:store(RequestId, {Waiters2, EvQueue}, StreamQueues),
+    dict:store(RequestId, {Waiters2, Size, EvQueue}, StreamQueues),
     State#state{
        stream_queues = StreamQueues2
     }.
@@ -642,7 +683,7 @@ stream_event_present(State, RequestId) ->
     case dict:find(RequestId, StreamQueues) of
     error ->
         nil;
-    {ok, {_, Events}} ->
+    {ok, {_, _, Events}} ->
         case length(Events) of
         0 ->
             false;
@@ -660,7 +701,7 @@ stream_event_waiters_present(State, RequestId) ->
     case dict:find(RequestId, StreamQueues) of
     error ->
         nil;
-    {ok, {Waiters, _}} ->
+    {ok, {Waiters, _, _}} ->
         case length(Waiters) of
         0 ->
             false;
@@ -675,9 +716,9 @@ remove_stream_event_waiter(State, RequestId) ->
     #state{
        stream_queues = StreamQueues
     } = State,
-    {ok, {[Waiter | Rest], EvQueue}} = dict:find(RequestId, StreamQueues),
+    {ok, {[Waiter | Rest], Size, EvQueue}} = dict:find(RequestId, StreamQueues),
     State2 = State#state{
-        stream_queues = dict:store(RequestId, {Rest, EvQueue}, StreamQueues)
+        stream_queues = dict:store(RequestId, {Rest, Size, EvQueue}, StreamQueues)
     },
     {State2, Waiter}.
 
@@ -720,6 +761,17 @@ parse_error_response(Socket, Timeout, BodyLength, Status) ->
 % Read and parse downstream messages and send to the gen_server process
 -spec receive_worker(socket(), timeout(), pid(), list()) -> any().
 receive_worker(Socket, Timeout, Parent, MsgAcc0) ->
+    receive
+    throttle ->
+        receive
+        continue ->
+            ok
+        end;
+    continue ->
+        ok
+    after 0 ->
+        ok
+    end,
     case socket_recv(Socket, ?UPR_HEADER_LEN, infinity) of
     {ok, Header} ->
         {Action, MsgAcc} =
@@ -802,4 +854,18 @@ receive_worker(Socket, Timeout, Parent, MsgAcc0) ->
         end;
     {error, Reason} ->
         Reason
+    end.
+
+
+-spec should_throttle(#state{}, integer()) -> boolean().
+should_throttle(State, Size) ->
+    #state{
+       throttled = Throttled,
+       max_buffer_size = MaxBufSize
+    } = State,
+    case Throttled of
+    true ->
+        false;
+    false ->
+        Size >= MaxBufSize
     end.

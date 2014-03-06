@@ -18,6 +18,7 @@
 
 % Only uses by tests
 -export([set_failover_log/2, pause_mutations/0, continue_mutations/0]).
+-export([send_single_mutation/0]).
 
 % Needed for internal process spawning
 -export([accept/1, accept_loop/1]).
@@ -120,6 +121,11 @@ continue_mutations() ->
     ?MODULE ! send_mutations,
     ok.
 
+% Used by tests to control flow of mutation message from server to client
+-spec send_single_mutation() -> ok.
+send_single_mutation() ->
+    ?MODULE ! send_mutations,
+    ok.
 
 % gen_server callbacks
 
