@@ -52,6 +52,7 @@
 -define(group_sig(State), (element(3, State#state.init_args))#set_view_group.sig).
 -define(group_id(State), (State#state.group)#set_view_group.name).
 -define(db_set(State), (State#state.group)#set_view_group.db_set).
+-define(upr_pid(State), (State#state.group)#set_view_group.upr_pid).
 -define(category(State), (State#state.group)#set_view_group.category).
 -define(is_defined(State),
     (((State#state.group)#set_view_group.index_header)#set_view_index_header.num_partitions > 0)).
@@ -1726,10 +1727,9 @@ get_group_info(State) ->
     ]},
     {ok, Size} = couch_file:bytes(Fd),
     {message_queue_len, DbSetMsgQueueLen} = process_info(?db_set(State), message_queue_len),
-    {ok, DbSeqs, ExpectedDbSeqs} = gen_server:call(?db_set(State), get_seqs_debug, infinity),
-    DbSetPartitions = ordsets:from_list([P || {P, _S} <- DbSeqs]),
     GroupPartitions = ordsets:from_list(
         couch_set_view_util:decode_bitmask(?set_abitmask(Group) bor ?set_pbitmask(Group))),
+    {ok, DbSeqs} = get_seqs(?upr_pid(State), GroupPartitions),
     [
         {signature, ?l2b(hex_sig(GroupSig))},
         {disk_size, Size},
@@ -1743,9 +1743,6 @@ get_group_info(State) ->
         {max_number_partitions, ?set_num_partitions(Group)},
         {update_seqs, {[{couch_util:to_binary(P), S} || {P, S} <- ?set_seqs(Group)]}},
         {partition_seqs, {[{couch_util:to_binary(P), S} || {P, S} <- DbSeqs]}},
-        {expected_partition_seqs, {[{couch_util:to_binary(P), S} || {P, S} <- ExpectedDbSeqs]}},
-        {partition_seqs_up_to_date, DbSeqs == ExpectedDbSeqs},
-        {out_of_sync_db_set_partitions, DbSetPartitions /= GroupPartitions},
         {db_set_message_queue_len, DbSetMsgQueueLen},
         {active_partitions, couch_set_view_util:decode_bitmask(?set_abitmask(Group))},
         {passive_partitions, couch_set_view_util:decode_bitmask(?set_pbitmask(Group))},
@@ -2223,7 +2220,7 @@ persist_partition_states(State, ActiveList, PassiveList, CleanupList, PendingTra
     ok = set_state(ReplicaPid, ReplicasToMarkActive, [], ReplicasToCleanup2),
     % Need to update list of active partition sequence numbers for every blocked client.
     WaitList2 = update_waiting_list(
-        WaitList, ?db_set(State), ActiveList2, PassiveList3, CleanupList),
+        WaitList, ?upr_pid(State), ActiveList2, PassiveList3, CleanupList),
     State4 = State3#state{waiting_list = WaitList2},
     case (dict:size(Listeners) > 0) andalso (CleanupList /= []) of
     true ->
@@ -2262,10 +2259,10 @@ persist_partition_states(State, ActiveList, PassiveList, CleanupList, PendingTra
                           ordsets:ordset(partition_id()),
                           ordsets:ordset(partition_id()),
                           ordsets:ordset(partition_id())) -> [#waiter{}].
-update_waiting_list([], _DbSet, _AddActiveList, _AddPassiveList, _AddCleanupList) ->
+update_waiting_list([], _UprPid, _AddActiveList, _AddPassiveList, _AddCleanupList) ->
     [];
-update_waiting_list(WaitList, DbSet, AddActiveList, AddPassiveList, AddCleanupList) ->
-    {ok, AddActiveSeqs} = couch_db_set:get_seqs(DbSet, AddActiveList, false),
+update_waiting_list(WaitList, UprPid, AddActiveList, AddPassiveList, AddCleanupList) ->
+    {ok, AddActiveSeqs} = get_seqs(UprPid, AddActiveList),
     RemoveSet = ordsets:union(AddPassiveList, AddCleanupList),
     MapFun = fun(W) -> update_waiter_seqs(W, AddActiveSeqs, RemoveSet) end,
     [MapFun(W) || W <- WaitList].
@@ -2359,7 +2356,7 @@ notify_pending_transition_waiters(State) ->
         replica_partitions = RepParts,
         waiting_list = WaitList
     } = State,
-    CurSeqs = active_partition_seqs(State, true),
+    CurSeqs = active_partition_seqs(State),
     {TransWaiters2, WaitList2, GroupReplyList, TriggerGroupUpdate} =
         lists:foldr(
             fun({From, Req} = TransWaiter, {AccTrans, AccWait, ReplyAcc, AccTriggerUp}) ->
@@ -2694,26 +2691,24 @@ cleaner(#state{group = Group}) ->
 
 -spec indexable_partition_seqs(#state{}) -> partition_seqs().
 indexable_partition_seqs(#state{group = Group} = State) ->
-    Sync = (dict:size(State#state.update_listeners) > 0) orelse
-        (State#state.waiting_list /= []),
+    CurPartitions = [P || {P, _} <- ?set_seqs(Group)],
     {ok, CurSeqs} = case ?set_unindexable_seqs(Group) of
     [] ->
-        couch_db_set:get_seqs(?db_set(State), Sync);
+        get_seqs(?upr_pid(State), CurPartitions);
     _ ->
-        CurPartitions = [P || {P, _} <- ?set_seqs(Group)],
         ReplicasOnTransfer = ?set_replicas_on_transfer(Group),
         Partitions = ordsets:union(CurPartitions, ReplicasOnTransfer),
         % Index unindexable replicas on transfer though (as the reason for the
         % transfer is to become active and indexable).
-        couch_db_set:get_seqs(?db_set(State), Partitions, Sync)
+        get_seqs(?upr_pid(State), Partitions)
     end,
     CurSeqs.
 
 
--spec active_partition_seqs(#state{}, boolean()) -> partition_seqs().
-active_partition_seqs(#state{group = Group} = State, Sync) ->
+-spec active_partition_seqs(#state{}) -> partition_seqs().
+active_partition_seqs(#state{group = Group} = State) ->
     ActiveParts = couch_set_view_util:decode_bitmask(?set_abitmask(Group)),
-    {ok, CurSeqs} = couch_db_set:get_seqs(?db_set(State), ActiveParts, Sync),
+    {ok, CurSeqs} = get_seqs(?upr_pid(State), ActiveParts),
     CurSeqs.
 
 
@@ -2776,7 +2771,7 @@ compact_group(#state{group = Group} = State) ->
 
 -spec stop_upr_streams(#state{}) -> ok.
 stop_upr_streams(State) ->
-    UprPid = (State#state.group)#set_view_group.upr_pid,
+    UprPid = ?upr_pid(State),
     ActiveStreams = couch_upr_client:list_streams(UprPid),
     lists:foreach(fun(ActiveStream) ->
         case couch_upr_client:remove_stream(UprPid, ActiveStream) of
@@ -3325,7 +3320,7 @@ process_view_group_request(#set_view_group_req{stale = false} = Req, From, State
         replica_partitions = ReplicaParts
     } = State,
     #set_view_group_req{debug = Debug} = Req,
-    CurSeqs = active_partition_seqs(State, true),
+    CurSeqs = active_partition_seqs(State),
     Waiter = #waiter{from = From, debug = Debug, seqs = CurSeqs},
     case reply_with_group(Group, ReplicaParts, [Waiter]) of
     [] ->
@@ -3635,15 +3630,12 @@ process_monitor_partition_update(#state{group = Group} = State, PartId, Ref, Pid
     false ->
         ok
     end,
+    {ok, [{PartId, CurSeq}]} = get_seqs(?upr_pid(State), [PartId]),
     case IsPending of
     true ->
         State2 = monitor_partitions(State, [PartId]),
-        Db = couch_set_view_util:open_db(?set_name(State2), PartId),
-        ok = couch_db:close(Db),
-        CurSeq = Db#db.update_seq,
         Seq = 0;
     false ->
-        {ok, [{PartId, CurSeq}]} = couch_db_set:get_seqs(?db_set(State), [PartId], true),
         case couch_set_view_util:find_part_seq(PartId, ?set_seqs(Group)) of
         not_found ->
             Seq = couch_set_view_util:get_part_seq(PartId, ?set_unindexable_seqs(Group));
@@ -3960,3 +3952,13 @@ rollback(State, RollbackPartSeqs) ->
     cannot_rollback ->
         {error, {cannot_rollback, State3}}
     end.
+
+
+-spec get_seqs(pid(), ordsets:ordset(partition_id())) ->
+                      {ok, partition_seqs()}.
+get_seqs(UprPid, Partitions) ->
+    Seqs = lists:map(fun(PartId) ->
+        {ok, NumItems} = couch_upr_client:get_sequence_number(UprPid, PartId),
+        {PartId, NumItems}
+    end, Partitions),
+    {ok, Seqs}.
