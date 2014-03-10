@@ -47,7 +47,7 @@ parse_header(<<?UPR_MAGIC_REQUEST,
     ?UPR_OPCODE_FAILOVER_LOG_REQUEST ->
         {failover_log, RequestId, PartId};
     ?UPR_OPCODE_STATS ->
-        {stats, BodyLength, RequestId};
+        {stats, BodyLength, RequestId, PartId};
     ?UPR_OPCODE_SASL_AUTH ->
         {sasl_auth, BodyLength, RequestId};
     ?UPR_OPCODE_STREAM_CLOSE ->

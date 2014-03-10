@@ -191,6 +191,41 @@ handle_call({set_failover_log, PartId, FailoverLog}, _From, State) ->
     }};
 
 
+handle_call({send_stat, Stat, Socket, RequestId, PartId}, _From, State) ->
+    BinPartId = list_to_binary(integer_to_list(PartId)),
+    case binary:split(Stat, <<" ">>) of
+    [<<"vbucket-seqno">>] ->
+            % XXX vmx 2013-12-09: Return all seq numbers
+            not_yet_implemented;
+    [<<"vbucket-seqno">>, _] ->
+        case get_sequence_number(State#state.setname, PartId) of
+        {ok, Seq} ->
+            SeqKey = <<"vb_", BinPartId/binary ,"_high_seqno">>,
+            SeqValue = list_to_binary(integer_to_list(Seq)),
+            SeqStat = couch_upr_producer:encode_stat(
+                RequestId, SeqKey, SeqValue),
+            ok = gen_tcp:send(Socket, SeqStat),
+
+            UuidKey = <<"vb_", BinPartId/binary ,"_vb_uuid">>,
+            FailoverLog = get_failover_log(PartId, State),
+            {UuidValue, _} = hd(FailoverLog),
+            UuidStat = couch_upr_producer:encode_stat(
+                RequestId, UuidKey, <<UuidValue:64/integer>>),
+            ok = gen_tcp:send(Socket, UuidStat),
+
+            EndStat = couch_upr_producer:encode_stat(RequestId, <<>>, <<>>),
+            ok = gen_tcp:send(Socket, EndStat);
+        {error, not_my_partition} ->
+            % The real response contains the vBucket map so that
+            % clients can adapt. It's not easy to simulate, hence
+            % we return an empty JSON object to keep things simple.
+            StatError = couch_upr_producer:encode_stat_error(
+                RequestId, ?UPR_STATUS_NOT_MY_VBUCKET,
+                <<"{}">>),
+            ok = gen_tcp:send(Socket, StatError)
+        end
+    end,
+    {reply, ok, State};
 
 handle_call({get_failover_log, PartId}, _From, State) ->
     FailoverLog = get_failover_log(PartId, State),
@@ -325,8 +360,8 @@ read(Socket) ->
             handle_stream_request_body(Socket, BodyLength, RequestId, PartId);
         {failover_log, RequestId, PartId} ->
             handle_failover_log(Socket, RequestId, PartId);
-        {stats, BodyLength, RequestId} ->
-            handle_stats_body(Socket, BodyLength, RequestId);
+        {stats, BodyLength, RequestId, PartId} ->
+            handle_stats_body(Socket, BodyLength, RequestId, PartId);
         {sasl_auth, BodyLength, RequestId} ->
             handle_sasl_auth_body(Socket, BodyLength, RequestId);
         {stream_close, RequestId, PartId} ->
@@ -465,46 +500,13 @@ handle_failover_log(Socket, RequestId, PartId) ->
     ok = gen_tcp:send(Socket, FailoverLogResponse).
 
 
--spec handle_stats_body(socket(), size(), request_id()) ->
+-spec handle_stats_body(socket(), size(), request_id(), partition_id()) ->
                                ok | not_yet_implemented |
                                {error, closed | not_my_partition}.
-handle_stats_body(Socket, BodyLength, RequestId) ->
+handle_stats_body(Socket, BodyLength, RequestId, PartId) ->
     case gen_tcp:recv(Socket, BodyLength) of
     {ok, Stat} ->
-        case binary:split(Stat, <<" ">>) of
-        [<<"vbucket-seqno">>] ->
-                % XXX vmx 2013-12-09: Return all seq numbers
-                not_yet_implemented;
-        [<<"vbucket-seqno">>, PartId0] ->
-            PartId = list_to_integer(binary_to_list(PartId0)),
-            SetName = gen_server:call(?MODULE, get_set_name),
-            case get_sequence_number(SetName, PartId) of
-            {ok, Seq} ->
-                SeqKey = <<"vb_", PartId0/binary ,"_high_seqno">>,
-                SeqValue = list_to_binary(integer_to_list(Seq)),
-                SeqStat = couch_upr_producer:encode_stat(
-                    RequestId, SeqKey, SeqValue),
-                ok = gen_tcp:send(Socket, SeqStat),
-
-                UuidKey = <<"vb_", PartId0/binary ,"_vb_uuid">>,
-                FailoverLog = get_failover_log(PartId),
-                {UuidValue, _} = hd(FailoverLog),
-                UuidStat = couch_upr_producer:encode_stat(
-                    RequestId, UuidKey, <<UuidValue:64/integer>>),
-                ok = gen_tcp:send(Socket, UuidStat),
-
-                EndStat = couch_upr_producer:encode_stat(RequestId, <<>>, <<>>),
-                ok = gen_tcp:send(Socket, EndStat);
-            {error, not_my_partition} ->
-                % The real response contains the vBucket map so that
-                % clients can adapt. It's not easy to simulate, hence
-                % we return an empty JSON object to keep things simple.
-                StatError = couch_upr_producer:encode_stat_error(
-                    RequestId, ?UPR_STATUS_NOT_MY_VBUCKET,
-                    <<"{}">>),
-                ok = gen_tcp:send(Socket, StatError)
-            end
-        end;
+        ok = gen_server:call(?MODULE, {send_stat, Stat, Socket, RequestId, PartId});
     {error, closed} ->
         {error, closed}
     end.
