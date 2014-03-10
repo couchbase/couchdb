@@ -190,20 +190,14 @@ handle_call({set_failover_log, PartId, FailoverLog}, _From, State) ->
         failover_logs = FailoverLogs
     }};
 
-handle_call({get_sequence_number, PartId}, _From, State) ->
-    case open_db(State#state.setname, PartId) of
-    {ok, Db} ->
-        Seq = Db#db.update_seq,
-        couch_db:close(Db),
-        {reply, {ok, Seq}, State};
-    {error, cannot_open_db} ->
-        {reply, {error, not_my_partition}, State}
-    end;
 
 
 handle_call({get_failover_log, PartId}, _From, State) ->
     FailoverLog = get_failover_log(PartId, State),
     {reply, FailoverLog, State};
+
+handle_call(get_set_name, _From, State) ->
+    {reply, State#state.setname, State};
 
 handle_call({pause_mutations, Flag}, _From, State) ->
     {reply, ok, State#state{pause_mutations = Flag}};
@@ -292,10 +286,18 @@ get_failover_log(PartId, State) ->
 
 
 % Returns the current high sequence number of a partition
--spec get_sequence_number(partition_id()) -> {ok, update_seq()} |
-                                             {error, not_my_partition}.
-get_sequence_number(PartId) ->
-    gen_server:call(?MODULE, {get_sequence_number, PartId}).
+-spec get_sequence_number(binary(), partition_id()) ->
+                                 {ok, update_seq()} |
+                                 {error, not_my_partition}.
+get_sequence_number(SetName, PartId) ->
+    case open_db(SetName, PartId) of
+    {ok, Db} ->
+        Seq = Db#db.update_seq,
+        couch_db:close(Db),
+        {ok, Seq};
+    {error, cannot_open_db} ->
+        {error, not_my_partition}
+    end.
 
 
 -spec accept(socket()) -> pid().
@@ -396,7 +398,8 @@ handle_stream_close_body(Socket, RequestId, PartId) ->
                        partition_version()) -> ok.
 send_ok_or_error(Socket, RequestId, PartId, StartSeq, EndSeq,
         PartVersionUuid, PartVersionSeq, FailoverLog) ->
-    {ok, HighSeq} = get_sequence_number(PartId),
+    SetName = gen_server:call(?MODULE, get_set_name),
+    {ok, HighSeq} = get_sequence_number(SetName, PartId),
 
     case StartSeq =:= 0 of
     true ->
@@ -474,7 +477,8 @@ handle_stats_body(Socket, BodyLength, RequestId) ->
                 not_yet_implemented;
         [<<"vbucket-seqno">>, PartId0] ->
             PartId = list_to_integer(binary_to_list(PartId0)),
-            case get_sequence_number(PartId) of
+            SetName = gen_server:call(?MODULE, get_set_name),
+            case get_sequence_number(SetName, PartId) of
             {ok, Seq} ->
                 SeqKey = <<"vb_", PartId0/binary ,"_high_seqno">>,
                 SeqValue = list_to_binary(integer_to_list(Seq)),
