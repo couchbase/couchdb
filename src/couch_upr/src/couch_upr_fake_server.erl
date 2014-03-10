@@ -202,12 +202,7 @@ handle_call({get_sequence_number, PartId}, _From, State) ->
 
 
 handle_call({get_failover_log, PartId}, _From, State) ->
-    case dict:find(PartId, State#state.failover_logs) of
-    {ok, FailoverLog} ->
-        ok;
-    error ->
-        FailoverLog = [{0, 0}]
-    end,
+    FailoverLog = get_failover_log(PartId, State),
     {reply, FailoverLog, State};
 
 handle_call({pause_mutations, Flag}, _From, State) ->
@@ -285,6 +280,15 @@ code_change(_OldVsn, State, _Extra) ->
 -spec get_failover_log(partition_id()) -> partition_version().
 get_failover_log(PartId) ->
     gen_server:call(?MODULE, {get_failover_log, PartId}).
+
+-spec get_failover_log(partition_id(), #state{}) -> partition_version().
+get_failover_log(PartId, State) ->
+    case dict:find(PartId, State#state.failover_logs) of
+    {ok, FailoverLog} ->
+        FailoverLog;
+    error ->
+        [{0, 0}]
+    end.
 
 
 % Returns the current high sequence number of a partition
