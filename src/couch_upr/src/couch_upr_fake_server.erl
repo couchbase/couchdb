@@ -223,6 +223,24 @@ handle_call({send_stat, Stat, Socket, RequestId, PartId}, _From, State) ->
                 RequestId, ?UPR_STATUS_NOT_MY_VBUCKET,
                 <<"{}">>),
             ok = gen_tcp:send(Socket, StatError)
+        end;
+    [<<"vbucket-details">>, _] ->
+        case get_num_items(State#state.setname, PartId) of
+        {ok, NumItems} ->
+            NumItemsKey = <<"vb_", BinPartId/binary ,":num_items">>,
+            NumItemsValue = list_to_binary(integer_to_list(NumItems)),
+            % The real vbucket-details response contains a lot of more
+            % stats, but we only care about the num_items
+            NumItemsStat = couch_upr_producer:encode_stat(
+                RequestId, NumItemsKey, NumItemsValue),
+            ok = gen_tcp:send(Socket, NumItemsStat),
+
+            EndStat = couch_upr_producer:encode_stat(RequestId, <<>>, <<>>),
+            ok = gen_tcp:send(Socket, EndStat);
+        {error, not_my_partition} ->
+            StatError = couch_upr_producer:encode_stat_error(
+                RequestId, ?UPR_STATUS_NOT_MY_VBUCKET, <<>>),
+            ok = gen_tcp:send(Socket, StatError)
         end
     end,
     {reply, ok, State};
@@ -330,6 +348,21 @@ get_sequence_number(SetName, PartId) ->
         Seq = Db#db.update_seq,
         couch_db:close(Db),
         {ok, Seq};
+    {error, cannot_open_db} ->
+        {error, not_my_partition}
+    end.
+
+
+% Returns the current number of items of a partition
+-spec get_num_items(binary(), partition_id()) -> {ok, non_neg_integer()} |
+                                                 {error, not_my_partition}.
+get_num_items(SetName, PartId) ->
+    case open_db(SetName, PartId) of
+    {ok, Db} ->
+        {ok, DbInfo} = couch_db:get_db_info(Db),
+        ok = couch_db:close(Db),
+        NumItems = couch_util:get_value(doc_count, DbInfo),
+        {ok, NumItems};
     {error, cannot_open_db} ->
         {error, not_my_partition}
     end.

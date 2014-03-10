@@ -24,7 +24,7 @@ num_docs() -> 1000.
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(31),
+    etap:plan(38),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -218,6 +218,38 @@ test() ->
     Throttled1 = try_until_unthrottled(Pid, StreamReq0_4, 25),
     etap:is(Throttled1, false, "Throttling disabled when drained buffered events queue"),
 
+
+    % Test get_num_items
+
+    {ok, NumItems0} = couch_upr_client:get_num_items(Pid, 0),
+    etap:is(NumItems0, num_docs() div num_set_partitions(),
+        "Number of items of partition 0 is correct"),
+    {ok, NumItems1} = couch_upr_client:get_num_items(Pid, 1),
+    etap:is(NumItems1, num_docs() div num_set_partitions(),
+        "Number of items of partition 1 is correct"),
+    {ok, NumItems2} = couch_upr_client:get_num_items(Pid, 2),
+    etap:is(NumItems2, num_docs() div num_set_partitions(),
+         "Number of items of partition 2 is correct"),
+    {ok, NumItems3} = couch_upr_client:get_num_items(Pid, 3),
+    etap:is(NumItems3, num_docs() div num_set_partitions(),
+        "Number of items of partition 3 is correct"),
+    NumItemsError = couch_upr_client:get_num_items(Pid, 100000),
+    etap:is(NumItemsError, {error, not_my_vbucket},
+        "Too high partition number returns correct error"),
+
+    DocsPerPartition = num_docs() div num_set_partitions(),
+    NumDelDocs0 = num_docs() div (num_set_partitions() * 2),
+    delete_docs(1, NumDelDocs0),
+    {ok, NumItemsDel0} = couch_upr_client:get_num_items(Pid, 0),
+    etap:is(NumItemsDel0, DocsPerPartition - NumItemsDel0,
+        "Number of items of partition 0 after some deletions is correct"),
+    NumDelDocs3 = num_docs() div (num_set_partitions() * 4),
+    delete_docs(3 * DocsPerPartition + 1, NumDelDocs3),
+    {ok, NumItemsDel3} = couch_upr_client:get_num_items(Pid, 3),
+    etap:is(NumItemsDel3, DocsPerPartition - NumDelDocs3,
+        "Number of items of partition 3 after some deletions is correct"),
+
+
     couch_set_view_test_util:stop_server(),
     ok.
 
@@ -323,3 +355,40 @@ populate_set() ->
         test_set_name(),
         lists:seq(0, num_set_partitions() - 1),
         DocList).
+
+delete_docs(StartId, NumDocs) ->
+    Dbs = dict:from_list(lists:map(
+        fun(I) ->
+            {ok, Db} = couch_set_view_test_util:open_set_db(
+                test_set_name(), I),
+            {I, Db}
+        end,
+        lists:seq(0, num_set_partitions() - 1))),
+    Docs = lists:foldl(
+        fun(I, Acc) ->
+            Doc = couch_doc:from_json_obj({[
+                {<<"meta">>, {[{<<"deleted">>, true}, {<<"id">>, doc_id(I)}]}},
+                {<<"json">>, {[]}}
+            ]}),
+            DocsPerPartition = num_docs() div num_set_partitions(),
+            DocList = case orddict:find(I div DocsPerPartition, Acc) of
+            {ok, L} ->
+                L;
+            error ->
+                []
+            end,
+            orddict:store(I div DocsPerPartition, [Doc | DocList], Acc)
+        end,
+        orddict:new(), lists:seq(StartId, StartId + NumDocs - 1)),
+    [] = orddict:fold(
+        fun(I, DocList, Acc) ->
+            Db = dict:fetch(I, Dbs),
+            etap:diag("Deleting " ++ integer_to_list(length(DocList)) ++
+                " documents from partition " ++ integer_to_list(I)),
+            ok = couch_db:update_docs(Db, DocList, [sort_docs]),
+            Acc
+        end,
+        [], Docs),
+    ok = lists:foreach(fun({_, Db}) ->
+        ok = couch_db:close(Db)
+    end, dict:to_list(Dbs)).

@@ -15,7 +15,8 @@
 
 % Public API
 -export([start/2]).
--export([add_stream/5, get_sequence_number/2, get_failover_log/2]).
+-export([add_stream/5, get_sequence_number/2, get_num_items/2,
+    get_failover_log/2]).
 -export([get_stream_event/2, remove_stream/2, list_streams/1, set_buffer_size/2]).
 -export([enum_docs_since/7]).
 
@@ -86,6 +87,20 @@ get_sequence_number(Pid, PartId) ->
         {_, SeqBin} = Stats,
         {ok, list_to_integer(binary_to_list(SeqBin))};
     {error,  {?UPR_STATUS_NOT_MY_VBUCKET, _}} ->
+        {error, not_my_vbucket}
+    end.
+
+
+-spec get_num_items(pid(), partition_id()) ->
+                           {ok, non_neg_integer()} | {error, not_my_vbucket}.
+get_num_items(Pid, PartId) ->
+    case gen_server:call(Pid, {get_stats, <<"vbucket-details">>, PartId}) of
+    {ok, Stats} ->
+        BinPartId = list_to_binary(integer_to_list(PartId)),
+        {_, NumItems} = lists:keyfind(
+            <<"vb_", BinPartId/binary, ":num_items">>, 1, Stats),
+        {ok, list_to_integer(binary_to_list(NumItems))};
+    {error, {?UPR_STATUS_NOT_MY_VBUCKET, _}} ->
         {error, not_my_vbucket}
     end.
 
