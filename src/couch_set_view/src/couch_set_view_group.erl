@@ -51,7 +51,6 @@
 -define(type(State), (element(3, State#state.init_args))#set_view_group.type).
 -define(group_sig(State), (element(3, State#state.init_args))#set_view_group.sig).
 -define(group_id(State), (State#state.group)#set_view_group.name).
--define(db_set(State), (State#state.group)#set_view_group.db_set).
 -define(upr_pid(State), (State#state.group)#set_view_group.upr_pid).
 -define(category(State), (State#state.group)#set_view_group.category).
 -define(is_defined(State),
@@ -369,18 +368,11 @@ do_init({_, SetName, _} = InitArgs) ->
         ViewCount = length(Group#set_view_group.views),
         case Header#set_view_index_header.num_partitions > 0 of
         false ->
-            DbSet = nil,
             ?LOG_INFO("Started undefined ~s (~s) set view group `~s`,"
                       " group `~s`,  signature `~s', view count: ~p",
                       [Type, Category, SetName,
                        Group#set_view_group.name, hex_sig(Group), ViewCount]);
         true ->
-            DbSet = case (catch couch_db_set:open(SetName, PartitionsList)) of
-            {ok, SetPid} ->
-                SetPid;
-            Error ->
-                throw(Error)
-            end,
             ?LOG_INFO("Started ~s (~s) set view group `~s`, group `~s`,"
                       " signature `~s', view count ~p~n"
                       "active partitions:      ~w~n"
@@ -425,7 +417,6 @@ do_init({_, SetName, _} = InitArgs) ->
             replica_partitions = ReplicaParts,
             group = Group#set_view_group{
                 ref_counter = RefCounter,
-                db_set = DbSet,
                 replica_pid = ReplicaPid,
                 upr_pid = UprPid
             }
@@ -482,50 +473,44 @@ handle_call({define_view, NumPartitions, ActiveList, ActiveBitmask,
         has_replica = UseReplicaIndex,
         partition_versions = PartVersions
     },
-    case (catch couch_db_set:open(?set_name(State), ActiveList ++ PassiveList)) of
-    {ok, DbSet} ->
-        case (?type(State) =:= main) andalso UseReplicaIndex of
-        false ->
-            ReplicaPid = nil;
-        true ->
-            ReplicaPid = open_replica_group(InitArgs),
-            ok = gen_server:call(ReplicaPid, {define_view, NumPartitions, [], 0, [], 0, false}, infinity)
-        end,
-        NewGroup = Group#set_view_group{
-            db_set = DbSet,
-            index_header = NewHeader,
-            replica_pid = ReplicaPid
-        },
-        State2 = State#state{
-            group = NewGroup,
-            replica_group = ReplicaPid
-        },
-        State3 = monitor_partitions(State2, ActiveList),
-        State4 = monitor_partitions(State3, PassiveList),
-        {ok, HeaderPos} = commit_header(NewGroup),
-        ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`, signature `~s',"
-                  " configured with:~n"
-                  "~p partitions~n"
-                  "~sreplica support~n"
-                  "initial active partitions ~w~n"
-                  "initial passive partitions ~w",
-                  [?set_name(State), ?type(State), ?category(State), DDocId,
-                   hex_sig(Group), NumPartitions,
-                   case UseReplicaIndex of
-                   true ->  "";
-                   false -> "no "
-                   end,
-            ActiveList, PassiveList]),
-        NewGroup2 = (State4#state.group)#set_view_group{
-            header_pos = HeaderPos
-        },
-        State5 = State4#state{
-            group = NewGroup2
-        },
-        {reply, ok, State5, ?GET_TIMEOUT(State5)};
-    Error ->
-        {reply, Error, State, ?GET_TIMEOUT(State)}
-    end;
+    case (?type(State) =:= main) andalso UseReplicaIndex of
+    false ->
+        ReplicaPid = nil;
+    true ->
+        ReplicaPid = open_replica_group(InitArgs),
+        ok = gen_server:call(ReplicaPid, {define_view, NumPartitions, [], 0, [], 0, false}, infinity)
+    end,
+    NewGroup = Group#set_view_group{
+        index_header = NewHeader,
+        replica_pid = ReplicaPid
+    },
+    State2 = State#state{
+        group = NewGroup,
+        replica_group = ReplicaPid
+    },
+    State3 = monitor_partitions(State2, ActiveList),
+    State4 = monitor_partitions(State3, PassiveList),
+    {ok, HeaderPos} = commit_header(NewGroup),
+    ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`, signature `~s',"
+              " configured with:~n"
+              "~p partitions~n"
+              "~sreplica support~n"
+              "initial active partitions ~w~n"
+              "initial passive partitions ~w",
+              [?set_name(State), ?type(State), ?category(State), DDocId,
+               hex_sig(Group), NumPartitions,
+               case UseReplicaIndex of
+               true ->  "";
+               false -> "no "
+               end,
+        ActiveList, PassiveList]),
+    NewGroup2 = (State4#state.group)#set_view_group{
+        header_pos = HeaderPos
+    },
+    State5 = State4#state{
+        group = NewGroup2
+    },
+    {reply, ok, State5, ?GET_TIMEOUT(State5)};
 
 handle_call({define_view, _, _, _, _, _, _}, _From, State) ->
     {reply, view_already_defined, State, ?GET_TIMEOUT(State)};
@@ -619,7 +604,6 @@ handle_call({remove_replicas, Partitions}, _From, #state{replica_group = Replica
         false ->
              State4 = State3
         end,
-        ok = couch_db_set:remove_partitions(?db_set(State4), Common),
         ReplicaPartitions2 = ordsets:subtract(ReplicaParts, Common),
         ReplicasOnTransfer2 = ordsets:subtract(?set_replicas_on_transfer(Group3), Common),
         State5 = update_header(
@@ -1172,14 +1156,6 @@ handle_info({'EXIT', Pid, Reason}, #state{cleaner_pid = Pid, group = Group} = St
                 ?group_id(State), Pid, Reason]),
     {noreply, State#state{cleaner_pid = nil}, ?GET_TIMEOUT(State)};
 
-handle_info({'EXIT', Pid, Reason},
-    #state{group = #set_view_group{db_set = Pid}} = State) ->
-    ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`, terminating"
-              " because database set ~p exited with reason: ~p",
-              [?set_name(State), ?type(State), ?category(State),
-               ?group_id(State), Pid, Reason]),
-    {stop, Reason, State};
-
 handle_info({'EXIT', Pid, {updater_finished, Result}}, #state{updater_pid = Pid} = State) ->
     #set_view_updater_result{
         stats = Stats,
@@ -1357,9 +1333,6 @@ handle_info({'EXIT', Pid, Reason}, #state{compactor_pid = Pid} = State) ->
     },
     {noreply, State2, ?GET_TIMEOUT(State2)};
 
-handle_info({'EXIT', Pid, Reason}, #state{group = #set_view_group{db_set = Pid}} = State) ->
-    {stop, {db_set_died, Reason}, State};
-
 handle_info({'EXIT', Pid, Reason},
         #state{group = #set_view_group{upr_pid = Pid}} = State) ->
     ?LOG_ERROR("Set view `~s`, ~s (~s) group `~s`,"
@@ -1417,7 +1390,6 @@ terminate(Reason, #state{group = #set_view_group{sig = Sig} = Group} = State) ->
         State, State#state.update_listeners, {shutdown, Reason}),
     State2 = reply_all(State#state{update_listeners = Listeners2}, Reason),
     State3 = notify_pending_transition_waiters(State2, {shutdown, Reason}),
-    catch couch_db_set:close(?db_set(State3)),
     couch_set_view_util:shutdown_wait(State3#state.cleaner_pid),
     couch_set_view_util:shutdown_wait(State3#state.updater_pid),
     couch_util:shutdown_sync(State3#state.compactor_pid),
@@ -1726,7 +1698,6 @@ get_group_info(State) ->
         {cleanup_history, Stats#set_view_group_stats.cleanup_history}
     ]},
     {ok, Size} = couch_file:bytes(Fd),
-    {message_queue_len, DbSetMsgQueueLen} = process_info(?db_set(State), message_queue_len),
     GroupPartitions = ordsets:from_list(
         couch_set_view_util:decode_bitmask(?set_abitmask(Group) bor ?set_pbitmask(Group))),
     {ok, DbSeqs} = get_seqs(?upr_pid(State), GroupPartitions),
@@ -1743,7 +1714,6 @@ get_group_info(State) ->
         {max_number_partitions, ?set_num_partitions(Group)},
         {update_seqs, {[{couch_util:to_binary(P), S} || {P, S} <- ?set_seqs(Group)]}},
         {partition_seqs, {[{couch_util:to_binary(P), S} || {P, S} <- DbSeqs]}},
-        {db_set_message_queue_len, DbSetMsgQueueLen},
         {active_partitions, couch_set_view_util:decode_bitmask(?set_abitmask(Group))},
         {passive_partitions, couch_set_view_util:decode_bitmask(?set_pbitmask(Group))},
         {cleanup_partitions, couch_set_view_util:decode_bitmask(?set_cbitmask(Group))},
@@ -2202,7 +2172,6 @@ persist_partition_states(State, ActiveList, PassiveList, CleanupList, PendingTra
         end,
         {NewSeqs3, ?set_unindexable_seqs(Group), NewVersions3},
         ToBeUnindexable),
-    ok = couch_db_set:remove_partitions(?db_set(State), CleanupList),
     State2 = demonitor_partitions(State, CleanupList),
     State3 = update_header(
         State2,
@@ -2544,7 +2513,6 @@ update_header(State, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs,
         }
     },
     PartitionsList = make_partitions_list(NewGroup),
-    ok = couch_db_set:add_partitions(?db_set(State), PartitionsList),
     NewState0 = State#state{
         group = NewGroup,
         replica_partitions = NewReplicaParts

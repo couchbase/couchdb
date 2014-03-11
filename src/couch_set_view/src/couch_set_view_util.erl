@@ -27,7 +27,6 @@
 -export([parse_values/1, parse_reductions/1, parse_view_id_keys/1]).
 -export([split_set_db_name/1]).
 -export([group_to_header_bin/1, header_bin_sig/1, header_bin_to_term/1]).
--export([open_db/2]).
 -export([get_part_seq/2, has_part_seq/2, find_part_seq/2]).
 -export([set_view_sig/1]).
 -export([check_primary_key_size/5, check_primary_value_size/5]).
@@ -583,23 +582,6 @@ bin_to_failoverlog(0, Rest, Acc) ->
     {lists:reverse(Acc), Rest};
 bin_to_failoverlog(Count, <<Uuid:64/integer, Seq:64, Rest/binary>>, Acc) ->
     bin_to_failoverlog(Count - 1, Rest, [{Uuid, Seq} | Acc]).
-
-
--spec open_db(binary(), non_neg_integer() | 'master') -> #db{}.
-open_db(SetName, PartId) ->
-    DbName = case PartId of
-    master ->
-        ?master_dbname(SetName);
-    _ ->
-        ?dbname(SetName, PartId)
-    end,
-    case couch_db:open_int(DbName, []) of
-    {ok, Db} ->
-        Db;
-    Error ->
-        Msg = io_lib:format("Couldn't open database `~s`, reason: ~w", [DbName, Error]),
-        throw({db_open_error, DbName, Error, iolist_to_binary(Msg)})
-    end.
 
 
 -spec get_part_seq(partition_id(), partition_seqs()) -> update_seq().

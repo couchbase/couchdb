@@ -32,7 +32,6 @@ source_files = \
     src/couch_set_view_compactor.erl \
     src/couch_set_view_util.erl \
     src/couch_set_view_mapreduce.erl \
-    src/couch_db_set.erl \
     src/couch_index_barrier.erl \
     src/couch_set_view_ddoc_cache.erl \
     src/mapreduce_view.erl \
@@ -82,7 +81,6 @@ compiled_files = \
     ebin/couch_set_view_compactor.beam \
     ebin/couch_set_view_util.beam \
     ebin/couch_set_view_mapreduce.beam \
-    ebin/couch_db_set.beam \
     ebin/couch_index_barrier.beam \
     ebin/couch_set_view_ddoc_cache.beam \
     ebin/mapreduce_view.beam \

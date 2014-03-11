@@ -27,7 +27,6 @@ main(_) ->
         couch_set_view_compactor,
         couch_set_view_util,
         couch_set_view_mapreduce,
-        couch_db_set,
         mapreduce_view
     ],
 

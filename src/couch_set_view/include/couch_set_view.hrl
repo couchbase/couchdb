@@ -245,7 +245,6 @@
     id_btree = nil                          :: 'nil' | #btree{},
     ref_counter = nil                       :: 'nil' | pid(),
     index_header = #set_view_index_header{} :: #set_view_index_header{},
-    db_set = nil                            :: 'nil' | pid(),
     type = main                             :: set_view_group_type(),
     replica_group = nil                     :: 'nil' | #set_view_group{},
     replica_pid = nil                       :: 'nil' | pid(),
