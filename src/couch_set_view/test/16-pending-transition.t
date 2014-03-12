@@ -95,6 +95,8 @@ test() ->
     % contents nor new contents are in the index after a stale=false request.
     etap:diag("Recreating partition 1 database, currenly marked as active in the"
               " pending transition - shouldn't cause the group process to die"),
+    ok = couch_set_view:set_partition_states(
+           mapreduce_view, test_set_name(), ddoc_id(), [], [], [1]),
     recreate_db(1, 9000009),
     ok = timer:sleep(6000),
     etap:is(is_process_alive(GroupPid), true, "Group process didn't die"),
