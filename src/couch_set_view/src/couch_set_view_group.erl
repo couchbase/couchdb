@@ -1601,6 +1601,9 @@ get_group_info(State) ->
     {ok, Size} = couch_file:bytes(Fd),
     GroupPartitions = ordsets:from_list(
         couch_set_view_util:decode_bitmask(?set_abitmask(Group) bor ?set_pbitmask(Group))),
+    PartVersions = lists:map(fun({PartId, PartVersion}) ->
+        {couch_util:to_binary(PartId), [tuple_to_list(V) || V <- PartVersion]}
+    end, ?set_partition_versions(Group)),
     {ok, DbSeqs} = get_seqs(?upr_pid(State), GroupPartitions),
     [
         {signature, ?l2b(hex_sig(GroupSig))},
@@ -1630,7 +1633,7 @@ get_group_info(State) ->
                 ]}
             end
         },
-        {partition_versions, ?set_partition_versions(Group)}
+        {partition_versions, {PartVersions}}
     ] ++
     case (?type(State) =:= main) andalso is_pid(ReplicaPid) of
     true ->

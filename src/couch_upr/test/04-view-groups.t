@@ -247,7 +247,11 @@ get_group_info() ->
 
 get_group_failover_log(PartId) ->
     GroupInfo = get_group_info(),
-    {partition_versions, PartVersions} = lists:keyfind(
+    {partition_versions, {PartVersions0}} = lists:keyfind(
         partition_versions, 1, GroupInfo),
+    PartVersions = lists:map(fun({PartId0, PartVersion}) ->
+        {list_to_integer(binary_to_list(PartId0)),
+            [list_to_tuple(V) || V <- PartVersion]}
+    end, PartVersions0),
     {PartId, FailoverLog} = lists:keyfind(PartId, 1, PartVersions),
     FailoverLog.
