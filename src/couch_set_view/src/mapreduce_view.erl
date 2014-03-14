@@ -197,7 +197,7 @@ index_builder_wait_loop(Port, Group, Acc) ->
                    [SetName, Type, DDocId]),
         exit(shutdown);
     {Port, {exit_status, Status}} ->
-        throw({index_builder_exit, Status});
+        throw({index_builder_exit, Status, ?l2b(Acc)});
     {Port, {data, {noeol, Data}}} ->
         index_builder_wait_loop(Port, Group, [Data | Acc]);
     {Port, {data, {eol, Data}}} ->
@@ -206,10 +206,18 @@ index_builder_wait_loop(Port, Group, Acc) ->
             name = DDocId,
             type = Type
         } = Group,
-        Msg = lists:reverse([Data | Acc]),
+        Msg = ?l2b(lists:reverse([Data | Acc])),
         ?LOG_ERROR("Set view `~s`, ~s group `~s`, received error from index builder: ~s",
                    [SetName, Type, DDocId, Msg]),
-        index_builder_wait_loop(Port, Group, []);
+
+        % Propogate this message to query response error message
+        Msg2 = case Msg of
+        <<"Error building index", _/binary>> ->
+            [Msg];
+        _ ->
+            []
+        end,
+        index_builder_wait_loop(Port, Group, Msg2);
     {Port, Error} ->
         throw({index_builder_error, Error});
     stop ->

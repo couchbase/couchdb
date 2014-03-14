@@ -58,7 +58,7 @@ num_docs() -> 1000.
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(25),
+    etap:plan(31),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -88,10 +88,15 @@ test() ->
     etap:diag("Testing case where too many KV pairs are emitted for a single document"),
     test_too_many_keys_per_doc(),
 
-    etap:diag("Testing builtin reduce _sum function with a runtime error"),
+    etap:diag("Testing builtin reduce _sum function with a runtime error (initial build)"),
     test_builtin_reduce_sum_runtime_error(),
-    etap:diag("Testing builtin reduce _stats function with a runtime error"),
+    etap:diag("Testing builtin reduce _sum function with a runtime error (incr update)"),
+    test_builtin_reduce_sum_runtime_error2(),
+    etap:diag("Testing builtin reduce _stats function with a runtime error (initial build)"),
     test_builtin_reduce_stats_runtime_error(),
+    etap:diag("Testing builtin reduce _stats function with a runtime error (incr update)"),
+    test_builtin_reduce_stats_runtime_error2(),
+
     etap:diag("Testing with an invalid builtin reduce function"),
     test_invalid_builtin_reduce_error(),
     etap:diag("Testing reduce function with a runtime error"),
@@ -393,7 +398,65 @@ test_builtin_reduce_sum_runtime_error() ->
     end,
 
     etap:is(QueryResult,
-            {error, <<"reducer failure">>},
+            {error, <<"Reducer: Error building index for view `test`, reason: Value is not a number (key \"doc1\")">>},
+            "Received error response"),
+
+    receive
+    {'DOWN', MonRef, _, _, _} ->
+        etap:bail("view group died")
+    after 5000 ->
+        etap:is(is_process_alive(GroupPid), true, "View group is still alive")
+    end,
+    couch_util:shutdown_sync(GroupPid),
+    couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()).
+
+
+test_builtin_reduce_sum_runtime_error2() ->
+    couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
+    couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
+
+    DDocId = <<"_design/test">>,
+    DDoc = {[
+        {<<"meta">>, {[{<<"id">>, DDocId}]}},
+        {<<"json">>, {[
+            {<<"language">>, <<"javascript">>},
+            {<<"views">>, {[
+                {<<"test">>, {[
+                    {<<"map">>, <<"function(doc, meta) { emit(meta.id, doc.value); }">>},
+                    {<<"reduce">>, <<"_sum">>}
+                ]}}
+            ]}}
+        ]}}
+    ]},
+
+    ok = couch_set_view_test_util:update_ddoc(test_set_name(), DDoc),
+    add_documents(0, num_docs(), true),
+
+    ok = configure_view_group(DDocId, [0, 1, 2, 3], []),
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), DDocId, prod),
+    MonRef = erlang:monitor(process, GroupPid),
+
+    QueryResult1 = try
+        query_reduce_view(DDocId, <<"test">>, false),
+        ok
+    catch _:Error1 ->
+        Error1
+    end,
+    etap:is(QueryResult1,
+            ok, <<"Query triggering initial index build did not throw any exception">>),
+
+
+    add_documents(num_docs(), 2 * num_docs(), false),
+
+    QueryResult2 = try
+        query_reduce_view(DDocId, <<"test">>, false)
+    catch _:Error2 ->
+        Error2
+    end,
+    DocId = doc_id(num_docs()),
+    etap:is(QueryResult2,
+            {error, <<"Reducer: Error updating index for view `test`, reason: Value is not a number (key \"", DocId/binary, "\")">>},
             "Received error response"),
 
     receive
@@ -417,7 +480,7 @@ test_builtin_reduce_stats_runtime_error() ->
             {<<"language">>, <<"javascript">>},
             {<<"views">>, {[
                 {<<"test">>, {[
-                    {<<"map">>, <<"function(doc) { emit(doc._id, 'foobar'); }">>},
+                    {<<"map">>, <<"function(doc, meta) { emit(meta.id, 'foobar'); }">>},
                     {<<"reduce">>, <<"_stats">>}
                 ]}}
             ]}}
@@ -437,7 +500,65 @@ test_builtin_reduce_stats_runtime_error() ->
     end,
 
     etap:is(QueryResult,
-            {error, <<"reducer failure">>},
+            {error, <<"Reducer: Error building index for view `test`, reason: Value is not a number (key \"doc1\")">>},
+            "Received error response"),
+
+    receive
+    {'DOWN', MonRef, _, _, _} ->
+        etap:bail("view group died")
+    after 5000 ->
+        etap:is(is_process_alive(GroupPid), true, "View group is still alive")
+    end,
+    couch_util:shutdown_sync(GroupPid),
+    couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()).
+
+
+test_builtin_reduce_stats_runtime_error2() ->
+    couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
+    couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
+
+    DDocId = <<"_design/test">>,
+    DDoc = {[
+        {<<"meta">>, {[{<<"id">>, DDocId}]}},
+        {<<"json">>, {[
+            {<<"language">>, <<"javascript">>},
+            {<<"views">>, {[
+                {<<"test">>, {[
+                    {<<"map">>, <<"function(doc, meta) { emit(meta.id, doc.value); }">>},
+                    {<<"reduce">>, <<"_stats">>}
+                ]}}
+            ]}}
+        ]}}
+    ]},
+
+    ok = couch_set_view_test_util:update_ddoc(test_set_name(), DDoc),
+    add_documents(0, num_docs(), true),
+
+    ok = configure_view_group(DDocId, [0, 1, 2, 3], []),
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), DDocId, prod),
+    MonRef = erlang:monitor(process, GroupPid),
+
+    QueryResult1 = try
+        query_reduce_view(DDocId, <<"test">>, false),
+        ok
+    catch _:Error1 ->
+        Error1
+    end,
+    etap:is(QueryResult1,
+            ok, <<"Query triggering initial index build did not throw any exception">>),
+
+
+    add_documents(num_docs(), 2 * num_docs(), false),
+
+    QueryResult2 = try
+        query_reduce_view(DDocId, <<"test">>, false)
+    catch _:Error2 ->
+        Error2
+    end,
+    DocId = doc_id(num_docs()),
+    etap:is(QueryResult2,
+            {error, <<"Reducer: Error updating index for view `test`, reason: Value is not a number (key \"", DocId/binary, "\")">>},
             "Received error response"),
 
     receive
@@ -703,6 +824,36 @@ populate_set(DDoc, NumDocs) ->
         end,
         lists:seq(1, NumDocs)),
     ok = couch_set_view_test_util:populate_set_alternated(
+        test_set_name(),
+        lists:seq(0, num_set_partitions() - 1),
+        DocList).
+
+
+doc_id(K) ->
+    iolist_to_binary(io_lib:format("doc_~8..0b", [K])).
+
+
+add_documents(StartId, Count, IsNumber) ->
+    DocValFun = case IsNumber of
+    true ->
+        fun(K) -> K end;
+    _ ->
+        fun(K) -> doc_id(K) end
+    end,
+    etap:diag("Adding " ++ integer_to_list(Count) ++ " new documents"),
+    DocList0 = lists:map(
+        fun(I) ->
+            {I rem num_set_partitions(), {[
+                {<<"meta">>, {[{<<"id">>, doc_id(I)}]}},
+                {<<"json">>, {[
+                    {<<"value">>, DocValFun(I)}
+                ]}}
+            ]}}
+        end,
+        lists:seq(StartId, StartId + Count - 1)),
+
+    DocList = [Doc || {_, Doc} <- lists:keysort(1, DocList0)],
+    ok = couch_set_view_test_util:populate_set_sequentially(
         test_set_name(),
         lists:seq(0, num_set_partitions() - 1),
         DocList).

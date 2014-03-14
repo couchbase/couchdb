@@ -1222,9 +1222,9 @@ handle_info({'EXIT', Pid, {updater_error, Error}}, #state{updater_pid = Pid, gro
         {stop, normal, reply_all(State2, {error, Error})};
     false ->
         Error2 = case Error of
-        {index_builder_exit, 86} ->
-            {error, <<"reducer failure">>};
-        {index_builder_exit, 87} ->
+        {_, 86, Msg} ->
+            {error, <<"Reducer: ", Msg/binary>>};
+        {_, 87, _} ->
             {error, <<"reduction too large">>};
         {error, _Reason} ->
             Error;

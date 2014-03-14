@@ -198,7 +198,7 @@ update_btrees_wait_loop(Port, Group, Acc0, Stats) ->
     nil ->
         receive
         {Port, {data, Data}} ->
-            Acc2 = iolist_to_binary([Acc, Data]),
+            Acc2 = ?l2b([Acc, Data]),
             update_btrees_wait_loop(Port, Group, Acc2, Stats);
         {Port, {exit_status, 0}} ->
             {ok, {Group, Stats}};
@@ -207,7 +207,7 @@ update_btrees_wait_loop(Port, Group, Acc0, Stats) ->
                        [SetName, Type, DDocId]),
             exit(shutdown);
         {Port, {exit_status, Status}} ->
-            throw({view_group_index_updater_exit, Status});
+            throw({view_group_index_updater_exit, Status, Acc});
         {Port, Error} ->
             throw({view_group_index_updater_error, Error});
         stop ->
@@ -218,7 +218,7 @@ update_btrees_wait_loop(Port, Group, Acc0, Stats) ->
         end;
     <<"Header Len : ", Data/binary>> ->
         % Read resulting group from stdout
-        {ok, [HeaderLen], []} = io_lib:fread("~d", binary_to_list(Data)),
+        {ok, [HeaderLen], []} = io_lib:fread("~d", ?b2l(Data)),
         {NewGroup, Acc2} =
         case couch_set_view_util:receive_group_header(Port, HeaderLen, Acc) of
         {ok, HeaderBin, Rest} ->
@@ -259,11 +259,17 @@ update_btrees_wait_loop(Port, Group, Acc0, Stats) ->
                          "kv_inserts : ~d, "
                          "kv_deletes : ~d, "
                          "cleanups : ~d",
-                         binary_to_list(Data)),
+                         ?b2l(Data)),
         Stats2 = {IdInserted, IdDeleted, ViewInserted, ViewDeleted, Cleanups},
         update_btrees_wait_loop(Port, Group, Acc, Stats2);
     Msg ->
         ?LOG_ERROR("Set view `~s`, ~s group `~s`, received error from index updater: ~s",
                    [SetName, Type, DDocId, Msg]),
-        update_btrees_wait_loop(Port, Group, <<>>, Stats)
+        Msg2 = case Msg of
+        <<"Error updating index", _/binary>> ->
+            Msg;
+        _ ->
+            <<>>
+        end,
+        update_btrees_wait_loop(Port, Group, Msg2, Stats)
     end.
