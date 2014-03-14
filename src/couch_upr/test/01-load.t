@@ -17,7 +17,10 @@
 main(_) ->
     test_util:init_code_path(),
     Modules = [
-        couch_upr
+        couch_upr_client,
+        couch_upr_consumer,
+        couch_upr_fake_server,
+        couch_upr_producer
     ],
 
     etap:plan(length(Modules)),
