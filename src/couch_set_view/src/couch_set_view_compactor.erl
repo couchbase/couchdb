@@ -191,7 +191,6 @@ merge_statuses(UserStatus, OurStatus) ->
 maybe_retry_compact(CompactResult0, StartTime, TmpDir, Owner, Retries) ->
     NewGroup = CompactResult0#set_view_compactor_result.group,
     #set_view_group{
-        views = NewViews,
         set_name = SetName,
         name = DDocId,
         type = Type,
@@ -215,8 +214,10 @@ maybe_retry_compact(CompactResult0, StartTime, TmpDir, Owner, Retries) ->
         {ok, {LogFiles, NewSeqs}} = gen_server:call(
             Owner, compact_log_files, infinity),
         ?LOG_INFO("Compactor for set view `~s`, ~s group `~s`, "
-                  "applying delta of ~p changes (retry number ~p)",
-                  [SetName, Type, DDocId, MissingCount, Retries]),
+                  "applying delta of ~p changes (retry number ~p, "
+                  "max # of log files per btree ~p)",
+                  [SetName, Type, DDocId, MissingCount, Retries,
+                   length(hd(LogFiles))]),
         [TotalChanges] = couch_task_status:get([total_changes]),
         TotalChanges2 = TotalChanges + MissingCount,
         couch_task_status:update([
@@ -225,13 +226,7 @@ maybe_retry_compact(CompactResult0, StartTime, TmpDir, Owner, Retries) ->
             {progress, (TotalChanges * 100) div TotalChanges2},
             {retry_number, Retries}
         ]),
-        ok = couch_set_view_util:open_raw_read_fd(NewGroup),
-        ok = lists:foreach(
-            fun couch_set_view_mapreduce:start_reduce_context/1, NewViews),
         NewGroup2 = apply_log(NewGroup, LogFiles, NewSeqs, TmpDir),
-        ok = couch_set_view_util:close_raw_read_fd(NewGroup),
-        ok = lists:foreach(
-            fun couch_set_view_mapreduce:end_reduce_context/1, NewViews),
         CompactResult2 = CompactResult0#set_view_compactor_result{
             group = NewGroup2
         },

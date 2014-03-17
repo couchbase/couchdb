@@ -97,6 +97,7 @@
     compactor_pid = nil                :: 'nil' | pid(),
     compactor_file = nil               :: 'nil' | pid(),
     compactor_fun = nil                :: 'nil' | compact_fun(),
+    compactor_retry_number = 0         :: non_neg_integer(),
     waiting_list = []                  :: [#waiter{}],
     cleaner_pid = nil                  :: 'nil' | pid(),
     shutdown = false                   :: boolean(),
@@ -808,6 +809,7 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
             compactor_file = nil,
             compactor_fun = nil,
             compact_log_files = nil,
+            compactor_retry_number = 0,
             updater_pid = NewUpdaterPid,
             initial_build = is_pid(NewUpdaterPid) andalso
                     couch_set_view_util:is_group_empty(NewGroup2),
@@ -822,7 +824,10 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
         inc_compactions(Result),
         {reply, ok, maybe_apply_pending_transition(State2), ?GET_TIMEOUT(State2)};
     false ->
-        {reply, {update, MissingChangesCount}, State, ?GET_TIMEOUT(State)}
+        State2 = State#state{
+            compactor_retry_number = State#state.compactor_retry_number + 1
+        },
+        {reply, {update, MissingChangesCount}, State2, ?GET_TIMEOUT(State2)}
     end;
 handle_call({compact_done, _Result}, _From, State) ->
     % From a previous compactor that was killed/stopped, ignore.
@@ -2602,7 +2607,8 @@ start_compactor(State, CompactFun) ->
     State2#state{
         compactor_pid = Pid,
         compactor_fun = CompactFun,
-        compactor_file = CompactFd
+        compactor_file = CompactFd,
+        compactor_retry_number = 0
     }.
 
 
@@ -2621,7 +2627,12 @@ stop_compactor(#state{compactor_pid = Pid, compactor_file = CompactFd} = State) 
         ?inc_cleanup_stops(State#state.group)
     end,
     inc_util_stat(#util_stats.compactor_interruptions, 1),
-    State#state{compactor_pid = nil, compactor_file = nil, compact_log_files = nil}.
+    State#state{
+        compactor_pid = nil,
+        compactor_file = nil,
+        compact_log_files = nil,
+        compactor_retry_number = 0
+    }.
 
 
 -spec compact_group(#state{}) -> #set_view_group{}.
@@ -2804,8 +2815,15 @@ do_start_updater(State, CurSeqs, Options) ->
     TmpDir = updater_tmp_dir(State),
     CompactRunning = is_pid(CompactPid) andalso is_process_alive(CompactPid),
     reset_updater_start_time(),
+    Options2 = case is_pid(State2#state.compactor_pid) andalso
+        State2#state.compactor_retry_number > 0 of
+    true ->
+        [throttle | Options];
+    false ->
+        Options
+    end,
     Pid = spawn_link(couch_set_view_updater, update,
-                     [self(), Group, CurSeqs, CompactRunning, TmpDir, Options]),
+                     [self(), Group, CurSeqs, CompactRunning, TmpDir, Options2]),
     State2#state{
         updater_pid = Pid,
         initial_build = couch_set_view_util:is_group_empty(Group),
