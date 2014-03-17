@@ -13,10 +13,11 @@ TEST_NOT_OK_RE = r"(^not ok)\b"
 MODULES = ["test/etap", "src/mapreduce", "src/couch_index_merger", "src/couch_view_parser"]
 
 def usage():
-    print "Usage: %s -p builddir -m module_dir_paths -t testfile" %sys.argv[0]
+    print "Usage: %s -p builddir -m module_dir_paths -t testfile [ -v ]" \
+    " [ -c couchstore_install_path ]" %sys.argv[0]
     print
 
-def run_test(testfile):
+def run_test(testfile, verbose = False):
     test_total = -1
     test_passed = 0
     exit_status = 0
@@ -34,6 +35,9 @@ def run_test(testfile):
             elif not_ok_re.match(line):
                 print line,
             else:
+                if verbose:
+                    print line,
+
                 count = count_re.match(line)
                 if count:
                     test_total = int(count.group(1))
@@ -55,8 +59,9 @@ def run_test(testfile):
 
 if __name__ == '__main__':
     try:
-        opts, args = getopt.getopt(sys.argv[1:], "p:m:t:h", \
-                    ["paths=", "modules=", "test=", "help"])
+        opts, args = getopt.getopt(sys.argv[1:], "p:m:t:hvc:", \
+                    ["paths=", "modules=", "test=", "help", "verbose",
+                    "couchstore-installdir="])
     except getopt.GetoptError, err:
         print err
         usage()
@@ -69,6 +74,8 @@ if __name__ == '__main__':
     path = None
     test = None
     modules = None
+    verbose = False
+    couchstore_path = None
 
     for opt, arg in opts:
         if opt in ("-p", "--path"):
@@ -77,6 +84,10 @@ if __name__ == '__main__':
             modules = arg
         elif opt in ("-t", "--test"):
             test = arg
+        elif opt in ("-v", "--verbose"):
+            verbose = True
+        elif opt in ("-c", "--couchstore-installdir"):
+            couchstore_path = arg
         elif opt in ("-h", "--help"):
             usage()
             sys.exit(0)
@@ -99,7 +110,17 @@ if __name__ == '__main__':
 
         os.putenv("ERL_FLAGS", erl_flags)
 
+    if couchstore_path:
+        env = os.getenv("PATH")
+        if env:
+            env += ":"
+        else:
+            env = ""
+
+        env += couchstore_path
+        os.putenv("PATH", env)
+
     if test:
-        sys.exit(run_test(test))
+        sys.exit(run_test(test, verbose))
     else:
         sys.exit("ERROR: No test specified")
