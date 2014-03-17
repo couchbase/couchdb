@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 
 import sys
-sys.path.insert(0, "%abs_top_builddir%/test/python/lib")
-sys.path.insert(0, "%abs_top_builddir%/test/python/set_view")
-sys.path.insert(0, "%abs_top_builddir%/test/python/set_view/common")
+sys.path.insert(0, "${CMAKE_CURRENT_BINARY_DIR}/test/python/lib")
+sys.path.insert(0, "${CMAKE_CURRENT_BINARY_DIR}/test/python/set_view")
+sys.path.insert(0, "${CMAKE_CURRENT_BINARY_DIR}/test/python/set_view/common")
 import unittest
 from subprocess import call
 from time import sleep
@@ -28,11 +28,11 @@ from view_params import TestViewParams
 
 
 def stop_couch():
-    call(["%abs_top_builddir%/utils/run", "-d"])
+    call(["${CMAKE_CURRENT_BINARY_DIR}/utils/run", "-d"])
 
 def start_couch():
     stop_couch()
-    call(["%abs_top_builddir%/utils/run", "-b"])
+    call(["${CMAKE_CURRENT_BINARY_DIR}/utils/run", "-b"])
     sleep(5)
 
 

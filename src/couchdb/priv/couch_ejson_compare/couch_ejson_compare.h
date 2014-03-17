@@ -21,7 +21,6 @@
 #include "unicode/ucol.h"
 #include "unicode/ucasemap.h"
 
-
 typedef struct {
     UCollator       **collators;
     int             collStackTop;

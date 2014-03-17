@@ -14,7 +14,7 @@
     </dict>
     <key>ProgramArguments</key>
     <array>
-      <string>%bindir%/%couchdb_command_name%</string>
+      <string>${CMAKE_INSTALL_PREFIX}/bin/couchdb</string>
     </array>
     <key>UserName</key>
     <string>couchdb</string>

@@ -12,7 +12,7 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-BUILDDIR="%abs_top_builddir%"
+BUILDDIR="@abs_top_builddir@"
 export ERL_FLAGS="$ERL_FLAGS -pa $BUILDDIR/src/couch_set_view/test/"
 
 $BUILDDIR/test/etap/run $@

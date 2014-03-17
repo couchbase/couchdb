@@ -22,12 +22,21 @@ specific language governing permissions and limitations under the License.
 #define U_DISABLE_RENAMING 1
 #endif
 
+#if defined (__SUNPRO_C) && (__SUNPRO_C >= 0x550)
+#define EXPORT_SYMBOL __global
+#elif defined __GNUC__
+#define EXPORT_SYMBOL __attribute__ ((visibility("default")))
+#elif defined(_MSC_VER)
+#define EXPORT_SYMBOL extern __declspec(dllexport)
+#else
+/* unknown compiler */
+#define EXPORT_SYMBOL
+#endif
+
 #include "erl_driver.h"
 #include "unicode/ucol.h"
 #include "unicode/ucasemap.h"
-#ifndef WIN32
 #include <string.h> // for memcpy
-#endif
 
 #if ERL_DRV_EXTENDED_MAJOR_VERSION < 2
 typedef int COUCH_SSIZET;
@@ -84,7 +93,7 @@ static ErlDrvData couch_drv_start(ErlDrvPort port, char *buff)
     return (ErlDrvData)pData;
 }
 
-COUCH_SSIZET
+static COUCH_SSIZET
 return_control_result(void* pLocalResult, int localLen,
             char **ppRetBuf, COUCH_SSIZET returnLen)
 {
@@ -98,10 +107,10 @@ return_control_result(void* pLocalResult, int localLen,
     return localLen;
 }
 
-static COUCH_SSIZET
+static ErlDrvSSizeT
 couch_drv_control(ErlDrvData drv_data, unsigned int command,
-        char *pBuf, COUCH_SSIZET bufLen,
-        char **rbuf, COUCH_SSIZET rlen)
+        char *pBuf, ErlDrvSizeT bufLen,
+        char **rbuf, ErlDrvSizeT rlen)
 {
 
     couch_drv_data* pData = (couch_drv_data*)drv_data;
@@ -156,7 +165,7 @@ couch_drv_control(ErlDrvData drv_data, unsigned int command,
     }
 }
 
-ErlDrvEntry couch_driver_entry = {
+static ErlDrvEntry couch_driver_entry = {
         NULL,               /* F_PTR init, N/A */
         couch_drv_start,    /* L_PTR start, called when port is opened */
         couch_drv_stop,     /* F_PTR stop, called when port is closed */
@@ -181,6 +190,7 @@ ErlDrvEntry couch_driver_entry = {
         NULL,               /* F_PTR process_exit */
 };
 
+EXPORT_SYMBOL
 DRIVER_INIT(couch_icu_driver) /* must match name in driver_entry */
 {
         return &couch_driver_entry;

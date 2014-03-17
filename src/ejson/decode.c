@@ -19,6 +19,7 @@
 #include "yajl/yajl_parse.h"
 #include "yajl/yajl_parser.h"
 #include "yajl/yajl_lex.h"
+#include "ejson.h"
 
 typedef struct {
     ERL_NIF_TERM head;
@@ -34,8 +35,8 @@ typedef struct {
 #define ERR_MEMORY 1
 
 
-static void * yajl_internal_malloc(void *ctx, size_t sz);
-static void * yajl_internal_realloc(void *ctx, void *previous, size_t sz);
+static void * yajl_internal_malloc(void *ctx, unsigned int sz);
+static void * yajl_internal_realloc(void *ctx, void *previous, unsigned int sz);
 static void yajl_internal_free(void *ctx, void *ptr);
 
 
@@ -378,12 +379,12 @@ done:
 }
 
 
-static void * yajl_internal_malloc(void *ctx, size_t sz)
+static void * yajl_internal_malloc(void *ctx, unsigned int sz)
 {
     return enif_alloc(sz);
 }
 
-static void * yajl_internal_realloc(void *ctx, void *previous, size_t sz)
+static void * yajl_internal_realloc(void *ctx, void *previous, unsigned int sz)
 {
     return enif_realloc(previous, sz);
 }

@@ -1,0 +1,21 @@
+FILE(GLOB SRC src/*.erl)
+ADD_ERLANG_INCLUDE_DIR(${CMAKE_CURRENT_SOURCE_DIR}/../couchdb)
+ADD_ERLANG_INCLUDE_DIR(${CMAKE_CURRENT_SOURCE_DIR}/..)
+ADD_ERLANG_INCLUDE_DIR(${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+CONFIGURE_FILE(${CMAKE_CURRENT_SOURCE_DIR}/src/couch_upr.app.src
+               ${CMAKE_CURRENT_BINARY_DIR}/ebin/couch_upr.app)
+
+
+ERL_BUILD("couch_upr" ${SRC})
+SET(COUCH_UPR_PREFIX ${CMAKE_ERL_LIB_INSTALL_PREFIX}/couch_upr-1.0.0)
+SET(COUCH_UPR_INCLUDE_FILES include/couch_upr.hrl)
+
+INSTALL(FILES include/couch_upr.hrl
+        DESTINATION ${COUCH_UPR_PREFIX}/include)
+
+INSTALL(FILES ${outfiles}
+              ${CMAKE_CURRENT_BINARY_DIR}/ebin/couch_upr.app
+        DESTINATION ${COUCH_UPR_PREFIX}/ebin)
+
+ADD_SUBDIRECTORY(test)

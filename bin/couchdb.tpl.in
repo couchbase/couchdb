@@ -13,8 +13,8 @@
 # the License.
 
 BACKGROUND=false
-DEFAULT_CONFIG_DIR=%localconfdir%/default.d
-DEFAULT_CONFIG_FILE=%localconfdir%/%defaultini%
+DEFAULT_CONFIG_DIR=${CMAKE_INSTALL_PREFIX}/etc/couchdb/default.d
+DEFAULT_CONFIG_FILE=${CMAKE_INSTALL_PREFIX}/etc/couchdb/default.ini
 ERL_OS_MON_OPTIONS="-os_mon \
     start_memsup false \
     start_cpu_sup false \
@@ -22,12 +22,12 @@ ERL_OS_MON_OPTIONS="-os_mon \
     disk_almost_full_threshold 1"
 ERL_START_OPTIONS="$ERL_OS_MON_OPTIONS -sasl errlog_type error +K true +A 4"
 HEART_BEAT_TIMEOUT=11
-HEART_COMMAND="'%bindir%/%couchdb_command_name%' -k"
+HEART_COMMAND="'${CMAKE_INSTALL_PREFIX}/bin/couchdb' -k"
 INTERACTIVE=false
 KILL=false
-LOCAL_CONFIG_DIR=%localconfdir%/local.d
-LOCAL_CONFIG_FILE=%localconfdir%/%localini%
-PID_FILE=%localstatedir%/run/couchdb/couchdb.pid
+LOCAL_CONFIG_DIR=${CMAKE_INSTALL_PREFIX}/etc/couchdb/local.d
+LOCAL_CONFIG_FILE=${CMAKE_INSTALL_PREFIX}/etc/couchdb/local.ini
+PID_FILE=${CMAKE_INSTALL_PREFIX}/var/run/couchdb/couchdb.pid
 RECURSED=false
 RESET_CONFIG=true
 RESPAWN_TIMEOUT=0
@@ -41,11 +41,11 @@ print_arguments=""
 start_arguments=""
 background_start_arguments=""
 
-basename=${0##*/}
+basename=`basename $0`
 
 display_version () {
     cat << EOF
-$basename - %package_name% %version%
+$basename - Apache CouchDB ${COUCHDB_VERSION}
 
 Licensed under the Apache License, Version 2.0 (the "License"); you may not use
 this file except in compliance with the License. You may obtain a copy of the
@@ -65,7 +65,7 @@ display_help () {
     cat << EOF
 Usage: $basename [OPTION]
 
-The $basename command runs the %package_name% server.
+The $basename command runs the Apache CouchDB server.
 
 Erlang is called with:
 
@@ -99,7 +99,7 @@ Options:
   -k          kill the background process, will respawn if needed
   -d          shutdown the background process
 
-Report bugs at <%bug_uri%>.
+Report bugs at <https://www.couchbase.com/issues>.
 EOF
 }
 
@@ -231,11 +231,11 @@ start_couchdb () {
         touch $PID_FILE
         interactive_option="+Bd -noinput"
     fi
-    ERL_LIBS="$ERL_LIBS:'%localerlanglibdir%'"
+    ERL_LIBS="$ERL_LIBS:'${CMAKE_INSTALL_PREFIX}/lib/couchdb/erlang/lib'"
 
     # Find plugins and add them to the Erlang path.
-    if test -d "%localerlanglibdir%/../../plugins"; then
-        for plugin in "%localerlanglibdir%/../../plugins"/*; do
+    if test -d "${CMAKE_INSTALL_PREFIX}/lib/couchdb/erlang/lib/../../plugins"; then
+        for plugin in "${CMAKE_INSTALL_PREFIX}/lib/couchdb/erlang/lib/../../plugins"/*; do
             if echo "$ERL_ZFLAGS" | grep "$plugin/ebin" > /dev/null 2> /dev/null; then
                 : # It's already loaded.
             else
@@ -252,8 +252,8 @@ start_couchdb () {
         export ERL_ZFLAGS
     fi
 
-    command="'%ERL%' $interactive_option $ERL_START_OPTIONS \
-        -env ERL_LIBS $ERL_LIBS %localerlanglibargs% -couch_ini $start_arguments -s couch"
+    command="'${ERL_EXECUTABLE}' $interactive_option $ERL_START_OPTIONS \
+        -env ERL_LIBS $ERL_LIBS -couch_ini $start_arguments -s couch"
 
     if test "$BACKGROUND" = "true" -a "$RECURSED" = "false"; then
         $0 $background_start_arguments -b -r $RESPAWN_TIMEOUT -p $PID_FILE \

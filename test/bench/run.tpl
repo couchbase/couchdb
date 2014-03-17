@@ -12,12 +12,12 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-SRC_DIR=%abs_top_srcdir%
+SRC_DIR=@abs_top_srcdir@
 SCRIPT_DIR=$SRC_DIR/share/www/script
 JS_TEST_DIR=$SRC_DIR/test/javascript
 JS_BENCH_DIR=$SRC_DIR/test/bench
 
-COUCHJS=%abs_top_builddir%/src/couchdb/priv/couchjs
+COUCHJS=@abs_top_srcdir@/src/couchdb/priv/couchjs
 
 cat $SCRIPT_DIR/json2.js \
     $SCRIPT_DIR/couch.js \
@@ -25,4 +25,3 @@ cat $SCRIPT_DIR/json2.js \
     $JS_BENCH_DIR/bench_marks.js \
     $JS_TEST_DIR/cli_runner.js \
     | $COUCHJS -
-

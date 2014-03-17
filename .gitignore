@@ -5,7 +5,6 @@
 *.lo
 *.la
 *.m4
-*.in
 *~
 *.orig
 *.rej
@@ -92,6 +91,7 @@ src/couch_index_merger/ebin/
 src/couch_view_parser/test/run
 src/mapreduce/test/run
 src/couch_upr/ebin/
+src/couch_upr/test/run
 test/local.ini
 test/etap/.deps/
 test/etap/run
@@ -107,7 +107,6 @@ bin/.deps/
 bin/couchjs_dev
 bin/couchpw
 etc/couchdb/default_dev.ini
-etc/couchdb/local_dev.ini
 utils/run
 tmp
 src/couchdb/priv/stat_descriptions.cfg
@@ -128,3 +127,42 @@ couchdb.stdout
 
 cover/*
 INSTALL
+
+# CMake stuff
+CMakeFiles
+CTestTestfile.cmake
+cmake_install.cmake
+/src/couch_view_parser/libcouch_view_parser_nif.so
+/src/couchdb/priv/couch_ejson_compare.so
+/src/couchdb/priv/couch_icu_driver.so
+/src/ejson/libejson.so
+/src/mapreduce/libmapreduce_nif.so
+/src/snappy/libsnappy_nif.so
+/bin/couchdb.bat
+/src/couch_view_parser/couch_view_parser_nif.exp
+/src/couch_view_parser/couch_view_parser_nif.lib
+/src/couchdb/priv/couch_ejson_compare.dll
+/src/couchdb/priv/couch_ejson_compare.dll.embed.manifest
+/src/couchdb/priv/couch_ejson_compare.dll.embed.manifest.res
+/src/couchdb/priv/couch_ejson_compare.dll.intermediate.manifest
+/src/couchdb/priv/couch_ejson_compare.dll.resource.txt
+/src/couchdb/priv/couch_ejson_compare.exp
+/src/couchdb/priv/couch_ejson_compare.ilk
+/src/couchdb/priv/couch_ejson_compare.lib
+/src/couchdb/priv/couch_ejson_compare.pdb
+/src/couchdb/priv/couch_icu_driver.dll
+/src/couchdb/priv/couch_icu_driver.dll.embed.manifest
+/src/couchdb/priv/couch_icu_driver.dll.embed.manifest.res
+/src/couchdb/priv/couch_icu_driver.dll.intermediate.manifest
+/src/couchdb/priv/couch_icu_driver.dll.resource.txt
+/src/couchdb/priv/couch_icu_driver.exp
+/src/couchdb/priv/couch_icu_driver.ilk
+/src/couchdb/priv/couch_icu_driver.lib
+/src/couchdb/priv/couch_icu_driver.pdb
+/src/ejson/ejson.exp
+/src/ejson/ejson.lib
+/src/mapreduce/mapreduce_nif.exp
+/src/mapreduce/mapreduce_nif.lib
+/src/snappy/snappy_nif.exp
+/src/snappy/snappy_nif.lib
+Testing

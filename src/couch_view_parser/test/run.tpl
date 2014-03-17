@@ -16,7 +16,7 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-BUILDDIR="%abs_top_builddir%"
+BUILDDIR="${CMAKE_CURRENT_BINARY_DIR}"
 export ERL_FLAGS="$ERL_FLAGS -pa $BUILDDIR/src/couch_view_parser/test/"
 
 $BUILDDIR/test/etap/run $@

@@ -17,11 +17,11 @@ SCRIPT_ERROR=1
 
 DEFAULT_VERSION=170
 
-basename=${0##*/}
+basename=`basename $0`
 
 display_version () {
     cat << EOF
-$basename - %package_name% %version%
+$basename - Apache CouchDB ${COUCHDB_VERSION}
 
 Licensed under the Apache License, Version 2.0 (the "License"); you may not use
 this file except in compliance with the License. You may obtain a copy of the
@@ -40,7 +40,7 @@ display_help () {
     cat << EOF
 Usage: $basename [FILE]
 
-The $basename command runs the %package_name% JavaScript interpreter.
+The $basename command runs the Apache CouchDB JavaScript interpreter.
 
 The exit status is 0 for success or 1 for failure.
 
@@ -51,7 +51,7 @@ Options:
   -H  install couchjs cURL bindings (only avaiable
       if CouchDB was built with cURL available)
 
-Report bugs at <%bug_uri%>.
+Report bugs at <https://www.couchbase.com/issues>.
 EOF
 }
 
@@ -65,7 +65,7 @@ display_error () {
 }
 
 run_couchjs () {
-    exec "%locallibbindir%/%couchjs_command_name%" "$@"
+    exec "${CMAKE_INSTALL_PREFIX}/lib/couchdb/bin/couchjs" "$@"
 }
 
 parse_script_option_list () {

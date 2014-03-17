@@ -12,7 +12,7 @@
 
 {application, couch_index_merger, [
     {description, "Index merger"},
-    {vsn, "%version%"},
+    {vsn, "${COUCHDB_VERSION}"},
     {modules, [
         couch_index_merger,
         couch_view_merger,

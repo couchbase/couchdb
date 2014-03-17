@@ -1,23 +1,17 @@
 #include "erl_nif.h"
+#include "ejson.h"
 
-ERL_NIF_TERM final_encode(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
-ERL_NIF_TERM reverse_tokens(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
-ERL_NIF_TERM validate_doc(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
-
-int
-on_load(ErlNifEnv* env, void** priv_data, ERL_NIF_TERM info)
+static int on_load(ErlNifEnv* env, void** priv_data, ERL_NIF_TERM info)
 {
     return 0;
 }
 
-int
-on_reload(ErlNifEnv* env, void** priv_data, ERL_NIF_TERM info)
+static int on_reload(ErlNifEnv* env, void** priv_data, ERL_NIF_TERM info)
 {
     return 0;
 }
 
-int
-on_upgrade(ErlNifEnv* env, void** priv_data, void** old_data, ERL_NIF_TERM info)
+static int on_upgrade(ErlNifEnv* env, void** priv_data, void** old_data, ERL_NIF_TERM info)
 {
     return 0;
 }
@@ -29,4 +23,9 @@ static ErlNifFunc nif_funcs[] =
     {"validate", 1, validate_doc}
 };
 
-ERL_NIF_INIT(ejson, nif_funcs, &on_load, &on_reload, &on_upgrade, NULL);
+#if defined (__SUNPRO_C) && (__SUNPRO_C >= 0x550)
+__global
+#elif defined __GNUC__
+__attribute__ ((visibility("default")))
+#endif
+ERL_NIF_INIT(ejson, nif_funcs, &on_load, &on_reload, &on_upgrade, NULL)

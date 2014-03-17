@@ -12,11 +12,11 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-SRC_DIR=%abs_top_srcdir%
+SRC_DIR=@abs_top_srcdir@
 SCRIPT_DIR=$SRC_DIR/share/www/script
 JS_TEST_DIR=$SRC_DIR/test/javascript
 
-COUCHJS=%abs_top_builddir%/src/couchdb/priv/couchjs
+COUCHJS=@abs_top_srcdir@/src/couchdb/priv/couchjs
 
 if [ "$#" -eq 0 ];
 then

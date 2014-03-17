@@ -12,7 +12,7 @@
 
 {application, couch_set_view, [
     {description, "Set views"},
-    {vsn, "%version%"},
+    {vsn, "${COUCHDB_VERSION}"},
     {modules, [
         couch_set_view,
         couch_set_view_dev,

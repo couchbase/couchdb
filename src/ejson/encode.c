@@ -17,6 +17,7 @@
 #include "erl_nif.h"
 #include "erl_nif_compat.h"
 #include "yajl/yajl_encode.h"
+#include "ejson.h"
 
 #if defined(_WIN32) || defined(WIN32) || defined(__WIN32__)
 #include <float.h>
@@ -180,4 +181,3 @@ done:
     // make the binary term which transfers ownership
     return enif_make_binary(env, &ctx.bin);
 }
-

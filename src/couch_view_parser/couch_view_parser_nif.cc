@@ -327,7 +327,7 @@ static inline ERL_NIF_TERM return_rows(ErlNifEnv *env, ctx_t *ctx)
 {
     try {
         return enif_make_tuple3(env, ATOM_OK, ATOM_ROWS, make_rows_list(env, ctx));
-    } catch(std::bad_alloc &e) {
+    } catch(std::bad_alloc &) {
         return makeError(env, "memory allocation failure");
     }
 }
@@ -461,7 +461,7 @@ static inline ERL_NIF_TERM return_error_entries(ErlNifEnv *env, ctx_t *ctx)
 {
     try {
         return enif_make_tuple3(env, ATOM_OK, ATOM_ERRORS, make_errors_list(env, ctx));
-    } catch(std::bad_alloc &e) {
+    } catch(std::bad_alloc &) {
         return makeError(env, "memory allocation failure");
     }
 }
@@ -506,7 +506,7 @@ static inline ERL_NIF_TERM return_debug_entries(ErlNifEnv *env, ctx_t *ctx)
 {
     try {
         return enif_make_tuple3(env, ATOM_OK, ATOM_DEBUG_INFOS, make_debug_entries_list(env, ctx));
-    } catch(std::bad_alloc &e) {
+    } catch(std::bad_alloc &) {
         return makeError(env, "memory allocation failure");
     }
 }
@@ -601,7 +601,14 @@ static ErlNifFunc nif_functions[] = {
     {"next_state", 1, nextState}
 };
 
-
+// Due to the stupid macros I need to manually do this in order
+// to get the correct linkage attributes :P
 extern "C" {
-    ERL_NIF_INIT(couch_view_parser, nif_functions, &onLoad, NULL, NULL, NULL);
+#if defined (__SUNPRO_C) && (__SUNPRO_C >= 0x550)
+__global ErlNifEntry* nif_init(void);
+#elif defined __GNUC__
+__attribute__ ((visibility("default"))) ErlNifEntry* nif_init(void);
+#endif
 }
+
+ERL_NIF_INIT(couch_view_parser, nif_functions, &onLoad, NULL, NULL, NULL)

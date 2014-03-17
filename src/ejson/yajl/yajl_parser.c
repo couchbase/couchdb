@@ -44,7 +44,7 @@
 #include <assert.h>
 #include <math.h>
 
-const char *
+static const char *
 yajl_parser_error_to_string(yajl_parser_error error)
 {
     switch (error) {

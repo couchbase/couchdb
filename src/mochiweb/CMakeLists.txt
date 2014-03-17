@@ -1,0 +1,12 @@
+FILE(GLOB MOCHIWEB_SRC *.erl)
+FILE(GLOB MOCHIWEB_TEST_SRC "*tests*erl")
+
+LIST(REMOVE_ITEM MOCHIWEB_SRC ${MOCHIWEB_TEST_SRC})
+
+CONFIGURE_FILE(${CMAKE_CURRENT_SOURCE_DIR}/mochiweb.app.src
+               ${CMAKE_CURRENT_BINARY_DIR}/mochiweb.app)
+
+ERL_BUILD("mochiweb" ${MOCHIWEB_SRC})
+INSTALL(FILES ${outfiles}
+               ${CMAKE_CURRENT_BINARY_DIR}/mochiweb.app
+        DESTINATION ${CMAKE_ERL_LIB_INSTALL_PREFIX}/mochiweb-1.4.1/ebin)

@@ -1,0 +1,247 @@
+; @configure_input@
+
+; Upgrading CouchDB will overwrite this file.
+
+[couchdb]
+database_dir = ${CMAKE_INSTALL_PREFIX}/var/lib/couchdb
+view_index_dir = ${CMAKE_INSTALL_PREFIX}/var/lib/couchdb
+util_driver_dir = ${CMAKE_INSTALL_PREFIX}/lib/couchdb/erlang/lib/couch-1.2.0a-961ad59-git/priv/lib
+delayed_commits = true ; set this to false to ensure an fsync before 201 Created is returned
+uri_file = ${CMAKE_INSTALL_PREFIX}/var/run/couchdb/couch.uri
+; Maximum number of distinct view update/building processes at any point in time.
+max_parallel_indexers = 4
+max_parallel_replica_indexers = 2
+max_parallel_spatial_indexers = 4
+consistency_check_precompacted = false
+consistency_check_compacted = false
+; Maximum period for which we attempt to retry file operations on Windows.
+windows_file_op_retry_period = 5000
+
+[database_compaction]
+; larger buffer sizes can originate smaller files
+doc_buffer_size = 524288 ; value in bytes
+checkpoint_after = 5242880 ; checkpoint after every N bytes were written
+
+[httpd]
+port = 5984
+bind_address = 127.0.0.1
+authentication_handlers =
+; authentication_handlers = {couch_httpd_oauth, oauth_authentication_handler}, {couch_httpd_auth, cookie_authentication_handler}, {couch_httpd_auth, default_authentication_handler}
+default_handler = {couch_httpd_db, handle_request}
+allow_jsonp = false
+db_frontend = couch_db_frontend
+; Options for the MochiWeb HTTP server.
+;server_options = [{backlog, 128}, {acceptor_pool_size, 16}]
+; For more socket options, consult Erlang's module 'inet' man page.
+;socket_options = [{recbuf, 262144}, {sndbuf, 262144}, {nodelay, true}]
+
+[ssl]
+port = 6984
+
+[log]
+file = ${CMAKE_INSTALL_PREFIX}/var/log/couchdb/couch.log
+level = info
+include_sasl = true
+
+[couch_httpd_auth]
+authentication_db = _users
+authentication_redirect = /_utils/session.html
+require_valid_user = false
+timeout = 600 ; number of seconds before automatic logout
+auth_cache_size = 50 ; size is number of cache entries
+
+[daemons]
+view_manager={couch_view, start_link, []}
+set_view_manager={couch_set_view, start_link, [prod, mapreduce_view]}
+set_view_manager_dev={couch_set_view, start_link, [dev, mapreduce_view]}
+index_merger_pool={lhttpc_manager, start_link, [[{connection_timeout, 90000}, {pool_size, 10000}, {name, couch_index_merger_connection_pool}]]}
+query_servers={couch_query_servers, start_link, []}
+httpd={couch_httpd, start_link, []}
+uuids={couch_uuids, start, []}
+auth_cache={couch_auth_cache, start_link, []}
+couch_set_view_ddoc_cache={couch_set_view_ddoc_cache, start_link, []}
+replication_manager={couch_replication_manager, start_link, []}
+compaction_daemon={couch_compaction_daemon, start_link, []}
+
+[httpd_global_handlers]
+/ = {couch_httpd_misc_handlers, handle_welcome_req, <<"Welcome">>}
+_active_tasks = {couch_httpd_misc_handlers, handle_task_status_req}
+_view_merge = {couch_httpd_view_merger, handle_req}
+_set_view = {couch_set_view_http, handle_req}
+
+[httpd_db_handlers]
+_view_cleanup = {couch_httpd_db, handle_view_cleanup_req}
+_compact = {couch_httpd_db, handle_compact_req}
+_design = {couch_httpd_db, handle_design_req}
+_changes = {couch_httpd_db, handle_changes_req}
+
+[httpd_design_handlers]
+_view = {couch_httpd_view, handle_view_req}
+_info = {couch_httpd_db,   handle_design_info_req}
+
+[uuids]
+; Known algorithms:
+;   random - 128 bits of random awesome
+;     All awesome, all the time.
+;   sequential - monotonically increasing ids with random increments
+;     First 26 hex characters are random. Last 6 increment in
+;     random amounts until an overflow occurs. On overflow, the
+;     random prefix is regenerated and the process starts over.
+;   utc_random - Time since Jan 1, 1970 UTC with microseconds
+;     First 14 characters are the time in hex. Last 18 are random.
+algorithm = sequential
+
+[replicator]
+db = _replicator
+; Maximum replicaton retry count can be a non-negative integer or "infinity".
+max_replication_retry_count = 10
+; More worker processes can give higher network throughput but can also
+; imply more disk and network IO.
+worker_processes = 4
+; With lower batch sizes checkpoints are done more frequently. Lower batch sizes
+; also reduce the total amount of used RAM memory.
+worker_batch_size = 500
+; Maximum number of HTTP connections per replication.
+http_connections = 20
+; HTTP connection timeout per replication.
+; Even for very fast/reliable networks it might need to be increased if a remote
+; database is too busy.
+connection_timeout = 30000
+; If a request fails, the replicator will retry it up to N times.
+retries_per_request = 2
+; Some socket options that might boost performance in some scenarios:
+;       {nodelay, boolean()}
+;       {sndbuf, integer()}
+;       {recbuf, integer()}
+;       {priority, integer()}
+; See the `inet` Erlang module's man page for the full list of options.
+socket_options = [{keepalive, true}, {nodelay, false}]
+; set to true to validate peer certificates
+verify_ssl_certificates = false
+; file containing a list of peer trusted certificates (PEM format)
+; ssl_trusted_certificates_file = /etc/ssl/certs/ca-certificates.crt
+; maximum peer certificate depth (must be set even if certificate validation is off)
+ssl_certificate_max_depth = 3
+
+[compaction_daemon]
+; The delay, in seconds, between each check for which database and view indexes
+; need to be compacted.
+check_interval = 60
+; If a database or view index file is smaller then this value (in bytes),
+; compaction will not happen. Very small files always have a very high
+; fragmentation therefore it's not worth to compact them.
+min_file_size = 131072
+
+[compactions]
+; List of compaction rules for the compaction daemon.
+; The daemon compacts databases and their respective view groups when all the
+; condition parameters are satisfied. Configuration can be per database or
+; global, and it has the following format:
+;
+; database_name = [ {ParamName, ParamValue}, {ParamName, ParamValue}, ... ]
+; _default = [ {ParamName, ParamValue}, {ParamName, ParamValue}, ... ]
+;
+; Possible parameters:
+;
+; * db_fragmentation - If the ratio (as an integer percentage), of the amount
+;                      of old data (and its supporting metadata) over the database
+;                      file size is equal to or greater then this value, this
+;                      database compaction condition is satisfied.
+;                      This value is computed as:
+;
+;                           (file_size - data_size) / file_size * 100
+;
+;                      The data_size and file_size values can be obtained when
+;                      querying a database's information URI (GET /dbname/).
+;
+; * view_fragmentation - If the ratio (as an integer percentage), of the amount
+;                        of old data (and its supporting metadata) over the view
+;                        index (view group) file size is equal to or greater then
+;                        this value, then this view index compaction condition is
+;                        satisfied. This value is computed as:
+;
+;                            (file_size - data_size) / file_size * 100
+;
+;                        The data_size and file_size values can be obtained when
+;                        querying a view group's information URI
+;                        (GET /dbname/_design/groupname/_info).
+;
+; * from _and_ to - The period for which a database (and its view groups) compaction
+;                   is allowed. The value for these parameters must obey the format:
+;
+;                   HH:MM - HH:MM  (HH in [0..23], MM in [0..59])
+;
+; * strict_window - If a compaction is still running after the end of the allowed
+;                   period, it will be canceled if this parameter is set to 'true'.
+;                   It defaults to 'false' and it's meaningful only if the *period*
+;                   parameter is also specified.
+;
+; * parallel_view_compaction - If set to 'true', the database and its views are
+;                              compacted in parallel. This is only useful on
+;                              certain setups, like for example when the database
+;                              and view index directories point to different
+;                              disks. It defaults to 'false'.
+;
+; Before a compaction is triggered, an estimation of how much free disk space is
+; needed is computed. This estimation corresponds to 2 times the data size of
+; the database or view index. When there's not enough free disk space to compact
+; a particular database or view index, a warning message is logged.
+;
+; Examples:
+;
+; 1) [{db_fragmentation, "70%"}, {view_fragmentation, "60%"}]
+;    The `foo` database is compacted if its fragmentation is 70% or more.
+;    Any view index of this database is compacted only if its fragmentation
+;    is 60% or more.
+;
+; 2) [{db_fragmentation, "70%"}, {view_fragmentation, "60%"}, {from, "00:00"}, {to, "04:00"}]
+;    Similar to the preceding example but a compaction (database or view index)
+;    is only triggered if the current time is between midnight and 4 AM.
+;
+; 3) [{db_fragmentation, "70%"}, {view_fragmentation, "60%"}, {from, "00:00"}, {to, "04:00"}, {strict_window, true}]
+;    Similar to the preceding example - a compaction (database or view index)
+;    is only triggered if the current time is between midnight and 4 AM. If at
+;    4 AM the database or one of its views is still compacting, the compaction
+;    process will be canceled.
+;
+; 4) [{db_fragmentation, "70%"}, {view_fragmentation, "60%"}, {from, "00:00"}, {to, "04:00"}, {strict_window, true}, {parallel_view_compaction, true}]
+;    Similar to the preceding example, but a database and its views can be
+;    compacted in parallel.
+;
+;_default = [{db_fragmentation, "70%"}, {view_fragmentation, "60%"}, {from, "23:00"}, {to, "04:00"}]
+;
+;[vendor]
+;name = Couchbase Single Server
+;version = 2.0.0
+;url = http://www.couchbase.com/
+
+[mapreduce]
+; Maximum duration, in milliseconds, for the execution time of all the map/reduce
+; functions in a design document against a single document (map function) or against
+; a list of map values/reductions (reduce/rereduce function).
+function_timeout = 10000
+; The maximum byte size allowed to be emitted for a single document. This is the
+; sum of the sizes of all emitted keys and values. A maximum of 0 means no limit.
+max_kv_size_per_doc = 1048576
+
+[set_views]
+ddoc_cache_size = 1048576
+btree_kv_node_threshold = 7168
+btree_kp_node_threshold = 6144
+; For incremental updates (value in bytes).
+indexer_max_insert_batch_size = 1048576
+; Maximum size (in bytes) of documents sent to the JavaScript engine.
+; A value of 0 means no limit, any document is passed to the engine.
+indexer_max_doc_size = 1048576
+; Sleep period for updates to wait when compactor is in retry phase.
+; Value is in milliseconds.
+throttle_period = 100
+
+[spatial_views]
+vtree_kv_node_threshold = 2000
+vtree_kp_node_threshold = 2000
+vtree_min_fill_rate = 0.4
+
+[upr]
+port = 11209
+connection_timeout = 5000

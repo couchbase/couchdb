@@ -483,13 +483,12 @@ static ErlNifFunc nif_functions[] = {
     {"less_json_nif", 2, less_json_nif}
 };
 
-
-#ifdef __cplusplus
-extern "C" {
+#ifndef _MSC_VER
+#if defined (__SUNPRO_C) && (__SUNPRO_C >= 0x550)
+__global
+#elif defined __GNUC__
+__attribute__ ((visibility("default")))
 #endif
 
-ERL_NIF_INIT(couch_ejson_compare, nif_functions, &on_load, NULL, NULL, &on_unload);
-
-#ifdef __cplusplus
-}
 #endif
+ERL_NIF_INIT(couch_ejson_compare, nif_functions, &on_load, NULL, NULL, &on_unload)

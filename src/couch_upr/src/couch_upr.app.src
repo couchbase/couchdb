@@ -12,7 +12,7 @@
 
 {application, couch_upr, [
     {description, "UPR for couch"},
-    {vsn, "%version%"},
+    {vsn, "${COUCHDB_VERSION}"},
     {modules, [
         couch_upr,
         couch_upr_fake_server

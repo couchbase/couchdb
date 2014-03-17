@@ -20,6 +20,7 @@
 #include <iostream>
 #include <string.h>
 #include <assert.h>
+#include <algorithm>
 
 #include "couch_view_parser.h"
 

@@ -12,8 +12,8 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-SRCDIR="%abs_top_srcdir%"
-BUILDDIR="%abs_top_builddir%"
+SRCDIR="@abs_top_srcdir@"
+BUILDDIR="@abs_top_builddir@"
 export ERL_LIBS="$BUILDDIR/src/:$ERL_LIBS"
 export ERL_FLAGS="$ERL_FLAGS -pa $BUILDDIR/test/etap/ -pa $BUILDDIR/src/mapreduce/ -pa $BUILDDIR/src/couch_index_merger/ -pa $BUILDDIR/src/couch_view_parser/"
 
