@@ -135,18 +135,8 @@ count_items_from_set(Group, Parts) ->
                    true ->
                        CountAcc;
                    false ->
-                       SetName = Group#set_view_group.set_name,
-                       Db = case couch_db:open_int(?dbname(SetName, PartId), []) of
-                       {ok, PartDb} ->
-                           PartDb;
-                       Error ->
-                           ErrorMsg = io_lib:format("Updater error opening database `~s': ~w",
-                                         [?dbname(SetName, PartId), Error]),
-                           throw({error, iolist_to_binary(ErrorMsg)})
-                       end,
-                       {ok, DbInfo} = couch_db:get_db_info(Db),
-                       ok = couch_db:close(Db),
-                       DocCount = couch_util:get_value(doc_count, DbInfo),
+                       {ok, DocCount} = couch_upr_client:get_num_items(
+                           Group#set_view_group.upr_pid, PartId),
                        CountAcc + DocCount
                    end
                 end, 0, Parts),

@@ -33,6 +33,7 @@
 -include("couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
 
+-define(UPR_SERVER_PORT, 12345).
 
 start_server() ->
     couch_server_sup:start_link(test_util:config_files()),
@@ -65,6 +66,8 @@ start_server(SetName) ->
     ok = couch_config:set("couchdb", "database_dir", NewDbDir, false),
     ok = couch_config:set("couchdb", "view_index_dir", NewIndexDir, false),
     start_server(),
+    % Also start the fake UPR server that is needed for testing
+    {ok, _} = couch_upr_fake_server:start(SetName),
     ok.
 
 

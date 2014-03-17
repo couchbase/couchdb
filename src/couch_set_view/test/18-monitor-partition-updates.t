@@ -131,7 +131,8 @@ test() ->
 
     Ref6 = couch_set_view:monitor_partition_update(
         mapreduce_view, test_set_name(), ddoc_id(), 20),
-    ok = couch_set_view_test_util:delete_set_db(test_set_name(), 20),
+    ok = couch_set_view:set_partition_states(
+           mapreduce_view, test_set_name(), ddoc_id(), [], [], [20]),
 
     GotPart20CleanupNotify = receive
     {Ref6, marked_for_cleanup} ->

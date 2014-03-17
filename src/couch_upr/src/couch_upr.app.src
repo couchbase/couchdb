@@ -10,21 +10,12 @@
 % License for the specific language governing permissions and limitations under
 % the License.
 
-{application, couch_set_view, [
-    {description, "Set views"},
+{application, couch_upr, [
+    {description, "UPR for couch"},
     {vsn, "%version%"},
     {modules, [
-        couch_set_view,
-        couch_set_view_dev,
-        couch_set_view_ddoc_cache,
-        couch_set_view_http,
-        couch_set_view_group,
-        couch_set_view_updater,
-        couch_set_view_updater_helper,
-        couch_set_view_compactor,
-        couch_set_view_util,
-        couch_set_view_mapreduce,
-        mapreduce_view
+        couch_upr,
+        couch_upr_fake_server
     ]},
     {registered, []},
     {applications, [kernel, stdlib]}

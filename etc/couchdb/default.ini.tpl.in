@@ -241,3 +241,7 @@ throttle_period = 100
 vtree_kv_node_threshold = 2000
 vtree_kp_node_threshold = 2000
 vtree_min_fill_rate = 0.4
+
+[upr]
+port = 11209
+connection_timeout = 5000

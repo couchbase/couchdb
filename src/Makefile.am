@@ -32,4 +32,5 @@ endif
 
 SUBDIRS += \
     couch_set_view \
-    couch_index_merger
+    couch_index_merger \
+    couch_upr

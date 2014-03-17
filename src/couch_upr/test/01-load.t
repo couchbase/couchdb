@@ -1,3 +1,7 @@
+#!/usr/bin/env escript
+%% -*- erlang -*-
+%%! -smp enable
+
 % Licensed under the Apache License, Version 2.0 (the "License"); you may not
 % use this file except in compliance with the License. You may obtain a copy of
 % the License at
@@ -10,22 +14,18 @@
 % License for the specific language governing permissions and limitations under
 % the License.
 
-{application, couch_set_view, [
-    {description, "Set views"},
-    {vsn, "%version%"},
-    {modules, [
-        couch_set_view,
-        couch_set_view_dev,
-        couch_set_view_ddoc_cache,
-        couch_set_view_http,
-        couch_set_view_group,
-        couch_set_view_updater,
-        couch_set_view_updater_helper,
-        couch_set_view_compactor,
-        couch_set_view_util,
-        couch_set_view_mapreduce,
-        mapreduce_view
-    ]},
-    {registered, []},
-    {applications, [kernel, stdlib]}
-]}.
+main(_) ->
+    test_util:init_code_path(),
+    Modules = [
+        couch_upr_client,
+        couch_upr_consumer,
+        couch_upr_fake_server,
+        couch_upr_producer
+    ],
+
+    etap:plan(length(Modules)),
+    lists:foreach(
+        fun(Module) ->
+            etap:loaded_ok(Module, lists:concat(["Loaded: ", Module]))
+        end, Modules),
+    etap:end_tests().

@@ -55,6 +55,9 @@
 -define(set_unindexable_seqs(SetViewGroup),
         (SetViewGroup#set_view_group.index_header)#set_view_index_header.unindexable_seqs).
 
+-define(set_partition_versions(SetViewGroup),
+        (SetViewGroup#set_view_group.index_header)#set_view_index_header.partition_versions).
+
 -define(pending_transition_active(Trans),
         (case Trans of
         nil ->
@@ -78,15 +81,20 @@
         end)).
 
 
+-type uint64()                   :: 0..18446744073709551615.
 -type partition_id()             :: non_neg_integer().
 -type staleness()                :: 'update_after' | 'ok' | 'false'.
 -type bitmask()                  :: non_neg_integer().
 -type bitmap()                   :: non_neg_integer().
 -type update_seq()               :: non_neg_integer().
 -type btree_state()              :: 'nil' | binary().
+-type uuid()                     :: uint64().
 -type partition_seq()            :: {partition_id(), update_seq()}.
 % Manipulate via ordsets or orddict, keep it ordered by partition id.
 -type partition_seqs()           :: ordsets:ordset(partition_seq()).
+-type partition_version()        :: [{uuid(), update_seq()}].
+% Manipulate via ordsets or orddict, keep it ordered by partition id.
+-type partition_versions()       :: ordsets:ordset({partition_id(), partition_version()}).
 -type view_state()               :: btree_state().
 -type set_view_group_type()      :: 'main' | 'replica'.
 -type set_view_ets_stats_key()   :: {binary(), binary(), binary(), set_view_group_type()}.
@@ -141,7 +149,7 @@
     unindexable = [] :: ordsets:ordset(partition_id())
 }).
 
--define(LATEST_COUCH_SET_VIEW_HEADER_VERSION, 1).
+-define(LATEST_COUCH_SET_VIEW_HEADER_VERSION, 2).
 
 -record(set_view_index_header, {
     version = ?LATEST_COUCH_SET_VIEW_HEADER_VERSION :: non_neg_integer(),
@@ -160,7 +168,8 @@
     replicas_on_transfer = []                       :: ordsets:ordset(partition_id()),
     % Pending partition states transition.
     pending_transition = nil                        :: 'nil' | #set_view_transition{},
-    unindexable_seqs = []                           :: partition_seqs()
+    unindexable_seqs = []                           :: partition_seqs(),
+    partition_versions = []                         :: partition_versions()
 }).
 
 % Keep all stats values as valid EJSON (except ets key).
@@ -236,7 +245,6 @@
     id_btree = nil                          :: 'nil' | #btree{},
     ref_counter = nil                       :: 'nil' | pid(),
     index_header = #set_view_index_header{} :: #set_view_index_header{},
-    db_set = nil                            :: 'nil' | pid(),
     type = main                             :: set_view_group_type(),
     replica_group = nil                     :: 'nil' | #set_view_group{},
     replica_pid = nil                       :: 'nil' | pid(),
@@ -251,7 +259,8 @@
     % Used to distinguish production and development set view groups
     category = nil                          :: 'nil' | 'prod' | 'dev',
     stats_ets = nil                         :: atom(),
-    header_pos = 0                          :: non_neg_integer()
+    header_pos = 0                          :: non_neg_integer(),
+    upr_pid = nil                           :: 'nil' | pid()
 }).
 
 -record(set_view_updater_stats, {

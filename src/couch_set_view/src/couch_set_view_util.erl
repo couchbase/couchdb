@@ -27,7 +27,6 @@
 -export([parse_values/1, parse_reductions/1, parse_view_id_keys/1]).
 -export([split_set_db_name/1]).
 -export([group_to_header_bin/1, header_bin_sig/1, header_bin_to_term/1]).
--export([open_db/2]).
 -export([get_part_seq/2, has_part_seq/2, find_part_seq/2]).
 -export([set_view_sig/1]).
 -export([check_primary_key_size/5, check_primary_value_size/5]).
@@ -385,7 +384,8 @@ group_to_header_bin(#set_view_group{index_header = Header, sig = Sig}) ->
         has_replica = HasReplica,
         replicas_on_transfer = RepsOnTransfer,
         pending_transition = PendingTrans,
-        unindexable_seqs = Unindexable
+        unindexable_seqs = Unindexable,
+        partition_versions = PartVersions
     } = Header,
     ViewStatesBin = lists:foldl(
         fun(State, Acc) ->
@@ -404,7 +404,8 @@ group_to_header_bin(#set_view_group{index_header = Header, sig = Sig}) ->
              (bool_to_bin(HasReplica))/binary,
              (length(RepsOnTransfer)):16, (partitions_to_bin(RepsOnTransfer, <<>>))/binary,
              (pending_trans_to_bin(PendingTrans))/binary,
-             (length(Unindexable)):16, (seqs_to_bin(Unindexable, <<>>))/binary
+             (length(Unindexable)):16, (seqs_to_bin(Unindexable, <<>>))/binary,
+             (length(PartVersions)):16, (partition_versions_to_bin(PartVersions, <<>>))/binary
            >>,
     <<Sig/binary, (couch_compress:compress(Base))/binary>>.
 
@@ -453,7 +454,12 @@ header_bin_to_term(HeaderBin) ->
       UnindexableCount:16,
       Rest8/binary
     >> = Rest7,
-    {Unindexable, <<>>} = bin_to_seqs(UnindexableCount, Rest8, []),
+    {Unindexable, Rest9} = bin_to_seqs(UnindexableCount, Rest8, []),
+    <<
+      NumPartVersions:16,
+      Rest10/binary
+    >> = Rest9,
+    {PartVersions, <<>>} = bin_to_partition_versions(NumPartVersions, Rest10, []),
     #set_view_index_header{
         version = Version,
         num_partitions = NumParts,
@@ -466,7 +472,8 @@ header_bin_to_term(HeaderBin) ->
         has_replica = case HasReplica of 1 -> true; 0 -> false end,
         replicas_on_transfer = ReplicasOnTransfer,
         pending_transition = PendingTrans,
-        unindexable_seqs = Unindexable
+        unindexable_seqs = Unindexable,
+        partition_versions = PartVersions
     }.
 
 
@@ -506,6 +513,19 @@ pending_trans_to_bin(#set_view_transition{active = A, passive = P, unindexable =
     <<(length(A)):16, (partitions_to_bin(A, <<>>))/binary,
       (length(P)):16, (partitions_to_bin(P, <<>>))/binary,
       (length(U)):16, (partitions_to_bin(U, <<>>))/binary>>.
+
+
+partition_versions_to_bin([], Acc) ->
+    Acc;
+partition_versions_to_bin([{P, F} | Rest], Acc0) ->
+    Bin = failoverlog_to_bin(F, <<>>),
+    Acc = <<Acc0/binary, P:16, (length(F)):16, Bin/binary>>,
+    partition_versions_to_bin(Rest, Acc).
+
+failoverlog_to_bin([], Acc) ->
+    Acc;
+failoverlog_to_bin([{Uuid, Seq}| Rest], Acc) ->
+    failoverlog_to_bin(Rest, <<Acc/binary, Uuid:64/integer, Seq:64>>).
 
 
 bin_to_pending_trans(<<NumActive:16, Rest/binary>>) ->
@@ -551,21 +571,17 @@ bin_to_partitions(Count, <<P:16, Rest/binary>>, Acc) ->
     bin_to_partitions(Count - 1, Rest, [P | Acc]).
 
 
--spec open_db(binary(), non_neg_integer() | 'master') -> #db{}.
-open_db(SetName, PartId) ->
-    DbName = case PartId of
-    master ->
-        ?master_dbname(SetName);
-    _ ->
-        ?dbname(SetName, PartId)
-    end,
-    case couch_db:open_int(DbName, []) of
-    {ok, Db} ->
-        Db;
-    Error ->
-        Msg = io_lib:format("Couldn't open database `~s`, reason: ~w", [DbName, Error]),
-        throw({db_open_error, DbName, Error, iolist_to_binary(Msg)})
-    end.
+bin_to_partition_versions(0, Rest, Acc) ->
+    {lists:reverse(Acc), Rest};
+bin_to_partition_versions(Count, <<P:16, NumFailoverLog:16, Rest0/binary>>,
+        Acc) ->
+    {FailoverLog, Rest} = bin_to_failoverlog(NumFailoverLog, Rest0, []),
+    bin_to_partition_versions(Count - 1, Rest, [{P, FailoverLog} | Acc]).
+
+bin_to_failoverlog(0, Rest, Acc) ->
+    {lists:reverse(Acc), Rest};
+bin_to_failoverlog(Count, <<Uuid:64/integer, Seq:64, Rest/binary>>, Acc) ->
+    bin_to_failoverlog(Count - 1, Rest, [{Uuid, Seq} | Acc]).
 
 
 -spec get_part_seq(partition_id(), partition_seqs()) -> update_seq().

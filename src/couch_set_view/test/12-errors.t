@@ -58,7 +58,7 @@ num_docs() -> 1000.
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(29),
+    etap:plan(25),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -71,9 +71,6 @@ main(_) ->
 
 test() ->
     couch_set_view_test_util:start_server(test_set_name()),
-
-    test_partition_not_found_when_group_is_configured(),
-    test_partition_not_found_when_group_starts(),
 
     etap:diag("Testing map function with a runtime error"),
     test_map_runtime_error(),
@@ -109,99 +106,6 @@ test() ->
 
     couch_set_view_test_util:stop_server(),
     ok.
-
-
-test_partition_not_found_when_group_is_configured() ->
-    couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
-    couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
-
-    DDocId = <<"_design/test">>,
-    DDoc = {[
-        {<<"meta">>, {[{<<"id">>, DDocId}]}},
-        {<<"json">>, {[
-        {<<"language">>, <<"javascript">>},
-        {<<"views">>, {[
-            {<<"test">>, {[
-                {<<"map">>, <<"function(doc, meta) { emit(meta.id, 1); }">>}
-            ]}}
-        ]}}
-        ]}}
-    ]},
-    populate_set(DDoc),
-
-    etap:diag("Deleting database of partition 1 before configuring view group"),
-    ok = couch_set_view_test_util:delete_set_db(test_set_name(), 0),
-
-    ConfigError = configure_view_group(DDocId, [0, 1, 2, 3], []),
-    ?etap_match(
-        ConfigError,
-        {error, {db_open_error, _DbName, {not_found, no_db_file}, _Text}},
-        "Got an error when configuring view group"),
-    couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()).
-
-
-test_partition_not_found_when_group_starts() ->
-    couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
-    couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
-
-    DDocId = <<"_design/test">>,
-    DDoc = {[
-        {<<"meta">>, {[{<<"id">>, DDocId}]}},
-        {<<"json">>, {[
-        {<<"language">>, <<"javascript">>},
-        {<<"views">>, {[
-            {<<"test">>, {[
-                {<<"map">>, <<"function(doc, meta) { emit(meta.id, 1); }">>}
-            ]}}
-        ]}}
-        ]}}
-    ]},
-    populate_set(DDoc),
-
-    ok = configure_view_group(DDocId, [0, 1, 2, 3], []),
-    lists:foreach(
-        fun(PartId) ->
-            {ok, Db} = couch_set_view_test_util:open_set_db(test_set_name(), PartId),
-            {ok, _} = couch_db:ensure_full_commit(Db),
-            ok = couch_db:close(Db)
-        end,
-        [master, 0, 1, 2, 3]),
-    GroupPid1 = couch_set_view:get_group_pid(
-        mapreduce_view, test_set_name(), DDocId, prod),
-    couch_util:shutdown_sync(GroupPid1),
-
-    etap:diag("Deleting database of active partition 1 after view group shutdown"),
-    DbName = iolist_to_binary([test_set_name(), "/0"]),
-    ok = couch_server:delete(DbName, []),
-    {ok, AllDbs} = couch_server:all_databases(),
-    etap:is(lists:member(DbName, AllDbs), false, "Partition 0 database file deleted"),
-
-    SetViewServerBefore = couch_set_view_test_util:get_daemon_pid(
-        set_view_manager),
-    MonRef = erlang:monitor(process, SetViewServerBefore),
-
-    try
-        couch_set_view:get_group_pid(
-            mapreduce_view, test_set_name(), DDocId, prod),
-        etap:bail("No failure opening view group after deleting an active partition database")
-    catch _:Error ->
-        ?etap_match(
-            Error,
-            {error, {db_open_error, DbName, {not_found, no_db_file}, _Text}},
-            "Got an error when opening view group")
-    end,
-
-    receive
-    {'DOWN', MonRef, _, _, _} ->
-        etap:bail("set_view server died")
-    after 5000 ->
-        ok
-    end,
-
-    SetViewServerAfter = couch_set_view_test_util:get_daemon_pid(
-        set_view_manager),
-    etap:is(SetViewServerAfter, SetViewServerBefore, "couch_set_view server didn't die"),
-    couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()).
 
 
 test_map_runtime_error() ->

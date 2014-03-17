@@ -34,7 +34,8 @@ run: ../bin/couchdb.tpl
 			-pa $(abs_top_builddir)\/src\/snappy \
 			-pa $(abs_top_builddir)\/src\/couch_set_view \
 			-pa $(abs_top_builddir)\/src\/couch_view_parser \
-			-pa $(abs_top_builddir)\/src\/couch_index_merger|g" \
+			-pa $(abs_top_builddir)\/src\/couch_index_merger \
+			-pa $(abs_top_builddir)\/src\/couch_upr|g" \
 	    -e "s|%localconfdir%|$(abs_top_builddir)/etc/couchdb|g" \
 	    -e "s|%localstatelogdir%|$(abs_top_builddir)/tmp/log|g" \
 	    -e "s|%localstatelibdir%|$(abs_top_builddir)/tmp/lib|g" \

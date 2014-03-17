@@ -952,45 +952,28 @@ handle_call({get_group_server, SetName, Group}, From, Server) ->
         {reply, {ok, ExistingPid}, Server}
     end;
 
-handle_call({before_database_delete, DbName}, _From, Server) ->
+handle_call({before_database_delete, SetName}, _From, Server) ->
     #server{root_dir = RootDir} = Server,
-    case couch_set_view_util:split_set_db_name(DbName) of
-    error ->
-        ok;
-    {ok, SetName, PartId} ->
-        lists:foreach(
-            fun({_SetName, {_DDocId, Sig}}) ->
-                % Important: view group processes monitor database processes, and
-                % they must be notified that a database is about to be deleted
-                % before they receive the monitor DOWN messages, therefore the
-                % before_delete event sent by couch_server must be synchronous
-                % and happen before it shutdowns the database processes. However
-                % we must be sure here that we don't do any synchronous calls to
-                % couch_server in order to avoid deadlocks.
-                case ets:lookup(Server#server.sig_to_pid_ets, {SetName, Sig}) of
-                [{_, Pid}] when is_pid(Pid) ->
-                    gen_server:cast(Pid, {before_partition_delete, PartId});
-                _ ->
-                    ok
-                end
-            end,
-            ets:lookup(Server#server.name_to_sig_ets, SetName)),
-        case PartId of
-        master ->
-            true = ets:delete(Server#server.name_to_sig_ets, SetName),
-            ?LOG_INFO("Deleting index files for set `~s` because master database"
-                      "is about to deleted", [SetName]),
-            try
-                delete_index_dir(RootDir, SetName)
-            catch _:Error ->
-                Stack = erlang:get_stacktrace(),
-                ?LOG_ERROR("Error deleting index files for set `~s`:~n"
-                           "  error: ~p~n  stacktrace: ~p~n",
-                           [SetName, Error, Stack])
-            end;
-        _ ->
-            ok
-        end
+    lists:foreach(
+        fun({_SetName, {_DDocId, Sig}}) ->
+            case ets:lookup(Server#server.sig_to_pid_ets, {SetName, Sig}) of
+            [{_, Pid}] when is_pid(Pid) ->
+                gen_server:cast(Pid, before_master_delete);
+            _ ->
+                ok
+            end
+        end,
+        ets:lookup(Server#server.name_to_sig_ets, SetName)),
+    true = ets:delete(Server#server.name_to_sig_ets, SetName),
+    ?LOG_INFO("Deleting index files for set `~s` because master database "
+              "is about to deleted", [SetName]),
+    try
+        delete_index_dir(RootDir, SetName)
+    catch _:Error ->
+        Stack = erlang:get_stacktrace(),
+        ?LOG_ERROR("Error deleting index files for set `~s`:~n"
+                   "  error: ~p~n  stacktrace: ~p~n",
+                   [SetName, Error, Stack])
     end,
     {reply, ok, Server};
 
@@ -1177,8 +1160,13 @@ modify_bitmasks(#set_view_group{replica_group = RepGroup} = Group, Partitions) -
 make_handle_db_event_fun(Mod, ServerName, SigToPidEts, NameToSigEts) ->
     fun
     ({before_delete, DbName}) ->
-        ok = gen_server:call(
-            ServerName, {before_database_delete, DbName}, infinity);
+        case couch_set_view_util:split_set_db_name(DbName) of
+        {ok, SetName, master} ->
+            ok = gen_server:call(
+                ServerName, {before_database_delete, SetName}, infinity);
+        _ ->
+            ok
+        end;
     ({ddoc_updated, {DbName, #doc{id = DDocId} = DDoc}}) ->
         case couch_set_view_util:split_set_db_name(DbName) of
         {ok, SetName, master} ->

@@ -22,6 +22,7 @@
 
 -include("couch_db.hrl").
 -include("couch_set_view_updater.hrl").
+-include_lib("couch_upr/include/couch_upr.hrl").
 
 -define(MAP_QUEUE_SIZE, 256 * 1024).
 -define(WRITE_QUEUE_SIZE, 512 * 1024).
@@ -90,7 +91,8 @@ update(Owner, Group, CurSeqs, CompactorRunning, TmpDir, Options) ->
               "    unindexable:      ~w~n"
               "Initial build:        ~s~n"
               "Compactor running:    ~s~n"
-              "Min # changes:        ~p~n",
+              "Min # changes:        ~p~n"
+              "Partition versions:   ~w~n",
               [SetName, Type, DDocId,
                ActiveParts,
                PassiveParts,
@@ -101,7 +103,8 @@ update(Owner, Group, CurSeqs, CompactorRunning, TmpDir, Options) ->
                ?pending_transition_unindexable(?set_pending_transition(Group)),
                InitialBuild,
                CompactorRunning,
-               NumChanges
+               NumChanges,
+               ?set_partition_versions(Group)
               ]),
 
     WriterAcc0 = #writer_acc{
@@ -180,7 +183,21 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
         try
             Mod:start_reduce_context(Group),
             try
-                FinalWriterAcc = do_writes(WriterAcc2),
+                WriterAcc3 = do_writes(WriterAcc2),
+                receive
+                {new_partition_versions, PartVersions0} ->
+                    WriterAccGroup = WriterAcc3#writer_acc.group,
+                    WriterAccHeader = WriterAccGroup#set_view_group.index_header,
+                    PartVersions = lists:ukeymerge(1, PartVersions0,
+                        WriterAccHeader#set_view_index_header.partition_versions),
+                    FinalWriterAcc = WriterAcc3#writer_acc{
+                        group = WriterAccGroup#set_view_group{
+                            index_header = WriterAccHeader#set_view_index_header{
+                                partition_versions = PartVersions
+                            }
+                        }
+                    }
+                end,
                 Parent ! {writer_finished, FinalWriterAcc}
             after
                 Mod:end_reduce_context(Group)
@@ -229,12 +246,15 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
             ok
         end,
         try
-            load_changes(Owner, Parent, Group, MapQueue,
-                         ActiveParts, PassiveParts,
-                         WriterAcc#writer_acc.initial_build)
+            PartVersions = load_changes(
+                Owner, Parent, Group, MapQueue, ActiveParts, PassiveParts,
+                WriterAcc#writer_acc.initial_build),
+            Parent ! {new_partition_versions, PartVersions}
         catch
         throw:purge ->
             exit(purge);
+        throw:{rollback, RollbackSeqs} ->
+            exit({rollback, RollbackSeqs});
         _:Error ->
             Stacktrace = erlang:get_stacktrace(),
             ?LOG_ERROR("Set view `~s`, ~s group `~s`, doc loader error~n"
@@ -281,6 +301,9 @@ wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup) ->
     continue ->
         % Used by unit tests.
         DocLoader ! continue,
+        wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup);
+    {new_partition_versions, PartVersions} ->
+        Writer ! {new_partition_versions, PartVersions},
         wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup);
     {writer_finished, WriterAcc} ->
         Stats0 = WriterAcc#writer_acc.stats,
@@ -346,54 +369,107 @@ wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup) ->
     end.
 
 
-load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts, InitialBuild) ->
+load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
+        InitialBuild) ->
     #set_view_group{
         set_name = SetName,
         name = DDocId,
         type = GroupType,
-        index_header = #set_view_index_header{seqs = SinceSeqs}
+        index_header = #set_view_index_header{
+            seqs = SinceSeqs,
+            partition_versions = PartVersions0
+        },
+        upr_pid = UprPid,
+        category = Category
     } = Group,
 
     MaxDocSize = list_to_integer(
         couch_config:get("set_views", "indexer_max_doc_size", "0")),
-    FoldFun = fun(PartId, {AccCount, AccSeqs}) ->
+    FoldFun = fun(PartId, {AccCount, AccSeqs, AccVersions, AccRollbacks}) ->
         case couch_set_view_util:has_part_seq(PartId, ?set_unindexable_seqs(Group))
             andalso not lists:member(PartId, ?set_replicas_on_transfer(Group)) of
         true ->
-            {AccCount, AccSeqs};
+            {AccCount, AccSeqs, AccVersions, AccRollbacks};
         false ->
-            Db = case couch_db:open_int(?dbname(SetName, PartId), []) of
-            {ok, PartDb} ->
-                PartDb;
-            Error ->
-                ErrorMsg = io_lib:format("Updater error opening database `~s': ~w",
-                                         [?dbname(SetName, PartId), Error]),
-                throw({error, iolist_to_binary(ErrorMsg)})
-            end,
-            PurgeSeq = couch_db:get_purge_seq(Db),
             Since = couch_util:get_value(PartId, SinceSeqs, 0),
-            case (PurgeSeq > Since) andalso (Since > 0) of
-            true ->
-                ?LOG_INFO("Updater ~s set view group `~s` from set `~s`, exiting"
-			  " with purge reason because partition ~p has purge seq"
-			  " ~p and last indexed seq is ~p",
-			  [GroupType, DDocId, SetName, PartId, PurgeSeq, Since]),
-                throw(purge);
-            false ->
-                ok
-            end,
-            try
-                ChangesWrapper = fun(DocInfo, _, AccCount2) ->
-                    load_doc(Db, PartId, DocInfo, MapQueue,
-                             Group, MaxDocSize, InitialBuild),
-                    {ok, AccCount2 + 1}
+            PartVersions = couch_util:get_value(PartId, AccVersions),
+            case AccRollbacks of
+            [] ->
+                {ok, EndSeq} = couch_upr_client:get_sequence_number(UprPid, PartId),
+                case EndSeq =:= Since of
+                true ->
+                    {AccCount, AccSeqs, AccVersions, AccRollbacks};
+                false ->
+                    ChangesWrapper = fun(Item, {Items, SingleSnapshot}) ->
+                        case Item of
+                        snapshot_marker ->
+                            ?LOG_INFO(
+                                "set view `~s`, ~s (~s) group `~s`: received "
+                                "a snapshot marker for partition ~p",
+                                [SetName, GroupType, Category, DDocId,
+                                    PartId]),
+                            {Items, false};
+                        _ ->
+                            Items2 = case SingleSnapshot of
+                            true ->
+                                [Item|Items];
+                            false ->
+                                lists:keystore(
+                                    Item#upr_doc.id, #upr_doc.id, Items, Item)
+                            end,
+                            {Items2, SingleSnapshot}
+                        end
+                    end,
+                    Result = couch_upr_client:enum_docs_since(
+                        UprPid, PartId, PartVersions, Since, EndSeq,
+                        ChangesWrapper, {[], true}),
+                    case Result of
+                    {ok, {Items, _}, NewPartVersions} ->
+                        AccCount2 = lists:foldl(fun(Item, Acc) ->
+                            queue_doc(
+                                Item, MapQueue, Group, MaxDocSize,
+                                InitialBuild),
+                            Acc + 1
+                        end, AccCount, Items),
+                        AccSeqs2 = orddict:store(PartId, EndSeq, AccSeqs),
+                        AccVersions2 = lists:ukeymerge(
+                            1, [{PartId, NewPartVersions}], AccVersions),
+                        AccRollbacks2 = AccRollbacks;
+                    {rollback, RollbackSeq} ->
+                        AccCount2 = AccCount,
+                        AccSeqs2 = AccSeqs,
+                        AccVersions2 = AccVersions,
+                        AccRollbacks2 = ordsets:add_element(
+                            {PartId, RollbackSeq}, AccRollbacks);
+                    Error ->
+                        AccCount2 = AccCount,
+                        AccSeqs2 = AccSeqs,
+                        AccVersions2 = AccVersions,
+                        AccRollbacks2 = AccRollbacks,
+                        ?LOG_ERROR("set view `~s`, ~s (~s) group `~s` error"
+                            "while loading changes for partition ~p:~n~p~n",
+                            [SetName, GroupType, Category, DDocId, PartId,
+                                Error]),
+                        throw(Error)
+                    end,
+                    {AccCount2, AccSeqs2, AccVersions2, AccRollbacks2}
+                end;
+            _ ->
+                % If there is a rollback needed, don't store any new documents
+                % in the index, but just check for a rollback of another
+                % partition (i.e. a request with start seq == end seq)
+                ChangesWrapper = fun(_, _) -> ok end,
+                Result = couch_upr_client:enum_docs_since(
+                    UprPid, PartId, PartVersions, Since, Since, ChangesWrapper,
+                    ok),
+                case Result of
+                {ok, _, _} ->
+                    AccRollbacks2 = AccRollbacks;
+                {rollback, RollbackSeq} ->
+                    AccRollbacks2 = ordsets:add_element(
+                        {PartId, RollbackSeq}, AccRollbacks)
                 end,
-                {ok, _, AccCount3} = couch_db:fast_reads(Db, fun() ->
-                    couch_db:enum_docs_since(Db, Since, ChangesWrapper, AccCount, [])
-                end),
-                {AccCount3, orddict:store(PartId, Db#db.update_seq, AccSeqs)}
-            after
-                ok = couch_db:close(Db)
+                {AccCount, AccSeqs, AccVersions, AccRollbacks2}
             end
         end
     end,
@@ -402,35 +478,52 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts, Initial
     case ActiveParts of
     [] ->
         ActiveChangesCount = 0,
-        MaxSeqs = orddict:new();
+        MaxSeqs = orddict:new(),
+        PartVersions = PartVersions0,
+        Rollbacks = [];
     _ ->
         ?LOG_INFO("Updater reading changes from active partitions to "
                   "update ~s set view group `~s` from set `~s`",
                   [GroupType, DDocId, SetName]),
-        {ActiveChangesCount, MaxSeqs} = lists:foldl(
-            FoldFun, {0, orddict:new()}, ActiveParts)
+        {ActiveChangesCount, MaxSeqs, PartVersions, Rollbacks} = lists:foldl(
+            FoldFun, {0, orddict:new(), PartVersions0, ordsets:new()},
+            ActiveParts)
     end,
     case PassiveParts of
     [] ->
         FinalChangesCount = ActiveChangesCount,
-        MaxSeqs2 = MaxSeqs;
+        MaxSeqs2 = MaxSeqs,
+        PartVersions2 = PartVersions,
+        Rollbacks2 = Rollbacks;
     _ ->
         ?LOG_INFO("Updater reading changes from passive partitions to "
                   "update ~s set view group `~s` from set `~s`",
                   [GroupType, DDocId, SetName]),
-        {FinalChangesCount, MaxSeqs2} = lists:foldl(
-            FoldFun, {ActiveChangesCount, MaxSeqs}, PassiveParts)
+        {FinalChangesCount, MaxSeqs2, PartVersions2, Rollbacks2} = lists:foldl(
+            FoldFun, {ActiveChangesCount, MaxSeqs, PartVersions, Rollbacks},
+            PassiveParts)
     end,
-    {FinalChangesCount3, MaxSeqs3} = load_changes_from_passive_parts_in_mailbox(
-        Group, FoldFun, FinalChangesCount, MaxSeqs2),
+    {FinalChangesCount3, MaxSeqs3, PartVersions3, Rollbacks3} =
+        load_changes_from_passive_parts_in_mailbox(
+            Group, FoldFun, FinalChangesCount, MaxSeqs2, PartVersions2, Rollbacks2),
+
+    case Rollbacks3 of
+    [] ->
+        ok;
+    _ ->
+        throw({rollback, Rollbacks3})
+    end,
+
     couch_work_queue:close(MapQueue),
     ?LOG_INFO("Updater for ~s set view group `~s`, set `~s`, read a total of ~p changes",
               [GroupType, DDocId, SetName, FinalChangesCount3]),
     ?LOG_DEBUG("Updater for ~s set view group `~s`, set `~s`, max partition seqs found:~n~w",
-               [GroupType, DDocId, SetName, MaxSeqs3]).
+               [GroupType, DDocId, SetName, MaxSeqs3]),
+    PartVersions3.
 
 
-load_changes_from_passive_parts_in_mailbox(Group, FoldFun, ChangesCount, MaxSeqs) ->
+load_changes_from_passive_parts_in_mailbox(
+        Group, FoldFun, ChangesCount, MaxSeqs, PartVersions0, Rollbacks) ->
     #set_view_group{
         set_name = SetName,
         name = DDocId,
@@ -439,13 +532,17 @@ load_changes_from_passive_parts_in_mailbox(Group, FoldFun, ChangesCount, MaxSeqs
     receive
     {new_passive_partitions, Parts0} ->
         Parts = get_more_passive_partitions(Parts0),
+        AddPartVersions = [{P, [{0, 0}]} || P <- Parts],
+        PartVersions = lists:ukeymerge(1, AddPartVersions, PartVersions0),
         ?LOG_INFO("Updater reading changes from new passive partitions ~w to "
                   "update ~s set view group `~s` from set `~s`",
                   [Parts, GroupType, DDocId, SetName]),
-        {ChangesCount2, MaxSeqs2} = lists:foldl(FoldFun, {ChangesCount, MaxSeqs}, Parts),
-        load_changes_from_passive_parts_in_mailbox(Group, FoldFun, ChangesCount2, MaxSeqs2)
+        {ChangesCount2, MaxSeqs2, PartVersions2, Rollbacks2} = lists:foldl(
+            FoldFun, {ChangesCount, MaxSeqs, PartVersions, Rollbacks}, Parts),
+        load_changes_from_passive_parts_in_mailbox(
+            Group, FoldFun, ChangesCount2, MaxSeqs2, PartVersions2, Rollbacks2)
     after 0 ->
-        {ChangesCount, MaxSeqs}
+        {ChangesCount, MaxSeqs, PartVersions0, Rollbacks}
     end.
 
 
@@ -462,50 +559,41 @@ notify_owner(Owner, Msg, UpdaterPid) ->
     Owner ! {updater_info, UpdaterPid, Msg}.
 
 
-load_doc(Db, PartitionId, DocInfo, MapQueue, Group, MaxDocSize, InitialBuild) ->
-    #set_view_group{
-        set_name = SetName,
-        name = DDocId,
-        type = GroupType
-    } = Group,
-    #doc_info{id=DocId, local_seq=Seq, deleted=Deleted} = DocInfo,
-    case Deleted of
+queue_doc(Doc, MapQueue, Group, MaxDocSize, InitialBuild) ->
+    case Doc#upr_doc.deleted of
     true when InitialBuild ->
         Entry = nil;
     true ->
-        Entry = {Seq, #doc{id = DocId, deleted = true}, PartitionId};
+        Entry = Doc;
     false ->
-        case couch_util:validate_utf8(DocId) of
-        false ->
-            Entry = {Seq, #doc{id = DocId, deleted = true}, PartitionId};
+        #set_view_group{
+           set_name = SetName,
+           name = DDocId,
+           type = GroupType
+        } = Group,
+        case couch_util:validate_utf8(Doc#upr_doc.id) of
         true ->
-            case couch_util:validate_utf8(DocId) of
+            case (MaxDocSize > 0) andalso
+                (iolist_size(Doc#upr_doc.body) > MaxDocSize) of
             true ->
-                {ok, Doc} = couch_db:open_doc_int(Db, DocInfo, []),
-                % TODO: avoid reading whole doc to determine its size, requires
-                % a minor storage layer change.
-                case (MaxDocSize > 0) andalso
-                    (iolist_size(Doc#doc.body) > MaxDocSize) of
-                true ->
-                    ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, skipping "
-                        "document with ID `~s`: too large body (~p bytes)",
-                        [SetName, GroupType, DDocId,
-                         DocId, iolist_size(Doc#doc.body)]),
-                    Entry = {Seq, #doc{id = DocId, deleted = true}, PartitionId};
-                false ->
-                    Entry = {Seq, Doc, PartitionId}
-                end;
-            false ->
-                % If the id isn't utf8 (memcached allows it), then log an error
-                % message and skip the doc. Send it through the queue anyway
-                % so we record the high seq num in case there are a bunch of
-                % these at the end, we want to keep track of the high seq and
-                % not reprocess again.
                 ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, skipping "
-                                     "document with non-utf8 id. Doc id bytes: ~w",
-                                     [SetName, GroupType, DDocId, ?b2l(DocId)]),
-                Entry = {Seq, #doc{id = DocId, deleted = true}, PartitionId}
-            end
+                    "document with ID `~s`: too large body (~p bytes)",
+                    [SetName, GroupType, DDocId,
+                     ?b2l(Doc#upr_doc.id), iolist_size(Doc#upr_doc.body)]),
+                Entry = Doc#upr_doc{deleted = true};
+            false ->
+                Entry = Doc
+            end;
+        false ->
+            % If the id isn't utf8 (memcached allows it), then log an error
+            % message and skip the doc. Send it through the queue anyway
+            % so we record the high seq num in case there are a bunch of
+            % these at the end, we want to keep track of the high seq and
+            % not reprocess again.
+            ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, skipping "
+                "document with non-utf8 id. Doc id bytes: ~w",
+                [SetName, GroupType, DDocId, ?b2l(Doc#upr_doc.id)]),
+            Entry = Doc#upr_doc{deleted = true}
         end
     end,
     case Entry of
@@ -530,10 +618,36 @@ do_maps(Group, MapQueue, WriteQueue) ->
     {ok, Queue, _QueueSize} ->
         ViewCount = length(Group#set_view_group.views),
         Items = lists:foldr(
-            fun({Seq, #doc{id = Id, deleted = true}, PartitionId}, Acc) ->
-                Item = {Seq, Id, PartitionId, []},
+            fun(#upr_doc{deleted = true} = UprDoc, Acc) ->
+                #upr_doc{
+                    id = Id,
+                    partition = PartId,
+                    seq = Seq
+                } = UprDoc,
+                Item = {Seq, Id, PartId, []},
                 [Item | Acc];
-            ({Seq, #doc{id = Id, deleted = false} = Doc, PartitionId}, Acc) ->
+            (#upr_doc{deleted = false} = UprDoc, Acc) ->
+                #upr_doc{
+                    id = Id,
+                    body = Body,
+                    partition = PartId,
+                    rev_seq = RevSeq,
+                    seq = Seq,
+                    cas = Cas,
+                    expiration = Expiration,
+                    flags = Flags,
+                    data_type = DataType
+                } = UprDoc,
+                Doc = #doc{
+                    id = Id,
+                    rev = {RevSeq, <<Cas:64, Expiration:32, Flags:32>>},
+                    body = Body,
+                    % XXX vmx 2014-02-26: Make sure the type is correct. I
+                    % guess UPR should provide us with the needed
+                    % information
+                    content_meta = DataType,
+                    deleted = false
+                },
                 try
                     {ok, Result} = couch_set_view_mapreduce:map(Doc),
                     {Result2, _} = lists:foldr(
@@ -549,13 +663,13 @@ do_maps(Group, MapQueue, WriteQueue) ->
                             {[KVs | AccRes], Pos - 1}
                         end,
                         {[], ViewCount}, Result),
-                    Item = {Seq, Id, PartitionId, Result2},
+                    Item = {Seq, Id, PartId, Result2},
                     [Item | Acc]
                 catch _:{error, Reason} ->
                     ErrorMsg = "Bucket `~s`, ~s group `~s`, error mapping document `~s`: ~s",
                     Args = [SetName, Type, DDocId, Id, couch_util:to_binary(Reason)],
                     ?LOG_MAPREDUCE_ERROR(ErrorMsg, Args),
-                    [{Seq, Id, PartitionId, []} | Acc]
+                    [{Seq, Id, PartId, []} | Acc]
                 end
             end,
             [], Queue),
@@ -1030,8 +1144,6 @@ spawn_updater_worker(WriterAcc, PartIdSeqs) ->
             CleanupStart = os:timestamp()
         end,
         {ok, NewGroup0, CleanupCount, NewStats, NewCompactFiles} = update_btrees(WriterAcc),
-        % NOTE vmx 2013-08-06: The following code works well with spatial view
-        %    as the `ViewBtrees2` will just be empty.
         case ?set_cbitmask(Group) of
         0 ->
             CleanupTime = 0.0;
@@ -1179,20 +1291,23 @@ maybe_fix_group(#set_view_group{index_header = Header} = Group) ->
     receive
     {new_passive_partitions, Parts} ->
         Bitmask = couch_set_view_util:build_bitmask(Parts),
-        Seqs2 = lists:foldl(
-            fun(PartId, Acc) ->
-                case couch_set_view_util:has_part_seq(PartId, Acc) of
+        {Seqs, PartVersions} = lists:foldl(
+            fun(PartId, {SeqAcc, PartVersionsAcc} = Acc) ->
+                case couch_set_view_util:has_part_seq(PartId, SeqAcc) of
                 true ->
                     Acc;
                 false ->
-                    ordsets:add_element({PartId, 0}, Acc)
+                    {ordsets:add_element({PartId, 0}, SeqAcc),
+                        ordsets:add_element({PartId, [{0, 0}]},
+                            PartVersionsAcc)}
                 end
             end,
-            ?set_seqs(Group), Parts),
+            {?set_seqs(Group), ?set_partition_versions(Group)}, Parts),
         Group#set_view_group{
             index_header = Header#set_view_index_header{
-                seqs = Seqs2,
-                pbitmask = ?set_pbitmask(Group) bor Bitmask
+                seqs = Seqs,
+                pbitmask = ?set_pbitmask(Group) bor Bitmask,
+                partition_versions = PartVersions
             }
         }
     after 0 ->
