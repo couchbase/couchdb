@@ -539,7 +539,7 @@ handle_failover_log(Socket, RequestId, PartId) ->
 handle_stats_body(Socket, BodyLength, RequestId, PartId) ->
     case gen_tcp:recv(Socket, BodyLength) of
     {ok, Stat} ->
-        ok = gen_server:call(?MODULE, {send_stat, Stat, Socket, RequestId, PartId});
+        gen_server:call(?MODULE, {send_stat, Stat, Socket, RequestId, PartId});
     {error, closed} ->
         {error, closed}
     end.

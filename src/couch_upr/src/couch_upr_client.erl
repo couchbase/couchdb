@@ -509,7 +509,7 @@ receive_snapshot_deletion(Socket, Timeout, PartId, KeyLength, BodyLength,
     end.
 
 -spec receive_stream_end(socket(), timeout(), size()) ->
-                            {ok, <<_:32>>} | {error, closed | inet:posix()}.
+                            <<_:32>> | {error, closed | inet:posix()}.
 receive_stream_end(Socket, Timeout, BodyLength) ->
     case socket_recv(Socket, BodyLength, Timeout) of
     {ok, Flag} ->
@@ -539,7 +539,7 @@ receive_failover_log(Socket, Timeout, Status, BodyLength) ->
     end.
 
 -spec receive_rollback_seq(socket(), timeout(), size()) ->
-                  {rollback, update_seq()} | {error, closed | inet:posix()}.
+                  {ok, update_seq()} | {error, closed | inet:posix()}.
 receive_rollback_seq(Socket, Timeout, BodyLength) ->
     case socket_recv(Socket, BodyLength, Timeout) of
     {ok, <<RollbackSeq:?UPR_SIZES_BY_SEQ>>} ->
