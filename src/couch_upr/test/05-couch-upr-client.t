@@ -24,7 +24,7 @@ num_docs() -> 1000.
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(38),
+    etap:plan(39),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -217,7 +217,23 @@ test() ->
 
     Throttled1 = try_until_unthrottled(Pid, StreamReq0_4, 25),
     etap:is(Throttled1, false, "Throttling disabled when drained buffered events queue"),
+    couch_upr_client:remove_stream(Pid, 0),
 
+    couch_upr_fake_server:pause_mutations(),
+    {StreamReq1_2, _} = couch_upr_client:add_stream(Pid, 1,
+        hd(InitialFailoverLog1), 0, 500),
+
+    ReqPid = spawn(fun() ->
+        couch_upr_client:get_stream_event(Pid, StreamReq1_2)
+        end),
+
+    EvResponse = couch_upr_client:get_stream_event(Pid, StreamReq1_2),
+    etap:is(EvResponse, {error, event_request_already_exists},
+        "Error message received when requested multiple times for same stream's event"),
+
+    exit(ReqPid, shutdown),
+    couch_upr_client:remove_stream(Pid, 1),
+    couch_upr_fake_server:continue_mutations(),
 
     % Test get_num_items
 

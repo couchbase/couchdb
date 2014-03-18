@@ -154,7 +154,8 @@ init([Port, SetName]) ->
                          {reply, any(), #state{}}.
 handle_call({add_stream, PartId, RequestId, StartSeq, EndSeq, Socket, FailoverLog}, _From, State) ->
     #state{
-       streams = Streams
+       streams = Streams,
+       pause_mutations = Pause
     } = State,
     case lists:keyfind(PartId, 1, State#state.streams) of
     false ->
@@ -165,7 +166,12 @@ handle_call({add_stream, PartId, RequestId, StartSeq, EndSeq, Socket, FailoverLo
         Num = length(Mutations),
         Streams2 =
             [{PartId, {RequestId, Mutations, Socket, StartSeq + Num}} | Streams],
-        self() ! send_mutations,
+        case Pause of
+        true ->
+            ok;
+        false ->
+            self() ! send_mutations
+        end,
         {reply, ok, State#state{streams = Streams2}};
     _ ->
         StreamExists = couch_upr_producer:encode_stream_request_error(

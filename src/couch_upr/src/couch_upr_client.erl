@@ -285,7 +285,12 @@ handle_call({get_stream_event, RequestId}, From, State) ->
         end,
         {reply, Event, State4};
     false ->
-        {noreply, add_stream_event_waiter(State, RequestId, From)};
+        case add_stream_event_waiter(State, RequestId, From) of
+        nil ->
+            {reply, {error, event_request_already_exists}, State};
+        State2 ->
+            {noreply, State2}
+        end;
     nil ->
         {reply, {error, vbucket_stream_not_found}, State}
     end;
@@ -647,7 +652,7 @@ add_request_queue(State, PartId, RequestId) ->
        stream_queues = StreamQueues
     } = State,
    ActiveStreams2 =  [{PartId, RequestId} | ActiveStreams],
-   StreamQueues2 = dict:store(RequestId, {[], 0, queue:new()}, StreamQueues),
+   StreamQueues2 = dict:store(RequestId, {nil, 0, queue:new()}, StreamQueues),
    State#state{
        active_streams = ActiveStreams2,
        stream_queues = StreamQueues2
@@ -660,12 +665,12 @@ enqueue_stream_event(State, RequestId, Event) ->
     #state{
        stream_queues = StreamQueues
     } = State,
-    {ok, {Waiters, Size, EvQueue}} = dict:find(RequestId, StreamQueues),
+    {ok, {Waiter, Size, EvQueue}} = dict:find(RequestId, StreamQueues),
     Size2 = Size + erts_debug:size(Event),
     State2 = State#state{
         stream_queues =
             dict:store(RequestId,
-                       {Waiters, Size2, queue:in(Event, EvQueue)},
+                       {Waiter, Size2, queue:in(Event, EvQueue)},
                        StreamQueues)
     },
     {State2, Size2}.
@@ -677,28 +682,31 @@ dequeue_stream_event(State, RequestId) ->
     #state{
        stream_queues = StreamQueues
     } = State,
-    {ok, {Waiters, Size, EvQueue}} = dict:find(RequestId, StreamQueues),
+    {ok, {Waiter, Size, EvQueue}} = dict:find(RequestId, StreamQueues),
     {{value, Event}, Rest} = queue:out(EvQueue),
     Size2 = Size - erts_debug:size(Event),
     State2 = State#state{
         stream_queues =
-            dict:store(RequestId, {Waiters, Size2, Rest}, StreamQueues)
+            dict:store(RequestId, {Waiter, Size2, Rest}, StreamQueues)
     },
     {State2, Event, Size2}.
 
 
--spec add_stream_event_waiter(#state{}, request_id(), term()) -> #state{}.
-add_stream_event_waiter(State, RequestId, Waiter) ->
+-spec add_stream_event_waiter(#state{}, request_id(), term()) -> #state{} | nil.
+add_stream_event_waiter(State, RequestId, NewWaiter) ->
     #state{
        stream_queues = StreamQueues
     } = State,
-    {ok, {Waiters, Size, EvQueue}} = dict:find(RequestId, StreamQueues),
-    Waiters2 = [Waiter | Waiters],
-    StreamQueues2 =
-    dict:store(RequestId, {Waiters2, Size, EvQueue}, StreamQueues),
-    State#state{
-       stream_queues = StreamQueues2
-    }.
+    {ok, {Waiter, Size, EvQueue}} = dict:find(RequestId, StreamQueues),
+    case Waiter of
+    nil ->
+        StreamQueues2 = dict:store(RequestId, {NewWaiter, Size, EvQueue}, StreamQueues),
+        State#state{
+           stream_queues = StreamQueues2
+        };
+    _ ->
+        nil
+    end.
 
 
 -spec stream_event_present(#state{}, request_id()) -> nil | true | false.
@@ -722,13 +730,8 @@ stream_event_waiters_present(State, RequestId) ->
     case dict:find(RequestId, StreamQueues) of
     error ->
         nil;
-    {ok, {Waiters, _, _}} ->
-        case length(Waiters) of
-        0 ->
-            false;
-        _ ->
-            true
-        end
+    {ok, {Waiter, _, _}} ->
+        Waiter =/= nil
     end.
 
 
@@ -737,9 +740,9 @@ remove_stream_event_waiter(State, RequestId) ->
     #state{
        stream_queues = StreamQueues
     } = State,
-    {ok, {[Waiter | Rest], Size, EvQueue}} = dict:find(RequestId, StreamQueues),
+    {ok, {Waiter, Size, EvQueue}} = dict:find(RequestId, StreamQueues),
     State2 = State#state{
-        stream_queues = dict:store(RequestId, {Rest, Size, EvQueue}, StreamQueues)
+        stream_queues = dict:store(RequestId, {nil, Size, EvQueue}, StreamQueues)
     },
     {State2, Waiter}.
 
