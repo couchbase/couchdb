@@ -647,7 +647,7 @@ add_request_queue(State, PartId, RequestId) ->
        stream_queues = StreamQueues
     } = State,
    ActiveStreams2 =  [{PartId, RequestId} | ActiveStreams],
-   StreamQueues2 = dict:store(RequestId, {[], 0, []}, StreamQueues),
+   StreamQueues2 = dict:store(RequestId, {[], 0, queue:new()}, StreamQueues),
    State#state{
        active_streams = ActiveStreams2,
        stream_queues = StreamQueues2
@@ -665,7 +665,7 @@ enqueue_stream_event(State, RequestId, Event) ->
     State2 = State#state{
         stream_queues =
             dict:store(RequestId,
-                       {Waiters, Size2, EvQueue ++ [Event]},
+                       {Waiters, Size2, queue:in(Event, EvQueue)},
                        StreamQueues)
     },
     {State2, Size2}.
@@ -677,7 +677,8 @@ dequeue_stream_event(State, RequestId) ->
     #state{
        stream_queues = StreamQueues
     } = State,
-    {ok, {Waiters, Size, [Event | Rest]}} = dict:find(RequestId, StreamQueues),
+    {ok, {Waiters, Size, EvQueue}} = dict:find(RequestId, StreamQueues),
+    {{value, Event}, Rest} = queue:out(EvQueue),
     Size2 = Size - erts_debug:size(Event),
     State2 = State#state{
         stream_queues =
@@ -708,13 +709,8 @@ stream_event_present(State, RequestId) ->
     case dict:find(RequestId, StreamQueues) of
     error ->
         nil;
-    {ok, {_, _, Events}} ->
-        case length(Events) of
-        0 ->
-            false;
-        _ ->
-            true
-        end
+    {ok, {_, _, EvQueue}} ->
+        queue:is_empty(EvQueue) =:= false
     end.
 
 
