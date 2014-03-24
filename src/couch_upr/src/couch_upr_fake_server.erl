@@ -200,13 +200,13 @@ handle_call({send_stat, Stat, Socket, RequestId, PartId}, _From, State) ->
     [<<"vbucket-seqno">>, _] ->
         case get_sequence_number(State#state.setname, PartId) of
         {ok, Seq} ->
-            SeqKey = <<"vb_", BinPartId/binary ,"_high_seqno">>,
+            SeqKey = <<"vb_", BinPartId/binary ,":high_seqno">>,
             SeqValue = list_to_binary(integer_to_list(Seq)),
             SeqStat = couch_upr_producer:encode_stat(
                 RequestId, SeqKey, SeqValue),
             ok = gen_tcp:send(Socket, SeqStat),
 
-            UuidKey = <<"vb_", BinPartId/binary ,"_vb_uuid">>,
+            UuidKey = <<"vb_", BinPartId/binary ,":vb_uuid">>,
             FailoverLog = get_failover_log(PartId, State),
             {UuidValue, _} = hd(FailoverLog),
             UuidStat = couch_upr_producer:encode_stat(
