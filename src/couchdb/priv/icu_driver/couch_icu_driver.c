@@ -107,10 +107,10 @@ return_control_result(void* pLocalResult, int localLen,
     return localLen;
 }
 
-static ErlDrvSSizeT
+static COUCH_SSIZET
 couch_drv_control(ErlDrvData drv_data, unsigned int command,
-        char *pBuf, ErlDrvSizeT bufLen,
-        char **rbuf, ErlDrvSizeT rlen)
+        char *pBuf, COUCH_SSIZET bufLen,
+        char **rbuf, COUCH_SSIZET rlen)
 {
 
     couch_drv_data* pData = (couch_drv_data*)drv_data;
