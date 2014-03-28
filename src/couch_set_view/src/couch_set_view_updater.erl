@@ -185,15 +185,32 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
             try
                 WriterAcc3 = do_writes(WriterAcc2),
                 receive
-                {new_partition_versions, PartVersions0} ->
+                {doc_loader_finished, {PartVersions0, RealMaxSeqs}} ->
+                    WriterAccStats = WriterAcc3#writer_acc.stats,
                     WriterAccGroup = WriterAcc3#writer_acc.group,
                     WriterAccHeader = WriterAccGroup#set_view_group.index_header,
                     PartVersions = lists:ukeymerge(1, PartVersions0,
                         WriterAccHeader#set_view_index_header.partition_versions),
+                    case WriterAcc3#writer_acc.initial_build of
+                    true ->
+                        % The doc loader might not load the mutations up to the
+                        % most recent one, but only to a lower one. Update the
+                        % group header and stats with the correct information.
+                        MaxSeqs = lists:ukeymerge(
+                            1, RealMaxSeqs, WriterAcc3#writer_acc.max_seqs),
+                        Stats = WriterAccStats#set_view_updater_stats{
+                            seqs = lists:sum([S || {_, S} <- MaxSeqs])
+                        };
+                    false ->
+                        MaxSeqs = WriterAccHeader#set_view_index_header.seqs,
+                        Stats = WriterAcc3#writer_acc.stats
+                    end,
                     FinalWriterAcc = WriterAcc3#writer_acc{
+                        stats = Stats,
                         group = WriterAccGroup#set_view_group{
                             index_header = WriterAccHeader#set_view_index_header{
-                                partition_versions = PartVersions
+                                partition_versions = PartVersions,
+                                seqs = MaxSeqs
                             }
                         }
                     }
@@ -246,10 +263,10 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
             ok
         end,
         try
-            PartVersions = load_changes(
+            {PartVersions, MaxSeqs} = load_changes(
                 Owner, Parent, Group, MapQueue, ActiveParts, PassiveParts,
                 WriterAcc#writer_acc.initial_build),
-            Parent ! {new_partition_versions, PartVersions}
+            Parent ! {doc_loader_finished, {PartVersions, MaxSeqs}}
         catch
         throw:purge ->
             exit(purge);
@@ -302,8 +319,8 @@ wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup) ->
         % Used by unit tests.
         DocLoader ! continue,
         wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup);
-    {new_partition_versions, PartVersions} ->
-        Writer ! {new_partition_versions, PartVersions},
+    {doc_loader_finished, {PartVersions, MaxSeqs}} ->
+        Writer ! {doc_loader_finished, {PartVersions, MaxSeqs}},
         wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup);
     {writer_finished, WriterAcc} ->
         Stats0 = WriterAcc#writer_acc.stats,
@@ -527,7 +544,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
               [GroupType, DDocId, SetName, FinalChangesCount3]),
     ?LOG_DEBUG("Updater for ~s set view group `~s`, set `~s`, max partition seqs found:~n~w",
                [GroupType, DDocId, SetName, MaxSeqs3]),
-    PartVersions3.
+    {PartVersions3, MaxSeqs3}.
 
 
 load_changes_from_passive_parts_in_mailbox(
@@ -792,14 +809,15 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
 
     {InsertKVCount, TmpFiles2} = Mod:write_kvs(Group, TmpFiles, ViewKVs),
 
+    Stats2 = Stats#set_view_updater_stats{
+        inserted_kvs = Stats#set_view_updater_stats.inserted_kvs + InsertKVCount,
+        inserted_ids = Stats#set_view_updater_stats.inserted_ids + length(DocIdViewIdKeys)
+    },
     case IsFinalBatch of
     false ->
         WriterAcc#writer_acc{
             max_seqs = MaxSeqs2,
-            stats = Stats#set_view_updater_stats{
-                inserted_kvs = Stats#set_view_updater_stats.inserted_kvs + InsertKVCount,
-                inserted_ids = Stats#set_view_updater_stats.inserted_ids + length(DocIdViewIdKeys)
-            }
+            stats = Stats2
         };
     true ->
         % For mapreduce view, sorting is performed by native btree builder
@@ -814,21 +832,11 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
         ?LOG_INFO("Updater for set view `~s`, ~s group `~s`, starting btree "
                   "build phase" , [SetName, Type, DDocId]),
         {Group2, BuildFd} = Mod:finish_build(Group, TmpFiles2, TmpDir),
-        Header = Group2#set_view_group.index_header,
-        NewHeader = Header#set_view_index_header{
-            seqs = MaxSeqs2
-        },
         WriterAcc#writer_acc{
             tmp_files = dict:store(build_file, BuildFd, TmpFiles2),
             max_seqs = MaxSeqs2,
-            stats = Stats#set_view_updater_stats{
-                inserted_kvs = Stats#set_view_updater_stats.inserted_kvs + InsertKVCount,
-                inserted_ids = Stats#set_view_updater_stats.inserted_ids + length(DocIdViewIdKeys),
-                seqs = lists:sum([S || {_, S} <- MaxSeqs2])
-            },
-            group = Group2#set_view_group{
-                index_header = NewHeader
-            }
+            stats = Stats2,
+            group = Group2
         }
     end.
 
