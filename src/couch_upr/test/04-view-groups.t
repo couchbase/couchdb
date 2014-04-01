@@ -54,7 +54,9 @@ test_partition_versions_update() ->
     etap:diag("Testing whether the view partition versions are updated or not"),
 
     setup_test(),
-    {ok, Pid} = couch_upr_client:start(test_set_name(), test_set_name()),
+    {auth, User, Passwd} = cb_auth_info:get(),
+    {ok, Pid} = couch_upr_client:start(
+            test_set_name(), test_set_name(), User, Passwd),
 
     {ok, InitialFailoverLog1} = couch_upr_client:get_failover_log(Pid, 1),
     {ok, InitialFailoverLog2} = couch_upr_client:get_failover_log(Pid, 2),

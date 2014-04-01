@@ -57,7 +57,9 @@ test() ->
         end
     end,
 
-    {ok, Pid} = couch_upr_client:start(test_set_name(), test_set_name()),
+    {auth, User, Passwd} = cb_auth_info:get(),
+    {ok, Pid} = couch_upr_client:start(
+        test_set_name(), test_set_name(), User, Passwd),
 
     % Get the latest partition version first
     {ok, InitialFailoverLog0} = couch_upr_client:get_failover_log(Pid, 0),

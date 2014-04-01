@@ -404,7 +404,9 @@ read(Socket) ->
         {sasl_auth, BodyLength, RequestId} ->
             handle_sasl_auth_body(Socket, BodyLength, RequestId);
         {stream_close, RequestId, PartId} ->
-            handle_stream_close_body(Socket, RequestId, PartId)
+            handle_stream_close_body(Socket, RequestId, PartId);
+        {select_bucket, BodyLength, RequestId} ->
+            handle_select_bucket_body(Socket, BodyLength, RequestId)
         end,
         read(Socket);
     {error, closed} ->
@@ -466,6 +468,12 @@ handle_stream_close_body(Socket, RequestId, PartId) ->
         RequestId, Status),
     ok = gen_tcp:send(Socket, Resp).
 
+handle_select_bucket_body(Socket, BodyLength, RequestId) ->
+    {ok, _} = gen_tcp:recv(Socket, BodyLength),
+    Status = ?UPR_STATUS_OK,
+    Resp = couch_upr_producer:encode_select_bucket_response(
+        RequestId, Status),
+    ok = gen_tcp:send(Socket, Resp).
 
 -spec send_ok_or_error(socket(), request_id(), partition_id(), update_seq(),
                        update_seq(), uuid(), update_seq(),

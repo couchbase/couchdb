@@ -14,7 +14,7 @@
 -behaviour(gen_server).
 
 % Public API
--export([start/2]).
+-export([start/4]).
 -export([add_stream/5, get_sequence_number/2, get_num_items/2,
     get_failover_log/2]).
 -export([get_stream_event/2, remove_stream/2, list_streams/1, set_buffer_size/2]).
@@ -57,10 +57,10 @@
 
 % Public API
 
--spec start(binary(), binary()) -> {ok, pid()} | ignore |
+-spec start(binary(), binary(), binary(), binary()) -> {ok, pid()} | ignore |
                                    {error, {already_started, pid()} | term()}.
-start(Name, Bucket) ->
-    gen_server:start_link(?MODULE, [Name, Bucket], []).
+start(Name, Bucket, AdmUser, AdmPasswd) ->
+    gen_server:start_link(?MODULE, [Name, Bucket, AdmUser, AdmPasswd], []).
 
 
 -spec add_stream(pid(), partition_id(), partition_version(), update_seq(), update_seq()) ->
@@ -156,7 +156,7 @@ enum_docs_since(Pid, PartId, [PartVersion|PartVersions], StartSeq, EndSeq,
 % gen_server callbacks
 
 -spec init([binary()]) -> {ok, #state{}} | {stop, sasl_auth_failed}.
-init([Name, Bucket]) ->
+init([Name, Bucket, AdmUser, AdmPasswd]) ->
     UprTimeout = list_to_integer(
         couch_config:get("upr", "connection_timeout")),
     UprPort = list_to_integer(couch_config:get("upr", "port")),
@@ -167,17 +167,22 @@ init([Name, Bucket]) ->
         timeout = UprTimeout,
         request_id = 0
     },
-    % Authentication is used to specify from which bucket the data should
-    % come from
-    case sasl_auth(Bucket, State) of
+
+    % Auth as admin and select bucket for the connection
+    case sasl_auth(AdmUser, AdmPasswd, State) of
     {ok, State2} ->
-        case open_connection(Name, State2) of
+        case select_bucket(Bucket, State2) of
         {ok, State3} ->
-            Parent = self(),
-            process_flag(trap_exit, true),
-            WorkerPid = spawn_link(
-                fun() -> receive_worker(Socket, UprTimeout, Parent, []) end),
-            {ok, State3#state{worker_pid = WorkerPid}};
+            case open_connection(Name, State3) of
+            {ok, State4} ->
+                Parent = self(),
+                process_flag(trap_exit, true),
+                WorkerPid = spawn_link(
+                    fun() -> receive_worker(Socket, UprTimeout, Parent, []) end),
+                {ok, State4#state{worker_pid = WorkerPid}};
+            {error, Reason} ->
+                {stop, Reason}
+            end;
         {error, Reason} ->
             {stop, Reason}
         end;
@@ -392,15 +397,15 @@ code_change(_OldVsn, State, _Extra) ->
 
 % Internal functions
 
--spec sasl_auth(binary(), #state{}) -> {ok, #state{}} |
+-spec sasl_auth(binary(), binary(), #state{}) -> {ok, #state{}} |
                             {error, sasl_auth_failed | closed | inet:posix()}.
-sasl_auth(Bucket, State) ->
+sasl_auth(User, Passwd, State) ->
     #state{
         socket = Socket,
         timeout = UprTimeout,
         request_id = RequestId
     } = State,
-    Authenticate = couch_upr_consumer:encode_sasl_auth(Bucket, RequestId),
+    Authenticate = couch_upr_consumer:encode_sasl_auth(User, Passwd, RequestId),
     case gen_tcp:send(Socket, Authenticate) of
     ok ->
         case socket_recv(Socket, ?UPR_HEADER_LEN, UprTimeout) of
@@ -419,6 +424,33 @@ sasl_auth(Bucket, State) ->
                 end;
             {error, _} = Error ->
                 Error
+            end;
+        {error, _} = Error ->
+            Error
+        end;
+    {error, _} = Error ->
+        Error
+    end.
+
+-spec select_bucket(binary(), #state{}) -> {ok, #state{}} | {error, term()}.
+select_bucket(Bucket, State) ->
+    #state{
+        socket = Socket,
+        timeout = UprTimeout,
+        request_id = RequestId
+    } = State,
+    SelectBucket = couch_upr_consumer:encode_select_bucket(Bucket, RequestId),
+    case gen_tcp:send(Socket, SelectBucket) of
+    ok ->
+        case socket_recv(Socket, ?UPR_HEADER_LEN, UprTimeout) of
+        {ok, Header} ->
+            {select_bucket, Status, RequestId, BodyLength} =
+                                    couch_upr_consumer:parse_header(Header),
+            case Status of
+            ?UPR_STATUS_OK ->
+                {ok, State#state{request_id = RequestId + 1}};
+            _ ->
+                parse_error_response(Socket, UprTimeout, BodyLength, Status)
             end;
         {error, _} = Error ->
             Error

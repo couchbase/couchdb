@@ -16,8 +16,9 @@
 
 -export([parse_header/1, parse_snapshot_mutation/4, parse_snapshot_deletion/2,
     parse_failover_log/1, parse_stat/4]).
--export([encode_sasl_auth/2, encode_open_connection/2, encode_stream_request/6,
-    encode_failover_log_request/2, encode_stat_request/3, encode_stream_close/2]).
+-export([encode_sasl_auth/3, encode_open_connection/2, encode_stream_request/6,
+    encode_failover_log_request/2, encode_stat_request/3, encode_stream_close/2,
+    encode_select_bucket/2]).
 
 -include_lib("couch_upr/include/couch_upr.hrl").
 -include_lib("couch_upr/include/couch_upr_typespecs.hrl").
@@ -58,7 +59,9 @@ parse_header(<<?UPR_MAGIC_RESPONSE,
     ?UPR_OPCODE_SASL_AUTH ->
         {sasl_auth, Status, RequestId, BodyLength};
     ?UPR_OPCODE_STREAM_CLOSE ->
-        {stream_close, Status, RequestId, BodyLength}
+        {stream_close, Status, RequestId, BodyLength};
+    ?UPR_OPCODE_SELECT_BUCKET ->
+        {select_bucket, Status, RequestId, BodyLength}
     end;
 parse_header(<<?UPR_MAGIC_REQUEST,
                Opcode,
@@ -148,11 +151,12 @@ parse_stat(Body, ?UPR_STATUS_OK, KeyLength, ValueLength) ->
     {ok, {Key, Value}}.
 
 
--spec encode_sasl_auth(binary(), request_id()) -> binary().
-encode_sasl_auth(Bucket, RequestId) ->
+-spec encode_sasl_auth(binary(), binary(), request_id()) -> binary().
+encode_sasl_auth(User, Passwd, RequestId) ->
     AuthType = <<"PLAIN">>,
     Body = <<AuthType/binary, $\0,
-             Bucket/binary, $\0, $\0>>,
+             User/binary, $\0,
+             Passwd/binary, $\0>>,
 
     KeyLength = byte_size(AuthType),
     BodyLength = byte_size(Body),
@@ -168,6 +172,34 @@ encode_sasl_auth(Bucket, RequestId) ->
                RequestId:?UPR_SIZES_OPAQUE,
                0:?UPR_SIZES_CAS>>,
     <<Header/binary, Body/binary>>.
+
+
+%UPR_SELECT_BUCKET command
+%Field        (offset) (value)
+%Magic        (0)    : 0x80
+%Opcode       (1)    : 0x50
+%Key length   (2,3)  : 0x0006
+%Extra length (4)    : 0x00
+%Data type    (5)    : 0x00
+%Vbucket      (6,7)  : 0x0000
+%Total body   (8-11) : 0x00000006
+%Opaque       (12-15): 0x00000001
+%CAS          (16-23): 0x0000000000000000
+%Key          (24-29): bucket
+
+encode_select_bucket(Bucket, RequestId) ->
+    KeyLength = byte_size(Bucket),
+    ExtraLength = 0,
+    Header = <<?UPR_MAGIC_REQUEST,
+               ?UPR_OPCODE_SELECT_BUCKET,
+               KeyLength:?UPR_SIZES_KEY_LENGTH,
+               ExtraLength,
+               0,
+               0:?UPR_SIZES_PARTITION,
+               KeyLength:?UPR_SIZES_BODY,
+               RequestId:?UPR_SIZES_OPAQUE,
+               0:?UPR_SIZES_CAS>>,
+    <<Header/binary, Bucket/binary>>.
 
 %UPR_OPEN command
 %Field        (offset) (value)

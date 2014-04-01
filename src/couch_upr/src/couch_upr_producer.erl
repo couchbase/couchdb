@@ -20,7 +20,8 @@
     encode_stream_request_ok/2, encode_stream_request_error/2,
     encode_stream_request_rollback/2, encode_stream_end/2,
     encode_failover_log/2, encode_stat/3, encode_stat_error/3,
-    encode_sasl_auth/1, encode_stream_close_response/2]).
+    encode_sasl_auth/1, encode_stream_close_response/2,
+    encode_select_bucket_response/2]).
 
 -include_lib("couch_upr/include/couch_upr.hrl").
 -include_lib("couch_upr/include/couch_upr_typespecs.hrl").
@@ -51,7 +52,9 @@ parse_header(<<?UPR_MAGIC_REQUEST,
     ?UPR_OPCODE_SASL_AUTH ->
         {sasl_auth, BodyLength, RequestId};
     ?UPR_OPCODE_STREAM_CLOSE ->
-        {stream_close, RequestId, PartId}
+        {stream_close, RequestId, PartId};
+    ?UPR_OPCODE_SELECT_BUCKET ->
+        {select_bucket, BodyLength, RequestId}
     end.
 
 
@@ -443,3 +446,30 @@ encode_stream_close_response(RequestId, Status) ->
       RequestId:?UPR_SIZES_OPAQUE,
       0:?UPR_SIZES_CAS,
       Message/binary>>.
+
+
+%UPR_SELECT_BUCKET response
+%Field        (offset) (value)
+%Magic        (0)    : 0x81
+%Opcode       (1)    : 0x53
+%Key length   (2,3)  : 0x0000
+%Extra length (4)    : 0x00
+%Data type    (5)    : 0x00
+%Status       (6,7)  : 0x10000000
+%Total body   (8-11) : 0x00000000
+%Opaque       (12-15): 0x00001000
+%CAS          (16-23): 0x0000000000000000
+
+-spec encode_select_bucket_response(request_id(), upr_status()) -> binary().
+encode_select_bucket_response(RequestId, Status) ->
+    ExtraLength = 0,
+    BodyLength = 0,
+    <<?UPR_MAGIC_RESPONSE,
+      ?UPR_OPCODE_SELECT_BUCKET,
+      0:?UPR_SIZES_KEY_LENGTH,
+      ExtraLength,
+      0,
+      Status:?UPR_SIZES_STATUS,
+      BodyLength:?UPR_SIZES_BODY,
+      RequestId:?UPR_SIZES_OPAQUE,
+      0:?UPR_SIZES_CAS>>.

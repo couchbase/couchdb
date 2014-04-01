@@ -407,7 +407,8 @@ do_init({_, SetName, _} = InitArgs) ->
             SetName/binary, " ", (Group#set_view_group.name)/binary,
             " (", (atom_to_binary(Category, latin1))/binary, "/",
             (atom_to_binary(Type, latin1))/binary, ")">>,
-        {ok, UprPid} = couch_upr_client:start(UprName, SetName),
+        {User, Passwd} = get_auth(),
+        {ok, UprPid} = couch_upr_client:start(UprName, SetName, User, Passwd),
         State = #state{
             init_args = InitArgs,
             replica_group = ReplicaPid,
@@ -3781,3 +3782,15 @@ get_seqs(UprPid, Partitions) ->
         {PartId, NumItems}
     end, Partitions),
     {ok, Seqs}.
+
+
+-spec get_auth() -> {binary(), binary()}.
+get_auth() ->
+    case cb_auth_info:get() of
+    {auth, User, Passwd} ->
+        {User, Passwd};
+    {error, server_not_ready} ->
+        ?LOG_ERROR("Retrying to obtain admin auth info from ns_server", []),
+        timer:sleep(1000),
+        get_auth()
+    end.
