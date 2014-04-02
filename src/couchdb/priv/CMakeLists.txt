@@ -26,5 +26,5 @@ TARGET_LINK_LIBRARIES(couch_ejson_compare ${COUCHBASE_UNRESOLVED} ${ICU_LIBRARIE
 INSTALL(TARGETS couch_icu_driver couch_ejson_compare
         DESTINATION ${COUCH_PRIV_LIB_PREFIX})
 
-INSTALL(FILES stat_descriptions.cfg
+INSTALL(FILES ${CMAKE_CURRENT_BINARY_DIR}/stat_descriptions.cfg
         DESTINATION ${COUCH_PRIV_PREFIX})
