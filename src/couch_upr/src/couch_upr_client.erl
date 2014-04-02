@@ -83,7 +83,7 @@ list_streams(Pid) ->
                                  {ok, update_seq()} | {error, not_my_vbucket}.
 get_sequence_number(Pid, PartId) ->
     case gen_server:call(Pid, {get_stats, <<"vbucket-seqno">>, PartId}) of
-    {ok, [Stats, _]} ->
+    {ok, [Stats | _]} ->
         {_, SeqBin} = Stats,
         {ok, list_to_integer(binary_to_list(SeqBin))};
     {error,  {?UPR_STATUS_NOT_MY_VBUCKET, _}} ->
