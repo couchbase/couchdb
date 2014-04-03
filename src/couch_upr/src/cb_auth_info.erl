@@ -12,10 +12,19 @@
 
 -module(cb_auth_info).
 
--export([get/0]).
+-export([get/0, trick_dialyzer/1]).
 
 % This is a fake cb_auth_info service (provided by ns_server in couchbase stack)
 
--spec get() -> {auth, binary(), binary()}.
 get() ->
-    {auth, <<"admin_user">>, <<"admin_passwd">>}.
+    % We can't just return `{auth, <<"admin_user">>, <<"admin_passwd">>}` as
+    % the dialyzer would complain that it never returns
+    % `{error, server_not_ready}`. Hence there's another function to trick the
+    % dialyzer. As this module is *only* used to run couchdb without the full
+    % stack, this is an acceptable trade-off.
+    trick_dialyzer(auth).
+
+trick_dialyzer(auth) ->
+    {auth, <<"admin_user">>, <<"admin_passwd">>};
+trick_dialyzer(error) ->
+    {error, server_not_ready}.
