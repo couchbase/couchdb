@@ -408,7 +408,14 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                                 "a snapshot marker for partition ~p",
                                 [SetName, GroupType, Category, DDocId,
                                     PartId]),
-                            {Items, false};
+                            case Items of
+                            % Ignore the snapshot marker that is at the
+                            % beginning of the stream
+                            [] ->
+                                {Items, true};
+                            _ ->
+                                {Items, false}
+                            end;
                         _ ->
                             Items2 = case SingleSnapshot of
                             true ->

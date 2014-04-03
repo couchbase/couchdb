@@ -164,13 +164,15 @@ handle_call({add_stream, PartId, RequestId, StartSeq, EndSeq, Socket, FailoverLo
         ok = gen_tcp:send(Socket, StreamOk),
         Mutations = create_mutations(State#state.setname, PartId, StartSeq, EndSeq),
         Num = length(Mutations),
-        Streams2 = [
-            {PartId, {RequestId, Mutations, Socket, StartSeq, StartSeq + Num}}
-            | Streams],
+        Streams2 =
+            [{PartId, {RequestId, Mutations, Socket, StartSeq + Num}} | Streams],
         case Pause of
         true ->
             ok;
         false ->
+            Marker = couch_upr_producer:encode_snapshot_marker(
+                PartId, RequestId, StartSeq, StartSeq + Num, ?UPR_SNAPSHOT_TYPE_DISK),
+            ok = gen_tcp:send(Socket, Marker),
             self() ! send_mutations
         end,
         {reply, ok, State#state{streams = Streams2}};
@@ -286,7 +288,7 @@ handle_info(send_mutations, State) ->
        pause_mutations = Pause
     } = State,
     Streams2 = lists:foldl(fun
-        ({VBucketId, {RequestId, [Mutation | Rest], Socket, LowSeq, HiSeq}}, Acc) ->
+        ({VBucketId, {RequestId, [Mutation | Rest], Socket, HiSeq}}, Acc) ->
             {Cas, Seq, RevSeq, Flags, Expiration, LockTime, Key, Value} = Mutation,
             Encoded = case Value of
             deleted ->
@@ -298,11 +300,8 @@ handle_info(send_mutations, State) ->
                 LockTime, Key, Value)
             end,
             ok = gen_tcp:send(Socket, Encoded),
-            [{VBucketId, {RequestId, Rest, Socket, LowSeq, HiSeq}} | Acc];
-        ({VBucketId, {RequestId, [], Socket, LowSeq, HiSeq}}, Acc) ->
-            Marker = couch_upr_producer:encode_snapshot_marker(
-                VBucketId, RequestId, LowSeq, HiSeq, ?UPR_SNAPSHOT_TYPE_DISK),
-            ok = gen_tcp:send(Socket, Marker),
+            [{VBucketId, {RequestId, Rest, Socket, HiSeq}} | Acc];
+        ({VBucketId, {RequestId, [], Socket, _HiSeq}}, Acc) ->
             StreamEnd = couch_upr_producer:encode_stream_end(VBucketId, RequestId),
             ok = gen_tcp:send(Socket, StreamEnd),
             Acc
