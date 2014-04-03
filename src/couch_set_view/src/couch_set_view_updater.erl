@@ -402,7 +402,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                 false ->
                     ChangesWrapper = fun(Item, {Items, SingleSnapshot}) ->
                         case Item of
-                        snapshot_marker ->
+                        {snapshot_marker, {_StartSeq, _EndSeq, _Type}} ->
                             ?LOG_INFO(
                                 "set view `~s`, ~s (~s) group `~s`: received "
                                 "a snapshot marker for partition ~p",

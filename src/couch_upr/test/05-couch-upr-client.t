@@ -50,7 +50,7 @@ test() ->
 
     TestFun = fun(Item, Acc) ->
         case Item of
-        snapshot_marker ->
+        {snapshot_marker, _} ->
             Acc;
         _ ->
             [Item|Acc]

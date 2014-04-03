@@ -15,7 +15,7 @@
 -module(couch_upr_producer).
 
 -export([parse_header/1]).
--export([encode_open_connection/1, encode_snapshot_marker/2,
+-export([encode_open_connection/1, encode_snapshot_marker/5,
     encode_snapshot_mutation/10, encode_snapshot_deletion/6,
     encode_stream_request_ok/2, encode_stream_request_error/2,
     encode_stream_request_rollback/2, encode_stream_end/2,
@@ -82,27 +82,37 @@ encode_open_connection(RequestId) ->
       0:?UPR_SIZES_CAS>>.
 
 %UPR_SNAPSHOT_MARKER command
-%Field        (offset) (value)
-%Magic        (0)    : 0x80
-%Opcode       (1)    : 0x56
-%Key length   (2,3)  : 0x0000
-%Extra length (4)    : 0x00
-%Data type    (5)    : 0x00
-%Vbucket      (6,7)  : 0x0000
-%Total body   (8-11) : 0x00000000
-%Opaque       (12-15): 0xdeadbeef
-%CAS          (16-23): 0x0000000000000000
--spec encode_snapshot_marker(partition_id(), request_id()) -> <<_:192>>.
-encode_snapshot_marker(PartId, RequestId) ->
-    <<?UPR_MAGIC_REQUEST,
-      ?UPR_OPCODE_SNAPSHOT_MARKER,
-      0:?UPR_SIZES_KEY_LENGTH,
-      0,
-      0,
-      PartId:?UPR_SIZES_PARTITION,
-      0:?UPR_SIZES_BODY,
-      RequestId:?UPR_SIZES_OPAQUE,
-      0:?UPR_SIZES_CAS>>.
+%Field           (offset) (value)
+%Magic           (0)    : 0x80
+%Opcode          (1)    : 0x56
+%Key length      (2,3)  : 0x0000
+%Extra length    (4)    : 0x14
+%Data type       (5)    : 0x00
+%Vbucket         (6,7)  : 0x0000
+%Total body      (8-11) : 0x00000014
+%Opaque          (12-15): 0xdeadbeef
+%CAS             (16-23): 0x0000000000000000
+%  Start Seqno   (24-31): 0x0000000000000000
+%  End Seqno     (32-39): 0x0000000000000008
+%  Snapshot Type (40-43): 0x00000001 (disk)
+-spec encode_snapshot_marker(partition_id(), request_id(), update_seq(),
+                             update_seq(), non_neg_integer()) -> binary().
+encode_snapshot_marker(PartId, RequestId, StartSeq, EndSeq, Type) ->
+    Body = <<StartSeq:?UPR_SIZES_BY_SEQ,
+             EndSeq:?UPR_SIZES_BY_SEQ,
+             Type:?UPR_SIZES_SNAPSHOT_TYPE>>,
+    BodyLength = byte_size(Body),
+    ExtraLength = BodyLength,
+    Header = <<?UPR_MAGIC_REQUEST,
+               ?UPR_OPCODE_SNAPSHOT_MARKER,
+               0:?UPR_SIZES_KEY_LENGTH,
+               ExtraLength,
+               0,
+               PartId:?UPR_SIZES_PARTITION,
+               BodyLength:?UPR_SIZES_BODY,
+               RequestId:?UPR_SIZES_OPAQUE,
+               0:?UPR_SIZES_CAS>>,
+    <<Header/binary, Body/binary>>.
 
 %UPR_MUTATION command
 %Field        (offset) (value)

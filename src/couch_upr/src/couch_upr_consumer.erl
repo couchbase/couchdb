@@ -14,8 +14,8 @@
 % by the indexer.
 -module(couch_upr_consumer).
 
--export([parse_header/1, parse_snapshot_mutation/4, parse_snapshot_deletion/2,
-    parse_failover_log/1, parse_stat/4]).
+-export([parse_header/1, parse_snapshot_marker/1, parse_snapshot_mutation/4,
+    parse_snapshot_deletion/2, parse_failover_log/1, parse_stat/4]).
 -export([encode_sasl_auth/3, encode_open_connection/2, encode_stream_request/6,
     encode_failover_log_request/2, encode_stat_request/3, encode_stream_close/2,
     encode_select_bucket/2]).
@@ -30,7 +30,6 @@
                           {atom(), upr_status(), request_id(), size()} |
                           {atom(), upr_status(), request_id(), size(),
                            size()} |
-                          {atom(), partition_id(), request_id()} |
                           {atom(), partition_id(), request_id(), size()} |
                           {atom(), partition_id(), request_id(), size(),
                            size()} |
@@ -76,7 +75,7 @@ parse_header(<<?UPR_MAGIC_REQUEST,
     ?UPR_OPCODE_STREAM_END ->
         {stream_end, PartId, RequestId, BodyLength};
     ?UPR_OPCODE_SNAPSHOT_MARKER ->
-        {snapshot_marker, PartId, RequestId};
+        {snapshot_marker, PartId, RequestId, BodyLength};
     ?UPR_OPCODE_MUTATION ->
         {snapshot_mutation, PartId, RequestId, KeyLength, BodyLength,
             ExtraLength, Cas};
@@ -85,6 +84,16 @@ parse_header(<<?UPR_MAGIC_REQUEST,
     ?UPR_OPCODE_EXPIRATION ->
         {snapshot_expiration, PartId, RequestId, KeyLength, BodyLength, Cas}
     end.
+
+-spec parse_snapshot_marker(<<_:160>>) ->
+                                   {snapshot_marker, update_seq(),
+                                    update_seq(), non_neg_integer()}.
+parse_snapshot_marker(Body) ->
+    <<StartSeq:?UPR_SIZES_BY_SEQ,
+      EndSeq:?UPR_SIZES_BY_SEQ,
+      Type:?UPR_SIZES_SNAPSHOT_TYPE>> = Body,
+    {snapshot_marker, StartSeq, EndSeq, Type}.
+
 
 -spec parse_snapshot_mutation(size(), binary(), size(), size()) ->
                                      {snapshot_mutation, #mutation{}}.

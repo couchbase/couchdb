@@ -498,6 +498,20 @@ open_connection(Name, State) ->
     end.
 
 
+-spec receive_snapshot_marker(socket(), timeout(),  size()) ->
+                                     {ok, {update_seq(), update_seq(),
+                                      non_neg_integer()}} |
+                                     {error, closed}.
+receive_snapshot_marker(Socket, Timeout, BodyLength) ->
+    case socket_recv(Socket, BodyLength, Timeout) of
+    {ok, Body} ->
+         {snapshot_marker, StartSeq, EndSeq, Type} =
+             couch_upr_consumer:parse_snapshot_marker(Body),
+         {ok, {StartSeq, EndSeq, Type}};
+    {error, _} = Error ->
+        Error
+    end.
+
 -spec receive_snapshot_mutation(socket(), timeout(), partition_id(), size(),
                                 size(), size(), uint64()) ->
                                        #upr_doc{} | {error, closed}.
@@ -620,15 +634,15 @@ receive_stat(Socket, Timeout, Status, BodyLength, KeyLength) ->
                      mutations_fold_acc()) -> {ok, mutations_fold_acc()} |
                                               {error, term()}.
 receive_events(Pid, RequestId, CallbackFn, InAcc) ->
-    {Optype, Doc} = get_stream_event(Pid, RequestId),
+    {Optype, Data} = get_stream_event(Pid, RequestId),
     case Optype of
     stream_end ->
         InAcc;
     snapshot_marker ->
-        InAcc2 = CallbackFn(snapshot_marker, InAcc),
+        InAcc2 = CallbackFn({snapshot_marker, Data}, InAcc),
         receive_events(Pid, RequestId, CallbackFn, InAcc2);
     _ ->
-        InAcc2 = CallbackFn(Doc, InAcc),
+        InAcc2 = CallbackFn(Data, InAcc),
         receive_events(Pid, RequestId, CallbackFn, InAcc2)
     end.
 
@@ -902,8 +916,11 @@ receive_worker(Socket, Timeout, Parent, MsgAcc0) ->
                     {done, {stream_response, RequestId, Error}}
                 end
             end;
-        {snapshot_marker, PartId, RequestId} ->
-            {done, {stream_event, RequestId, {snapshot_marker, PartId}}};
+        {snapshot_marker, _PartId, RequestId, BodyLength} ->
+            {ok, SnapshotMarker} = receive_snapshot_marker(
+                Socket, Timeout, BodyLength),
+            {done, {stream_event, RequestId,
+                {snapshot_marker, SnapshotMarker}}};
         {snapshot_mutation, PartId, RequestId, KeyLength, BodyLength,
                 ExtraLength, Cas} ->
             Mutation = receive_snapshot_mutation(

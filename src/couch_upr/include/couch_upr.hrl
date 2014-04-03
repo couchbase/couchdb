@@ -39,6 +39,8 @@
 -define(UPR_STATUS_NOT_MY_VBUCKET, 16#07).
 -define(UPR_STATUS_ERANGE, 16#22).
 -define(UPR_STATUS_SASL_AUTH_FAILED, 16#20).
+-define(UPR_SNAPSHOT_TYPE_MEMORY, 16#0).
+-define(UPR_SNAPSHOT_TYPE_DISK, 16#1).
 % The sizes are in bits
 -define(UPR_SIZES_KEY_LENGTH, 16).
 -define(UPR_SIZES_PARTITION, 16).
@@ -58,6 +60,7 @@
 -define(UPR_SIZES_SEQNO, 32).
 -define(UPR_SIZES_METADATA_LENGTH, 16).
 -define(UPR_SIZES_NRU_LENGTH, 8).
+-define(UPR_SIZES_SNAPSHOT_TYPE, 32).
 
 % NOTE vmx 2014-01-16: In ep-engine the maximum size is currently 25
 -define(UPR_MAX_FAILOVER_LOG_SIZE, 25).
