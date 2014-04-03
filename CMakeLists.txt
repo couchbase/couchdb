@@ -54,6 +54,7 @@ ADD_CUSTOM_COMMAND(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/couchdb.plt
                    -pa src/couch_index_merger
                    -pa src/couch_view_parser
                    -pa src/mapreduce
+                   -pa src/couch_upr
                    --apps
                         compiler
                         crypto
@@ -89,6 +90,7 @@ ADD_CUSTOM_TARGET(dialyzer
                    -pa src/mapreduce
                    -pa src/lhttpc
                    -pa src/snappy
+                   -pa src/couch_upr
                    -r
                         src/couchdb
                         src/couch_set_view
@@ -97,4 +99,5 @@ ADD_CUSTOM_TARGET(dialyzer
                         src/snappy
                         src/lhttpc
                         src/mapreduce
+                        src/couch_upr
                   DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/couchdb.plt)
