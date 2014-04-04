@@ -65,10 +65,10 @@ start(Name, Bucket, AdmUser, AdmPasswd) ->
     gen_server:start_link(?MODULE, [Name, Bucket, AdmUser, AdmPasswd], []).
 
 
--spec add_stream(pid(), partition_id(), partition_version(), update_seq(), update_seq()) ->
-                                                       {request_id(), term()}.
-add_stream(Pid, PartId, PartVersion, StartSeq, EndSeq) ->
-    gen_server:call(Pid, {add_stream, PartId, PartVersion, StartSeq, EndSeq}).
+-spec add_stream(pid(), partition_id(), uuid(), update_seq(),
+    update_seq()) -> {request_id(), term()}.
+add_stream(Pid, PartId, PartUuid, StartSeq, EndSeq) ->
+    gen_server:call(Pid, {add_stream, PartId, PartUuid, StartSeq, EndSeq}).
 
 
 -spec remove_stream(pid(), partition_id()) ->
@@ -143,9 +143,11 @@ set_buffer_size(Pid, Size) ->
 enum_docs_since(_, _, [], _, _, _, _) ->
     % No matching partition version found. Recreate the index from scratch
     {rollback, 0};
-enum_docs_since(Pid, PartId, [PartVersion|PartVersions], StartSeq, EndSeq,
-        CallbackFn, InAcc) ->
-    {RequestId, Resp} =  add_stream(Pid, PartId, PartVersion, StartSeq, EndSeq),
+enum_docs_since(Pid, PartId, PartVersions, StartSeq, EndSeq, CallbackFn,
+        InAcc) ->
+    [PartVersion | PartVersionsRest] = PartVersions,
+    {PartUuid, _} = PartVersion,
+    {RequestId, Resp} =  add_stream(Pid, PartId, PartUuid, StartSeq, EndSeq),
     case Resp of
     {failoverlog, FailoverLog} ->
         case length(FailoverLog) > ?UPR_MAX_FAILOVER_LOG_SIZE of
@@ -156,7 +158,13 @@ enum_docs_since(Pid, PartId, [PartVersion|PartVersions], StartSeq, EndSeq,
             {ok, Acc2, FailoverLog}
         end;
     {error, vbucket_stream_not_found} ->
-        enum_docs_since(Pid, PartId, PartVersions, StartSeq, EndSeq, CallbackFn, InAcc);
+        enum_docs_since(Pid, PartId, PartVersionsRest, StartSeq, EndSeq,
+            CallbackFn, InAcc);
+    {error, vbucket_stream_tmp_fail} ->
+        ?LOG_INFO("upr client (~p): Temporary failure on stream request "
+            "on partition ~p. Retrying...", [Pid, PartId]),
+        enum_docs_since(Pid, PartId, PartVersions, StartSeq, EndSeq,
+            CallbackFn, InAcc);
     _ ->
         Resp
     end.
@@ -201,13 +209,18 @@ init([Name, Bucket, AdmUser, AdmPasswd]) ->
 
 
 % Add caller to the request queue and wait for gen_server to reply on response arrival
-handle_call({add_stream, PartId, PartVersion, StartSeq, EndSeq}, From, State) ->
+handle_call({add_stream, PartId, PartUuid, StartSeq, EndSeq}, From, State) ->
     #state{
        socket = Socket,
        request_id = RequestId
     } = State,
+    % TODO vmx 2014-04-04: And proper retry if the last request didn't return
+    % the full expected result
+    SnapshotStart = StartSeq,
+    SnapshotEnd = StartSeq,
     StreamRequest = couch_upr_consumer:encode_stream_request(
-        PartId, RequestId, 0, StartSeq, EndSeq, PartVersion),
+        PartId, RequestId, 0, StartSeq, EndSeq, PartUuid, SnapshotStart,
+        SnapshotEnd),
     case gen_tcp:send(Socket, StreamRequest) of
     ok ->
         State2 = next_request_id(State),
@@ -835,6 +848,8 @@ parse_error_response(Socket, Timeout, BodyLength, Status) ->
             {error, vbucket_stream_already_exists};
         ?UPR_STATUS_NOT_MY_VBUCKET ->
             {error, server_not_my_vbucket};
+        ?UPR_STATUS_TMP_FAIL ->
+            {error, vbucket_stream_tmp_fail};
         _ ->
             {error, {status, Status}}
         end;

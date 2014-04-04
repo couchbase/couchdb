@@ -16,7 +16,7 @@
 
 -export([parse_header/1, parse_snapshot_marker/1, parse_snapshot_mutation/4,
     parse_snapshot_deletion/2, parse_failover_log/1, parse_stat/4]).
--export([encode_sasl_auth/3, encode_open_connection/2, encode_stream_request/6,
+-export([encode_sasl_auth/3, encode_open_connection/2, encode_stream_request/8,
     encode_failover_log_request/2, encode_stat_request/3, encode_stream_close/2,
     encode_select_bucket/2]).
 
@@ -143,7 +143,7 @@ parse_failover_log(Body) ->
     parse_failover_log(Body, []).
 parse_failover_log(<<>>, Acc) ->
     {ok, lists:reverse(Acc)};
-parse_failover_log(<<PartUuid:?UPR_SIZES_PARTITION_UUID/integer,
+parse_failover_log(<<PartUuid:?UPR_SIZES_PARTITION_UUID,
                      PartSeq:?UPR_SIZES_BY_SEQ,
                      Rest/binary>>,
                    Acc) ->
@@ -246,33 +246,35 @@ encode_open_connection(Name, RequestId) ->
     <<Header/binary, Body/binary>>.
 
 %UPR_STREAM_REQ command
-%Field        (offset) (value)
-%Magic        (0)    : 0x80
-%Opcode       (1)    : 0x53
-%Key length   (2,3)  : 0x0000
-%Extra length (4)    : 0x28
-%Data type    (5)    : 0x00
-%Vbucket      (6,7)  : 0x0000
-%Total body   (8-11) : 0x00000028
-%Opaque       (12-15): 0x00001000
-%CAS          (16-23): 0x0000000000000000
-%  flags      (24-27): 0x00000000
-%  reserved   (28-31): 0x00000000
-%  start seqno(32-39): 0x0000000000ffeedd
-%  end seqno  (40-47): 0xffffffffffffffff
-%  vb UUID    (48-55): 0x00000000feeddeca
-%  high seqno (56-63): 0x0000000000000000
+%Field                  (offset) (value)
+%Magic                  (0)    : 0x80
+%Opcode                 (1)    : 0x53
+%Key length             (2,3)  : 0x0000
+%Extra length           (4)    : 0x30
+%Data type              (5)    : 0x00
+%Vbucket                (6,7)  : 0x0000
+%Total body             (8-11) : 0x00000030
+%Opaque                 (12-15): 0x00001000
+%CAS                    (16-23): 0x0000000000000000
+%  flags                (24-27): 0x00000000
+%  reserved             (28-31): 0x00000000
+%  start seqno          (32-39): 0x0000000000ffeedd
+%  end seqno            (40-47): 0xffffffffffffffff
+%  vb UUID              (48-55): 0x00000000feeddeca
+%  snapshot start seqno (56-63): 0x0000000000000000
+%  snapshot end seqno   (64-71): 0x0000000000ffeeff
 -spec encode_stream_request(partition_id(), request_id(), non_neg_integer(),
                             update_seq(), update_seq(),
-                            {uuid(), update_seq()}) -> binary().
-encode_stream_request(PartId, RequestId, Flags, StartSeq, EndSeq,
-        {PartUuid, PartHighSeq}) ->
+                            uuid(), update_seq(), update_seq()) -> binary().
+encode_stream_request(PartId, RequestId, Flags, StartSeq, EndSeq, PartUuid,
+        SnapshotStart, SnapshotEnd) ->
     Body = <<Flags:?UPR_SIZES_FLAGS,
              0:?UPR_SIZES_RESERVED,
              StartSeq:?UPR_SIZES_BY_SEQ,
              EndSeq:?UPR_SIZES_BY_SEQ,
-             PartUuid:?UPR_SIZES_PARTITION_UUID/integer,
-             PartHighSeq:?UPR_SIZES_BY_SEQ>>,
+             PartUuid:?UPR_SIZES_PARTITION_UUID,
+             SnapshotStart:?UPR_SIZES_BY_SEQ,
+             SnapshotEnd:?UPR_SIZES_BY_SEQ>>,
 
     BodyLength = byte_size(Body),
     ExtraLength = BodyLength,

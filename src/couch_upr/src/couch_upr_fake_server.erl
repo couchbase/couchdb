@@ -433,23 +433,31 @@ handle_open_connection_body(Socket, BodyLength, RequestId) ->
                                  partition_id()) -> ok | {error, closed}.
 handle_stream_request_body(Socket, BodyLength, RequestId, PartId) ->
     case gen_tcp:recv(Socket, BodyLength) of
+    % TODO vmx 2014-04-04: Make a rollback due to wrong SnapshotStart/End
     {ok, <<_Flags:?UPR_SIZES_FLAGS,
            _Reserved:?UPR_SIZES_RESERVED,
            StartSeq:?UPR_SIZES_BY_SEQ,
            EndSeq:?UPR_SIZES_BY_SEQ,
-           PartUuid:?UPR_SIZES_PARTITION_UUID/integer,
-           PartHighSeq:?UPR_SIZES_BY_SEQ>>} ->
+           PartUuid:?UPR_SIZES_PARTITION_UUID,
+           _SnapshotStart:?UPR_SIZES_BY_SEQ,
+           _SnapshotEnd:?UPR_SIZES_BY_SEQ>>} ->
         FailoverLog = get_failover_log(PartId),
         case StartSeq > EndSeq of
         true ->
             send_error(Socket, RequestId, ?UPR_STATUS_ERANGE);
         false ->
-            case lists:member({PartUuid, PartHighSeq}, FailoverLog) orelse
-                 StartSeq =:= 0 of
+            Found = case lists:keyfind(PartUuid, 1, FailoverLog) of
+            {PartUuid, PartVersionSeq} ->
+                true;
+            false ->
+                PartVersionSeq = 0,
+                false
+            end,
+            case Found orelse StartSeq =:= 0 of
             true ->
                 send_ok_or_error(
                     Socket, RequestId, PartId, StartSeq, EndSeq, PartUuid,
-                    PartHighSeq, FailoverLog);
+                    PartVersionSeq, FailoverLog);
             false ->
                 send_error(Socket, RequestId, ?UPR_STATUS_KEY_NOT_FOUND)
             end
@@ -479,8 +487,8 @@ handle_select_bucket_body(Socket, BodyLength, RequestId) ->
 -spec send_ok_or_error(socket(), request_id(), partition_id(), update_seq(),
                        update_seq(), uuid(), update_seq(),
                        partition_version()) -> ok.
-send_ok_or_error(Socket, RequestId, PartId, StartSeq, EndSeq,
-        PartVersionUuid, PartVersionSeq, FailoverLog) ->
+send_ok_or_error(Socket, RequestId, PartId, StartSeq, EndSeq, PartUuid,
+        PartVersionSeq, FailoverLog) ->
     SetName = gen_server:call(?MODULE, get_set_name),
     {ok, HighSeq} = get_sequence_number(SetName, PartId),
 
@@ -494,7 +502,7 @@ send_ok_or_error(Socket, RequestId, PartId, StartSeq, EndSeq,
         % requested `StartSeq` is lower than the sequence number of the
         % failover log entry that comes next (if there is any).
         DiffFailoverLog = lists:takewhile(fun({LogPartUuid, _}) ->
-            LogPartUuid =/= PartVersionUuid
+            LogPartUuid =/= PartUuid
         end, FailoverLog),
 
         case DiffFailoverLog of

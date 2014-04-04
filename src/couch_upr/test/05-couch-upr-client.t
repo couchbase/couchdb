@@ -133,13 +133,16 @@ test() ->
 
     % Test multiple streams in parallel
     {StreamReq0, {failoverlog, InitialFailoverLog0}} =
-        couch_upr_client:add_stream(Pid, 0, hd(InitialFailoverLog0), 10, 100),
+        couch_upr_client:add_stream(
+            Pid, 0, first_uuid(InitialFailoverLog0), 10, 100),
 
     {StreamReq1, {failoverlog, InitialFailoverLog1}} =
-        couch_upr_client:add_stream(Pid, 1, hd(InitialFailoverLog1), 100, 200),
+        couch_upr_client:add_stream(
+            Pid, 1, first_uuid(InitialFailoverLog1), 100, 200),
 
     {StreamReq2, {failoverlog, InitialFailoverLog2}} =
-        couch_upr_client:add_stream(Pid, 2, hd(InitialFailoverLog2), 0, 10),
+        couch_upr_client:add_stream(
+            Pid, 2, first_uuid(InitialFailoverLog2), 0, 10),
 
     [MutationsPart0, MutationsPart1, MutationsPart2] = read_mutations(
                     Pid, [StreamReq0, StreamReq1, StreamReq2], [[], [], []]),
@@ -164,10 +167,12 @@ test() ->
 
     couch_upr_fake_server:pause_mutations(),
     {StreamReq0_2, {failoverlog, InitialFailoverLog0}} =
-        couch_upr_client:add_stream(Pid, 0, hd(InitialFailoverLog0), 1, 100),
+        couch_upr_client:add_stream(
+            Pid, 0, first_uuid(InitialFailoverLog0), 1, 100),
 
     {_, StreamResp0_3} =
-        couch_upr_client:add_stream(Pid, 0, hd(InitialFailoverLog0), 10, 100),
+        couch_upr_client:add_stream(
+            Pid, 0, first_uuid(InitialFailoverLog0), 10, 100),
     etap:is(StreamResp0_3, {error,vbucket_stream_already_exists},
         "Stream for vbucket 0 already exists"),
     couch_upr_fake_server:continue_mutations(),
@@ -176,9 +181,11 @@ test() ->
     read_mutations(Pid, [StreamReq0_2], [[]]),
 
     couch_upr_fake_server:pause_mutations(),
-    couch_upr_client:add_stream(Pid, 1, hd(InitialFailoverLog1), 10, 300),
+    couch_upr_client:add_stream(
+        Pid, 1, first_uuid(InitialFailoverLog1), 10, 300),
 
-    couch_upr_client:add_stream(Pid, 2, hd(InitialFailoverLog2), 100, 200),
+    couch_upr_client:add_stream(
+        Pid, 2, first_uuid(InitialFailoverLog2), 100, 200),
 
     StreamList1 = couch_upr_client:list_streams(Pid),
     etap:is(StreamList1, [1,2], "Stream list contains parititon 1,2"),
@@ -211,8 +218,8 @@ test() ->
     couch_upr_fake_server:pause_mutations(),
     couch_upr_client:set_buffer_size(Pid, 50),
 
-    {StreamReq0_4, _} = couch_upr_client:add_stream(Pid, 0,
-        hd(InitialFailoverLog0), 0, 500),
+    {StreamReq0_4, _} = couch_upr_client:add_stream(
+        Pid, 0, first_uuid(InitialFailoverLog0), 0, 500),
 
     Throttled0 = try_until_throttled(Pid, 100),
     etap:is(Throttled0, true, "Throttled stream events queue when buffer became full"),
@@ -222,8 +229,8 @@ test() ->
     couch_upr_client:remove_stream(Pid, 0),
 
     couch_upr_fake_server:pause_mutations(),
-    {StreamReq1_2, _} = couch_upr_client:add_stream(Pid, 1,
-        hd(InitialFailoverLog1), 0, 500),
+    {StreamReq1_2, _} = couch_upr_client:add_stream(
+        Pid, 1, first_uuid(InitialFailoverLog1), 0, 500),
 
     ReqPid = spawn(fun() ->
         couch_upr_client:get_stream_event(Pid, StreamReq1_2)
@@ -410,3 +417,7 @@ delete_docs(StartId, NumDocs) ->
     ok = lists:foreach(fun({_, Db}) ->
         ok = couch_db:close(Db)
     end, dict:to_list(Dbs)).
+
+
+first_uuid(FailoverLog) ->
+    element(1, hd(FailoverLog)).

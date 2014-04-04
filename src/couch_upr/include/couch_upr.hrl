@@ -39,6 +39,7 @@
 -define(UPR_STATUS_NOT_MY_VBUCKET, 16#07).
 -define(UPR_STATUS_ERANGE, 16#22).
 -define(UPR_STATUS_SASL_AUTH_FAILED, 16#20).
+-define(UPR_STATUS_TMP_FAIL, 16#86).
 -define(UPR_SNAPSHOT_TYPE_MEMORY, 16#0).
 -define(UPR_SNAPSHOT_TYPE_DISK, 16#1).
 % The sizes are in bits
