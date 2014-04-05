@@ -126,7 +126,7 @@ set_buffer_size(Pid, Size) ->
 -spec enum_docs_since(pid(), partition_id(), partition_version(), update_seq(),
                       update_seq(), mutations_fold_fun(),
                       mutations_fold_acc()) ->
-                             {error, wrong_partition_version |
+                             {error, vbucket_stream_not_found |
                               wrong_start_sequence_number |
                               too_large_failover_log } |
                              {rollback, update_seq()} |
@@ -146,7 +146,7 @@ enum_docs_since(Pid, PartId, [PartVersion|PartVersions], StartSeq, EndSeq,
             Acc2 = receive_events(Pid, RequestId, CallbackFn, InAcc),
             {ok, Acc2, FailoverLog}
         end;
-    {error, wrong_partition_version} ->
+    {error, vbucket_stream_not_found} ->
         enum_docs_since(Pid, PartId, PartVersions, StartSeq, EndSeq, CallbackFn, InAcc);
     _ ->
         Resp
@@ -798,13 +798,13 @@ parse_error_response(Socket, Timeout, BodyLength, Status) ->
     {ok, _} ->
         case Status of
         ?UPR_STATUS_KEY_NOT_FOUND ->
-            {error, wrong_partition_version};
+            {error, vbucket_stream_not_found};
         ?UPR_STATUS_ERANGE ->
             {error, wrong_start_sequence_number};
         ?UPR_STATUS_KEY_EEXISTS ->
             {error, vbucket_stream_already_exists};
         ?UPR_STATUS_NOT_MY_VBUCKET ->
-            {error, vbucket_stream_not_found};
+            {error, server_not_my_vbucket};
         _ ->
             {error, {status, Status}}
         end;
