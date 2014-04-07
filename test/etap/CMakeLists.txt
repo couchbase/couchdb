@@ -3,7 +3,7 @@ LIST(SORT TEST_FILES)
 
 FOREACH (it ${TEST_FILES})
    GET_FILENAME_COMPONENT(testname ${it} NAME_WE)
-   ADD_TEST(couchdb-etap-${testname} ${PYTHON_EXECUTABLE} ${COUCHDB_RUNTEST} -c ${COUCHSTORE_BIN_PATH} -p ${COUCHDB_BIN_PATH} -m ${COUCHDB_BIN_PATH}/src/couch_set_view,${COUCHDB_BIN_PATH}/src/couch_set_view/test -t ${it})
+   ADD_TEST(couchdb-etap-${testname} ${PYTHON_EXECUTABLE} ${COUCHDB_RUNTEST} -c ${COUCHSTORE_BIN_PATH} -p ${COUCHDB_BIN_PATH} -s ${CouchDB_SOURCE_DIR} -t ${it})
 ENDFOREACH (it)
 
 CONFIGURE_FILE(${CMAKE_CURRENT_SOURCE_DIR}/test_util.erl.in
