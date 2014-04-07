@@ -8,7 +8,7 @@ CONFIGURE_FILE(${CMAKE_CURRENT_SOURCE_DIR}/src/couch_set_view.app.src
                ${CMAKE_CURRENT_BINARY_DIR}/ebin/couch_set_view.app)
 
 
-ERL_BUILD("couch_set_view" ${SRC})
+ERL_BUILD_OTP("couch_set_view" ${SRC})
 SET(COUCH_SET_VIEW_PREFIX ${CMAKE_ERL_LIB_INSTALL_PREFIX}/couch_set_view-1.0.0)
 
 SET(COUCH_SET_VIEW_INCLUDE_FILES include/couch_set_view.hrl
