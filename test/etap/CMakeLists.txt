@@ -14,4 +14,4 @@ CONFIGURE_FILE(${CMAKE_CURRENT_SOURCE_DIR}/run.tpl
                ${CMAKE_CURRENT_BINARY_DIR}/run)
 
 FILE(GLOB ETAP_SRC *.erl)
-ERL_BUILD("etap_test" ${ETAP_SRC})
+ERL_BUILD("etap_test" ${ETAP_SRC} ${CMAKE_CURRENT_BINARY_DIR}/test_util.erl)
