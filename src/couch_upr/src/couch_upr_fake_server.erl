@@ -462,7 +462,7 @@ handle_stream_close_body(Socket, RequestId, PartId) ->
     ok ->
         ?UPR_STATUS_OK;
     vbucket_stream_not_found ->
-        ?UPR_STATUS_NOT_MY_VBUCKET
+        ?UPR_STATUS_KEY_NOT_FOUND
     end,
     Resp = couch_upr_producer:encode_stream_close_response(
         RequestId, Status),
