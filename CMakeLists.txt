@@ -18,7 +18,8 @@ ELSEIF (NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "SunOS")
   SET(COUCHBASE_UNRESOLVED -Wl,-undefined -Wl,dynamic_lookup)
 ENDIF(WIN32)
 
-SET(ERLANG_COMPILE_FLAGS +debug_info -Werror +nowarn_deprecated_function)
+SET(ERLANG_COMPILE_FLAGS +debug_info -Werror
+  +nowarn_deprecated_function +nowarn_deprecated_type)
 
 
 EXECUTE_PROCESS(COMMAND git describe
