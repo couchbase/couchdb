@@ -24,7 +24,7 @@ num_docs() -> 1000.
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(39),
+    etap:plan(42),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -53,7 +53,7 @@ test() ->
         {snapshot_marker, _} ->
             Acc;
         _ ->
-            [Item|Acc]
+            Acc ++ [Item]
         end
     end,
 
@@ -68,14 +68,14 @@ test() ->
     % First parameter is the partition, the second is the sequence number
     % to start at.
     {ok, Docs1, FailoverLog1} = couch_upr_client:enum_docs_since(
-        Pid, 0, InitialFailoverLog0, 4, 10, TestFun, []),
+        Pid, 0, InitialFailoverLog0, 4, 10, ?UPR_FLAG_NOFLAG, TestFun, []),
     etap:is(length(Docs1), 6, "Correct number of docs (6) in partition 0"),
     etap:is(FailoverLog1, lists:nth(1, FailoverLogs),
         "Failoverlog from partition 0 is correct"),
 
     {ok, InitialFailoverLog1} = couch_upr_client:get_failover_log(Pid, 1),
     {ok, Docs2, FailoverLog2} = couch_upr_client:enum_docs_since(
-        Pid, 1, InitialFailoverLog1, 46, 165, TestFun, []),
+        Pid, 1, InitialFailoverLog1, 46, 165, ?UPR_FLAG_NOFLAG, TestFun, []),
     etap:is(length(Docs2), 119, "Correct number of docs (109) partition 1"),
     etap:is(FailoverLog2, lists:nth(2, FailoverLogs),
         "Failoverlog from partition 1 is correct"),
@@ -83,7 +83,7 @@ test() ->
     {ok, InitialFailoverLog2} = couch_upr_client:get_failover_log(Pid, 2),
     {ok, Docs3, FailoverLog3} = couch_upr_client:enum_docs_since(
         Pid, 2, InitialFailoverLog2, 80, num_docs() div num_set_partitions(),
-        TestFun, []),
+        ?UPR_FLAG_NOFLAG, TestFun, []),
     Expected3 = (num_docs() div num_set_partitions()) - 80,
     etap:is(length(Docs3), Expected3,
         io_lib:format("Correct number of docs (~p) partition 2", [Expected3])),
@@ -92,25 +92,25 @@ test() ->
 
     {ok, InitialFailoverLog3} = couch_upr_client:get_failover_log(Pid, 3),
     {ok, Docs4, FailoverLog4} = couch_upr_client:enum_docs_since(
-        Pid, 3, InitialFailoverLog3, 0, 5, TestFun, []),
+        Pid, 3, InitialFailoverLog3, 0, 5, ?UPR_FLAG_NOFLAG, TestFun, []),
     etap:is(length(Docs4), 5, "Correct number of docs (5) partition 3"),
     etap:is(FailoverLog4, lists:nth(4, FailoverLogs),
         "Failoverlog from partition 3 is correct"),
 
     % Try a too high sequence number to get a erange error response
     {error, ErangeError} = couch_upr_client:enum_docs_since(
-        Pid, 0, InitialFailoverLog0, 400, 450, TestFun, []),
+        Pid, 0, InitialFailoverLog0, 400, 450, ?UPR_FLAG_NOFLAG, TestFun, []),
     etap:is(ErangeError, wrong_start_sequence_number,
         "Correct error message for too high sequence number"),
     % Start sequence is bigger than end sequence
     {error, ErangeError2} = couch_upr_client:enum_docs_since(
-        Pid, 0, InitialFailoverLog0, 5, 2, TestFun, []),
+        Pid, 0, InitialFailoverLog0, 5, 2, ?UPR_FLAG_NOFLAG, TestFun, []),
     etap:is(ErangeError2, wrong_start_sequence_number,
         "Correct error message for start sequence > end sequence"),
 
 
     Error = couch_upr_client:enum_docs_since(
-        Pid, 1, [{4455667788, 1243}], 46, 165, TestFun, []),
+        Pid, 1, [{4455667788, 1243}], 46, 165, ?UPR_FLAG_NOFLAG, TestFun, []),
     etap:is(Error, {rollback, 0},
         "Correct error for wrong failover log"),
 
@@ -134,15 +134,17 @@ test() ->
     % Test multiple streams in parallel
     {StreamReq0, {failoverlog, InitialFailoverLog0}} =
         couch_upr_client:add_stream(
-            Pid, 0, first_uuid(InitialFailoverLog0), 10, 100),
+            Pid, 0, first_uuid(InitialFailoverLog0), 10, 100,
+            ?UPR_FLAG_NOFLAG),
 
     {StreamReq1, {failoverlog, InitialFailoverLog1}} =
         couch_upr_client:add_stream(
-            Pid, 1, first_uuid(InitialFailoverLog1), 100, 200),
+            Pid, 1, first_uuid(InitialFailoverLog1), 100, 200,
+            ?UPR_FLAG_NOFLAG),
 
     {StreamReq2, {failoverlog, InitialFailoverLog2}} =
         couch_upr_client:add_stream(
-            Pid, 2, first_uuid(InitialFailoverLog2), 0, 10),
+            Pid, 2, first_uuid(InitialFailoverLog2), 0, 10, ?UPR_FLAG_NOFLAG),
 
     [MutationsPart0, MutationsPart1, MutationsPart2] = read_mutations(
                     Pid, [StreamReq0, StreamReq1, StreamReq2], [[], [], []]),
@@ -168,11 +170,12 @@ test() ->
     couch_upr_fake_server:pause_mutations(),
     {StreamReq0_2, {failoverlog, InitialFailoverLog0}} =
         couch_upr_client:add_stream(
-            Pid, 0, first_uuid(InitialFailoverLog0), 1, 100),
+            Pid, 0, first_uuid(InitialFailoverLog0), 1, 100, ?UPR_FLAG_NOFLAG),
 
     {_, StreamResp0_3} =
         couch_upr_client:add_stream(
-            Pid, 0, first_uuid(InitialFailoverLog0), 10, 100),
+            Pid, 0, first_uuid(InitialFailoverLog0), 10, 100,
+            ?UPR_FLAG_NOFLAG),
     etap:is(StreamResp0_3, {error,vbucket_stream_already_exists},
         "Stream for vbucket 0 already exists"),
     couch_upr_fake_server:continue_mutations(),
@@ -182,10 +185,10 @@ test() ->
 
     couch_upr_fake_server:pause_mutations(),
     couch_upr_client:add_stream(
-        Pid, 1, first_uuid(InitialFailoverLog1), 10, 300),
+        Pid, 1, first_uuid(InitialFailoverLog1), 10, 300, ?UPR_FLAG_NOFLAG),
 
     couch_upr_client:add_stream(
-        Pid, 2, first_uuid(InitialFailoverLog2), 100, 200),
+        Pid, 2, first_uuid(InitialFailoverLog2), 100, 200, ?UPR_FLAG_NOFLAG),
 
     StreamList1 = couch_upr_client:list_streams(Pid),
     etap:is(StreamList1, [1,2], "Stream list contains parititon 1,2"),
@@ -206,7 +209,7 @@ test() ->
     PartId = 1,
     couch_upr_fake_server:set_failover_log(PartId, TooLargeFailoverLog),
     TooLargeError = couch_upr_client:enum_docs_since(
-          Pid, PartId, [{0, 0}], 0, 100, TestFun, []),
+          Pid, PartId, [{0, 0}], 0, 100, ?UPR_FLAG_NOFLAG, TestFun, []),
     etap:is(TooLargeError, {error, too_large_failover_log},
         "Too large failover log returns correct error"),
 
@@ -219,7 +222,7 @@ test() ->
     couch_upr_client:set_buffer_size(Pid, 50),
 
     {StreamReq0_4, _} = couch_upr_client:add_stream(
-        Pid, 0, first_uuid(InitialFailoverLog0), 0, 500),
+        Pid, 0, first_uuid(InitialFailoverLog0), 0, 500, ?UPR_FLAG_NOFLAG),
 
     Throttled0 = try_until_throttled(Pid, 100),
     etap:is(Throttled0, true, "Throttled stream events queue when buffer became full"),
@@ -230,7 +233,7 @@ test() ->
 
     couch_upr_fake_server:pause_mutations(),
     {StreamReq1_2, _} = couch_upr_client:add_stream(
-        Pid, 1, first_uuid(InitialFailoverLog1), 0, 500),
+        Pid, 1, first_uuid(InitialFailoverLog1), 0, 500, ?UPR_FLAG_NOFLAG),
 
     ReqPid = spawn(fun() ->
         couch_upr_client:get_stream_event(Pid, StreamReq1_2)
@@ -274,9 +277,51 @@ test() ->
     etap:is(NumItemsDel3, DocsPerPartition - NumDelDocs3,
         "Number of items of partition 3 after some deletions is correct"),
 
+    % Tests for requesting persisted items only
+
+    couch_upr_fake_server:set_persisted_items_fun(fun(Seq) -> Seq  end),
+    {ok, HighSeq1} = couch_upr_client:get_sequence_number(Pid, 1),
+    {ok, ExpectedDocs1, _} =
+        couch_upr_client:enum_docs_since(
+            Pid, 0, InitialFailoverLog0, 0, HighSeq1, ?UPR_FLAG_NOFLAG,
+            TestFun, []),
+    {ok, PersistedDocs1, _} =
+        couch_upr_client:enum_docs_since(
+            Pid, 0, InitialFailoverLog0, 0, HighSeq1, ?UPR_FLAG_DISKONLY,
+            TestFun, []),
+    etap:is(PersistedDocs1, ExpectedDocs1,
+        "The persisted sequence number is correct, seq"),
+
+    couch_upr_fake_server:set_persisted_items_fun(
+       fun(Seq) -> Seq div 2 end),
+    {ok, HighSeq2} = couch_upr_client:get_sequence_number(Pid, 1),
+    {ok, ExpectedDocs2, _} =
+        couch_upr_client:enum_docs_since(
+            Pid, 0, InitialFailoverLog0, 0, HighSeq2 div 2, ?UPR_FLAG_NOFLAG,
+            TestFun, []),
+    {ok, PersistedDocs2, _} =
+        couch_upr_client:enum_docs_since(
+            Pid, 0, InitialFailoverLog0, 0, HighSeq2, ?UPR_FLAG_DISKONLY,
+            TestFun, []),
+    etap:is(PersistedDocs2, ExpectedDocs2,
+        "The persisted sequence number is correct, seq/2"),
+
+    couch_upr_fake_server:set_persisted_items_fun(fun(Seq) -> Seq - 1 end),
+    {ok, HighSeq3} = couch_upr_client:get_sequence_number(Pid, 1),
+    {ok, ExpectedDocs3, _} =
+        couch_upr_client:enum_docs_since(
+            Pid, 0, InitialFailoverLog0, 0, HighSeq3 - 1, ?UPR_FLAG_NOFLAG,
+            TestFun, []),
+    {ok, PersistedDocs3, _} =
+        couch_upr_client:enum_docs_since(
+            Pid, 0, InitialFailoverLog0, 0, HighSeq3, ?UPR_FLAG_DISKONLY,
+            TestFun, []),
+    etap:is(PersistedDocs3, ExpectedDocs3,
+        "The persisted sequence number is correct, seq - 1"),
 
     couch_set_view_test_util:stop_server(),
     ok.
+
 
 try_until_throttled(_Pid, 0) ->
     false;

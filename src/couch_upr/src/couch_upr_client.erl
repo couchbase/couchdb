@@ -15,10 +15,10 @@
 
 % Public API
 -export([start/4]).
--export([add_stream/5, get_sequence_number/2, get_num_items/2,
+-export([add_stream/6, get_sequence_number/2, get_num_items/2,
     get_failover_log/2]).
 -export([get_stream_event/2, remove_stream/2, list_streams/1, set_buffer_size/2]).
--export([enum_docs_since/7]).
+-export([enum_docs_since/8]).
 
 % gen_server callbacks
 -export([init/1, terminate/2, handle_call/3, handle_cast/2, handle_info/2, code_change/3]).
@@ -66,9 +66,10 @@ start(Name, Bucket, AdmUser, AdmPasswd) ->
 
 
 -spec add_stream(pid(), partition_id(), uuid(), update_seq(),
-    update_seq()) -> {request_id(), term()}.
-add_stream(Pid, PartId, PartUuid, StartSeq, EndSeq) ->
-    gen_server:call(Pid, {add_stream, PartId, PartUuid, StartSeq, EndSeq}).
+    update_seq(), 0..255) -> {request_id(), term()}.
+add_stream(Pid, PartId, PartUuid, StartSeq, EndSeq, Flags) ->
+    gen_server:call(
+        Pid, {add_stream, PartId, PartUuid, StartSeq, EndSeq, Flags}).
 
 
 -spec remove_stream(pid(), partition_id()) ->
@@ -133,21 +134,22 @@ set_buffer_size(Pid, Size) ->
 
 
 -spec enum_docs_since(pid(), partition_id(), partition_version(), update_seq(),
-                      update_seq(), mutations_fold_fun(),
+                      update_seq(), 0..255, mutations_fold_fun(),
                       mutations_fold_acc()) ->
                              {error, vbucket_stream_not_found |
                               wrong_start_sequence_number |
                               too_large_failover_log } |
                              {rollback, update_seq()} |
                              {ok, mutations_fold_acc(), partition_version()}.
-enum_docs_since(_, _, [], _, _, _, _) ->
+enum_docs_since(_, _, [], _, _, _, _, _) ->
     % No matching partition version found. Recreate the index from scratch
     {rollback, 0};
-enum_docs_since(Pid, PartId, PartVersions, StartSeq, EndSeq, CallbackFn,
-        InAcc) ->
+enum_docs_since(Pid, PartId, PartVersions, StartSeq, EndSeq, Flags,
+        CallbackFn, InAcc) ->
     [PartVersion | PartVersionsRest] = PartVersions,
     {PartUuid, _} = PartVersion,
-    {RequestId, Resp} =  add_stream(Pid, PartId, PartUuid, StartSeq, EndSeq),
+    {RequestId, Resp} =  add_stream(
+        Pid, PartId, PartUuid, StartSeq, EndSeq, Flags),
     case Resp of
     {failoverlog, FailoverLog} ->
         case length(FailoverLog) > ?UPR_MAX_FAILOVER_LOG_SIZE of
@@ -159,12 +161,12 @@ enum_docs_since(Pid, PartId, PartVersions, StartSeq, EndSeq, CallbackFn,
         end;
     {error, vbucket_stream_not_found} ->
         enum_docs_since(Pid, PartId, PartVersionsRest, StartSeq, EndSeq,
-            CallbackFn, InAcc);
+            Flags, CallbackFn, InAcc);
     {error, vbucket_stream_tmp_fail} ->
         ?LOG_INFO("upr client (~p): Temporary failure on stream request "
             "on partition ~p. Retrying...", [Pid, PartId]),
         enum_docs_since(Pid, PartId, PartVersions, StartSeq, EndSeq,
-            CallbackFn, InAcc);
+            Flags, CallbackFn, InAcc);
     _ ->
         Resp
     end.
@@ -209,17 +211,18 @@ init([Name, Bucket, AdmUser, AdmPasswd]) ->
 
 
 % Add caller to the request queue and wait for gen_server to reply on response arrival
-handle_call({add_stream, PartId, PartUuid, StartSeq, EndSeq}, From, State) ->
+handle_call({add_stream, PartId, PartUuid, StartSeq, EndSeq, Flags},
+        From, State) ->
     #state{
        socket = Socket,
        request_id = RequestId
     } = State,
-    % TODO vmx 2014-04-04: And proper retry if the last request didn't return
+    % TODO vmx 2014-04-04: Add proper retry if the last request didn't return
     % the full expected result
     SnapshotStart = StartSeq,
     SnapshotEnd = StartSeq,
     StreamRequest = couch_upr_consumer:encode_stream_request(
-        PartId, RequestId, 0, StartSeq, EndSeq, PartUuid, SnapshotStart,
+        PartId, RequestId, Flags, StartSeq, EndSeq, PartUuid, SnapshotStart,
         SnapshotEnd),
     case gen_tcp:send(Socket, StreamRequest) of
     ok ->

@@ -17,8 +17,8 @@
 -export([start/1, reset/0]).
 
 % Only uses by tests
--export([set_failover_log/2, pause_mutations/0, continue_mutations/0]).
--export([send_single_mutation/0]).
+-export([set_failover_log/2, set_persisted_items_fun/1, pause_mutations/0]).
+-export([send_single_mutation/0, continue_mutations/0]).
 
 % Needed for internal process spawning
 -export([accept/1, accept_loop/1]).
@@ -89,7 +89,13 @@
     streams = [],
     setname = nil,
     failover_logs = dict:new(),
-    pause_mutations = false
+    pause_mutations = false,
+    % This is a function is used to simulate the stream request on persited
+    % items only. It returns the sequence number up to which the items should
+    % be considered as persisted.
+    % By default it returns the current high sequence number, which means
+    % that all items got persisted.
+    persisted_items_fun = fun(Seq) -> Seq end
 }).
 
 
@@ -110,6 +116,11 @@ reset() ->
 -spec set_failover_log(partition_id(), partition_version()) -> ok.
 set_failover_log(PartId, FailoverLog) ->
     gen_server:call(?MODULE, {set_failover_log, PartId, FailoverLog}).
+
+% For unit tests only
+-spec set_persisted_items_fun(fun((update_seq()) -> update_seq())) -> ok.
+set_persisted_items_fun(Fun) ->
+    gen_server:call(?MODULE, {set_persisted_items_fun, Fun}).
 
 -spec pause_mutations() -> ok.
 pause_mutations() ->
@@ -199,6 +210,11 @@ handle_call({set_failover_log, PartId, FailoverLog}, _From, State) ->
         failover_logs = FailoverLogs
     }};
 
+handle_call({set_persisted_items_fun, Fun}, _From, State) ->
+    {reply, ok, State#state{
+        persisted_items_fun = Fun
+    }};
+
 
 handle_call({send_stat, Stat, Socket, RequestId, PartId}, _From, State) ->
     BinPartId = list_to_binary(integer_to_list(PartId)),
@@ -260,6 +276,9 @@ handle_call({get_failover_log, PartId}, _From, State) ->
 
 handle_call(get_set_name, _From, State) ->
     {reply, State#state.setname, State};
+
+handle_call(get_persisted_items_fun, _From, State) ->
+    {reply, State#state.persisted_items_fun, State};
 
 handle_call({pause_mutations, Flag}, _From, State) ->
     {reply, ok, State#state{pause_mutations = Flag}};
@@ -434,7 +453,7 @@ handle_open_connection_body(Socket, BodyLength, RequestId) ->
 handle_stream_request_body(Socket, BodyLength, RequestId, PartId) ->
     case gen_tcp:recv(Socket, BodyLength) of
     % TODO vmx 2014-04-04: Make a rollback due to wrong SnapshotStart/End
-    {ok, <<_Flags:?UPR_SIZES_FLAGS,
+    {ok, <<Flags:?UPR_SIZES_FLAGS,
            _Reserved:?UPR_SIZES_RESERVED,
            StartSeq:?UPR_SIZES_BY_SEQ,
            EndSeq:?UPR_SIZES_BY_SEQ,
@@ -446,6 +465,14 @@ handle_stream_request_body(Socket, BodyLength, RequestId, PartId) ->
         true ->
             send_error(Socket, RequestId, ?UPR_STATUS_ERANGE);
         false ->
+            EndSeq2 = case Flags of
+            ?UPR_FLAG_NOFLAG ->
+                EndSeq;
+            ?UPR_FLAG_DISKONLY ->
+                PersistedItemsFun = gen_server:call(
+                    ?MODULE, get_persisted_items_fun),
+                PersistedItemsFun(EndSeq)
+            end,
             Found = case lists:keyfind(PartUuid, 1, FailoverLog) of
             {PartUuid, PartVersionSeq} ->
                 true;
@@ -456,7 +483,7 @@ handle_stream_request_body(Socket, BodyLength, RequestId, PartId) ->
             case Found orelse StartSeq =:= 0 of
             true ->
                 send_ok_or_error(
-                    Socket, RequestId, PartId, StartSeq, EndSeq, PartUuid,
+                    Socket, RequestId, PartId, StartSeq, EndSeq2, PartUuid,
                     PartVersionSeq, FailoverLog);
             false ->
                 send_error(Socket, RequestId, ?UPR_STATUS_KEY_NOT_FOUND)
