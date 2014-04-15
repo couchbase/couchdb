@@ -122,16 +122,7 @@ test_state_changes_while_updater_running(ValueGenFun, NumDocs) ->
         PassiveParts),
 
     UpdaterPid ! continue,
-    etap:diag("Waiting for updater to finish"),
-    receive
-    {'DOWN', Ref, _, _, {updater_finished, _}} ->
-        etap:diag("Updater finished");
-    {'DOWN', Ref, _, _, Reason} ->
-        etap:bail("Updater finished with unexpected reason: " ++ couch_util:to_list(Reason))
-    after ?MAX_WAIT_TIME ->
-        etap:bail("Timeout waiting for updater to finish")
-    end,
-
+    wait_for_initial_index_updater(Ref, GroupPid),
     verify_btrees(ValueGenFun, NumDocs, ActiveParts, PassiveParts),
 
     etap:diag("Shutting down group pid, and verifying last written header is good"),
@@ -206,6 +197,41 @@ wait_group_respawn(OldPid, T) ->
         wait_group_respawn(OldPid, T - 20);
     _ ->
         ok
+    end.
+
+
+wait_for_initial_index_updater(Ref, GroupPid) ->
+    etap:diag("Waiting for updater to finish"),
+    receive
+    {'DOWN', Ref, _, _, {updater_finished, _}} ->
+        % The initial index update may restart the indexer if the high
+        % sequence number is higher than the highest persisted sequence
+        % number. The couch_upr_fake_server is configured to test that
+        % case by default. Hence we need to wait for another DOWN message.
+        % The second updater run might be finished so quickly that it is
+        % already done before we make the updater_pid call, in this case
+        % it will be 'nil'.
+        {ok, UpdaterPid2} = gen_server:call(GroupPid, updater_pid),
+        case UpdaterPid2 of
+        nil ->
+            etap:diag("Updater finished");
+        _ ->
+            Ref2 = erlang:monitor(process, UpdaterPid2),
+            receive
+            {'DOWN', Ref2, _, _, {updater_finished, _}} ->
+                etap:diag("Updater finished");
+            {'DOWN', Ref2, _, _, Reason} ->
+                etap:bail("Updater finished with unexpected reason: "
+                    ++ couch_util:to_list(Reason))
+            after ?MAX_WAIT_TIME ->
+                etap:bail("Timeout waiting for updater to finish")
+            end
+        end;
+    {'DOWN', Ref, _, _, Reason} ->
+        etap:bail("Updater finished with unexpected reason: " ++
+            couch_util:to_list(Reason))
+    after ?MAX_WAIT_TIME ->
+        etap:bail("Timeout waiting for updater to finish")
     end.
 
 

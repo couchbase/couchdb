@@ -93,9 +93,10 @@
     % This is a function is used to simulate the stream request on persited
     % items only. It returns the sequence number up to which the items should
     % be considered as persisted.
-    % By default it returns the current high sequence number, which means
-    % that all items got persisted.
-    persisted_items_fun = fun(Seq) -> Seq end
+    % By default it returns half of the current high sequence number and at
+    % minimum 1. This ensures that a lot of the current test suites runs
+    % across the code path of restarting the updater.
+    persisted_items_fun = fun(Seq) -> max(Seq div 2, 1) end
 }).
 
 
