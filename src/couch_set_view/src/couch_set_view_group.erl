@@ -813,7 +813,7 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
             compactor_retry_number = 0,
             updater_pid = NewUpdaterPid,
             initial_build = is_pid(NewUpdaterPid) andalso
-                    couch_set_view_util:is_group_empty(NewGroup2),
+                    couch_set_view_util:is_initial_build(NewGroup2),
             updater_state = case is_pid(NewUpdaterPid) of
                 true -> starting;
                 false -> not_running
@@ -1132,9 +1132,9 @@ handle_info({'EXIT', Pid, {updater_finished, Result}}, #state{updater_pid = Pid}
         replica_partitions = ReplicaParts,
         shutdown = Shutdown,
         group = NewGroup2,
-        update_listeners = UpdateListeners2
+        update_listeners = UpdateListeners2,
+        initial_build = InitialBuild
     } = State2,
-    WaitList2 = reply_with_group(NewGroup2, ReplicaParts, WaitList),
     inc_updates(NewGroup2, Result, false, false),
     ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`, updater finished~n"
               "Indexing time: ~.3f seconds~n"
@@ -1148,25 +1148,51 @@ handle_info({'EXIT', Pid, {updater_finished, Result}}, #state{updater_pid = Pid}
               [?set_name(State), ?type(State), ?category(State),
                ?group_id(State), IndexingTime, BlockedTime, InsertedIds,
                DeletedIds, InsertedKVs, DeletedKVs, CleanupKVCount, SeqsDone]),
-    case Shutdown andalso (WaitList2 == []) of
+    UpdaterRestarted = case InitialBuild of
     true ->
-        {stop, normal, State2#state{waiting_list = []}};
-    false ->
-        State3 = State2#state{
+        ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`,"
+                  " initial index build of on-disk items is done,"
+                  " restart updater to index in-memory items in case"
+                  " there are any",
+                  [?set_name(State2), ?type(State2), ?category(State2),
+                   ?group_id(State2)]),
+        StoppedUpdaterState = State2#state{
             updater_pid = nil,
             initial_build = false,
-            updater_state = not_running,
-            waiting_list = WaitList2
+            updater_state = not_running
         },
-        State4 = maybe_apply_pending_transition(State3),
-        State5 = case (WaitList2 /= []) orelse (dict:size(UpdateListeners2) > 0) of
+        State3 = start_updater(StoppedUpdaterState),
+        WaitList2 = State3#state.waiting_list,
+        is_pid(State3#state.updater_pid);
+    false ->
+        WaitList2 = reply_with_group(NewGroup2, ReplicaParts, WaitList),
+        State3 = State2,
+        false
+    end,
+    case UpdaterRestarted of
+    true ->
+        {noreply, State3, ?GET_TIMEOUT(State3)};
+    false ->
+        case Shutdown andalso (WaitList2 == []) of
         true ->
-            start_updater(State4);
+            {stop, normal, State3#state{waiting_list = []}};
         false ->
-            State4
-        end,
-        State6 = maybe_start_cleaner(State5),
-        {noreply, State6, ?GET_TIMEOUT(State6)}
+            State4 = State3#state{
+                updater_pid = nil,
+                initial_build = false,
+                updater_state = not_running,
+                waiting_list = WaitList2
+            },
+            State5 = maybe_apply_pending_transition(State4),
+            State6 = case (WaitList2 /= []) orelse (dict:size(UpdateListeners2) > 0) of
+            true ->
+                start_updater(State5);
+            false ->
+                State5
+            end,
+            State7 = maybe_start_cleaner(State6),
+            {noreply, State7, ?GET_TIMEOUT(State7)}
+        end
     end;
 
 handle_info({'EXIT', Pid, {updater_error, purge}}, #state{updater_pid = Pid} = State) ->
@@ -2827,7 +2853,7 @@ do_start_updater(State, CurSeqs, Options) ->
                      [self(), Group, CurSeqs, CompactRunning, TmpDir, Options2]),
     State2#state{
         updater_pid = Pid,
-        initial_build = couch_set_view_util:is_group_empty(Group),
+        initial_build = couch_set_view_util:is_initial_build(Group),
         updater_state = starting
     }.
 

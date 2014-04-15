@@ -27,7 +27,7 @@ num_docs_pp() -> 1024 div num_set_partitions().
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(10),
+    etap:plan(12),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -46,6 +46,7 @@ test() ->
 
     test_partition_versions_update(),
     test_rollback_different_heads(),
+    test_persisted_items(),
 
     couch_set_view_test_util:stop_server(),
     ok.
@@ -159,6 +160,41 @@ rollback_different_heads(DoRollback, FailoverLog) ->
 
     shutdown_group(),
     {ViewResults3, FailoverLog2}.
+
+
+test_persisted_items() ->
+    etap:diag("Test the initial index build with a persisted sequence number "
+        "which is lower than the current high sequence"),
+
+    % First query with persisted sequence number == high sequence number
+    setup_test(),
+    couch_upr_fake_server:set_persisted_items_fun(fun(Seq) -> Seq end),
+    {ok, {ViewResults1}} = couch_set_view_test_util:query_view(
+        test_set_name(), ddoc_id(), <<"test">>, ["stale=false"]),
+    shutdown_group(),
+
+    % Then with persisted sequence number == high sequence number / 2
+    setup_test(),
+    couch_upr_fake_server:set_persisted_items_fun(
+        fun(Seq) -> max(Seq div 2, 1) end),
+    {ok, {ViewResults2}} = couch_set_view_test_util:query_view(
+        test_set_name(), ddoc_id(), <<"test">>, ["stale=false"]),
+    etap:is(ViewResults1, ViewResults2,
+        "Having a persisted sequence number lower than the high sequence "
+        "number doesn't make difference (a)"),
+    shutdown_group(),
+
+    % Then with persisted sequence number == high sequence number - 1
+    setup_test(),
+    couch_upr_fake_server:set_persisted_items_fun(
+        fun(Seq) -> max(Seq - 1, 1) end),
+    {ok, {ViewResults3}} = couch_set_view_test_util:query_view(
+        test_set_name(), ddoc_id(), <<"test">>, ["stale=false"]),
+    etap:is(ViewResults1, ViewResults3,
+        "Having a persisted sequence number lower than the high sequence "
+        "number doesn't make difference (b)"),
+    shutdown_group(),
+    ok.
 
 
 setup_test() ->

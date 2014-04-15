@@ -79,7 +79,7 @@ update(Owner, Group, CurSeqs, CompactorRunning, TmpDir, Options) ->
     end,
 
     CleanupParts = couch_set_view_util:decode_bitmask(?set_cbitmask(Group)),
-    InitialBuild = couch_set_view_util:is_group_empty(Group),
+    InitialBuild = couch_set_view_util:is_initial_build(Group),
     ?LOG_INFO("Updater for set view `~s`, ~s group `~s` started~n"
               "Active partitions:    ~w~n"
               "Passive partitions:   ~w~n"
@@ -410,53 +410,86 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
         false ->
             Since = couch_util:get_value(PartId, SinceSeqs, 0),
             PartVersions = couch_util:get_value(PartId, AccVersions),
-            Flags = ?UPR_FLAG_NOFLAG,
+            Flags = case InitialBuild of
+            true ->
+                ?UPR_FLAG_DISKONLY;
+            false ->
+                ?UPR_FLAG_NOFLAG
+            end,
             case AccRollbacks of
             [] ->
-                {ok, EndSeq} = couch_upr_client:get_sequence_number(UprPid, PartId),
+                {ok, EndSeq} = couch_upr_client:get_sequence_number(
+                    UprPid, PartId),
                 case EndSeq =:= Since of
                 true ->
                     {AccCount, AccSeqs, AccVersions, AccRollbacks};
                 false ->
-                    ChangesWrapper = fun(Item, {Items, SingleSnapshot}) ->
-                        case Item of
-                        {snapshot_marker, {_StartSeq, _EndSeq, _Type}} ->
-                            ?LOG_INFO(
-                                "set view `~s`, ~s (~s) group `~s`: received "
-                                "a snapshot marker for partition ~p",
-                                [SetName, GroupType, Category, DDocId,
-                                    PartId]),
-                            case Items of
-                            % Ignore the snapshot marker that is at the
-                            % beginning of the stream
-                            [] ->
-                                {Items, true};
+                    % NOTE vmx 2014-04-11: The ChangeWrapper code is a bit
+                    % ugly at the moment. The reason is that I want to change
+                    % the behaviour of the initial build only and keep the
+                    % current incremental implementation the same. It will
+                    % be cleaned up, once the non-buffering incremental
+                    % update is also in place
+                    ChangesWrapper = case InitialBuild of
+                    true ->
+                        fun(Item, {Items, InitialEndSeq}) ->
+                            case Item of
+                            {snapshot_marker,{_StartSeq, MarkerEndSeq,
+                                    ?UPR_SNAPSHOT_TYPE_DISK}} ->
+                                ?LOG_INFO(
+                                    "(initial build) set view `~s`, "
+                                    "~s (~s) group `~s`: received "
+                                    "a snapshot marker for partition ~p",
+                                    [SetName, GroupType, Category, DDocId,
+                                        PartId]),
+                                {Items, MarkerEndSeq};
+                            #upr_doc{} ->
+                                {[Item|Items], InitialEndSeq}
+                            end
+                        end;
+                    false ->
+                        fun(Item, {Items, SingleSnapshot}) ->
+                            case Item of
+                            {snapshot_marker, {_StartSeq, _EndSeq, _Type}} ->
+                                ?LOG_INFO(
+                                    "(incremental build) " "set view `~s`, "
+                                    "~s (~s) group `~s`: received "
+                                    "a snapshot marker for partition ~p",
+                                    [SetName, GroupType, Category, DDocId,
+                                        PartId]),
+                                % Ignore the snapshot marker that is at the
+                                % beginning of the stream
+                                {Items, Items == []};
                             _ ->
-                                {Items, false}
-                            end;
-                        _ ->
-                            Items2 = case SingleSnapshot of
-                            true ->
-                                [Item|Items];
-                            false ->
-                                lists:keystore(
-                                    Item#upr_doc.id, #upr_doc.id, Items, Item)
-                            end,
-                            {Items2, SingleSnapshot}
-                        end
-                    end,
+                                Items2 = case SingleSnapshot of
+                                true ->
+                                    [Item|Items];
+                                false ->
+                                    lists:keystore(
+                                        Item#upr_doc.id, #upr_doc.id, Items, Item)
+                                end,
+                                {Items2, SingleSnapshot}
+                            end
+                         end
+                     end,
                     Result = couch_upr_client:enum_docs_since(
                         UprPid, PartId, PartVersions, Since, EndSeq, Flags,
                         ChangesWrapper, {[], true}),
                     case Result of
-                    {ok, {Items, _}, NewPartVersions} ->
+                    {ok, {Items, InitialEndSeq}, NewPartVersions} ->
                         AccCount2 = lists:foldl(fun(Item, Acc) ->
                             queue_doc(
                                 Item, MapQueue, Group, MaxDocSize,
                                 InitialBuild),
                             Acc + 1
                         end, AccCount, Items),
-                        AccSeqs2 = orddict:store(PartId, EndSeq, AccSeqs),
+                        case InitialBuild of
+                        true ->
+                            AccSeqs2 = orddict:store(
+                                PartId, InitialEndSeq, AccSeqs);
+                        false ->
+                            AccSeqs2 = orddict:store(PartId, EndSeq, AccSeqs)
+                        end,
                         AccVersions2 = lists:ukeymerge(
                             1, [{PartId, NewPartVersions}], AccVersions),
                         AccRollbacks2 = AccRollbacks;

@@ -360,7 +360,8 @@ get_failover_log(PartId, State) ->
     {ok, FailoverLog} ->
         FailoverLog;
     error ->
-        [{0, 0}]
+        % Use a different partition UUID for every partition
+        [{1000 + PartId, 0}]
     end.
 
 

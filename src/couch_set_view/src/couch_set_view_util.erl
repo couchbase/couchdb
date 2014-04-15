@@ -21,7 +21,7 @@
 -export([open_raw_read_fd/1, close_raw_read_fd/1]).
 -export([compute_indexed_bitmap/1, cleanup_group/1]).
 -export([missing_changes_count/2]).
--export([is_group_empty/1]).
+-export([is_initial_build/1]).
 -export([new_sort_file_path/2, delete_sort_files/2]).
 -export([encode_key_docid/2, decode_key_docid/1, split_key_docid/1]).
 -export([parse_values/1, parse_reductions/1, parse_view_id_keys/1]).
@@ -290,11 +290,18 @@ missing_changes_count([{Part, CurSeq} | RestCur], NewSeqs, Acc) ->
     end.
 
 
--spec is_group_empty(#set_view_group{}) -> boolean().
-is_group_empty(Group) ->
+-spec is_initial_build(#set_view_group{}) -> boolean().
+is_initial_build(Group) ->
     Predicate = fun({_PartId, Seq}) -> Seq == 0 end,
+    % If there are no persisted items, the initial index build will
+    % create and empty index with partition versions updated. Hence use the
+    % partition versions as well to determine whether it is an initial index
+    % build or not.
+    PartitionVersionsPredicate =
+        fun({_PartId, PartitionVersion}) -> PartitionVersion =:= [{0, 0}] end,
     lists:all(Predicate, ?set_seqs(Group)) andalso
-        lists:all(Predicate, ?set_unindexable_seqs(Group)).
+        lists:all(Predicate, ?set_unindexable_seqs(Group)) andalso
+        lists:all(PartitionVersionsPredicate, ?set_partition_versions(Group)).
 
 
 -spec new_sort_file_path(string(), 'updater' | 'compactor') -> string().
