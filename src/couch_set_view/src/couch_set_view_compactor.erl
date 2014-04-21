@@ -20,6 +20,8 @@
 -export([start_compact/3, start_compact/4, start_compact/6, cancel_compact/5]).
 
 -define(SORTED_CHUNK_SIZE, 1024 * 1024).
+-define(PORT_OPTS,
+        [exit_status, use_stdio, stderr_to_stdout, {line, 4096}, binary]).
 
 -record(acc, {
    changes = 0,
@@ -268,33 +270,23 @@ total_kv_count(#set_view_group{id_btree = IdBtree, views = Views, mod = Mod}) ->
         IdCount, Views).
 
 
-apply_log(Group, [[] | _], NewSeqs, _TmpDir) ->
-    #set_view_group{
-        id_btree = IdBtree,
-        mod = Mod,
-        views = Views,
-        index_header = Header
-    } = Group,
-    Group#set_view_group{
-        index_header = Header#set_view_index_header{
-            seqs = NewSeqs,
-            id_btree_state = couch_btree:get_state(IdBtree),
-            view_states = [Mod:get_state(V#set_view.indexer) || V <- Views]
-        }
-    };
 apply_log(Group0, LogFiles, NewSeqs, TmpDir) ->
     #set_view_group{
-        mod = Mod
+        mod = Mod,
+        index_header = Header
     } = Group0,
 
-    {Batch, LogFiles2} = get_file_batch(LogFiles),
-
-    [IdMergeFile | ViewLogFiles] = Batch,
+    [IdMergeFiles | ViewLogFilesList] = LogFiles,
+    IdMergeFile = merge_files(Group0, IdMergeFiles, TmpDir, true),
+    ViewMergeFiles = lists:map(
+      fun(ViewFiles) ->
+        merge_files(Group0, ViewFiles, TmpDir, false)
+    end, ViewLogFilesList),
 
     % Remove spatial views since native updater cannot handle them
     Group = couch_set_view_util:remove_group_views(Group0, spatial_view),
     {ok, NewGroup0, _} = couch_set_view_updater_helper:update_btrees(
-        Group, TmpDir, Batch, ?SORTED_CHUNK_SIZE, true),
+        Group, TmpDir, [IdMergeFile | ViewMergeFiles], ?SORTED_CHUNK_SIZE, true),
 
     % Add back spatial views
     NewGroup = couch_set_view_util:update_group_views(
@@ -303,30 +295,94 @@ apply_log(Group0, LogFiles, NewSeqs, TmpDir) ->
     ok = file2:delete(IdMergeFile),
 
     % For spatial views, execute erlang code for view compaction
-    NewGroup2 = case Mod of
+    Header2 = NewGroup#set_view_group.index_header,
+    case Mod of
     mapreduce_view ->
         lists:foreach(
           fun(LogFile) ->
             ok = file2:delete(LogFile)
-          end, ViewLogFiles),
-        NewGroup;
-    _ ->
-        NewViews = Mod:apply_log(Group, ViewLogFiles),
+          end, ViewMergeFiles),
         NewGroup#set_view_group{
-          views = NewViews
-         }
+            index_header = Header2#set_view_index_header{seqs = NewSeqs}
+        };
+    _ ->
+        NewViews = Mod:apply_log(Group, ViewMergeFiles),
+        NewGroup#set_view_group{
+            views = NewViews,
+            index_header = Header#set_view_index_header{
+                seqs = NewSeqs,
+                view_states = [Mod:get_state(V#set_view.indexer) || V <- NewViews]
+            }
+        }
+    end.
+
+merge_files(_Group, [LogFile], _TmpDir, _IsIdFile) ->
+    LogFile;
+
+merge_files(Group, LogFiles, TmpDir, IsIdFile) ->
+    case os:find_executable("couch_view_file_merger") of
+    false ->
+        FileMergerCmd = nil,
+        throw(<<"couch_view_file_merger command not found">>);
+    FileMergerCmd ->
+        ok
     end,
-    apply_log(NewGroup2, LogFiles2, NewSeqs, TmpDir).
+    FileType = case IsIdFile of
+    true ->
+        "i";
+    false ->
+        "v"
+    end,
+    NumFiles = length(LogFiles),
+    Port = open_port({spawn_executable, FileMergerCmd}, ?PORT_OPTS),
+    true = port_command(Port, [FileType, $\n]),
+    true = port_command(Port, [integer_to_list(NumFiles), $\n]),
+    ok = lists:foreach(
+      fun(LogFile) ->
+          true = port_command(Port, [LogFile, $\n])
+      end, LogFiles),
+    DestFile = couch_set_view_util:new_sort_file_path(TmpDir, compactor),
+    true = port_command(Port, [DestFile, $\n]),
+    try
+        file_merger_wait_loop(Group, Port, []),
+        DestFile
+    catch Error ->
+        file2:delete(DestFile),
+        exit(Error)
+    after
+        catch port_close(Port)
+    end.
 
-
-get_file_batch(LogFiles) ->
-    lists:foldr(
-        fun(BtreeFiles, {AccBatch, AccLogFiles2}) ->
-            [First | Rest] = BtreeFiles,
-            {[First | AccBatch], [Rest | AccLogFiles2]}
-        end,
-        {[], []},
-        LogFiles).
+file_merger_wait_loop(Group, Port, Acc) ->
+    #set_view_group{
+        set_name = SetName,
+        name = DDocId,
+        type = Type
+    } = Group,
+    receive
+    {Port, {exit_status, 0}} ->
+        ok;
+    {Port, {exit_status, 1}} ->
+        ?LOG_INFO("Set view `~s`, ~s group `~s`, file merger stopped successfully.",
+                   [SetName, Type, DDocId]),
+        exit(shutdown);
+    {Port, {exit_status, Status}} ->
+        throw({couch_view_file_merger, Status, ?l2b(Acc)});
+    {Port, {data, {noeol, Data}}} ->
+        file_merger_wait_loop(Group, Port, [Data | Acc]);
+    {Port, {data, {eol, Data}}} ->
+        Msg = ?l2b(lists:reverse([Data | Acc])),
+        ?LOG_ERROR("Set view `~s`, ~s group `~s`, received error from file merger: ~s",
+                   [SetName, Type, DDocId, Msg]),
+        file_merger_wait_loop(Group, Port, []);
+    {Port, Error} ->
+        throw({file_merger_error, Error});
+    stop ->
+        ?LOG_INFO("Set view `~s`, ~s group `~s`, sending stop message to file merger.",
+                   [SetName, Type, DDocId]),
+        true = port_command(Port, "exit"),
+        file_merger_wait_loop(Group, Port, Acc)
+    end.
 
 % Compact a view group by rewriting all btrees to a new file
 % Invokes a native view compacter process to do the compaction.
