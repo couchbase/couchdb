@@ -182,8 +182,16 @@ handle_call({add_stream, PartId, RequestId, StartSeq, EndSeq, Socket, FailoverLo
         true ->
             ok;
         false ->
+            % For unit tests it's OK to pretend that only snapshots
+            % received from the start are on-disk snapshots.
+            SnapshotType = case StartSeq of
+            0 ->
+                ?UPR_SNAPSHOT_TYPE_DISK;
+            _ ->
+                ?UPR_SNAPSHOT_TYPE_MEMORY
+            end,
             Marker = couch_upr_producer:encode_snapshot_marker(
-                PartId, RequestId, StartSeq, StartSeq + Num, ?UPR_SNAPSHOT_TYPE_DISK),
+                PartId, RequestId, StartSeq, StartSeq + Num, SnapshotType),
             ok = gen_tcp:send(Socket, Marker),
             self() ! send_mutations
         end,

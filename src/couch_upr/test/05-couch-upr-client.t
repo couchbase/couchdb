@@ -24,7 +24,7 @@ num_docs() -> 1000.
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(42),
+    etap:plan(44),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -129,6 +129,38 @@ test() ->
     SeqError = couch_upr_client:get_sequence_number(Pid, 100000),
     etap:is(SeqError, {error, not_my_vbucket},
         "Too high partition number returns correct error"),
+
+
+    % Test snapshot markers types
+
+    TestSnapshotFun = fun(Item, Acc) ->
+        case Item of
+        {snapshot_marker, Marker} ->
+            Acc ++ [Marker];
+        _ ->
+            Acc
+        end
+    end,
+
+    SnapshotStart1 = 0,
+    SnapshotEnd1 = num_docs() div (num_set_partitions() * 2),
+    {ok, Markers1, SnapshotFailoverLog1} = couch_upr_client:enum_docs_since(
+        Pid, 2, [{0, 0}], SnapshotStart1, SnapshotEnd1, ?UPR_FLAG_NOFLAG,
+        TestSnapshotFun, []),
+    ExpectedMarkers1 = [{SnapshotStart1, SnapshotEnd1,
+        ?UPR_SNAPSHOT_TYPE_DISK}],
+    etap:is(Markers1, ExpectedMarkers1,
+        "Received one on-disk snapshot marker"),
+
+    SnapshotStart2 = num_docs() div (num_set_partitions() * 2),
+    SnapshotEnd2 = num_docs() div num_set_partitions(),
+    {ok, Markers2, SnapshotFailoverLog2} = couch_upr_client:enum_docs_since(
+        Pid, 2, SnapshotFailoverLog1, SnapshotStart2, SnapshotEnd2,
+        ?UPR_FLAG_NOFLAG, TestSnapshotFun, []),
+    ExpectedMarkers2 = [{SnapshotStart2, SnapshotEnd2,
+        ?UPR_SNAPSHOT_TYPE_MEMORY}],
+    etap:is(Markers2, ExpectedMarkers2,
+        "Received one in-memory snapshot marker"),
 
 
     % Test multiple streams in parallel
