@@ -17,7 +17,8 @@
 -export([start/1, reset/0]).
 
 % Only uses by tests
--export([set_failover_log/2, set_persisted_items_fun/1, pause_mutations/0]).
+-export([set_failover_log/2, set_persisted_items_fun/1,
+    set_items_per_snapshot/1, pause_mutations/0]).
 -export([send_single_mutation/0, continue_mutations/0]).
 
 % Needed for internal process spawning
@@ -96,7 +97,10 @@
     % By default it returns half of the current high sequence number and at
     % minimum 1. This ensures that a lot of the current test suites runs
     % across the code path of restarting the updater.
-    persisted_items_fun = fun(Seq) -> max(Seq div 2, 1) end
+    persisted_items_fun = fun(Seq) -> max(Seq div 2, 1) end,
+    % Determines how many items a snapshot should have, if it's set to 0,
+    % all mutations will be returned in a single snapshot.
+    items_per_snapshot = 0
 }).
 
 
@@ -122,6 +126,11 @@ set_failover_log(PartId, FailoverLog) ->
 -spec set_persisted_items_fun(fun((update_seq()) -> update_seq())) -> ok.
 set_persisted_items_fun(Fun) ->
     gen_server:call(?MODULE, {set_persisted_items_fun, Fun}).
+
+% For unit tests only
+-spec set_items_per_snapshot(non_neg_integer()) -> ok.
+set_items_per_snapshot(Num) ->
+    gen_server:call(?MODULE, {set_items_per_snapshot, Num}).
 
 -spec pause_mutations() -> ok.
 pause_mutations() ->
@@ -167,7 +176,8 @@ init([Port, SetName]) ->
 handle_call({add_stream, PartId, RequestId, StartSeq, EndSeq, Socket, FailoverLog}, _From, State) ->
     #state{
        streams = Streams,
-       pause_mutations = Pause
+       pause_mutations = Pause,
+       items_per_snapshot = ItemsPerSnapshot
     } = State,
     case lists:keyfind(PartId, 1, State#state.streams) of
     false ->
@@ -175,9 +185,14 @@ handle_call({add_stream, PartId, RequestId, StartSeq, EndSeq, Socket, FailoverLo
             RequestId, FailoverLog),
         ok = gen_tcp:send(Socket, StreamOk),
         Mutations = create_mutations(State#state.setname, PartId, StartSeq, EndSeq),
-        Num = length(Mutations),
+        Num = case ItemsPerSnapshot of
+        0 ->
+            length(Mutations);
+        _ ->
+            min(length(Mutations), ItemsPerSnapshot)
+        end,
         Streams2 =
-            [{PartId, {RequestId, Mutations, Socket, StartSeq + Num}} | Streams],
+            [{PartId, {RequestId, Mutations, Socket, 0}} | Streams],
         case Pause of
         true ->
             ok;
@@ -222,6 +237,11 @@ handle_call({set_failover_log, PartId, FailoverLog}, _From, State) ->
 handle_call({set_persisted_items_fun, Fun}, _From, State) ->
     {reply, ok, State#state{
         persisted_items_fun = Fun
+    }};
+
+handle_call({set_items_per_snapshot, Num}, _From, State) ->
+    {reply, ok, State#state{
+        items_per_snapshot = Num
     }};
 
 
@@ -289,6 +309,9 @@ handle_call(get_set_name, _From, State) ->
 handle_call(get_persisted_items_fun, _From, State) ->
     {reply, State#state.persisted_items_fun, State};
 
+handle_call(get_items_per_snapshot, _From, State) ->
+    {reply, State#state.items_per_snapshot, State};
+
 handle_call({pause_mutations, Flag}, _From, State) ->
     {reply, ok, State#state{pause_mutations = Flag}};
 
@@ -313,11 +336,24 @@ handle_info({'EXIT', _From, normal}, State)  ->
 handle_info(send_mutations, State) ->
     #state{
        streams = Streams,
-       pause_mutations = Pause
+       pause_mutations = Pause,
+       items_per_snapshot = ItemsPerSnapshot
     } = State,
     Streams2 = lists:foldl(fun
-        ({VBucketId, {RequestId, [Mutation | Rest], Socket, HiSeq}}, Acc) ->
+        ({VBucketId, {RequestId, [Mutation | Rest], Socket, NumSent0}}, Acc) ->
             {Cas, Seq, RevSeq, Flags, Expiration, LockTime, Key, Value} = Mutation,
+            NumSent = case ItemsPerSnapshot > 0 andalso
+                    NumSent0 =:= ItemsPerSnapshot of
+            true ->
+                NumItems = min(length(Rest) + 1, ItemsPerSnapshot),
+                Marker = couch_upr_producer:encode_snapshot_marker(
+                    VBucketId, RequestId, Seq - 1, Seq + NumItems - 1,
+                    ?UPR_SNAPSHOT_TYPE_MEMORY),
+                ok = gen_tcp:send(Socket, Marker),
+                1;
+            false ->
+                NumSent0 + 1
+            end,
             Encoded = case Value of
             deleted ->
                 couch_upr_producer:encode_snapshot_deletion(
@@ -328,8 +364,8 @@ handle_info(send_mutations, State) ->
                 LockTime, Key, Value)
             end,
             ok = gen_tcp:send(Socket, Encoded),
-            [{VBucketId, {RequestId, Rest, Socket, HiSeq}} | Acc];
-        ({VBucketId, {RequestId, [], Socket, _HiSeq}}, Acc) ->
+            [{VBucketId, {RequestId, Rest, Socket, NumSent}} | Acc];
+        ({VBucketId, {RequestId, [], Socket, _NumSent}}, Acc) ->
             StreamEnd = couch_upr_producer:encode_stream_end(VBucketId, RequestId),
             ok = gen_tcp:send(Socket, StreamEnd),
             Acc
@@ -479,9 +515,18 @@ handle_stream_request_body(Socket, BodyLength, RequestId, PartId) ->
             ?UPR_FLAG_NOFLAG ->
                 EndSeq;
             ?UPR_FLAG_DISKONLY ->
-                PersistedItemsFun = gen_server:call(
-                    ?MODULE, get_persisted_items_fun),
-                PersistedItemsFun(EndSeq)
+                ItemsPerSnapshot = gen_server:call(
+                    ?MODULE, get_items_per_snapshot),
+                case ItemsPerSnapshot of
+                0 ->
+                    PersistedItemsFun = gen_server:call(
+                        ?MODULE, get_persisted_items_fun),
+                    PersistedItemsFun(EndSeq);
+                % The items per snapshot have higher priority than the
+                % persisted items function
+                _ ->
+                    ItemsPerSnapshot
+                end
             end,
             Found = case lists:keyfind(PartUuid, 1, FailoverLog) of
             {PartUuid, PartVersionSeq} ->

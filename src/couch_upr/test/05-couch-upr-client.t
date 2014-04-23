@@ -24,7 +24,7 @@ num_docs() -> 1000.
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(44),
+    etap:plan(46),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -161,6 +161,36 @@ test() ->
         ?UPR_SNAPSHOT_TYPE_MEMORY}],
     etap:is(Markers2, ExpectedMarkers2,
         "Received one in-memory snapshot marker"),
+
+
+    % Test multiple snapshots
+
+    TestAllFun = fun(Item, Acc) -> Acc ++ [Item] end,
+
+    ItemsPerSnapshot = 30,
+    couch_upr_fake_server:set_items_per_snapshot(ItemsPerSnapshot),
+    SnapshotStart3 = 0,
+    SnapshotEnd3 = num_docs() div num_set_partitions(),
+    {ok, All3, SnapshotFailoverLog3} = couch_upr_client:enum_docs_since(
+        Pid, 2, [{0, 0}], SnapshotStart3, SnapshotEnd3, ?UPR_FLAG_NOFLAG,
+        TestAllFun, []),
+    Markers3 = [M || {snapshot_marker, M} <- All3],
+    ExpectedMarkers3 = [{0, ItemsPerSnapshot, ?UPR_SNAPSHOT_TYPE_DISK}] ++
+        lists:map(fun(I) ->
+            {I, min(I + ItemsPerSnapshot, SnapshotEnd3),
+                ?UPR_SNAPSHOT_TYPE_MEMORY}
+        end, lists:seq(ItemsPerSnapshot, SnapshotEnd3 - 1, ItemsPerSnapshot)),
+    etap:is(Markers3, ExpectedMarkers3,
+        "Received the expected snapshot markers"),
+
+    Mutations3 = [M || #upr_doc{} = M <- All3],
+    couch_upr_fake_server:set_items_per_snapshot(0),
+    {ok, ExpectedMutations3, SnapshotFailoverLog3} =
+            couch_upr_client:enum_docs_since(
+        Pid, 2, [{0, 0}], SnapshotStart3, SnapshotEnd3, ?UPR_FLAG_NOFLAG,
+        TestFun, []),
+    etap:is(Mutations3, ExpectedMutations3,
+        "Received the expected mutations within the several snapshots"),
 
 
     % Test multiple streams in parallel
