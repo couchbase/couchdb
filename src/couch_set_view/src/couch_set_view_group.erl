@@ -178,7 +178,7 @@ request_replica_group(RepPid, ActiveReplicasBitmask, Req) ->
     end.
 
 
--spec release_group(#set_view_group{}) -> no_return().
+-spec release_group(#set_view_group{}) -> ok.
 release_group(#set_view_group{ref_counter = RefCounter, replica_group = RepGroup}) ->
     couch_ref_counter:drop(RefCounter),
     case RepGroup of

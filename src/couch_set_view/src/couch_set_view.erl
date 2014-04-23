@@ -136,7 +136,7 @@ get_group_pid(Mod, SetName, DDocId, Category) when is_binary(DDocId) ->
     get_group_server(SetName, open_set_group(Mod, SetName, DDocId, Category)).
 
 
--spec release_group(#set_view_group{}) -> no_return().
+-spec release_group(#set_view_group{}) -> ok.
 release_group(Group) ->
     couch_set_view_group:release_group(Group).
 
