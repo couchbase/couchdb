@@ -22,6 +22,7 @@
 
 % gen_server callbacks
 -export([init/1, terminate/2, handle_call/3, handle_cast/2, handle_info/2, code_change/3]).
+-export([format_status/2]).
 
 -include("couch_db.hrl").
 -include_lib("couch_upr/include/couch_upr.hrl").
@@ -393,6 +394,13 @@ terminate(_Reason, #state{worker_pid = Pid}) ->
 -spec code_change(any(), #state{}, any()) -> {ok, #state{}}.
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
+
+
+format_status(_Opt, [_PDict, #state{stream_queues = StreamQueues} = State]) ->
+    TransformFn = fun(_Key, {Waiter, Size, Queue}) ->
+                     {Waiter, Size, {queue:len(Queue), queue:peek_r(Queue)}}
+                  end,
+    State#state{stream_queues = dict:map(TransformFn, StreamQueues)}.
 
 
 % Internal functions
