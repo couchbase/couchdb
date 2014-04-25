@@ -18,7 +18,8 @@
 
 % Only uses by tests
 -export([set_failover_log/2, set_persisted_items_fun/1,
-    set_items_per_snapshot/1, pause_mutations/0]).
+    set_items_per_snapshot/1, set_dups_per_snapshot/1,
+    pause_mutations/0, ceil_div/2, num_items_with_dups/3]).
 -export([send_single_mutation/0, continue_mutations/0]).
 
 % Needed for internal process spawning
@@ -100,7 +101,11 @@
     persisted_items_fun = fun(Seq) -> max(Seq div 2, 1) end,
     % Determines how many items a snapshot should have, if it's set to 0,
     % all mutations will be returned in a single snapshot.
-    items_per_snapshot = 0
+    items_per_snapshot = 0,
+    % The number of duplicates a snapshot should contain. This option needs
+    % to be combined with items_per_snapshot. A snapshot will contain the
+    % given number of items from a previous snapshot (randomly chosen).
+    dups_per_snapshot = 0
 }).
 
 
@@ -131,6 +136,11 @@ set_persisted_items_fun(Fun) ->
 -spec set_items_per_snapshot(non_neg_integer()) -> ok.
 set_items_per_snapshot(Num) ->
     gen_server:call(?MODULE, {set_items_per_snapshot, Num}).
+
+% For unit tests only
+-spec set_dups_per_snapshot(non_neg_integer()) -> ok.
+set_dups_per_snapshot(Num) ->
+    gen_server:call(?MODULE, {set_dups_per_snapshot, Num}).
 
 -spec pause_mutations() -> ok.
 pause_mutations() ->
@@ -175,16 +185,44 @@ init([Port, SetName]) ->
                          {reply, any(), #state{}}.
 handle_call({add_stream, PartId, RequestId, StartSeq, EndSeq, Socket, FailoverLog}, _From, State) ->
     #state{
-       streams = Streams,
-       pause_mutations = Pause,
-       items_per_snapshot = ItemsPerSnapshot
+        streams = Streams,
+        pause_mutations = Pause,
+        items_per_snapshot = ItemsPerSnapshot,
+        dups_per_snapshot = DupsPerSnapshot
     } = State,
     case lists:keyfind(PartId, 1, State#state.streams) of
     false ->
         StreamOk = couch_upr_producer:encode_stream_request_ok(
             RequestId, FailoverLog),
         ok = gen_tcp:send(Socket, StreamOk),
-        Mutations = create_mutations(State#state.setname, PartId, StartSeq, EndSeq),
+        Mutations = case DupsPerSnapshot > 0 of
+        true ->
+            NumSnapshots = ceil_div(EndSeq - StartSeq, ItemsPerSnapshot),
+            % The first snapshot mustn't contain duplicates
+            EndSeq2 = EndSeq - (NumSnapshots - 1) * DupsPerSnapshot,
+            Mutations2 = create_mutations(State#state.setname, PartId,
+                StartSeq, EndSeq2),
+            Mutations3 = case StartSeq of
+            0 ->
+                create_mutations_dups(Mutations2, ItemsPerSnapshot,
+                    DupsPerSnapshot, 0);
+            _ ->
+                % create_mutations_dups/3 doesn't create duplicates in the
+                % first snapshot. If we are not in an initial index build
+                % (start seq > 0), then the first snapshot *must* contain
+                % duplicates. To KISS we just take DupsPerSnapshot number of
+                % items from the second (still unique) snapshot and prepend
+                % them.
+                Prepend = lists:sublist(Mutations2, ItemsPerSnapshot + 1,
+                    DupsPerSnapshot),
+                Dups = create_mutations_dups(Mutations2, ItemsPerSnapshot,
+                    DupsPerSnapshot, DupsPerSnapshot),
+                Prepend ++ Dups
+            end,
+            apply_sequence_numbers(Mutations3);
+        false ->
+            create_mutations(State#state.setname, PartId, StartSeq, EndSeq)
+        end,
         Num = case ItemsPerSnapshot of
         0 ->
             length(Mutations);
@@ -244,15 +282,26 @@ handle_call({set_items_per_snapshot, Num}, _From, State) ->
         items_per_snapshot = Num
     }};
 
+handle_call({set_dups_per_snapshot, Num}, _From, State) ->
+    {reply, ok, State#state{
+        dups_per_snapshot = Num
+    }};
+
 
 handle_call({send_stat, Stat, Socket, RequestId, PartId}, _From, State) ->
+    #state{
+        setname = SetName,
+        items_per_snapshot = ItemsPerSnapshot,
+        dups_per_snapshot = DupsPerSnapshot
+    } = State,
     BinPartId = list_to_binary(integer_to_list(PartId)),
     case binary:split(Stat, <<" ">>) of
     [<<"vbucket-seqno">>] ->
             % XXX vmx 2013-12-09: Return all seq numbers
             not_yet_implemented;
     [<<"vbucket-seqno">>, _] ->
-        case get_sequence_number(State#state.setname, PartId) of
+        case get_sequence_number(SetName, PartId, ItemsPerSnapshot,
+            DupsPerSnapshot) of
         {ok, Seq} ->
             SeqKey = <<"vb_", BinPartId/binary ,":high_seqno">>,
             SeqValue = list_to_binary(integer_to_list(Seq)),
@@ -279,7 +328,7 @@ handle_call({send_stat, Stat, Socket, RequestId, PartId}, _From, State) ->
             ok = gen_tcp:send(Socket, StatError)
         end;
     [<<"vbucket-details">>, _] ->
-        case get_num_items(State#state.setname, PartId) of
+        case get_num_items(SetName, PartId) of
         {ok, NumItems} ->
             NumItemsKey = <<"vb_", BinPartId/binary ,":num_items">>,
             NumItemsValue = list_to_binary(integer_to_list(NumItems)),
@@ -311,6 +360,9 @@ handle_call(get_persisted_items_fun, _From, State) ->
 
 handle_call(get_items_per_snapshot, _From, State) ->
     {reply, State#state.items_per_snapshot, State};
+
+handle_call(get_dups_per_snapshot, _From, State) ->
+    {reply, State#state.dups_per_snapshot, State};
 
 handle_call({pause_mutations, Flag}, _From, State) ->
     {reply, ok, State#state{pause_mutations = Flag}};
@@ -415,10 +467,27 @@ get_failover_log(PartId, State) ->
                                  {ok, update_seq()} |
                                  {error, not_my_partition}.
 get_sequence_number(SetName, PartId) ->
+    ItemsPerSnapshot = gen_server:call(?MODULE, get_items_per_snapshot),
+    DupsPerSnapshot = gen_server:call(?MODULE, get_dups_per_snapshot),
+    get_sequence_number(SetName, PartId, ItemsPerSnapshot,
+        DupsPerSnapshot).
+
+-spec get_sequence_number(binary(), partition_id(), non_neg_integer(),
+                          non_neg_integer()) ->
+                                 {ok, update_seq()} |
+                                 {error, not_my_partition}.
+get_sequence_number(SetName, PartId, ItemsPerSnapshot,
+        DupsPerSnapshot) ->
     case open_db(SetName, PartId) of
     {ok, Db} ->
-        Seq = Db#db.update_seq,
+        Seq0 = Db#db.update_seq,
         couch_db:close(Db),
+        Seq = case DupsPerSnapshot > 0 of
+        true ->
+            num_items_with_dups(Seq0, ItemsPerSnapshot, DupsPerSnapshot);
+        false ->
+             Seq0
+        end,
         {ok, Seq};
     {error, cannot_open_db} ->
         {error, not_my_partition}
@@ -718,4 +787,72 @@ open_db(SetName, PartId) ->
         {ok, PartDb};
     _Error ->
         {error, cannot_open_db}
+    end.
+
+
+-spec ceil_div(non_neg_integer(), pos_integer()) -> non_neg_integer().
+ceil_div(Numerator, Denominator) ->
+    (Numerator div Denominator) + min(Numerator rem Denominator, 1).
+
+
+-spec create_mutations_dups([tuple()], pos_integer(), pos_integer(),
+                            non_neg_integer()) -> [tuple()].
+create_mutations_dups(_Mutations, ItemsPerSnapshot, DupsPerSnapshot,
+        _InitCount) when DupsPerSnapshot >= (ItemsPerSnapshot div 2) ->
+    % Else the algorithm for creating duplicates doesn't work properly
+    throw({error, <<"The number of duplicates must be lower than half of "
+        "the items per snapshot">>});
+create_mutations_dups(Mutations, ItemsPerSnapshot, DupsPerSnapshot,
+        InitCount) ->
+    % Make sure every test run leads to the same result
+    random:seed(5, 6, 7),
+    {Mutations2, _} = lists:foldl(fun(Mutation, {Acc, I}) ->
+        case I > 0 andalso (I rem ItemsPerSnapshot) =:= 0 of
+        true ->
+            Shuffled = [X || {_, X} <- lists:sort(
+                [{random:uniform(), M} || M <- lists:usort(Acc)])],
+            RandomMutations = lists:sublist(Shuffled, DupsPerSnapshot),
+            {Acc ++ RandomMutations ++ [Mutation], I + 1 + DupsPerSnapshot};
+        false ->
+            {Acc ++ [Mutation], I + 1}
+        end
+    end, {[], InitCount}, Mutations),
+    Mutations2.
+
+
+% Apply sequentially increasing sequence numbers to the mutations
+-spec apply_sequence_numbers([tuple()]) -> [tuple()].
+apply_sequence_numbers(Mutations) ->
+    StartSeq = element(2, hd(Mutations)),
+    {Mutations2, _} = lists:mapfoldl(fun(M, I) ->
+        {setelement(2, M, I), I + 1}
+    end, StartSeq, Mutations),
+    Mutations2.
+
+
+% When a certain amount of items is added per snapshot, it can happen that
+% the number of items overflow into a new snapshot which can keep cascading
+-spec num_items_with_dups(pos_integer(), pos_integer(), pos_integer()) ->
+                                 pos_integer().
+num_items_with_dups(NumItems, ItemsPerSnapshot, DupsPerSnapshot) ->
+    NumSnapshots = couch_upr_fake_server:ceil_div(NumItems, ItemsPerSnapshot),
+    % The first snapshot doesn't contain duplicates hence "- 1"
+    num_items_with_dups(
+        NumItems + (NumSnapshots - 1) * DupsPerSnapshot,
+        ItemsPerSnapshot, DupsPerSnapshot, NumSnapshots).
+
+-spec num_items_with_dups(pos_integer(), pos_integer(), pos_integer(),
+                          pos_integer()) -> pos_integer().
+num_items_with_dups(CurrentNum, ItemsPerSnapshot, DupsPerSnapshot,
+        NumSnapshots) ->
+    NewNumSnapshots = couch_upr_fake_server:ceil_div(
+        CurrentNum, ItemsPerSnapshot),
+    case NewNumSnapshots =:= NumSnapshots of
+    true ->
+        CurrentNum;
+    false ->
+        NewNum = CurrentNum +
+            (NewNumSnapshots - NumSnapshots) * DupsPerSnapshot,
+        num_items_with_dups(
+            NewNum, ItemsPerSnapshot, DupsPerSnapshot, NewNumSnapshots)
     end.

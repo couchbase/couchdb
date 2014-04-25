@@ -27,7 +27,7 @@ num_docs_pp() -> 1024 div num_set_partitions().
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(14),
+    etap:plan(16),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -48,6 +48,7 @@ test() ->
     test_rollback_different_heads(),
     test_persisted_items(),
     test_mutliple_snapshots(),
+    test_duplicates(),
 
     couch_set_view_test_util:stop_server(),
     ok.
@@ -226,6 +227,41 @@ test_mutliple_snapshots() ->
     etap:is(ViewResults1, ViewResults3,
         "The results of the single snapshot is the same as with multiple "
         "snapshots (b)"),
+    shutdown_group(),
+    ok.
+
+
+test_duplicates() ->
+    etap:diag("Test the index build with receiving duplicates within several "
+      "snapshots"),
+
+    % First query with the result returning in a single snapshot
+    setup_test(),
+    couch_upr_fake_server:set_items_per_snapshot(0),
+    {ok, {ViewResults1}} = couch_set_view_test_util:query_view(
+        test_set_name(), ddoc_id(), <<"test">>, ["stale=false"]),
+    shutdown_group(),
+
+    % Then with the result where the stream contains duplicates
+    setup_test(),
+    couch_upr_fake_server:set_items_per_snapshot(num_docs_pp() div 4),
+    couch_upr_fake_server:set_dups_per_snapshot(num_docs_pp() div 9),
+    {ok, {ViewResults2}} = couch_set_view_test_util:query_view(
+        test_set_name(), ddoc_id(), <<"test">>, ["stale=false"]),
+    etap:is(ViewResults2, ViewResults1,
+        "The results of the single snapshot is the same as with multiple "
+        "snapshots containing duplicates (a)"),
+    shutdown_group(),
+
+    % Try again with some other number of duplicates
+    setup_test(),
+    couch_upr_fake_server:set_items_per_snapshot(num_docs_pp() div 3),
+    couch_upr_fake_server:set_dups_per_snapshot(num_docs_pp() div 10),
+    {ok, {ViewResults3}} = couch_set_view_test_util:query_view(
+        test_set_name(), ddoc_id(), <<"test">>, ["stale=false"]),
+    etap:is(ViewResults3, ViewResults1,
+        "The results of the single snapshot is the same as with multiple "
+        "snapshots containing duplicates (b)"),
     shutdown_group(),
     ok.
 

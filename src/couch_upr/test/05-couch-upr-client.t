@@ -19,12 +19,13 @@
 test_set_name() -> <<"couch_test_couch_upr_client">>.
 num_set_partitions() -> 4.
 num_docs() -> 1000.
+num_docs_pp() -> num_docs() div num_set_partitions().
 
 
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(46),
+    etap:plan(49),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -191,6 +192,35 @@ test() ->
         TestFun, []),
     etap:is(Mutations3, ExpectedMutations3,
         "Received the expected mutations within the several snapshots"),
+
+
+    % Test duplicated items in multiple snapshots
+
+    ItemsPerSnapshot2 = 30,
+    DupsPerSnapshot2 = 4,
+    couch_upr_fake_server:set_items_per_snapshot(ItemsPerSnapshot2),
+    couch_upr_fake_server:set_dups_per_snapshot(DupsPerSnapshot2),
+    DupsStart2 = 0,
+    DupsEnd2 = couch_upr_fake_server:num_items_with_dups(
+        num_docs_pp(), ItemsPerSnapshot2, DupsPerSnapshot2),
+
+    {ok, AllDups2, DupsFailoverLog2} = couch_upr_client:enum_docs_since(
+        Pid, 2, [{0, 0}], DupsStart2, DupsEnd2, ?UPR_FLAG_NOFLAG,
+        TestAllFun, []),
+    DupsMutations2 = [M || #upr_doc{} = M <- AllDups2],
+    DupsMarkers2 = [M || {snapshot_marker, M} <- AllDups2],
+    etap:is(length(DupsMutations2), DupsEnd2,
+        "received the expected number of mutations (incl. duplicates)"),
+    etap:is(length(DupsMarkers2),
+        couch_upr_fake_server:ceil_div(DupsEnd2, ItemsPerSnapshot2),
+        "received the expected number of snapshots"),
+    DupsUnique2 = lists:ukeysort(#upr_doc.id, DupsMutations2),
+    DupsUniqueIds2 = [Id || #upr_doc{id = Id} <- DupsUnique2],
+    MutationsIds2 = [Id || #upr_doc{id = Id} <- Mutations3],
+    etap:is(DupsUniqueIds2, MutationsIds2,
+        "received the expected mutations when de-duplicated"),
+    couch_upr_fake_server:set_items_per_snapshot(0),
+    couch_upr_fake_server:set_dups_per_snapshot(0),
 
 
     % Test multiple streams in parallel
