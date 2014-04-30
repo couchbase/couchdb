@@ -448,8 +448,8 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                             end
                         end;
                     false ->
-                        fun(Item, {Items, SingleSnapshot}) ->
-                            case Item of
+                        fun(Item, {Items, NotNeeded}) ->
+                            Items2 = case Item of
                             {snapshot_marker, {_StartSeq, _EndSeq, _Type}} ->
                                 ?LOG_INFO(
                                     "(incremental build) " "set view `~s`, "
@@ -457,24 +457,29 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                                     "a snapshot marker for partition ~p",
                                     [SetName, GroupType, Category, DDocId,
                                         PartId]),
+                                case Items of
                                 % Ignore the snapshot marker that is at the
                                 % beginning of the stream
-                                {Items, Items == []};
+                                % We skip it as it would lead to an additional
+                                % flush which isn't needed as the previous
+                                % items are from a different partition, and
+                                % items with the same document ID can't be in
+                                % different partitions (hence it can't lead to
+                                % duplicates without one batch).
+                                [] ->
+                                    Items;
+                                _ ->
+                                    [snapshot_marker|Items]
+                                end;
                             _ ->
-                                Items2 = case SingleSnapshot of
-                                true ->
-                                    [Item|Items];
-                                false ->
-                                    lists:keystore(
-                                        Item#upr_doc.id, #upr_doc.id, Items, Item)
-                                end,
-                                {Items2, SingleSnapshot}
-                            end
+                                [Item|Items]
+                            end,
+                            {Items2, NotNeeded}
                          end
                      end,
                     Result = couch_upr_client:enum_docs_since(
                         UprPid, PartId, PartVersions, Since, EndSeq, Flags,
-                        ChangesWrapper, {[], true}),
+                        ChangesWrapper, {[], 0}),
                     case Result of
                     {ok, {Items, InitialEndSeq}, NewPartVersions} ->
                         AccCount2 = lists:foldl(fun(Item, Acc) ->
@@ -482,7 +487,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                                 Item, MapQueue, Group, MaxDocSize,
                                 InitialBuild),
                             Acc + 1
-                        end, AccCount, Items),
+                        end, AccCount, lists:reverse(Items)),
                         case InitialBuild of
                         true ->
                             AccSeqs2 = orddict:store(
@@ -617,6 +622,8 @@ notify_owner(Owner, Msg, UpdaterPid) ->
     Owner ! {updater_info, UpdaterPid, Msg}.
 
 
+queue_doc(snapshot_marker, MapQueue, _Group, _MaxDocSize, _InitialBuild) ->
+    couch_work_queue:queue(MapQueue, force_flush);
 queue_doc(Doc, MapQueue, Group, MaxDocSize, InitialBuild) ->
     case Doc#upr_doc.deleted of
     true when InitialBuild ->
@@ -728,7 +735,9 @@ do_maps(Group, MapQueue, WriteQueue) ->
                     Args = [SetName, Type, DDocId, Id, couch_util:to_binary(Reason)],
                     ?LOG_MAPREDUCE_ERROR(ErrorMsg, Args),
                     [{Seq, Id, PartId, []} | Acc]
-                end
+                end;
+            (force_flush, Acc) ->
+                [force_flush | Acc]
             end,
             [], Queue),
         ok = couch_work_queue:queue(WriteQueue, Items),
@@ -736,6 +745,8 @@ do_maps(Group, MapQueue, WriteQueue) ->
     end.
 
 
+do_writes(#writer_acc{kvs = [], final_batch = true} = Acc) ->
+    Acc;
 do_writes(Acc) ->
     #writer_acc{
         kvs = Kvs,
@@ -746,32 +757,55 @@ do_writes(Acc) ->
     ok = timer:sleep(Throttle),
     case couch_work_queue:dequeue(WriteQueue) of
     closed ->
-        flush_writes(Acc#writer_acc{final_batch = true});
+        EndOfQueue = true,
+        Queue = [],
+        QueueSize = 0;
     {ok, Queue0, QueueSize} ->
-        Queue = lists:flatten(Queue0),
-        Kvs2 = Kvs ++ Queue,
-        KvsSize2 = KvsSize + QueueSize,
+        EndOfQueue = false,
+        Queue = lists:flatten(Queue0)
+    end,
+
+    Kvs2 = Kvs ++ Queue,
+    KvsSize2 = KvsSize + QueueSize,
+    {Kvs3, KvsRest} = lists:splitwith(
+        fun(Item) -> Item =/= force_flush end, Kvs2),
+
+    case KvsRest of
+    NoRest when NoRest =:= [] orelse NoRest =:= [force_flush] ->
         Acc2 = Acc#writer_acc{
-            kvs = Kvs2,
-            kvs_size = KvsSize2
+            kvs = Kvs3,
+            kvs_size = KvsSize2,
+            final_batch = EndOfQueue,
+            force_flush = NoRest =:= [force_flush] andalso Kvs =/= []
         },
-        case should_flush_writes(Acc2) of
+        case should_flush_writes(Acc2) orelse EndOfQueue of
         true ->
             Acc3 = flush_writes(Acc2),
             Acc4 = Acc3#writer_acc{kvs = [], kvs_size = 0};
         false ->
             Acc4 = Acc2
-        end,
-        do_writes(Acc4)
-    end.
+        end;
+    [force_flush | KvsRest2] ->
+        KvsRestSize = ?term_size(KvsRest2),
+        Acc2 = Acc#writer_acc{
+            kvs = Kvs3,
+            kvs_size = KvsSize2 - KvsRestSize,
+            force_flush = true
+        },
+        Acc3 = flush_writes(Acc2),
+        Acc4 = Acc3#writer_acc{kvs = KvsRest2, kvs_size = KvsRestSize}
+    end,
+    do_writes(Acc4).
 
 
 should_flush_writes(Acc) ->
     #writer_acc{
         view_empty_kvs = ViewEmptyKvs,
-        kvs_size = KvsSize
+        kvs_size = KvsSize,
+        force_flush = ForceFlush
     } = Acc,
-    KvsSize >= (?MIN_BATCH_SIZE_PER_VIEW * length(ViewEmptyKvs)).
+    KvsSize >= (?MIN_BATCH_SIZE_PER_VIEW * length(ViewEmptyKvs)) orelse
+        ForceFlush.
 
 
 flush_writes(#writer_acc{kvs = [], initial_build = false} = Acc) ->
@@ -883,7 +917,10 @@ process_map_results(Kvs, ViewEmptyKVs, PartSeqs) ->
             {NewViewKVs, NewViewIdKeys} = view_insert_doc_query_results(
                     DocId, PartId, QueryResults, ViewKVsAcc, [], []),
             PartIdSeqs2 = update_part_seq(Seq, PartId, PartIdSeqs),
-            {NewViewKVs, [{DocId, {PartId, NewViewIdKeys}} | DocIdViewIdKeysAcc], PartIdSeqs2}
+            {NewViewKVs, [{DocId, {PartId, NewViewIdKeys}} | DocIdViewIdKeysAcc], PartIdSeqs2};
+        (force_flush, _Acc) ->
+            throw({error,
+                <<"There should have been a forced flush, but wasn't">>})
         end,
         {ViewEmptyKVs, [], PartSeqs}, Kvs).
 
@@ -1075,7 +1112,8 @@ maybe_update_btrees(WriterAcc0) ->
         group = Group0,
         final_batch = IsFinalBatch,
         owner = Owner,
-        last_seqs = LastSeqs
+        last_seqs = LastSeqs,
+        force_flush = ForceFlush
     } = WriterAcc0,
     IdTmpFileInfo = dict:fetch(ids_index, TmpFiles),
     ShouldFlushViews = case Group0#set_view_group.mod of
@@ -1091,6 +1129,7 @@ maybe_update_btrees(WriterAcc0) ->
         true
     end,
     ShouldFlush = IsFinalBatch orelse
+        ForceFlush orelse
         ((IdTmpFileInfo#set_view_tmp_file_info.size >= ?INC_MAX_TMP_FILE_SIZE) andalso
         ShouldFlushViews),
     case ShouldFlush of

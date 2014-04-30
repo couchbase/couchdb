@@ -35,5 +35,6 @@
     initial_seqs,
     max_insert_batch_size,
     tmp_files = dict:new(),
-    throttle = 0
+    throttle = 0,
+    force_flush = false
 }).
