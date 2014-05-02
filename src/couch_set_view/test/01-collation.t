@@ -161,12 +161,16 @@ expectations() ->
      {<<"\"Os cágados voadores que atacaram as vacas do senhor engenheiro Bairrão!\""/utf8>>,
       <<"\"Os cágados voadores que atacaram as vacas do senhor engenheiro Bairrão!\""/utf8>>,
       0},
-     {<<"\"Os cagádos voadores que atacaram as vacas do senhor engenheiro Bairrão!\""/utf8>>,
-      <<"\"Os cágados voadores que atacaram as vacas do senhor engenheiro Bairrão!\""/utf8>>,
-      1},
-     {<<"\"Os cágados voadores que atacaram as vacas do senhor engenheiro Bairrão!\""/utf8>>,
-      <<"\"Os cagádos voadores que atacaram as vacas do senhor engenheiro Bairrão!\""/utf8>>,
-      -1},
+     % NOTE vmx: 2014-05-02: The handling of UTF-8 binaries within escripts is
+     % broken in Erlang < 17.0, hence these comparisons are disabled for now.
+     % See MB-11023 (http://www.couchbase.com/issues/browse/MB-11023) for more
+     % information.
+     %{<<"\"Os cagádos voadores que atacaram as vacas do senhor engenheiro Bairrão!\""/utf8>>,
+     % <<"\"Os cágados voadores que atacaram as vacas do senhor engenheiro Bairrão!\""/utf8>>,
+     % -1},
+     %{<<"\"Os cágados voadores que atacaram as vacas do senhor engenheiro Bairrão!\""/utf8>>,
+     % <<"\"Os cagádos voadores que atacaram as vacas do senhor engenheiro Bairrão!\""/utf8>>,
+     % 1},
      {<<"\"\\\\u00e1\"">>, <<"\"\"">>, 1},
      {<<"\"\\\\U00e1\"">>, <<"\"\"">>, 1},
      {<<"\"h\\\\u00e1\"">>, <<"\"\\\\u00e1\"">>, 1},
