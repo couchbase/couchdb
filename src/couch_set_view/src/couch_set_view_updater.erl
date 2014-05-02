@@ -424,64 +424,43 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                 true ->
                     {AccCount, AccSeqs, AccVersions, AccRollbacks};
                 false ->
-                    % NOTE vmx 2014-04-11: The ChangeWrapper code is a bit
-                    % ugly at the moment. The reason is that I want to change
-                    % the behaviour of the initial build only and keep the
-                    % current incremental implementation the same. It will
-                    % be cleaned up, once the non-buffering incremental
-                    % update is also in place
-                    ChangesWrapper = case InitialBuild of
-                    true ->
-                        fun(Item, {Items, InitialEndSeq}) ->
-                            case Item of
-                            {snapshot_marker,{_StartSeq, MarkerEndSeq,
-                                    ?UPR_SNAPSHOT_TYPE_DISK}} ->
-                                ?LOG_INFO(
-                                    "(initial build) set view `~s`, "
-                                    "~s (~s) group `~s`: received "
-                                    "a snapshot marker for partition ~p",
-                                    [SetName, GroupType, Category, DDocId,
-                                        PartId]),
+                    ChangesWrapper = fun
+                        ({snapshot_marker, Marker}, {Items, _}) ->
+                            {MarkerStartSeq, MarkerEndSeq, MarkerType} =
+                                Marker,
+                            ?LOG_INFO(
+                                "set view `~s`, ~s (~s) group `~s`: received "
+                                "a snapshot marker (~s) for partition ~p from "
+                                "sequence ~p to ~p",
+                                [SetName, GroupType, Category, DDocId,
+                                    case MarkerType of
+                                    ?UPR_SNAPSHOT_TYPE_DISK -> "on-disk";
+                                    ?UPR_SNAPSHOT_TYPE_MEMORY -> "in-memory"
+                                    end,
+                                    PartId, MarkerStartSeq, MarkerEndSeq]),
+                            case Items of
+                            % Ignore the snapshot marker that is at the
+                            % beginning of the stream.
+                            % If it wasn't ignored, it would lead to an
+                            % additional forced flush which isn't needed. A
+                            % flush is needed if there are several mutations
+                            % of the same document within one batch. As two
+                            % different partitions can't contain the same
+                            % document ID, we are safe to not force flushing
+                            % between two partitions.
+                            [] ->
                                 {Items, MarkerEndSeq};
-                            #upr_doc{} ->
-                                {[Item|Items], InitialEndSeq}
-                            end
-                        end;
-                    false ->
-                        fun(Item, {Items, NotNeeded}) ->
-                            Items2 = case Item of
-                            {snapshot_marker, {_StartSeq, _EndSeq, _Type}} ->
-                                ?LOG_INFO(
-                                    "(incremental build) " "set view `~s`, "
-                                    "~s (~s) group `~s`: received "
-                                    "a snapshot marker for partition ~p",
-                                    [SetName, GroupType, Category, DDocId,
-                                        PartId]),
-                                case Items of
-                                % Ignore the snapshot marker that is at the
-                                % beginning of the stream
-                                % We skip it as it would lead to an additional
-                                % flush which isn't needed as the previous
-                                % items are from a different partition, and
-                                % items with the same document ID can't be in
-                                % different partitions (hence it can't lead to
-                                % duplicates without one batch).
-                                [] ->
-                                    Items;
-                                _ ->
-                                    [snapshot_marker|Items]
-                                end;
                             _ ->
-                                [Item|Items]
-                            end,
-                            {Items2, NotNeeded}
-                         end
-                     end,
+                                {[snapshot_marker|Items], MarkerEndSeq}
+                            end;
+                        (#upr_doc{} = Item, {Items, AccEndSeq}) ->
+                            {[Item|Items], AccEndSeq}
+                        end,
                     Result = couch_upr_client:enum_docs_since(
                         UprPid, PartId, PartVersions, Since, EndSeq, Flags,
                         ChangesWrapper, {[], 0}),
                     case Result of
-                    {ok, {Items, InitialEndSeq}, NewPartVersions} ->
+                    {ok, {Items, AccEndSeq}, NewPartVersions} ->
                         AccCount2 = lists:foldl(fun(Item, Acc) ->
                             queue_doc(
                                 Item, MapQueue, Group, MaxDocSize,
@@ -491,7 +470,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                         case InitialBuild of
                         true ->
                             AccSeqs2 = orddict:store(
-                                PartId, InitialEndSeq, AccSeqs);
+                                PartId, AccEndSeq, AccSeqs);
                         false ->
                             AccSeqs2 = orddict:store(PartId, EndSeq, AccSeqs)
                         end,
