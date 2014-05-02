@@ -425,7 +425,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                     {AccCount, AccSeqs, AccVersions, AccRollbacks};
                 false ->
                     ChangesWrapper = fun
-                        ({snapshot_marker, Marker}, {Items, _}) ->
+                        ({snapshot_marker, Marker}, {Count, _}) ->
                             {MarkerStartSeq, MarkerEndSeq, MarkerType} =
                                 Marker,
                             ?LOG_INFO(
@@ -438,7 +438,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                                     ?UPR_SNAPSHOT_TYPE_MEMORY -> "in-memory"
                                     end,
                                     PartId, MarkerStartSeq, MarkerEndSeq]),
-                            case Items of
+                            case Count of
                             % Ignore the snapshot marker that is at the
                             % beginning of the stream.
                             % If it wasn't ignored, it would lead to an
@@ -448,31 +448,30 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                             % different partitions can't contain the same
                             % document ID, we are safe to not force flushing
                             % between two partitions.
-                            [] ->
-                                {Items, MarkerEndSeq};
+                            0 ->
+                                {Count, MarkerEndSeq};
                             _ ->
-                                {[snapshot_marker|Items], MarkerEndSeq}
+                                queue_doc(
+                                    snapshot_marker, MapQueue, Group,
+                                    MaxDocSize, InitialBuild),
+                                {Count, MarkerEndSeq}
                             end;
-                        (#upr_doc{} = Item, {Items, AccEndSeq}) ->
-                            {[Item|Items], AccEndSeq}
+                        (#upr_doc{} = Item, {Count, AccEndSeq}) ->
+                            queue_doc(
+                                Item, MapQueue, Group,
+                                MaxDocSize, InitialBuild),
+                            {Count + 1, AccEndSeq}
                         end,
                     Result = couch_upr_client:enum_docs_since(
                         UprPid, PartId, PartVersions, Since, EndSeq, Flags,
-                        ChangesWrapper, {[], 0}),
+                        ChangesWrapper, {0, 0}),
                     case Result of
-                    {ok, {Items, AccEndSeq}, NewPartVersions} ->
-                        AccCount2 = lists:foldl(fun(Item, Acc) ->
-                            queue_doc(
-                                Item, MapQueue, Group, MaxDocSize,
-                                InitialBuild),
-                            Acc + 1
-                        end, AccCount, lists:reverse(Items)),
-                        case InitialBuild of
+                    {ok, {AccCount2, AccEndSeq}, NewPartVersions} ->
+                        AccSeqs2 = case InitialBuild of
                         true ->
-                            AccSeqs2 = orddict:store(
-                                PartId, AccEndSeq, AccSeqs);
+                            orddict:store(PartId, AccEndSeq, AccSeqs);
                         false ->
-                            AccSeqs2 = orddict:store(PartId, EndSeq, AccSeqs)
+                            orddict:store(PartId, EndSeq, AccSeqs)
                         end,
                         AccVersions2 = lists:ukeymerge(
                             1, [{PartId, NewPartVersions}], AccVersions),
