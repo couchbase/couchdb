@@ -26,7 +26,7 @@
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(123),
+    etap:plan(121),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -36,11 +36,11 @@ main(_) ->
     end,
     ok.
 
+
 test() ->
     test_map_function_bad_syntax(),
     test_map_function_throw_exception(),
     test_map_function_runtime_error(),
-    test_map_function_with_non_json_value(),
     test_multiple_map_functions_runtime_errors(),
     test_empty_results_single_function(),
     test_empty_results_multiple_functions(),
@@ -101,14 +101,6 @@ test_map_function_runtime_error() ->
     {ok, [{error, Reason2}]} = Results2,
     etap:is(is_binary(Reason2), true, "Error reason is a binary").
 
-test_map_function_with_non_json_value() ->
-    {ok, Ctx} = mapreduce:start_map_context([
-        <<"function(doc, meta) { emit(meta.type, decodeBase64(doc)); }">>
-    ]),
-    Results = mapreduce:map_doc(Ctx, <<"test">>, <<"{}">>),
-    {ok,[[{Type, Data}]]} = Results,
-    etap:is(Type, <<"\"base64\"">>, "Data type is correctly set to base64"),
-    etap:is(Data, <<"[116,101,115,116]">>, "Data is correctly decoded to base64").
 
 test_multiple_map_functions_runtime_errors() ->
     {ok, Ctx} = mapreduce:start_map_context([

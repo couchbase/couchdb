@@ -96,9 +96,6 @@ static const char *BASE64_FUNCTION_STRING =
     "    return arr;"
     "})";
 
-#define META_TYPE_KEY "type"
-#define META_BASE64_VALUE "base64"
-
 static void doInitContext(map_reduce_ctx_t *ctx, const function_sources_list_t &funs);
 #ifdef V8_POST_3_19_API
 static Local<Context> createJsContext(map_reduce_ctx_t *ctx);
@@ -115,13 +112,11 @@ static void freeMapResultList(const map_results_list_t &results);
 static Handle<Function> compileFunction(const function_source_t &funSource);
 static inline ErlNifBinary jsonStringify(const Handle<Value> &obj);
 static inline Handle<Value> jsonParse(const ErlNifBinary &thing);
-static inline Handle<Value> parseDoc(const ErlNifBinary &thing, Handle<Value> &metaObject);
 static inline Handle<Array> jsonListToJsArray(const json_results_list_t &list);
 static inline isolate_data_t *getIsolateData();
 static inline void taskStarted(map_reduce_ctx_t *ctx);
 static inline void taskFinished(map_reduce_ctx_t *ctx);
 static std::string exceptionString(const TryCatch &tryCatch);
-static inline ErlNifBinary base64Encode(const unsigned char *data, size_t inputLength);
 
 
 
@@ -210,13 +205,13 @@ map_results_list_t mapDoc(map_reduce_ctx_t *ctx,
     HandleScope handleScope;
     Context::Scope contextScope(ctx->jsContext);
 #endif
+    Handle<Value> docObject = jsonParse(doc);
     Handle<Value> metaObject = jsonParse(meta);
 
     if (!metaObject->IsObject()) {
         throw MapReduceError("metadata is not a JSON object");
     }
 
-    Handle<Value> docObject = parseDoc(doc, metaObject);
     map_results_list_t results;
     Handle<Value> funArgs[] = { docObject, metaObject };
 
@@ -628,23 +623,6 @@ Handle<Value> jsonParse(const ErlNifBinary &thing)
     return result;
 }
 
-// Convert the data to base64 if it is not a valid json.
-Handle<Value> parseDoc(const ErlNifBinary &thing, Handle<Value> &metaObject)
-{
-    Handle<Value> docObject;
-    try {
-        docObject = jsonParse(thing);
-    } catch (...) {
-        ErlNifBinary newThing = base64Encode(reinterpret_cast<const unsigned char *>
-            (thing.data), thing.size);
-        docObject = jsonParse(newThing);
-        Handle<Value> key = String::New(META_TYPE_KEY, sizeof(META_TYPE_KEY) - 1);
-        Handle<Value> value = String::New(META_BASE64_VALUE, sizeof(META_BASE64_VALUE) - 1);
-        metaObject->ToObject()->Set(key, value);
-        enif_release_binary(&newThing);
-    }
-    return docObject;
-}
 
 void loadFunctions(map_reduce_ctx_t *ctx, const function_sources_list_t &funStrings)
 {
@@ -810,36 +788,4 @@ void freeJsonData(const json_results_list_t &data)
         ErlNifBinary bin = *it;
         enif_release_binary(&bin);
     }
-}
-
-ErlNifBinary base64Encode(const unsigned char *data, size_t inputLength)
-{
-    static const char encodingTable[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    static const int modTable[] = {0, 2, 1};
-    ErlNifBinary newThing;
-    size_t outputLength = 4 * ((inputLength + 2) / 3);
-    if (!enif_alloc_binary_compat(isoData->ctx->env, outputLength + 2,
-        &newThing)) {
-        throw std::bad_alloc();
-    }
-    unsigned char *encodedData = newThing.data;
-    encodedData[0] = '"';
-    for (int i = 0, j = 1; i < inputLength;) {
-
-        uint32_t octetA = i < inputLength ? (unsigned char)data[i++] : 0;
-        uint32_t octetB = i < inputLength ? (unsigned char)data[i++] : 0;
-        uint32_t octetC = i < inputLength ? (unsigned char)data[i++] : 0;
-
-        uint32_t triple = (octetA << 0x10) + (octetB << 0x08) + octetC;
-
-        encodedData[j++] = encodingTable[(triple >> 3 * 6) & 0x3F];
-        encodedData[j++] = encodingTable[(triple >> 2 * 6) & 0x3F];
-        encodedData[j++] = encodingTable[(triple >> 1 * 6) & 0x3F];
-        encodedData[j++] = encodingTable[(triple >> 0 * 6) & 0x3F];
-    }
-    for (int i = 0; i < modTable[inputLength % 3]; i++) {
-        encodedData[outputLength - i] = '=';
-    }
-    encodedData[outputLength + 1] = '"';
-    return newThing;
 }
