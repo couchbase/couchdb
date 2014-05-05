@@ -10,10 +10,11 @@
 % License for the specific language governing permissions and limitations under
 % the License.
 
--type upr_status() :: non_neg_integer().
--type request_id() :: non_neg_integer().
--type size()       :: non_neg_integer().
--type socket()     :: port().
+-type upr_status()    :: non_neg_integer().
+-type upr_data_type() :: 0..255.
+-type request_id()    :: non_neg_integer().
+-type size()          :: non_neg_integer().
+-type socket()        :: port().
 
 % Those types are duplicates from couch_set_view.hrl
 -type uint64()                   :: 0..18446744073709551615.

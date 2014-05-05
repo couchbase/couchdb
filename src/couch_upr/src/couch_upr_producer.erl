@@ -168,11 +168,17 @@ encode_snapshot_mutation(PartId, RequestId, Cas, Seq, RevSeq, Flags,
     BodyLength = byte_size(Body),
     ExtraLength = BodyLength - KeyLength - ValueLength - MetadataLength,
 
+    DataType = case ejson:validate(Value) of
+    ok ->
+        ?UPR_DATA_TYPE_JSON;
+    _ ->
+        ?UPR_DATA_TYPE_RAW
+    end,
     Header = <<?UPR_MAGIC_REQUEST,
                ?UPR_OPCODE_MUTATION,
                KeyLength:?UPR_SIZES_KEY_LENGTH,
                ExtraLength,
-               0,
+               DataType,
                PartId:?UPR_SIZES_PARTITION,
                BodyLength:?UPR_SIZES_BODY,
                RequestId:?UPR_SIZES_OPAQUE,

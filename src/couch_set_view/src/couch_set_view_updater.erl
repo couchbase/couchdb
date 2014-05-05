@@ -679,15 +679,18 @@ do_maps(Group, MapQueue, WriteQueue) ->
                     cas = Cas,
                     expiration = Expiration,
                     flags = Flags,
-                    data_type = DataType
+                    data_type = UprDataType
                 } = UprDoc,
+                DataType = case UprDataType of
+                ?UPR_DATA_TYPE_RAW ->
+                    ?CONTENT_META_NON_JSON_MODE;
+                ?UPR_DATA_TYPE_JSON ->
+                    ?CONTENT_META_JSON
+                end,
                 Doc = #doc{
                     id = Id,
                     rev = {RevSeq, <<Cas:64, Expiration:32, Flags:32>>},
                     body = Body,
-                    % XXX vmx 2014-02-26: Make sure the type is correct. I
-                    % guess UPR should provide us with the needed
-                    % information
                     content_meta = DataType,
                     deleted = false
                 },

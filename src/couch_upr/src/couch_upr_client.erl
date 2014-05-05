@@ -77,7 +77,7 @@ start(Name, Bucket, AdmUser, AdmPasswd, BufferSize) ->
     gen_server:start_link(?MODULE, [Name, Bucket, AdmUser, AdmPasswd, BufferSize], []).
 
 -spec add_stream(pid(), partition_id(), uuid(), update_seq(),
-    update_seq(), 0..255) -> {request_id(), term()}.
+    update_seq(), upr_data_type()) -> {request_id(), term()}.
 add_stream(Pid, PartId, PartUuid, StartSeq, EndSeq, Flags) ->
     gen_server:call(
         Pid, {add_stream, PartId, PartUuid, StartSeq, EndSeq, Flags}).
@@ -621,10 +621,10 @@ receive_snapshot_marker(Socket, Timeout, BodyLength) ->
     end.
 
 -spec receive_snapshot_mutation(socket(), timeout(), partition_id(), size(),
-                                size(), size(), uint64()) ->
+                                size(), size(), uint64(), upr_data_type()) ->
                                        #upr_doc{} | {error, closed}.
 receive_snapshot_mutation(Socket, Timeout, PartId, KeyLength, BodyLength,
-        ExtraLength, Cas) ->
+        ExtraLength, Cas, DataType) ->
     case socket_recv(Socket, BodyLength, Timeout) of
     {ok, Body} ->
          {snapshot_mutation, Mutation} =
@@ -641,8 +641,7 @@ receive_snapshot_mutation(Socket, Timeout, PartId, KeyLength, BodyLength,
          #upr_doc{
              id = Key,
              body = Value,
-             % XXX vmx 2014-02-26: TODO: datatype
-             %data_type =
+             data_type = DataType,
              partition = PartId,
              cas = Cas,
              rev_seq = RevSeq,
@@ -656,11 +655,11 @@ receive_snapshot_mutation(Socket, Timeout, PartId, KeyLength, BodyLength,
     end.
 
 -spec receive_snapshot_deletion(socket(), timeout(), partition_id(), size(),
-                                size(), uint64()) ->
+                                size(), uint64(), upr_data_type()) ->
                                        #upr_doc{} |
                                        {error, closed | inet:posix()}.
 receive_snapshot_deletion(Socket, Timeout, PartId, KeyLength, BodyLength,
-        Cas) ->
+        Cas, DataType) ->
     case socket_recv(Socket, BodyLength, Timeout) of
     {ok, Body} ->
          {snapshot_deletion, Deletion} =
@@ -669,8 +668,7 @@ receive_snapshot_deletion(Socket, Timeout, PartId, KeyLength, BodyLength,
          #upr_doc{
              id = Key,
              body = <<>>,
-             % XXX vmx 2014-02-26: TODO: datatype
-             %data_type =
+             data_type = DataType,
              partition = PartId,
              cas = Cas,
              rev_seq = RevSeq,
@@ -1031,20 +1029,20 @@ receive_worker(Socket, Timeout, Parent, MsgAcc0) ->
             {done, {stream_event, RequestId,
                 {snapshot_marker, SnapshotMarker, BodyLength}}};
         {snapshot_mutation, PartId, RequestId, KeyLength, BodyLength,
-                ExtraLength, Cas} ->
+                ExtraLength, Cas, DataType} ->
             Mutation = receive_snapshot_mutation(
                 Socket, Timeout, PartId, KeyLength, BodyLength, ExtraLength,
-                Cas),
+                Cas, DataType),
             {done, {stream_event, RequestId, {snapshot_mutation, Mutation, BodyLength}}};
         % For the indexer and XDCR there's no difference between a deletion
         % end an expiration. In both cases the items should get removed.
         % Hence the same code can be used after the initial header
         % parsing (the body is the same).
-        {OpCode, PartId, RequestId, KeyLength, BodyLength, Cas} when
+        {OpCode, PartId, RequestId, KeyLength, BodyLength, Cas, DataType} when
                 OpCode =:= snapshot_deletion orelse
                 OpCode =:= snapshot_expiration ->
             Deletion = receive_snapshot_deletion(
-                Socket, Timeout, PartId, KeyLength, BodyLength, Cas),
+                Socket, Timeout, PartId, KeyLength, BodyLength, Cas, DataType),
             {done, {stream_event, RequestId, {snapshot_deletion, Deletion, BodyLength}}};
         {stream_end, PartId, RequestId, BodyLength} ->
             Flag = receive_stream_end(Socket, Timeout, BodyLength),

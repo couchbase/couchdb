@@ -75,7 +75,7 @@ parse_header(<<?UPR_MAGIC_REQUEST,
                Opcode,
                KeyLength:?UPR_SIZES_KEY_LENGTH,
                ExtraLength,
-               _DataType,
+               DataType,
                PartId:?UPR_SIZES_PARTITION,
                BodyLength:?UPR_SIZES_BODY,
                RequestId:?UPR_SIZES_OPAQUE,
@@ -87,11 +87,13 @@ parse_header(<<?UPR_MAGIC_REQUEST,
         {snapshot_marker, PartId, RequestId, BodyLength};
     ?UPR_OPCODE_MUTATION ->
         {snapshot_mutation, PartId, RequestId, KeyLength, BodyLength,
-            ExtraLength, Cas};
+            ExtraLength, Cas, DataType};
     ?UPR_OPCODE_DELETION ->
-        {snapshot_deletion, PartId, RequestId, KeyLength, BodyLength, Cas};
+        {snapshot_deletion, PartId, RequestId, KeyLength, BodyLength, Cas,
+            DataType};
     ?UPR_OPCODE_EXPIRATION ->
-        {snapshot_expiration, PartId, RequestId, KeyLength, BodyLength, Cas}
+        {snapshot_expiration, PartId, RequestId, KeyLength, BodyLength, Cas,
+            DataType}
     end.
 
 -spec parse_snapshot_marker(<<_:160>>) ->
