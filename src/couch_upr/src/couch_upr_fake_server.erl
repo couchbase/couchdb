@@ -21,7 +21,7 @@
     set_items_per_snapshot/1, set_dups_per_snapshot/1,
     pause_mutations/0, ceil_div/2, num_items_with_dups/3]).
 -export([send_single_mutation/0, continue_mutations/0]).
--export([get_num_buffer_acks/0, is_control_req/0]).
+-export([get_num_buffer_acks/0, is_control_req/0, close_connection/1]).
 
 % Needed for internal process spawning
 -export([accept/1, accept_loop/1]).
@@ -165,6 +165,10 @@ get_num_buffer_acks() ->
 -spec is_control_req() -> boolean().
 is_control_req() ->
     gen_server:call(?MODULE, is_control_req).
+
+% Used by unit test.
+close_connection(PartId) ->
+    ok = gen_server:call(?MODULE, {close_connection, PartId}).
 
 % Used by unit test to control flow of mutation message from server to client
 -spec send_single_mutation() -> ok.
@@ -436,7 +440,19 @@ handle_call(is_control_req, _From, State) ->
     _ ->
         true
     end,
-    {reply, Val, State}.
+    {reply, Val, State};
+
+handle_call({close_connection, PartId}, _From, State) ->
+     #state{
+       streams = Streams
+    } = State,
+    case lists:keytake(PartId, 1, Streams) of
+    {value, StreamMeta, Streams2} ->
+        {_PartId, {_RequestId, _Mutation, Socket, _HiSeq}} = StreamMeta,
+        ok = gen_tcp:close(Socket),
+        State2 = State#state{streams = Streams2},
+        {reply, ok, State2}
+    end.
 
 -spec handle_cast(any(), #state{}) ->
                          {stop, {unexpected_cast, any()}, #state{}}.

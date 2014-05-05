@@ -25,7 +25,7 @@ num_docs_pp() -> num_docs() div num_set_partitions().
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(50),
+    etap:plan(53),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -357,6 +357,35 @@ test() ->
 
     exit(ReqPid, shutdown),
     couch_upr_client:remove_stream(Pid, 1),
+    gen_server:call(Pid, flush_old_streams_meta),
+
+    {StreamReq0_5, _} = couch_upr_client:add_stream(Pid, 2,
+        first_uuid(InitialFailoverLog2), 0, 500, ?UPR_FLAG_NOFLAG),
+
+    ok = couch_upr_fake_server:send_single_mutation(),
+    {snapshot_mutation, Mutation1} = couch_upr_client:get_stream_event(Pid, StreamReq0_5),
+    #upr_doc{seq = SeqNo1} = Mutation1,
+    OldSocket = gen_server:call(Pid, get_socket),
+    ok = couch_upr_fake_server:close_connection(2),
+    % wait for sometime to do reconnect from couch_upr client
+    timer:sleep(4000),
+    NewSocket = gen_server:call(Pid, get_socket),
+    etap:isnt(OldSocket, NewSocket, "Socket changed"),
+    ok = couch_upr_fake_server:send_single_mutation(),
+    {snapshot_mutation, Mutation2} = couch_upr_client:get_stream_event(Pid, StreamReq0_5),
+    #upr_doc{seq = SeqNo2} = Mutation2,
+    etap:is(SeqNo1+1, SeqNo2, "Got the correct mutation after connection close"),
+
+    receive_mutation(10, Pid, StreamReq0_5),
+    ok = couch_upr_fake_server:close_connection(2),
+    % wait for sometime to do reconnect from couch_upr client
+    timer:sleep(4000),
+    couch_upr_fake_server:send_single_mutation(),
+    {snapshot_mutation, Mutation3} = couch_upr_client:get_stream_event(Pid, StreamReq0_5),
+    #upr_doc{seq = SeqNo3} = Mutation3,
+    etap:is(SeqNo2+11, SeqNo3, "Got the correct mutation after connection close"),
+
+    couch_upr_client:remove_stream(Pid, 2),
     couch_upr_fake_server:continue_mutations(),
 
     % Test get_num_items
@@ -572,3 +601,10 @@ delete_docs(StartId, NumDocs) ->
 
 first_uuid(FailoverLog) ->
     element(1, hd(FailoverLog)).
+
+receive_mutation(0, _, _) ->
+    ok;
+receive_mutation(Count, Pid, Stream) ->
+    couch_upr_fake_server:send_single_mutation(),
+    couch_upr_client:get_stream_event(Pid, Stream),
+    receive_mutation(Count - 1, Pid, Stream).

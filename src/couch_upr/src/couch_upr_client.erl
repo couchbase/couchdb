@@ -18,7 +18,7 @@
 -export([add_stream/6, get_sequence_number/2, get_num_items/2,
     get_failover_log/2]).
 -export([get_stream_event/2, remove_stream/2, list_streams/1]).
--export([enum_docs_since/8]).
+-export([enum_docs_since/8, restart_worker/1]).
 
 % gen_server callbacks
 -export([init/1, terminate/2, handle_call/3, handle_cast/2, handle_info/2, code_change/3]).
@@ -29,6 +29,7 @@
 -include_lib("couch_upr/include/couch_upr_typespecs.hrl").
 -define(MAX_BUF_SIZE, 10485760).
 -define(TIMEOUT, 60000).
+-define(UPR_RETRY_TIMEOUT, 2000).
 
 -type mutations_fold_fun() :: fun().
 -type mutations_fold_acc() :: any().
@@ -42,7 +43,18 @@
     active_streams = []             :: list(),
     worker_pid                      :: pid(),
     max_buffer_size = ?MAX_BUF_SIZE :: integer(),
-    total_buffer_size = 0                  :: non_neg_integer()
+    total_buffer_size = 0           :: non_neg_integer(),
+    stream_info = dict:new()        :: dict(),
+    args = []                       :: list()
+}).
+
+-record(stream_info, {
+    part_id = 0                     :: partition_id(),
+    part_uuid = 0                   :: uuid(),
+    start_seq = 0                   :: update_seq(),
+    end_seq = 0                     :: update_seq(),
+    snapshot_seq = {0, 0}           :: {update_seq(), update_seq()},
+    flags = 0                       :: non_neg_integer()
 }).
 
 % This gen server implements a UPR client with vbucket stream multiplexing
@@ -198,15 +210,18 @@ init([Name, Bucket, AdmUser, AdmPasswd, BufferSize]) ->
     {ok, State2} ->
         case select_bucket(Bucket, State2) of
         {ok, State3} ->
-            case open_connection(Name, State3) of
-            {ok, State4} ->
+            % Store the meta information to reconnect
+            Args = [Name, Bucket, AdmUser, AdmPasswd, BufferSize],
+            State4 = State3#state{args = Args},
+            case open_connection(Name, State4) of
+            {ok, State5} ->
                 Parent = self(),
                 process_flag(trap_exit, true),
                 WorkerPid = spawn_link(
                     fun() -> receive_worker(Socket, UprTimeout, Parent, []) end),
-                case set_buffer_size(State4, BufferSize) of
-                {ok, State5} ->
-                    {ok, State5#state{worker_pid = WorkerPid}};
+                case set_buffer_size(State5, BufferSize) of
+                {ok, State6} ->
+                    {ok, State6#state{worker_pid = WorkerPid}};
                 {error, Reason} ->
                     exit(WorkerPid, shutdown),
                     {stop, Reason}
@@ -225,45 +240,38 @@ init([Name, Bucket, AdmUser, AdmPasswd, BufferSize]) ->
 % Add caller to the request queue and wait for gen_server to reply on response arrival
 handle_call({add_stream, PartId, PartUuid, StartSeq, EndSeq, Flags},
         From, State) ->
-    #state{
-       socket = Socket,
-       request_id = RequestId
-    } = State,
-    % TODO vmx 2014-04-04: Add proper retry if the last request didn't return
+    % TODO vmx 2014-04-04: And proper retry if the last request didn't return
     % the full expected result
     SnapshotStart = StartSeq,
     SnapshotEnd = StartSeq,
-    StreamRequest = couch_upr_consumer:encode_stream_request(
-        PartId, RequestId, Flags, StartSeq, EndSeq, PartUuid, SnapshotStart,
-        SnapshotEnd),
-    case gen_tcp:send(Socket, StreamRequest) of
-    ok ->
-        State2 = next_request_id(State),
-        State3 = add_pending_request(State2, RequestId, {add_stream, PartId}, From),
-        {noreply, State3};
-    Error ->
-        {reply, Error, State}
+    case add_new_stream({PartId, PartUuid, StartSeq, EndSeq,
+        init, 0, {SnapshotStart, SnapshotEnd}, Flags}, From, State) of
+    {error, Reason} ->
+        {reply, {error, Reason}, State};
+    State2 ->
+        {noreply, State2}
     end;
 
 handle_call({remove_stream, PartId}, From, State) ->
+    State2 = remove_stream_info(PartId, State),
     #state{
        request_id = RequestId,
        socket = Socket
-    } = State,
-    case check_and_send_buffer_ack(State, RequestId, nil, remove_stream) of
-    {ok, State2} ->
+    } = State2,
+    case check_and_send_buffer_ack(State2, RequestId, nil, remove_stream) of
+    {ok, State3} ->
         StreamCloseRequest = couch_upr_consumer:encode_stream_close(
             PartId, RequestId),
         case gen_tcp:send(Socket, StreamCloseRequest) of
         ok ->
-            State3 = next_request_id(State2),
-            State4 = add_pending_request(State3, RequestId, {remove_stream, PartId}, From),
-            {noreply, State4};
+            State4 = next_request_id(State3),
+            State5 = add_pending_request(State4, RequestId, {remove_stream, PartId}, From),
+            {noreply, State5};
         Error ->
-            {reply, Error, State2}
+            {reply, Error, State3}
         end;
     {error, _Reason} = Error ->
-        {reply, Error, State}
+        {reply, Error, State2}
     end;
 
 handle_call(list_streams, _From, State) ->
@@ -313,6 +321,14 @@ handle_call(get_buffer_size, _From, #state{total_buffer_size = Size} = State) ->
 handle_call(reset_buffer_size, _From, #state{total_buffer_size = Size} = State) ->
     State2 = State#state{total_buffer_size = 0},
     {reply, Size, State2};
+
+% Only used by unit test
+handle_call(flush_old_streams_meta, _From, State) ->
+    {reply, ok, State#state{stream_info = dict:new()}};
+
+% Only used by unit test
+handle_call(get_socket, _From, #state{socket = Socket} = State) ->
+    {reply, Socket, State};
 
 % Only used by unit test
 handle_call({get_buffer_size, RequestId}, _From,
@@ -367,6 +383,8 @@ handle_info({get_stream_event, RequestId, From}, State) ->
 % Reply back to waiting callers
 handle_info({stream_response, RequestId, Msg}, State) ->
     State3 = case find_pending_request(State, RequestId) of
+    {_, nil} ->
+        State;
     {ReqInfo, SendTo} ->
         State2 = case ReqInfo of
         {add_stream, PartId} ->
@@ -415,33 +433,49 @@ handle_info({stream_noop, RequestId, _}, State) ->
 % If there is a waiting caller for stream event, reply to them
 % Else, queue the event into the stream queue
 handle_info({stream_event, RequestId, Event}, State) ->
-    case stream_event_waiters_present(State, RequestId) of
+    {Optype, Data} = Event,
+    State2 = case Optype of
+    snapshot_marker ->
+        store_snapshot_seq(RequestId, Data, State);
+    snapshot_mutation ->
+        store_snapshot_mutation(RequestId, Data, State);
+    stream_end ->
+        #state{
+            stream_info = StreamData
+        } = State,
+        StreamData2 = dict:erase(RequestId, StreamData),
+        State#state{stream_info = StreamData2};
+    snapshot_deletion ->
+        store_snapshot_mutation(RequestId, Data, State)
+    end,
+    case stream_event_waiters_present(State2, RequestId) of
     true ->
-        {State2, Waiter} = remove_stream_event_waiter(State, RequestId),
-        {Msg, State5} = case check_and_send_buffer_ack(State2, RequestId, Event, mutation) of
-        {ok, State3} ->
-            State4 = case Event of
+        {State3, Waiter} = remove_stream_event_waiter(State2, RequestId),
+        {Msg, State6} = case check_and_send_buffer_ack(State3, RequestId, Event, mutation) of
+        {ok, State4} ->
+            State5 = case Event of
             {stream_end, _} ->
-                remove_request_queue(State3, RequestId);
+                remove_request_queue(State4, RequestId);
             _ ->
-                State3
+                State4
             end,
-            {Event, State4};
+            {Event, State5};
         {error, Reason} ->
-            State3 = enqueue_stream_event(State2, RequestId, Event),
-            {{error, Reason}, State3}
+            State4 = enqueue_stream_event(State3, RequestId, Event),
+            {{error, Reason}, State4}
         end,
         Waiter ! {stream_event, RequestId, Msg},
-        {noreply, State5};
+        {noreply, State6};
     false ->
-        State2 = enqueue_stream_event(State, RequestId, Event),
-        {noreply, State2};
+        State3 = enqueue_stream_event(State2, RequestId, Event),
+        {noreply, State3};
     nil ->
         {noreply, State}
     end;
 
-handle_info({'EXIT', Pid, Reason}, #state{worker_pid = Pid} = State) ->
-    {stop, Reason, State};
+handle_info({'EXIT', Pid, _Reason}, #state{worker_pid = Pid} = State) ->
+    timer:sleep(?UPR_RETRY_TIMEOUT),
+    restart_worker(State);
 
 handle_info({print_log, Pid, ReqId}, State) ->
     #state{
@@ -745,7 +779,7 @@ remove_pending_request(State, RequestId) ->
     State#state{pending_requests = PendingRequests2}.
 
 
--spec find_pending_request(#state{}, request_id()) -> nil | {term(), {pid(), term()}}.
+-spec find_pending_request(#state{}, request_id()) -> nil | {term(), nil | {pid(), term()}}.
 find_pending_request(State, RequestId) ->
     #state{
        pending_requests = PendingRequests
@@ -1123,4 +1157,132 @@ get_event_size({Type, Doc}) ->
             id = Key
         } = Doc,
        ?UPR_MSG_SIZE_DELETION + erlang:external_size(Key)
+    end.
+
+-spec remove_stream_info(partition_id(), #state{}) -> #state{}.
+remove_stream_info(PartId, State) ->
+    #state{
+        active_streams = ActiveStreams,
+        stream_info = StreamData
+    } = State,
+    case lists:keyfind(PartId, 1, ActiveStreams) of
+    false ->
+        State;
+    {_, RequestId} ->
+        StreamData2 = dict:erase(RequestId, StreamData),
+        State#state{stream_info = StreamData2}
+    end.
+
+-spec insert_stream_info(partition_id(), request_id(), uuid(), non_neg_integer(),
+                        non_neg_integer(), #state{}, non_neg_integer()) -> #state{}.
+insert_stream_info(PartId, RequestId, PartUuid, StartSeq, EndSeq, State, Flags) ->
+    #state{stream_info = StreamData} = State,
+    Data = #stream_info{
+        part_id = PartId,
+        part_uuid = PartUuid,
+        start_seq = StartSeq,
+        end_seq = EndSeq,
+        flags = Flags
+    },
+    StreamData2 = dict:store(RequestId, Data, StreamData),
+    State#state{stream_info = StreamData2}.
+
+-spec add_new_stream({partition_id(), uuid(), update_seq(), update_seq(),
+        init | retry, request_id(), {update_seq(), update_seq()}, 0..255},
+        {pid(), string()}, #state{}) -> #state{} | {error, closed | inet:posix()}.
+add_new_stream({PartId, PartUuid, StartSeq, EndSeq, Type, OldRequestId,
+    {SnapSeqStart, SnapSeqEnd}, Flags}, From, State) ->
+   #state{
+       socket = Socket,
+       request_id = RequestId
+    } = State,
+    Id = case Type of
+    init ->
+        RequestId;
+    retry ->
+        OldRequestId
+    end,
+    StreamRequest = couch_upr_consumer:encode_stream_request(
+        PartId, Id, Flags, StartSeq, EndSeq, PartUuid, SnapSeqStart, SnapSeqEnd),
+    case gen_tcp:send(Socket, StreamRequest) of
+    ok ->
+        case Type of
+        init ->
+            State2 = insert_stream_info(PartId, RequestId, PartUuid, StartSeq, EndSeq,
+                State, Flags),
+            State3 = next_request_id(State2),
+            add_pending_request(State3, RequestId, {add_stream, PartId}, From);
+        retry ->
+            add_pending_request(State, OldRequestId, {add_stream, PartId}, nil)
+        end;
+    Error ->
+        {error, Error}
+    end.
+
+-spec restart_worker(#state{}) -> {noreply, #state{}} | {stop, sasl_auth_failed}.
+restart_worker(State) ->
+    #state{
+        args = Args
+    } = State,
+    case init(Args) of
+    {stop, Reason} ->
+        {stop, Reason};
+    {ok, State2} ->
+        #state{
+            socket = Socket,
+            worker_pid = WorkerPid
+        } = State2,
+        % Replace the socket
+        State3 = State#state{
+            socket = Socket,
+            pending_requests = dict:new(),
+            worker_pid = WorkerPid
+        },
+        #state{stream_info = StreamData} = State,
+        State4 = dict:fold(fun(RequestId, Value, Acc) ->
+            #stream_info{
+                part_id = PartId,
+                part_uuid= Puuid,
+                start_seq = StartSeq,
+                end_seq = EndSeq,
+                snapshot_seq = SnapshotSeq,
+                flags = Flags
+            } = Value,
+            add_new_stream({PartId, Puuid, StartSeq, EndSeq,
+                retry, RequestId, SnapshotSeq, Flags}, 0, Acc)
+        end, State3, StreamData),
+        {noreply, State4}
+    end.
+
+-spec store_snapshot_seq(request_id(), {update_seq(), update_seq(),
+                            non_neg_integer()}, #state{}) -> #state{}.
+store_snapshot_seq(RequestId, Data, State) ->
+    {StartSeq, EndSeq, _Type} = Data,
+    #state{
+        stream_info = StreamData
+    } = State,
+    case dict:find(RequestId, StreamData) of
+    {ok, Val} ->
+        Val2 = Val#stream_info{snapshot_seq = {StartSeq, EndSeq}},
+        StreamData2 = dict:store(RequestId, Val2, StreamData),
+        State#state{stream_info = StreamData2};
+    error ->
+        State
+    end.
+
+-spec store_snapshot_mutation(request_id(), #upr_doc{}, #state{}) -> #state{}.
+store_snapshot_mutation(RequestId, Data, State) ->
+  #upr_doc{
+        seq = Seq
+    } = Data,
+    #state{
+        stream_info = StreamData
+    } = State,
+    case dict:find(RequestId, StreamData) of
+    error ->
+        State;
+    {ok, Val} ->
+        Val2 = Val#stream_info{start_seq = Seq},
+        StreamData2 = dict:store(RequestId, Val2, StreamData),
+        State#state{stream_info = StreamData2}
     end.
