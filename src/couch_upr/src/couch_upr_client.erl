@@ -28,6 +28,7 @@
 -include_lib("couch_upr/include/couch_upr.hrl").
 -include_lib("couch_upr/include/couch_upr_typespecs.hrl").
 -define(MAX_BUF_SIZE, 10485760).
+-define(TIMEOUT, 60000).
 
 -type mutations_fold_fun() :: fun().
 -type mutations_fold_acc() :: any().
@@ -116,7 +117,14 @@ get_failover_log(Pid, PartId) ->
 -spec get_stream_event(pid(), request_id()) ->
                               {atom(), #upr_doc{}} | {'error', term()}.
 get_stream_event(Pid, ReqId) ->
-    gen_server:call(Pid, {get_stream_event, ReqId}).
+    try
+        gen_server:call(Pid, {get_stream_event, ReqId}, ?TIMEOUT)
+    catch exit:{timeout, _} ->
+        ?LOG_ERROR("upr client (~p): Obtaining mutation from server timed out "
+                   "after ~p seconds. Waiting...",
+                   [Pid, ?TIMEOUT/1000]),
+        get_stream_event(Pid, ReqId)
+    end.
 
 
 -spec set_buffer_size(pid(), integer()) -> ok.
