@@ -65,7 +65,8 @@ start_apps([App|Rest]) ->
     {error, _Reason} when App =:= public_key ->
        % ignore on R12B5
        start_apps(Rest);
-    {error, _Reason} ->
+    {error, Reason} ->
+       error_logger:error_msg("Could not start app ~p: ~p~n", [App, Reason]),
        {error, {app_would_not_start, App}}
     end.
 
