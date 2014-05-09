@@ -271,16 +271,28 @@ update_tmp_files(WriterAcc, ViewKeyValues, KeysToRemoveByView) ->
     TmpFiles2 = lists:foldl(
         fun({#set_view{id_num = ViewId}, AddKeyValues}, AccTmpFiles) ->
             AddKeyValuesBinaries = convert_primary_index_kvs_to_binary(AddKeyValues, Group, []),
-            KeysToRemove = couch_util:dict_find(ViewId, KeysToRemoveByView, []),
-            BatchData = lists:map(
-                fun(K) -> couch_set_view_updater_helper:encode_btree_op(remove, K) end,
-                KeysToRemove),
-            BatchData2 = lists:foldl(
-                fun({K, V}, Acc) ->
+            KeysToRemoveDict = couch_util:dict_find(ViewId, KeysToRemoveByView, dict:new()),
+
+            {KeysToRemoveDict2, BatchData} = lists:foldl(
+                fun({K, V},{KeysToRemoveAcc, BinOpAcc}) ->
                     Bin = couch_set_view_updater_helper:encode_btree_op(insert, K, V),
-                    [Bin | Acc]
+                    BinOpAcc2 = [Bin | BinOpAcc],
+                    case dict:find(K, KeysToRemoveAcc) of
+                    {ok, _} ->
+                        {dict:erase(K, KeysToRemoveAcc), BinOpAcc2};
+                    _ ->
+                        {KeysToRemoveAcc, BinOpAcc2}
+                    end
                 end,
-                BatchData, AddKeyValuesBinaries),
+                {KeysToRemoveDict, []}, AddKeyValuesBinaries),
+
+            BatchData2 = dict:fold(
+                fun(K, _V, BatchAcc) ->
+                    Bin = couch_set_view_updater_helper:encode_btree_op(remove, K),
+                    [Bin | BatchAcc]
+                end,
+                BatchData, KeysToRemoveDict2),
+
             ViewTmpFileInfo = dict:fetch(ViewId, TmpFiles),
             case ViewTmpFileInfo of
             #set_view_tmp_file_info{fd = nil} ->

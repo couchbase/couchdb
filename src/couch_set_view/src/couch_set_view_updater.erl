@@ -1000,8 +1000,13 @@ write_to_tmp_batch_files(ViewKeyValuesToAdd, DocIdViewIdKeys, WriterAcc) ->
             {ok, {<<_Part:16, DocId/binary>>, <<_Part:16, ViewIdKeys/binary>>}} ->
                 lists:foldl(
                     fun({ViewId, Keys}, KeysToRemoveByViewAcc2) ->
-                        EncodedKeys = [couch_set_view_util:encode_key_docid(Key, DocId) || Key <- Keys],
-                        dict:append_list(ViewId, EncodedKeys, KeysToRemoveByViewAcc2)
+                        RemoveKeysDict = lists:foldl(
+                            fun(Key, RemoveKeysDictAcc) ->
+                                EncodedKey = couch_set_view_util:encode_key_docid(Key, DocId),
+                                dict:store(EncodedKey, nil, RemoveKeysDictAcc)
+                            end,
+                        couch_util:dict_find(ViewId, KeysToRemoveByViewAcc2, dict:new()), Keys),
+                        dict:store(ViewId, RemoveKeysDict, KeysToRemoveByViewAcc2)
                     end,
                     KeysToRemoveByViewAcc, couch_set_view_util:parse_view_id_keys(ViewIdKeys));
             {not_found, _} ->
