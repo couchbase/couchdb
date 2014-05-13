@@ -5,7 +5,7 @@
 [couchdb]
 database_dir = ${CMAKE_INSTALL_PREFIX}/var/lib/couchdb
 view_index_dir = ${CMAKE_INSTALL_PREFIX}/var/lib/couchdb
-util_driver_dir = ${CMAKE_INSTALL_PREFIX}/lib/couchdb/erlang/lib/couch-1.2.0a-961ad59-git/priv/lib
+util_driver_dir = ${CMAKE_INSTALL_PREFIX}/${CMAKE_ERL_LIB_INSTALL_PREFIX}/couch-1.2.0a-961ad59-git/priv/lib
 delayed_commits = true ; set this to false to ensure an fsync before 201 Created is returned
 uri_file = ${CMAKE_INSTALL_PREFIX}/var/run/couchdb/couch.uri
 ; Maximum number of distinct view update/building processes at any point in time.

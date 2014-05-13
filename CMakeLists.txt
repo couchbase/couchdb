@@ -31,7 +31,9 @@ EXECUTE_PROCESS(COMMAND git describe
 CONFIGURE_FILE(${CMAKE_CURRENT_SOURCE_DIR}/test/python/set_view/run.py.tpl
                ${CMAKE_CURRENT_BINARY_DIR}/test/python/set_view/run.py)
 
-SET(CMAKE_ERL_LIB_INSTALL_PREFIX "lib/couchdb/erlang/lib")
+SET(CMAKE_ERL_LIB_INSTALL_PREFIX "lib/couchdb/erlang/lib" CACHE STRING
+  "Installation prefix for CouchDB libs")
+MARK_AS_ADVANCED(CMAKE_ERL_LIB_INSTALL_PREFIX)
 
 ADD_SUBDIRECTORY(bin)
 ADD_SUBDIRECTORY(etc)
