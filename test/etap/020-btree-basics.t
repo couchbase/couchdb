@@ -31,7 +31,7 @@ rows() -> 250.
 
 main(_) ->
     test_util:init_code_path(),
-    etap:plan(75),
+    etap:plan(81),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -98,17 +98,13 @@ test_kvs(KeyValues) ->
     etap:is(0, couch_btree:size(Btree3),
             "After removing all keys btree size is 0."),
 
-    {Btree4, _} = lists:foldl(fun(KV, {BtAcc, PrevSize}) ->
+    Btree4 = lists:foldl(fun(KV, BtAcc) ->
         ok = couch_file:flush(Fd),
         {ok, BtAcc2} = couch_btree:add_remove(BtAcc, [KV], []),
-        case couch_btree:size(BtAcc2) > PrevSize of
-        true ->
-            ok;
-        false ->
-            etap:bail("After inserting a value, btree size did not increase.")
-        end,
-        {BtAcc2, couch_btree:size(BtAcc2)}
-    end, {Btree3, couch_btree:size(Btree3)}, KeyValues),
+        BtAcc2
+    end, Btree3, KeyValues),
+    etap:is(couch_btree:size(Btree3) < couch_btree:size(Btree4), true,
+        "After inserting values, btree size did not increase."),
     ok = couch_file:flush(Fd),
 
     etap:ok(test_btree(Btree4, KeyValues),
@@ -116,17 +112,11 @@ test_kvs(KeyValues) ->
     etap:is((couch_btree:size(Btree4) > 0), true,
             "Non empty btrees have a size > 0."),
 
-    {Btree5, _} = lists:foldl(fun({K, _}, {BtAcc, PrevSize}) ->
+    Btree5 = lists:foldl(fun({K, _}, BtAcc) ->
         ok = couch_file:flush(Fd),
         {ok, BtAcc2} = couch_btree:add_remove(BtAcc, [], [K]),
-        case couch_btree:size(BtAcc2) < PrevSize of
-        true ->
-            ok;
-        false ->
-            etap:bail("After removing a key, btree size did not decrease.")
-        end,
-        {BtAcc2, couch_btree:size(BtAcc2)}
-    end, {Btree4, couch_btree:size(Btree4)}, KeyValues),
+        BtAcc2
+    end, Btree4, KeyValues),
     ok = couch_file:flush(Fd),
 
     etap:ok(test_btree(Btree5, []),
@@ -135,18 +125,13 @@ test_kvs(KeyValues) ->
             "After removing all keys, one by one, btree size is 0."),
 
     KeyValuesRev = lists:reverse(KeyValues),
-    {Btree6, _} = lists:foldl(fun(KV, {BtAcc, PrevSize}) ->
+    Btree6 = lists:foldl(fun(KV, BtAcc) ->
         ok = couch_file:flush(Fd),
         {ok, BtAcc2} = couch_btree:add_remove(BtAcc, [KV], []),
-        case couch_btree:size(BtAcc2) > PrevSize of
-        true ->
-            ok;
-        false ->
-            etap:is(false, true,
-                   "After inserting a value, btree size did not increase.")
-        end,
-        {BtAcc2, couch_btree:size(BtAcc2)}
-    end, {Btree5, couch_btree:size(Btree5)}, KeyValuesRev),
+        BtAcc2
+    end, Btree5, KeyValuesRev),
+    etap:is(couch_btree:size(Btree5) < couch_btree:size(Btree6), true,
+        "After inserting values, btree size did not increase."),
     etap:ok(test_btree(Btree6, KeyValues),
         "Adding all keys in reverse order returns a complete btree."),
 
