@@ -424,7 +424,7 @@ try_until_throttled(Pid, N) ->
         true;
     false ->
         ok = couch_upr_fake_server:send_single_mutation(),
-        timer:sleep(1),
+        timer:sleep(20),
         try_until_throttled(Pid, N-1)
     end.
 
