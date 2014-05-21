@@ -121,9 +121,8 @@ get_stream_event(Pid, ReqId) ->
     try
         gen_server:call(Pid, {get_stream_event, ReqId}, ?TIMEOUT)
     catch exit:{timeout, _} ->
-        ?LOG_ERROR("upr client (~p): Obtaining mutation from server timed out "
-                   "after ~p seconds. Waiting...",
-                   [Pid, ?TIMEOUT/1000]),
+        Msg = {print_log, Pid, ReqId},
+        Pid ! Msg,
         get_stream_event(Pid, ReqId)
     end.
 
@@ -399,9 +398,23 @@ handle_info({stream_event, RequestId, Event}, State) ->
 handle_info({'EXIT', Pid, Reason}, #state{worker_pid = Pid} = State) ->
     {stop, Reason, State};
 
+handle_info({print_log, Pid, ReqId}, State) ->
+    #state{
+        active_streams = ActiveStreams
+    } = State,
+    PartId = case lists:keyfind(ReqId, 2, ActiveStreams) of
+    {Partid, ReqId} ->
+        Partid;
+    false ->
+        nil
+    end,
+    ?LOG_ERROR("upr client (~p): Obtaining mutation from server timed out "
+        "after ~p seconds [RequestId ~p PartId ~p]. Waiting...",
+        [Pid, ?TIMEOUT / 1000, ReqId, PartId]),
+    {noreply, State};
+
 handle_info(Msg, State) ->
     {stop, {unexpected_info, Msg}, State}.
-
 
 -spec handle_cast(any(), #state{}) ->
                          {stop, {unexpected_cast, any()}, #state{}}.
