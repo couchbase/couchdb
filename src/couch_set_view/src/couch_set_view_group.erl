@@ -403,7 +403,7 @@ do_init({_, SetName, _} = InitArgs) ->
                            []
                        end)
         end,
-        UprName = <<"Indexer ", (atom_to_binary(Mod, latin1))/binary, ": ",
+        UprName = <<(atom_to_binary(Mod, latin1))/binary, ": ",
             SetName/binary, " ", (Group#set_view_group.name)/binary,
             " (", (atom_to_binary(Category, latin1))/binary, "/",
             (atom_to_binary(Type, latin1))/binary, ")">>,
