@@ -26,6 +26,9 @@
 -define(UPR_OPCODE_STATS, 16#10).
 -define(UPR_OPCODE_SASL_AUTH, 16#21).
 -define(UPR_OPCODE_SELECT_BUCKET, 16#89).
+-define(UPR_OPCODE_UPR_CONTROL, 16#5E).
+-define(UPR_OPCODE_UPR_BUFFER, 16#5D).
+-define(UPR_OPCODE_UPR_NOOP, 16#5C).
 -define(UPR_FLAG_OK, 16#00).
 -define(UPR_FLAG_STATE_CHANGED, 16#01).
 -define(UPR_FLAG_CONSUMER, 16#00).
@@ -64,6 +67,15 @@
 -define(UPR_SIZES_METADATA_LENGTH, 16).
 -define(UPR_SIZES_NRU_LENGTH, 8).
 -define(UPR_SIZES_SNAPSHOT_TYPE, 32).
+-define(UPR_SIZES_BUFFER_SIZE, 32).
+-define(UPR_BUFFER_ACK_THRESHOLD, 0.2).
+
+% size of the upr message for flow control
+-define(UPR_MSG_SIZE_MUTATION, 55).
+-define(UPR_MSG_SIZE_DELETION, 42).
+-define(UPR_MSG_SIZE_SNAPSHOT , 24).
+-define(UPR_MSG_SIZE_STREAM_END, 28).
+
 
 % NOTE vmx 2014-01-16: In ep-engine the maximum size is currently 25
 -define(UPR_MAX_FAILOVER_LOG_SIZE, 25).

@@ -25,7 +25,7 @@ num_docs_pp() -> num_docs() div num_set_partitions().
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(49),
+    etap:plan(50),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -60,7 +60,7 @@ test() ->
 
     {auth, User, Passwd} = cb_auth_info:get(),
     {ok, Pid} = couch_upr_client:start(
-        test_set_name(), test_set_name(), User, Passwd),
+        test_set_name(), test_set_name(), User, Passwd, 1024),
 
     % Get the latest partition version first
     {ok, InitialFailoverLog0} = couch_upr_client:get_failover_log(Pid, 0),
@@ -305,22 +305,42 @@ test() ->
     etap:is(TooLargeError, {error, too_large_failover_log},
         "Too large failover log returns correct error"),
 
+    gen_server:call(Pid, reset_buffer_size),
     % Remove existing streams
+    couch_upr_client:remove_stream(Pid, 0),
     couch_upr_client:remove_stream(Pid, 1),
     couch_upr_client:remove_stream(Pid, 2),
 
+
     % Tests for flow control
     couch_upr_fake_server:pause_mutations(),
-    couch_upr_client:set_buffer_size(Pid, 50),
 
     {StreamReq0_4, _} = couch_upr_client:add_stream(
         Pid, 0, first_uuid(InitialFailoverLog0), 0, 500, ?UPR_FLAG_NOFLAG),
 
-    Throttled0 = try_until_throttled(Pid, 100),
-    etap:is(Throttled0, true, "Throttled stream events queue when buffer became full"),
+    gen_server:call(Pid, reset_buffer_size),
+    Ret = couch_upr_fake_server:is_control_req(),
 
-    Throttled1 = try_until_unthrottled(Pid, StreamReq0_4, 25),
-    etap:is(Throttled1, false, "Throttling disabled when drained buffered events queue"),
+    etap:is(Ret, true, "Buffer control request sent"),
+
+    NumBufferAck = couch_upr_fake_server:get_num_buffer_acks(),
+
+    % Fill the client buffer by asking server to send 1024 bytes data
+    try_until_throttled(Pid, StreamReq0_4, 1000, 1024),
+
+    % Consume 200 bytes from the client
+    try_until_unthrottled(Pid, StreamReq0_4, 0, 200),
+
+    NumBufferAck2 = couch_upr_fake_server:get_num_buffer_acks(),
+    etap:is(NumBufferAck2, NumBufferAck, "Not sent the buffer ack"),
+
+    % Consume More data so that is greater then 20 % of 1024 i.e.204.
+    % when data is 20% consumed, client sends the buffer ack to increase
+    % the flow control buffer.
+    try_until_unthrottled(Pid, StreamReq0_4, 0, 200),
+    timer:sleep(2),
+    NumBufferAck3 = couch_upr_fake_server:get_num_buffer_acks(),
+    etap:is(NumBufferAck3, NumBufferAck + 1, "Got the buffer ack"),
     couch_upr_client:remove_stream(Pid, 0),
 
     couch_upr_fake_server:pause_mutations(),
@@ -414,32 +434,26 @@ test() ->
     couch_set_view_test_util:stop_server(),
     ok.
 
-
-try_until_throttled(_Pid, 0) ->
-    false;
-try_until_throttled(Pid, N) ->
-    Throttled = gen_server:call(Pid, throttled),
-    case Throttled of
+try_until_throttled(Pid, ReqId, N, MaxSize) when N > 0 ->
+    ok = couch_upr_fake_server:send_single_mutation(),
+    timer:sleep(1),
+    Size2 = gen_server:call(Pid, {get_buffer_size, ReqId}),
+    if 
+    MaxSize > Size2 ->
+        try_until_throttled(Pid, ReqId, N - 1, MaxSize);
     true ->
-        true;
-    false ->
-        ok = couch_upr_fake_server:send_single_mutation(),
-        timer:sleep(20),
-        try_until_throttled(Pid, N-1)
+        ok
     end.
 
-try_until_unthrottled(_Pid, _ReqId, 0) ->
-    true;
-try_until_unthrottled(Pid, ReqId, N) ->
-    Throttled = gen_server:call(Pid, throttled),
-    case Throttled of
-    false ->
-        false;
+try_until_unthrottled(Pid, ReqId, Size, MaxSize) ->
+    Data = couch_upr_client:get_stream_event(Pid, ReqId),
+    Size2 = Size + gen_server:call(Pid, {get_event_size, Data}), 
+    if
+    Size2 < MaxSize ->
+        try_until_unthrottled(Pid, ReqId, Size2, MaxSize);
     true ->
-        couch_upr_client:get_stream_event(Pid, ReqId),
-        try_until_unthrottled(Pid, ReqId, N-1)
+        ok
     end.
-
 
 setup_test() ->
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),

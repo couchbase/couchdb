@@ -21,6 +21,7 @@
     set_items_per_snapshot/1, set_dups_per_snapshot/1,
     pause_mutations/0, ceil_div/2, num_items_with_dups/3]).
 -export([send_single_mutation/0, continue_mutations/0]).
+-export([get_num_buffer_acks/0, is_control_req/0]).
 
 % Needed for internal process spawning
 -export([accept/1, accept_loop/1]).
@@ -92,6 +93,9 @@
     setname = nil,
     failover_logs = dict:new(),
     pause_mutations = false,
+    % This dictionary contains the meta data for flow control
+    % that will be used by unit tests.
+    control_flow = dict:new(),
     % This is a function is used to simulate the stream request on persited
     % items only. It returns the sequence number up to which the items should
     % be considered as persisted.
@@ -152,7 +156,17 @@ continue_mutations() ->
     ?MODULE ! send_mutations,
     ok.
 
-% Used by tests to control flow of mutation message from server to client
+% Used by unit tests. Check if server got buffer ack.
+-spec get_num_buffer_acks() -> integer().
+get_num_buffer_acks() ->
+    gen_server:call(?MODULE, get_num_buffer_acks).
+
+% Used by unit tests. Check if server got control request.
+-spec is_control_req() -> boolean().
+is_control_req() ->
+    gen_server:call(?MODULE, is_control_req).
+
+% Used by unit test to control flow of mutation message from server to client
 -spec send_single_mutation() -> ok.
 send_single_mutation() ->
     ?MODULE ! send_mutations,
@@ -371,8 +385,58 @@ handle_call(reset, _From, State0) ->
     State = #state{
         setname = State0#state.setname
     },
-    {reply, ok, State}.
+    {reply, ok, State};
 
+% Increment the count for the buffer ack request
+handle_call({handle_buffer_ack, _Size}, _From, State) ->
+    #state {
+        control_flow = ControlFlow
+    } = State,
+    Val = case dict:find(num_buffer_acks, ControlFlow) of
+    error ->
+        1;
+    {ok, Value} ->
+        Value + 1
+    end,
+    ControlFlow2 = dict:store(num_buffer_acks, Val, ControlFlow),
+    {reply, ok, State#state{
+        control_flow = ControlFlow2
+    }};
+
+handle_call({handle_control_req, Size}, _From, State) ->
+    #state {
+        control_flow = ControlFlow
+    } = State,
+    ControlFlow2 = dict:store(control_req, Size, ControlFlow),
+    {reply, ok, State#state{
+        control_flow = ControlFlow2
+    }};
+
+% Return the current count of buffer ack requests
+handle_call(get_num_buffer_acks, _From, State) ->
+    #state {
+        control_flow = ControlFlow
+    } = State,
+    Val = case dict:find(num_buffer_acks, ControlFlow) of
+    error ->
+        0;
+    {ok, Value} ->
+        Value
+    end,
+    {reply, Val, State};
+
+% Return true if we got control request
+handle_call(is_control_req, _From, State) ->
+    #state {
+        control_flow = ControlFlow
+    } = State,
+    Val = case dict:find(control_req, ControlFlow) of
+    error ->
+        false;
+    _ ->
+        true
+    end,
+    {reply, Val, State}.
 
 -spec handle_cast(any(), #state{}) ->
                          {stop, {unexpected_cast, any()}, #state{}}.
@@ -541,12 +605,34 @@ read(Socket) ->
         {stream_close, RequestId, PartId} ->
             handle_stream_close_body(Socket, RequestId, PartId);
         {select_bucket, BodyLength, RequestId} ->
-            handle_select_bucket_body(Socket, BodyLength, RequestId)
+            handle_select_bucket_body(Socket, BodyLength, RequestId);
+        {control_request, BodyLength, RequestId} ->
+            handle_control_request(Socket, BodyLength, RequestId);
+        {buffer_ack, BodyLength, RequestId} ->
+            handle_buffer_ack_request(Socket, BodyLength, RequestId)
         end,
         read(Socket);
     {error, closed} ->
         ok
     end.
+
+-spec handle_control_request(socket(), size(), request_id()) -> ok.
+handle_control_request(Socket, BodyLength, RequestId) ->
+    case gen_tcp:recv(Socket, BodyLength) of
+    {ok, <<"connection_buffer_size", Size/binary>>} ->
+        ok = gen_server:call(?MODULE, {handle_control_req, Size})
+    end,
+    ControlResponse = couch_upr_producer:encode_control_flow_ok(RequestId),
+    ok = gen_tcp:send(Socket, ControlResponse).
+
+-spec handle_buffer_ack_request(socket(), size(), request_id()) -> ok .
+handle_buffer_ack_request(Socket, BodyLength, RequestId) ->
+    case gen_tcp:recv(Socket, BodyLength) of
+    {ok, <<Size:?UPR_SIZES_BUFFER_SIZE>>} ->
+        gen_server:call(?MODULE, {handle_buffer_ack, Size})
+    end,
+    BufferResponse = couch_upr_producer:encode_buffer_ack_ok(RequestId),
+    ok = gen_tcp:send(Socket, BufferResponse).
 
 
 % XXX vmx: 2014-01-24: Proper logging/error handling is missing

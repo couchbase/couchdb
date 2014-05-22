@@ -21,7 +21,8 @@
     encode_stream_request_rollback/2, encode_stream_end/2,
     encode_failover_log/2, encode_stat/3, encode_stat_error/3,
     encode_sasl_auth/1, encode_stream_close_response/2,
-    encode_select_bucket_response/2]).
+    encode_select_bucket_response/2, encode_control_flow_ok/1,
+    encode_buffer_ack_ok/1]).
 
 -include_lib("couch_upr/include/couch_upr.hrl").
 -include_lib("couch_upr/include/couch_upr_typespecs.hrl").
@@ -54,7 +55,13 @@ parse_header(<<?UPR_MAGIC_REQUEST,
     ?UPR_OPCODE_STREAM_CLOSE ->
         {stream_close, RequestId, PartId};
     ?UPR_OPCODE_SELECT_BUCKET ->
-        {select_bucket, BodyLength, RequestId}
+        {select_bucket, BodyLength, RequestId};
+    ?UPR_OPCODE_UPR_NOOP ->
+        {no_op, BodyLength, RequestId};
+    ?UPR_OPCODE_UPR_BUFFER ->
+        {buffer_ack, BodyLength, RequestId};
+    ?UPR_OPCODE_UPR_CONTROL ->
+        {control_request, BodyLength, RequestId}
     end.
 
 
@@ -480,6 +487,58 @@ encode_select_bucket_response(RequestId, Status) ->
       ExtraLength,
       0,
       Status:?UPR_SIZES_STATUS,
+      BodyLength:?UPR_SIZES_BODY,
+      RequestId:?UPR_SIZES_OPAQUE,
+      0:?UPR_SIZES_CAS>>.
+
+%UPR_CONTROL_BINARY_CMD response
+%Field        (offset) (value)
+%Magic        (0)    : 0x81
+%Opcode       (1)    : 0x5E
+%Key length   (2,3)  : 0x0000
+%Extra length (4)    : 0x00
+%Data type    (5)    : 0x00
+%Status       (6,7)  : 0x00000000
+%Total body   (8-11) : 0x00000000
+%Opaque       (12-15): 0x00001000
+%CAS          (16-23): 0x0000000000000000
+
+-spec encode_control_flow_ok(request_id()) -> binary().
+encode_control_flow_ok(RequestId) ->
+    ExtraLength = 0,
+    BodyLength = 0,
+    <<?UPR_MAGIC_RESPONSE,
+      ?UPR_OPCODE_UPR_CONTROL,
+      0:?UPR_SIZES_KEY_LENGTH,
+      ExtraLength,
+      0,
+      ?UPR_STATUS_OK:?UPR_SIZES_STATUS,
+      BodyLength:?UPR_SIZES_BODY,
+      RequestId:?UPR_SIZES_OPAQUE,
+      0:?UPR_SIZES_CAS>>.
+
+%UPR_BUFFER_ACK_CMD response
+%Field        (offset) (value)
+%Magic        (0)    : 0x81
+%Opcode       (1)    : 0x5D
+%Key length   (2,3)  : 0x0000
+%Extra length (4)    : 0x00
+%Data type    (5)    : 0x00
+%Status       (6,7)  : 0x00000000
+%Total body   (8-11) : 0x00000000
+%Opaque       (12-15): 0x00000000
+%CAS          (16-23): 0x0000000000000000
+
+-spec encode_buffer_ack_ok(request_id()) -> binary().
+encode_buffer_ack_ok(RequestId) ->
+    ExtraLength = 0,
+    BodyLength = 0,
+    <<?UPR_MAGIC_RESPONSE,
+      ?UPR_OPCODE_UPR_BUFFER,
+      0:?UPR_SIZES_KEY_LENGTH,
+      ExtraLength,
+      0,
+      0:?UPR_SIZES_STATUS,
       BodyLength:?UPR_SIZES_BODY,
       RequestId:?UPR_SIZES_OPAQUE,
       0:?UPR_SIZES_CAS>>.

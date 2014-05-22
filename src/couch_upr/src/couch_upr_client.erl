@@ -14,10 +14,10 @@
 -behaviour(gen_server).
 
 % Public API
--export([start/4]).
+-export([start/5]).
 -export([add_stream/6, get_sequence_number/2, get_num_items/2,
     get_failover_log/2]).
--export([get_stream_event/2, remove_stream/2, list_streams/1, set_buffer_size/2]).
+-export([get_stream_event/2, remove_stream/2, list_streams/1]).
 -export([enum_docs_since/8]).
 
 % gen_server callbacks
@@ -42,7 +42,7 @@
     active_streams = []             :: list(),
     worker_pid                      :: pid(),
     max_buffer_size = ?MAX_BUF_SIZE :: integer(),
-    throttled = false               :: boolean()
+    total_buffer_size = 0                  :: non_neg_integer()
 }).
 
 % This gen server implements a UPR client with vbucket stream multiplexing
@@ -59,11 +59,10 @@
 
 % Public API
 
--spec start(binary(), binary(), binary(), binary()) -> {ok, pid()} | ignore |
+-spec start(binary(), binary(), binary(), binary(), non_neg_integer()) -> {ok, pid()} | ignore |
                                    {error, {already_started, pid()} | term()}.
-start(Name, Bucket, AdmUser, AdmPasswd) ->
-    gen_server:start_link(?MODULE, [Name, Bucket, AdmUser, AdmPasswd], []).
-
+start(Name, Bucket, AdmUser, AdmPasswd, BufferSize) ->
+    gen_server:start_link(?MODULE, [Name, Bucket, AdmUser, AdmPasswd, BufferSize], []).
 
 -spec add_stream(pid(), partition_id(), uuid(), update_seq(),
     update_seq(), 0..255) -> {request_id(), term()}.
@@ -137,9 +136,6 @@ get_stream_event_get_reply(Pid, ReqId, MRef) ->
     end.
 
 
--spec set_buffer_size(pid(), integer()) -> ok.
-set_buffer_size(Pid, Size) ->
-    gen_server:call(Pid, {set_buffer_size, Size}).
 
 
 -spec enum_docs_since(pid(), partition_id(), partition_version(), update_seq(),
@@ -183,8 +179,9 @@ enum_docs_since(Pid, PartId, PartVersions, StartSeq, EndSeq, Flags,
 
 % gen_server callbacks
 
--spec init([binary()]) -> {ok, #state{}} | {stop, sasl_auth_failed}.
-init([Name, Bucket, AdmUser, AdmPasswd]) ->
+-spec init([binary() | non_neg_integer()]) -> {ok, #state{}} |
+                    {stop, sasl_auth_failed | closed | inet:posix()}.
+init([Name, Bucket, AdmUser, AdmPasswd, BufferSize]) ->
     UprTimeout = list_to_integer(
         couch_config:get("upr", "connection_timeout")),
     UprPort = list_to_integer(couch_config:get("upr", "port")),
@@ -207,7 +204,13 @@ init([Name, Bucket, AdmUser, AdmPasswd]) ->
                 process_flag(trap_exit, true),
                 WorkerPid = spawn_link(
                     fun() -> receive_worker(Socket, UprTimeout, Parent, []) end),
-                {ok, State4#state{worker_pid = WorkerPid}};
+                case set_buffer_size(State4, BufferSize) of
+                {ok, State5} ->
+                    {ok, State5#state{worker_pid = WorkerPid}};
+                {error, Reason} ->
+                    exit(WorkerPid, shutdown),
+                    {stop, Reason}
+                end;
             {error, Reason} ->
                 {stop, Reason}
             end;
@@ -247,14 +250,19 @@ handle_call({remove_stream, PartId}, From, State) ->
        request_id = RequestId,
        socket = Socket
     } = State,
-    StreamCloseRequest = couch_upr_consumer:encode_stream_close(
-        PartId, RequestId),
-    case gen_tcp:send(Socket, StreamCloseRequest) of
-    ok ->
-        State2 = next_request_id(State),
-        State3 = add_pending_request(State2, RequestId, {remove_stream, PartId}, From),
-        {noreply, State3};
-    Error ->
+    case check_and_send_buffer_ack(State, RequestId, nil, remove_stream) of
+    {ok, State2} ->
+        StreamCloseRequest = couch_upr_consumer:encode_stream_close(
+            PartId, RequestId),
+        case gen_tcp:send(Socket, StreamCloseRequest) of
+        ok ->
+            State3 = next_request_id(State2),
+            State4 = add_pending_request(State3, RequestId, {remove_stream, PartId}, From),
+            {noreply, State4};
+        Error ->
+            {reply, Error, State2}
+        end;
+    {error, _Reason} = Error ->
         {reply, Error, State}
     end;
 
@@ -297,41 +305,49 @@ handle_call({get_failover_log, PartId}, From, State) ->
         {reply, Error, State}
     end;
 
-handle_call({set_buffer_size, Size}, _From, State) ->
-    {reply, ok, State#state{max_buffer_size = Size}};
+% Only used by unit test
+handle_call(get_buffer_size, _From, #state{total_buffer_size = Size} = State) ->
+    {reply, Size, State};
 
 % Only used by unit test
-handle_call(throttled, _From, #state{throttled = Throttled} = State) ->
-    {reply, Throttled, State}.
+handle_call(reset_buffer_size, _From, #state{total_buffer_size = Size} = State) ->
+    State2 = State#state{total_buffer_size = 0},
+    {reply, Size, State2};
 
+% Only used by unit test
+handle_call({get_buffer_size, RequestId}, _From,
+        #state{stream_queues = StreamQueues} = State) ->
+    {ok, {_, EvQueue}} = dict:find(RequestId, StreamQueues),
+    Size = get_queue_size(EvQueue, 0),
+    {reply, Size, State};
+
+% Only used by unit test
+handle_call({get_event_size, Event}, _From, State) ->
+    Size = get_event_size(Event),
+    {reply, Size, State}.
 
 % If a stream event for this requestId is present in the queue,
 % dequeue it and reply back to the caller.
 % Else, put the caller into the stream queue waiter list
 handle_info({get_stream_event, RequestId, From}, State) ->
-    #state{
-       throttled = Throttled,
-       max_buffer_size = MaxBufSize,
-       worker_pid = Pid
-    } = State,
     case stream_event_present(State, RequestId) of
     true ->
-        {State2, Event, Size} = dequeue_stream_event(State, RequestId),
-        State3 = case Throttled andalso (Size < MaxBufSize) of
-        true ->
-            Pid ! continue,
-            State2#state{throttled = false};
-        false ->
-            State2
+        Event = peek_stream_event(State, RequestId),
+        {Msg, State6} = case check_and_send_buffer_ack(State, RequestId, Event, mutation) of
+        {ok, State3} ->
+            {State4, Event} = dequeue_stream_event(State3, RequestId),
+            State5 = case Event of
+            {stream_end, _} ->
+                remove_request_queue(State4, RequestId);
+            _ ->
+                State4
+            end,
+            {Event, State5};
+        {error, Reason} ->
+            {{error, Reason}, State}
         end,
-        State4 = case Event of
-        {stream_end, _} ->
-            remove_request_queue(State3, RequestId);
-        _ ->
-            State3
-        end,
-        From ! {stream_event, RequestId, Event},
-        {noreply, State4};
+        From ! {stream_event, RequestId, Msg},
+        {noreply, State6};
     false ->
         case add_stream_event_waiter(State, RequestId, From) of
         nil ->
@@ -352,9 +368,9 @@ handle_info({get_stream_event, RequestId, From}, State) ->
 handle_info({stream_response, RequestId, Msg}, State) ->
     State3 = case find_pending_request(State, RequestId) of
     {ReqInfo, SendTo} ->
-        gen_server:reply(SendTo, Msg),
         State2 = case ReqInfo of
         {add_stream, PartId} ->
+            gen_server:reply(SendTo, Msg),
             case Msg of
             {_, {failoverlog, _}} ->
                 add_request_queue(State, PartId, RequestId);
@@ -362,6 +378,7 @@ handle_info({stream_response, RequestId, Msg}, State) ->
                 State
             end;
         {remove_stream, PartId} ->
+            gen_server:reply(SendTo, Msg),
             StreamReqId = find_stream_req_id(State, PartId),
             case Msg of
             ok ->
@@ -371,7 +388,11 @@ handle_info({stream_response, RequestId, Msg}, State) ->
             _ ->
                 State
             end;
+        % Server sent the response for the internal control request
+        {control_request, Size} ->
+            State#state{max_buffer_size = Size};
         _ ->
+            gen_server:reply(SendTo, Msg),
             State
         end,
         remove_pending_request(State2, RequestId);
@@ -380,6 +401,16 @@ handle_info({stream_response, RequestId, Msg}, State) ->
     end,
     {noreply, State3};
 
+% Repond with the no op message reply to server
+handle_info({stream_noop, RequestId, _}, State) ->
+    #state {
+        socket = Socket
+    } = State,
+    NoOpResponse = couch_upr_consumer:encode_no_op_response(RequestId),
+    % if noop reponse fails two times, server it self will close the connection
+    gen_tcp:send(Socket, NoOpResponse),
+    {noreply, State};
+
 % Handle events send by connection receiver worker
 % If there is a waiting caller for stream event, reply to them
 % Else, queue the event into the stream queue
@@ -387,25 +418,24 @@ handle_info({stream_event, RequestId, Event}, State) ->
     case stream_event_waiters_present(State, RequestId) of
     true ->
         {State2, Waiter} = remove_stream_event_waiter(State, RequestId),
-        Waiter ! {stream_event, RequestId, Event},
-        State3 =
-        case Event of
-        {stream_end, _} ->
-            remove_request_queue(State2, RequestId);
-        _ ->
-            State2
+        {Msg, State5} = case check_and_send_buffer_ack(State2, RequestId, Event, mutation) of
+        {ok, State3} ->
+            State4 = case Event of
+            {stream_end, _} ->
+                remove_request_queue(State3, RequestId);
+            _ ->
+                State3
+            end,
+            {Event, State4};
+        {error, Reason} ->
+            State3 = enqueue_stream_event(State2, RequestId, Event),
+            {{error, Reason}, State3}
         end,
-        {noreply, State3};
+        Waiter ! {stream_event, RequestId, Msg},
+        {noreply, State5};
     false ->
-        {State2, Size} = enqueue_stream_event(State, RequestId, Event),
-        State3 = case should_throttle(State2, Size) of
-        true ->
-            State2#state.worker_pid ! throttle,
-            State2#state{throttled = true};
-        false ->
-            State2
-        end,
-        {noreply, State3};
+        State2 = enqueue_stream_event(State, RequestId, Event),
+        {noreply, State2};
     nil ->
         {noreply, State}
     end;
@@ -449,8 +479,8 @@ code_change(_OldVsn, State, _Extra) ->
 
 
 format_status(_Opt, [_PDict, #state{stream_queues = StreamQueues} = State]) ->
-    TransformFn = fun(_Key, {Waiter, Size, Queue}) ->
-                     {Waiter, Size, {queue:len(Queue), queue:peek_r(Queue)}}
+    TransformFn = fun(_Key, {Waiter, Queue}) ->
+                     {Waiter, {queue:len(Queue), queue:peek_r(Queue)}}
                   end,
     State#state{stream_queues = dict:map(TransformFn, StreamQueues)}.
 
@@ -699,7 +729,7 @@ socket_recv(Socket, Length, Timeout) ->
     gen_tcp:recv(Socket, Length, Timeout).
 
 
--spec add_pending_request(#state{}, request_id(), term(), {pid(), term()}) -> #state{}.
+-spec add_pending_request(#state{}, request_id(), term(), nil | {pid(), term()}) -> #state{}.
 add_pending_request(State, RequestId, ReqInfo, From) ->
     #state{
        pending_requests = PendingRequests
@@ -758,55 +788,58 @@ add_request_queue(State, PartId, RequestId) ->
        stream_queues = StreamQueues
     } = State,
    ActiveStreams2 =  [{PartId, RequestId} | ActiveStreams],
-   StreamQueues2 = dict:store(RequestId, {nil, 0, queue:new()}, StreamQueues),
+   StreamQueues2 = dict:store(RequestId, {nil, queue:new()}, StreamQueues),
    State#state{
        active_streams = ActiveStreams2,
        stream_queues = StreamQueues2
     }.
 
 
--spec enqueue_stream_event(#state{}, request_id(), tuple()) ->
-                                            {#state{}, non_neg_integer()}.
+-spec enqueue_stream_event(#state{}, request_id(), tuple()) -> #state{}.
 enqueue_stream_event(State, RequestId, Event) ->
     #state{
        stream_queues = StreamQueues
     } = State,
-    {ok, {Waiter, Size, EvQueue}} = dict:find(RequestId, StreamQueues),
-    Size2 = Size + erts_debug:size(Event),
-    State2 = State#state{
+    {ok, {Waiter, EvQueue}} = dict:find(RequestId, StreamQueues),
+    State#state{
         stream_queues =
             dict:store(RequestId,
-                       {Waiter, Size2, queue:in(Event, EvQueue)},
+                       {Waiter, queue:in(Event, EvQueue)},
                        StreamQueues)
-    },
-    {State2, Size2}.
-
+    }.
 
 -spec dequeue_stream_event(#state{}, request_id()) ->
-                               {#state{}, tuple(), non_neg_integer()}.
+                               {#state{}, tuple()}.
 dequeue_stream_event(State, RequestId) ->
     #state{
        stream_queues = StreamQueues
     } = State,
-    {ok, {Waiter, Size, EvQueue}} = dict:find(RequestId, StreamQueues),
+    {ok, {Waiter, EvQueue}} = dict:find(RequestId, StreamQueues),
     {{value, Event}, Rest} = queue:out(EvQueue),
-    Size2 = Size - erts_debug:size(Event),
     State2 = State#state{
         stream_queues =
-            dict:store(RequestId, {Waiter, Size2, Rest}, StreamQueues)
+            dict:store(RequestId, {Waiter, Rest}, StreamQueues)
     },
-    {State2, Event, Size2}.
+    {State2, Event}.
 
+-spec peek_stream_event(#state{}, request_id()) -> tuple().
+peek_stream_event(State, RequestId) ->
+    #state{
+       stream_queues = StreamQueues
+    } = State,
+    {ok, {_, EvQueue}} = dict:find(RequestId, StreamQueues),
+    {value, Event} = queue:peek(EvQueue),
+    Event.
 
 -spec add_stream_event_waiter(#state{}, request_id(), term()) -> #state{} | nil.
 add_stream_event_waiter(State, RequestId, NewWaiter) ->
     #state{
        stream_queues = StreamQueues
     } = State,
-    {ok, {Waiter, Size, EvQueue}} = dict:find(RequestId, StreamQueues),
+    {ok, {Waiter, EvQueue}} = dict:find(RequestId, StreamQueues),
     case Waiter of
     nil ->
-        StreamQueues2 = dict:store(RequestId, {NewWaiter, Size, EvQueue}, StreamQueues),
+        StreamQueues2 = dict:store(RequestId, {NewWaiter, EvQueue}, StreamQueues),
         State#state{
            stream_queues = StreamQueues2
         };
@@ -823,7 +856,7 @@ stream_event_present(State, RequestId) ->
     case dict:find(RequestId, StreamQueues) of
     error ->
         nil;
-    {ok, {_, _, EvQueue}} ->
+    {ok, {_, EvQueue}} ->
         queue:is_empty(EvQueue) =:= false
     end.
 
@@ -836,7 +869,7 @@ stream_event_waiters_present(State, RequestId) ->
     case dict:find(RequestId, StreamQueues) of
     error ->
         nil;
-    {ok, {Waiter, _, _}} ->
+    {ok, {Waiter, _}} ->
         Waiter =/= nil
     end.
 
@@ -846,9 +879,9 @@ remove_stream_event_waiter(State, RequestId) ->
     #state{
        stream_queues = StreamQueues
     } = State,
-    {ok, {Waiter, Size, EvQueue}} = dict:find(RequestId, StreamQueues),
+    {ok, {Waiter, EvQueue}} = dict:find(RequestId, StreamQueues),
     State2 = State#state{
-        stream_queues = dict:store(RequestId, {nil, Size, EvQueue}, StreamQueues)
+        stream_queues = dict:store(RequestId, {nil, EvQueue}, StreamQueues)
     },
     {State2, Waiter}.
 
@@ -891,23 +924,19 @@ parse_error_response(Socket, Timeout, BodyLength, Status) ->
 
 % The worker process for handling upr connection downstream pipe
 % Read and parse downstream messages and send to the gen_server process
--spec receive_worker(socket(), timeout(), pid(), list()) -> any().
+-spec receive_worker(socket(), timeout(), pid(), list()) -> closed | inet:posix().
 receive_worker(Socket, Timeout, Parent, MsgAcc0) ->
-    receive
-    throttle ->
-        receive
-        continue ->
-            ok
-        end;
-    continue ->
-        ok
-    after 0 ->
-        ok
-    end,
     case socket_recv(Socket, ?UPR_HEADER_LEN, infinity) of
     {ok, Header} ->
         {Action, MsgAcc} =
         case couch_upr_consumer:parse_header(Header) of
+        {control_request, Status, RequestId} ->
+            {done, {stream_response, RequestId, {RequestId, Status}}};
+        {no_op, Status, RequestId} ->
+            {done, {stream_noop, RequestId, {RequestId, Status}}};
+        {buffer_ack, Status, _RequestId} ->
+            Status = ?UPR_STATUS_OK,
+            {true, []};
         {stream_request, Status, RequestId, BodyLength} ->
             Response = case Status of
             ?UPR_STATUS_OK ->
@@ -998,16 +1027,100 @@ receive_worker(Socket, Timeout, Parent, MsgAcc0) ->
         Reason
     end.
 
-
--spec should_throttle(#state{}, integer()) -> boolean().
-should_throttle(State, Size) ->
+% Check if we need to send buffer ack to server and send it
+% if required.
+-spec check_and_send_buffer_ack(#state{}, request_id(), tuple() | nil, atom()) ->
+                        {ok, #state{}} | {error, closed | inet:posix()}.
+check_and_send_buffer_ack(State, RequestId, Event, Type) ->
     #state{
-       throttled = Throttled,
-       max_buffer_size = MaxBufSize
+        socket = Socket,
+        max_buffer_size = MaxBufSize,
+        stream_queues = StreamQueues,
+        total_buffer_size = Size
     } = State,
-    case Throttled of
+    Size2 = case Type of
+    remove_stream ->
+        case dict:find(RequestId, StreamQueues) of
+        error ->
+            0;
+        {ok, {_, EvQueue}} ->
+            get_queue_size(EvQueue, 0)
+        end;
+    mutation ->
+        Size + get_event_size(Event)
+    end,
+    MaxAckSize = MaxBufSize * ?UPR_BUFFER_ACK_THRESHOLD,
+    {Status, Ret} = if
+    Size2 > MaxAckSize ->
+        BufferAckRequest = couch_upr_consumer:encode_buffer_request(0, Size2),
+        case gen_tcp:send(Socket, BufferAckRequest) of
+        ok ->
+            {ok, 0};
+        Error ->
+            {error, Error}
+        end;
+    Size2 == 0 ->
+        {false, stream_not_found};
     true ->
-        false;
+        {ok, Size2}
+    end,
+    case Status of
+    ok ->
+        State2 = State#state{
+            total_buffer_size = Ret
+        },
+        {ok, State2};
+    error ->
+        {error, Ret};
     false ->
-        Size >= MaxBufSize
+        {ok, State}
+    end.
+
+
+-spec set_buffer_size(#state{}, non_neg_integer()) -> {ok ,#state{}} |
+                                            {error, closed | inet:posix()}.
+set_buffer_size(State, Size) ->
+    #state{
+        socket = Socket,
+        request_id = RequestId
+    } = State,
+    ControlRequest = couch_upr_consumer:encode_control_request(RequestId, connection, Size),
+    case gen_tcp:send(Socket, ControlRequest) of
+    ok ->
+        State2 = next_request_id(State),
+        State3 = add_pending_request(State2, RequestId, {control_request, Size}, nil),
+        State4 = State3#state{max_buffer_size = Size},
+        {ok, State4};
+    {error, Error} ->
+        {error, Error}
+    end.
+
+-spec get_queue_size(queue(), non_neg_integer()) -> non_neg_integer().
+get_queue_size(EvQueue, Size) ->
+    case queue:out(EvQueue) of
+    {empty, _} ->
+        Size;
+    {{value, Item}, NewQueue} ->
+        Size2 = Size + get_event_size(Item),
+        get_queue_size(NewQueue, Size2)
+    end.
+
+-spec get_event_size({atom(), #upr_doc{}}) -> pos_integer().
+get_event_size({Type, Doc}) ->
+    case Type of
+    snapshot_mutation ->
+        #upr_doc {
+            id = Key,
+            body = Value
+        } = Doc,
+        ?UPR_MSG_SIZE_MUTATION + erlang:external_size(Key) + erlang:external_size(Value);
+    stream_end ->
+        ?UPR_MSG_SIZE_STREAM_END;
+    snapshot_marker ->
+        ?UPR_MSG_SIZE_SNAPSHOT;
+    snapshot_deletion ->
+        #upr_doc {
+            id = Key
+        } = Doc,
+       ?UPR_MSG_SIZE_DELETION + erlang:external_size(Key)
     end.
