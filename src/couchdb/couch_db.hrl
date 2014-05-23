@@ -60,7 +60,8 @@
     % On the full Couchbase stack the ale logger is available
     try
         {current_function, {_, FunName__, _}} = process_info(self(), current_function),
-        'ale_logger-mapreduce_errors':error(?MODULE, FunName__, ?LINE, Format, Args)
+        ale:xerror(mapreduce_errors,
+                   {?MODULE, FunName__, ?LINE}, undefined, Format, Args)
     catch error:undef ->
         ?LOG_ERROR(Format, Args)
     end).
