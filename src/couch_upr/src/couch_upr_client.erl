@@ -118,12 +118,22 @@ get_failover_log(Pid, PartId) ->
 -spec get_stream_event(pid(), request_id()) ->
                               {atom(), #upr_doc{}} | {'error', term()}.
 get_stream_event(Pid, ReqId) ->
-    try
-        gen_server:call(Pid, {get_stream_event, ReqId}, ?TIMEOUT)
-    catch exit:{timeout, _} ->
+    MRef = erlang:monitor(process, Pid),
+    Pid ! {get_stream_event, ReqId, self()},
+    Reply = get_stream_event_get_reply(Pid, ReqId, MRef),
+    erlang:demonitor(MRef, [flush]),
+    Reply.
+
+get_stream_event_get_reply(Pid, ReqId, MRef) ->
+    receive
+    {stream_event, ReqId, Reply} ->
+        Reply;
+    {'DOWN', MRef, process, Pid, Reason} ->
+        exit({upr_client_died, Pid, Reason})
+    after ?TIMEOUT ->
         Msg = {print_log, Pid, ReqId},
         Pid ! Msg,
-        get_stream_event(Pid, ReqId)
+        get_stream_event_get_reply(Pid, ReqId, MRef)
     end.
 
 
@@ -287,10 +297,18 @@ handle_call({get_failover_log, PartId}, From, State) ->
         {reply, Error, State}
     end;
 
+handle_call({set_buffer_size, Size}, _From, State) ->
+    {reply, ok, State#state{max_buffer_size = Size}};
+
+% Only used by unit test
+handle_call(throttled, _From, #state{throttled = Throttled} = State) ->
+    {reply, Throttled, State}.
+
+
 % If a stream event for this requestId is present in the queue,
 % dequeue it and reply back to the caller.
 % Else, put the caller into the stream queue waiter list
-handle_call({get_stream_event, RequestId}, From, State) ->
+handle_info({get_stream_event, RequestId, From}, State) ->
     #state{
        throttled = Throttled,
        max_buffer_size = MaxBufSize,
@@ -312,25 +330,22 @@ handle_call({get_stream_event, RequestId}, From, State) ->
         _ ->
             State3
         end,
-        {reply, Event, State4};
+        From ! {stream_event, RequestId, Event},
+        {noreply, State4};
     false ->
         case add_stream_event_waiter(State, RequestId, From) of
         nil ->
-            {reply, {error, event_request_already_exists}, State};
+            Reply = {error, event_request_already_exists},
+            From ! {stream_event, RequestId, Reply},
+            {noreply, State};
         State2 ->
             {noreply, State2}
         end;
     nil ->
-        {reply, {error, vbucket_stream_not_found}, State}
+        Reply = {error, vbucket_stream_not_found},
+        From ! {stream_event, RequestId, Reply},
+        {noreply, State}
     end;
-
-handle_call({set_buffer_size, Size}, _From, State) ->
-    {reply, ok, State#state{max_buffer_size = Size}};
-
-% Only used by unit test
-handle_call(throttled, _From, #state{throttled = Throttled} = State) ->
-    {reply, Throttled, State}.
-
 
 % Handle response message send by connection receiver worker
 % Reply back to waiting callers
@@ -372,7 +387,7 @@ handle_info({stream_event, RequestId, Event}, State) ->
     case stream_event_waiters_present(State, RequestId) of
     true ->
         {State2, Waiter} = remove_stream_event_waiter(State, RequestId),
-        gen_server:reply(Waiter, Event),
+        Waiter ! {stream_event, RequestId, Event},
         State3 =
         case Event of
         {stream_end, _} ->
