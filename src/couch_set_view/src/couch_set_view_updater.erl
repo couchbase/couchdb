@@ -349,8 +349,12 @@ wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup) ->
     {compactor_started_ack, Writer, GroupSnapshot} ->
         ?LOG_INFO("Set view `~s`, ~s group `~s`, updater received compaction ack"
                   " from writer ~p", [SetName, Type, DDocId, Writer]),
-        {Pid, Ref} = erlang:erase(compactor_pid),
-        Pid ! {Ref, {ok, GroupSnapshot}},
+        case erlang:erase(compactor_pid) of
+        {Pid, Ref} ->
+            Pid ! {Ref, {ok, GroupSnapshot}};
+        undefined ->
+            ok
+        end,
         wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup);
     {'EXIT', _, Reason} when Reason =/= normal ->
         couch_util:shutdown_sync(DocLoader),
