@@ -21,6 +21,10 @@ num_set_partitions() -> 4.
 num_docs() -> 1000.
 num_docs_pp() -> num_docs() div num_set_partitions().
 
+-define(UPR_MSG_SIZE_MUTATION, 55).
+-define(UPR_MSG_SIZE_DELETION, 42).
+-define(UPR_MSG_SIZE_SNAPSHOT , 44).
+-define(UPR_MSG_SIZE_STREAM_END, 28). 
 
 main(_) ->
     test_util:init_code_path(),
@@ -476,7 +480,7 @@ try_until_throttled(Pid, ReqId, N, MaxSize) when N > 0 ->
 
 try_until_unthrottled(Pid, ReqId, Size, MaxSize) ->
     Data = couch_upr_client:get_stream_event(Pid, ReqId),
-    Size2 = Size + gen_server:call(Pid, {get_event_size, Data}), 
+    Size2 = Size + get_event_size(Data), 
     if
     Size2 < MaxSize ->
         try_until_unthrottled(Pid, ReqId, Size2, MaxSize);
@@ -608,3 +612,22 @@ receive_mutation(Count, Pid, Stream) ->
     couch_upr_fake_server:send_single_mutation(),
     couch_upr_client:get_stream_event(Pid, Stream),
     receive_mutation(Count - 1, Pid, Stream).
+
+get_event_size({Type, Doc}) ->
+    case Type of
+        snapshot_mutation ->
+            #upr_doc {
+                id = Key,
+                body = Value
+            } = Doc,
+            ?UPR_MSG_SIZE_MUTATION + erlang:external_size(Key) + erlang:external_size(Value);
+        stream_end ->
+            ?UPR_MSG_SIZE_STREAM_END;
+        snapshot_marker ->
+            ?UPR_MSG_SIZE_SNAPSHOT;
+        snapshot_deletion ->
+            #upr_doc {
+                id = Key
+            } = Doc,
+           ?UPR_MSG_SIZE_DELETION + erlang:external_size(Key)
+    end.

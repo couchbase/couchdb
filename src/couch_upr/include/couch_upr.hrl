@@ -70,13 +70,6 @@
 -define(UPR_SIZES_BUFFER_SIZE, 32).
 -define(UPR_BUFFER_ACK_THRESHOLD, 0.2).
 
-% size of the upr message for flow control
--define(UPR_MSG_SIZE_MUTATION, 55).
--define(UPR_MSG_SIZE_DELETION, 42).
--define(UPR_MSG_SIZE_SNAPSHOT , 24).
--define(UPR_MSG_SIZE_STREAM_END, 28).
-
-
 % NOTE vmx 2014-01-16: In ep-engine the maximum size is currently 25
 -define(UPR_MAX_FAILOVER_LOG_SIZE, 25).
 

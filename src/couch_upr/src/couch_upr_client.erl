@@ -353,12 +353,12 @@ handle_info({get_stream_event, RequestId, From}, State) ->
         {ok, State3} ->
             {State4, Event} = dequeue_stream_event(State3, RequestId),
             State5 = case Event of
-            {stream_end, _} ->
+            {stream_end, _, _} ->
                 remove_request_queue(State4, RequestId);
             _ ->
                 State4
             end,
-            {Event, State5};
+            {remove_body_len(Event), State5};
         {error, Reason} ->
             {{error, Reason}, State}
         end,
@@ -433,7 +433,7 @@ handle_info({stream_noop, RequestId, _}, State) ->
 % If there is a waiting caller for stream event, reply to them
 % Else, queue the event into the stream queue
 handle_info({stream_event, RequestId, Event}, State) ->
-    {Optype, Data} = Event,
+    {Optype, Data, _Length} = Event,
     State2 = case Optype of
     snapshot_marker ->
         store_snapshot_seq(RequestId, Data, State);
@@ -454,12 +454,12 @@ handle_info({stream_event, RequestId, Event}, State) ->
         {Msg, State6} = case check_and_send_buffer_ack(State3, RequestId, Event, mutation) of
         {ok, State4} ->
             State5 = case Event of
-            {stream_end, _} ->
+            {stream_end, _, _} ->
                 remove_request_queue(State4, RequestId);
             _ ->
                 State4
             end,
-            {Event, State5};
+            {remove_body_len(Event), State5};
         {error, Reason} ->
             State4 = enqueue_stream_event(State3, RequestId, Event),
             {{error, Reason}, State4}
@@ -1029,13 +1029,13 @@ receive_worker(Socket, Timeout, Parent, MsgAcc0) ->
             {ok, SnapshotMarker} = receive_snapshot_marker(
                 Socket, Timeout, BodyLength),
             {done, {stream_event, RequestId,
-                {snapshot_marker, SnapshotMarker}}};
+                {snapshot_marker, SnapshotMarker, BodyLength}}};
         {snapshot_mutation, PartId, RequestId, KeyLength, BodyLength,
                 ExtraLength, Cas} ->
             Mutation = receive_snapshot_mutation(
                 Socket, Timeout, PartId, KeyLength, BodyLength, ExtraLength,
                 Cas),
-            {done, {stream_event, RequestId, {snapshot_mutation, Mutation}}};
+            {done, {stream_event, RequestId, {snapshot_mutation, Mutation, BodyLength}}};
         % For the indexer and XDCR there's no difference between a deletion
         % end an expiration. In both cases the items should get removed.
         % Hence the same code can be used after the initial header
@@ -1045,10 +1045,10 @@ receive_worker(Socket, Timeout, Parent, MsgAcc0) ->
                 OpCode =:= snapshot_expiration ->
             Deletion = receive_snapshot_deletion(
                 Socket, Timeout, PartId, KeyLength, BodyLength, Cas),
-            {done, {stream_event, RequestId, {snapshot_deletion, Deletion}}};
+            {done, {stream_event, RequestId, {snapshot_deletion, Deletion, BodyLength}}};
         {stream_end, PartId, RequestId, BodyLength} ->
             Flag = receive_stream_end(Socket, Timeout, BodyLength),
-            {done, {stream_event, RequestId, {stream_end, {RequestId, PartId, Flag}}}}
+            {done, {stream_event, RequestId, {stream_end, {RequestId, PartId, Flag}, BodyLength}}}
         end,
         case Action of
         done ->
@@ -1139,25 +1139,9 @@ get_queue_size(EvQueue, Size) ->
         get_queue_size(NewQueue, Size2)
     end.
 
--spec get_event_size({atom(), #upr_doc{}}) -> pos_integer().
-get_event_size({Type, Doc}) ->
-    case Type of
-    snapshot_mutation ->
-        #upr_doc {
-            id = Key,
-            body = Value
-        } = Doc,
-        ?UPR_MSG_SIZE_MUTATION + erlang:external_size(Key) + erlang:external_size(Value);
-    stream_end ->
-        ?UPR_MSG_SIZE_STREAM_END;
-    snapshot_marker ->
-        ?UPR_MSG_SIZE_SNAPSHOT;
-    snapshot_deletion ->
-        #upr_doc {
-            id = Key
-        } = Doc,
-       ?UPR_MSG_SIZE_DELETION + erlang:external_size(Key)
-    end.
+-spec get_event_size({atom(), #upr_doc{}, non_neg_integer()}) -> non_neg_integer().
+get_event_size({_Type, _Doc, BodyLength}) ->
+    ?UPR_HEADER_LEN + BodyLength.
 
 -spec remove_stream_info(partition_id(), #state{}) -> #state{}.
 remove_stream_info(PartId, State) ->
@@ -1286,3 +1270,8 @@ store_snapshot_mutation(RequestId, Data, State) ->
         StreamData2 = dict:store(RequestId, Val2, StreamData),
         State#state{stream_info = StreamData2}
     end.
+
+-spec remove_body_len({atom(), tuple | #upr_doc{}, non_neg_integer()}) ->
+                                                {atom(), tuple | #upr_doc{}}.
+remove_body_len({Type, Data, _BodyLength}) ->
+    {Type, Data}.
