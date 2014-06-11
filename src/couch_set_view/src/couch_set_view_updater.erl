@@ -592,7 +592,7 @@ get_more_passive_partitions(Parts) ->
     {new_passive_partitions, Parts2} ->
         get_more_passive_partitions(Parts ++ Parts2)
     after 0 ->
-        Parts
+        lists:sort(Parts)
     end.
 
 
