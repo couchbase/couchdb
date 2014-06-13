@@ -605,7 +605,7 @@ notify_owner(Owner, Msg, UpdaterPid) ->
 
 
 queue_doc(snapshot_marker, MapQueue, _Group, _MaxDocSize, _InitialBuild) ->
-    couch_work_queue:queue(MapQueue, force_flush);
+    couch_work_queue:queue(MapQueue, snapshot_marker);
 queue_doc(Doc, MapQueue, Group, MaxDocSize, InitialBuild) ->
     case Doc#upr_doc.deleted of
     true when InitialBuild ->
@@ -721,8 +721,8 @@ do_maps(Group, MapQueue, WriteQueue) ->
                     ?LOG_MAPREDUCE_ERROR(ErrorMsg, Args),
                     [{Seq, Id, PartId, []} | Acc]
                 end;
-            (force_flush, Acc) ->
-                [force_flush | Acc]
+            (snapshot_marker, Acc) ->
+                [snapshot_marker | Acc]
             end,
             [], Queue),
         ok = couch_work_queue:queue(WriteQueue, Items),
@@ -730,8 +730,6 @@ do_maps(Group, MapQueue, WriteQueue) ->
     end.
 
 
-do_writes(#writer_acc{kvs = [], final_batch = true} = Acc) ->
-    Acc;
 do_writes(Acc) ->
     #writer_acc{
         kvs = Kvs,
@@ -742,55 +740,32 @@ do_writes(Acc) ->
     ok = timer:sleep(Throttle),
     case couch_work_queue:dequeue(WriteQueue) of
     closed ->
-        EndOfQueue = true,
-        Queue = [],
-        QueueSize = 0;
+        flush_writes(Acc#writer_acc{final_batch = true});
     {ok, Queue0, QueueSize} ->
-        EndOfQueue = false,
-        Queue = lists:flatten(Queue0)
-    end,
+        Queue = lists:flatten(Queue0),
+        Kvs2 = Kvs ++ Queue,
+        KvsSize2 = KvsSize + QueueSize,
 
-    Kvs2 = Kvs ++ Queue,
-    KvsSize2 = KvsSize + QueueSize,
-    {Kvs3, KvsRest} = lists:splitwith(
-        fun(Item) -> Item =/= force_flush end, Kvs2),
-
-    case KvsRest of
-    NoRest when NoRest =:= [] orelse NoRest =:= [force_flush] ->
         Acc2 = Acc#writer_acc{
-            kvs = Kvs3,
-            kvs_size = KvsSize2,
-            final_batch = EndOfQueue,
-            force_flush = NoRest =:= [force_flush] andalso Kvs =/= []
+            kvs = Kvs2,
+            kvs_size = KvsSize2
         },
-        case should_flush_writes(Acc2) orelse EndOfQueue of
+        case should_flush_writes(Acc2) of
         true ->
             Acc3 = flush_writes(Acc2),
             Acc4 = Acc3#writer_acc{kvs = [], kvs_size = 0};
         false ->
             Acc4 = Acc2
-        end;
-    [force_flush | KvsRest2] ->
-        KvsRestSize = ?term_size(KvsRest2),
-        Acc2 = Acc#writer_acc{
-            kvs = Kvs3,
-            kvs_size = KvsSize2 - KvsRestSize,
-            force_flush = true
-        },
-        Acc3 = flush_writes(Acc2),
-        Acc4 = Acc3#writer_acc{kvs = KvsRest2, kvs_size = KvsRestSize}
-    end,
-    do_writes(Acc4).
-
+        end,
+        do_writes(Acc4)
+    end.
 
 should_flush_writes(Acc) ->
     #writer_acc{
         view_empty_kvs = ViewEmptyKvs,
-        kvs_size = KvsSize,
-        force_flush = ForceFlush
+        kvs_size = KvsSize
     } = Acc,
-    KvsSize >= (?MIN_BATCH_SIZE_PER_VIEW * length(ViewEmptyKvs)) orelse
-        ForceFlush.
+    KvsSize >= (?MIN_BATCH_SIZE_PER_VIEW * length(ViewEmptyKvs)).
 
 
 flush_writes(#writer_acc{kvs = [], initial_build = false} = Acc) ->
@@ -806,8 +781,10 @@ flush_writes(#writer_acc{initial_build = false} = Acc0) ->
         owner = Owner,
         last_seqs = LastSeqs
     } = Acc0,
+    % Only incremental updates can contain multiple snapshots
+    {MultipleSnapshots, Kvs2} = merge_snapshots(Kvs),
     {ViewKVs, DocIdViewIdKeys, NewLastSeqs} =
-        process_map_results(Kvs, ViewEmptyKVs, LastSeqs),
+        process_map_results(Kvs2, ViewEmptyKVs, LastSeqs),
     Acc1 = Acc0#writer_acc{last_seqs = NewLastSeqs},
     Acc = write_to_tmp_batch_files(ViewKVs, DocIdViewIdKeys, Acc1),
     #writer_acc{group = NewGroup} = Acc,
@@ -825,7 +802,13 @@ flush_writes(#writer_acc{initial_build = false} = Acc0) ->
             Acc2
         end;
     false ->
-        Acc
+        case MultipleSnapshots of
+        true ->
+            Acc2 = maybe_update_btrees(Acc#writer_acc{force_flush = true}),
+            checkpoint(Acc2);
+        false ->
+            Acc
+        end
     end;
 
 flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
@@ -903,9 +886,10 @@ process_map_results(Kvs, ViewEmptyKVs, PartSeqs) ->
                     DocId, PartId, QueryResults, ViewKVsAcc, [], []),
             PartIdSeqs2 = update_part_seq(Seq, PartId, PartIdSeqs),
             {NewViewKVs, [{DocId, {PartId, NewViewIdKeys}} | DocIdViewIdKeysAcc], PartIdSeqs2};
-        (force_flush, _Acc) ->
+        (snapshot_marker, _Acc) ->
             throw({error,
-                <<"There should have been a forced flush, but wasn't">>})
+                <<"The multiple snapshots should have been merged, "
+                  "but theu weren't">>})
         end,
         {ViewEmptyKVs, [], PartSeqs}, Kvs).
 
@@ -1589,3 +1573,26 @@ file_sorter_wait_loop(Port, Group, Acc) ->
     {Port, Error} ->
         throw({file_sorter_error, Error})
     end.
+
+
+% UPR introduces the concept of snapshots, where a document mutation is only
+% guaranteed to be unique within a single snapshot. But the flusher expects
+% unique mutations within the full batch. Merge multiple snapshots (if there
+% are any) into a single one. The latest mutation wins.
+merge_snapshots(KVs) ->
+    merge_snapshots(KVs, false, []).
+
+merge_snapshots([], true, Acc) ->
+    {true, Acc};
+merge_snapshots([], false, Acc) ->
+    % The order of the KVs doesn't really matter, but having them sorted the
+    % same way will make life easier when debugging
+    {false, lists:reverse(Acc)};
+merge_snapshots([snapshot_marker | KVs], _MultipleSnapshots, Acc) ->
+    merge_snapshots(KVs, true, Acc);
+merge_snapshots([KV | KVs], true, Acc0) ->
+    {_Seq, DocId, _PartId, _QueryResults} = KV,
+    Acc = lists:keystore(DocId, 2, Acc0, KV),
+    merge_snapshots(KVs, true, Acc);
+merge_snapshots([KV | KVs], false, Acc) ->
+    merge_snapshots(KVs, false, [KV | Acc]).
