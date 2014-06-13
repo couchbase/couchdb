@@ -63,7 +63,7 @@
 
 -define(MAX_HIST_SIZE, 10).
 % flow control buffer size 20 MB
--define(UPR_CONTROL_BUFFER_SIZE, 20971520).
+-define(UPR_CONTROL_BUFFER_SIZE, "20971520").
 
 -record(util_stats, {
     useful_indexing_time = 0.0  :: float(),
@@ -410,8 +410,11 @@ do_init({_, SetName, _} = InitArgs) ->
             " (", (atom_to_binary(Category, latin1))/binary, "/",
             (atom_to_binary(Type, latin1))/binary, ")">>,
         {User, Passwd} = get_auth(),
+        UprBufferSize = list_to_integer(couch_config:get("upr",
+            "flow_control_buffer_size", ?UPR_CONTROL_BUFFER_SIZE)),
+        ?LOG_INFO("Flow control buffer size is ~p bytes", [UprBufferSize]),
         {ok, UprPid} = couch_upr_client:start(UprName, SetName, User, Passwd,
-            ?UPR_CONTROL_BUFFER_SIZE),
+            UprBufferSize),
         State = #state{
             init_args = InitArgs,
             replica_group = ReplicaPid,

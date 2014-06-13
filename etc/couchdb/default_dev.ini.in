@@ -245,3 +245,4 @@ vtree_min_fill_rate = 0.4
 [upr]
 port = 11209
 connection_timeout = 5000
+flow_control_buffer_size = 20971520
