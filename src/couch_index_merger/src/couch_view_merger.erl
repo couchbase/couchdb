@@ -16,7 +16,7 @@
 
 % export callbacks
 -export([parse_http_params/4, make_funs/3, get_skip_and_limit/1]).
--export([http_index_folder_req_details/3, make_event_fun/2]).
+-export([make_event_fun/2, view_qs/2, process_extra_params/2]).
 -export([simple_set_view_query/3]).
 
 
@@ -147,78 +147,10 @@ make_event_fun(ViewArgs, Queue) ->
     end.
 
 % callback!
-http_index_folder_req_details(#merged_index_spec{} = IndexSpec, MergeParams, DDoc) ->
-    #merged_index_spec{
-        url = MergeUrl0,
-        ejson_spec = {EJson}
-    } = IndexSpec,
-    #index_merge{
-        conn_timeout = Timeout,
-        http_params = ViewArgs,
-        extra = #view_merge{
-            keys = Keys
-        }
-    } = MergeParams,
-    {ok, HttpDb} = couch_index_merger:open_db(MergeUrl0, nil, Timeout),
-    #httpdb{
-        url = Url,
-        lhttpc_options = Options,
-        headers = Headers
-    } = HttpDb,
-    MergeUrl = Url ++ view_qs(ViewArgs, MergeParams),
-
-    EJson1 = case Keys of
-    nil ->
-        EJson;
-    _ ->
-        [{<<"keys">>, Keys} | EJson]
-    end,
-
-    EJson2 = case couch_index_merger:should_check_rev(MergeParams, DDoc) of
-    true ->
-        P = fun (Tuple) -> element(1, Tuple) =/= <<"ddoc_revision">> end,
-        [{<<"ddoc_revision">>, couch_index_merger:ddoc_rev_str(DDoc)} |
-            lists:filter(P, EJson1)];
-    false ->
-        EJson1
-    end,
-
-    Body = {EJson2},
-    put(from_url, ?l2b(Url)),
-    {MergeUrl, "POST", Headers, ?JSON_ENCODE(Body), Options};
-
-http_index_folder_req_details(#simple_index_spec{} = IndexSpec, MergeParams, _DDoc) ->
-    #simple_index_spec{
-        database = DbUrl,
-        ddoc_id = DDocId,
-        index_name = ViewName
-    } = IndexSpec,
-    #index_merge{
-        conn_timeout = Timeout,
-        http_params = ViewArgs,
-        extra = #view_merge{
-            keys = Keys
-        }
-    } = MergeParams,
-    {ok, HttpDb} = couch_index_merger:open_db(DbUrl, nil, Timeout),
-    #httpdb{
-        url = Url,
-        lhttpc_options = Options,
-        headers = Headers
-    } = HttpDb,
-    ViewUrl = Url ++ case ViewName of
-    <<"_all_docs">> ->
-        "_all_docs";
-    _ ->
-        couch_httpd:quote(DDocId) ++ "/_view/" ++ couch_httpd:quote(ViewName)
-    end ++ view_qs(ViewArgs, MergeParams),
-    put(from_url, DbUrl),
-    case Keys of
-    nil ->
-        {ViewUrl, get, [], [], Options};
-    _ ->
-        {ViewUrl, post, Headers, ?JSON_ENCODE({[{<<"keys">>, Keys}]}), Options}
-    end.
+process_extra_params(#view_merge{keys = nil}, EJson) ->
+    EJson;
+process_extra_params(#view_merge{keys = Keys}, EJson) ->
+    [{<<"keys">>, Keys} | EJson].
 
 
 view_type(nil, <<"_all_docs">>) ->

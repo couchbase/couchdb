@@ -653,7 +653,7 @@ http_index_folder(Mod, IndexSpec, MergeParams, DDoc, Queue) ->
 
 run_http_index_folder(Mod, IndexSpec, MergeParams, DDoc, Queue) ->
     {Url, Method, Headers, Body, BaseOptions} =
-        Mod:http_index_folder_req_details(IndexSpec, MergeParams, DDoc),
+        http_index_folder_req_details(Mod, IndexSpec, MergeParams, DDoc),
     #index_merge{
         conn_timeout = Timeout
     } = MergeParams,
@@ -710,6 +710,76 @@ run_http_index_folder(Mod, IndexSpec, MergeParams, DDoc, Queue) ->
     {error, Error} ->
         ok = couch_view_merger_queue:queue(Queue, {error, Url, Error}),
         ok = couch_view_merger_queue:done(Queue)
+    end.
+
+
+http_index_folder_req_details(Mod, #merged_index_spec{} = IndexSpec,
+        MergeParams, DDoc) ->
+    #merged_index_spec{
+        url = MergeUrl0,
+        ejson_spec = {EJson}
+    } = IndexSpec,
+    #index_merge{
+        conn_timeout = Timeout,
+        http_params = ViewArgs,
+        extra = Extra
+    } = MergeParams,
+    {ok, HttpDb} = couch_index_merger:open_db(MergeUrl0, nil, Timeout),
+    #httpdb{
+        url = Url,
+        lhttpc_options = Options,
+        headers = Headers
+    } = HttpDb,
+
+    MergeUrl = Url ++ Mod:view_qs(ViewArgs, MergeParams),
+    EJson1 = Mod:process_extra_params(Extra, EJson),
+
+    EJson2 = case couch_index_merger:should_check_rev(MergeParams, DDoc) of
+    true ->
+        P = fun (Tuple) -> element(1, Tuple) =/= <<"ddoc_revision">> end,
+        [{<<"ddoc_revision">>, couch_index_merger:ddoc_rev_str(DDoc)} |
+            lists:filter(P, EJson1)];
+    false ->
+        EJson1
+    end,
+
+    Body = {EJson2},
+    put(from_url, ?l2b(Url)),
+    {MergeUrl, "POST", Headers, ?JSON_ENCODE(Body), Options};
+
+% #simple_index_spec{} is only used for _all_docs and the old spatial views
+http_index_folder_req_details(Mod, #simple_index_spec{} = IndexSpec,
+        MergeParams, _DDoc) ->
+    #simple_index_spec{
+        database = DbUrl,
+        ddoc_id = DDocId,
+        index_name = ViewName
+    } = IndexSpec,
+    #index_merge{
+        conn_timeout = Timeout,
+        http_params = ViewArgs,
+        extra = #view_merge{
+            keys = Keys
+        }
+    } = MergeParams,
+    {ok, HttpDb} = couch_index_merger:open_db(DbUrl, nil, Timeout),
+    #httpdb{
+        url = Url,
+        lhttpc_options = Options,
+        headers = Headers
+    } = HttpDb,
+    ViewUrl = Url ++ case ViewName of
+    <<"_all_docs">> ->
+        "_all_docs";
+    _ ->
+        couch_httpd:quote(DDocId) ++ "/_spatial/" ++ couch_httpd:quote(ViewName)
+    end ++ Mod:view_qs(ViewArgs, MergeParams),
+    put(from_url, DbUrl),
+    case Keys of
+    nil ->
+        {ViewUrl, get, [], [], Options};
+    _ ->
+        {ViewUrl, post, Headers, ?JSON_ENCODE({[{<<"keys">>, Keys}]}), Options}
     end.
 
 
