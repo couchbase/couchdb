@@ -419,12 +419,12 @@ handle_info({stream_response, RequestId, Msg}, State) ->
     end,
     {noreply, State3};
 
-% Repond with the no op message reply to server
-handle_info({stream_noop, RequestId, _}, State) ->
+% Respond with the no op message reply to server
+handle_info({stream_noop, RequestId}, State) ->
     #state {
         socket = Socket
     } = State,
-    NoOpResponse = couch_upr_consumer:encode_no_op_response(RequestId),
+    NoOpResponse = couch_upr_consumer:encode_noop_response(RequestId),
     % if noop reponse fails two times, server it self will close the connection
     gen_tcp:send(Socket, NoOpResponse),
     {noreply, State};
@@ -964,8 +964,8 @@ receive_worker(Socket, Timeout, Parent, MsgAcc0) ->
         case couch_upr_consumer:parse_header(Header) of
         {control_request, Status, RequestId} ->
             {done, {stream_response, RequestId, {RequestId, Status}}};
-        {no_op, Status, RequestId} ->
-            {done, {stream_noop, RequestId, {RequestId, Status}}};
+        {noop_request, RequestId} ->
+            {done, {stream_noop, RequestId}};
         {buffer_ack, Status, _RequestId} ->
             Status = ?UPR_STATUS_OK,
             {true, []};

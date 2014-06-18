@@ -19,7 +19,7 @@
 -export([encode_sasl_auth/3, encode_open_connection/2, encode_stream_request/8,
     encode_failover_log_request/2, encode_stat_request/3, encode_stream_close/2,
     encode_select_bucket/2]).
--export([encode_no_op_response/1, encode_no_op_request/1, encode_buffer_request/2,
+-export([encode_noop_response/1, encode_buffer_request/2,
     encode_control_request/3]).
 
 -include_lib("couch_upr/include/couch_upr.hrl").
@@ -64,8 +64,6 @@ parse_header(<<?UPR_MAGIC_RESPONSE,
         {stream_close, Status, RequestId, BodyLength};
     ?UPR_OPCODE_SELECT_BUCKET ->
         {select_bucket, Status, RequestId, BodyLength};
-    ?UPR_OPCODE_UPR_NOOP ->
-        {no_op, Status, RequestId};
     ?UPR_OPCODE_UPR_BUFFER ->
         {buffer_ack, Status, RequestId};
     ?UPR_OPCODE_UPR_CONTROL ->
@@ -93,7 +91,9 @@ parse_header(<<?UPR_MAGIC_REQUEST,
             DataType};
     ?UPR_OPCODE_EXPIRATION ->
         {snapshot_expiration, PartId, RequestId, KeyLength, BodyLength, Cas,
-            DataType}
+            DataType};
+    ?UPR_OPCODE_UPR_NOOP ->
+        {noop_request, RequestId}
     end.
 
 -spec parse_snapshot_marker(<<_:160>>) ->
@@ -447,31 +447,7 @@ encode_buffer_request(RequestId, BufferSize) ->
                0:?UPR_SIZES_CAS>>,
     <<Header/binary, Body/binary>>.
 
-%UPR_NO_OP command
-%Field        (offset) (value)
-%Magic        (0)    : 0x80
-%Opcode       (1)    : 0x5C
-%Key length   (2,3)  : 0x0000
-%Extra length (4)    : 0x00
-%Data type    (5)    : 0x00
-%VBucket      (6,7)  : 0x0000
-%Total body   (8-11) : 0x00000000
-%Opaque       (12-15): 0x00000005
-%CAS          (16-23): 0x0000000000000000
-
--spec encode_no_op_request(request_id()) -> binary().
-encode_no_op_request(RequestId) ->
-    <<?UPR_MAGIC_REQUEST,
-      ?UPR_OPCODE_UPR_NOOP,
-      0:?UPR_SIZES_KEY_LENGTH,
-      0,
-      0,
-      0:?UPR_SIZES_PARTITION,
-      0:?UPR_SIZES_BODY,
-      RequestId:?UPR_SIZES_OPAQUE,
-      0:?UPR_SIZES_CAS>>.
-
-%UPR_NO_OP response
+%UPR_NOOP response
 %Field        (offset) (value)
 %Magic        (0)    : 0x81
 %Opcode       (1)    : 0x5C
@@ -483,8 +459,8 @@ encode_no_op_request(RequestId) ->
 %Opaque       (12-15): 0x00000005
 %CAS          (16-23): 0x0000000000000000
 
--spec encode_no_op_response(request_id()) -> binary().
-encode_no_op_response(RequestId) ->
+-spec encode_noop_response(request_id()) -> binary().
+encode_noop_response(RequestId) ->
     <<?UPR_MAGIC_RESPONSE,
       ?UPR_OPCODE_UPR_NOOP,
       0:?UPR_SIZES_KEY_LENGTH,

@@ -22,7 +22,7 @@
     encode_failover_log/2, encode_stat/3, encode_stat_error/3,
     encode_sasl_auth/1, encode_stream_close_response/2,
     encode_select_bucket_response/2, encode_control_flow_ok/1,
-    encode_buffer_ack_ok/1]).
+    encode_buffer_ack_ok/1, encode_noop_request/1]).
 
 -include_lib("couch_upr/include/couch_upr.hrl").
 -include_lib("couch_upr/include/couch_upr_typespecs.hrl").
@@ -56,14 +56,25 @@ parse_header(<<?UPR_MAGIC_REQUEST,
         {stream_close, RequestId, PartId};
     ?UPR_OPCODE_SELECT_BUCKET ->
         {select_bucket, BodyLength, RequestId};
-    ?UPR_OPCODE_UPR_NOOP ->
-        {no_op, BodyLength, RequestId};
     ?UPR_OPCODE_UPR_BUFFER ->
         {buffer_ack, BodyLength, RequestId};
     ?UPR_OPCODE_UPR_CONTROL ->
         {control_request, BodyLength, RequestId}
-    end.
+    end;
 
+parse_header(<<?UPR_MAGIC_RESPONSE,
+               Opcode,
+               _KeyLength:?UPR_SIZES_KEY_LENGTH,
+               _ExtraLength,
+               0,
+               Status:?UPR_SIZES_STATUS,
+               BodyLength:?UPR_SIZES_BODY,
+               RequestId:?UPR_SIZES_OPAQUE,
+               _Cas:?UPR_SIZES_CAS>>) ->
+    case Opcode of
+    ?UPR_OPCODE_UPR_NOOP ->
+        {noop_response, Status, RequestId, BodyLength}
+    end.
 
 %UPR_OPEN response
 %Field        (offset) (value)
@@ -546,5 +557,29 @@ encode_buffer_ack_ok(RequestId) ->
       0,
       0:?UPR_SIZES_STATUS,
       BodyLength:?UPR_SIZES_BODY,
+      RequestId:?UPR_SIZES_OPAQUE,
+      0:?UPR_SIZES_CAS>>.
+
+%UPR_NOOP command
+%Field        (offset) (value)
+%Magic        (0)    : 0x80
+%Opcode       (1)    : 0x5C
+%Key length   (2,3)  : 0x0000
+%Extra length (4)    : 0x00
+%Data type    (5)    : 0x00
+%VBucket      (6,7)  : 0x0000
+%Total body   (8-11) : 0x00000000
+%Opaque       (12-15): 0x00000005
+%CAS          (16-23): 0x0000000000000000
+
+-spec encode_noop_request(request_id()) -> binary().
+encode_noop_request(RequestId) ->
+    <<?UPR_MAGIC_REQUEST,
+      ?UPR_OPCODE_UPR_NOOP,
+      0:?UPR_SIZES_KEY_LENGTH,
+      0,
+      0,
+      0:?UPR_SIZES_PARTITION,
+      0:?UPR_SIZES_BODY,
       RequestId:?UPR_SIZES_OPAQUE,
       0:?UPR_SIZES_CAS>>.
