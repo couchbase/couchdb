@@ -1642,7 +1642,7 @@ get_group_info(State) ->
     PartVersions = lists:map(fun({PartId, PartVersion}) ->
         {couch_util:to_binary(PartId), [tuple_to_list(V) || V <- PartVersion]}
     end, ?set_partition_versions(Group)),
-    {ok, DbSeqs} = get_seqs(?upr_pid(State), GroupPartitions),
+    {ok, DbSeqs} = couch_set_view_util:get_seqs(?upr_pid(State), GroupPartitions),
     [
         {signature, ?l2b(hex_sig(GroupSig))},
         {disk_size, Size},
@@ -2172,7 +2172,7 @@ persist_partition_states(State, ActiveList, PassiveList, CleanupList, PendingTra
 update_waiting_list([], _UprPid, _AddActiveList, _AddPassiveList, _AddCleanupList) ->
     [];
 update_waiting_list(WaitList, UprPid, AddActiveList, AddPassiveList, AddCleanupList) ->
-    {ok, AddActiveSeqs} = get_seqs(UprPid, AddActiveList),
+    {ok, AddActiveSeqs} = couch_set_view_util:get_seqs(UprPid, AddActiveList),
     RemoveSet = ordsets:union(AddPassiveList, AddCleanupList),
     MapFun = fun(W) -> update_waiter_seqs(W, AddActiveSeqs, RemoveSet) end,
     [MapFun(W) || W <- WaitList].
@@ -2601,13 +2601,13 @@ indexable_partition_seqs(#state{group = Group} = State) ->
     CurPartitions = [P || {P, _} <- ?set_seqs(Group)],
     {ok, CurSeqs} = case ?set_unindexable_seqs(Group) of
     [] ->
-        get_seqs(?upr_pid(State), CurPartitions);
+        couch_set_view_util:get_seqs(?upr_pid(State), CurPartitions);
     _ ->
         ReplicasOnTransfer = ?set_replicas_on_transfer(Group),
         Partitions = ordsets:union(CurPartitions, ReplicasOnTransfer),
         % Index unindexable replicas on transfer though (as the reason for the
         % transfer is to become active and indexable).
-        get_seqs(?upr_pid(State), Partitions)
+        couch_set_view_util:get_seqs(?upr_pid(State), Partitions)
     end,
     CurSeqs.
 
@@ -2615,7 +2615,7 @@ indexable_partition_seqs(#state{group = Group} = State) ->
 -spec active_partition_seqs(#state{}) -> partition_seqs().
 active_partition_seqs(#state{group = Group} = State) ->
     ActiveParts = couch_set_view_util:decode_bitmask(?set_abitmask(Group)),
-    {ok, CurSeqs} = get_seqs(?upr_pid(State), ActiveParts),
+    {ok, CurSeqs} = couch_set_view_util:get_seqs(?upr_pid(State), ActiveParts),
     CurSeqs.
 
 
@@ -3484,7 +3484,7 @@ process_monitor_partition_update(#state{group = Group} = State, PartId, Ref, Pid
     false ->
         ok
     end,
-    {ok, [{PartId, CurSeq}]} = get_seqs(?upr_pid(State), [PartId]),
+    {ok, [{PartId, CurSeq}]} = couch_set_view_util:get_seqs(?upr_pid(State), [PartId]),
     case IsPending of
     true ->
         Seq = 0;
@@ -3804,16 +3804,6 @@ rollback(State, RollbackPartSeqs) ->
     cannot_rollback ->
         {error, {cannot_rollback, State3}}
     end.
-
-
--spec get_seqs(pid(), ordsets:ordset(partition_id())) ->
-                      {ok, partition_seqs()}.
-get_seqs(UprPid, Partitions) ->
-    Seqs = lists:map(fun(PartId) ->
-        {ok, NumItems} = couch_upr_client:get_sequence_number(UprPid, PartId),
-        {PartId, NumItems}
-    end, Partitions),
-    {ok, Seqs}.
 
 
 -spec get_auth() -> {binary(), binary()}.

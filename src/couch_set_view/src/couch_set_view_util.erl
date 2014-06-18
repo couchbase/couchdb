@@ -36,6 +36,7 @@
 -export([send_group_header/2, receive_group_header/3]).
 -export([remove_group_views/2, update_group_views/3]).
 -export([send_group_info/2]).
+-export([get_seqs/2]).
 
 
 -include("couch_db.hrl").
@@ -807,3 +808,13 @@ send_group_info(Group, Port) ->
             true = port_command(Port, Mod:view_info(View))
         end,
         Views).
+
+
+-spec get_seqs(pid(), ordsets:ordset(partition_id())) ->
+                      {ok, partition_seqs()}.
+get_seqs(UprPid, Partitions) ->
+    Seqs = lists:map(fun(PartId) ->
+        {ok, NumItems} = couch_upr_client:get_sequence_number(UprPid, PartId),
+        {PartId, NumItems}
+    end, Partitions),
+    {ok, Seqs}.
