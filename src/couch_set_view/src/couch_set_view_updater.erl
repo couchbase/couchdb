@@ -265,7 +265,7 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
         try
             {PartVersions, MaxSeqs} = load_changes(
                 Owner, Parent, Group, MapQueue, ActiveParts, PassiveParts,
-                WriterAcc#writer_acc.initial_build),
+                WriterAcc#writer_acc.max_seqs, WriterAcc#writer_acc.initial_build),
             Parent ! {doc_loader_finished, {PartVersions, MaxSeqs}}
         catch
         throw:purge ->
@@ -390,8 +390,16 @@ wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup) ->
     end.
 
 
+-spec filter_seqs(list(partition_id()), partition_seqs()) ->
+                                        partition_seqs().
+filter_seqs(Parts, Seqs) ->
+    lists:filter(fun({PartId, _}) ->
+        lists:member(PartId, Parts)
+    end, Seqs).
+
+
 load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
-        InitialBuild) ->
+        EndSeqs, InitialBuild) ->
     #set_view_group{
         set_name = SetName,
         name = DDocId,
@@ -406,7 +414,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
 
     MaxDocSize = list_to_integer(
         couch_config:get("set_views", "indexer_max_doc_size", "0")),
-    FoldFun = fun(PartId, {AccCount, AccSeqs, AccVersions, AccRollbacks}) ->
+    FoldFun = fun({PartId, EndSeq}, {AccCount, AccSeqs, AccVersions, AccRollbacks}) ->
         case couch_set_view_util:has_part_seq(PartId, ?set_unindexable_seqs(Group))
             andalso not lists:member(PartId, ?set_replicas_on_transfer(Group)) of
         true ->
@@ -422,8 +430,6 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
             end,
             case AccRollbacks of
             [] ->
-                {ok, EndSeq} = couch_upr_client:get_sequence_number(
-                    UprPid, PartId),
                 case EndSeq =:= Since of
                 true ->
                     {AccCount, AccSeqs, AccVersions, AccRollbacks};
@@ -532,7 +538,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                   [GroupType, DDocId, SetName]),
         {ActiveChangesCount, MaxSeqs, PartVersions, Rollbacks} = lists:foldl(
             FoldFun, {0, orddict:new(), PartVersions0, ordsets:new()},
-            ActiveParts)
+            filter_seqs(ActiveParts, EndSeqs))
     end,
     case PassiveParts of
     [] ->
@@ -546,10 +552,10 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                   [GroupType, DDocId, SetName]),
         {FinalChangesCount, MaxSeqs2, PartVersions2, Rollbacks2} = lists:foldl(
             FoldFun, {ActiveChangesCount, MaxSeqs, PartVersions, Rollbacks},
-            PassiveParts)
+            filter_seqs(PassiveParts, EndSeqs))
     end,
     {FinalChangesCount3, MaxSeqs3, PartVersions3, Rollbacks3} =
-        load_changes_from_passive_parts_in_mailbox(
+        load_changes_from_passive_parts_in_mailbox(UprPid,
             Group, FoldFun, FinalChangesCount, MaxSeqs2, PartVersions2, Rollbacks2),
 
     case Rollbacks3 of
@@ -567,8 +573,8 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
     {PartVersions3, MaxSeqs3}.
 
 
-load_changes_from_passive_parts_in_mailbox(
-        Group, FoldFun, ChangesCount, MaxSeqs, PartVersions0, Rollbacks) ->
+load_changes_from_passive_parts_in_mailbox(UprPid,
+        Group, FoldFun, ChangesCount, MaxSeqs0, PartVersions0, Rollbacks) ->
     #set_view_group{
         set_name = SetName,
         name = DDocId,
@@ -578,16 +584,19 @@ load_changes_from_passive_parts_in_mailbox(
     {new_passive_partitions, Parts0} ->
         Parts = get_more_passive_partitions(Parts0),
         AddPartVersions = [{P, [{0, 0}]} || P <- Parts],
+        {ok, AddMaxSeqs} = couch_set_view_util:get_seqs(UprPid, Parts),
         PartVersions = lists:ukeymerge(1, AddPartVersions, PartVersions0),
+
+        MaxSeqs = lists:ukeymerge(1, AddMaxSeqs, MaxSeqs0),
         ?LOG_INFO("Updater reading changes from new passive partitions ~w to "
                   "update ~s set view group `~s` from set `~s`",
                   [Parts, GroupType, DDocId, SetName]),
         {ChangesCount2, MaxSeqs2, PartVersions2, Rollbacks2} = lists:foldl(
-            FoldFun, {ChangesCount, MaxSeqs, PartVersions, Rollbacks}, Parts),
-        load_changes_from_passive_parts_in_mailbox(
+            FoldFun, {ChangesCount, MaxSeqs, PartVersions, Rollbacks}, AddMaxSeqs),
+        load_changes_from_passive_parts_in_mailbox(UprPid,
             Group, FoldFun, ChangesCount2, MaxSeqs2, PartVersions2, Rollbacks2)
     after 0 ->
-        {ChangesCount, MaxSeqs, PartVersions0, Rollbacks}
+        {ChangesCount, MaxSeqs0, PartVersions0, Rollbacks}
     end.
 
 
