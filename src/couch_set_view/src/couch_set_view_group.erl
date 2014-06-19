@@ -1249,6 +1249,7 @@ handle_info({'EXIT', Pid, {updater_error, Error}}, #state{updater_pid = Pid, gro
         updater_state = not_running,
         update_listeners = Listeners2
     },
+    stop_upr_streams(State),
     ?inc_updater_errors(State2#state.group),
     case State#state.shutdown of
     true ->
