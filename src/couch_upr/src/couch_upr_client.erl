@@ -473,9 +473,14 @@ handle_info({stream_event, RequestId, Event}, State) ->
         {noreply, State}
     end;
 
-handle_info({'EXIT', Pid, _Reason}, #state{worker_pid = Pid} = State) ->
+handle_info({'EXIT', Pid, {conn_error, Reason}}, #state{worker_pid = Pid} = State) ->
+    ?LOG_ERROR("upr client (~p): upr receive worker failed due to reason: ~p."
+        " Restarting upr receive worker...", [self(), Reason]),
     timer:sleep(?UPR_RETRY_TIMEOUT),
     restart_worker(State);
+
+handle_info({'EXIT', Pid, Reason}, #state{worker_pid = Pid} = State) ->
+    {stop, Reason, State};
 
 handle_info({print_log, Pid, ReqId}, State) ->
     #state{
@@ -1056,7 +1061,7 @@ receive_worker(Socket, Timeout, Parent, MsgAcc0) ->
             receive_worker(Socket, Timeout, Parent, MsgAcc)
         end;
     {error, Reason} ->
-        Reason
+        exit({conn_error, Reason})
     end.
 
 % Check if we need to send buffer ack to server and send it
