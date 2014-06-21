@@ -470,6 +470,11 @@ handle_info({stream_event, RequestId, Event}, State) ->
         State3 = enqueue_stream_event(State2, RequestId, Event),
         {noreply, State3};
     nil ->
+        % We might have explicitly closed a stream using close_stream command
+        % Before the server received close_stream message, it would have placed
+        % some mutations in the network buffer queue. We still need to acknowledge
+        % the mutations received.
+        {ok, _State} = check_and_send_buffer_ack(State, RequestId, Event, mutation),
         {noreply, State}
     end;
 
