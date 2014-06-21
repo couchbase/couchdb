@@ -1141,7 +1141,14 @@ maybe_update_btrees(WriterAcc0) ->
         spatial_view ->
             ok = sort_tmp_files(TmpFiles, WriterAcc0#writer_acc.tmp_dir, Group0, false);
         _ ->
-            ok
+            % Close all open tmpfile fds before starting native sorter
+            ok = close_tmp_fd(IdTmpFileInfo),
+            ok = lists:foreach(
+                fun(#set_view{id_num = Id}) ->
+                    ViewTmpFileInfo = dict:fetch(Id, TmpFiles),
+                    ok = close_tmp_fd(ViewTmpFileInfo)
+                end,
+                Group0#set_view_group.views)
         end,
         case erlang:erase(updater_worker) of
         undefined ->
