@@ -816,8 +816,18 @@ remove_request_queue(State, RequestId) ->
        stream_queues = StreamQueues
     } = State,
     ActiveStreams2 = lists:keydelete(RequestId, 2, ActiveStreams),
+
+    % All active streams have finished reading
+    % Let us ack for remaining unacked bytes
+    case length(ActiveStreams2) of
+    0 ->
+        {ok, State2} = send_buffer_ack(State);
+    _ ->
+        State2 = State
+    end,
+
     StreamQueues2 = dict:erase(RequestId, StreamQueues),
-    State#state{
+    State2#state{
        active_streams = ActiveStreams2,
        stream_queues = StreamQueues2
     }.
@@ -1116,6 +1126,21 @@ check_and_send_buffer_ack(State, RequestId, Event, Type) ->
         {error, Ret};
     false ->
         {ok, State}
+    end.
+
+-spec send_buffer_ack(#state{}) ->
+            {ok, #state{}} | {error, closed | inet:posix()}.
+send_buffer_ack(State) ->
+    #state{
+       socket = Socket,
+        total_buffer_size = Size
+    } = State,
+    BufferAckRequest = couch_upr_consumer:encode_buffer_request(0, Size),
+    case gen_tcp:send(Socket, BufferAckRequest) of
+    ok ->
+        {ok, State#state{total_buffer_size = 0}};
+    {error, _Reason} = Error ->
+        Error
     end.
 
 
