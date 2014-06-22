@@ -751,7 +751,10 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
                       " up to date - restarting updater",
                       [?set_name(State), ?type(State), ?category(State),
                        ?group_id(State)]),
-            couch_set_view_util:shutdown_wait(UpdaterPid);
+            % Decided to switch to compacted file
+            % Compactor has caught up and hence discard the running updater
+            couch_set_view_util:shutdown_wait(UpdaterPid),
+            stop_upr_streams(State);
         true ->
             ok
         end,
