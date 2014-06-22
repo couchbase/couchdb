@@ -1156,13 +1156,23 @@ maybe_update_btrees(WriterAcc0) ->
                     })
             end
         end,
-        WriterAcc2 = check_if_compactor_started(WriterAcc1),
-        NewUpdaterWorker = spawn_updater_worker(WriterAcc2, LastSeqs),
-        NewLastSeqs1 = orddict:new(),
-        erlang:put(updater_worker, NewUpdaterWorker),
-        TmpFiles2 = dict:map(
-            fun(_, _) -> #set_view_tmp_file_info{} end, TmpFiles),
-        WriterAcc = WriterAcc2#writer_acc{tmp_files = TmpFiles2}
+
+
+        % MB-11472: There is no id sortfile present and hence this is the final batch
+        % and nothing left to be updated to the btree
+        case IdTmpFileInfo#set_view_tmp_file_info.name of
+        nil ->
+            WriterAcc = WriterAcc1;
+        _ ->
+            WriterAcc2 = check_if_compactor_started(WriterAcc1),
+            NewUpdaterWorker = spawn_updater_worker(WriterAcc2, LastSeqs),
+            erlang:put(updater_worker, NewUpdaterWorker),
+
+            TmpFiles2 = dict:map(
+                fun(_, _) -> #set_view_tmp_file_info{} end, TmpFiles),
+            WriterAcc = WriterAcc2#writer_acc{tmp_files = TmpFiles2}
+        end,
+        NewLastSeqs1 = orddict:new()
     end,
     #writer_acc{
         stats = NewStats0,
