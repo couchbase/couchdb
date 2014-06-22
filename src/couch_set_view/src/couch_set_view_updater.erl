@@ -744,20 +744,12 @@ do_writes(Acc) ->
         kvs = Kvs,
         kvs_size = KvsSize,
         write_queue = WriteQueue,
-        throttle = Throttle,
-        tmp_files = TmpFiles
+        throttle = Throttle
     } = Acc,
     ok = timer:sleep(Throttle),
     case couch_work_queue:dequeue(WriteQueue) of
     closed ->
-        % There is no active flush batch and there is nothing left to be written
-        #set_view_tmp_file_info{name = IdFile} = dict:fetch(ids_index, TmpFiles),
-        case IdFile =:= nil andalso Kvs =:= [] of
-        true ->
-            Acc;
-        false ->
-            flush_writes(Acc#writer_acc{final_batch = true})
-        end;
+        flush_writes(Acc#writer_acc{final_batch = true});
     {ok, Queue0, QueueSize} ->
         Queue = lists:flatten(Queue0),
         Kvs2 = Kvs ++ Queue,
