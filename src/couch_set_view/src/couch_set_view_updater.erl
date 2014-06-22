@@ -1205,7 +1205,13 @@ maybe_update_btrees(WriterAcc0) ->
 send_log_compact_files(_Owner, [], _Seqs) ->
     ok;
 send_log_compact_files(Owner, Files, Seqs) ->
-    ok = gen_server:cast(Owner, {compact_log_files, Files, Seqs}).
+    Init = case erlang:erase(new_compactor) of
+    true ->
+        true;
+    undefined ->
+        false
+    end,
+    ok = gen_server:cast(Owner, {compact_log_files, Files, Seqs, Init}).
 
 
 spawn_updater_worker(WriterAcc, PartIdSeqs) ->
@@ -1404,6 +1410,7 @@ maybe_fix_group(#set_view_group{index_header = Header} = Group) ->
 check_if_compactor_started(#writer_acc{group = Group0} = Acc) ->
     receive
     {compactor_started, Pid} ->
+        erlang:put(new_compactor, true),
         Group = maybe_fix_group(Group0),
         Pid ! {compactor_started_ack, self(), Group},
         Acc#writer_acc{compactor_running = true, group = Group}

@@ -925,16 +925,22 @@ handle_call(get_utilization_stats, _From, #state{replica_group = RepPid} = State
 handle_cast(_Msg, State) when not ?is_defined(State) ->
     {noreply, State};
 
-handle_cast({compact_log_files, Files, Seqs}, #state{compact_log_files = nil} = State) ->
-    L = lists:map(fun(F) -> [F] end, Files),
-    {noreply, State#state{compact_log_files = {L, Seqs}}, ?GET_TIMEOUT(State)};
+handle_cast({compact_log_files, Files, Seqs, _Init},
+                                #state{compact_log_files = nil} = State) ->
+    LogList = lists:map(fun(F) -> [F] end, Files),
+    {noreply, State#state{compact_log_files = {LogList, Seqs}}, ?GET_TIMEOUT(State)};
 
-handle_cast({compact_log_files, Files, NewSeqs}, State) ->
-    {OldL, _OldSeqs} = State#state.compact_log_files,
-    L = lists:zipwith(
-        fun(F, Current) -> [F | Current] end,
-        Files, OldL),
-    {noreply, State#state{compact_log_files = {L, NewSeqs}}, ?GET_TIMEOUT(State)};
+handle_cast({compact_log_files, Files, NewSeqs, Init}, State) ->
+    LogList = case Init of
+    true ->
+        lists:map(fun(F) -> [F] end, Files);
+    false ->
+        {OldL, _OldSeqs} = State#state.compact_log_files,
+        lists:zipwith(
+            fun(F, Current) -> [F | Current] end,
+            Files, OldL)
+    end,
+    {noreply, State#state{compact_log_files = {LogList, NewSeqs}}, ?GET_TIMEOUT(State)};
 
 handle_cast({ddoc_updated, NewSig, Aliases}, State) ->
     #state{
@@ -2645,6 +2651,7 @@ start_compactor(State, CompactFun) ->
         compactor_pid = Pid,
         compactor_fun = CompactFun,
         compactor_file = CompactFd,
+        compact_log_files = nil,
         compactor_retry_number = 0
     }.
 
