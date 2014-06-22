@@ -258,18 +258,13 @@ handle_call({remove_stream, PartId}, From, State) ->
        request_id = RequestId,
        socket = Socket
     } = State2,
-    case check_and_send_buffer_ack(State2, RequestId, nil, remove_stream) of
-    {ok, State3} ->
-        StreamCloseRequest = couch_upr_consumer:encode_stream_close(
-            PartId, RequestId),
-        case gen_tcp:send(Socket, StreamCloseRequest) of
-        ok ->
-            State4 = next_request_id(State3),
-            State5 = add_pending_request(State4, RequestId, {remove_stream, PartId}, From),
-            {noreply, State5};
-        Error ->
-            {reply, Error, State3}
-        end;
+    StreamCloseRequest = couch_upr_consumer:encode_stream_close(
+        PartId, RequestId),
+    case gen_tcp:send(Socket, StreamCloseRequest) of
+    ok ->
+        State3 = next_request_id(State2),
+        State4 = add_pending_request(State3, RequestId, {remove_stream, PartId}, From),
+        {noreply, State4};
     {error, _Reason} = Error ->
         {reply, Error, State2}
     end;
@@ -398,12 +393,18 @@ handle_info({stream_response, RequestId, Msg}, State) ->
         {remove_stream, PartId} ->
             gen_server:reply(SendTo, Msg),
             StreamReqId = find_stream_req_id(State, PartId),
-            case Msg of
-            ok ->
-                remove_request_queue(State, StreamReqId);
-            {error, vbucket_stream_not_found} ->
-                remove_request_queue(State, StreamReqId);
-            _ ->
+            case check_and_send_buffer_ack(State, StreamReqId, nil, remove_stream) of
+            {ok, NewState} ->
+                case Msg of
+                ok ->
+                    remove_request_queue(NewState, StreamReqId);
+                {error, vbucket_stream_not_found} ->
+                    remove_request_queue(NewState, StreamReqId);
+                _ ->
+                    NewState
+                end;
+            {error, Error} ->
+                throw({control_ack_failed, Error}),
                 State
             end;
         % Server sent the response for the internal control request
@@ -1094,9 +1095,9 @@ check_and_send_buffer_ack(State, RequestId, Event, Type) ->
     remove_stream ->
         case dict:find(RequestId, StreamQueues) of
         error ->
-            0;
+            Size;
         {ok, {_, EvQueue}} ->
-            get_queue_size(EvQueue, 0)
+            get_queue_size(EvQueue, Size)
         end;
     mutation ->
         Size + get_event_size(Event)
