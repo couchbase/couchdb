@@ -235,7 +235,7 @@ indexer_max_insert_batch_size = 1048576
 indexer_max_doc_size = 1048576
 ; Sleep period for updates to wait when compactor is in retry phase.
 ; Value is in milliseconds.
-throttle_period = 100
+throttle_period = 0
 
 [spatial_views]
 vtree_kv_node_threshold = 2000
