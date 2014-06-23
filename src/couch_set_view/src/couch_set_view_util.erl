@@ -813,8 +813,13 @@ send_group_info(Group, Port) ->
 -spec get_seqs(pid(), ordsets:ordset(partition_id())) ->
                       {ok, partition_seqs()}.
 get_seqs(UprPid, Partitions) ->
-    Seqs = lists:map(fun(PartId) ->
-        {ok, NumItems} = couch_upr_client:get_sequence_number(UprPid, PartId),
-        {PartId, NumItems}
-    end, Partitions),
-    {ok, Seqs}.
+    {ok, Seqs} = couch_upr_client:get_sequence_numbers(UprPid, Partitions),
+    SeqsResult = lists:zipwith(fun(PartId, Seq) ->
+        case Seq of
+        {error, not_my_vbucket} ->
+            throw({error, {PartId, not_found}});
+        Seq ->
+            {PartId, Seq}
+        end
+    end, Partitions, Seqs),
+    {ok, SeqsResult}.

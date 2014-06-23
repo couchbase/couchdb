@@ -15,7 +15,7 @@
 
 % Public API
 -export([start/5]).
--export([add_stream/6, get_sequence_number/2, get_num_items/2,
+-export([add_stream/6, get_sequence_numbers/2, get_num_items/2,
     get_failover_log/2]).
 -export([get_stream_event/2, remove_stream/2, list_streams/1]).
 -export([enum_docs_since/8, restart_worker/1]).
@@ -93,15 +93,24 @@ remove_stream(Pid, PartId) ->
 list_streams(Pid) ->
     gen_server:call(Pid, list_streams).
 
--spec get_sequence_number(pid(), partition_id()) ->
-                                 {ok, update_seq()} | {error, not_my_vbucket}.
-get_sequence_number(Pid, PartId) ->
-    case gen_server:call(Pid, {get_stats, <<"vbucket-seqno">>, PartId}) of
-    {ok, [Stats | _]} ->
-        {_, SeqBin} = Stats,
-        {ok, list_to_integer(binary_to_list(SeqBin))};
-    {error,  {?UPR_STATUS_NOT_MY_VBUCKET, _}} ->
-        {error, not_my_vbucket}
+-spec get_sequence_numbers(pid(), [partition_id()]) ->
+         {ok, [update_seq()] | {error, not_my_vbucket}} | {error, term()}.
+
+get_sequence_numbers(Pid, PartIds) ->
+    case gen_server:call(Pid, {get_stats, <<"vbucket-seqno">>, nil}) of
+    {ok, Stats} ->
+        Seqs = lists:map(fun(PartId) ->
+            Key = list_to_binary([<<"vb_">>, integer_to_list(PartId), <<":high_seqno">>]),
+            case lists:keyfind(Key, 1, Stats) of
+            {Key, SeqBin} ->
+                list_to_integer(binary_to_list(SeqBin));
+            false ->
+                {error, not_my_vbucket}
+            end
+        end, PartIds),
+        {ok, Seqs};
+    {error, _Error} = Error ->
+        Error
     end.
 
 

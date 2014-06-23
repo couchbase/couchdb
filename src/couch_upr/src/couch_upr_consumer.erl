@@ -361,11 +361,17 @@ encode_failover_log_request(PartId, RequestId) ->
 %Opaque       (12-15): 0x00000000
 %CAS          (16-23): 0x0000000000000000
 %Key                 : vbucket-seqno 1
--spec encode_stat_request(binary(), partition_id(), request_id()) -> binary().
+-spec encode_stat_request(binary(), partition_id() | nil, request_id()) -> binary().
 encode_stat_request(Stat, PartId, RequestId) ->
-    Body = <<Stat/binary, " ",
-        (list_to_binary(integer_to_list(PartId)))/binary>>,
-
+    case PartId of
+    nil ->
+        PartId2 = 0,
+        Body = Stat;
+    PartId ->
+        PartId2 = PartId,
+        Body = <<Stat/binary, " ",
+            (list_to_binary(integer_to_list(PartId)))/binary>>
+    end,
     KeyLength = BodyLength = byte_size(Body),
     ExtraLength = 0,
 
@@ -374,7 +380,7 @@ encode_stat_request(Stat, PartId, RequestId) ->
                KeyLength:?UPR_SIZES_KEY_LENGTH,
                ExtraLength,
                0,
-               PartId:?UPR_SIZES_PARTITION,
+               PartId2:?UPR_SIZES_PARTITION,
                BodyLength:?UPR_SIZES_BODY,
                RequestId:?UPR_SIZES_OPAQUE,
                0:?UPR_SIZES_CAS>>,

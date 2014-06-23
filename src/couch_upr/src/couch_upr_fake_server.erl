@@ -308,46 +308,19 @@ handle_call({set_dups_per_snapshot, Num}, _From, State) ->
 
 handle_call({send_stat, Stat, Socket, RequestId, PartId}, _From, State) ->
     #state{
-        setname = SetName,
-        items_per_snapshot = ItemsPerSnapshot,
-        dups_per_snapshot = DupsPerSnapshot
+        setname = SetName
     } = State,
-    BinPartId = list_to_binary(integer_to_list(PartId)),
     case binary:split(Stat, <<" ">>) of
     [<<"vbucket-seqno">>] ->
-            % XXX vmx 2013-12-09: Return all seq numbers
-            not_yet_implemented;
-    [<<"vbucket-seqno">>, _] ->
-        case get_sequence_number(SetName, PartId, ItemsPerSnapshot,
-            DupsPerSnapshot) of
-        {ok, Seq} ->
-            SeqKey = <<"vb_", BinPartId/binary ,":high_seqno">>,
-            SeqValue = list_to_binary(integer_to_list(Seq)),
-            SeqStat = couch_upr_producer:encode_stat(
-                RequestId, SeqKey, SeqValue),
-            ok = gen_tcp:send(Socket, SeqStat),
-
-            UuidKey = <<"vb_", BinPartId/binary ,":vb_uuid">>,
-            FailoverLog = get_failover_log(PartId, State),
-            {UuidValue, _} = hd(FailoverLog),
-            UuidStat = couch_upr_producer:encode_stat(
-                RequestId, UuidKey, <<UuidValue:64/integer>>),
-            ok = gen_tcp:send(Socket, UuidStat),
-
-            EndStat = couch_upr_producer:encode_stat(RequestId, <<>>, <<>>),
-            ok = gen_tcp:send(Socket, EndStat);
-        {error, not_my_partition} ->
-            % The real response contains the vBucket map so that
-            % clients can adapt. It's not easy to simulate, hence
-            % we return an empty JSON object to keep things simple.
-            StatError = couch_upr_producer:encode_stat_error(
-                RequestId, ?UPR_STATUS_NOT_MY_VBUCKET,
-                <<"{}">>),
-            ok = gen_tcp:send(Socket, StatError)
-        end;
+        Partitions = list_partitions(SetName),
+        send_vbucket_seqnos_stats(State, SetName, Socket, RequestId, Partitions);
+    [<<"vbucket-seqno">>, BinPartId] ->
+        PartIdInt = list_to_integer(binary_to_list(BinPartId)),
+        send_vbucket_seqnos_stats(State, SetName, Socket, RequestId, [PartIdInt]);
     [<<"vbucket-details">>, _] ->
         case get_num_items(SetName, PartId) of
         {ok, NumItems} ->
+            BinPartId = list_to_binary(integer_to_list(PartId)),
             NumItemsKey = <<"vb_", BinPartId/binary ,":num_items">>,
             NumItemsValue = list_to_binary(integer_to_list(NumItems)),
             % The real vbucket-details response contains a lot of more
@@ -962,4 +935,63 @@ num_items_with_dups(CurrentNum, ItemsPerSnapshot, DupsPerSnapshot,
             (NewNumSnapshots - NumSnapshots) * DupsPerSnapshot,
         num_items_with_dups(
             NewNum, ItemsPerSnapshot, DupsPerSnapshot, NewNumSnapshots)
+    end.
+
+-spec list_partitions(binary()) -> [partition_id()].
+list_partitions(SetName) ->
+    FilePaths = couch_server:all_known_databases_with_prefix(SetName),
+    lists:foldl(fun(P, Acc) ->
+        File = lists:last(binary:split(P, <<"/">>)),
+        case File of
+        <<"master">> ->
+            Acc;
+        BinPartId ->
+            PartId = list_to_integer(binary_to_list(BinPartId)),
+            [PartId | Acc]
+        end
+    end, [], FilePaths).
+
+-spec send_vbucket_seqnos_stats(#state{}, binary(),
+        socket(), request_id(), [partition_id()]) -> ok.
+send_vbucket_seqnos_stats(State, SetName, Socket, RequestId, Partitions) ->
+    #state{
+        setname = SetName,
+        items_per_snapshot = ItemsPerSnapshot,
+        dups_per_snapshot = DupsPerSnapshot
+    } = State,
+    Result = lists:map(fun(PartId) ->
+        BinPartId = list_to_binary(integer_to_list(PartId)),
+        case get_sequence_number(SetName, PartId, ItemsPerSnapshot,
+            DupsPerSnapshot) of
+        {ok, Seq} ->
+            SeqKey = <<"vb_", BinPartId/binary ,":high_seqno">>,
+            SeqValue = list_to_binary(integer_to_list(Seq)),
+            SeqStat = couch_upr_producer:encode_stat(
+                RequestId, SeqKey, SeqValue),
+            ok = gen_tcp:send(Socket, SeqStat),
+
+            UuidKey = <<"vb_", BinPartId/binary ,":vb_uuid">>,
+            FailoverLog = get_failover_log(PartId, State),
+            {UuidValue, _} = hd(FailoverLog),
+            UuidStat = couch_upr_producer:encode_stat(
+                RequestId, UuidKey, <<UuidValue:64/integer>>),
+            ok = gen_tcp:send(Socket, UuidStat),
+            true;
+        {error, not_my_partition} ->
+            % The real response contains the vBucket map so that
+            % clients can adapt. It's not easy to simulate, hence
+            % we return an empty JSON object to keep things simple.
+            StatError = couch_upr_producer:encode_stat_error(
+                RequestId, ?UPR_STATUS_NOT_MY_VBUCKET,
+                <<"{}">>),
+            ok = gen_tcp:send(Socket, StatError),
+            false
+        end
+    end, Partitions),
+    case lists:all(fun(E) -> E end, Result) of
+    true ->
+        EndStat = couch_upr_producer:encode_stat(RequestId, <<>>, <<>>),
+        ok = gen_tcp:send(Socket, EndStat);
+    false ->
+        ok
     end.
