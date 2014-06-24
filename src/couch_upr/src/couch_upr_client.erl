@@ -151,7 +151,7 @@ get_stream_event_get_reply(Pid, ReqId, MRef) ->
     {'DOWN', MRef, process, Pid, Reason} ->
         exit({upr_client_died, Pid, Reason})
     after ?TIMEOUT ->
-        Msg = {print_log, Pid, ReqId},
+        Msg = {print_log, ReqId},
         Pid ! Msg,
         get_stream_event_get_reply(Pid, ReqId, MRef)
     end.
@@ -499,27 +499,31 @@ handle_info({stream_event, RequestId, Event}, State) ->
     end;
 
 handle_info({'EXIT', Pid, {conn_error, Reason}}, #state{worker_pid = Pid} = State) ->
-    ?LOG_ERROR("upr client (~p): upr receive worker failed due to reason: ~p."
-        " Restarting upr receive worker...", [self(), Reason]),
+    [Name, Bucket, _AdmUser, _AdmPasswd, _BufferSize] = State#state.args,
+    ?LOG_ERROR("upr client (~s, ~s): upr receive worker failed due to reason: ~p."
+        " Restarting upr receive worker...",
+        [Bucket, Name, Reason]),
     timer:sleep(?UPR_RETRY_TIMEOUT),
     restart_worker(State);
 
 handle_info({'EXIT', Pid, Reason}, #state{worker_pid = Pid} = State) ->
     {stop, Reason, State};
 
-handle_info({print_log, Pid, ReqId}, State) ->
-    #state{
-        active_streams = ActiveStreams
-    } = State,
-    PartId = case lists:keyfind(ReqId, 2, ActiveStreams) of
-    {Partid, ReqId} ->
-        Partid;
-    false ->
-        nil
+handle_info({print_log, ReqId}, State) ->
+    [Name, Bucket, _AdmUser, _AdmPasswd, _BufferSize] = State#state.args,
+    case find_stream_info(ReqId, State) of
+    nil ->
+        throw({invalid_stream, ReqId});
+    StreamInfo ->
+        #stream_info{
+           start_seq = Start,
+           end_seq = End,
+           part_id = PartId
+        } = StreamInfo,
+        ?LOG_ERROR("upr client (~s, ~s): Obtaining mutation from server timed out "
+            "after ~p seconds [RequestId ~p, PartId ~p, StartSeq ~p, EndSeq ~p]. Waiting...",
+            [Bucket, Name, ?TIMEOUT / 1000, ReqId, PartId, Start, End])
     end,
-    ?LOG_ERROR("upr client (~p): Obtaining mutation from server timed out "
-        "after ~p seconds [RequestId ~p PartId ~p]. Waiting...",
-        [Pid, ?TIMEOUT / 1000, ReqId, PartId]),
     {noreply, State};
 
 handle_info(Msg, State) ->
@@ -1223,6 +1227,18 @@ insert_stream_info(PartId, RequestId, PartUuid, StartSeq, EndSeq, State, Flags) 
     },
     StreamData2 = dict:store(RequestId, Data, StreamData),
     State#state{stream_info = StreamData2}.
+
+-spec find_stream_info(request_id(), #state{}) -> #stream_info{} | nil.
+find_stream_info(RequestId, State) ->
+    #state{
+       stream_info = StreamData
+    } = State,
+    case dict:find(RequestId, StreamData) of
+    {ok, Info} ->
+        Info;
+    error ->
+        nil
+    end.
 
 -spec add_new_stream({partition_id(), uuid(), update_seq(), update_seq(),
         init | retry, request_id(), {update_seq(), update_seq()}, 0..255},
