@@ -423,7 +423,7 @@ encode_control_request(RequestId, Type, BufferSize) ->
 %Magic        (0)    : 0x80
 %Opcode       (1)    : 0x5D
 %Key length   (2,3)  : 0x0000
-%Extra length (4)    : 0x00
+%Extra length (4)    : 0x04
 %Data type    (5)    : 0x00
 %VBucket      (6,7)  : 0x0000
 %Total body   (8-11) : 0x00000004
@@ -432,20 +432,19 @@ encode_control_request(RequestId, Type, BufferSize) ->
 %BufferSize   (24-27): 0x00001000
 -spec encode_buffer_request(request_id(), size()) -> binary().
 encode_buffer_request(RequestId, BufferSize) ->
-    Body = <<BufferSize:?UPR_SIZES_BUFFER_SIZE>>,
-
-    BodyLength = byte_size(Body),
+    Extra = <<BufferSize:?UPR_SIZES_BUFFER_SIZE>>,
+    BodyLength = ExtraLength = byte_size(Extra),
 
     Header = <<?UPR_MAGIC_REQUEST,
                ?UPR_OPCODE_UPR_BUFFER,
                0:?UPR_SIZES_KEY_LENGTH,
-               0,
+               ExtraLength,
                0,
                0:?UPR_SIZES_PARTITION,
                BodyLength:?UPR_SIZES_BODY,
                RequestId:?UPR_SIZES_OPAQUE,
                0:?UPR_SIZES_CAS>>,
-    <<Header/binary, Body/binary>>.
+    <<Header/binary, Extra/binary>>.
 
 %UPR_NOOP response
 %Field        (offset) (value)
