@@ -49,6 +49,7 @@
         etap:fun_is(fun(XXXXXX) ->
             case XXXXXX of Expected -> true; _ -> false end
         end, Got, Desc)).
+-define(MAX_WAIT_TIME, 10 * 1000).
 
 test_set_name() -> <<"couch_test_set_index_debug_params">>.
 num_set_partitions() -> 64.
@@ -130,6 +131,8 @@ test_filter_parameter_main(AccessType) ->
             "Reduce view query queried with _filter=false returns all "
             "partitions"),
 
+    GroupPid = get_main_pid(),
+    couch_set_view_test_util:wait_for_updater_to_finish(GroupPid, ?MAX_WAIT_TIME),
     shutdown_group().
 
 
@@ -169,6 +172,9 @@ test_filter_parameter_replica(AccessType) ->
     etap:is(RowsRed2, (num_docs()) * 0.25,
         "Replica reduce view query queried with _filter=false returns all "
         "partitions"),
+
+    GroupPid = get_replica_pid(),
+    couch_set_view_test_util:wait_for_updater_to_finish(GroupPid, ?MAX_WAIT_TIME),
 
     shutdown_group().
 
@@ -327,3 +333,13 @@ configure_replica_group(DDocId, Active, Passive) ->
     couch_set_view_group:set_state(
         Group#set_view_group.replica_pid, Active, Passive, []),
     couch_set_view:release_group(Group).
+
+
+get_main_pid() ->
+    couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id(), prod).
+
+get_replica_pid() ->
+    MainPid = get_main_pid(),
+    {ok, Group} = gen_server:call(MainPid, request_group, infinity),
+    Group#set_view_group.replica_pid.

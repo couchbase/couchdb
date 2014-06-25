@@ -29,6 +29,7 @@
 -export([fold_id_btree/5]).
 -export([fold_view_btree/5]).
 -export([get_daemon_pid/1]).
+-export([wait_for_updater_to_finish/2]).
 
 -include("couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
@@ -379,3 +380,22 @@ get_daemon_pid(Name) ->
     SupervisorChildren = supervisor:which_children(couch_secondary_services),
     {Name, Pid, _, _} = lists:keyfind(Name, 1, SupervisorChildren),
     Pid.
+
+
+wait_for_updater_to_finish(GroupPid, Timeout) ->
+    {ok, UpdaterPid} = gen_server:call(GroupPid, updater_pid),
+    case UpdaterPid of
+    nil ->
+        etap:diag("Updater finished");
+    _ ->
+        Ref2 = erlang:monitor(process, UpdaterPid),
+        receive
+        {'DOWN', Ref2, _, _, {updater_finished, _}} ->
+            etap:diag("Updater finished");
+        {'DOWN', Ref2, _, _, Reason} ->
+            etap:bail("Updater finished with unexpected reason: "
+                ++ couch_util:to_list(Reason))
+        after Timeout ->
+            etap:bail("Timeout waiting for updater to finish")
+        end
+    end.

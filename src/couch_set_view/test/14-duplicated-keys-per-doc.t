@@ -110,6 +110,9 @@ test_same_key_by_same_doc_multiple_times() ->
     Group10 = get_group_snapshot(),
     same_key_by_same_doc_multiple_times_verify_btrees_4(Group10),
 
+    GroupPid = get_main_pid(),
+    couch_set_view_test_util:wait_for_updater_to_finish(GroupPid, ?MAX_WAIT_TIME),
+
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
     ok.
 
@@ -155,6 +158,9 @@ test_same_key_by_different_docs_multiple_times() ->
 
     Group8 = get_group_snapshot(),
     test_same_key_by_different_docs_multiple_times_verify_btrees_3(Group8),
+
+    GroupPid = get_main_pid(),
+    couch_set_view_test_util:wait_for_updater_to_finish(GroupPid, ?MAX_WAIT_TIME),
 
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
     ok.
@@ -975,3 +981,8 @@ test_same_key_by_different_docs_multiple_times_verify_btrees_3(Group) ->
         0, []),
     etap:is(View1BtreeFoldResult, 0, "View1 Btree has 0 entries"),
     ok.
+
+
+get_main_pid() ->
+    couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id(), prod).
