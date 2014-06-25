@@ -1654,7 +1654,23 @@ get_group_info(State) ->
     PartVersions = lists:map(fun({PartId, PartVersion}) ->
         {couch_util:to_binary(PartId), [tuple_to_list(V) || V <- PartVersion]}
     end, ?set_partition_versions(Group)),
-    {ok, DbSeqs} = couch_set_view_util:get_seqs(?upr_pid(State), GroupPartitions),
+
+    IndexSeqs = ?set_seqs(Group),
+    IndexPartitions = [PartId || {PartId, _} <- IndexSeqs],
+    % Extract the seqnum from KV store for all indexible partitions.
+    {ok, GroupSeqs} = couch_set_view_util:get_seqs(?upr_pid(State),
+        GroupPartitions),
+    PartSeqs = lists:filter(fun({PartId, _}) ->
+        lists:member(PartId, IndexPartitions)
+    end, GroupSeqs),
+    % Calculate the total sum over difference of Seqnum between KV
+    % and Index partition.
+    SeqDiffs = lists:zipwith(
+        fun({PartId, Seq1}, {PartId, Seq2}) ->
+            Seq1 - Seq2
+        end, PartSeqs, IndexSeqs),
+    TotalSeqDiff = lists:sum(SeqDiffs),
+
     [
         {signature, ?l2b(hex_sig(GroupSig))},
         {disk_size, Size},
@@ -1666,8 +1682,9 @@ get_group_info(State) ->
         {cleanup_running, (CleanerPid /= nil) orelse
             ((CompactorPid /= nil) andalso (?set_cbitmask(Group) =/= 0))},
         {max_number_partitions, ?set_num_partitions(Group)},
-        {update_seqs, {[{couch_util:to_binary(P), S} || {P, S} <- ?set_seqs(Group)]}},
-        {partition_seqs, {[{couch_util:to_binary(P), S} || {P, S} <- DbSeqs]}},
+        {update_seqs, {[{couch_util:to_binary(P), S} || {P, S} <- IndexSeqs]}},
+        {partition_seqs, {[{couch_util:to_binary(P), S} || {P, S} <- GroupSeqs]}},
+        {total_seqs_diff, TotalSeqDiff},
         {active_partitions, couch_set_view_util:decode_bitmask(?set_abitmask(Group))},
         {passive_partitions, couch_set_view_util:decode_bitmask(?set_pbitmask(Group))},
         {cleanup_partitions, couch_set_view_util:decode_bitmask(?set_cbitmask(Group))},
