@@ -3718,6 +3718,17 @@ merge_seqs(Original, New) ->
         end
     end, Original).
 
+-spec merge_part_versions(partition_versions(), partition_versions()) ->
+                                                    partition_versions().
+merge_part_versions(Original, New) ->
+    lists:map(fun({PartId, _}) ->
+        case lists:keyfind(PartId, 1, New) of
+        {PartId, PartVersion} ->
+            {PartId, PartVersion};
+        false ->
+            {PartId, [{0, 0}]}
+        end
+    end, Original).
 
 -spec rollback(#state{}, partition_seqs()) ->
                       {'ok', #state{}} |
@@ -3733,7 +3744,8 @@ rollback(State, RollbackPartSeqs) ->
                 seqs = GroupIndexable,
                 unindexable_seqs = GroupUnindexable,
                 abitmask = ActiveBitmask,
-                pbitmask = PassiveBitmask
+                pbitmask = PassiveBitmask,
+                partition_versions = GroupPartVersions
             } = Header,
             views = Views,
             mod = Mod,
@@ -3750,7 +3762,8 @@ rollback(State, RollbackPartSeqs) ->
             seqs = NewIndexableSeqs,
             unindexable_seqs = NewUnindexableSeqs,
             abitmask = HeaderActiveBitmask,
-            pbitmask = HeaderPassiveBitmask
+            pbitmask = HeaderPassiveBitmask,
+            partition_versions = NewPartVersions
         } = NewHeader,
         NewIdBtree = couch_btree:set_state(IdBtree, IdBtreeState),
         NewViews = lists:zipwith(fun(NewState, SetView) ->
@@ -3771,6 +3784,7 @@ rollback(State, RollbackPartSeqs) ->
         NewSeqs = ordsets:union(NewIndexableSeqs, NewUnindexableSeqs),
         Indexable = merge_seqs(GroupIndexable, NewSeqs),
         Unindexable = merge_seqs(GroupUnindexable, NewSeqs),
+        PartVersions = merge_part_versions(GroupPartVersions, NewPartVersions),
 
         ?LOG_INFO("Rollback of set view `~s`, ~s (~s) group `~s` to ~w~n"
                   "indexable partitions before:   ~w~n"
@@ -3800,8 +3814,7 @@ rollback(State, RollbackPartSeqs) ->
                 seqs = Indexable,
                 unindexable_seqs = Unindexable,
                 cbitmask = CleanupBitmask,
-                partition_versions =
-                    NewHeader#set_view_index_header.partition_versions
+                partition_versions = PartVersions
             }
         },
         NewHeaderBin = couch_set_view_util:group_to_header_bin(NewGroup),
