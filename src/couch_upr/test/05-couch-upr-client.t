@@ -107,12 +107,14 @@ test() ->
         Pid, 0, InitialFailoverLog0, 400, 450, ?UPR_FLAG_NOFLAG, TestFun, []),
     etap:is(ErangeError, wrong_start_sequence_number,
         "Correct error message for too high sequence number"),
-    % Start sequence is bigger than end sequence
-    {error, ErangeError2} = couch_upr_client:enum_docs_since(
-        Pid, 0, InitialFailoverLog0, 5, 2, ?UPR_FLAG_NOFLAG, TestFun, []),
-    etap:is(ErangeError2, wrong_start_sequence_number,
-        "Correct error message for start sequence > end sequence"),
 
+    % Start sequence is bigger than end sequence
+    {_Request, ErangeError2} =
+        couch_upr_client:add_stream(
+            Pid, 0, first_uuid(InitialFailoverLog0), 5, 2,
+            ?UPR_FLAG_NOFLAG),
+    etap:is(ErangeError2, {error, wrong_start_sequence_number},
+        "Correct error message for start sequence > end sequence"),
 
     Error = couch_upr_client:enum_docs_since(
         Pid, 1, [{4455667788, 1243}], 46, 165, ?UPR_FLAG_NOFLAG, TestFun, []),

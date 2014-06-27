@@ -161,10 +161,19 @@ get_stream_event_get_reply(Pid, ReqId, MRef) ->
 enum_docs_since(_, _, [], _, _, _, _, _) ->
     % No matching partition version found. Recreate the index from scratch
     {rollback, 0};
-enum_docs_since(Pid, PartId, PartVersions, StartSeq, EndSeq, Flags,
+enum_docs_since(Pid, PartId, PartVersions, StartSeq, EndSeq0, Flags,
         CallbackFn, InAcc) ->
     [PartVersion | PartVersionsRest] = PartVersions,
     {PartUuid, _} = PartVersion,
+    EndSeq = case EndSeq0 < StartSeq of
+    true ->
+        ?LOG_INFO("upr client (~p): Expecting a rollback for partition ~p. "
+        "Found start_seqno > end_seqno (~p > ~p).",
+        [Pid, PartId, StartSeq, EndSeq0]),
+        StartSeq;
+    false ->
+        EndSeq0
+    end,
     {RequestId, Resp} =  add_stream(
         Pid, PartId, PartUuid, StartSeq, EndSeq, Flags),
     case Resp of
