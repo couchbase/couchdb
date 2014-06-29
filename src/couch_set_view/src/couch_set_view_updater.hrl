@@ -21,6 +21,7 @@
     owner,
     group,
     last_seqs = orddict:new(),
+    part_versions = orddict:new(),
     compactor_running,
     write_queue,
     initial_build,

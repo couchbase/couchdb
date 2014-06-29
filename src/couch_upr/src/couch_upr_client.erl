@@ -182,8 +182,9 @@ enum_docs_since(Pid, PartId, PartVersions, StartSeq, EndSeq0, Flags,
         true ->
             {error, too_large_failover_log};
         false ->
-            Acc2 = receive_events(Pid, RequestId, CallbackFn, InAcc),
-            {ok, Acc2, FailoverLog}
+            InAcc2 = CallbackFn({part_versions, {PartId, FailoverLog}}, InAcc),
+            InAcc3 = receive_events(Pid, RequestId, CallbackFn, InAcc2),
+            {ok, InAcc3, FailoverLog}
         end;
     {error, vbucket_stream_not_found} ->
         enum_docs_since(Pid, PartId, PartVersionsRest, StartSeq, EndSeq,

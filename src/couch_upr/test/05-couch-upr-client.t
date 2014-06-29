@@ -57,6 +57,8 @@ test() ->
         case Item of
         {snapshot_marker, _} ->
             Acc;
+        {part_versions, _} ->
+            Acc;
         _ ->
             Acc ++ [Item]
         end
@@ -144,6 +146,8 @@ test() ->
         case Item of
         {snapshot_marker, Marker} ->
             Acc ++ [Marker];
+        {part_versions, _} ->
+            Acc;
         _ ->
             Acc
         end

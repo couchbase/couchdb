@@ -113,6 +113,7 @@ update(Owner, Group, CurSeqs, CompactorRunning, TmpDir, Options) ->
         group = Group,
         initial_build = InitialBuild,
         max_seqs = CurSeqs,
+        part_versions = ?set_partition_versions(Group),
         tmp_dir = TmpDir,
         max_insert_batch_size = list_to_integer(
             couch_config:get("set_views", "indexer_max_insert_batch_size", "1048576"))
@@ -435,6 +436,11 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                     {AccCount, AccSeqs, AccVersions, AccRollbacks};
                 false ->
                     ChangesWrapper = fun
+                        ({part_versions, _} = NewVersions, Acc) ->
+                            queue_doc(
+                                NewVersions, MapQueue, Group,
+                                MaxDocSize, InitialBuild),
+                            Acc;
                         ({snapshot_marker, Marker}, {Count, _}) ->
                             {MarkerStartSeq, MarkerEndSeq, MarkerType} =
                                 Marker,
@@ -615,6 +621,9 @@ notify_owner(Owner, Msg, UpdaterPid) ->
 
 queue_doc(snapshot_marker, MapQueue, _Group, _MaxDocSize, _InitialBuild) ->
     couch_work_queue:queue(MapQueue, snapshot_marker);
+queue_doc({part_versions, _} = PartVersions, MapQueue, _Group, _MaxDocSize,
+    _InitialBuild) ->
+    couch_work_queue:queue(MapQueue, PartVersions);
 queue_doc(Doc, MapQueue, Group, MaxDocSize, InitialBuild) ->
     case Doc#upr_doc.deleted of
     true when InitialBuild ->
@@ -731,7 +740,9 @@ do_maps(Group, MapQueue, WriteQueue) ->
                     [{Seq, Id, PartId, []} | Acc]
                 end;
             (snapshot_marker, Acc) ->
-                [snapshot_marker | Acc]
+                [snapshot_marker | Acc];
+            ({part_versions, _} = PartVersions, Acc) ->
+                [PartVersions | Acc]
             end,
             [], Queue),
         ok = couch_work_queue:queue(WriteQueue, Items),
@@ -788,13 +799,14 @@ flush_writes(#writer_acc{initial_build = false} = Acc0) ->
         group = Group,
         parent = Parent,
         owner = Owner,
-        last_seqs = LastSeqs
+        last_seqs = LastSeqs,
+        part_versions = PartVersions
     } = Acc0,
     % Only incremental updates can contain multiple snapshots
     {MultipleSnapshots, Kvs2} = merge_snapshots(Kvs),
-    {ViewKVs, DocIdViewIdKeys, NewLastSeqs} =
-        process_map_results(Kvs2, ViewEmptyKVs, LastSeqs),
-    Acc1 = Acc0#writer_acc{last_seqs = NewLastSeqs},
+    {ViewKVs, DocIdViewIdKeys, NewLastSeqs, NewPartVersions} =
+        process_map_results(Kvs2, ViewEmptyKVs, LastSeqs, PartVersions),
+    Acc1 = Acc0#writer_acc{last_seqs = NewLastSeqs, part_versions = NewPartVersions},
     Acc = write_to_tmp_batch_files(ViewKVs, DocIdViewIdKeys, Acc1),
     #writer_acc{group = NewGroup} = Acc,
     case ?set_seqs(NewGroup) =/= ?set_seqs(Group) of
@@ -829,6 +841,7 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
         group = Group,
         final_batch = IsFinalBatch,
         max_seqs = MaxSeqs,
+        part_versions = PartVersions,
         stats = Stats
     } = WriterAcc,
     #set_view_group{
@@ -837,7 +850,8 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
         name = DDocId,
         mod = Mod
     } = Group,
-    {ViewKVs, DocIdViewIdKeys, MaxSeqs2} = process_map_results(Kvs, ViewEmptyKVs, MaxSeqs),
+    {ViewKVs, DocIdViewIdKeys, MaxSeqs2, PartVersions2} = process_map_results(
+        Kvs, ViewEmptyKVs, MaxSeqs, PartVersions),
 
     IdRecords = lists:foldr(
         fun({_DocId, {_PartId, []}}, Acc) ->
@@ -879,28 +893,32 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
         WriterAcc#writer_acc{
             tmp_files = dict:store(build_file, BuildFd, TmpFiles2),
             max_seqs = MaxSeqs2,
+            part_versions = PartVersions2,
             stats = Stats2,
             group = Group2
         }
     end.
 
 
-process_map_results(Kvs, ViewEmptyKVs, PartSeqs) ->
+process_map_results(Kvs, ViewEmptyKVs, PartSeqs, PartVersions) ->
     lists:foldl(
-        fun({Seq, DocId, PartId, []}, {ViewKVsAcc, DocIdViewIdKeysAcc, PartIdSeqs}) ->
+        fun({Seq, DocId, PartId, []}, {ViewKVsAcc, DocIdViewIdKeysAcc, PartIdSeqs, PartIdVersions}) ->
             PartIdSeqs2 = update_part_seq(Seq, PartId, PartIdSeqs),
-            {ViewKVsAcc, [{DocId, {PartId, []}} | DocIdViewIdKeysAcc], PartIdSeqs2};
-        ({Seq, DocId, PartId, QueryResults}, {ViewKVsAcc, DocIdViewIdKeysAcc, PartIdSeqs}) ->
+            {ViewKVsAcc, [{DocId, {PartId, []}} | DocIdViewIdKeysAcc], PartIdSeqs2, PartIdVersions};
+        ({Seq, DocId, PartId, QueryResults}, {ViewKVsAcc, DocIdViewIdKeysAcc, PartIdSeqs, PartIdVersions}) ->
             {NewViewKVs, NewViewIdKeys} = view_insert_doc_query_results(
                     DocId, PartId, QueryResults, ViewKVsAcc, [], []),
             PartIdSeqs2 = update_part_seq(Seq, PartId, PartIdSeqs),
-            {NewViewKVs, [{DocId, {PartId, NewViewIdKeys}} | DocIdViewIdKeysAcc], PartIdSeqs2};
+            {NewViewKVs, [{DocId, {PartId, NewViewIdKeys}} | DocIdViewIdKeysAcc], PartIdSeqs2, PartIdVersions};
         (snapshot_marker, _Acc) ->
             throw({error,
                 <<"The multiple snapshots should have been merged, "
-                  "but theu weren't">>})
+                  "but theu weren't">>});
+        ({part_versions, {PartId, NewVersions}}, {ViewKVsAcc, DocIdViewIdKeysAcc, PartIdSeqs, PartIdVersions}) ->
+            PartIdVersions2 = update_part_versions(NewVersions, PartId, PartIdVersions),
+            {ViewKVsAcc, DocIdViewIdKeysAcc, PartIdSeqs, PartIdVersions2}
         end,
-        {ViewEmptyKVs, [], PartSeqs}, Kvs).
+        {ViewEmptyKVs, [], PartSeqs, PartVersions}, Kvs).
 
 
 -spec update_transferred_replicas(#set_view_group{},
@@ -948,6 +966,12 @@ update_part_seq(Seq, PartId, Acc) ->
     _ ->
         orddict:store(PartId, Seq, Acc)
     end.
+
+
+-spec update_part_versions(partition_version(), partition_id(), partition_versions()) ->
+    partition_versions().
+update_part_versions(NewVersions, PartId, PartVersions) ->
+    orddict:store(PartId, NewVersions, PartVersions).
 
 
 view_insert_doc_query_results(_DocId, _PartitionId, [], [], ViewKVsAcc, ViewIdKeysAcc) ->
@@ -1091,6 +1115,7 @@ maybe_update_btrees(WriterAcc0) ->
         final_batch = IsFinalBatch,
         owner = Owner,
         last_seqs = LastSeqs,
+        part_versions = PartVersions,
         force_flush = ForceFlush
     } = WriterAcc0,
     IdTmpFileInfo = dict:fetch(ids_index, TmpFiles),
@@ -1165,7 +1190,7 @@ maybe_update_btrees(WriterAcc0) ->
             WriterAcc = WriterAcc1;
         _ ->
             WriterAcc2 = check_if_compactor_started(WriterAcc1),
-            NewUpdaterWorker = spawn_updater_worker(WriterAcc2, LastSeqs),
+            NewUpdaterWorker = spawn_updater_worker(WriterAcc2, LastSeqs, PartVersions),
             erlang:put(updater_worker, NewUpdaterWorker),
 
             TmpFiles2 = dict:map(
@@ -1216,7 +1241,7 @@ send_log_compact_files(Owner, Files, Seqs) ->
     ok = gen_server:cast(Owner, {compact_log_files, Files, Seqs, Init}).
 
 
-spawn_updater_worker(WriterAcc, PartIdSeqs) ->
+spawn_updater_worker(WriterAcc, PartIdSeqs, PartVersions) ->
     Parent = self(),
     Ref = make_ref(),
     #writer_acc{
@@ -1253,9 +1278,11 @@ spawn_updater_worker(WriterAcc, PartIdSeqs) ->
                       [SetName, GroupType, DDocId, CleanupCount, CleanupTime])
         end,
         NewSeqs = update_seqs(PartIdSeqs, ?set_seqs(Group)),
+        NewPartVersions = update_versions(PartVersions, ?set_partition_versions(Group)),
         Header = NewGroup0#set_view_group.index_header,
         NewHeader = Header#set_view_index_header{
-            seqs = NewSeqs
+            seqs = NewSeqs,
+            partition_versions = NewPartVersions
         },
         NewGroup = NewGroup0#set_view_group{
             index_header = NewHeader
@@ -1347,6 +1374,9 @@ update_seqs(PartIdSeqs, Seqs) ->
             orddict:store(PartId, NewSeq, Acc)
         end,
         Seqs, PartIdSeqs).
+
+update_versions(PartVersions, AllPartVersions) ->
+    lists:ukeymerge(1, PartVersions, AllPartVersions).
 
 
 update_task(NumChanges) ->
@@ -1623,6 +1653,8 @@ merge_snapshots([], false, Acc) ->
     {false, lists:reverse(Acc)};
 merge_snapshots([snapshot_marker | KVs], _MultipleSnapshots, Acc) ->
     merge_snapshots(KVs, true, Acc);
+merge_snapshots([{part_versions, _} = PartVersions | KVs], MultipleSnapshots, Acc) ->
+    merge_snapshots(KVs, MultipleSnapshots, [PartVersions | Acc]);
 merge_snapshots([KV | KVs], true, Acc0) ->
     {_Seq, DocId, _PartId, _QueryResults} = KV,
     Acc = lists:keystore(DocId, 2, Acc0, KV),
