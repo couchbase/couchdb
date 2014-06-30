@@ -429,6 +429,16 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
             false ->
                 ?UPR_FLAG_NOFLAG
             end,
+            % For stream request from 0, If a vbucket got reset in the window
+            % of time between seqno was obtained from stats and stream request
+            % was made, the end_seqno may be higher than current vb high seqno.
+            % Use a special flag to tell server to set end_seqno.
+            Flags2 = case PartVersions of
+            [{0, 0}] ->
+                Flags bor ?UPR_FLAG_USELATEST_ENDSEQNO;
+            _ ->
+                Flags
+            end,
             case AccRollbacks of
             [] ->
                 case EndSeq =:= Since of
@@ -479,7 +489,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                             {Count + 1, AccEndSeq}
                         end,
                     Result = couch_upr_client:enum_docs_since(
-                        UprPid, PartId, PartVersions, Since, EndSeq, Flags,
+                        UprPid, PartId, PartVersions, Since, EndSeq, Flags2,
                         ChangesWrapper, {0, 0}),
                     case Result of
                     {ok, {AccCount2, AccEndSeq}, NewPartVersions} ->
@@ -517,7 +527,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                 % partition (i.e. a request with start seq == end seq)
                 ChangesWrapper = fun(_, _) -> ok end,
                 Result = couch_upr_client:enum_docs_since(
-                    UprPid, PartId, PartVersions, Since, Since, Flags,
+                    UprPid, PartId, PartVersions, Since, Since, Flags2,
                     ChangesWrapper, ok),
                 case Result of
                 {ok, _, _} ->

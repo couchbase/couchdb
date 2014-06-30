@@ -685,7 +685,12 @@ handle_stream_request_body(Socket, BodyLength, RequestId, PartId) ->
             EndSeq2 = case Flags of
             ?UPR_FLAG_NOFLAG ->
                 EndSeq;
-            ?UPR_FLAG_DISKONLY ->
+            ?UPR_FLAG_USELATEST_ENDSEQNO ->
+                EndSeq;
+            Flags when (Flags band ?UPR_FLAG_DISKONLY) =/= 0 ->
+                % Either of the following flags:
+                % UPR_FLAG_DISKONLY
+                % (UPR_FLAG_DISKONLY bor UPR_FLAG_USELATEST_ENDSEQNO)
                 ItemsPerSnapshot = gen_server:call(
                     ?MODULE, get_items_per_snapshot),
                 case ItemsPerSnapshot of
