@@ -1154,7 +1154,8 @@ maybe_update_btrees(WriterAcc0) ->
         UpdaterWorker when is_reference(UpdaterWorker) ->
             receive
             {UpdaterWorker, UpGroup, UpStats, CompactFiles} ->
-                send_log_compact_files(Owner, CompactFiles, ?set_seqs(UpGroup)),
+                send_log_compact_files(Owner, CompactFiles, ?set_seqs(UpGroup),
+                    ?set_partition_versions(UpGroup)),
                 erlang:erase(updater_worker),
                 WriterAcc = check_if_compactor_started(
                     WriterAcc0#writer_acc{group = UpGroup, stats = UpStats})
@@ -1183,7 +1184,8 @@ maybe_update_btrees(WriterAcc0) ->
         UpdaterWorker when is_reference(UpdaterWorker) ->
             receive
             {UpdaterWorker, UpGroup2, UpStats2, CompactFiles2} ->
-                send_log_compact_files(Owner, CompactFiles2, ?set_seqs(UpGroup2)),
+                send_log_compact_files(Owner, CompactFiles2, ?set_seqs(UpGroup2),
+                    ?set_partition_versions(UpGroup2)),
                 WriterAcc1 = check_if_compactor_started(
                     WriterAcc0#writer_acc{
                         group = UpGroup2,
@@ -1222,7 +1224,8 @@ maybe_update_btrees(WriterAcc0) ->
         UpdaterWorker2 when is_reference(UpdaterWorker2) ->
             receive
             {UpdaterWorker2, NewGroup, NewStats, CompactFiles3} ->
-                send_log_compact_files(Owner, CompactFiles3, ?set_seqs(NewGroup))
+                send_log_compact_files(Owner, CompactFiles3, ?set_seqs(NewGroup),
+                    ?set_partition_versions(NewGroup))
             end
         end,
         NewLastSeqs = orddict:new();
@@ -1239,16 +1242,16 @@ maybe_update_btrees(WriterAcc0) ->
     NewWriterAcc.
 
 
-send_log_compact_files(_Owner, [], _Seqs) ->
+send_log_compact_files(_Owner, [], _Seqs, _PartVersions) ->
     ok;
-send_log_compact_files(Owner, Files, Seqs) ->
+send_log_compact_files(Owner, Files, Seqs, PartVersions) ->
     Init = case erlang:erase(new_compactor) of
     true ->
         true;
     undefined ->
         false
     end,
-    ok = gen_server:cast(Owner, {compact_log_files, Files, Seqs, Init}).
+    ok = gen_server:cast(Owner, {compact_log_files, Files, Seqs, PartVersions, Init}).
 
 
 spawn_updater_worker(WriterAcc, PartIdSeqs, PartVersions) ->

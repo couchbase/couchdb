@@ -213,7 +213,7 @@ maybe_retry_compact(CompactResult0, StartTime, TmpDir, Owner, Retries) ->
     ok ->
         ok;
     {update, MissingCount} ->
-        {ok, {LogFiles, NewSeqs}} = gen_server:call(
+        {ok, {LogFiles, NewSeqs, NewPartVersions}} = gen_server:call(
             Owner, compact_log_files, infinity),
         ?LOG_INFO("Compactor for set view `~s`, ~s group `~s`, "
                   "applying delta of ~p changes (retry number ~p, "
@@ -228,7 +228,7 @@ maybe_retry_compact(CompactResult0, StartTime, TmpDir, Owner, Retries) ->
             {progress, (TotalChanges * 100) div TotalChanges2},
             {retry_number, Retries}
         ]),
-        NewGroup2 = apply_log(NewGroup, LogFiles, NewSeqs, TmpDir),
+        NewGroup2 = apply_log(NewGroup, LogFiles, NewSeqs, NewPartVersions, TmpDir),
         CompactResult2 = CompactResult0#set_view_compactor_result{
             group = NewGroup2
         },
@@ -270,7 +270,7 @@ total_kv_count(#set_view_group{id_btree = IdBtree, views = Views, mod = Mod}) ->
         IdCount, Views).
 
 
-apply_log(Group0, LogFiles, NewSeqs, TmpDir) ->
+apply_log(Group0, LogFiles, NewSeqs, NewPartVersions, TmpDir) ->
     #set_view_group{
         mod = Mod,
         index_header = Header
@@ -311,6 +311,7 @@ apply_log(Group0, LogFiles, NewSeqs, TmpDir) ->
             views = NewViews,
             index_header = Header#set_view_index_header{
                 seqs = NewSeqs,
+                partition_versions = NewPartVersions,
                 view_states = [Mod:get_state(V#set_view.indexer) || V <- NewViews]
             }
         }

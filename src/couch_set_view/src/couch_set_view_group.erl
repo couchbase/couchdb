@@ -109,7 +109,7 @@
     replica_partitions = []            :: ordsets:ordset(partition_id()),
     pending_transition_waiters = []    :: [{From::{pid(), reference()}, #set_view_group_req{}}],
     update_listeners = dict:new()      :: dict(),
-    compact_log_files = nil            :: 'nil' | {[[string()]], partition_seqs()},
+    compact_log_files = nil            :: 'nil' | {[[string()]], partition_seqs(), partition_versions()},
     timeout = ?DEFAULT_TIMEOUT         :: non_neg_integer() | 'infinity'
 }).
 
@@ -884,10 +884,10 @@ handle_call({demonitor_partition_update, Ref}, _From, State) ->
     end;
 
 handle_call(compact_log_files, _From, State) ->
-    {Files0, Seqs} = State#state.compact_log_files,
+    {Files0, Seqs, PartVersions} = State#state.compact_log_files,
     Files = lists:map(fun lists:reverse/1, Files0),
     NewState = State#state{compact_log_files = nil},
-    {reply, {ok, {Files, Seqs}}, NewState, ?GET_TIMEOUT(NewState)};
+    {reply, {ok, {Files, Seqs, PartVersions}}, NewState, ?GET_TIMEOUT(NewState)};
 
 handle_call(reset_utilization_stats, _From, #state{replica_group = RepPid} = State) ->
     reset_util_stats(),
@@ -925,22 +925,24 @@ handle_call(get_utilization_stats, _From, #state{replica_group = RepPid} = State
 handle_cast(_Msg, State) when not ?is_defined(State) ->
     {noreply, State};
 
-handle_cast({compact_log_files, Files, Seqs, _Init},
+handle_cast({compact_log_files, Files, Seqs, PartVersions, _Init},
                                 #state{compact_log_files = nil} = State) ->
     LogList = lists:map(fun(F) -> [F] end, Files),
-    {noreply, State#state{compact_log_files = {LogList, Seqs}}, ?GET_TIMEOUT(State)};
+    {noreply, State#state{compact_log_files = {LogList, Seqs, PartVersions}},
+        ?GET_TIMEOUT(State)};
 
-handle_cast({compact_log_files, Files, NewSeqs, Init}, State) ->
+handle_cast({compact_log_files, Files, NewSeqs, NewPartVersions, Init}, State) ->
     LogList = case Init of
     true ->
         lists:map(fun(F) -> [F] end, Files);
     false ->
-        {OldL, _OldSeqs} = State#state.compact_log_files,
+        {OldL, _OldSeqs, _OldPartVersions} = State#state.compact_log_files,
         lists:zipwith(
             fun(F, Current) -> [F | Current] end,
             Files, OldL)
     end,
-    {noreply, State#state{compact_log_files = {LogList, NewSeqs}}, ?GET_TIMEOUT(State)};
+    {noreply, State#state{compact_log_files = {LogList, NewSeqs, NewPartVersions}},
+        ?GET_TIMEOUT(State)};
 
 handle_cast({ddoc_updated, NewSig, Aliases}, State) ->
     #state{
