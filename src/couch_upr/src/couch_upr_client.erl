@@ -29,6 +29,7 @@
 -include_lib("couch_upr/include/couch_upr_typespecs.hrl").
 -define(MAX_BUF_SIZE, 10485760).
 -define(TIMEOUT, 60000).
+-define(TIMEOUT_STATS, 2000).
 -define(UPR_RETRY_TIMEOUT, 2000).
 
 -type mutations_fold_fun() :: fun().
@@ -93,11 +94,36 @@ remove_stream(Pid, PartId) ->
 list_streams(Pid) ->
     gen_server:call(Pid, list_streams).
 
+
+-spec get_stats_reply(pid(), reference()) -> term().
+get_stats_reply(Pid, MRef) ->
+    receive
+    {get_stats, MRef, Reply} ->
+        Reply;
+    {'DOWN', MRef, process, Pid, Reason} ->
+        exit({upr_client_died, Pid, Reason})
+    after ?TIMEOUT_STATS ->
+        ?LOG_ERROR("upr client (~p): vbucket-seqno stats timed out after ~p seconds."
+                   " Waiting...",
+            [Pid, ?TIMEOUT_STATS / 1000]),
+        get_stats_reply(Pid, MRef)
+    end.
+
+
+-spec get_stats(pid(), binary(), partition_id() | nil) -> term().
+get_stats(Pid, Name, PartId) ->
+    MRef = erlang:monitor(process, Pid),
+    Pid ! {get_stats, Name, PartId, {MRef, self()}},
+    Reply = get_stats_reply(Pid, MRef),
+    erlang:demonitor(MRef, [flush]),
+    Reply.
+
+
 -spec get_sequence_numbers(pid(), [partition_id()]) ->
          {ok, [update_seq()] | {error, not_my_vbucket}} | {error, term()}.
-
 get_sequence_numbers(Pid, PartIds) ->
-    case gen_server:call(Pid, {get_stats, <<"vbucket-seqno">>, nil}) of
+    Reply = get_stats(Pid, <<"vbucket-seqno">>, nil),
+    case Reply of
     {ok, Stats} ->
         Seqs = lists:map(fun(PartId) ->
             Key = list_to_binary([<<"vb_">>, integer_to_list(PartId), <<":high_seqno">>]),
@@ -117,7 +143,8 @@ get_sequence_numbers(Pid, PartIds) ->
 -spec get_num_items(pid(), partition_id()) ->
                            {ok, non_neg_integer()} | {error, not_my_vbucket}.
 get_num_items(Pid, PartId) ->
-    case gen_server:call(Pid, {get_stats, <<"vbucket-details">>, PartId}) of
+    Reply = get_stats(Pid, <<"vbucket-details">>, PartId),
+    case Reply of
     {ok, Stats} ->
         BinPartId = list_to_binary(integer_to_list(PartId)),
         {_, NumItems} = lists:keyfind(
@@ -295,22 +322,6 @@ handle_call(list_streams, _From, State) ->
     Reply = lists:foldl(fun({PartId, _}, Acc) -> [PartId | Acc] end, [], ActiveStreams),
     {reply, Reply, State};
 
-handle_call({get_stats, Stat, PartId}, From, State) ->
-    #state{
-       request_id = RequestId,
-       socket = Socket
-    } = State,
-    SeqStatRequest = couch_upr_consumer:encode_stat_request(
-        Stat, PartId, RequestId),
-    case gen_tcp:send(Socket, SeqStatRequest) of
-    ok ->
-        State2 = next_request_id(State),
-        State3 = add_pending_request(State2, RequestId, get_stats, From),
-        {noreply, State3};
-    Error ->
-        {reply, Error, State}
-    end;
-
 handle_call({get_failover_log, PartId}, From, State) ->
     #state{
        request_id = RequestId,
@@ -393,6 +404,24 @@ handle_info({get_stream_event, RequestId, From}, State) ->
         {noreply, State}
     end;
 
+
+handle_info({get_stats, Stat, PartId, From}, State) ->
+    #state{
+       request_id = RequestId,
+       socket = Socket
+    } = State,
+    SeqStatRequest = couch_upr_consumer:encode_stat_request(
+        Stat, PartId, RequestId),
+    case gen_tcp:send(Socket, SeqStatRequest) of
+    ok ->
+        State2 = next_request_id(State),
+        State3 = add_pending_request(State2, RequestId, get_stats, From),
+        {noreply, State3};
+    Error ->
+        {reply, Error, State}
+    end;
+
+
 % Handle response message send by connection receiver worker
 % Reply back to waiting callers
 handle_info({stream_response, RequestId, Msg}, State) ->
@@ -429,6 +458,10 @@ handle_info({stream_response, RequestId, Msg}, State) ->
         % Server sent the response for the internal control request
         {control_request, Size} ->
             State#state{max_buffer_size = Size};
+        get_stats ->
+            {MRef, From} = SendTo,
+            From ! {get_stats, MRef, Msg},
+            State;
         _ ->
             gen_server:reply(SendTo, Msg),
             State
