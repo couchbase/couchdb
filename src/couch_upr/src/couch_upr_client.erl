@@ -513,7 +513,7 @@ handle_info({print_log, ReqId}, State) ->
     [Name, Bucket, _AdmUser, _AdmPasswd, _BufferSize] = State#state.args,
     case find_stream_info(ReqId, State) of
     nil ->
-        throw({invalid_stream, ReqId});
+        ok;
     StreamInfo ->
         #stream_info{
            start_seq = Start,
