@@ -778,6 +778,7 @@ random_binary(N) ->
 shutdown_group() ->
     GroupPid = couch_set_view:get_group_pid(
         mapreduce_view, test_set_name(), ddoc_id(), prod),
+    couch_set_view_test_util:wait_for_updater_to_finish(GroupPid, ?MAX_WAIT_TIME),
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
     MonRef = erlang:monitor(process, GroupPid),
     receive
