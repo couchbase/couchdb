@@ -244,7 +244,7 @@ init([Name, Bucket, AdmUser, AdmPasswd, BufferSize]) ->
         couch_config:get("upr", "connection_timeout")),
     UprPort = list_to_integer(couch_config:get("upr", "port")),
     {ok, Socket} = gen_tcp:connect("localhost", UprPort,
-        [binary, {packet, raw}, {active, false}]),
+        [binary, {packet, raw}, {active, false}, {nodelay, true}]),
     State = #state{
         socket = Socket,
         timeout = UprTimeout,
