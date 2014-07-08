@@ -2518,8 +2518,8 @@ update_header(State, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs,
               "  active:      ~w~n"
               "  passive:     ~w~n"
               "  unindexable: ~w~n"
-              "partition versions before:~n~p~n"
-              "partition versions after:~n~p~n",
+              "partition versions before:~n~w~n"
+              "partition versions after:~n~w~n",
               [?set_name(State), ?type(State), ?category(State),
                ?group_id(State),
                couch_set_view_util:decode_bitmask(Abitmask),
