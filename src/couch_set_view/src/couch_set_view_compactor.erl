@@ -303,7 +303,10 @@ apply_log(Group0, LogFiles, NewSeqs, NewPartVersions, TmpDir) ->
             ok = file2:delete(LogFile)
           end, ViewMergeFiles),
         NewGroup#set_view_group{
-            index_header = Header2#set_view_index_header{seqs = NewSeqs}
+            index_header = Header2#set_view_index_header{
+                seqs = NewSeqs,
+                partition_versions = NewPartVersions
+            }
         };
     _ ->
         NewViews = Mod:apply_log(Group, ViewMergeFiles),
