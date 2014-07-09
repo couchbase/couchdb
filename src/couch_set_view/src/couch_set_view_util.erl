@@ -797,7 +797,14 @@ send_group_info(Group, Port) ->
         header_pos = HeaderPos,
         mod = Mod
     } = Group,
+    Mod2 = case Mod of
+    mapreduce_view ->
+        ?COUCHSTORE_VIEW_TYPE_MAPREDUCE;
+    spatial_view ->
+        ?COUCHSTORE_VIEW_TYPE_SPATIAL
+    end,
     Data1 = [
+        integer_to_list(Mod2), $\n,
         IndexFile, $\n,
         integer_to_list(HeaderPos), $\n,
         integer_to_list(length(Views)), $\n
