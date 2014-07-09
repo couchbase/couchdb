@@ -87,7 +87,7 @@ append_term(Fd, Term) ->
 
 append_binary(Fd, Bin) ->
     gen_server:call(Fd, {append_bin, assemble_file_chunk(Bin)}, infinity).
-    
+
 append_binary_crc32(Fd, Bin) ->
     gen_server:call(Fd,
         {append_bin, assemble_file_chunk(Bin, erlang:crc32(Bin))}, infinity).
@@ -236,6 +236,8 @@ delete(RootDir, Filepath) ->
 
 delete(RootDir, Filepath, Async) ->
     DelFile = filename:join([RootDir,".delete", ?b2l(couch_uuids:random())]),
+    ?LOG_INFO("Deleting couch file ~p with renaming it to ~p", [Filepath,
+        DelFile]),
     case file2:rename(Filepath, DelFile) of
     ok ->
         if (Async) ->
