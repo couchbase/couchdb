@@ -56,8 +56,8 @@ test() ->
     ValueGenFun1 = fun(I) -> I end,
     update_documents(0, num_docs(), ValueGenFun1),
 
-    trigger_main_update_and_wait(),
-    trigger_replica_update_and_wait(),
+    main_trigger_wait_for_initial_build(),
+    replica_trigger_wait_for_initial_build(),
 
     ExpectedSeqs1 = couch_set_view_test_util:get_db_seqs(test_set_name(), ActiveParts),
     ExpectedUnindexableSeqs1 = [],
@@ -597,3 +597,18 @@ verify_btrees_2(ExpectedSeqs, ExpectedUnindexableSeqs, ValueGenFun1, ValueGenFun
     etap:is(View1BtreeFoldResult, ExpectedKVCount,
         "View1 Btree has " ++ integer_to_list(ExpectedKVCount) ++ " entries"),
     ok.
+
+
+main_trigger_wait_for_initial_build() ->
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
+    {ok, _, _} = gen_server:call(
+        GroupPid, #set_view_group_req{stale = false, debug = true}, ?MAX_WAIT_TIME).
+
+
+replica_trigger_wait_for_initial_build() ->
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
+    {ok, ReplicaGroupPid} = gen_server:call(GroupPid, replica_pid, infinity),
+    {ok, _, _} = gen_server:call(
+        ReplicaGroupPid, #set_view_group_req{stale = false, debug = true}, ?MAX_WAIT_TIME).

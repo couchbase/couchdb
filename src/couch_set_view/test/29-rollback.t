@@ -413,7 +413,7 @@ test_rollback_mark_for_cleanup() ->
     MissingPartitions = [MissingA, MissingB],
 
     populate_set(1, num_docs() div 2),
-    trigger_updater(),
+    trigger_initial_build(),
     GroupSeqs1 = get_seq_from_group(),
     etap:is(length(GroupSeqs1), num_set_partitions(),
         "All partitions are indexable"),
@@ -655,7 +655,7 @@ test_rollback_added_partitions() ->
         mapreduce_view, test_set_name(), ddoc_id(), prod),
     Fd1 = get_fd(),
     populate_set(1, num_docs()),
-    trigger_updater(),
+    trigger_initial_build(),
 
     GroupSeqs = get_seq_from_group(),
     PartId = 0,
@@ -871,6 +871,13 @@ get_unindexable_seq_from_group() ->
 get_fd() ->
     Group = get_group_snapshot(),
     Group#set_view_group.fd.
+
+
+trigger_initial_build() ->
+    GroupPid = couch_set_view:get_group_pid(
+        mapreduce_view, test_set_name(), ddoc_id(), prod),
+    {ok, _, _} = gen_server:call(
+        GroupPid, #set_view_group_req{stale = false, debug = true}, ?MAX_WAIT_TIME).
 
 
 trigger_updater() ->
