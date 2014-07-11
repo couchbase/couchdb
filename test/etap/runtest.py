@@ -98,12 +98,17 @@ if __name__ == '__main__':
     if modules:
         MODULES += modules.split(",")
 
+    # Erlang modules expect posix path format
+    # which is respected by all platforms
+    # including Windows. So replace '\' by '/'
+    # Ensure spaces escaped by '\' are intact,
+    # since directory names might contain space
     if path:
         erl_libs = os.path.join(path, "src")
         env = os.getenv("ERL_LIBS")
         if env:
             erl_libs = env + ":" + erl_libs
-
+        erl_libs = re.sub(r'\\(\S)', r'/\1', erl_libs)
         os.putenv("ERL_LIBS", erl_libs)
 
         source = os.path.join(source, "src")
@@ -113,8 +118,9 @@ if __name__ == '__main__':
         env = os.getenv("ERL_FLAGS")
         if env:
             erl_flags = env + " " + erl_flags
-
+        erl_flags = re.sub(r'\\(\S)', r'/\1', erl_flags)
         os.putenv("ERL_FLAGS", erl_flags)
+
         if verbose:
             print('ERL_LIBS="{}"'.format(erl_libs))
             print('ERL_FLAGS="{}"'.format(erl_flags))
