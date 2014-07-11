@@ -883,15 +883,20 @@ trigger_initial_build() ->
 trigger_updater() ->
     GroupPid = get_group_pid(),
     {ok, UpPid} = gen_server:call(GroupPid, {start_updater, []}, infinity),
-    UpRef = erlang:monitor(process, UpPid),
-    receive
-    {'DOWN', UpRef, process, UpPid, {updater_finished, _}} ->
+    case UpPid of
+    nil ->
         ok;
-    {'DOWN', UpRef, process, UpPid, Reason} ->
-        etap:bail("Updater died with unexpected reason: " ++
-            couch_util:to_list(Reason))
-    after 5000 ->
-        etap:bail("Timeout waiting for updater to finish")
+    _ ->
+        UpRef = erlang:monitor(process, UpPid),
+        receive
+        {'DOWN', UpRef, process, UpPid, {updater_finished, _}} ->
+            ok;
+        {'DOWN', UpRef, process, UpPid, Reason} ->
+            etap:bail("Updater died with unexpected reason: " ++
+                couch_util:to_list(Reason))
+        after 5000 ->
+            etap:bail("Timeout waiting for updater to finish")
+        end
     end.
 
 
