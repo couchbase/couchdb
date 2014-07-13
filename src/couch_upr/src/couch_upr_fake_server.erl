@@ -978,14 +978,15 @@ send_vbucket_seqnos_stats(State, SetName, Socket, RequestId, Partitions) ->
             ok = gen_tcp:send(Socket, UuidStat),
             true;
         {error, not_my_partition} ->
+            % TODO sarath 2014-07-15: Fix get_stats API for single partition
             % The real response contains the vBucket map so that
             % clients can adapt. It's not easy to simulate, hence
             % we return an empty JSON object to keep things simple.
-            StatError = couch_upr_producer:encode_stat_error(
-                RequestId, ?UPR_STATUS_NOT_MY_VBUCKET,
-                <<"{}">>),
-            ok = gen_tcp:send(Socket, StatError),
-            false
+            %StatError = couch_upr_producer:encode_stat_error(
+            %    RequestId, ?UPR_STATUS_NOT_MY_VBUCKET,
+            %    <<"{}">>),
+            %ok = gen_tcp:send(Socket, StatError),
+            true
         end
     end, Partitions),
     case lists:all(fun(E) -> E end, Result) of
