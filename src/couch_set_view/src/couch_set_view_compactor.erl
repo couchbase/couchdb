@@ -384,7 +384,7 @@ file_merger_wait_loop(Group, Port, Acc) ->
     stop ->
         ?LOG_INFO("Set view `~s`, ~s group `~s`, sending stop message to file merger.",
                    [SetName, Type, DDocId]),
-        true = port_command(Port, "exit"),
+        port_command(Port, "exit"),
         file_merger_wait_loop(Group, Port, Acc)
     end.
 

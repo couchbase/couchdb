@@ -223,7 +223,7 @@ index_builder_wait_loop(Port, Group, Acc) ->
     stop ->
         ?LOG_INFO("Set view `~s`, ~s group `~s`, sending stop message to index builder.",
                    [SetName, Type, DDocId]),
-        true = port_command(Port, "exit"),
+        port_command(Port, "exit"),
         index_builder_wait_loop(Port, Group, Acc)
     end.
 
@@ -544,7 +544,7 @@ cleanup_view_group_wait_loop(Port, Group, Acc, PurgedCount) ->
     stop ->
         ?LOG_INFO("Set view `~s`, ~s group `~s`, sending stop message to index cleaner.",
                    [SetName, Type, DDocId]),
-        true = port_command(Port, "exit"),
+        port_command(Port, "exit"),
         cleanup_view_group_wait_loop(Port, Group, Acc, PurgedCount)
     end.
 

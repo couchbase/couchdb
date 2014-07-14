@@ -213,7 +213,7 @@ update_btrees_wait_loop(Port, Group, Acc0, Stats) ->
         stop ->
             ?LOG_INFO("Set view `~s`, ~s group `~s`, sending stop message to index updater.",
                        [SetName, Type, DDocId]),
-            true = port_command(Port, "exit"),
+            port_command(Port, "exit"),
             update_btrees_wait_loop(Port, Group, Acc, Stats)
         end;
     <<"Header Len : ", Data/binary>> ->
