@@ -110,7 +110,8 @@
     pending_transition_waiters = []    :: [{From::{pid(), reference()}, #set_view_group_req{}}],
     update_listeners = dict:new()      :: dict(),
     compact_log_files = nil            :: 'nil' | {[[string()]], partition_seqs(), partition_versions()},
-    timeout = ?DEFAULT_TIMEOUT         :: non_neg_integer() | 'infinity'
+    timeout = ?DEFAULT_TIMEOUT         :: non_neg_integer() | 'infinity',
+    update_scheduler_pid = nil         :: 'nil' | pid()
 }).
 
 -define(inc_stat(Group, S),
@@ -415,10 +416,16 @@ do_init({_, SetName, _} = InitArgs) ->
         ?LOG_INFO("Flow control buffer size is ~p bytes", [UprBufferSize]),
         {ok, UprPid} = couch_upr_client:start(UprName, SetName, User, Passwd,
             UprBufferSize),
+        Owner = self(),
+        UpdateSchedPid = spawn_link(
+        fun() ->
+            update_scheduler(UprPid, Owner)
+        end),
         State = #state{
             init_args = InitArgs,
             replica_group = ReplicaPid,
             replica_partitions = ReplicaParts,
+            update_scheduler_pid = UpdateSchedPid,
             group = Group#set_view_group{
                 ref_counter = RefCounter,
                 replica_pid = ReplicaPid,
@@ -672,10 +679,16 @@ handle_call(replica_pid, _From, #state{replica_group = Pid} = State) ->
     % To be used only by unit tests.
     {reply, {ok, Pid}, State, ?GET_TIMEOUT(State)};
 
-handle_call({start_updater, Options}, _From, State) ->
+handle_call({start_updater, Options}, From, State) ->
     % To be used only by unit tests.
-    State2 = start_updater(State, Options),
-    {reply, {ok, State2#state.updater_pid}, State2, ?GET_TIMEOUT(State2)};
+    Pid = State#state.updater_pid,
+    case is_pid(Pid) of
+    true ->
+        {reply, {ok, Pid}, State, ?GET_TIMEOUT(State)};
+    false ->
+        State2 = start_updater(State, [{unit_test_waiter, From} | Options]),
+        {noreply, State2, ?GET_TIMEOUT(State2)}
+    end;
 
 handle_call(start_cleaner, _From, State) ->
     % To be used only by unit tests.
@@ -995,6 +1008,35 @@ handle_cast({update, MinNumChanges}, #state{group = Group} = State) ->
             {noreply, State}
         end
     end;
+
+handle_cast({start_updater, CurSeqs, Options}, #state{group = Group} = State) ->
+    % Check if the updater is triggered by unit test
+    case Options of
+    [{unit_test_waiter, UnitTestWaiter} | UpdaterOptions] ->
+        ok;
+    _ ->
+        UpdaterOptions = Options,
+        UnitTestWaiter = nil
+    end,
+    NewState = case is_pid(State#state.updater_pid) of
+    true ->
+        State;
+    false ->
+        Seqs = indexable_partition_seqs(State, CurSeqs),
+        case Seqs > ?set_seqs(Group) of
+        true ->
+            do_start_updater(State, Seqs, UpdaterOptions);
+        false ->
+            State
+        end
+    end,
+    case UnitTestWaiter of
+    nil ->
+        ok;
+    From ->
+        gen_server:reply(From, {ok, NewState#state.updater_pid})
+    end,
+    {noreply, NewState};
 
 handle_cast({update_replica, _MinNumChanges}, #state{replica_group = nil} = State) ->
     {noreply, State};
@@ -2632,20 +2674,40 @@ cleaner(#state{group = Group}) ->
     {clean_group, NewGroup, TotalPurgedCount, Duration}.
 
 
+-spec filter_seqs(list(partition_id()), partition_seqs()) ->
+                                        partition_seqs().
+filter_seqs(Parts, Seqs) ->
+    lists:filter(fun({PartId, _}) ->
+        lists:member(PartId, Parts)
+    end, Seqs).
+
+
 -spec indexable_partition_seqs(#state{}) -> partition_seqs().
 indexable_partition_seqs(#state{group = Group} = State) ->
     CurPartitions = [P || {P, _} <- ?set_seqs(Group)],
-    {ok, CurSeqs} = case ?set_unindexable_seqs(Group) of
+    {ok, Seqs} = couch_set_view_util:get_seqs(?upr_pid(State), CurPartitions),
+    indexable_partition_seqs(State, Seqs).
+
+-spec indexable_partition_seqs(#state{}, partition_seqs()) -> partition_seqs().
+indexable_partition_seqs(#state{group = Group}, Seqs) ->
+    IndexSeqs = ?set_seqs(Group),
+    CurPartitions = [P || {P, _} <- IndexSeqs],
+    CurSeqs = case ?set_unindexable_seqs(Group) of
     [] ->
-        couch_set_view_util:get_seqs(?upr_pid(State), CurPartitions);
+        filter_seqs(CurPartitions, Seqs);
     _ ->
         ReplicasOnTransfer = ?set_replicas_on_transfer(Group),
         Partitions = ordsets:union(CurPartitions, ReplicasOnTransfer),
         % Index unindexable replicas on transfer though (as the reason for the
         % transfer is to become active and indexable).
-        couch_set_view_util:get_seqs(?upr_pid(State), Partitions)
+        filter_seqs(Partitions, Seqs)
     end,
-    CurSeqs.
+    lists:map(fun
+        ({PartId, {error, _}}) ->
+            lists:keyfind(PartId, 1, IndexSeqs);
+        (Seq) ->
+            Seq
+    end, CurSeqs).
 
 
 -spec active_partition_seqs(#state{}) -> partition_seqs().
@@ -2863,14 +2925,9 @@ start_updater(#state{updater_pid = nil, updater_state = not_running} = State, Op
         replica_partitions = ReplicaParts,
         waiting_list = WaitList
     } = State,
-    CurSeqs = indexable_partition_seqs(State),
-    case CurSeqs > ?set_seqs(Group) of
-    true ->
-        do_start_updater(State, CurSeqs, Options);
-    false ->
-        WaitList2 = reply_with_group(Group, ReplicaParts, WaitList),
-        State#state{waiting_list = WaitList2}
-    end.
+    WaitList2 = reply_with_group(Group, ReplicaParts, WaitList),
+    schedule_index_update(State, Options),
+    State#state{waiting_list = WaitList2}.
 
 
 -spec do_start_updater(#state{}, partition_seqs(), [term()]) -> #state{}.
@@ -3866,3 +3923,21 @@ get_auth() ->
         timer:sleep(1000),
         get_auth()
     end.
+
+
+schedule_index_update(State, Options) ->
+    #state{
+       update_scheduler_pid = Pid
+    } = State,
+    Pid ! {start_updater, Options},
+    ok.
+
+
+update_scheduler(UprPid, Owner) ->
+    receive
+    {start_updater, Options} ->
+        {ok, Seqs} = couch_set_view_util:get_seqs(UprPid, lists:seq(0, 1023)),
+        Seqs
+    end,
+    gen_server:cast(Owner, {start_updater, Seqs, Options}),
+    update_scheduler(UprPid, Owner).
