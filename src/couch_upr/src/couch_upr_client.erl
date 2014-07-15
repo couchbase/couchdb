@@ -228,6 +228,7 @@ enum_docs_since(Pid, PartId, PartVersions, StartSeq, EndSeq0, Flags,
     {error, vbucket_stream_tmp_fail} ->
         ?LOG_INFO("upr client (~p): Temporary failure on stream request "
             "on partition ~p. Retrying...", [Pid, PartId]),
+        timer:sleep(100),
         enum_docs_since(Pid, PartId, PartVersions, StartSeq, EndSeq,
             Flags, CallbackFn, InAcc);
     _ ->
