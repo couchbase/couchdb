@@ -51,6 +51,7 @@ sup_start_link() ->
     gen_server:start_link({local, couch_server}, couch_server, [], []).
 
 open(DbName, Options) ->
+    couch_log:pre_db_open(DbName),
     case gen_server:call(couch_server, {open, DbName, Options}, infinity) of
     {ok, Db} ->
         Ctx = couch_util:get_value(user_ctx, Options, #user_ctx{}),

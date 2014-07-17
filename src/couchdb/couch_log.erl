@@ -19,6 +19,8 @@
 -export([debug_on/0, info_on/0, get_level/0, get_level_integer/0, set_level/1]).
 -export([read/2]).
 
+-export([pre_db_open/1]).
+
 % gen_event callbacks
 -export([init/1, handle_event/2, terminate/2, code_change/3]).
 -export([handle_info/2, handle_call/2]).
@@ -185,3 +187,6 @@ read(Bytes, Offset) ->
     {ok, Chunk} = file:pread(Fd, Start, LogFileSize),
     ok = file:close(Fd),
     Chunk.
+
+pre_db_open(_) ->
+    ok.
