@@ -399,6 +399,19 @@ filter_seqs(Parts, Seqs) ->
     end, Seqs).
 
 
+upr_marker_to_string(Type) ->
+    case Type of
+    ?UPR_SNAPSHOT_TYPE_DISK ->
+        "on-disk";
+    ?UPR_SNAPSHOT_TYPE_MEMORY ->
+        "in-memory";
+    ?UPR_SNAPSHOT_TYPE_CHK ->
+        "chk";
+    _ ->
+        io_lib:format("unknown (~w)", [Type])
+    end.
+
+
 load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
         EndSeqs, InitialBuild) ->
     #set_view_group{
@@ -451,18 +464,15 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                                 NewVersions, MapQueue, Group,
                                 MaxDocSize, InitialBuild),
                             Acc;
-                        ({snapshot_marker, Marker}, {Count, _}) ->
-                            {MarkerStartSeq, MarkerEndSeq, MarkerType} =
-                                Marker,
+                        ({snapshot_marker, {MarkerStartSeq, MarkerEndSeq, MarkerType}}, {Count, _})
+                            when (MarkerType =:= ?UPR_SNAPSHOT_TYPE_DISK)
+                                 orelse (MarkerType =:= ?UPR_SNAPSHOT_TYPE_MEMORY) ->
                             ?LOG_INFO(
                                 "set view `~s`, ~s (~s) group `~s`: received "
                                 "a snapshot marker (~s) for partition ~p from "
                                 "sequence ~p to ~p",
                                 [SetName, GroupType, Category, DDocId,
-                                    case MarkerType of
-                                    ?UPR_SNAPSHOT_TYPE_DISK -> "on-disk";
-                                    ?UPR_SNAPSHOT_TYPE_MEMORY -> "in-memory"
-                                    end,
+                                    upr_marker_to_string(MarkerType),
                                     PartId, MarkerStartSeq, MarkerEndSeq]),
                             case Count of
                             % Ignore the snapshot marker that is at the
@@ -482,6 +492,15 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                                     MaxDocSize, InitialBuild),
                                 {Count, MarkerEndSeq}
                             end;
+                        ({snapshot_marker, {MarkerStartSeq, MarkerEndSeq, MarkerType}}, Acc) ->
+                            ?LOG_INFO(
+                                "set view `~s`, ~s (~s) group `~s`: received "
+                                "a snapshot marker (~s) for partition ~p from "
+                                "sequence ~p to ~p",
+                                [SetName, GroupType, Category, DDocId,
+                                    upr_marker_to_string(MarkerType),
+                                    PartId, MarkerStartSeq, MarkerEndSeq]),
+                            Acc;
                         (#upr_doc{} = Item, {Count, AccEndSeq}) ->
                             queue_doc(
                                 Item, MapQueue, Group,
