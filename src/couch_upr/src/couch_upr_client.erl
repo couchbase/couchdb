@@ -642,7 +642,16 @@ select_bucket(Bucket, State) ->
             ?UPR_STATUS_OK ->
                 {ok, State#state{request_id = RequestId + 1}};
             _ ->
-                parse_error_response(Socket, UprTimeout, BodyLength, Status)
+                case parse_error_response(
+                        Socket, UprTimeout, BodyLength, Status) of
+                % When the authentication happened with bucket name and
+                % password, then the correct bucket is already selected. In
+                % this case a select bucket command returns "not supported".
+                {error, not_supported} ->
+                    {ok, State#state{request_id = RequestId + 1}};
+                {error, _} = Error ->
+                    Error
+                end
             end;
         {error, _} = Error ->
             Error
@@ -1024,6 +1033,8 @@ parse_error_response(Socket, Timeout, BodyLength, Status) ->
             {error, server_not_my_vbucket};
         ?UPR_STATUS_TMP_FAIL ->
             {error, vbucket_stream_tmp_fail};
+        ?UPR_STATUS_NOT_SUPPORTED ->
+            {error, not_supported};
         _ ->
             {error, {status, Status}}
         end;
