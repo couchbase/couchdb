@@ -824,7 +824,7 @@ get_seqs(UprPid, Partitions) ->
     SeqsResult = lists:zipwith(fun(PartId, Seq) ->
         case Seq of
         {error, not_my_vbucket} ->
-            throw({error, {PartId, not_found}});
+            {error, {PartId, not_found}};
         Seq ->
             {PartId, Seq}
         end

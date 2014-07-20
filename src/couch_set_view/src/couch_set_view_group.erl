@@ -2632,20 +2632,45 @@ cleaner(#state{group = Group}) ->
     {clean_group, NewGroup, TotalPurgedCount, Duration}.
 
 
+-spec filter_seqs(list(partition_id()), partition_seqs()) ->
+                                        partition_seqs().
+filter_seqs(Parts, Seqs) ->
+    lists:foldr(fun(PartId, Acc) ->
+        case lists:keyfind(PartId, 1, Seqs) of
+        false ->
+            Acc;
+        PartSeq ->
+            [PartSeq | Acc]
+        end
+    end, [], Parts).
+
+
 -spec indexable_partition_seqs(#state{}) -> partition_seqs().
 indexable_partition_seqs(#state{group = Group} = State) ->
     CurPartitions = [P || {P, _} <- ?set_seqs(Group)],
-    {ok, CurSeqs} = case ?set_unindexable_seqs(Group) of
+    {ok, Seqs} = couch_set_view_util:get_seqs(?upr_pid(State), CurPartitions),
+    indexable_partition_seqs(State, Seqs).
+
+-spec indexable_partition_seqs(#state{}, partition_seqs()) -> partition_seqs().
+indexable_partition_seqs(#state{group = Group}, Seqs) ->
+    IndexSeqs = ?set_seqs(Group),
+    CurPartitions = [P || {P, _} <- IndexSeqs],
+    CurSeqs = case ?set_unindexable_seqs(Group) of
     [] ->
-        couch_set_view_util:get_seqs(?upr_pid(State), CurPartitions);
+        filter_seqs(CurPartitions, Seqs);
     _ ->
         ReplicasOnTransfer = ?set_replicas_on_transfer(Group),
         Partitions = ordsets:union(CurPartitions, ReplicasOnTransfer),
         % Index unindexable replicas on transfer though (as the reason for the
         % transfer is to become active and indexable).
-        couch_set_view_util:get_seqs(?upr_pid(State), Partitions)
+        filter_seqs(Partitions, Seqs)
     end,
-    CurSeqs.
+    lists:map(fun
+        ({PartId, {error, _}}) ->
+            lists:keyfind(PartId, 1, IndexSeqs);
+        (Seq) ->
+            Seq
+    end, CurSeqs).
 
 
 -spec active_partition_seqs(#state{}) -> partition_seqs().
@@ -2653,6 +2678,11 @@ active_partition_seqs(#state{group = Group} = State) ->
     ActiveParts = couch_set_view_util:decode_bitmask(?set_abitmask(Group)),
     {ok, CurSeqs} = couch_set_view_util:get_seqs(?upr_pid(State), ActiveParts),
     CurSeqs.
+
+-spec active_partition_seqs(#state{}, partition_seqs()) -> partition_seqs().
+active_partition_seqs(#state{group = Group}, Seqs) ->
+    ActiveParts = couch_set_view_util:decode_bitmask(?set_abitmask(Group)),
+    filter_seqs(ActiveParts, Seqs).
 
 
 -spec start_compactor(#state{}, compact_fun()) -> #state{}.
@@ -2863,10 +2893,17 @@ start_updater(#state{updater_pid = nil, updater_state = not_running} = State, Op
         replica_partitions = ReplicaParts,
         waiting_list = WaitList
     } = State,
-    CurSeqs = indexable_partition_seqs(State),
+    case Options of
+    [{seqs, Seqs} | Options2] ->
+        ok;
+    Options2 ->
+        CurPartitions = lists:seq(0, ?MAX_NUM_PARTITIONS - 1),
+        {ok, Seqs} = couch_set_view_util:get_seqs(?upr_pid(State), CurPartitions)
+    end,
+    CurSeqs = indexable_partition_seqs(State, Seqs),
     case CurSeqs > ?set_seqs(Group) of
     true ->
-        do_start_updater(State, CurSeqs, Options);
+        do_start_updater(State, CurSeqs, Options2);
     false ->
         WaitList2 = reply_with_group(Group, ReplicaParts, WaitList),
         State#state{waiting_list = WaitList2}
@@ -3270,13 +3307,17 @@ process_view_group_request(#set_view_group_req{stale = false} = Req, From, State
         replica_partitions = ReplicaParts
     } = State,
     #set_view_group_req{debug = Debug} = Req,
-    CurSeqs = active_partition_seqs(State),
+
+    CurPartitions = lists:seq(0, ?MAX_NUM_PARTITIONS - 1),
+    {ok, Seqs} = couch_set_view_util:get_seqs(?upr_pid(State), CurPartitions),
+    Options = [{seqs, Seqs}],
+    CurSeqs = active_partition_seqs(State, Seqs),
     Waiter = #waiter{from = From, debug = Debug, seqs = CurSeqs},
     case reply_with_group(Group, ReplicaParts, [Waiter]) of
     [] ->
-        start_updater(State);
+        start_updater(State, Options);
     _ ->
-        start_updater(State#state{waiting_list = [Waiter | WaitList]})
+        start_updater(State#state{waiting_list = [Waiter | WaitList]}, Options)
     end;
 
 process_view_group_request(#set_view_group_req{stale = ok} = Req, From, State) ->
