@@ -232,14 +232,22 @@ update_btrees_wait_loop(Port, Group, Acc0, Stats) ->
                 view_states = NewViewRoots
             } = Header,
             NewIdBtree = couch_btree:set_state(IdBtree, NewIdBtreeRoot),
-            NewViews = lists:zipwith(
-                fun(#set_view{indexer = View} = V, NewRoot) ->
-                    #mapreduce_view{btree = Bt} = View,
-                    NewBt = couch_btree:set_state(Bt, NewRoot),
-                    NewView = View#mapreduce_view{btree = NewBt},
-                    V#set_view{indexer = NewView}
-                end,
-                Views, NewViewRoots),
+            NewViews = case Views of
+            % Spatial views use this function only for the ID b-tree. Their
+            % views get removed before calling from the view group and get
+            % added afterwards.
+            [] ->
+                [];
+            _ ->
+                lists:zipwith(
+                    fun(#set_view{indexer = View} = V, NewRoot) ->
+                        #mapreduce_view{btree = Bt} = View,
+                        NewBt = couch_btree:set_state(Bt, NewRoot),
+                        NewView = View#mapreduce_view{btree = NewBt},
+                        V#set_view{indexer = NewView}
+                    end,
+                    Views, NewViewRoots)
+            end,
 
             NewGroup0 = Group#set_view_group{
                 id_btree = NewIdBtree,

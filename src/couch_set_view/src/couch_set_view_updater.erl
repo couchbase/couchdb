@@ -907,15 +907,6 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
             stats = Stats2
         };
     true ->
-        % For mapreduce view, sorting is performed by native btree builder
-        case Mod of
-        spatial_view ->
-            ?LOG_INFO("Updater for set view `~s`, ~s group `~s`, sorting view files",
-                  [SetName, Type, DDocId]),
-            ok = sort_tmp_files(TmpFiles2, TmpDir, Group, true);
-        _ ->
-            ok
-        end,
         ?LOG_INFO("Updater for set view `~s`, ~s group `~s`, starting btree "
                   "build phase" , [SetName, Type, DDocId]),
         {Group2, BuildFd} = Mod:finish_build(Group, TmpFiles2, TmpDir),
@@ -1183,20 +1174,13 @@ maybe_update_btrees(WriterAcc0) ->
             end
         end;
     true ->
-        % Mapreduce view ops sorting is performed by native updater
-        case Group0#set_view_group.mod of
-        spatial_view ->
-            ok = sort_tmp_files(TmpFiles, WriterAcc0#writer_acc.tmp_dir, Group0, false);
-        _ ->
-            % Close all open tmpfile fds before starting native sorter
-            ok = close_tmp_fd(IdTmpFileInfo),
-            ok = lists:foreach(
-                fun(#set_view{id_num = Id}) ->
-                    ViewTmpFileInfo = dict:fetch(Id, TmpFiles),
-                    ok = close_tmp_fd(ViewTmpFileInfo)
-                end,
-                Group0#set_view_group.views)
-        end,
+        ok = close_tmp_fd(IdTmpFileInfo),
+        ok = lists:foreach(
+            fun(#set_view{id_num = Id}) ->
+                ViewTmpFileInfo = dict:fetch(Id, TmpFiles),
+                ok = close_tmp_fd(ViewTmpFileInfo)
+            end,
+            Group0#set_view_group.views),
         case erlang:erase(updater_worker) of
         undefined ->
             WriterAcc1 = WriterAcc0;
@@ -1558,116 +1542,10 @@ count_seqs_done(Group, NewSeqs) ->
         0, NewSeqs).
 
 
-% Incremental updates.
--spec sort_tmp_files(dict(), string(), #set_view_group{}, boolean()) -> 'ok'.
-sort_tmp_files(TmpFiles, TmpDir, Group, InitialBuild) ->
-    #set_view_group{
-        views = Views0,
-        mod = Mod
-    } = Group,
-    case os:find_executable("couch_view_file_sorter") of
-    false ->
-        FileSorterCmd = nil,
-        throw(<<"couch_view_file_sorter command not found">>);
-    FileSorterCmd ->
-        ok
-    end,
-    FileSorter = open_port({spawn_executable, FileSorterCmd}, ?PORT_OPTS),
-    case Mod of
-    mapreduce_view ->
-        case InitialBuild of
-        true ->
-            true = port_command(FileSorter, [TmpDir, $\n, "b", $\n]);
-        false ->
-            true = port_command(FileSorter, [TmpDir, $\n, "u", $\n])
-        end,
-        Views = Views0;
-    spatial_view ->
-        case InitialBuild of
-        true ->
-            true = port_command(FileSorter, [TmpDir, $\n, "s", $\n]),
-            Views = Views0;
-        false ->
-            % TODO vmx 2013-08-05: Currently the incremental updates only
-            %    contain the id-btree that needs to be processed, hence
-            %    the same call as for views can be used.
-            true = port_command(FileSorter, [TmpDir, $\n, "u", $\n]),
-            Views = []
-        end
-    end,
-    NumViews = length(Views),
-    true = port_command(FileSorter, [integer_to_list(NumViews), $\n]),
-    IdTmpFileInfo = dict:fetch(ids_index, TmpFiles),
-    ok = close_tmp_fd(IdTmpFileInfo),
-    true = port_command(FileSorter, [tmp_file_name(IdTmpFileInfo), $\n]),
-    ok = lists:foreach(
-        fun(#set_view{id_num = Id}) ->
-            ViewTmpFileInfo = dict:fetch(Id, TmpFiles),
-            ok = close_tmp_fd(ViewTmpFileInfo),
-            true = port_command(FileSorter, [tmp_file_name(ViewTmpFileInfo), $\n])
-        end,
-        Views),
-    case Mod of
-    mapreduce_view ->
-        ok;
-    spatial_view when InitialBuild ->
-        % Spatial indexes need the enclosing bounding box of the data that
-        % is stored in the file
-        ok = lists:foreach(
-            fun(#set_view{id_num = Id}) ->
-                ViewTmpFileInfo = dict:fetch(Id, TmpFiles),
-                Mbb = ViewTmpFileInfo#set_view_tmp_file_info.extra,
-                NumValues = length(Mbb)*2,
-                Values = [
-                    [<<From:64/float-native>>, <<To:64/float-native>>] ||
-                    [From, To] <- Mbb],
-                Data = [<<NumValues:16/integer-native>>, Values, $\n],
-                true = port_command(FileSorter, Data)
-            end,
-            Views);
-    spatial_view ->
-        ok
-    end,
-    try
-        file_sorter_wait_loop(FileSorter, Group, [])
-    after
-        catch port_close(FileSorter)
-    end.
-
-
 close_tmp_fd(#set_view_tmp_file_info{fd = nil}) ->
     ok;
 close_tmp_fd(#set_view_tmp_file_info{fd = Fd}) ->
     ok = file:close(Fd).
-
-
-tmp_file_name(#set_view_tmp_file_info{name = nil}) ->
-    "<nil>";
-tmp_file_name(#set_view_tmp_file_info{name = Name}) ->
-    Name.
-
-
-file_sorter_wait_loop(Port, Group, Acc) ->
-    receive
-    {Port, {exit_status, 0}} ->
-        ok;
-    {Port, {exit_status, Status}} ->
-        throw({file_sorter_exit, Status});
-    {Port, {data, {noeol, Data}}} ->
-        file_sorter_wait_loop(Port, Group, [Data | Acc]);
-    {Port, {data, {eol, Data}}} ->
-        #set_view_group{
-            set_name = SetName,
-            name = DDocId,
-            type = Type
-        } = Group,
-        Msg = lists:reverse([Data | Acc]),
-        ?LOG_ERROR("Set view `~s`, ~s group `~s`, received error from file sorter: ~s",
-                   [SetName, Type, DDocId, Msg]),
-        file_sorter_wait_loop(Port, Group, []);
-    {Port, Error} ->
-        throw({file_sorter_error, Error})
-    end.
 
 
 % DCP introduces the concept of snapshots, where a document mutation is only
