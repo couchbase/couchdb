@@ -65,6 +65,9 @@
 % flow control buffer size 20 MB
 -define(UPR_CONTROL_BUFFER_SIZE, "20971520").
 
+% Seqs cache ttl in microseconds
+-define(SEQS_CACHE_TTL, 300000).
+
 -record(util_stats, {
     useful_indexing_time = 0.0  :: float(),
     wasted_indexing_time = 0.0  :: float(),
@@ -110,6 +113,7 @@
     pending_transition_waiters = []    :: [{From::{pid(), reference()}, #set_view_group_req{}}],
     update_listeners = dict:new()      :: dict(),
     compact_log_files = nil            :: 'nil' | {[[string()]], partition_seqs(), partition_versions()},
+    part_seqs = {{0, 0, 0}, []}        :: {timer:time(), partition_seqs()},
     timeout = ?DEFAULT_TIMEOUT         :: non_neg_integer() | 'infinity'
 }).
 
@@ -3340,7 +3344,9 @@ process_view_group_request(#set_view_group_req{stale = update_after} = Req, From
     Pid when is_pid(Pid) ->
         State;
     nil ->
-        start_updater(State)
+        {Seqs, State2} = get_seqs_lazy(State),
+        Options = [{seqs, Seqs}],
+        start_updater(State2, Options)
     end.
 
 
@@ -3891,7 +3897,7 @@ rollback(State, RollbackPartSeqs) ->
         NewGroup2 = NewGroup#set_view_group{
             header_pos = NewHeaderPos
         },
-        {ok, State3#state{group = NewGroup2}};
+        {ok, State3#state{group = NewGroup2, part_seqs = {{0, 0, 0}, []}}};
     cannot_rollback ->
         {error, {cannot_rollback, State3}}
     end.
@@ -3907,3 +3913,16 @@ get_auth() ->
         timer:sleep(1000),
         get_auth()
     end.
+
+
+-spec get_seqs_lazy(#state{}) -> {partition_seqs(), #state{}}.
+get_seqs_lazy(#state{part_seqs = {Ts, Seqs}} = State) ->
+    {NewTs, NewSeqs2} = case timer:now_diff(os:timestamp(), Ts) > ?SEQS_CACHE_TTL of
+    true ->
+        CurPartitions = lists:seq(0, ?MAX_NUM_PARTITIONS - 1),
+        {ok, NewSeqs} = couch_set_view_util:get_seqs(?upr_pid(State), CurPartitions),
+        {os:timestamp(), NewSeqs};
+    false ->
+        {Ts, Seqs}
+    end,
+    {NewSeqs2, State#state{part_seqs = {NewTs, NewSeqs2}}}.
