@@ -151,8 +151,13 @@ define_group(Mod, SetName, DDocId, #set_view_params{} = Params) ->
         Error ->
             throw(Error)
         end
-    catch throw:{error, empty_group} ->
-        ok
+    catch
+        throw:{error, empty_group} ->
+            ok;
+        exit:{normal, _} ->
+            ?LOG_INFO("Group process normally exited. So retrying..", []),
+            timer:sleep(100),
+            define_group(Mod, SetName, DDocId, Params)
     end.
 
 
