@@ -1324,7 +1324,7 @@ restart_worker(State) ->
     } = State,
     case init(Args) of
     {stop, Reason} ->
-        {stop, Reason};
+        {stop, Reason, State};
     {ok, State2} ->
         #state{
             socket = Socket,
