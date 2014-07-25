@@ -242,7 +242,7 @@ vtree_kv_node_threshold = 2000
 vtree_kp_node_threshold = 2000
 vtree_min_fill_rate = 0.4
 
-[upr]
+[dcp]
 port = 11209
 connection_timeout = 5000
 flow_control_buffer_size = 20971520

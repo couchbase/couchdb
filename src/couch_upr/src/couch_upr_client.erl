@@ -104,7 +104,7 @@ get_stats_reply(Pid, MRef) ->
     {'DOWN', MRef, process, Pid, Reason} ->
         exit({upr_client_died, Pid, Reason})
     after ?TIMEOUT_STATS ->
-        ?LOG_ERROR("upr client (~p): vbucket-seqno stats timed out after ~p seconds."
+        ?LOG_ERROR("dcp client (~p): vbucket-seqno stats timed out after ~p seconds."
                    " Waiting...",
             [Pid, ?TIMEOUT_STATS / 1000]),
         get_stats_reply(Pid, MRef)
@@ -229,7 +229,7 @@ enum_docs_since(Pid, PartId, PartVersions, StartSeq, EndSeq0, Flags,
     {PartUuid, _} = PartVersion,
     EndSeq = case EndSeq0 < StartSeq of
     true ->
-        ?LOG_INFO("upr client (~p): Expecting a rollback for partition ~p. "
+        ?LOG_INFO("dcp client (~p): Expecting a rollback for partition ~p. "
         "Found start_seqno > end_seqno (~p > ~p).",
         [Pid, PartId, StartSeq, EndSeq0]),
         StartSeq;
@@ -252,7 +252,7 @@ enum_docs_since(Pid, PartId, PartVersions, StartSeq, EndSeq0, Flags,
         enum_docs_since(Pid, PartId, PartVersionsRest, StartSeq, EndSeq,
             Flags, CallbackFn, InAcc);
     {error, vbucket_stream_tmp_fail} ->
-        ?LOG_INFO("upr client (~p): Temporary failure on stream request "
+        ?LOG_INFO("dcp client (~p): Temporary failure on stream request "
             "on partition ~p. Retrying...", [Pid, PartId]),
         timer:sleep(100),
         enum_docs_since(Pid, PartId, PartVersions, StartSeq, EndSeq,
@@ -268,8 +268,8 @@ enum_docs_since(Pid, PartId, PartVersions, StartSeq, EndSeq0, Flags,
                     {stop, sasl_auth_failed | closed | inet:posix()}.
 init([Name, Bucket, AdmUser, AdmPasswd, BufferSize]) ->
     UprTimeout = list_to_integer(
-        couch_config:get("upr", "connection_timeout")),
-    UprPort = list_to_integer(couch_config:get("upr", "port")),
+        couch_config:get("dcp", "connection_timeout")),
+    UprPort = list_to_integer(couch_config:get("dcp", "port")),
     {ok, Socket} = gen_tcp:connect("localhost", UprPort,
         [binary, {packet, raw}, {active, false}, {nodelay, true}]),
     State = #state{
@@ -560,7 +560,7 @@ handle_info({stream_event, RequestId, Event}, State) ->
 
 handle_info({'EXIT', Pid, {conn_error, Reason}}, #state{worker_pid = Pid} = State) ->
     [Name, Bucket, _AdmUser, _AdmPasswd, _BufferSize] = State#state.args,
-    ?LOG_ERROR("upr client (~s, ~s): upr receive worker failed due to reason: ~p."
+    ?LOG_ERROR("dcp client (~s, ~s): dcp receive worker failed due to reason: ~p."
         " Restarting upr receive worker...",
         [Bucket, Name, Reason]),
     timer:sleep(?UPR_RETRY_TIMEOUT),
@@ -580,7 +580,7 @@ handle_info({print_log, ReqId}, State) ->
            end_seq = End,
            part_id = PartId
         } = StreamInfo,
-        ?LOG_ERROR("upr client (~s, ~s): Obtaining mutation from server timed out "
+        ?LOG_ERROR("dcp client (~s, ~s): Obtaining mutation from server timed out "
             "after ~p seconds [RequestId ~p, PartId ~p, StartSeq ~p, EndSeq ~p]. Waiting...",
             [Bucket, Name, ?TIMEOUT / 1000, ReqId, PartId, Start, End])
     end,

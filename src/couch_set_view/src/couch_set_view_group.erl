@@ -420,7 +420,7 @@ do_init({_, SetName, _} = InitArgs) ->
             " (", (atom_to_binary(Category, latin1))/binary, "/",
             (atom_to_binary(Type, latin1))/binary, ")">>,
         {User, Passwd} = get_auth(),
-        UprBufferSize = list_to_integer(couch_config:get("upr",
+        UprBufferSize = list_to_integer(couch_config:get("dcp",
             "flow_control_buffer_size", ?UPR_CONTROL_BUFFER_SIZE)),
         ?LOG_INFO("Flow control buffer size is ~p bytes", [UprBufferSize]),
         {ok, UprPid} = couch_upr_client:start(UprName, SetName, User, Passwd,

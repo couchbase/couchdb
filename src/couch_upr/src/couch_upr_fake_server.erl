@@ -119,7 +119,7 @@
                          {error, {already_started, pid()} | term()}.
 start(SetName) ->
     % Start the fake UPR server where the original one is expected to be
-    Port = list_to_integer(couch_config:get("upr", "port", "0")),
+    Port = list_to_integer(couch_config:get("dcp", "port", "0")),
     gen_server:start({local, ?MODULE}, ?MODULE, [Port, SetName], []).
 
 -spec reset() -> ok.
@@ -188,7 +188,7 @@ init([Port, SetName]) ->
     % port was chosen (that's only needed for the tests).
     0 ->
         {ok, RandomPort} = inet:port(Listen),
-        couch_config:set("upr", "port", integer_to_list(RandomPort), false);
+        couch_config:set("dcp", "port", integer_to_list(RandomPort), false);
     _ ->
         ok
     end,
