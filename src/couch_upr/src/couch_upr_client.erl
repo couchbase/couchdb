@@ -19,6 +19,7 @@
     get_failover_log/2]).
 -export([get_stream_event/2, remove_stream/2, list_streams/1]).
 -export([enum_docs_since/8, restart_worker/1]).
+-export([get_sequence_numbers_async/1, parse_stats_seqnos/1]).
 
 % gen_server callbacks
 -export([init/1, terminate/2, handle_call/3, handle_cast/2, handle_info/2, code_change/3]).
@@ -117,6 +118,31 @@ get_stats(Pid, Name, PartId) ->
     Reply = get_stats_reply(Pid, MRef),
     erlang:demonitor(MRef, [flush]),
     Reply.
+
+
+% The async get_sequence_numbers API requests asynchronous stats.
+% The response will be sent to the caller process asynchronously in the
+% following message format:
+% {get_stats, nil, StatsResponse}.
+% The receiver needs to use parse_stats_seqnos() method to parse the
+% response to valid seqnos format.
+-spec get_sequence_numbers_async(pid()) -> ok.
+get_sequence_numbers_async(Pid) ->
+    Pid ! {get_stats, <<"vbucket-seqno">>, nil, {nil, self()}},
+    ok.
+
+-spec parse_stats_seqnos([{binary(), binary()}]) -> [{partition_id(), update_seq()}].
+parse_stats_seqnos(Stats) ->
+    lists:foldr(fun({Key, SeqBin}, Acc) ->
+        case binary:split(Key, <<":">>) of
+        [<<"vb_", PartIdBin/binary>>, <<"high_seqno">>] ->
+            PartId = list_to_integer(binary_to_list(PartIdBin)),
+            Seq = list_to_integer(binary_to_list(SeqBin)),
+            [{PartId, Seq} | Acc];
+        _ ->
+            Acc
+        end
+    end, [], Stats).
 
 
 -spec get_sequence_numbers(pid(), [partition_id()]) ->

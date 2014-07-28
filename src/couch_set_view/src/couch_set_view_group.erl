@@ -92,6 +92,12 @@
     seqs = []     :: partition_seqs()
 }).
 
+-record(seqs_cache, {
+    timestamp = {0, 0, 0}              :: timer:time(),
+    is_waiting = false                 :: boolean(),
+    seqs = []                          :: partition_seqs()
+}).
+
 -record(state, {
     init_args                          :: init_args(),
     replica_group = nil                :: 'nil' | pid(),
@@ -113,7 +119,7 @@
     pending_transition_waiters = []    :: [{From::{pid(), reference()}, #set_view_group_req{}}],
     update_listeners = dict:new()      :: dict(),
     compact_log_files = nil            :: 'nil' | {[[string()]], partition_seqs(), partition_versions()},
-    part_seqs = {{0, 0, 0}, []}        :: {timer:time(), partition_seqs()},
+    seqs_cache = #seqs_cache{}         :: #seqs_cache{},
     timeout = ?DEFAULT_TIMEOUT         :: non_neg_integer() | 'infinity'
 }).
 
@@ -1340,7 +1346,44 @@ handle_info({'EXIT', Pid, Reason}, State) ->
                " terminating because linked PID ~p died with reason: ~p",
                [?set_name(State), ?type(State), ?category(State),
                 ?group_id(State), Pid, Reason]),
-    {stop, Reason, State}.
+    {stop, Reason, State};
+
+handle_info({get_stats, nil, StatsResponse}, State) ->
+    SeqsCache = State#state.seqs_cache,
+    NewState = case StatsResponse of
+    {ok, Stats} ->
+        Seqs = couch_upr_client:parse_stats_seqnos(Stats),
+        NewCacheVal = #seqs_cache{
+            timestamp = os:timestamp(),
+            is_waiting = false,
+            seqs = Seqs
+        },
+        CurSeqs = indexable_partition_seqs(State, Seqs),
+        State2 = case CurSeqs > ?set_seqs(State#state.group) of
+        true ->
+            do_start_updater(State, CurSeqs, []);
+        false ->
+            State
+        end,
+        % If a rollback happened in between async seqs update request and
+        % its response, is_waiting flag will be resetted. In that case, we should
+        % just discard the update seqs.
+        case SeqsCache#seqs_cache.is_waiting of
+        true ->
+            State2#state{seqs_cache = NewCacheVal};
+        false ->
+            State2
+        end;
+    _ ->
+        ?LOG_ERROR("Set view `~s`, ~s (~s) group `~s`,"
+                              " received bad response for update seqs"
+                              " request ~p",
+                              [?set_name(State), ?type(State),
+                               ?category(State), ?group_id(State),
+                               StatsResponse]),
+        State
+    end,
+    {noreply, NewState}.
 
 
 terminate(Reason, #state{group = #set_view_group{sig = Sig} = Group} = State) ->
@@ -3344,9 +3387,18 @@ process_view_group_request(#set_view_group_req{stale = update_after} = Req, From
     Pid when is_pid(Pid) ->
         State;
     nil ->
-        {Seqs, State2} = get_seqs_lazy(State),
+        % Do not start updater if we have triggered an async seqs update.
+        % When the actual seqs are updated, it will trigger the updater.
+        State2 = try_update_seqs(State),
+        #state{seqs_cache = SeqsCache} = State2,
+        #seqs_cache{is_waiting = IsWaiting, seqs = Seqs} = SeqsCache,
         Options = [{seqs, Seqs}],
-        start_updater(State2, Options)
+        case IsWaiting of
+        true ->
+            State2;
+        false ->
+            start_updater(State2, Options)
+        end
     end.
 
 
@@ -3897,7 +3949,7 @@ rollback(State, RollbackPartSeqs) ->
         NewGroup2 = NewGroup#set_view_group{
             header_pos = NewHeaderPos
         },
-        {ok, State3#state{group = NewGroup2, part_seqs = {{0, 0, 0}, []}}};
+        {ok, State3#state{group = NewGroup2, seqs_cache = #seqs_cache{}}};
     cannot_rollback ->
         {error, {cannot_rollback, State3}}
     end.
@@ -3915,14 +3967,23 @@ get_auth() ->
     end.
 
 
--spec get_seqs_lazy(#state{}) -> {partition_seqs(), #state{}}.
-get_seqs_lazy(#state{part_seqs = {Ts, Seqs}} = State) ->
-    {NewTs, NewSeqs2} = case timer:now_diff(os:timestamp(), Ts) > ?SEQS_CACHE_TTL of
+-spec try_update_seqs(#state{}) -> #state{}.
+try_update_seqs(#state{seqs_cache = SeqsCache} = State) ->
+    #seqs_cache{
+        timestamp = Ts,
+        is_waiting = IsWaiting
+    } = SeqsCache,
+    case IsWaiting of
     true ->
-        CurPartitions = lists:seq(0, ?MAX_NUM_PARTITIONS - 1),
-        {ok, NewSeqs} = couch_set_view_util:get_seqs(?upr_pid(State), CurPartitions),
-        {os:timestamp(), NewSeqs};
+        State;
     false ->
-        {Ts, Seqs}
-    end,
-    {NewSeqs2, State#state{part_seqs = {NewTs, NewSeqs2}}}.
+        IsWaiting2 = case timer:now_diff(os:timestamp(), Ts) > ?SEQS_CACHE_TTL of
+        true ->
+            couch_upr_client:get_sequence_numbers_async(?upr_pid(State)),
+            true;
+        false ->
+            false
+        end,
+        SeqsCache2 = SeqsCache#seqs_cache{is_waiting = IsWaiting2},
+        State#state{seqs_cache = SeqsCache2}
+    end.
