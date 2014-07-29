@@ -554,8 +554,8 @@ handle_info({stream_event, RequestId, Event}, State) ->
         % Before the server received close_stream message, it would have placed
         % some mutations in the network buffer queue. We still need to acknowledge
         % the mutations received.
-        {ok, State2} = check_and_send_buffer_ack(State, RequestId, Event, mutation),
-        {noreply, State2}
+        {ok, State3} = check_and_send_buffer_ack(State, RequestId, Event, mutation),
+        {noreply, State3}
     end;
 
 handle_info({'EXIT', Pid, {conn_error, Reason}}, #state{worker_pid = Pid} = State) ->
