@@ -82,13 +82,13 @@ start(Name, Bucket, AdmUser, AdmPasswd, BufferSize) ->
     update_seq(), upr_data_type()) -> {request_id(), term()}.
 add_stream(Pid, PartId, PartUuid, StartSeq, EndSeq, Flags) ->
     gen_server:call(
-        Pid, {add_stream, PartId, PartUuid, StartSeq, EndSeq, Flags}).
+        Pid, {add_stream, PartId, PartUuid, StartSeq, EndSeq, Flags}, ?TIMEOUT).
 
 
 -spec remove_stream(pid(), partition_id()) ->
                             'ok' | {'error', term()}.
 remove_stream(Pid, PartId) ->
-    gen_server:call(Pid, {remove_stream, PartId}).
+    gen_server:call(Pid, {remove_stream, PartId}, ?TIMEOUT).
 
 
 -spec list_streams(pid()) -> list().
