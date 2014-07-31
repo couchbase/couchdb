@@ -573,7 +573,10 @@ handle_info({print_log, ReqId}, State) ->
     [Name, Bucket, _AdmUser, _AdmPasswd, _BufferSize] = State#state.args,
     case find_stream_info(ReqId, State) of
     nil ->
-        ok;
+        ?LOG_ERROR(
+            "dcp client (~s, ~s): Obtaining message from server timed out "
+            "after ~p seconds [RequestId ~p]. Waiting...",
+            [Bucket, Name, ?TIMEOUT / 1000, ReqId]);
     StreamInfo ->
         #stream_info{
            start_seq = Start,
