@@ -253,12 +253,14 @@ cleanup_group(Mod, Group) ->
     } = Group,
     PurgeFun = make_btree_purge_fun(Group),
     ok = couch_set_view_util:open_raw_read_fd(Group),
-    {ok, NewIdBtree, {Go, IdPurgedCount}} =
+    {ok, NewIdBtree, {_Go, IdPurgedCount}} =
         couch_btree:guided_purge(IdBtree, PurgeFun, {go, 0}),
-    lists:foreach(fun couch_set_view_mapreduce:start_reduce_context/1, Views),
-    {TotalPurgedCount, NewViews} =
-        Mod:clean_views(Go, PurgeFun, Views, IdPurgedCount, []),
+    CleanupParts = couch_set_view_util:decode_bitmask(?set_cbitmask(Group)),
+    {ViewsPurgeCount, NewViews} = Mod:clean_views(Views, CleanupParts),
+    TotalPurgedCount = IdPurgedCount + ViewsPurgeCount,
     ok = couch_set_view_util:close_raw_read_fd(Group),
+    % XXX vmx 2014-07-30: Currently the IndexedBitmap is always 0. This works
+    % for now, but should be investigated later on
     IndexedBitmap = compute_indexed_bitmap(Mod, NewIdBtree, NewViews),
     Group2 = Group#set_view_group{
         id_btree = NewIdBtree,
@@ -269,7 +271,6 @@ cleanup_group(Mod, Group) ->
             view_states = [Mod:get_state(V#set_view.indexer) || V <- NewViews]
         }
     },
-    lists:foreach(fun couch_set_view_mapreduce:end_reduce_context/1, Views),
     ok = couch_file:flush(Group#set_view_group.fd),
     {ok, Group2, TotalPurgedCount}.
 

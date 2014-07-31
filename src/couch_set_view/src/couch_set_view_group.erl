@@ -1083,7 +1083,15 @@ handle_info({updater_info, _Pid, {state, _UpdaterState}}, State) ->
 
 handle_info({'EXIT', Pid, {clean_group, CleanGroup, Count, Time}}, #state{cleaner_pid = Pid} = State) ->
     #state{group = OldGroup} = State,
-    {ok, NewGroup0} = couch_set_view_util:refresh_viewgroup_header(CleanGroup),
+    case CleanGroup#set_view_group.mod of
+    % The mapreduce view cleaner is a native C based one that writes the
+    % information to disk.
+    mapreduce_view ->
+        {ok, NewGroup0} =
+             couch_set_view_util:refresh_viewgroup_header(CleanGroup);
+    spatial_view ->
+        NewGroup0 = CleanGroup
+    end,
     NewGroup = update_clean_group_seqs(OldGroup, NewGroup0),
     ?LOG_INFO("Cleanup finished for set view `~s`, ~s (~s) group `~s`~n"
               "Removed ~p values from the index in ~.3f seconds~n"

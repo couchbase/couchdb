@@ -1147,7 +1147,8 @@ maybe_update_btrees(WriterAcc0) ->
                 ViewTmpFileInfo#set_view_tmp_file_info.size >= ?INC_MAX_TMP_FILE_SIZE
             end, ViewEmptyKVs);
     % Currently the spatial views are updated through an code path within
-    % Erlang without using the new C based code.
+    % Erlang without using the new C based code. Though the ID b-tree of
+    % the spatial views is updated through the code path below
     spatial_view ->
         true
     end,
