@@ -135,8 +135,8 @@ count_items_from_set(Group, Parts) ->
                    true ->
                        CountAcc;
                    false ->
-                       {ok, DocCount} = couch_upr_client:get_num_items(
-                           Group#set_view_group.upr_pid, PartId),
+                       {ok, DocCount} = couch_dcp_client:get_num_items(
+                           Group#set_view_group.dcp_pid, PartId),
                        CountAcc + DocCount
                    end
                 end, 0, Parts),

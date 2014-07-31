@@ -14,17 +14,17 @@
 % License for the specific language governing permissions and limitations under
 % the License.
 
--include_lib("couch_upr/include/couch_upr.hrl").
+-include_lib("couch_dcp/include/couch_dcp.hrl").
 
-test_set_name() -> <<"couch_test_couch_upr_client">>.
+test_set_name() -> <<"couch_test_couch_dcp_client">>.
 num_set_partitions() -> 4.
 num_docs() -> 1000.
 num_docs_pp() -> num_docs() div num_set_partitions().
 
--define(UPR_MSG_SIZE_MUTATION, 55).
--define(UPR_MSG_SIZE_DELETION, 42).
--define(UPR_MSG_SIZE_SNAPSHOT , 44).
--define(UPR_MSG_SIZE_STREAM_END, 28). 
+-define(DCP_MSG_SIZE_MUTATION, 55).
+-define(DCP_MSG_SIZE_DELETION, 42).
+-define(DCP_MSG_SIZE_SNAPSHOT , 44).
+-define(DCP_MSG_SIZE_STREAM_END, 28).
 
 main(_) ->
     test_util:init_code_path(),
@@ -49,7 +49,7 @@ test() ->
     FailoverLogs = lists:map(fun(PartId) ->
         FailoverLog = [
             {10001, PartId + 3}, {10002, PartId + 2}, {10003, 0}],
-        couch_upr_fake_server:set_failover_log(PartId, FailoverLog),
+        couch_dcp_fake_server:set_failover_log(PartId, FailoverLog),
         FailoverLog
     end, lists:seq(0, num_set_partitions() - 1)),
 
@@ -65,77 +65,77 @@ test() ->
     end,
 
     {auth, User, Passwd} = cb_auth_info:get(),
-    {ok, Pid} = couch_upr_client:start(
+    {ok, Pid} = couch_dcp_client:start(
         test_set_name(), test_set_name(), User, Passwd, 1024),
 
     % Get the latest partition version first
-    {ok, InitialFailoverLog0} = couch_upr_client:get_failover_log(Pid, 0),
+    {ok, InitialFailoverLog0} = couch_dcp_client:get_failover_log(Pid, 0),
     etap:is(InitialFailoverLog0, hd(FailoverLogs), "Failover log is correct"),
 
     % First parameter is the partition, the second is the sequence number
     % to start at.
-    {ok, Docs1, FailoverLog1} = couch_upr_client:enum_docs_since(
-        Pid, 0, InitialFailoverLog0, 4, 10, ?UPR_FLAG_NOFLAG, TestFun, []),
+    {ok, Docs1, FailoverLog1} = couch_dcp_client:enum_docs_since(
+        Pid, 0, InitialFailoverLog0, 4, 10, ?DCP_FLAG_NOFLAG, TestFun, []),
     etap:is(length(Docs1), 6, "Correct number of docs (6) in partition 0"),
     etap:is(FailoverLog1, lists:nth(1, FailoverLogs),
         "Failoverlog from partition 0 is correct"),
 
-    {ok, InitialFailoverLog1} = couch_upr_client:get_failover_log(Pid, 1),
-    {ok, Docs2, FailoverLog2} = couch_upr_client:enum_docs_since(
-        Pid, 1, InitialFailoverLog1, 46, 165, ?UPR_FLAG_NOFLAG, TestFun, []),
+    {ok, InitialFailoverLog1} = couch_dcp_client:get_failover_log(Pid, 1),
+    {ok, Docs2, FailoverLog2} = couch_dcp_client:enum_docs_since(
+        Pid, 1, InitialFailoverLog1, 46, 165, ?DCP_FLAG_NOFLAG, TestFun, []),
     etap:is(length(Docs2), 119, "Correct number of docs (109) partition 1"),
     etap:is(FailoverLog2, lists:nth(2, FailoverLogs),
         "Failoverlog from partition 1 is correct"),
 
-    {ok, InitialFailoverLog2} = couch_upr_client:get_failover_log(Pid, 2),
-    {ok, Docs3, FailoverLog3} = couch_upr_client:enum_docs_since(
+    {ok, InitialFailoverLog2} = couch_dcp_client:get_failover_log(Pid, 2),
+    {ok, Docs3, FailoverLog3} = couch_dcp_client:enum_docs_since(
         Pid, 2, InitialFailoverLog2, 80, num_docs() div num_set_partitions(),
-        ?UPR_FLAG_NOFLAG, TestFun, []),
+        ?DCP_FLAG_NOFLAG, TestFun, []),
     Expected3 = (num_docs() div num_set_partitions()) - 80,
     etap:is(length(Docs3), Expected3,
         io_lib:format("Correct number of docs (~p) partition 2", [Expected3])),
     etap:is(FailoverLog3, lists:nth(3, FailoverLogs),
         "Failoverlog from partition 2 is correct"),
 
-    {ok, InitialFailoverLog3} = couch_upr_client:get_failover_log(Pid, 3),
-    {ok, Docs4, FailoverLog4} = couch_upr_client:enum_docs_since(
-        Pid, 3, InitialFailoverLog3, 0, 5, ?UPR_FLAG_NOFLAG, TestFun, []),
+    {ok, InitialFailoverLog3} = couch_dcp_client:get_failover_log(Pid, 3),
+    {ok, Docs4, FailoverLog4} = couch_dcp_client:enum_docs_since(
+        Pid, 3, InitialFailoverLog3, 0, 5, ?DCP_FLAG_NOFLAG, TestFun, []),
     etap:is(length(Docs4), 5, "Correct number of docs (5) partition 3"),
     etap:is(FailoverLog4, lists:nth(4, FailoverLogs),
         "Failoverlog from partition 3 is correct"),
 
     % Try a too high sequence number to get a erange error response
-    {error, ErangeError} = couch_upr_client:enum_docs_since(
-        Pid, 0, InitialFailoverLog0, 400, 450, ?UPR_FLAG_NOFLAG, TestFun, []),
+    {error, ErangeError} = couch_dcp_client:enum_docs_since(
+        Pid, 0, InitialFailoverLog0, 400, 450, ?DCP_FLAG_NOFLAG, TestFun, []),
     etap:is(ErangeError, wrong_start_sequence_number,
         "Correct error message for too high sequence number"),
 
     % Start sequence is bigger than end sequence
     {_Request, ErangeError2} =
-        couch_upr_client:add_stream(
+        couch_dcp_client:add_stream(
             Pid, 0, first_uuid(InitialFailoverLog0), 5, 2,
-            ?UPR_FLAG_NOFLAG),
+            ?DCP_FLAG_NOFLAG),
     etap:is(ErangeError2, {error, wrong_start_sequence_number},
         "Correct error message for start sequence > end sequence"),
 
-    Error = couch_upr_client:enum_docs_since(
-        Pid, 1, [{4455667788, 1243}], 46, 165, ?UPR_FLAG_NOFLAG, TestFun, []),
+    Error = couch_dcp_client:enum_docs_since(
+        Pid, 1, [{4455667788, 1243}], 46, 165, ?DCP_FLAG_NOFLAG, TestFun, []),
     etap:is(Error, {rollback, 0},
         "Correct error for wrong failover log"),
 
-    {ok, [Seq0]} = couch_upr_client:get_sequence_numbers(Pid, [0]),
+    {ok, [Seq0]} = couch_dcp_client:get_sequence_numbers(Pid, [0]),
     etap:is(Seq0, num_docs() div num_set_partitions(),
         "Sequence number of partition 0 is correct"),
-    {ok, [Seq1]} = couch_upr_client:get_sequence_numbers(Pid, [1]),
+    {ok, [Seq1]} = couch_dcp_client:get_sequence_numbers(Pid, [1]),
     etap:is(Seq1, num_docs() div num_set_partitions(),
         "Sequence number of partition 1 is correct"),
-    {ok, [Seq2]} = couch_upr_client:get_sequence_numbers(Pid, [2]),
+    {ok, [Seq2]} = couch_dcp_client:get_sequence_numbers(Pid, [2]),
     etap:is(Seq2, num_docs() div num_set_partitions(),
          "Sequence number of partition 2 is correct"),
-    {ok, [Seq3]} = couch_upr_client:get_sequence_numbers(Pid, [3]),
+    {ok, [Seq3]} = couch_dcp_client:get_sequence_numbers(Pid, [3]),
     etap:is(Seq3, num_docs() div num_set_partitions(),
         "Sequence number of partition 3 is correct"),
-    SeqError = couch_upr_client:get_sequence_numbers(Pid, [100000]),
+    SeqError = couch_dcp_client:get_sequence_numbers(Pid, [100000]),
     etap:is(SeqError, {ok, [{error, not_my_vbucket}]},
         "Too high partition number returns correct error"),
 
@@ -155,21 +155,21 @@ test() ->
 
     SnapshotStart1 = 0,
     SnapshotEnd1 = num_docs() div (num_set_partitions() * 2),
-    {ok, Markers1, SnapshotFailoverLog1} = couch_upr_client:enum_docs_since(
-        Pid, 2, [{0, 0}], SnapshotStart1, SnapshotEnd1, ?UPR_FLAG_NOFLAG,
+    {ok, Markers1, SnapshotFailoverLog1} = couch_dcp_client:enum_docs_since(
+        Pid, 2, [{0, 0}], SnapshotStart1, SnapshotEnd1, ?DCP_FLAG_NOFLAG,
         TestSnapshotFun, []),
     ExpectedMarkers1 = [{SnapshotStart1, SnapshotEnd1,
-        ?UPR_SNAPSHOT_TYPE_DISK}],
+        ?DCP_SNAPSHOT_TYPE_DISK}],
     etap:is(Markers1, ExpectedMarkers1,
         "Received one on-disk snapshot marker"),
 
     SnapshotStart2 = num_docs() div (num_set_partitions() * 2),
     SnapshotEnd2 = num_docs() div num_set_partitions(),
-    {ok, Markers2, SnapshotFailoverLog2} = couch_upr_client:enum_docs_since(
+    {ok, Markers2, SnapshotFailoverLog2} = couch_dcp_client:enum_docs_since(
         Pid, 2, SnapshotFailoverLog1, SnapshotStart2, SnapshotEnd2,
-        ?UPR_FLAG_NOFLAG, TestSnapshotFun, []),
+        ?DCP_FLAG_NOFLAG, TestSnapshotFun, []),
     ExpectedMarkers2 = [{SnapshotStart2, SnapshotEnd2,
-        ?UPR_SNAPSHOT_TYPE_MEMORY}],
+        ?DCP_SNAPSHOT_TYPE_MEMORY}],
     etap:is(Markers2, ExpectedMarkers2,
         "Received one in-memory snapshot marker"),
 
@@ -179,26 +179,26 @@ test() ->
     TestAllFun = fun(Item, Acc) -> Acc ++ [Item] end,
 
     ItemsPerSnapshot = 30,
-    couch_upr_fake_server:set_items_per_snapshot(ItemsPerSnapshot),
+    couch_dcp_fake_server:set_items_per_snapshot(ItemsPerSnapshot),
     SnapshotStart3 = 0,
     SnapshotEnd3 = num_docs() div num_set_partitions(),
-    {ok, All3, SnapshotFailoverLog3} = couch_upr_client:enum_docs_since(
-        Pid, 2, [{0, 0}], SnapshotStart3, SnapshotEnd3, ?UPR_FLAG_NOFLAG,
+    {ok, All3, SnapshotFailoverLog3} = couch_dcp_client:enum_docs_since(
+        Pid, 2, [{0, 0}], SnapshotStart3, SnapshotEnd3, ?DCP_FLAG_NOFLAG,
         TestAllFun, []),
     Markers3 = [M || {snapshot_marker, M} <- All3],
-    ExpectedMarkers3 = [{0, ItemsPerSnapshot, ?UPR_SNAPSHOT_TYPE_DISK}] ++
+    ExpectedMarkers3 = [{0, ItemsPerSnapshot, ?DCP_SNAPSHOT_TYPE_DISK}] ++
         lists:map(fun(I) ->
             {I, min(I + ItemsPerSnapshot, SnapshotEnd3),
-                ?UPR_SNAPSHOT_TYPE_MEMORY}
+                ?DCP_SNAPSHOT_TYPE_MEMORY}
         end, lists:seq(ItemsPerSnapshot, SnapshotEnd3 - 1, ItemsPerSnapshot)),
     etap:is(Markers3, ExpectedMarkers3,
         "Received the expected snapshot markers"),
 
-    Mutations3 = [M || #upr_doc{} = M <- All3],
-    couch_upr_fake_server:set_items_per_snapshot(0),
+    Mutations3 = [M || #dcp_doc{} = M <- All3],
+    couch_dcp_fake_server:set_items_per_snapshot(0),
     {ok, ExpectedMutations3, SnapshotFailoverLog3} =
-            couch_upr_client:enum_docs_since(
-        Pid, 2, [{0, 0}], SnapshotStart3, SnapshotEnd3, ?UPR_FLAG_NOFLAG,
+            couch_dcp_client:enum_docs_since(
+        Pid, 2, [{0, 0}], SnapshotStart3, SnapshotEnd3, ?DCP_FLAG_NOFLAG,
         TestFun, []),
     etap:is(Mutations3, ExpectedMutations3,
         "Received the expected mutations within the several snapshots"),
@@ -208,45 +208,45 @@ test() ->
 
     ItemsPerSnapshot2 = 30,
     DupsPerSnapshot2 = 4,
-    couch_upr_fake_server:set_items_per_snapshot(ItemsPerSnapshot2),
-    couch_upr_fake_server:set_dups_per_snapshot(DupsPerSnapshot2),
+    couch_dcp_fake_server:set_items_per_snapshot(ItemsPerSnapshot2),
+    couch_dcp_fake_server:set_dups_per_snapshot(DupsPerSnapshot2),
     DupsStart2 = 0,
-    DupsEnd2 = couch_upr_fake_server:num_items_with_dups(
+    DupsEnd2 = couch_dcp_fake_server:num_items_with_dups(
         num_docs_pp(), ItemsPerSnapshot2, DupsPerSnapshot2),
 
-    {ok, AllDups2, DupsFailoverLog2} = couch_upr_client:enum_docs_since(
-        Pid, 2, [{0, 0}], DupsStart2, DupsEnd2, ?UPR_FLAG_NOFLAG,
+    {ok, AllDups2, DupsFailoverLog2} = couch_dcp_client:enum_docs_since(
+        Pid, 2, [{0, 0}], DupsStart2, DupsEnd2, ?DCP_FLAG_NOFLAG,
         TestAllFun, []),
-    DupsMutations2 = [M || #upr_doc{} = M <- AllDups2],
+    DupsMutations2 = [M || #dcp_doc{} = M <- AllDups2],
     DupsMarkers2 = [M || {snapshot_marker, M} <- AllDups2],
     etap:is(length(DupsMutations2), DupsEnd2,
         "received the expected number of mutations (incl. duplicates)"),
     etap:is(length(DupsMarkers2),
-        couch_upr_fake_server:ceil_div(DupsEnd2, ItemsPerSnapshot2),
+        couch_dcp_fake_server:ceil_div(DupsEnd2, ItemsPerSnapshot2),
         "received the expected number of snapshots"),
-    DupsUnique2 = lists:ukeysort(#upr_doc.id, DupsMutations2),
-    DupsUniqueIds2 = [Id || #upr_doc{id = Id} <- DupsUnique2],
-    MutationsIds2 = [Id || #upr_doc{id = Id} <- Mutations3],
+    DupsUnique2 = lists:ukeysort(#dcp_doc.id, DupsMutations2),
+    DupsUniqueIds2 = [Id || #dcp_doc{id = Id} <- DupsUnique2],
+    MutationsIds2 = [Id || #dcp_doc{id = Id} <- Mutations3],
     etap:is(DupsUniqueIds2, MutationsIds2,
         "received the expected mutations when de-duplicated"),
-    couch_upr_fake_server:set_items_per_snapshot(0),
-    couch_upr_fake_server:set_dups_per_snapshot(0),
+    couch_dcp_fake_server:set_items_per_snapshot(0),
+    couch_dcp_fake_server:set_dups_per_snapshot(0),
 
 
     % Test multiple streams in parallel
     {StreamReq0, {failoverlog, InitialFailoverLog0}} =
-        couch_upr_client:add_stream(
+        couch_dcp_client:add_stream(
             Pid, 0, first_uuid(InitialFailoverLog0), 10, 100,
-            ?UPR_FLAG_NOFLAG),
+            ?DCP_FLAG_NOFLAG),
 
     {StreamReq1, {failoverlog, InitialFailoverLog1}} =
-        couch_upr_client:add_stream(
+        couch_dcp_client:add_stream(
             Pid, 1, first_uuid(InitialFailoverLog1), 100, 200,
-            ?UPR_FLAG_NOFLAG),
+            ?DCP_FLAG_NOFLAG),
 
     {StreamReq2, {failoverlog, InitialFailoverLog2}} =
-        couch_upr_client:add_stream(
-            Pid, 2, first_uuid(InitialFailoverLog2), 0, 10, ?UPR_FLAG_NOFLAG),
+        couch_dcp_client:add_stream(
+            Pid, 2, first_uuid(InitialFailoverLog2), 0, 10, ?DCP_FLAG_NOFLAG),
 
     [MutationsPart0, MutationsPart1, MutationsPart2] = read_mutations(
                     Pid, [StreamReq0, StreamReq1, StreamReq2], [[], [], []]),
@@ -266,74 +266,74 @@ test() ->
     etap:is(length(MutationsPart2), 10,
         "Stream2 has 10 mutations"),
 
-    StreamList0 = couch_upr_client:list_streams(Pid),
+    StreamList0 = couch_dcp_client:list_streams(Pid),
     etap:is(StreamList0, [], "Stream list is empty"),
 
-    couch_upr_fake_server:pause_mutations(),
+    couch_dcp_fake_server:pause_mutations(),
     {StreamReq0_2, {failoverlog, InitialFailoverLog0}} =
-        couch_upr_client:add_stream(
-            Pid, 0, first_uuid(InitialFailoverLog0), 1, 100, ?UPR_FLAG_NOFLAG),
+        couch_dcp_client:add_stream(
+            Pid, 0, first_uuid(InitialFailoverLog0), 1, 100, ?DCP_FLAG_NOFLAG),
 
     {_, StreamResp0_3} =
-        couch_upr_client:add_stream(
+        couch_dcp_client:add_stream(
             Pid, 0, first_uuid(InitialFailoverLog0), 10, 100,
-            ?UPR_FLAG_NOFLAG),
+            ?DCP_FLAG_NOFLAG),
     etap:is(StreamResp0_3, {error,vbucket_stream_already_exists},
         "Stream for vbucket 0 already exists"),
-    couch_upr_fake_server:continue_mutations(),
+    couch_dcp_fake_server:continue_mutations(),
 
     % Drain all mutations
     read_mutations(Pid, [StreamReq0_2], [[]]),
 
-    couch_upr_fake_server:pause_mutations(),
-    couch_upr_client:add_stream(
-        Pid, 1, first_uuid(InitialFailoverLog1), 10, 300, ?UPR_FLAG_NOFLAG),
+    couch_dcp_fake_server:pause_mutations(),
+    couch_dcp_client:add_stream(
+        Pid, 1, first_uuid(InitialFailoverLog1), 10, 300, ?DCP_FLAG_NOFLAG),
 
-    couch_upr_client:add_stream(
-        Pid, 2, first_uuid(InitialFailoverLog2), 100, 200, ?UPR_FLAG_NOFLAG),
+    couch_dcp_client:add_stream(
+        Pid, 2, first_uuid(InitialFailoverLog2), 100, 200, ?DCP_FLAG_NOFLAG),
 
-    StreamList1 = couch_upr_client:list_streams(Pid),
+    StreamList1 = couch_dcp_client:list_streams(Pid),
     etap:is(StreamList1, [1,2], "Stream list contains parititon 1,2"),
 
-    StreamRemoveResp0 = couch_upr_client:remove_stream(Pid, 1),
-    StreamList2 = couch_upr_client:list_streams(Pid),
+    StreamRemoveResp0 = couch_dcp_client:remove_stream(Pid, 1),
+    StreamList2 = couch_dcp_client:list_streams(Pid),
     etap:is({StreamRemoveResp0, StreamList2}, {ok, [2]},
         "Removed parititon stream 1 and parition stream 2 is left"),
 
-    StreamRemoveResp1 = couch_upr_client:remove_stream(Pid, 1),
+    StreamRemoveResp1 = couch_dcp_client:remove_stream(Pid, 1),
     etap:is(StreamRemoveResp1, {error, vbucket_stream_not_found},
         "Correct error on trying to remove non-existing stream"),
-    couch_upr_fake_server:continue_mutations(),
+    couch_dcp_fake_server:continue_mutations(),
 
     % Test with too large failover log
     TooLargeFailoverLog = [{I, I} ||
-        I <- lists:seq(0, ?UPR_MAX_FAILOVER_LOG_SIZE)],
+        I <- lists:seq(0, ?DCP_MAX_FAILOVER_LOG_SIZE)],
     PartId = 1,
-    couch_upr_fake_server:set_failover_log(PartId, TooLargeFailoverLog),
-    TooLargeError = couch_upr_client:enum_docs_since(
-          Pid, PartId, [{0, 0}], 0, 100, ?UPR_FLAG_NOFLAG, TestFun, []),
+    couch_dcp_fake_server:set_failover_log(PartId, TooLargeFailoverLog),
+    TooLargeError = couch_dcp_client:enum_docs_since(
+          Pid, PartId, [{0, 0}], 0, 100, ?DCP_FLAG_NOFLAG, TestFun, []),
     etap:is(TooLargeError, {error, too_large_failover_log},
         "Too large failover log returns correct error"),
 
     gen_server:call(Pid, reset_buffer_size),
     % Remove existing streams
-    couch_upr_client:remove_stream(Pid, 0),
-    couch_upr_client:remove_stream(Pid, 1),
-    couch_upr_client:remove_stream(Pid, 2),
+    couch_dcp_client:remove_stream(Pid, 0),
+    couch_dcp_client:remove_stream(Pid, 1),
+    couch_dcp_client:remove_stream(Pid, 2),
 
 
     % Tests for flow control
-    couch_upr_fake_server:pause_mutations(),
+    couch_dcp_fake_server:pause_mutations(),
 
-    {StreamReq0_4, _} = couch_upr_client:add_stream(
-        Pid, 0, first_uuid(InitialFailoverLog0), 0, 500, ?UPR_FLAG_NOFLAG),
+    {StreamReq0_4, _} = couch_dcp_client:add_stream(
+        Pid, 0, first_uuid(InitialFailoverLog0), 0, 500, ?DCP_FLAG_NOFLAG),
 
     gen_server:call(Pid, reset_buffer_size),
-    Ret = couch_upr_fake_server:is_control_req(),
+    Ret = couch_dcp_fake_server:is_control_req(),
 
     etap:is(Ret, true, "Buffer control request sent"),
 
-    NumBufferAck = couch_upr_fake_server:get_num_buffer_acks(),
+    NumBufferAck = couch_dcp_fake_server:get_num_buffer_acks(),
 
     % Fill the client buffer by asking server to send 1024 bytes data
     try_until_throttled(Pid, StreamReq0_4, 1000, 1024),
@@ -341,7 +341,7 @@ test() ->
     % Consume 200 bytes from the client
     try_until_unthrottled(Pid, StreamReq0_4, 0, 200),
 
-    NumBufferAck2 = couch_upr_fake_server:get_num_buffer_acks(),
+    NumBufferAck2 = couch_dcp_fake_server:get_num_buffer_acks(),
     etap:is(NumBufferAck2, NumBufferAck, "Not sent the buffer ack"),
 
     % Consume More data so that is greater then 20 % of 1024 i.e.204.
@@ -349,123 +349,123 @@ test() ->
     % the flow control buffer.
     try_until_unthrottled(Pid, StreamReq0_4, 0, 200),
     timer:sleep(2),
-    NumBufferAck3 = couch_upr_fake_server:get_num_buffer_acks(),
+    NumBufferAck3 = couch_dcp_fake_server:get_num_buffer_acks(),
     etap:is(NumBufferAck3, NumBufferAck + 1, "Got the buffer ack"),
-    couch_upr_client:remove_stream(Pid, 0),
+    couch_dcp_client:remove_stream(Pid, 0),
 
-    couch_upr_fake_server:pause_mutations(),
-    {StreamReq1_2, _} = couch_upr_client:add_stream(
-        Pid, 1, first_uuid(InitialFailoverLog1), 0, 500, ?UPR_FLAG_NOFLAG),
+    couch_dcp_fake_server:pause_mutations(),
+    {StreamReq1_2, _} = couch_dcp_client:add_stream(
+        Pid, 1, first_uuid(InitialFailoverLog1), 0, 500, ?DCP_FLAG_NOFLAG),
 
     ReqPid = spawn(fun() ->
-        couch_upr_client:get_stream_event(Pid, StreamReq1_2)
+        couch_dcp_client:get_stream_event(Pid, StreamReq1_2)
         end),
 
-    EvResponse = couch_upr_client:get_stream_event(Pid, StreamReq1_2),
+    EvResponse = couch_dcp_client:get_stream_event(Pid, StreamReq1_2),
     etap:is(EvResponse, {error, event_request_already_exists},
         "Error message received when requested multiple times for same stream's event"),
 
     exit(ReqPid, shutdown),
-    couch_upr_client:remove_stream(Pid, 1),
+    couch_dcp_client:remove_stream(Pid, 1),
     gen_server:call(Pid, flush_old_streams_meta),
 
-    {StreamReq0_5, _} = couch_upr_client:add_stream(Pid, 2,
-        first_uuid(InitialFailoverLog2), 0, 500, ?UPR_FLAG_NOFLAG),
+    {StreamReq0_5, _} = couch_dcp_client:add_stream(Pid, 2,
+        first_uuid(InitialFailoverLog2), 0, 500, ?DCP_FLAG_NOFLAG),
 
-    ok = couch_upr_fake_server:send_single_mutation(),
-    {snapshot_mutation, Mutation1} = couch_upr_client:get_stream_event(Pid, StreamReq0_5),
-    #upr_doc{seq = SeqNo1} = Mutation1,
+    ok = couch_dcp_fake_server:send_single_mutation(),
+    {snapshot_mutation, Mutation1} = couch_dcp_client:get_stream_event(Pid, StreamReq0_5),
+    #dcp_doc{seq = SeqNo1} = Mutation1,
     OldSocket = gen_server:call(Pid, get_socket),
-    ok = couch_upr_fake_server:close_connection(2),
-    % wait for sometime to do reconnect from couch_upr client
+    ok = couch_dcp_fake_server:close_connection(2),
+    % wait for sometime to do reconnect from couch_dcp client
     timer:sleep(4000),
     NewSocket = gen_server:call(Pid, get_socket),
     etap:isnt(OldSocket, NewSocket, "Socket changed"),
-    ok = couch_upr_fake_server:send_single_mutation(),
-    {snapshot_mutation, Mutation2} = couch_upr_client:get_stream_event(Pid, StreamReq0_5),
-    #upr_doc{seq = SeqNo2} = Mutation2,
+    ok = couch_dcp_fake_server:send_single_mutation(),
+    {snapshot_mutation, Mutation2} = couch_dcp_client:get_stream_event(Pid, StreamReq0_5),
+    #dcp_doc{seq = SeqNo2} = Mutation2,
     etap:is(SeqNo1+1, SeqNo2, "Got the correct mutation after connection close"),
 
     receive_mutation(10, Pid, StreamReq0_5),
-    ok = couch_upr_fake_server:close_connection(2),
-    % wait for sometime to do reconnect from couch_upr client
+    ok = couch_dcp_fake_server:close_connection(2),
+    % wait for sometime to do reconnect from couch_dcp client
     timer:sleep(4000),
-    couch_upr_fake_server:send_single_mutation(),
-    {snapshot_mutation, Mutation3} = couch_upr_client:get_stream_event(Pid, StreamReq0_5),
-    #upr_doc{seq = SeqNo3} = Mutation3,
+    couch_dcp_fake_server:send_single_mutation(),
+    {snapshot_mutation, Mutation3} = couch_dcp_client:get_stream_event(Pid, StreamReq0_5),
+    #dcp_doc{seq = SeqNo3} = Mutation3,
     etap:is(SeqNo2+11, SeqNo3, "Got the correct mutation after connection close"),
 
-    couch_upr_client:remove_stream(Pid, 2),
-    couch_upr_fake_server:continue_mutations(),
+    couch_dcp_client:remove_stream(Pid, 2),
+    couch_dcp_fake_server:continue_mutations(),
 
     % Test get_num_items
 
-    {ok, NumItems0} = couch_upr_client:get_num_items(Pid, 0),
+    {ok, NumItems0} = couch_dcp_client:get_num_items(Pid, 0),
     etap:is(NumItems0, num_docs() div num_set_partitions(),
         "Number of items of partition 0 is correct"),
-    {ok, NumItems1} = couch_upr_client:get_num_items(Pid, 1),
+    {ok, NumItems1} = couch_dcp_client:get_num_items(Pid, 1),
     etap:is(NumItems1, num_docs() div num_set_partitions(),
         "Number of items of partition 1 is correct"),
-    {ok, NumItems2} = couch_upr_client:get_num_items(Pid, 2),
+    {ok, NumItems2} = couch_dcp_client:get_num_items(Pid, 2),
     etap:is(NumItems2, num_docs() div num_set_partitions(),
          "Number of items of partition 2 is correct"),
-    {ok, NumItems3} = couch_upr_client:get_num_items(Pid, 3),
+    {ok, NumItems3} = couch_dcp_client:get_num_items(Pid, 3),
     etap:is(NumItems3, num_docs() div num_set_partitions(),
         "Number of items of partition 3 is correct"),
-    NumItemsError = couch_upr_client:get_num_items(Pid, 100000),
+    NumItemsError = couch_dcp_client:get_num_items(Pid, 100000),
     etap:is(NumItemsError, {error, not_my_vbucket},
         "Too high partition number returns correct error"),
 
     DocsPerPartition = num_docs() div num_set_partitions(),
     NumDelDocs0 = num_docs() div (num_set_partitions() * 2),
     delete_docs(1, NumDelDocs0),
-    {ok, NumItemsDel0} = couch_upr_client:get_num_items(Pid, 0),
+    {ok, NumItemsDel0} = couch_dcp_client:get_num_items(Pid, 0),
     etap:is(NumItemsDel0, DocsPerPartition - NumItemsDel0,
         "Number of items of partition 0 after some deletions is correct"),
     NumDelDocs3 = num_docs() div (num_set_partitions() * 4),
     delete_docs(3 * DocsPerPartition + 1, NumDelDocs3),
-    {ok, NumItemsDel3} = couch_upr_client:get_num_items(Pid, 3),
+    {ok, NumItemsDel3} = couch_dcp_client:get_num_items(Pid, 3),
     etap:is(NumItemsDel3, DocsPerPartition - NumDelDocs3,
         "Number of items of partition 3 after some deletions is correct"),
 
     % Tests for requesting persisted items only
 
-    couch_upr_fake_server:set_persisted_items_fun(fun(Seq) -> Seq  end),
-    {ok, [HighSeq1]} = couch_upr_client:get_sequence_numbers(Pid, [1]),
+    couch_dcp_fake_server:set_persisted_items_fun(fun(Seq) -> Seq  end),
+    {ok, [HighSeq1]} = couch_dcp_client:get_sequence_numbers(Pid, [1]),
     {ok, ExpectedDocs1, _} =
-        couch_upr_client:enum_docs_since(
-            Pid, 0, InitialFailoverLog0, 0, HighSeq1, ?UPR_FLAG_NOFLAG,
+        couch_dcp_client:enum_docs_since(
+            Pid, 0, InitialFailoverLog0, 0, HighSeq1, ?DCP_FLAG_NOFLAG,
             TestFun, []),
     {ok, PersistedDocs1, _} =
-        couch_upr_client:enum_docs_since(
-            Pid, 0, InitialFailoverLog0, 0, HighSeq1, ?UPR_FLAG_DISKONLY,
+        couch_dcp_client:enum_docs_since(
+            Pid, 0, InitialFailoverLog0, 0, HighSeq1, ?DCP_FLAG_DISKONLY,
             TestFun, []),
     etap:is(PersistedDocs1, ExpectedDocs1,
         "The persisted sequence number is correct, seq"),
 
-    couch_upr_fake_server:set_persisted_items_fun(
+    couch_dcp_fake_server:set_persisted_items_fun(
        fun(Seq) -> Seq div 2 end),
-    {ok, [HighSeq2]} = couch_upr_client:get_sequence_numbers(Pid, [1]),
+    {ok, [HighSeq2]} = couch_dcp_client:get_sequence_numbers(Pid, [1]),
     {ok, ExpectedDocs2, _} =
-        couch_upr_client:enum_docs_since(
-            Pid, 0, InitialFailoverLog0, 0, HighSeq2 div 2, ?UPR_FLAG_NOFLAG,
+        couch_dcp_client:enum_docs_since(
+            Pid, 0, InitialFailoverLog0, 0, HighSeq2 div 2, ?DCP_FLAG_NOFLAG,
             TestFun, []),
     {ok, PersistedDocs2, _} =
-        couch_upr_client:enum_docs_since(
-            Pid, 0, InitialFailoverLog0, 0, HighSeq2, ?UPR_FLAG_DISKONLY,
+        couch_dcp_client:enum_docs_since(
+            Pid, 0, InitialFailoverLog0, 0, HighSeq2, ?DCP_FLAG_DISKONLY,
             TestFun, []),
     etap:is(PersistedDocs2, ExpectedDocs2,
         "The persisted sequence number is correct, seq/2"),
 
-    couch_upr_fake_server:set_persisted_items_fun(fun(Seq) -> Seq - 1 end),
-    {ok, [HighSeq3]} = couch_upr_client:get_sequence_numbers(Pid, [1]),
+    couch_dcp_fake_server:set_persisted_items_fun(fun(Seq) -> Seq - 1 end),
+    {ok, [HighSeq3]} = couch_dcp_client:get_sequence_numbers(Pid, [1]),
     {ok, ExpectedDocs3, _} =
-        couch_upr_client:enum_docs_since(
-            Pid, 0, InitialFailoverLog0, 0, HighSeq3 - 1, ?UPR_FLAG_NOFLAG,
+        couch_dcp_client:enum_docs_since(
+            Pid, 0, InitialFailoverLog0, 0, HighSeq3 - 1, ?DCP_FLAG_NOFLAG,
             TestFun, []),
     {ok, PersistedDocs3, _} =
-        couch_upr_client:enum_docs_since(
-            Pid, 0, InitialFailoverLog0, 0, HighSeq3, ?UPR_FLAG_DISKONLY,
+        couch_dcp_client:enum_docs_since(
+            Pid, 0, InitialFailoverLog0, 0, HighSeq3, ?DCP_FLAG_DISKONLY,
             TestFun, []),
     etap:is(PersistedDocs3, ExpectedDocs3,
         "The persisted sequence number is correct, seq - 1"),
@@ -474,7 +474,7 @@ test() ->
     ok.
 
 try_until_throttled(Pid, ReqId, N, MaxSize) when N > 0 ->
-    ok = couch_upr_fake_server:send_single_mutation(),
+    ok = couch_dcp_fake_server:send_single_mutation(),
     timer:sleep(1),
     Size2 = gen_server:call(Pid, {get_buffer_size, ReqId}),
     if 
@@ -485,7 +485,7 @@ try_until_throttled(Pid, ReqId, N, MaxSize) when N > 0 ->
     end.
 
 try_until_unthrottled(Pid, ReqId, Size, MaxSize) ->
-    Data = couch_upr_client:get_stream_event(Pid, ReqId),
+    Data = couch_dcp_client:get_stream_event(Pid, ReqId),
     Size2 = Size + get_event_size(Data), 
     if
     Size2 < MaxSize ->
@@ -500,13 +500,13 @@ setup_test() ->
     populate_set().
 
 is_same_partition(PartId, Docs) ->
-    lists:all(fun({_, #upr_doc{partition = P}}) ->
+    lists:all(fun({_, #dcp_doc{partition = P}}) ->
         P =:= PartId
     end, Docs).
 
 read_streams(Pid, StreamReqs) ->
     lists:foldr(fun(Request, Acc) ->
-        case couch_upr_client:get_stream_event(Pid, Request) of
+        case couch_dcp_client:get_stream_event(Pid, Request) of
         {error, vbucket_stream_not_found} ->
             [drained | Acc];
         {Optype, _} = Item ->
@@ -615,25 +615,25 @@ first_uuid(FailoverLog) ->
 receive_mutation(0, _, _) ->
     ok;
 receive_mutation(Count, Pid, Stream) ->
-    couch_upr_fake_server:send_single_mutation(),
-    couch_upr_client:get_stream_event(Pid, Stream),
+    couch_dcp_fake_server:send_single_mutation(),
+    couch_dcp_client:get_stream_event(Pid, Stream),
     receive_mutation(Count - 1, Pid, Stream).
 
 get_event_size({Type, Doc}) ->
     case Type of
         snapshot_mutation ->
-            #upr_doc {
+            #dcp_doc {
                 id = Key,
                 body = Value
             } = Doc,
-            ?UPR_MSG_SIZE_MUTATION + erlang:external_size(Key) + erlang:external_size(Value);
+            ?DCP_MSG_SIZE_MUTATION + erlang:external_size(Key) + erlang:external_size(Value);
         stream_end ->
-            ?UPR_MSG_SIZE_STREAM_END;
+            ?DCP_MSG_SIZE_STREAM_END;
         snapshot_marker ->
-            ?UPR_MSG_SIZE_SNAPSHOT;
+            ?DCP_MSG_SIZE_SNAPSHOT;
         snapshot_deletion ->
-            #upr_doc {
+            #dcp_doc {
                 id = Key
             } = Doc,
-           ?UPR_MSG_SIZE_DELETION + erlang:external_size(Key)
+           ?DCP_MSG_SIZE_DELETION + erlang:external_size(Key)
     end.

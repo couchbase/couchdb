@@ -90,8 +90,8 @@ src/couch_set_view/test/run
 src/couch_index_merger/ebin/
 src/couch_view_parser/test/run
 src/mapreduce/test/run
-src/couch_upr/ebin/
-src/couch_upr/test/run
+src/couch_dcp/ebin/
+src/couch_dcp/test/run
 test/local.ini
 test/etap/.deps/
 test/etap/run

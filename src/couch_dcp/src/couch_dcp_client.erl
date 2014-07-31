@@ -10,7 +10,7 @@
 % License for the specific language governing permissions and limitations under
 % the License.
 
--module(couch_upr_client).
+-module(couch_dcp_client).
 -behaviour(gen_server).
 
 % Public API
@@ -26,12 +26,12 @@
 -export([format_status/2]).
 
 -include("couch_db.hrl").
--include_lib("couch_upr/include/couch_upr.hrl").
--include_lib("couch_upr/include/couch_upr_typespecs.hrl").
+-include_lib("couch_dcp/include/couch_dcp.hrl").
+-include_lib("couch_dcp/include/couch_dcp_typespecs.hrl").
 -define(MAX_BUF_SIZE, 10485760).
 -define(TIMEOUT, 60000).
 -define(TIMEOUT_STATS, 2000).
--define(UPR_RETRY_TIMEOUT, 2000).
+-define(DCP_RETRY_TIMEOUT, 2000).
 
 -type mutations_fold_fun() :: fun().
 -type mutations_fold_acc() :: any().
@@ -59,10 +59,10 @@
     flags = 0                       :: non_neg_integer()
 }).
 
-% This gen server implements a UPR client with vbucket stream multiplexing
+% This gen server implements a DCP client with vbucket stream multiplexing
 % The client spawns a worker process to handle all response messages and event
-% messages received from the UPR server. For easiness, responses are classifed into
-% two types of messages, stream_response and stream_event. For any UPR request, the
+% messages received from the DCP server. For easiness, responses are classifed into
+% two types of messages, stream_response and stream_event. For any DCP request, the
 % corresponding response message is called stream_response. But a vbucket stream request
 % is like a subscribe mechanism. After the stream initated response arrives, it will start
 % sending vbucket events. This type of messages are called as stream_event.
@@ -79,7 +79,7 @@ start(Name, Bucket, AdmUser, AdmPasswd, BufferSize) ->
     gen_server:start_link(?MODULE, [Name, Bucket, AdmUser, AdmPasswd, BufferSize], []).
 
 -spec add_stream(pid(), partition_id(), uuid(), update_seq(),
-    update_seq(), upr_data_type()) -> {request_id(), term()}.
+    update_seq(), dcp_data_type()) -> {request_id(), term()}.
 add_stream(Pid, PartId, PartUuid, StartSeq, EndSeq, Flags) ->
     gen_server:call(
         Pid, {add_stream, PartId, PartUuid, StartSeq, EndSeq, Flags}, ?TIMEOUT).
@@ -102,7 +102,7 @@ get_stats_reply(Pid, MRef) ->
     {get_stats, MRef, Reply} ->
         Reply;
     {'DOWN', MRef, process, Pid, Reason} ->
-        exit({upr_client_died, Pid, Reason})
+        exit({dcp_client_died, Pid, Reason})
     after ?TIMEOUT_STATS ->
         ?LOG_ERROR("dcp client (~p): vbucket-seqno stats timed out after ~p seconds."
                    " Waiting...",
@@ -176,20 +176,20 @@ get_num_items(Pid, PartId) ->
         {_, NumItems} = lists:keyfind(
             <<"vb_", BinPartId/binary, ":num_items">>, 1, Stats),
         {ok, list_to_integer(binary_to_list(NumItems))};
-    {error, {?UPR_STATUS_NOT_MY_VBUCKET, _}} ->
+    {error, {?DCP_STATUS_NOT_MY_VBUCKET, _}} ->
         {error, not_my_vbucket}
     end.
 
 
 -spec get_failover_log(pid(), partition_id()) ->
-                              {error, no_failover_log_found | upr_status()} |
+                              {error, no_failover_log_found | dcp_status()} |
                               {ok, partition_version()}.
 get_failover_log(Pid, PartId) ->
     gen_server:call(Pid, {get_failover_log, PartId}).
 
 
 -spec get_stream_event(pid(), request_id()) ->
-                              {atom(), #upr_doc{}} | {'error', term()}.
+                              {atom(), #dcp_doc{}} | {'error', term()}.
 get_stream_event(Pid, ReqId) ->
     MRef = erlang:monitor(process, Pid),
     Pid ! {get_stream_event, ReqId, self()},
@@ -202,7 +202,7 @@ get_stream_event_get_reply(Pid, ReqId, MRef) ->
     {stream_event, ReqId, Reply} ->
         Reply;
     {'DOWN', MRef, process, Pid, Reason} ->
-        exit({upr_client_died, Pid, Reason})
+        exit({dcp_client_died, Pid, Reason})
     after ?TIMEOUT ->
         Msg = {print_log, ReqId},
         Pid ! Msg,
@@ -240,7 +240,7 @@ enum_docs_since(Pid, PartId, PartVersions, StartSeq, EndSeq0, Flags,
         Pid, PartId, PartUuid, StartSeq, EndSeq, Flags),
     case Resp of
     {failoverlog, FailoverLog} ->
-        case length(FailoverLog) > ?UPR_MAX_FAILOVER_LOG_SIZE of
+        case length(FailoverLog) > ?DCP_MAX_FAILOVER_LOG_SIZE of
         true ->
             {error, too_large_failover_log};
         false ->
@@ -267,14 +267,14 @@ enum_docs_since(Pid, PartId, PartVersions, StartSeq, EndSeq0, Flags,
 -spec init([binary() | non_neg_integer()]) -> {ok, #state{}} |
                     {stop, sasl_auth_failed | closed | inet:posix()}.
 init([Name, Bucket, AdmUser, AdmPasswd, BufferSize]) ->
-    UprTimeout = list_to_integer(
+    DcpTimeout = list_to_integer(
         couch_config:get("dcp", "connection_timeout")),
-    UprPort = list_to_integer(couch_config:get("dcp", "port")),
-    {ok, Socket} = gen_tcp:connect("localhost", UprPort,
+    DcpPort = list_to_integer(couch_config:get("dcp", "port")),
+    {ok, Socket} = gen_tcp:connect("localhost", DcpPort,
         [binary, {packet, raw}, {active, false}, {nodelay, true}]),
     State = #state{
         socket = Socket,
-        timeout = UprTimeout,
+        timeout = DcpTimeout,
         request_id = 0
     },
 
@@ -291,7 +291,7 @@ init([Name, Bucket, AdmUser, AdmPasswd, BufferSize]) ->
                 Parent = self(),
                 process_flag(trap_exit, true),
                 WorkerPid = spawn_link(
-                    fun() -> receive_worker(Socket, UprTimeout, Parent, []) end),
+                    fun() -> receive_worker(Socket, DcpTimeout, Parent, []) end),
                 case set_buffer_size(State5, BufferSize) of
                 {ok, State6} ->
                     {ok, State6#state{worker_pid = WorkerPid}};
@@ -331,7 +331,7 @@ handle_call({remove_stream, PartId}, From, State) ->
        request_id = RequestId,
        socket = Socket
     } = State2,
-    StreamCloseRequest = couch_upr_consumer:encode_stream_close(
+    StreamCloseRequest = couch_dcp_consumer:encode_stream_close(
         PartId, RequestId),
     case gen_tcp:send(Socket, StreamCloseRequest) of
     ok ->
@@ -354,7 +354,7 @@ handle_call({get_failover_log, PartId}, From, State) ->
        request_id = RequestId,
        socket = Socket
     } = State,
-    FailoverLogRequest = couch_upr_consumer:encode_failover_log_request(
+    FailoverLogRequest = couch_dcp_consumer:encode_failover_log_request(
         PartId, RequestId),
     case gen_tcp:send(Socket, FailoverLogRequest) of
     ok ->
@@ -437,7 +437,7 @@ handle_info({get_stats, Stat, PartId, From}, State) ->
        request_id = RequestId,
        socket = Socket
     } = State,
-    SeqStatRequest = couch_upr_consumer:encode_stat_request(
+    SeqStatRequest = couch_dcp_consumer:encode_stat_request(
         Stat, PartId, RequestId),
     case gen_tcp:send(Socket, SeqStatRequest) of
     ok ->
@@ -504,7 +504,7 @@ handle_info({stream_noop, RequestId}, State) ->
     #state {
         socket = Socket
     } = State,
-    NoOpResponse = couch_upr_consumer:encode_noop_response(RequestId),
+    NoOpResponse = couch_dcp_consumer:encode_noop_response(RequestId),
     % if noop reponse fails two times, server it self will close the connection
     gen_tcp:send(Socket, NoOpResponse),
     {noreply, State};
@@ -561,9 +561,9 @@ handle_info({stream_event, RequestId, Event}, State) ->
 handle_info({'EXIT', Pid, {conn_error, Reason}}, #state{worker_pid = Pid} = State) ->
     [Name, Bucket, _AdmUser, _AdmPasswd, _BufferSize] = State#state.args,
     ?LOG_ERROR("dcp client (~s, ~s): dcp receive worker failed due to reason: ~p."
-        " Restarting upr receive worker...",
+        " Restarting dcp receive worker...",
         [Bucket, Name, Reason]),
-    timer:sleep(?UPR_RETRY_TIMEOUT),
+    timer:sleep(?DCP_RETRY_TIMEOUT),
     restart_worker(State);
 
 handle_info({'EXIT', Pid, Reason}, #state{worker_pid = Pid} = State) ->
@@ -620,24 +620,24 @@ format_status(_Opt, [_PDict, #state{stream_queues = StreamQueues} = State]) ->
 sasl_auth(User, Passwd, State) ->
     #state{
         socket = Socket,
-        timeout = UprTimeout,
+        timeout = DcpTimeout,
         request_id = RequestId
     } = State,
-    Authenticate = couch_upr_consumer:encode_sasl_auth(User, Passwd, RequestId),
+    Authenticate = couch_dcp_consumer:encode_sasl_auth(User, Passwd, RequestId),
     case gen_tcp:send(Socket, Authenticate) of
     ok ->
-        case socket_recv(Socket, ?UPR_HEADER_LEN, UprTimeout) of
+        case socket_recv(Socket, ?DCP_HEADER_LEN, DcpTimeout) of
         {ok, Header} ->
             {sasl_auth, Status, RequestId, BodyLength} =
-                couch_upr_consumer:parse_header(Header),
+                couch_dcp_consumer:parse_header(Header),
             % Receive the body so that it is not mangled with the next request,
             % we care about the status only though
-            case socket_recv(Socket, BodyLength, UprTimeout) of
+            case socket_recv(Socket, BodyLength, DcpTimeout) of
             {ok, _} ->
                 case Status of
-                ?UPR_STATUS_OK ->
+                ?DCP_STATUS_OK ->
                     {ok, State#state{request_id = RequestId + 1}};
-                ?UPR_STATUS_SASL_AUTH_FAILED ->
+                ?DCP_STATUS_SASL_AUTH_FAILED ->
                     {error, sasl_auth_failed}
                 end;
             {error, _} = Error ->
@@ -654,22 +654,22 @@ sasl_auth(User, Passwd, State) ->
 select_bucket(Bucket, State) ->
     #state{
         socket = Socket,
-        timeout = UprTimeout,
+        timeout = DcpTimeout,
         request_id = RequestId
     } = State,
-    SelectBucket = couch_upr_consumer:encode_select_bucket(Bucket, RequestId),
+    SelectBucket = couch_dcp_consumer:encode_select_bucket(Bucket, RequestId),
     case gen_tcp:send(Socket, SelectBucket) of
     ok ->
-        case socket_recv(Socket, ?UPR_HEADER_LEN, UprTimeout) of
+        case socket_recv(Socket, ?DCP_HEADER_LEN, DcpTimeout) of
         {ok, Header} ->
             {select_bucket, Status, RequestId, BodyLength} =
-                                    couch_upr_consumer:parse_header(Header),
+                                    couch_dcp_consumer:parse_header(Header),
             case Status of
-            ?UPR_STATUS_OK ->
+            ?DCP_STATUS_OK ->
                 {ok, State#state{request_id = RequestId + 1}};
             _ ->
                 case parse_error_response(
-                        Socket, UprTimeout, BodyLength, Status) of
+                        Socket, DcpTimeout, BodyLength, Status) of
                 % When the authentication happened with bucket name and
                 % password, then the correct bucket is already selected. In
                 % this case a select bucket command returns "not supported".
@@ -690,16 +690,16 @@ select_bucket(Bucket, State) ->
 open_connection(Name, State) ->
     #state{
         socket = Socket,
-        timeout = UprTimeout,
+        timeout = DcpTimeout,
         request_id = RequestId
     } = State,
-    OpenConnection = couch_upr_consumer:encode_open_connection(
+    OpenConnection = couch_dcp_consumer:encode_open_connection(
         Name, RequestId),
     case gen_tcp:send(Socket, OpenConnection) of
     ok ->
-        case socket_recv(Socket, ?UPR_HEADER_LEN, UprTimeout) of
+        case socket_recv(Socket, ?DCP_HEADER_LEN, DcpTimeout) of
         {ok, Header} ->
-            {open_connection, RequestId} = couch_upr_consumer:parse_header(Header),
+            {open_connection, RequestId} = couch_dcp_consumer:parse_header(Header),
             {ok, next_request_id(State)};
         {error, _} = Error ->
             Error
@@ -717,21 +717,21 @@ receive_snapshot_marker(Socket, Timeout, BodyLength) ->
     case socket_recv(Socket, BodyLength, Timeout) of
     {ok, Body} ->
          {snapshot_marker, StartSeq, EndSeq, Type} =
-             couch_upr_consumer:parse_snapshot_marker(Body),
+             couch_dcp_consumer:parse_snapshot_marker(Body),
          {ok, {StartSeq, EndSeq, Type}};
     {error, _} = Error ->
         Error
     end.
 
 -spec receive_snapshot_mutation(socket(), timeout(), partition_id(), size(),
-                                size(), size(), uint64(), upr_data_type()) ->
-                                       #upr_doc{} | {error, closed}.
+                                size(), size(), uint64(), dcp_data_type()) ->
+                                       #dcp_doc{} | {error, closed}.
 receive_snapshot_mutation(Socket, Timeout, PartId, KeyLength, BodyLength,
         ExtraLength, Cas, DataType) ->
     case socket_recv(Socket, BodyLength, Timeout) of
     {ok, Body} ->
          {snapshot_mutation, Mutation} =
-             couch_upr_consumer:parse_snapshot_mutation(KeyLength, Body,
+             couch_dcp_consumer:parse_snapshot_mutation(KeyLength, Body,
                  BodyLength, ExtraLength),
          #mutation{
              seq = Seq,
@@ -741,7 +741,7 @@ receive_snapshot_mutation(Socket, Timeout, PartId, KeyLength, BodyLength,
              key = Key,
              value = Value
          } = Mutation,
-         #upr_doc{
+         #dcp_doc{
              id = Key,
              body = Value,
              data_type = DataType,
@@ -758,17 +758,17 @@ receive_snapshot_mutation(Socket, Timeout, PartId, KeyLength, BodyLength,
     end.
 
 -spec receive_snapshot_deletion(socket(), timeout(), partition_id(), size(),
-                                size(), uint64(), upr_data_type()) ->
-                                       #upr_doc{} |
+                                size(), uint64(), dcp_data_type()) ->
+                                       #dcp_doc{} |
                                        {error, closed | inet:posix()}.
 receive_snapshot_deletion(Socket, Timeout, PartId, KeyLength, BodyLength,
         Cas, DataType) ->
     case socket_recv(Socket, BodyLength, Timeout) of
     {ok, Body} ->
          {snapshot_deletion, Deletion} =
-             couch_upr_consumer:parse_snapshot_deletion(KeyLength, Body),
+             couch_dcp_consumer:parse_snapshot_deletion(KeyLength, Body),
          {Seq, RevSeq, Key, _Metadata} = Deletion,
-         #upr_doc{
+         #dcp_doc{
              id = Key,
              body = <<>>,
              data_type = DataType,
@@ -803,10 +803,10 @@ receive_failover_log(_Socket, _Timeout, _Status, 0) ->
     {error, no_failover_log_found};
 receive_failover_log(Socket, Timeout, Status, BodyLength) ->
     case Status of
-    ?UPR_STATUS_OK ->
+    ?DCP_STATUS_OK ->
         case socket_recv(Socket, BodyLength, Timeout) of
         {ok, Body} ->
-            couch_upr_consumer:parse_failover_log(Body);
+            couch_dcp_consumer:parse_failover_log(Body);
         {error, _} = Error->
             Error
         end;
@@ -818,21 +818,21 @@ receive_failover_log(Socket, Timeout, Status, BodyLength) ->
                   {ok, update_seq()} | {error, closed | inet:posix()}.
 receive_rollback_seq(Socket, Timeout, BodyLength) ->
     case socket_recv(Socket, BodyLength, Timeout) of
-    {ok, <<RollbackSeq:?UPR_SIZES_BY_SEQ>>} ->
+    {ok, <<RollbackSeq:?DCP_SIZES_BY_SEQ>>} ->
         {ok, RollbackSeq};
     {error, _} = Error->
         Error
     end.
 
 
--spec receive_stat(socket(), timeout(), upr_status(), size(), size()) ->
+-spec receive_stat(socket(), timeout(), dcp_status(), size(), size()) ->
                           {ok, {binary(), binary()} |
-                           {error, {upr_status(), binary()}}} |
+                           {error, {dcp_status(), binary()}}} |
                           {error, closed}.
 receive_stat(Socket, Timeout, Status, BodyLength, KeyLength) ->
     case socket_recv(Socket, BodyLength, Timeout) of
     {ok, Body} ->
-        couch_upr_consumer:parse_stat(
+        couch_dcp_consumer:parse_stat(
             Body, Status, KeyLength, BodyLength - KeyLength);
     {error, Reason} ->
         {error, Reason}
@@ -895,7 +895,7 @@ find_pending_request(State, RequestId) ->
 -spec next_request_id(#state{}) -> #state{}.
 next_request_id(#state{request_id = RequestId} = State) ->
     RequestId2 = case RequestId of
-    Id when Id + 1 < (1 bsl ?UPR_SIZES_OPAQUE) ->
+    Id when Id + 1 < (1 bsl ?DCP_SIZES_OPAQUE) ->
         Id + 1;
     _ ->
         0
@@ -1049,17 +1049,17 @@ parse_error_response(Socket, Timeout, BodyLength, Status) ->
     case socket_recv(Socket, BodyLength, Timeout) of
     {ok, _} ->
         case Status of
-        ?UPR_STATUS_KEY_NOT_FOUND ->
+        ?DCP_STATUS_KEY_NOT_FOUND ->
             {error, vbucket_stream_not_found};
-        ?UPR_STATUS_ERANGE ->
+        ?DCP_STATUS_ERANGE ->
             {error, wrong_start_sequence_number};
-        ?UPR_STATUS_KEY_EEXISTS ->
+        ?DCP_STATUS_KEY_EEXISTS ->
             {error, vbucket_stream_already_exists};
-        ?UPR_STATUS_NOT_MY_VBUCKET ->
+        ?DCP_STATUS_NOT_MY_VBUCKET ->
             {error, server_not_my_vbucket};
-        ?UPR_STATUS_TMP_FAIL ->
+        ?DCP_STATUS_TMP_FAIL ->
             {error, vbucket_stream_tmp_fail};
-        ?UPR_STATUS_NOT_SUPPORTED ->
+        ?DCP_STATUS_NOT_SUPPORTED ->
             {error, not_supported};
         _ ->
             {error, {status, Status}}
@@ -1069,24 +1069,24 @@ parse_error_response(Socket, Timeout, BodyLength, Status) ->
     end.
 
 
-% The worker process for handling upr connection downstream pipe
+% The worker process for handling dcp connection downstream pipe
 % Read and parse downstream messages and send to the gen_server process
 -spec receive_worker(socket(), timeout(), pid(), list()) -> closed | inet:posix().
 receive_worker(Socket, Timeout, Parent, MsgAcc0) ->
-    case socket_recv(Socket, ?UPR_HEADER_LEN, infinity) of
+    case socket_recv(Socket, ?DCP_HEADER_LEN, infinity) of
     {ok, Header} ->
         {Action, MsgAcc} =
-        case couch_upr_consumer:parse_header(Header) of
+        case couch_dcp_consumer:parse_header(Header) of
         {control_request, Status, RequestId} ->
             {done, {stream_response, RequestId, {RequestId, Status}}};
         {noop_request, RequestId} ->
             {done, {stream_noop, RequestId}};
         {buffer_ack, Status, _RequestId} ->
-            Status = ?UPR_STATUS_OK,
+            Status = ?DCP_STATUS_OK,
             {true, []};
         {stream_request, Status, RequestId, BodyLength} ->
             Response = case Status of
-            ?UPR_STATUS_OK ->
+            ?DCP_STATUS_OK ->
                 case receive_failover_log(
                      Socket, Timeout, Status, BodyLength) of
                 {ok, FailoverLog} ->
@@ -1094,7 +1094,7 @@ receive_worker(Socket, Timeout, Parent, MsgAcc0) ->
                 Error ->
                     Error
                 end;
-            ?UPR_STATUS_ROLLBACK ->
+            ?DCP_STATUS_ROLLBACK ->
                 case receive_rollback_seq(
                      Socket, Timeout, BodyLength) of
                 {ok, RollbackSeq} ->
@@ -1111,7 +1111,7 @@ receive_worker(Socket, Timeout, Parent, MsgAcc0) ->
             {done, {stream_response, RequestId, Response}};
         {stream_close, Status, RequestId, BodyLength} ->
             Response = case Status of
-            ?UPR_STATUS_OK ->
+            ?DCP_STATUS_OK ->
                 ok;
             _ ->
                 parse_error_response(Socket, Timeout, BodyLength, Status)
@@ -1121,7 +1121,7 @@ receive_worker(Socket, Timeout, Parent, MsgAcc0) ->
             case BodyLength of
             0 ->
                 case Status of
-                ?UPR_STATUS_OK ->
+                ?DCP_STATUS_OK ->
                     StatAcc = lists:reverse(MsgAcc0),
                     {done, {stream_response, RequestId, {ok, StatAcc}}};
                 % Some errors might not contain a body
@@ -1196,10 +1196,10 @@ check_and_send_buffer_ack(State, RequestId, Event, Type) ->
     mutation ->
         Size + get_event_size(Event)
     end,
-    MaxAckSize = MaxBufSize * ?UPR_BUFFER_ACK_THRESHOLD,
+    MaxAckSize = MaxBufSize * ?DCP_BUFFER_ACK_THRESHOLD,
     {Status, Ret} = if
     Size2 > MaxAckSize ->
-        BufferAckRequest = couch_upr_consumer:encode_buffer_request(0, Size2),
+        BufferAckRequest = couch_dcp_consumer:encode_buffer_request(0, Size2),
         case gen_tcp:send(Socket, BufferAckRequest) of
         ok ->
             {ok, 0};
@@ -1230,7 +1230,7 @@ send_buffer_ack(State) ->
        socket = Socket,
         total_buffer_size = Size
     } = State,
-    BufferAckRequest = couch_upr_consumer:encode_buffer_request(0, Size),
+    BufferAckRequest = couch_dcp_consumer:encode_buffer_request(0, Size),
     case gen_tcp:send(Socket, BufferAckRequest) of
     ok ->
         {ok, State#state{total_buffer_size = 0}};
@@ -1246,7 +1246,7 @@ set_buffer_size(State, Size) ->
         socket = Socket,
         request_id = RequestId
     } = State,
-    ControlRequest = couch_upr_consumer:encode_control_request(RequestId, connection, Size),
+    ControlRequest = couch_dcp_consumer:encode_control_request(RequestId, connection, Size),
     case gen_tcp:send(Socket, ControlRequest) of
     ok ->
         State2 = next_request_id(State),
@@ -1267,9 +1267,9 @@ get_queue_size(EvQueue, Size) ->
         get_queue_size(NewQueue, Size2)
     end.
 
--spec get_event_size({atom(), #upr_doc{}, non_neg_integer()}) -> non_neg_integer().
+-spec get_event_size({atom(), #dcp_doc{}, non_neg_integer()}) -> non_neg_integer().
 get_event_size({_Type, _Doc, BodyLength}) ->
-    ?UPR_HEADER_LEN + BodyLength.
+    ?DCP_HEADER_LEN + BodyLength.
 
 -spec remove_stream_info(partition_id(), #state{}) -> #state{}.
 remove_stream_info(PartId, State) ->
@@ -1326,7 +1326,7 @@ add_new_stream({PartId, PartUuid, StartSeq, EndSeq, Type, OldRequestId,
     retry ->
         OldRequestId
     end,
-    StreamRequest = couch_upr_consumer:encode_stream_request(
+    StreamRequest = couch_dcp_consumer:encode_stream_request(
         PartId, Id, Flags, StartSeq, EndSeq, PartUuid, SnapSeqStart, SnapSeqEnd),
     case gen_tcp:send(Socket, StreamRequest) of
     ok ->
@@ -1394,9 +1394,9 @@ store_snapshot_seq(RequestId, Data, State) ->
         State
     end.
 
--spec store_snapshot_mutation(request_id(), #upr_doc{}, #state{}) -> #state{}.
+-spec store_snapshot_mutation(request_id(), #dcp_doc{}, #state{}) -> #state{}.
 store_snapshot_mutation(RequestId, Data, State) ->
-  #upr_doc{
+  #dcp_doc{
         seq = Seq
     } = Data,
     #state{
@@ -1411,7 +1411,7 @@ store_snapshot_mutation(RequestId, Data, State) ->
         State#state{stream_info = StreamData2}
     end.
 
--spec remove_body_len({atom(), tuple | #upr_doc{}, non_neg_integer()}) ->
-                                                {atom(), tuple | #upr_doc{}}.
+-spec remove_body_len({atom(), tuple | #dcp_doc{}, non_neg_integer()}) ->
+                                                {atom(), tuple | #dcp_doc{}}.
 remove_body_len({Type, Data, _BodyLength}) ->
     {Type, Data}.

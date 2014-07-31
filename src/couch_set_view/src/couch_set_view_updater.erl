@@ -22,7 +22,7 @@
 
 -include("couch_db.hrl").
 -include("couch_set_view_updater.hrl").
--include_lib("couch_upr/include/couch_upr.hrl").
+-include_lib("couch_dcp/include/couch_dcp.hrl").
 
 -define(MAP_QUEUE_SIZE, 256 * 1024).
 -define(WRITE_QUEUE_SIZE, 512 * 1024).
@@ -399,13 +399,13 @@ filter_seqs(Parts, Seqs) ->
     end, Seqs).
 
 
-upr_marker_to_string(Type) ->
+dcp_marker_to_string(Type) ->
     case Type of
-    ?UPR_SNAPSHOT_TYPE_DISK ->
+    ?DCP_SNAPSHOT_TYPE_DISK ->
         "on-disk";
-    ?UPR_SNAPSHOT_TYPE_MEMORY ->
+    ?DCP_SNAPSHOT_TYPE_MEMORY ->
         "in-memory";
-    ?UPR_SNAPSHOT_TYPE_CHK ->
+    ?DCP_SNAPSHOT_TYPE_CHK ->
         "chk";
     _ ->
         io_lib:format("unknown (~w)", [Type])
@@ -422,7 +422,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
             seqs = SinceSeqs,
             partition_versions = PartVersions0
         },
-        upr_pid = UprPid,
+        dcp_pid = DcpPid,
         category = Category
     } = Group,
 
@@ -438,9 +438,9 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
             PartVersions = couch_util:get_value(PartId, AccVersions),
             Flags = case InitialBuild of
             true ->
-                ?UPR_FLAG_DISKONLY;
+                ?DCP_FLAG_DISKONLY;
             false ->
-                ?UPR_FLAG_NOFLAG
+                ?DCP_FLAG_NOFLAG
             end,
             % For stream request from 0, If a vbucket got reset in the window
             % of time between seqno was obtained from stats and stream request
@@ -448,7 +448,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
             % Use a special flag to tell server to set end_seqno.
             Flags2 = case PartVersions of
             [{0, 0}] ->
-                Flags bor ?UPR_FLAG_USELATEST_ENDSEQNO;
+                Flags bor ?DCP_FLAG_USELATEST_ENDSEQNO;
             _ ->
                 Flags
             end,
@@ -465,14 +465,14 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                                 MaxDocSize, InitialBuild),
                             Acc;
                         ({snapshot_marker, {MarkerStartSeq, MarkerEndSeq, MarkerType}}, {Count, _})
-                            when (MarkerType =:= ?UPR_SNAPSHOT_TYPE_DISK)
-                                 orelse (MarkerType =:= ?UPR_SNAPSHOT_TYPE_MEMORY) ->
+                            when (MarkerType =:= ?DCP_SNAPSHOT_TYPE_DISK)
+                                 orelse (MarkerType =:= ?DCP_SNAPSHOT_TYPE_MEMORY) ->
                             ?LOG_INFO(
                                 "set view `~s`, ~s (~s) group `~s`: received "
                                 "a snapshot marker (~s) for partition ~p from "
                                 "sequence ~p to ~p",
                                 [SetName, GroupType, Category, DDocId,
-                                    upr_marker_to_string(MarkerType),
+                                    dcp_marker_to_string(MarkerType),
                                     PartId, MarkerStartSeq, MarkerEndSeq]),
                             case Count of
                             % Ignore the snapshot marker that is at the
@@ -498,17 +498,17 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                                 "a snapshot marker (~s) for partition ~p from "
                                 "sequence ~p to ~p",
                                 [SetName, GroupType, Category, DDocId,
-                                    upr_marker_to_string(MarkerType),
+                                    dcp_marker_to_string(MarkerType),
                                     PartId, MarkerStartSeq, MarkerEndSeq]),
                             Acc;
-                        (#upr_doc{} = Item, {Count, AccEndSeq}) ->
+                        (#dcp_doc{} = Item, {Count, AccEndSeq}) ->
                             queue_doc(
                                 Item, MapQueue, Group,
                                 MaxDocSize, InitialBuild),
                             {Count + 1, AccEndSeq}
                         end,
-                    Result = couch_upr_client:enum_docs_since(
-                        UprPid, PartId, PartVersions, Since, EndSeq, Flags2,
+                    Result = couch_dcp_client:enum_docs_since(
+                        DcpPid, PartId, PartVersions, Since, EndSeq, Flags2,
                         ChangesWrapper, {0, 0}),
                     case Result of
                     {ok, {AccCount2, AccEndSeq}, NewPartVersions} ->
@@ -545,8 +545,8 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                 % in the index, but just check for a rollback of another
                 % partition (i.e. a request with start seq == end seq)
                 ChangesWrapper = fun(_, _) -> ok end,
-                Result = couch_upr_client:enum_docs_since(
-                    UprPid, PartId, PartVersions, Since, Since, Flags2,
+                Result = couch_dcp_client:enum_docs_since(
+                    DcpPid, PartId, PartVersions, Since, Since, Flags2,
                     ChangesWrapper, ok),
                 case Result of
                 {ok, _, _} ->
@@ -590,7 +590,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
             filter_seqs(PassiveParts, EndSeqs))
     end,
     {FinalChangesCount3, MaxSeqs3, PartVersions3, Rollbacks3} =
-        load_changes_from_passive_parts_in_mailbox(UprPid,
+        load_changes_from_passive_parts_in_mailbox(DcpPid,
             Group, FoldFun, FinalChangesCount, MaxSeqs2, PartVersions2, Rollbacks2),
 
     case Rollbacks3 of
@@ -608,7 +608,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
     {PartVersions3, MaxSeqs3}.
 
 
-load_changes_from_passive_parts_in_mailbox(UprPid,
+load_changes_from_passive_parts_in_mailbox(DcpPid,
         Group, FoldFun, ChangesCount, MaxSeqs0, PartVersions0, Rollbacks) ->
     #set_view_group{
         set_name = SetName,
@@ -619,7 +619,7 @@ load_changes_from_passive_parts_in_mailbox(UprPid,
     {new_passive_partitions, Parts0} ->
         Parts = get_more_passive_partitions(Parts0),
         AddPartVersions = [{P, [{0, 0}]} || P <- Parts],
-        {ok, AddMaxSeqs} = couch_set_view_util:get_seqs(UprPid, Parts),
+        {ok, AddMaxSeqs} = couch_set_view_util:get_seqs(DcpPid, Parts),
         PartVersions = lists:ukeymerge(1, AddPartVersions, PartVersions0),
 
         MaxSeqs = lists:ukeymerge(1, AddMaxSeqs, MaxSeqs0),
@@ -628,7 +628,7 @@ load_changes_from_passive_parts_in_mailbox(UprPid,
                   [Parts, GroupType, DDocId, SetName]),
         {ChangesCount2, MaxSeqs2, PartVersions2, Rollbacks2} = lists:foldl(
             FoldFun, {ChangesCount, MaxSeqs, PartVersions, Rollbacks}, AddMaxSeqs),
-        load_changes_from_passive_parts_in_mailbox(UprPid,
+        load_changes_from_passive_parts_in_mailbox(DcpPid,
             Group, FoldFun, ChangesCount2, MaxSeqs2, PartVersions2, Rollbacks2)
     after 0 ->
         {ChangesCount, MaxSeqs0, PartVersions0, Rollbacks}
@@ -654,7 +654,7 @@ queue_doc({part_versions, _} = PartVersions, MapQueue, _Group, _MaxDocSize,
     _InitialBuild) ->
     couch_work_queue:queue(MapQueue, PartVersions);
 queue_doc(Doc, MapQueue, Group, MaxDocSize, InitialBuild) ->
-    case Doc#upr_doc.deleted of
+    case Doc#dcp_doc.deleted of
     true when InitialBuild ->
         Entry = nil;
     true ->
@@ -665,16 +665,16 @@ queue_doc(Doc, MapQueue, Group, MaxDocSize, InitialBuild) ->
            name = DDocId,
            type = GroupType
         } = Group,
-        case couch_util:validate_utf8(Doc#upr_doc.id) of
+        case couch_util:validate_utf8(Doc#dcp_doc.id) of
         true ->
             case (MaxDocSize > 0) andalso
-                (iolist_size(Doc#upr_doc.body) > MaxDocSize) of
+                (iolist_size(Doc#dcp_doc.body) > MaxDocSize) of
             true ->
                 ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, skipping "
                     "document with ID `~s`: too large body (~p bytes)",
                     [SetName, GroupType, DDocId,
-                     ?b2l(Doc#upr_doc.id), iolist_size(Doc#upr_doc.body)]),
-                Entry = Doc#upr_doc{deleted = true};
+                     ?b2l(Doc#dcp_doc.id), iolist_size(Doc#dcp_doc.body)]),
+                Entry = Doc#dcp_doc{deleted = true};
             false ->
                 Entry = Doc
             end;
@@ -686,8 +686,8 @@ queue_doc(Doc, MapQueue, Group, MaxDocSize, InitialBuild) ->
             % not reprocess again.
             ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, skipping "
                 "document with non-utf8 id. Doc id bytes: ~w",
-                [SetName, GroupType, DDocId, ?b2l(Doc#upr_doc.id)]),
-            Entry = Doc#upr_doc{deleted = true}
+                [SetName, GroupType, DDocId, ?b2l(Doc#dcp_doc.id)]),
+            Entry = Doc#dcp_doc{deleted = true}
         end
     end,
     case Entry of
@@ -712,16 +712,16 @@ do_maps(Group, MapQueue, WriteQueue) ->
     {ok, Queue, _QueueSize} ->
         ViewCount = length(Group#set_view_group.views),
         Items = lists:foldr(
-            fun(#upr_doc{deleted = true} = UprDoc, Acc) ->
-                #upr_doc{
+            fun(#dcp_doc{deleted = true} = DcpDoc, Acc) ->
+                #dcp_doc{
                     id = Id,
                     partition = PartId,
                     seq = Seq
-                } = UprDoc,
+                } = DcpDoc,
                 Item = {Seq, Id, PartId, []},
                 [Item | Acc];
-            (#upr_doc{deleted = false} = UprDoc, Acc) ->
-                #upr_doc{
+            (#dcp_doc{deleted = false} = DcpDoc, Acc) ->
+                #dcp_doc{
                     id = Id,
                     body = Body,
                     partition = PartId,
@@ -730,12 +730,12 @@ do_maps(Group, MapQueue, WriteQueue) ->
                     cas = Cas,
                     expiration = Expiration,
                     flags = Flags,
-                    data_type = UprDataType
-                } = UprDoc,
-                DataType = case UprDataType of
-                ?UPR_DATA_TYPE_RAW ->
+                    data_type = DcpDataType
+                } = DcpDoc,
+                DataType = case DcpDataType of
+                ?DCP_DATA_TYPE_RAW ->
                     ?CONTENT_META_NON_JSON_MODE;
-                ?UPR_DATA_TYPE_JSON ->
+                ?DCP_DATA_TYPE_JSON ->
                     ?CONTENT_META_JSON
                 end,
                 Doc = #doc{
@@ -1670,7 +1670,7 @@ file_sorter_wait_loop(Port, Group, Acc) ->
     end.
 
 
-% UPR introduces the concept of snapshots, where a document mutation is only
+% DCP introduces the concept of snapshots, where a document mutation is only
 % guaranteed to be unique within a single snapshot. But the flusher expects
 % unique mutations within the full batch. Merge multiple snapshots (if there
 % are any) into a single one. The latest mutation wins.

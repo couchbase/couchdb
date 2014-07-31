@@ -17,7 +17,7 @@
 -include_lib("couch_set_view/include/couch_set_view.hrl").
 
 
-test_set_name() -> <<"couch_test_upr_view_groups">>.
+test_set_name() -> <<"couch_test_dcp_view_groups">>.
 num_set_partitions() -> 4.
 ddoc_id() -> <<"_design/test">>.
 num_docs() -> 1024.  % keep it a multiple of num_set_partitions()
@@ -42,7 +42,7 @@ main(_) ->
 
 test() ->
     couch_set_view_test_util:start_server(test_set_name()),
-    etap:diag("Testing UPR in regards to view groups"),
+    etap:diag("Testing DCP in regards to view groups"),
 
     test_partition_versions_update(),
     test_rollback_different_heads(),
@@ -58,11 +58,11 @@ test_partition_versions_update() ->
 
     setup_test(),
     {auth, User, Passwd} = cb_auth_info:get(),
-    {ok, Pid} = couch_upr_client:start(
+    {ok, Pid} = couch_dcp_client:start(
             test_set_name(), test_set_name(), User, Passwd, 20*1024*1024),
 
-    {ok, InitialFailoverLog1} = couch_upr_client:get_failover_log(Pid, 1),
-    {ok, InitialFailoverLog2} = couch_upr_client:get_failover_log(Pid, 2),
+    {ok, InitialFailoverLog1} = couch_dcp_client:get_failover_log(Pid, 1),
+    {ok, InitialFailoverLog2} = couch_dcp_client:get_failover_log(Pid, 2),
     {ok, {_ViewResults1}} = couch_set_view_test_util:query_view(
         test_set_name(), ddoc_id(), <<"test">>, []),
 
@@ -76,7 +76,7 @@ test_partition_versions_update() ->
         "initial failover log"),
 
     FailoverLog2 = InitialFailoverLog2 ++ [{222331, 10}],
-    couch_upr_fake_server:set_failover_log(2, FailoverLog2),
+    couch_dcp_fake_server:set_failover_log(2, FailoverLog2),
     % Insert new docs so that the updater is run on the new query
     populate_set(num_docs() + 1, 2 * num_docs()),
     {ok, {_ViewResults2}} = couch_set_view_test_util:query_view(
@@ -102,7 +102,7 @@ test_rollback_different_heads() ->
     etap:diag("Testing a rollback where the server and the client have "
         "a common history except for the most recent one, where both differ"),
 
-    % Give the UPR server a failover log we can diverge from
+    % Give the DCP server a failover log we can diverge from
     FailoverLog = [
         {10001, (num_docs_pp() * 2)},
         {10002, num_docs_pp()},
@@ -129,7 +129,7 @@ rollback_different_heads(DoRollback, FailoverLog) ->
 
     setup_test(),
     PartId = 1,
-    couch_upr_fake_server:set_failover_log(PartId, FailoverLog),
+    couch_dcp_fake_server:set_failover_log(PartId, FailoverLog),
 
     % Update index twice, so that there are header to roll back to
     {ok, {_ViewResults1}} = couch_set_view_test_util:query_view(
@@ -149,7 +149,7 @@ rollback_different_heads(DoRollback, FailoverLog) ->
         % The client has, so that a rollback is needed
         FailoverLog2 = [{777888999, num_docs_pp() + 10}] ++
             tl(FailoverLog),
-        couch_upr_fake_server:set_failover_log(PartId, FailoverLog2)
+        couch_dcp_fake_server:set_failover_log(PartId, FailoverLog2)
     end,
 
     % Insert new docs so that the updater is run on the new query
@@ -170,14 +170,14 @@ test_persisted_items() ->
 
     % First query with persisted sequence number == high sequence number
     setup_test(),
-    couch_upr_fake_server:set_persisted_items_fun(fun(Seq) -> Seq end),
+    couch_dcp_fake_server:set_persisted_items_fun(fun(Seq) -> Seq end),
     {ok, {ViewResults1}} = couch_set_view_test_util:query_view(
         test_set_name(), ddoc_id(), <<"test">>, ["stale=false"]),
     shutdown_group(),
 
     % Then with persisted sequence number == high sequence number / 2
     setup_test(),
-    couch_upr_fake_server:set_persisted_items_fun(
+    couch_dcp_fake_server:set_persisted_items_fun(
         fun(Seq) -> max(Seq div 2, 1) end),
     {ok, {ViewResults2}} = couch_set_view_test_util:query_view(
         test_set_name(), ddoc_id(), <<"test">>, ["stale=false"]),
@@ -188,7 +188,7 @@ test_persisted_items() ->
 
     % Then with persisted sequence number == high sequence number - 1
     setup_test(),
-    couch_upr_fake_server:set_persisted_items_fun(
+    couch_dcp_fake_server:set_persisted_items_fun(
         fun(Seq) -> max(Seq - 1, 1) end),
     {ok, {ViewResults3}} = couch_set_view_test_util:query_view(
         test_set_name(), ddoc_id(), <<"test">>, ["stale=false"]),
@@ -204,14 +204,14 @@ test_mutliple_snapshots() ->
 
     % First query with the result returning in a single snapshot
     setup_test(),
-    couch_upr_fake_server:set_items_per_snapshot(0),
+    couch_dcp_fake_server:set_items_per_snapshot(0),
     {ok, {ViewResults1}} = couch_set_view_test_util:query_view(
         test_set_name(), ddoc_id(), <<"test">>, ["stale=false"]),
     shutdown_group(),
 
     % Then with the result returning in several snapshots
     setup_test(),
-    couch_upr_fake_server:set_items_per_snapshot(num_docs_pp() div 4),
+    couch_dcp_fake_server:set_items_per_snapshot(num_docs_pp() div 4),
     {ok, {ViewResults2}} = couch_set_view_test_util:query_view(
         test_set_name(), ddoc_id(), <<"test">>, ["stale=false"]),
     etap:is(ViewResults1, ViewResults2,
@@ -221,7 +221,7 @@ test_mutliple_snapshots() ->
 
     % Try again with some other number of snapshots
     setup_test(),
-    couch_upr_fake_server:set_items_per_snapshot(num_docs_pp() div 3),
+    couch_dcp_fake_server:set_items_per_snapshot(num_docs_pp() div 3),
     {ok, {ViewResults3}} = couch_set_view_test_util:query_view(
         test_set_name(), ddoc_id(), <<"test">>, ["stale=false"]),
     etap:is(ViewResults1, ViewResults3,
@@ -237,15 +237,15 @@ test_duplicates() ->
 
     % First query with the result returning in a single snapshot
     setup_test(),
-    couch_upr_fake_server:set_items_per_snapshot(0),
+    couch_dcp_fake_server:set_items_per_snapshot(0),
     {ok, {ViewResults1}} = couch_set_view_test_util:query_view(
         test_set_name(), ddoc_id(), <<"test">>, ["stale=false"]),
     shutdown_group(),
 
     % Then with the result where the stream contains duplicates
     setup_test(),
-    couch_upr_fake_server:set_items_per_snapshot(num_docs_pp() div 4),
-    couch_upr_fake_server:set_dups_per_snapshot(num_docs_pp() div 9),
+    couch_dcp_fake_server:set_items_per_snapshot(num_docs_pp() div 4),
+    couch_dcp_fake_server:set_dups_per_snapshot(num_docs_pp() div 9),
     {ok, {ViewResults2}} = couch_set_view_test_util:query_view(
         test_set_name(), ddoc_id(), <<"test">>, ["stale=false"]),
     etap:is(ViewResults2, ViewResults1,
@@ -255,8 +255,8 @@ test_duplicates() ->
 
     % Try again with some other number of duplicates
     setup_test(),
-    couch_upr_fake_server:set_items_per_snapshot(num_docs_pp() div 3),
-    couch_upr_fake_server:set_dups_per_snapshot(num_docs_pp() div 10),
+    couch_dcp_fake_server:set_items_per_snapshot(num_docs_pp() div 3),
+    couch_dcp_fake_server:set_dups_per_snapshot(num_docs_pp() div 10),
     {ok, {ViewResults3}} = couch_set_view_test_util:query_view(
         test_set_name(), ddoc_id(), <<"test">>, ["stale=false"]),
     etap:is(ViewResults3, ViewResults1,
@@ -285,7 +285,7 @@ setup_test() ->
     ok = configure_view_group().
 
 shutdown_group() ->
-    couch_upr_fake_server:reset(),
+    couch_dcp_fake_server:reset(),
     GroupPid = couch_set_view:get_group_pid(
         mapreduce_view, test_set_name(), ddoc_id(), prod),
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),

@@ -819,8 +819,8 @@ send_group_info(Group, Port) ->
 
 -spec get_seqs(pid(), ordsets:ordset(partition_id())) ->
                       {ok, partition_seqs()}.
-get_seqs(UprPid, Partitions) ->
-    {ok, Seqs} = couch_upr_client:get_sequence_numbers(UprPid, Partitions),
+get_seqs(DcpPid, Partitions) ->
+    {ok, Seqs} = couch_dcp_client:get_sequence_numbers(DcpPid, Partitions),
     SeqsResult = lists:zipwith(fun(PartId, Seq) ->
         case Seq of
         {error, not_my_vbucket} ->

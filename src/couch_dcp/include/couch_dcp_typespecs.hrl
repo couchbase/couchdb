@@ -10,8 +10,8 @@
 % License for the specific language governing permissions and limitations under
 % the License.
 
--type upr_status()    :: non_neg_integer().
--type upr_data_type() :: 0..255.
+-type dcp_status()    :: non_neg_integer().
+-type dcp_data_type() :: 0..255.
 -type request_id()    :: non_neg_integer().
 -type size()          :: non_neg_integer().
 -type socket()        :: port().

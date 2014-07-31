@@ -1,3 +1,7 @@
+#!/usr/bin/env escript
+%% -*- erlang -*-
+%%! -smp enable
+
 % Licensed under the Apache License, Version 2.0 (the "License"); you may not
 % use this file except in compliance with the License. You may obtain a copy of
 % the License at
@@ -10,13 +14,18 @@
 % License for the specific language governing permissions and limitations under
 % the License.
 
-{application, couch_upr, [
-    {description, "UPR for couch"},
-    {vsn, "${COUCHDB_VERSION}"},
-    {modules, [
-        couch_upr,
-        couch_upr_fake_server
-    ]},
-    {registered, []},
-    {applications, [kernel, stdlib]}
-]}.
+main(_) ->
+    test_util:init_code_path(),
+    Modules = [
+        couch_dcp_client,
+        couch_dcp_consumer,
+        couch_dcp_fake_server,
+        couch_dcp_producer
+    ],
+
+    etap:plan(length(Modules)),
+    lists:foreach(
+        fun(Module) ->
+            etap:loaded_ok(Module, lists:concat(["Loaded: ", Module]))
+        end, Modules),
+    etap:end_tests().

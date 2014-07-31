@@ -10,7 +10,7 @@
 % License for the specific language governing permissions and limitations under
 % the License.
 
--module(couch_upr_fake_server).
+-module(couch_dcp_fake_server).
 -behaviour(gen_server).
 
 % Public API
@@ -30,8 +30,8 @@
 -export([init/1, terminate/2, handle_call/3, handle_cast/2, handle_info/2,
     code_change/3]).
 
--include_lib("couch_upr/include/couch_upr.hrl").
--include_lib("couch_upr/include/couch_upr_typespecs.hrl").
+-include_lib("couch_dcp/include/couch_dcp.hrl").
+-include_lib("couch_dcp/include/couch_dcp_typespecs.hrl").
 
 
 -define(dbname(SetName, PartId),
@@ -118,7 +118,7 @@
 -spec start(binary()) -> {ok, pid()} | ignore |
                          {error, {already_started, pid()} | term()}.
 start(SetName) ->
-    % Start the fake UPR server where the original one is expected to be
+    % Start the fake DCP server where the original one is expected to be
     Port = list_to_integer(couch_config:get("dcp", "port", "0")),
     gen_server:start({local, ?MODULE}, ?MODULE, [Port, SetName], []).
 
@@ -184,7 +184,7 @@ init([Port, SetName]) ->
         [binary, {packet, raw}, {active, false}, {reuseaddr, true}]),
     case Port of
     % In case the port was set to "0", the OS will decide which port to run
-    % the fake UPR server on. Update the configuration so that we know which
+    % the fake DCP server on. Update the configuration so that we know which
     % port was chosen (that's only needed for the tests).
     0 ->
         {ok, RandomPort} = inet:port(Listen),
@@ -210,7 +210,7 @@ handle_call({add_stream, PartId, RequestId, StartSeq, EndSeq, Socket, FailoverLo
     } = State,
     case lists:keyfind(PartId, 1, State#state.streams) of
     false ->
-        StreamOk = couch_upr_producer:encode_stream_request_ok(
+        StreamOk = couch_dcp_producer:encode_stream_request_ok(
             RequestId, FailoverLog),
         ok = gen_tcp:send(Socket, StreamOk),
         Mutations = case DupsPerSnapshot > 0 of
@@ -257,19 +257,19 @@ handle_call({add_stream, PartId, RequestId, StartSeq, EndSeq, Socket, FailoverLo
             % received from the start are on-disk snapshots.
             SnapshotType = case StartSeq of
             0 ->
-                ?UPR_SNAPSHOT_TYPE_DISK;
+                ?DCP_SNAPSHOT_TYPE_DISK;
             _ ->
-                ?UPR_SNAPSHOT_TYPE_MEMORY
+                ?DCP_SNAPSHOT_TYPE_MEMORY
             end,
-            Marker = couch_upr_producer:encode_snapshot_marker(
+            Marker = couch_dcp_producer:encode_snapshot_marker(
                 PartId, RequestId, StartSeq, StartSeq + Num, SnapshotType),
             ok = gen_tcp:send(Socket, Marker),
             self() ! send_mutations
         end,
         {reply, ok, State#state{streams = Streams2}};
     _ ->
-        StreamExists = couch_upr_producer:encode_stream_request_error(
-                         RequestId, ?UPR_STATUS_KEY_EEXISTS),
+        StreamExists = couch_dcp_producer:encode_stream_request_error(
+                         RequestId, ?DCP_STATUS_KEY_EEXISTS),
         ok = gen_tcp:send(Socket, StreamExists),
         {reply, ok, State}
     end;
@@ -325,15 +325,15 @@ handle_call({send_stat, Stat, Socket, RequestId, PartId}, _From, State) ->
             NumItemsValue = list_to_binary(integer_to_list(NumItems)),
             % The real vbucket-details response contains a lot of more
             % stats, but we only care about the num_items
-            NumItemsStat = couch_upr_producer:encode_stat(
+            NumItemsStat = couch_dcp_producer:encode_stat(
                 RequestId, NumItemsKey, NumItemsValue),
             ok = gen_tcp:send(Socket, NumItemsStat),
 
-            EndStat = couch_upr_producer:encode_stat(RequestId, <<>>, <<>>),
+            EndStat = couch_dcp_producer:encode_stat(RequestId, <<>>, <<>>),
             ok = gen_tcp:send(Socket, EndStat);
         {error, not_my_partition} ->
-            StatError = couch_upr_producer:encode_stat_error(
-                RequestId, ?UPR_STATUS_NOT_MY_VBUCKET, <<>>),
+            StatError = couch_dcp_producer:encode_stat_error(
+                RequestId, ?DCP_STATUS_NOT_MY_VBUCKET, <<>>),
             ok = gen_tcp:send(Socket, StatError)
         end
     end,
@@ -451,9 +451,9 @@ handle_info(send_mutations, State) ->
                     NumSent0 =:= ItemsPerSnapshot of
             true ->
                 NumItems = min(length(Rest) + 1, ItemsPerSnapshot),
-                Marker = couch_upr_producer:encode_snapshot_marker(
+                Marker = couch_dcp_producer:encode_snapshot_marker(
                     VBucketId, RequestId, Seq - 1, Seq + NumItems - 1,
-                    ?UPR_SNAPSHOT_TYPE_MEMORY),
+                    ?DCP_SNAPSHOT_TYPE_MEMORY),
                 ok = gen_tcp:send(Socket, Marker),
                 1;
             false ->
@@ -461,17 +461,17 @@ handle_info(send_mutations, State) ->
             end,
             Encoded = case Value of
             deleted ->
-                couch_upr_producer:encode_snapshot_deletion(
+                couch_dcp_producer:encode_snapshot_deletion(
                 VBucketId, RequestId, Cas, Seq, RevSeq, Key);
             _ ->
-                couch_upr_producer:encode_snapshot_mutation(
+                couch_dcp_producer:encode_snapshot_mutation(
                 VBucketId, RequestId, Cas, Seq, RevSeq, Flags, Expiration,
                 LockTime, Key, Value)
             end,
             ok = gen_tcp:send(Socket, Encoded),
             [{VBucketId, {RequestId, Rest, Socket, NumSent}} | Acc];
         ({VBucketId, {RequestId, [], Socket, _NumSent}}, Acc) ->
-            StreamEnd = couch_upr_producer:encode_stream_end(VBucketId, RequestId),
+            StreamEnd = couch_dcp_producer:encode_stream_end(VBucketId, RequestId),
             ok = gen_tcp:send(Socket, StreamEnd),
             Acc
         end, [], Streams),
@@ -578,9 +578,9 @@ accept_loop(Listen) ->
 
 -spec read(socket()) -> ok.
 read(Socket) ->
-    case gen_tcp:recv(Socket, ?UPR_HEADER_LEN) of
+    case gen_tcp:recv(Socket, ?DCP_HEADER_LEN) of
     {ok, Header} ->
-        case couch_upr_producer:parse_header(Header) of
+        case couch_dcp_producer:parse_header(Header) of
         {open_connection, BodyLength, RequestId} ->
             handle_open_connection_body(Socket, BodyLength, RequestId);
         {stream_request, BodyLength, RequestId, PartId} ->
@@ -611,16 +611,16 @@ handle_control_request(Socket, BodyLength, RequestId) ->
     {ok, <<"connection_buffer_size", Size/binary>>} ->
         ok = gen_server:call(?MODULE, {handle_control_req, Size})
     end,
-    ControlResponse = couch_upr_producer:encode_control_flow_ok(RequestId),
+    ControlResponse = couch_dcp_producer:encode_control_flow_ok(RequestId),
     ok = gen_tcp:send(Socket, ControlResponse).
 
 -spec handle_buffer_ack_request(socket(), size(), request_id()) -> ok .
 handle_buffer_ack_request(Socket, BodyLength, RequestId) ->
     case gen_tcp:recv(Socket, BodyLength) of
-    {ok, <<Size:?UPR_SIZES_BUFFER_SIZE>>} ->
+    {ok, <<Size:?DCP_SIZES_BUFFER_SIZE>>} ->
         gen_server:call(?MODULE, {handle_buffer_ack, Size})
     end,
-    BufferResponse = couch_upr_producer:encode_buffer_ack_ok(RequestId),
+    BufferResponse = couch_dcp_producer:encode_buffer_ack_ok(RequestId),
     ok = gen_tcp:send(Socket, BufferResponse).
 
 
@@ -629,10 +629,10 @@ handle_buffer_ack_request(Socket, BodyLength, RequestId) ->
                                          ok | {error, closed}.
 handle_open_connection_body(Socket, BodyLength, RequestId) ->
     case gen_tcp:recv(Socket, BodyLength) of
-    {ok, <<_SeqNo:?UPR_SIZES_SEQNO,
-           ?UPR_FLAG_PRODUCER:?UPR_SIZES_FLAGS,
+    {ok, <<_SeqNo:?DCP_SIZES_SEQNO,
+           ?DCP_FLAG_PRODUCER:?DCP_SIZES_FLAGS,
            _Name/binary>>} ->
-        OpenConnection = couch_upr_producer:encode_open_connection(RequestId),
+        OpenConnection = couch_dcp_producer:encode_open_connection(RequestId),
         ok = gen_tcp:send(Socket, OpenConnection);
     {error, closed} ->
         {error, closed}
@@ -643,27 +643,27 @@ handle_open_connection_body(Socket, BodyLength, RequestId) ->
 handle_stream_request_body(Socket, BodyLength, RequestId, PartId) ->
     case gen_tcp:recv(Socket, BodyLength) of
     % TODO vmx 2014-04-04: Make a rollback due to wrong SnapshotStart/End
-    {ok, <<Flags:?UPR_SIZES_FLAGS,
-           _Reserved:?UPR_SIZES_RESERVED,
-           StartSeq:?UPR_SIZES_BY_SEQ,
-           EndSeq:?UPR_SIZES_BY_SEQ,
-           PartUuid:?UPR_SIZES_PARTITION_UUID,
-           _SnapshotStart:?UPR_SIZES_BY_SEQ,
-           _SnapshotEnd:?UPR_SIZES_BY_SEQ>>} ->
+    {ok, <<Flags:?DCP_SIZES_FLAGS,
+           _Reserved:?DCP_SIZES_RESERVED,
+           StartSeq:?DCP_SIZES_BY_SEQ,
+           EndSeq:?DCP_SIZES_BY_SEQ,
+           PartUuid:?DCP_SIZES_PARTITION_UUID,
+           _SnapshotStart:?DCP_SIZES_BY_SEQ,
+           _SnapshotEnd:?DCP_SIZES_BY_SEQ>>} ->
         FailoverLog = get_failover_log(PartId),
         case StartSeq > EndSeq of
         true ->
-            send_error(Socket, RequestId, ?UPR_STATUS_ERANGE);
+            send_error(Socket, RequestId, ?DCP_STATUS_ERANGE);
         false ->
             EndSeq2 = case Flags of
-            ?UPR_FLAG_NOFLAG ->
+            ?DCP_FLAG_NOFLAG ->
                 EndSeq;
-            ?UPR_FLAG_USELATEST_ENDSEQNO ->
+            ?DCP_FLAG_USELATEST_ENDSEQNO ->
                 EndSeq;
-            Flags when (Flags band ?UPR_FLAG_DISKONLY) =/= 0 ->
+            Flags when (Flags band ?DCP_FLAG_DISKONLY) =/= 0 ->
                 % Either of the following flags:
-                % UPR_FLAG_DISKONLY
-                % (UPR_FLAG_DISKONLY bor UPR_FLAG_USELATEST_ENDSEQNO)
+                % DCP_FLAG_DISKONLY
+                % (DCP_FLAG_DISKONLY bor DCP_FLAG_USELATEST_ENDSEQNO)
                 ItemsPerSnapshot = gen_server:call(
                     ?MODULE, get_items_per_snapshot),
                 case ItemsPerSnapshot of
@@ -690,7 +690,7 @@ handle_stream_request_body(Socket, BodyLength, RequestId, PartId) ->
                     Socket, RequestId, PartId, StartSeq, EndSeq2, PartUuid,
                     PartVersionSeq, FailoverLog);
             false ->
-                send_error(Socket, RequestId, ?UPR_STATUS_KEY_NOT_FOUND)
+                send_error(Socket, RequestId, ?DCP_STATUS_KEY_NOT_FOUND)
             end
         end;
     {error, closed} ->
@@ -700,18 +700,18 @@ handle_stream_request_body(Socket, BodyLength, RequestId, PartId) ->
 handle_stream_close_body(Socket, RequestId, PartId) ->
     Status = case gen_server:call(?MODULE, {remove_stream, PartId}) of
     ok ->
-        ?UPR_STATUS_OK;
+        ?DCP_STATUS_OK;
     vbucket_stream_not_found ->
-        ?UPR_STATUS_KEY_NOT_FOUND
+        ?DCP_STATUS_KEY_NOT_FOUND
     end,
-    Resp = couch_upr_producer:encode_stream_close_response(
+    Resp = couch_dcp_producer:encode_stream_close_response(
         RequestId, Status),
     ok = gen_tcp:send(Socket, Resp).
 
 handle_select_bucket_body(Socket, BodyLength, RequestId) ->
     {ok, _} = gen_tcp:recv(Socket, BodyLength),
-    Status = ?UPR_STATUS_OK,
-    Resp = couch_upr_producer:encode_select_bucket_response(
+    Status = ?DCP_STATUS_OK,
+    Resp = couch_dcp_producer:encode_select_bucket_response(
         RequestId, Status),
     ok = gen_tcp:send(Socket, Resp).
 
@@ -746,7 +746,7 @@ send_ok_or_error(Socket, RequestId, PartId, StartSeq, EndSeq, PartUuid,
             false ->
                 % The client tries to get items from the future, which
                 % means that it got ahead of the server somehow.
-                send_error(Socket, RequestId, ?UPR_STATUS_ERANGE)
+                send_error(Socket, RequestId, ?DCP_STATUS_ERANGE)
             end;
         _ ->
             {_, NextHighSeqNum} = lists:last(DiffFailoverLog),
@@ -768,13 +768,13 @@ send_ok(Socket, RequestId, PartId, StartSeq, EndSeq, FailoverLog) ->
 
 -spec send_rollback(socket(), request_id(), update_seq()) -> ok.
 send_rollback(Socket, RequestId, RollbackSeq) ->
-    StreamRollback = couch_upr_producer:encode_stream_request_rollback(
+    StreamRollback = couch_dcp_producer:encode_stream_request_rollback(
         RequestId, RollbackSeq),
     ok = gen_tcp:send(Socket, StreamRollback).
 
--spec send_error(socket(), request_id(), upr_status()) -> ok.
+-spec send_error(socket(), request_id(), dcp_status()) -> ok.
 send_error(Socket, RequestId, Status) ->
-    StreamError = couch_upr_producer:encode_stream_request_error(
+    StreamError = couch_dcp_producer:encode_stream_request_error(
         RequestId, Status),
     ok = gen_tcp:send(Socket, StreamError).
 
@@ -782,7 +782,7 @@ send_error(Socket, RequestId, Status) ->
 -spec handle_failover_log(socket(), request_id(), partition_id()) -> ok.
 handle_failover_log(Socket, RequestId, PartId) ->
     FailoverLog = get_failover_log(PartId),
-    FailoverLogResponse = couch_upr_producer:encode_failover_log(
+    FailoverLogResponse = couch_dcp_producer:encode_failover_log(
         RequestId, FailoverLog),
     ok = gen_tcp:send(Socket, FailoverLogResponse).
 
@@ -808,7 +808,7 @@ handle_sasl_auth_body(Socket, BodyLength, RequestId) ->
     % implemented in the fake server. Just always send back the authentication
     % was successful
     {ok, _} ->
-        Authenticated = couch_upr_producer:encode_sasl_auth(RequestId),
+        Authenticated = couch_dcp_producer:encode_sasl_auth(RequestId),
         ok = gen_tcp:send(Socket, Authenticated);
     {error, closed} ->
         {error, closed}
@@ -915,7 +915,7 @@ apply_sequence_numbers(Mutations) ->
 -spec num_items_with_dups(pos_integer(), pos_integer(), pos_integer()) ->
                                  pos_integer().
 num_items_with_dups(NumItems, ItemsPerSnapshot, DupsPerSnapshot) ->
-    NumSnapshots = couch_upr_fake_server:ceil_div(NumItems, ItemsPerSnapshot),
+    NumSnapshots = couch_dcp_fake_server:ceil_div(NumItems, ItemsPerSnapshot),
     % The first snapshot doesn't contain duplicates hence "- 1"
     num_items_with_dups(
         NumItems + (NumSnapshots - 1) * DupsPerSnapshot,
@@ -925,7 +925,7 @@ num_items_with_dups(NumItems, ItemsPerSnapshot, DupsPerSnapshot) ->
                           pos_integer()) -> pos_integer().
 num_items_with_dups(CurrentNum, ItemsPerSnapshot, DupsPerSnapshot,
         NumSnapshots) ->
-    NewNumSnapshots = couch_upr_fake_server:ceil_div(
+    NewNumSnapshots = couch_dcp_fake_server:ceil_div(
         CurrentNum, ItemsPerSnapshot),
     case NewNumSnapshots =:= NumSnapshots of
     true ->
@@ -966,14 +966,14 @@ send_vbucket_seqnos_stats(State, SetName, Socket, RequestId, Partitions) ->
         {ok, Seq} ->
             SeqKey = <<"vb_", BinPartId/binary ,":high_seqno">>,
             SeqValue = list_to_binary(integer_to_list(Seq)),
-            SeqStat = couch_upr_producer:encode_stat(
+            SeqStat = couch_dcp_producer:encode_stat(
                 RequestId, SeqKey, SeqValue),
             ok = gen_tcp:send(Socket, SeqStat),
 
             UuidKey = <<"vb_", BinPartId/binary ,":vb_uuid">>,
             FailoverLog = get_failover_log(PartId, State),
             {UuidValue, _} = hd(FailoverLog),
-            UuidStat = couch_upr_producer:encode_stat(
+            UuidStat = couch_dcp_producer:encode_stat(
                 RequestId, UuidKey, <<UuidValue:64/integer>>),
             ok = gen_tcp:send(Socket, UuidStat),
             true;
@@ -982,8 +982,8 @@ send_vbucket_seqnos_stats(State, SetName, Socket, RequestId, Partitions) ->
             % The real response contains the vBucket map so that
             % clients can adapt. It's not easy to simulate, hence
             % we return an empty JSON object to keep things simple.
-            %StatError = couch_upr_producer:encode_stat_error(
-            %    RequestId, ?UPR_STATUS_NOT_MY_VBUCKET,
+            %StatError = couch_dcp_producer:encode_stat_error(
+            %    RequestId, ?DCP_STATUS_NOT_MY_VBUCKET,
             %    <<"{}">>),
             %ok = gen_tcp:send(Socket, StatError),
             true
@@ -991,7 +991,7 @@ send_vbucket_seqnos_stats(State, SetName, Socket, RequestId, Partitions) ->
     end, Partitions),
     case lists:all(fun(E) -> E end, Result) of
     true ->
-        EndStat = couch_upr_producer:encode_stat(RequestId, <<>>, <<>>),
+        EndStat = couch_dcp_producer:encode_stat(RequestId, <<>>, <<>>),
         ok = gen_tcp:send(Socket, EndStat);
     false ->
         ok

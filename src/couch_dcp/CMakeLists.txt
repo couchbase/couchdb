@@ -1,0 +1,21 @@
+FILE(GLOB SRC src/*.erl)
+ADD_ERLANG_INCLUDE_DIR(${CMAKE_CURRENT_SOURCE_DIR}/../couchdb)
+ADD_ERLANG_INCLUDE_DIR(${CMAKE_CURRENT_SOURCE_DIR}/..)
+ADD_ERLANG_INCLUDE_DIR(${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+CONFIGURE_FILE(${CMAKE_CURRENT_SOURCE_DIR}/src/couch_dcp.app.src
+               ${CMAKE_CURRENT_BINARY_DIR}/ebin/couch_dcp.app)
+
+
+ERL_BUILD_OTP("couch_dcp" ${SRC})
+SET(COUCH_DCP_PREFIX ${CMAKE_ERL_LIB_INSTALL_PREFIX}/couch_dcp-1.0.0)
+SET(COUCH_DCP_INCLUDE_FILES include/couch_dcp.hrl)
+
+INSTALL(FILES include/couch_dcp.hrl
+        DESTINATION ${COUCH_DCP_PREFIX}/include)
+
+INSTALL(FILES ${outfiles}
+              ${CMAKE_CURRENT_BINARY_DIR}/ebin/couch_dcp.app
+        DESTINATION ${COUCH_DCP_PREFIX}/ebin)
+
+ADD_SUBDIRECTORY(test)

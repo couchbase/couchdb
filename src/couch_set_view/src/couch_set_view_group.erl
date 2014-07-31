@@ -51,7 +51,7 @@
 -define(type(State), (element(3, State#state.init_args))#set_view_group.type).
 -define(group_sig(State), (element(3, State#state.init_args))#set_view_group.sig).
 -define(group_id(State), (State#state.group)#set_view_group.name).
--define(upr_pid(State), (State#state.group)#set_view_group.upr_pid).
+-define(dcp_pid(State), (State#state.group)#set_view_group.dcp_pid).
 -define(category(State), (State#state.group)#set_view_group.category).
 -define(is_defined(State),
     (((State#state.group)#set_view_group.index_header)#set_view_index_header.num_partitions > 0)).
@@ -63,7 +63,7 @@
 
 -define(MAX_HIST_SIZE, 10).
 % flow control buffer size 20 MB
--define(UPR_CONTROL_BUFFER_SIZE, "20971520").
+-define(DCP_CONTROL_BUFFER_SIZE, "20971520").
 
 % Seqs cache ttl in microseconds
 -define(SEQS_CACHE_TTL, 300000).
@@ -415,16 +415,16 @@ do_init({_, SetName, _} = InitArgs) ->
                            []
                        end)
         end,
-        UprName = <<(atom_to_binary(Mod, latin1))/binary, ": ",
+        DcpName = <<(atom_to_binary(Mod, latin1))/binary, ": ",
             SetName/binary, " ", (Group#set_view_group.name)/binary,
             " (", (atom_to_binary(Category, latin1))/binary, "/",
             (atom_to_binary(Type, latin1))/binary, ")">>,
         {User, Passwd} = get_auth(),
-        UprBufferSize = list_to_integer(couch_config:get("dcp",
-            "flow_control_buffer_size", ?UPR_CONTROL_BUFFER_SIZE)),
-        ?LOG_INFO("Flow control buffer size is ~p bytes", [UprBufferSize]),
-        {ok, UprPid} = couch_upr_client:start(UprName, SetName, User, Passwd,
-            UprBufferSize),
+        DcpBufferSize = list_to_integer(couch_config:get("dcp",
+            "flow_control_buffer_size", ?DCP_CONTROL_BUFFER_SIZE)),
+        ?LOG_INFO("Flow control buffer size is ~p bytes", [DcpBufferSize]),
+        {ok, DcpPid} = couch_dcp_client:start(DcpName, SetName, User, Passwd,
+            DcpBufferSize),
         State = #state{
             init_args = InitArgs,
             replica_group = ReplicaPid,
@@ -432,7 +432,7 @@ do_init({_, SetName, _} = InitArgs) ->
             group = Group#set_view_group{
                 ref_counter = RefCounter,
                 replica_pid = ReplicaPid,
-                upr_pid = UprPid
+                dcp_pid = DcpPid
             }
         },
         true = ets:insert(
@@ -764,7 +764,7 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
             % Decided to switch to compacted file
             % Compactor has caught up and hence discard the running updater
             couch_set_view_util:shutdown_wait(UpdaterPid),
-            stop_upr_streams(State);
+            stop_dcp_streams(State);
         true ->
             ok
         end,
@@ -1277,7 +1277,7 @@ handle_info({'EXIT', Pid, {updater_error, Error}}, #state{updater_pid = Pid, gro
         updater_state = not_running,
         update_listeners = Listeners2
     },
-    stop_upr_streams(State),
+    stop_dcp_streams(State),
     ?inc_updater_errors(State2#state.group),
     case State#state.shutdown of
     true ->
@@ -1334,12 +1334,12 @@ handle_info({'EXIT', Pid, Reason}, #state{compactor_pid = Pid} = State) ->
     {noreply, State2, ?GET_TIMEOUT(State2)};
 
 handle_info({'EXIT', Pid, Reason},
-        #state{group = #set_view_group{upr_pid = Pid}} = State) ->
+        #state{group = #set_view_group{dcp_pid = Pid}} = State) ->
     ?LOG_ERROR("Set view `~s`, ~s (~s) group `~s`,"
-               " UPR process ~p died with unexpected reason: ~p",
+               " DCP process ~p died with unexpected reason: ~p",
                [?set_name(State), ?type(State), ?category(State),
                 ?group_id(State), Pid, Reason]),
-    {stop, {upr_died, Reason}, State};
+    {stop, {dcp_died, Reason}, State};
 
 handle_info({'EXIT', Pid, Reason}, State) ->
     ?LOG_ERROR("Set view `~s`, ~s (~s) group `~s`,"
@@ -1352,7 +1352,7 @@ handle_info({get_stats, nil, StatsResponse}, State) ->
     SeqsCache = State#state.seqs_cache,
     NewState = case StatsResponse of
     {ok, Stats} ->
-        Seqs = couch_upr_client:parse_stats_seqnos(Stats),
+        Seqs = couch_dcp_client:parse_stats_seqnos(Stats),
         NewCacheVal = #seqs_cache{
             timestamp = os:timestamp(),
             is_waiting = false,
@@ -1712,7 +1712,7 @@ get_group_info(State) ->
     IndexSeqs = ?set_seqs(Group),
     IndexPartitions = [PartId || {PartId, _} <- IndexSeqs],
     % Extract the seqnum from KV store for all indexible partitions.
-    {ok, GroupSeqs} = couch_set_view_util:get_seqs(?upr_pid(State),
+    {ok, GroupSeqs} = couch_set_view_util:get_seqs(?dcp_pid(State),
         GroupPartitions),
     PartSeqs = lists:filter(fun({PartId, _}) ->
         lists:member(PartId, IndexPartitions)
@@ -2213,7 +2213,7 @@ persist_partition_states(State, ActiveList, PassiveList, CleanupList, PendingTra
     ok = set_state(ReplicaPid, ReplicasToMarkActive, [], ReplicasToCleanup2),
     % Need to update list of active partition sequence numbers for every blocked client.
     WaitList2 = update_waiting_list(
-        WaitList, ?upr_pid(State), ActiveList2, PassiveList3, CleanupList),
+        WaitList, ?dcp_pid(State), ActiveList2, PassiveList3, CleanupList),
     State3 = State2#state{waiting_list = WaitList2},
     case (dict:size(Listeners) > 0) andalso (CleanupList /= []) of
     true ->
@@ -2252,10 +2252,10 @@ persist_partition_states(State, ActiveList, PassiveList, CleanupList, PendingTra
                           ordsets:ordset(partition_id()),
                           ordsets:ordset(partition_id()),
                           ordsets:ordset(partition_id())) -> [#waiter{}].
-update_waiting_list([], _UprPid, _AddActiveList, _AddPassiveList, _AddCleanupList) ->
+update_waiting_list([], _DcpPid, _AddActiveList, _AddPassiveList, _AddCleanupList) ->
     [];
-update_waiting_list(WaitList, UprPid, AddActiveList, AddPassiveList, AddCleanupList) ->
-    {ok, AddActiveSeqs} = couch_set_view_util:get_seqs(UprPid, AddActiveList),
+update_waiting_list(WaitList, DcpPid, AddActiveList, AddPassiveList, AddCleanupList) ->
+    {ok, AddActiveSeqs} = couch_set_view_util:get_seqs(DcpPid, AddActiveList),
     RemoveSet = ordsets:union(AddPassiveList, AddCleanupList),
     MapFun = fun(W) -> update_waiter_seqs(W, AddActiveSeqs, RemoveSet) end,
     [MapFun(W) || W <- WaitList].
@@ -2695,7 +2695,7 @@ filter_seqs(Parts, Seqs) ->
 -spec indexable_partition_seqs(#state{}) -> partition_seqs().
 indexable_partition_seqs(#state{group = Group} = State) ->
     CurPartitions = [P || {P, _} <- ?set_seqs(Group)],
-    {ok, Seqs} = couch_set_view_util:get_seqs(?upr_pid(State), CurPartitions),
+    {ok, Seqs} = couch_set_view_util:get_seqs(?dcp_pid(State), CurPartitions),
     indexable_partition_seqs(State, Seqs).
 
 -spec indexable_partition_seqs(#state{}, partition_seqs()) -> partition_seqs().
@@ -2723,7 +2723,7 @@ indexable_partition_seqs(#state{group = Group}, Seqs) ->
 -spec active_partition_seqs(#state{}) -> partition_seqs().
 active_partition_seqs(#state{group = Group} = State) ->
     ActiveParts = couch_set_view_util:decode_bitmask(?set_abitmask(Group)),
-    {ok, CurSeqs} = couch_set_view_util:get_seqs(?upr_pid(State), ActiveParts),
+    {ok, CurSeqs} = couch_set_view_util:get_seqs(?dcp_pid(State), ActiveParts),
     CurSeqs.
 
 -spec active_partition_seqs(#state{}, partition_seqs()) -> partition_seqs().
@@ -2789,12 +2789,12 @@ compact_group(#state{group = Group} = State) ->
     reset_file(Fd, Group#set_view_group{filepath = CompactFilepath}).
 
 
--spec stop_upr_streams(#state{}) -> ok.
-stop_upr_streams(State) ->
-    UprPid = ?upr_pid(State),
-    ActiveStreams = couch_upr_client:list_streams(UprPid),
+-spec stop_dcp_streams(#state{}) -> ok.
+stop_dcp_streams(State) ->
+    DcpPid = ?dcp_pid(State),
+    ActiveStreams = couch_dcp_client:list_streams(DcpPid),
     lists:foreach(fun(ActiveStream) ->
-        case couch_upr_client:remove_stream(UprPid, ActiveStream) of
+        case couch_dcp_client:remove_stream(DcpPid, ActiveStream) of
         ok ->
             ok;
         {error, vbucket_stream_not_found} ->
@@ -2819,7 +2819,7 @@ stop_updater(#state{updater_pid = Pid, initial_build = true} = State) when is_pi
               [?set_name(State), ?type(State), ?category(State),
                ?group_id(State), LostTime]),
     couch_set_view_util:shutdown_wait(Pid),
-    stop_upr_streams(State),
+    stop_dcp_streams(State),
     inc_util_stat(#util_stats.updater_interruptions, 1),
     inc_util_stat(#util_stats.wasted_indexing_time, LostTime),
     State#state{
@@ -2842,7 +2842,7 @@ stop_updater(#state{updater_pid = Pid} = State) when is_pid(Pid) ->
         receive {'EXIT', Pid, _} -> ok after 0 -> ok end,
         after_updater_stopped(State2, Reason)
     end,
-    stop_upr_streams(State),
+    stop_dcp_streams(State),
     ok = couch_file:refresh_eof((State#state.group)#set_view_group.fd),
     erlang:demonitor(MRef, [flush]),
     NewState.
@@ -2945,7 +2945,7 @@ start_updater(#state{updater_pid = nil, updater_state = not_running} = State, Op
         ok;
     Options2 ->
         CurPartitions = lists:seq(0, ?MAX_NUM_PARTITIONS - 1),
-        {ok, Seqs} = couch_set_view_util:get_seqs(?upr_pid(State), CurPartitions)
+        {ok, Seqs} = couch_set_view_util:get_seqs(?dcp_pid(State), CurPartitions)
     end,
     CurSeqs = indexable_partition_seqs(State, Seqs),
     case CurSeqs > ?set_seqs(Group) of
@@ -3356,7 +3356,7 @@ process_view_group_request(#set_view_group_req{stale = false} = Req, From, State
     #set_view_group_req{debug = Debug} = Req,
 
     CurPartitions = lists:seq(0, ?MAX_NUM_PARTITIONS - 1),
-    {ok, Seqs} = couch_set_view_util:get_seqs(?upr_pid(State), CurPartitions),
+    {ok, Seqs} = couch_set_view_util:get_seqs(?dcp_pid(State), CurPartitions),
     Options = [{seqs, Seqs}],
     CurSeqs = active_partition_seqs(State, Seqs),
     Waiter = #waiter{from = From, debug = Debug, seqs = CurSeqs},
@@ -3620,7 +3620,7 @@ process_monitor_partition_update(#state{group = Group} = State, PartId, Ref, Pid
     false ->
         ok
     end,
-    {ok, [{PartId, CurSeq}]} = couch_set_view_util:get_seqs(?upr_pid(State), [PartId]),
+    {ok, [{PartId, CurSeq}]} = couch_set_view_util:get_seqs(?dcp_pid(State), [PartId]),
     case IsPending of
     true ->
         Seq = 0;
@@ -3979,7 +3979,7 @@ try_update_seqs(#state{seqs_cache = SeqsCache} = State) ->
     false ->
         IsWaiting2 = case timer:now_diff(os:timestamp(), Ts) > ?SEQS_CACHE_TTL of
         true ->
-            couch_upr_client:get_sequence_numbers_async(?upr_pid(State)),
+            couch_dcp_client:get_sequence_numbers_async(?dcp_pid(State)),
             true;
         false ->
             false

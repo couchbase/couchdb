@@ -10,9 +10,9 @@
 % License for the specific language governing permissions and limitations under
 % the License.
 
-% This module is for parsing and encoding all the UPR commands that are needed
+% This module is for parsing and encoding all the DCP commands that are needed
 % by the indexer.
--module(couch_upr_consumer).
+-module(couch_dcp_consumer).
 
 -export([parse_header/1, parse_snapshot_marker/1, parse_snapshot_mutation/4,
     parse_snapshot_deletion/2, parse_failover_log/1, parse_stat/4]).
@@ -22,16 +22,16 @@
 -export([encode_noop_response/1, encode_buffer_request/2,
     encode_control_request/3]).
 
--include_lib("couch_upr/include/couch_upr.hrl").
--include_lib("couch_upr/include/couch_upr_typespecs.hrl").
+-include_lib("couch_dcp/include/couch_dcp.hrl").
+-include_lib("couch_dcp/include/couch_dcp_typespecs.hrl").
 
 
 % TODO vmx 2013-08-22: Bad match error handling
 -spec parse_header(<<_:192>>) ->
                           {atom(), size()} |
-                          {atom(), upr_status(), request_id(), size()} |
-                          {atom(), upr_status(), request_id()} |
-                          {atom(), upr_status(), request_id(), size(),
+                          {atom(), dcp_status(), request_id(), size()} |
+                          {atom(), dcp_status(), request_id()} |
+                          {atom(), dcp_status(), request_id(), size(),
                            size()} |
                           {atom(), partition_id(), request_id(), size()} |
                           {atom(), partition_id(), request_id(), size(),
@@ -40,59 +40,59 @@
                            size(), uint64()} |
                           {atom(), partition_id(), request_id(), size(),
                            size(), size(), uint64()}.
-parse_header(<<?UPR_MAGIC_RESPONSE,
+parse_header(<<?DCP_MAGIC_RESPONSE,
                Opcode,
-               KeyLength:?UPR_SIZES_KEY_LENGTH,
+               KeyLength:?DCP_SIZES_KEY_LENGTH,
                _ExtraLength,
                0,
-               Status:?UPR_SIZES_STATUS,
-               BodyLength:?UPR_SIZES_BODY,
-               RequestId:?UPR_SIZES_OPAQUE,
-               _Cas:?UPR_SIZES_CAS>>) ->
+               Status:?DCP_SIZES_STATUS,
+               BodyLength:?DCP_SIZES_BODY,
+               RequestId:?DCP_SIZES_OPAQUE,
+               _Cas:?DCP_SIZES_CAS>>) ->
     case Opcode of
-    ?UPR_OPCODE_STREAM_REQUEST ->
+    ?DCP_OPCODE_STREAM_REQUEST ->
         {stream_request, Status, RequestId, BodyLength};
-    ?UPR_OPCODE_OPEN_CONNECTION ->
+    ?DCP_OPCODE_OPEN_CONNECTION ->
         {open_connection, RequestId};
-    ?UPR_OPCODE_FAILOVER_LOG_REQUEST ->
+    ?DCP_OPCODE_FAILOVER_LOG_REQUEST ->
         {failover_log, Status, RequestId, BodyLength};
-    ?UPR_OPCODE_STATS ->
+    ?DCP_OPCODE_STATS ->
         {stats, Status, RequestId, BodyLength, KeyLength};
-    ?UPR_OPCODE_SASL_AUTH ->
+    ?DCP_OPCODE_SASL_AUTH ->
         {sasl_auth, Status, RequestId, BodyLength};
-    ?UPR_OPCODE_STREAM_CLOSE ->
+    ?DCP_OPCODE_STREAM_CLOSE ->
         {stream_close, Status, RequestId, BodyLength};
-    ?UPR_OPCODE_SELECT_BUCKET ->
+    ?DCP_OPCODE_SELECT_BUCKET ->
         {select_bucket, Status, RequestId, BodyLength};
-    ?UPR_OPCODE_UPR_BUFFER ->
+    ?DCP_OPCODE_DCP_BUFFER ->
         {buffer_ack, Status, RequestId};
-    ?UPR_OPCODE_UPR_CONTROL ->
+    ?DCP_OPCODE_DCP_CONTROL ->
         {control_request, Status, RequestId}
     end;
-parse_header(<<?UPR_MAGIC_REQUEST,
+parse_header(<<?DCP_MAGIC_REQUEST,
                Opcode,
-               KeyLength:?UPR_SIZES_KEY_LENGTH,
+               KeyLength:?DCP_SIZES_KEY_LENGTH,
                ExtraLength,
                DataType,
-               PartId:?UPR_SIZES_PARTITION,
-               BodyLength:?UPR_SIZES_BODY,
-               RequestId:?UPR_SIZES_OPAQUE,
-               Cas:?UPR_SIZES_CAS>>) ->
+               PartId:?DCP_SIZES_PARTITION,
+               BodyLength:?DCP_SIZES_BODY,
+               RequestId:?DCP_SIZES_OPAQUE,
+               Cas:?DCP_SIZES_CAS>>) ->
     case Opcode of
-    ?UPR_OPCODE_STREAM_END ->
+    ?DCP_OPCODE_STREAM_END ->
         {stream_end, PartId, RequestId, BodyLength};
-    ?UPR_OPCODE_SNAPSHOT_MARKER ->
+    ?DCP_OPCODE_SNAPSHOT_MARKER ->
         {snapshot_marker, PartId, RequestId, BodyLength};
-    ?UPR_OPCODE_MUTATION ->
+    ?DCP_OPCODE_MUTATION ->
         {snapshot_mutation, PartId, RequestId, KeyLength, BodyLength,
             ExtraLength, Cas, DataType};
-    ?UPR_OPCODE_DELETION ->
+    ?DCP_OPCODE_DELETION ->
         {snapshot_deletion, PartId, RequestId, KeyLength, BodyLength, Cas,
             DataType};
-    ?UPR_OPCODE_EXPIRATION ->
+    ?DCP_OPCODE_EXPIRATION ->
         {snapshot_expiration, PartId, RequestId, KeyLength, BodyLength, Cas,
             DataType};
-    ?UPR_OPCODE_UPR_NOOP ->
+    ?DCP_OPCODE_DCP_NOOP ->
         {noop_request, RequestId}
     end.
 
@@ -100,22 +100,22 @@ parse_header(<<?UPR_MAGIC_REQUEST,
                                    {snapshot_marker, update_seq(),
                                     update_seq(), non_neg_integer()}.
 parse_snapshot_marker(Body) ->
-    <<StartSeq:?UPR_SIZES_BY_SEQ,
-      EndSeq:?UPR_SIZES_BY_SEQ,
-      Type:?UPR_SIZES_SNAPSHOT_TYPE>> = Body,
+    <<StartSeq:?DCP_SIZES_BY_SEQ,
+      EndSeq:?DCP_SIZES_BY_SEQ,
+      Type:?DCP_SIZES_SNAPSHOT_TYPE>> = Body,
     {snapshot_marker, StartSeq, EndSeq, Type}.
 
 
 -spec parse_snapshot_mutation(size(), binary(), size(), size()) ->
                                      {snapshot_mutation, #mutation{}}.
 parse_snapshot_mutation(KeyLength, Body, BodyLength, ExtraLength) ->
-    <<Seq:?UPR_SIZES_BY_SEQ,
-      RevSeq:?UPR_SIZES_REV_SEQ,
-      Flags:?UPR_SIZES_FLAGS,
-      Expiration:?UPR_SIZES_EXPIRATION,
-      LockTime:?UPR_SIZES_LOCK,
-      MetadataLength:?UPR_SIZES_METADATA_LENGTH,
-      _Nru:?UPR_SIZES_NRU_LENGTH,
+    <<Seq:?DCP_SIZES_BY_SEQ,
+      RevSeq:?DCP_SIZES_REV_SEQ,
+      Flags:?DCP_SIZES_FLAGS,
+      Expiration:?DCP_SIZES_EXPIRATION,
+      LockTime:?DCP_SIZES_LOCK,
+      MetadataLength:?DCP_SIZES_METADATA_LENGTH,
+      _Nru:?DCP_SIZES_NRU_LENGTH,
       Key:KeyLength/binary,
       Rest/binary>> = Body,
     ValueLength = BodyLength - ExtraLength - KeyLength - MetadataLength,
@@ -140,9 +140,9 @@ parse_snapshot_deletion(KeyLength, Body) ->
     % XXX vmx 2014-01-07: No metadata support for now. Make it so it breaks
     % once it's there.
     MetadataLength = 0,
-    <<Seq:?UPR_SIZES_BY_SEQ,
-      RevSeq:?UPR_SIZES_REV_SEQ,
-      MetadataLength:?UPR_SIZES_METADATA_LENGTH,
+    <<Seq:?DCP_SIZES_BY_SEQ,
+      RevSeq:?DCP_SIZES_REV_SEQ,
+      MetadataLength:?DCP_SIZES_METADATA_LENGTH,
       Key:KeyLength/binary,
       Metadata:MetadataLength/binary>> = Body,
     {snapshot_deletion, {Seq, RevSeq, Key, Metadata}}.
@@ -154,19 +154,19 @@ parse_failover_log(Body) ->
     parse_failover_log(Body, []).
 parse_failover_log(<<>>, Acc) ->
     {ok, lists:reverse(Acc)};
-parse_failover_log(<<PartUuid:?UPR_SIZES_PARTITION_UUID,
-                     PartSeq:?UPR_SIZES_BY_SEQ,
+parse_failover_log(<<PartUuid:?DCP_SIZES_PARTITION_UUID,
+                     PartSeq:?DCP_SIZES_BY_SEQ,
                      Rest/binary>>,
                    Acc) ->
     parse_failover_log(Rest, [{PartUuid, PartSeq}|Acc]).
 
 
--spec parse_stat(binary(), upr_status(), size(), size()) ->
+-spec parse_stat(binary(), dcp_status(), size(), size()) ->
                         {ok, {binary(), binary()}} |
-                        {error, {upr_status(), binary()}}.
+                        {error, {dcp_status(), binary()}}.
 parse_stat(Body, Status, 0, _ValueLength) ->
     {error, {Status, Body}};
-parse_stat(Body, ?UPR_STATUS_OK, KeyLength, ValueLength) ->
+parse_stat(Body, ?DCP_STATUS_OK, KeyLength, ValueLength) ->
     <<Key:KeyLength/binary, Value:ValueLength/binary>> = Body,
     {ok, {Key, Value}}.
 
@@ -182,19 +182,19 @@ encode_sasl_auth(User, Passwd, RequestId) ->
     BodyLength = byte_size(Body),
     ExtraLength = 0,
 
-    Header = <<?UPR_MAGIC_REQUEST,
-               ?UPR_OPCODE_SASL_AUTH,
-               KeyLength:?UPR_SIZES_KEY_LENGTH,
+    Header = <<?DCP_MAGIC_REQUEST,
+               ?DCP_OPCODE_SASL_AUTH,
+               KeyLength:?DCP_SIZES_KEY_LENGTH,
                ExtraLength,
                0,
-               0:?UPR_SIZES_PARTITION,
-               BodyLength:?UPR_SIZES_BODY,
-               RequestId:?UPR_SIZES_OPAQUE,
-               0:?UPR_SIZES_CAS>>,
+               0:?DCP_SIZES_PARTITION,
+               BodyLength:?DCP_SIZES_BODY,
+               RequestId:?DCP_SIZES_OPAQUE,
+               0:?DCP_SIZES_CAS>>,
     <<Header/binary, Body/binary>>.
 
 
-%UPR_SELECT_BUCKET command
+%DCP_SELECT_BUCKET command
 %Field        (offset) (value)
 %Magic        (0)    : 0x80
 %Opcode       (1)    : 0x50
@@ -210,18 +210,18 @@ encode_sasl_auth(User, Passwd, RequestId) ->
 encode_select_bucket(Bucket, RequestId) ->
     KeyLength = byte_size(Bucket),
     ExtraLength = 0,
-    Header = <<?UPR_MAGIC_REQUEST,
-               ?UPR_OPCODE_SELECT_BUCKET,
-               KeyLength:?UPR_SIZES_KEY_LENGTH,
+    Header = <<?DCP_MAGIC_REQUEST,
+               ?DCP_OPCODE_SELECT_BUCKET,
+               KeyLength:?DCP_SIZES_KEY_LENGTH,
                ExtraLength,
                0,
-               0:?UPR_SIZES_PARTITION,
-               KeyLength:?UPR_SIZES_BODY,
-               RequestId:?UPR_SIZES_OPAQUE,
-               0:?UPR_SIZES_CAS>>,
+               0:?DCP_SIZES_PARTITION,
+               KeyLength:?DCP_SIZES_BODY,
+               RequestId:?DCP_SIZES_OPAQUE,
+               0:?DCP_SIZES_CAS>>,
     <<Header/binary, Bucket/binary>>.
 
-%UPR_OPEN command
+%DCP_OPEN command
 %Field        (offset) (value)
 %Magic        (0)    : 0x80
 %Opcode       (1)    : 0x50
@@ -237,26 +237,26 @@ encode_select_bucket(Bucket, RequestId) ->
 %Key          (32-55): bucketstream vb[100-105]
 -spec encode_open_connection(binary(), request_id()) -> binary().
 encode_open_connection(Name, RequestId) ->
-    Body = <<0:?UPR_SIZES_SEQNO,
-             ?UPR_FLAG_PRODUCER:?UPR_SIZES_FLAGS,
+    Body = <<0:?DCP_SIZES_SEQNO,
+             ?DCP_FLAG_PRODUCER:?DCP_SIZES_FLAGS,
              Name/binary>>,
 
     KeyLength = byte_size(Name),
     BodyLength = byte_size(Body),
     ExtraLength = BodyLength - KeyLength,
 
-    Header = <<?UPR_MAGIC_REQUEST,
-               ?UPR_OPCODE_OPEN_CONNECTION,
-               KeyLength:?UPR_SIZES_KEY_LENGTH,
+    Header = <<?DCP_MAGIC_REQUEST,
+               ?DCP_OPCODE_OPEN_CONNECTION,
+               KeyLength:?DCP_SIZES_KEY_LENGTH,
                ExtraLength,
                0,
-               0:?UPR_SIZES_PARTITION,
-               BodyLength:?UPR_SIZES_BODY,
-               RequestId:?UPR_SIZES_OPAQUE,
-               0:?UPR_SIZES_CAS>>,
+               0:?DCP_SIZES_PARTITION,
+               BodyLength:?DCP_SIZES_BODY,
+               RequestId:?DCP_SIZES_OPAQUE,
+               0:?DCP_SIZES_CAS>>,
     <<Header/binary, Body/binary>>.
 
-%UPR_STREAM_REQ command
+%DCP_STREAM_REQ command
 %Field                  (offset) (value)
 %Magic                  (0)    : 0x80
 %Opcode                 (1)    : 0x53
@@ -279,30 +279,30 @@ encode_open_connection(Name, RequestId) ->
                             uuid(), update_seq(), update_seq()) -> binary().
 encode_stream_request(PartId, RequestId, Flags, StartSeq, EndSeq, PartUuid,
         SnapshotStart, SnapshotEnd) ->
-    Body = <<Flags:?UPR_SIZES_FLAGS,
-             0:?UPR_SIZES_RESERVED,
-             StartSeq:?UPR_SIZES_BY_SEQ,
-             EndSeq:?UPR_SIZES_BY_SEQ,
-             PartUuid:?UPR_SIZES_PARTITION_UUID,
-             SnapshotStart:?UPR_SIZES_BY_SEQ,
-             SnapshotEnd:?UPR_SIZES_BY_SEQ>>,
+    Body = <<Flags:?DCP_SIZES_FLAGS,
+             0:?DCP_SIZES_RESERVED,
+             StartSeq:?DCP_SIZES_BY_SEQ,
+             EndSeq:?DCP_SIZES_BY_SEQ,
+             PartUuid:?DCP_SIZES_PARTITION_UUID,
+             SnapshotStart:?DCP_SIZES_BY_SEQ,
+             SnapshotEnd:?DCP_SIZES_BY_SEQ>>,
 
     BodyLength = byte_size(Body),
     ExtraLength = BodyLength,
 
-    Header = <<?UPR_MAGIC_REQUEST,
-               ?UPR_OPCODE_STREAM_REQUEST,
-               0:?UPR_SIZES_KEY_LENGTH,
+    Header = <<?DCP_MAGIC_REQUEST,
+               ?DCP_OPCODE_STREAM_REQUEST,
+               0:?DCP_SIZES_KEY_LENGTH,
                ExtraLength,
                0,
-               PartId:?UPR_SIZES_PARTITION,
-               BodyLength:?UPR_SIZES_BODY,
-               RequestId:?UPR_SIZES_OPAQUE,
-               0:?UPR_SIZES_CAS>>,
+               PartId:?DCP_SIZES_PARTITION,
+               BodyLength:?DCP_SIZES_BODY,
+               RequestId:?DCP_SIZES_OPAQUE,
+               0:?DCP_SIZES_CAS>>,
     <<Header/binary, Body/binary>>.
 
 
-%UPR_CLOSE_STREAM command
+%DCP_CLOSE_STREAM command
 %Field        (offset) (value)
 %Magic        (0)    : 0x80
 %Opcode       (1)    : 0x52
@@ -314,18 +314,18 @@ encode_stream_request(PartId, RequestId, Flags, StartSeq, EndSeq, PartUuid,
 %Opaque       (12-15): 0xdeadbeef
 %CAS          (16-23): 0x0000000000000000
 encode_stream_close(PartId, RequestId) ->
-    Header = <<?UPR_MAGIC_REQUEST,
-               ?UPR_OPCODE_STREAM_CLOSE,
-               0:?UPR_SIZES_KEY_LENGTH,
+    Header = <<?DCP_MAGIC_REQUEST,
+               ?DCP_OPCODE_STREAM_CLOSE,
+               0:?DCP_SIZES_KEY_LENGTH,
                0,
                0,
-               PartId:?UPR_SIZES_PARTITION,
-               0:?UPR_SIZES_BODY,
-               RequestId:?UPR_SIZES_OPAQUE,
-               0:?UPR_SIZES_CAS>>,
+               PartId:?DCP_SIZES_PARTITION,
+               0:?DCP_SIZES_BODY,
+               RequestId:?DCP_SIZES_OPAQUE,
+               0:?DCP_SIZES_CAS>>,
     Header.
 
-%UPR_GET_FAILOVER_LOG command
+%DCP_GET_FAILOVER_LOG command
 %Field        (offset) (value)
 %Magic        (0)    : 0x80
 %Opcode       (1)    : 0x54
@@ -338,15 +338,15 @@ encode_stream_close(PartId, RequestId) ->
 %CAS          (16-23): 0x0000000000000000
 -spec encode_failover_log_request(partition_id(), request_id()) -> binary().
 encode_failover_log_request(PartId, RequestId) ->
-    Header = <<?UPR_MAGIC_REQUEST,
-               ?UPR_OPCODE_FAILOVER_LOG_REQUEST,
-               0:?UPR_SIZES_KEY_LENGTH,
+    Header = <<?DCP_MAGIC_REQUEST,
+               ?DCP_OPCODE_FAILOVER_LOG_REQUEST,
+               0:?DCP_SIZES_KEY_LENGTH,
                0,
                0,
-               PartId:?UPR_SIZES_PARTITION,
-               0:?UPR_SIZES_BODY,
-               RequestId:?UPR_SIZES_OPAQUE,
-               0:?UPR_SIZES_CAS>>,
+               PartId:?DCP_SIZES_PARTITION,
+               0:?DCP_SIZES_BODY,
+               RequestId:?DCP_SIZES_OPAQUE,
+               0:?DCP_SIZES_CAS>>,
     <<Header/binary>>.
 
 
@@ -375,18 +375,18 @@ encode_stat_request(Stat, PartId, RequestId) ->
     KeyLength = BodyLength = byte_size(Body),
     ExtraLength = 0,
 
-    Header = <<?UPR_MAGIC_REQUEST,
-               ?UPR_OPCODE_STATS,
-               KeyLength:?UPR_SIZES_KEY_LENGTH,
+    Header = <<?DCP_MAGIC_REQUEST,
+               ?DCP_OPCODE_STATS,
+               KeyLength:?DCP_SIZES_KEY_LENGTH,
                ExtraLength,
                0,
-               PartId2:?UPR_SIZES_PARTITION,
-               BodyLength:?UPR_SIZES_BODY,
-               RequestId:?UPR_SIZES_OPAQUE,
-               0:?UPR_SIZES_CAS>>,
+               PartId2:?DCP_SIZES_PARTITION,
+               BodyLength:?DCP_SIZES_BODY,
+               RequestId:?DCP_SIZES_OPAQUE,
+               0:?DCP_SIZES_CAS>>,
     <<Header/binary, Body/binary>>.
 
-%UPR_CONTROL_BINARY_REQUEST command
+%DCP_CONTROL_BINARY_REQUEST command
 %Field        (offset) (value)
 %Magic        (0)    : 0x80
 %Opcode       (1)    : 0x5E
@@ -413,18 +413,18 @@ encode_control_request(RequestId, Type, BufferSize) ->
     BodyLength = byte_size(Body),
     ExtraLength = 0,
 
-    Header = <<?UPR_MAGIC_REQUEST,
-               ?UPR_OPCODE_UPR_CONTROL,
-               KeyLength:?UPR_SIZES_KEY_LENGTH,
+    Header = <<?DCP_MAGIC_REQUEST,
+               ?DCP_OPCODE_DCP_CONTROL,
+               KeyLength:?DCP_SIZES_KEY_LENGTH,
                ExtraLength,
                0,
-               0:?UPR_SIZES_PARTITION,
-               BodyLength:?UPR_SIZES_BODY,
-               RequestId:?UPR_SIZES_OPAQUE,
-               0:?UPR_SIZES_CAS>>,
+               0:?DCP_SIZES_PARTITION,
+               BodyLength:?DCP_SIZES_BODY,
+               RequestId:?DCP_SIZES_OPAQUE,
+               0:?DCP_SIZES_CAS>>,
     <<Header/binary, Body/binary>>.
 
-%UPR_BUFFER_ACK_REQUEST command
+%DCP_BUFFER_ACK_REQUEST command
 %Field        (offset) (value)
 %Magic        (0)    : 0x80
 %Opcode       (1)    : 0x5D
@@ -438,21 +438,21 @@ encode_control_request(RequestId, Type, BufferSize) ->
 %BufferSize   (24-27): 0x00001000
 -spec encode_buffer_request(request_id(), size()) -> binary().
 encode_buffer_request(RequestId, BufferSize) ->
-    Extra = <<BufferSize:?UPR_SIZES_BUFFER_SIZE>>,
+    Extra = <<BufferSize:?DCP_SIZES_BUFFER_SIZE>>,
     BodyLength = ExtraLength = byte_size(Extra),
 
-    Header = <<?UPR_MAGIC_REQUEST,
-               ?UPR_OPCODE_UPR_BUFFER,
-               0:?UPR_SIZES_KEY_LENGTH,
+    Header = <<?DCP_MAGIC_REQUEST,
+               ?DCP_OPCODE_DCP_BUFFER,
+               0:?DCP_SIZES_KEY_LENGTH,
                ExtraLength,
                0,
-               0:?UPR_SIZES_PARTITION,
-               BodyLength:?UPR_SIZES_BODY,
-               RequestId:?UPR_SIZES_OPAQUE,
-               0:?UPR_SIZES_CAS>>,
+               0:?DCP_SIZES_PARTITION,
+               BodyLength:?DCP_SIZES_BODY,
+               RequestId:?DCP_SIZES_OPAQUE,
+               0:?DCP_SIZES_CAS>>,
     <<Header/binary, Extra/binary>>.
 
-%UPR_NOOP response
+%DCP_NOOP response
 %Field        (offset) (value)
 %Magic        (0)    : 0x81
 %Opcode       (1)    : 0x5C
@@ -466,12 +466,12 @@ encode_buffer_request(RequestId, BufferSize) ->
 
 -spec encode_noop_response(request_id()) -> binary().
 encode_noop_response(RequestId) ->
-    <<?UPR_MAGIC_RESPONSE,
-      ?UPR_OPCODE_UPR_NOOP,
-      0:?UPR_SIZES_KEY_LENGTH,
+    <<?DCP_MAGIC_RESPONSE,
+      ?DCP_OPCODE_DCP_NOOP,
+      0:?DCP_SIZES_KEY_LENGTH,
       0,
       0,
-      0:?UPR_SIZES_PARTITION,
-      0:?UPR_SIZES_BODY,
-      RequestId:?UPR_SIZES_OPAQUE,
-      0:?UPR_SIZES_CAS>>.
+      0:?DCP_SIZES_PARTITION,
+      0:?DCP_SIZES_BODY,
+      RequestId:?DCP_SIZES_OPAQUE,
+      0:?DCP_SIZES_CAS>>.
