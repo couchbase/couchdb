@@ -19,6 +19,9 @@
 -export([make_event_fun/2, view_qs/2, process_extra_params/2]).
 -export([simple_set_view_query/3]).
 
+% exports for spatial_merger
+-export([queue_debug_info/4, debug_info/3, get_set_view/5,
+         prepare_set_view/5]).
 
 -include("couch_db.hrl").
 -include_lib("couch_index_merger/include/couch_index_merger.hrl").
