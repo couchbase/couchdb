@@ -232,7 +232,7 @@ btree_kp_node_threshold = 6144
 indexer_max_insert_batch_size = 1048576
 ; Maximum size (in bytes) of documents sent to the JavaScript engine.
 ; A value of 0 means no limit, any document is passed to the engine.
-indexer_max_doc_size = 1048576
+indexer_max_doc_size = 20971520
 ; Sleep period for updates to wait when compactor is in retry phase.
 ; Value is in milliseconds.
 throttle_period = 0
