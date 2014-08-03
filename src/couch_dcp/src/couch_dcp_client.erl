@@ -25,6 +25,9 @@
 -export([init/1, terminate/2, handle_call/3, handle_cast/2, handle_info/2, code_change/3]).
 -export([format_status/2]).
 
+% TODO sarath 2014-08-04: Fix retry capability
+-export([add_new_stream/3]).
+
 -include("couch_db.hrl").
 -include_lib("couch_dcp/include/couch_dcp.hrl").
 -include_lib("couch_dcp/include/couch_dcp_typespecs.hrl").
@@ -245,8 +248,12 @@ enum_docs_since(Pid, PartId, PartVersions, StartSeq, EndSeq0, Flags,
             {error, too_large_failover_log};
         false ->
             InAcc2 = CallbackFn({part_versions, {PartId, FailoverLog}}, InAcc),
-            InAcc3 = receive_events(Pid, RequestId, CallbackFn, InAcc2),
-            {ok, InAcc3, FailoverLog}
+            case receive_events(Pid, RequestId, CallbackFn, InAcc2) of
+            {ok, InAcc3} ->
+                {ok, InAcc3, FailoverLog};
+            Error ->
+                Error
+            end
         end;
     {error, vbucket_stream_not_found} ->
         enum_docs_since(Pid, PartId, PartVersionsRest, StartSeq, EndSeq,
@@ -401,11 +408,12 @@ handle_info({get_stream_event, RequestId, From}, State) ->
     case stream_event_present(State, RequestId) of
     true ->
         Event = peek_stream_event(State, RequestId),
+        {Optype, _, _} = Event,
         {Msg, State6} = case check_and_send_buffer_ack(State, RequestId, Event, mutation) of
         {ok, State3} ->
             {State4, Event} = dequeue_stream_event(State3, RequestId),
-            State5 = case Event of
-            {stream_end, _, _} ->
+            State5 = case Optype =:= stream_end orelse Optype =:= error of
+            true ->
                 remove_request_queue(State4, RequestId);
             _ ->
                 State4
@@ -515,16 +523,16 @@ handle_info({stream_noop, RequestId}, State) ->
 handle_info({stream_event, RequestId, Event}, State) ->
     {Optype, Data, _Length} = Event,
     State2 = case Optype of
-    snapshot_marker ->
-        store_snapshot_seq(RequestId, Data, State);
-    snapshot_mutation ->
-        store_snapshot_mutation(RequestId, Data, State);
-    stream_end ->
+    Optype when Optype =:= stream_end orelse Optype =:= error ->
         #state{
             stream_info = StreamData
         } = State,
         StreamData2 = dict:erase(RequestId, StreamData),
         State#state{stream_info = StreamData2};
+    snapshot_marker ->
+        store_snapshot_seq(RequestId, Data, State);
+    snapshot_mutation ->
+        store_snapshot_mutation(RequestId, Data, State);
     snapshot_deletion ->
         store_snapshot_mutation(RequestId, Data, State)
     end,
@@ -533,8 +541,8 @@ handle_info({stream_event, RequestId, Event}, State) ->
         {State3, Waiter} = remove_stream_event_waiter(State2, RequestId),
         {Msg, State6} = case check_and_send_buffer_ack(State3, RequestId, Event, mutation) of
         {ok, State4} ->
-            State5 = case Event of
-            {stream_end, _, _} ->
+            State5 = case Optype =:= stream_end orelse Optype =:= error of
+            true ->
                 remove_request_queue(State4, RequestId);
             _ ->
                 State4
@@ -849,10 +857,12 @@ receive_events(Pid, RequestId, CallbackFn, InAcc) ->
     {Optype, Data} = get_stream_event(Pid, RequestId),
     case Optype of
     stream_end ->
-        InAcc;
+        {ok, InAcc};
     snapshot_marker ->
         InAcc2 = CallbackFn({snapshot_marker, Data}, InAcc),
         receive_events(Pid, RequestId, CallbackFn, InAcc2);
+    error ->
+        {error, Data};
     _ ->
         InAcc2 = CallbackFn(Data, InAcc),
         receive_events(Pid, RequestId, CallbackFn, InAcc2)
@@ -1181,6 +1191,9 @@ receive_worker(Socket, Timeout, Parent, MsgAcc0) ->
 % if required.
 -spec check_and_send_buffer_ack(#state{}, request_id(), tuple() | nil, atom()) ->
                         {ok, #state{}} | {error, closed | inet:posix()}.
+check_and_send_buffer_ack(State, _RequestId, {error, _, _}, _Type) ->
+    {ok, State};
+
 check_and_send_buffer_ack(State, RequestId, Event, Type) ->
     #state{
         socket = Socket,
@@ -1365,20 +1378,11 @@ restart_worker(State) ->
             pending_requests = dict:new(),
             worker_pid = WorkerPid
         },
-        #state{stream_info = StreamData} = State,
-        State4 = dict:fold(fun(RequestId, Value, Acc) ->
-            #stream_info{
-                part_id = PartId,
-                part_uuid= Puuid,
-                start_seq = StartSeq,
-                end_seq = EndSeq,
-                snapshot_seq = SnapshotSeq,
-                flags = Flags
-            } = Value,
-            add_new_stream({PartId, Puuid, StartSeq, EndSeq,
-                retry, RequestId, SnapshotSeq, Flags}, 0, Acc)
-        end, State3, StreamData),
-        {noreply, State4}
+        dict:map(fun(RequestId, _Value) ->
+            Event = {error, dcp_conn_closed, 0},
+            self() ! {stream_event, RequestId, Event}
+        end, State#state.stream_info),
+        {noreply, State3}
     end.
 
 -spec store_snapshot_seq(request_id(), {update_seq(), update_seq(),

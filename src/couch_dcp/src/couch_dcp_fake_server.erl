@@ -415,17 +415,27 @@ handle_call(is_control_req, _From, State) ->
     end,
     {reply, Val, State};
 
+% Close all connections if PartId = nil
 handle_call({close_connection, PartId}, _From, State) ->
      #state{
        streams = Streams
     } = State,
-    case lists:keytake(PartId, 1, Streams) of
-    {value, StreamMeta, Streams2} ->
-        {_PartId, {_RequestId, _Mutation, Socket, _HiSeq}} = StreamMeta,
-        ok = gen_tcp:close(Socket),
-        State2 = State#state{streams = Streams2},
-        {reply, ok, State2}
-    end.
+    Streams2 = lists:foldl(
+        fun({PartId2, {_RequestId, _Mutation, Socket, _HiSeq}} = Entry, Acc) ->
+            case PartId of
+            nil ->
+                ok = gen_tcp:close(Socket),
+                Acc;
+            PartId2 ->
+                ok = gen_tcp:close(Socket),
+                Acc;
+            _ ->
+                [Entry | Acc]
+            end
+        end,
+    [], Streams),
+    State2 = State#state{streams = Streams2},
+    {reply, ok, State2}.
 
 -spec handle_cast(any(), #state{}) ->
                          {stop, {unexpected_cast, any()}, #state{}}.

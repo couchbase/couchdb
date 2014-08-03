@@ -372,6 +372,7 @@ test() ->
     {StreamReq0_5, _} = couch_dcp_client:add_stream(Pid, 2,
         first_uuid(InitialFailoverLog2), 0, 500, ?DCP_FLAG_NOFLAG),
 
+    % Connection close and reconnection tests
     ok = couch_dcp_fake_server:send_single_mutation(),
     {snapshot_mutation, Mutation1} = couch_dcp_client:get_stream_event(Pid, StreamReq0_5),
     #dcp_doc{seq = SeqNo1} = Mutation1,
@@ -382,19 +383,14 @@ test() ->
     NewSocket = gen_server:call(Pid, get_socket),
     etap:isnt(OldSocket, NewSocket, "Socket changed"),
     ok = couch_dcp_fake_server:send_single_mutation(),
-    {snapshot_mutation, Mutation2} = couch_dcp_client:get_stream_event(Pid, StreamReq0_5),
-    #dcp_doc{seq = SeqNo2} = Mutation2,
-    etap:is(SeqNo1+1, SeqNo2, "Got the correct mutation after connection close"),
+    ErrorResp = couch_dcp_client:get_stream_event(Pid, StreamReq0_5),
+    etap:is({error, dcp_conn_closed}, ErrorResp, "Got the error response after connection close"),
+    EmptyStreamList = couch_dcp_client:list_streams(Pid),
+    etap:is([], EmptyStreamList, "Stream is correctly removed after connection close"),
 
-    receive_mutation(10, Pid, StreamReq0_5),
-    ok = couch_dcp_fake_server:close_connection(2),
+    ok = couch_dcp_fake_server:close_connection(nil),
     % wait for sometime to do reconnect from couch_dcp client
     timer:sleep(4000),
-    couch_dcp_fake_server:send_single_mutation(),
-    {snapshot_mutation, Mutation3} = couch_dcp_client:get_stream_event(Pid, StreamReq0_5),
-    #dcp_doc{seq = SeqNo3} = Mutation3,
-    etap:is(SeqNo2+11, SeqNo3, "Got the correct mutation after connection close"),
-
     couch_dcp_client:remove_stream(Pid, 2),
     couch_dcp_fake_server:continue_mutations(),
 
