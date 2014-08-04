@@ -1358,12 +1358,17 @@ handle_info({get_stats, nil, StatsResponse}, State) ->
             is_waiting = false,
             seqs = Seqs
         },
-        CurSeqs = indexable_partition_seqs(State, Seqs),
-        State2 = case CurSeqs > ?set_seqs(State#state.group) of
+        State2 = case is_pid(State#state.updater_pid) of
         true ->
-            do_start_updater(State, CurSeqs, []);
+            State;
         false ->
-            State
+            CurSeqs = indexable_partition_seqs(State, Seqs),
+            case CurSeqs > ?set_seqs(State#state.group) of
+            true ->
+                do_start_updater(State, CurSeqs, []);
+            false ->
+                State
+            end
         end,
         % If a rollback happened in between async seqs update request and
         % its response, is_waiting flag will be resetted. In that case, we should
