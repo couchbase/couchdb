@@ -25,9 +25,6 @@
 -export([init/1, terminate/2, handle_call/3, handle_cast/2, handle_info/2, code_change/3]).
 -export([format_status/2]).
 
-% TODO sarath 2014-08-04: Fix retry capability
--export([add_new_stream/3]).
-
 -include("couch_db.hrl").
 -include_lib("couch_dcp/include/couch_dcp.hrl").
 -include_lib("couch_dcp/include/couch_dcp_typespecs.hrl").
@@ -82,7 +79,7 @@ start(Name, Bucket, AdmUser, AdmPasswd, BufferSize) ->
     gen_server:start_link(?MODULE, [Name, Bucket, AdmUser, AdmPasswd, BufferSize], []).
 
 -spec add_stream(pid(), partition_id(), uuid(), update_seq(),
-    update_seq(), dcp_data_type()) -> {request_id(), term()}.
+    update_seq(), dcp_data_type()) -> {error, term()} | {request_id(), term()}.
 add_stream(Pid, PartId, PartUuid, StartSeq, EndSeq, Flags) ->
     gen_server:call(
         Pid, {add_stream, PartId, PartUuid, StartSeq, EndSeq, Flags}, ?TIMEOUT).
@@ -239,33 +236,37 @@ enum_docs_since(Pid, PartId, PartVersions, StartSeq, EndSeq0, Flags,
     false ->
         EndSeq0
     end,
-    {RequestId, Resp} =  add_stream(
-        Pid, PartId, PartUuid, StartSeq, EndSeq, Flags),
-    case Resp of
-    {failoverlog, FailoverLog} ->
-        case length(FailoverLog) > ?DCP_MAX_FAILOVER_LOG_SIZE of
-        true ->
-            {error, too_large_failover_log};
-        false ->
-            InAcc2 = CallbackFn({part_versions, {PartId, FailoverLog}}, InAcc),
-            case receive_events(Pid, RequestId, CallbackFn, InAcc2) of
-            {ok, InAcc3} ->
-                {ok, InAcc3, FailoverLog};
-            Error ->
-                Error
-            end
-        end;
-    {error, vbucket_stream_not_found} ->
-        enum_docs_since(Pid, PartId, PartVersionsRest, StartSeq, EndSeq,
-            Flags, CallbackFn, InAcc);
-    {error, vbucket_stream_tmp_fail} ->
-        ?LOG_INFO("dcp client (~p): Temporary failure on stream request "
-            "on partition ~p. Retrying...", [Pid, PartId]),
-        timer:sleep(100),
-        enum_docs_since(Pid, PartId, PartVersions, StartSeq, EndSeq,
-            Flags, CallbackFn, InAcc);
-    _ ->
-        Resp
+
+    case add_stream(Pid, PartId, PartUuid, StartSeq, EndSeq, Flags) of
+    {error, _} = Error ->
+        Error;
+    {RequestId, Resp} ->
+        case Resp of
+        {failoverlog, FailoverLog} ->
+            case length(FailoverLog) > ?DCP_MAX_FAILOVER_LOG_SIZE of
+            true ->
+                {error, too_large_failover_log};
+            false ->
+                InAcc2 = CallbackFn({part_versions, {PartId, FailoverLog}}, InAcc),
+                case receive_events(Pid, RequestId, CallbackFn, InAcc2) of
+                {ok, InAcc3} ->
+                    {ok, InAcc3, FailoverLog};
+                Error ->
+                    Error
+                end
+            end;
+        {error, vbucket_stream_not_found} ->
+            enum_docs_since(Pid, PartId, PartVersionsRest, StartSeq, EndSeq,
+                Flags, CallbackFn, InAcc);
+        {error, vbucket_stream_tmp_fail} ->
+            ?LOG_INFO("dcp client (~p): Temporary failure on stream request "
+                "on partition ~p. Retrying...", [Pid, PartId]),
+            timer:sleep(100),
+            enum_docs_since(Pid, PartId, PartVersions, StartSeq, EndSeq,
+                Flags, CallbackFn, InAcc);
+        _ ->
+            Resp
+        end
     end.
 
 
@@ -320,12 +321,10 @@ init([Name, Bucket, AdmUser, AdmPasswd, BufferSize]) ->
 % Add caller to the request queue and wait for gen_server to reply on response arrival
 handle_call({add_stream, PartId, PartUuid, StartSeq, EndSeq, Flags},
         From, State) ->
-    % TODO vmx 2014-04-04: And proper retry if the last request didn't return
-    % the full expected result
     SnapshotStart = StartSeq,
     SnapshotEnd = StartSeq,
     case add_new_stream({PartId, PartUuid, StartSeq, EndSeq,
-        init, 0, {SnapshotStart, SnapshotEnd}, Flags}, From, State) of
+        {SnapshotStart, SnapshotEnd}, Flags}, From, State) of
     {error, Reason} ->
         {reply, {error, Reason}, State};
     State2 ->
@@ -1328,33 +1327,22 @@ find_stream_info(RequestId, State) ->
     end.
 
 -spec add_new_stream({partition_id(), uuid(), update_seq(), update_seq(),
-        init | retry, request_id(), {update_seq(), update_seq()}, 0..255},
+        {update_seq(), update_seq()}, 0..255},
         {pid(), string()}, #state{}) -> #state{} | {error, closed | inet:posix()}.
-add_new_stream({PartId, PartUuid, StartSeq, EndSeq, Type, OldRequestId,
+add_new_stream({PartId, PartUuid, StartSeq, EndSeq,
     {SnapSeqStart, SnapSeqEnd}, Flags}, From, State) ->
    #state{
        socket = Socket,
        request_id = RequestId
     } = State,
-    Id = case Type of
-    init ->
-        RequestId;
-    retry ->
-        OldRequestId
-    end,
     StreamRequest = couch_dcp_consumer:encode_stream_request(
-        PartId, Id, Flags, StartSeq, EndSeq, PartUuid, SnapSeqStart, SnapSeqEnd),
+        PartId, RequestId, Flags, StartSeq, EndSeq, PartUuid, SnapSeqStart, SnapSeqEnd),
     case gen_tcp:send(Socket, StreamRequest) of
     ok ->
-        case Type of
-        init ->
-            State2 = insert_stream_info(PartId, RequestId, PartUuid, StartSeq, EndSeq,
-                State, Flags),
-            State3 = next_request_id(State2),
-            add_pending_request(State3, RequestId, {add_stream, PartId}, From);
-        retry ->
-            add_pending_request(State, OldRequestId, {add_stream, PartId}, nil)
-        end;
+        State2 = insert_stream_info(PartId, RequestId, PartUuid, StartSeq, EndSeq,
+            State, Flags),
+        State3 = next_request_id(State2),
+        add_pending_request(State3, RequestId, {add_stream, PartId}, From);
     Error ->
         {error, Error}
     end.
@@ -1378,6 +1366,18 @@ restart_worker(State) ->
             pending_requests = dict:new(),
             worker_pid = WorkerPid
         },
+        Error = {error, dcp_conn_closed},
+        dict:map(fun(_RequestId, {ReqInfo, SendTo}) ->
+            case ReqInfo of
+            get_stats ->
+                {MRef, From} = SendTo,
+                From ! {get_stats, MRef, Error};
+            {control_request, _} ->
+                ok;
+            _ ->
+                gen_server:reply(SendTo, Error)
+            end
+        end, State#state.pending_requests),
         dict:map(fun(RequestId, _Value) ->
             Event = {error, dcp_conn_closed, 0},
             self() ! {stream_event, RequestId, Event}
