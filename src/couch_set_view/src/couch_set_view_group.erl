@@ -1386,7 +1386,8 @@ handle_info({get_stats, nil, StatsResponse}, State) ->
                               [?set_name(State), ?type(State),
                                ?category(State), ?group_id(State),
                                StatsResponse]),
-        State
+        SeqsCache2 = SeqsCache#seqs_cache{is_waiting = false},
+        State#state{seqs_cache = SeqsCache2}
     end,
     {noreply, NewState}.
 
