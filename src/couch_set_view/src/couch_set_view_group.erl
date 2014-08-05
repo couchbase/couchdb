@@ -1363,20 +1363,25 @@ handle_info({'EXIT', Pid, Reason}, State) ->
     {stop, Reason, State};
 
 handle_info({get_stats, nil, StatsResponse}, State) ->
-    SeqsCache = State#state.seqs_cache,
+    #state{
+       seqs_cache = SeqsCache,
+       group = Group
+    } = State,
     NewState = case StatsResponse of
     {ok, Stats} ->
         Seqs = couch_dcp_client:parse_stats_seqnos(Stats),
+        Partitions = group_partitions(Group),
+        Seqs2 = filter_seqs(Partitions, Seqs),
         NewCacheVal = #seqs_cache{
             timestamp = os:timestamp(),
             is_waiting = false,
-            seqs = Seqs
+            seqs = Seqs2
         },
         State2 = case is_pid(State#state.updater_pid) of
         true ->
             State;
         false ->
-            CurSeqs = indexable_partition_seqs(State, Seqs),
+            CurSeqs = indexable_partition_seqs(State, Seqs2),
             case CurSeqs > ?set_seqs(State#state.group) of
             true ->
                 do_start_updater(State, CurSeqs, []);
@@ -4007,3 +4012,9 @@ try_update_seqs(#state{seqs_cache = SeqsCache} = State) ->
         SeqsCache2 = SeqsCache#seqs_cache{is_waiting = IsWaiting2},
         State#state{seqs_cache = SeqsCache2}
     end.
+
+-spec group_partitions(#set_view_group{}) -> ordsets:ordset(partition_id()).
+group_partitions(Group) ->
+    Indexable = lists:map(fun({P, _S}) -> P end, ?set_seqs(Group)),
+    Unindexable = lists:map(fun({P, _S}) -> P end, ?set_unindexable_seqs(Group)),
+    ordsets:union(Indexable, Unindexable).
