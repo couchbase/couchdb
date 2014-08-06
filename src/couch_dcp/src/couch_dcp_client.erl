@@ -15,11 +15,11 @@
 
 % Public API
 -export([start/5]).
--export([add_stream/6, get_sequence_numbers/2, get_num_items/2,
+-export([add_stream/6, get_seqs/2, get_num_items/2,
     get_failover_log/2]).
 -export([get_stream_event/2, remove_stream/2, list_streams/1]).
 -export([enum_docs_since/8, restart_worker/1]).
--export([get_sequence_numbers_async/1, parse_stats_seqnos/1]).
+-export([get_seqs_async/1, parse_stats_seqnos/1]).
 
 % gen_server callbacks
 -export([init/1, terminate/2, handle_call/3, handle_cast/2, handle_info/2, code_change/3]).
@@ -120,14 +120,14 @@ get_stats(Pid, Name, PartId) ->
     Reply.
 
 
-% The async get_sequence_numbers API requests asynchronous stats.
+% The async get_seqs API requests asynchronous stats.
 % The response will be sent to the caller process asynchronously in the
 % following message format:
 % {get_stats, nil, StatsResponse}.
 % The receiver needs to use parse_stats_seqnos() method to parse the
 % response to valid seqnos format.
--spec get_sequence_numbers_async(pid()) -> ok.
-get_sequence_numbers_async(Pid) ->
+-spec get_seqs_async(pid()) -> ok.
+get_seqs_async(Pid) ->
     Pid ! {get_stats, <<"vbucket-seqno">>, nil, {nil, self()}},
     ok.
 
@@ -145,21 +145,26 @@ parse_stats_seqnos(Stats) ->
     end, [], Stats).
 
 
--spec get_sequence_numbers(pid(), [partition_id()]) ->
-         {ok, [update_seq()] | {error, not_my_vbucket}} | {error, term()}.
-get_sequence_numbers(Pid, PartIds) ->
+-spec get_seqs(pid(), ordsets:ordset(partition_id()) | nil) ->
+         {ok, partition_seqs()} | {error, term()}.
+get_seqs(Pid, SortedPartIds) ->
+    case get_seqs(Pid) of
+    {ok, Seqs} ->
+        case SortedPartIds of
+        nil ->
+            {ok, Seqs};
+        _ ->
+            {ok, [{P, S} || {P, S} <- Seqs, ordsets:is_element(P, SortedPartIds)]}
+        end;
+    {error, _} = Error ->
+        Error
+    end.
+
+get_seqs(Pid) ->
     Reply = get_stats(Pid, <<"vbucket-seqno">>, nil),
     case Reply of
     {ok, Stats} ->
-        Seqs = lists:map(fun(PartId) ->
-            Key = list_to_binary([<<"vb_">>, integer_to_list(PartId), <<":high_seqno">>]),
-            case lists:keyfind(Key, 1, Stats) of
-            {Key, SeqBin} ->
-                list_to_integer(binary_to_list(SeqBin));
-            false ->
-                {error, not_my_vbucket}
-            end
-        end, PartIds),
+        Seqs = parse_stats_seqnos(Stats),
         {ok, Seqs};
     {error, _Error} = Error ->
         Error

@@ -44,6 +44,7 @@ update(Owner, Group, CurSeqs, CompactorRunning, TmpDir, Options) ->
         type = Type,
         name = DDocId
     } = Group,
+
     ActiveParts = couch_set_view_util:decode_bitmask(?set_abitmask(Group)),
     PassiveParts = couch_set_view_util:decode_bitmask(?set_pbitmask(Group)),
     NumChanges = couch_set_view_util:missing_changes_count(CurSeqs, ?set_seqs(Group)),
@@ -391,14 +392,6 @@ wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup) ->
     end.
 
 
--spec filter_seqs(list(partition_id()), partition_seqs()) ->
-                                        partition_seqs().
-filter_seqs(Parts, Seqs) ->
-    lists:filter(fun({PartId, _}) ->
-        lists:member(PartId, Parts)
-    end, Seqs).
-
-
 dcp_marker_to_string(Type) ->
     case Type of
     ?DCP_SNAPSHOT_TYPE_DISK ->
@@ -573,7 +566,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                   [GroupType, DDocId, SetName]),
         {ActiveChangesCount, MaxSeqs, PartVersions, Rollbacks} = lists:foldl(
             FoldFun, {0, orddict:new(), PartVersions0, ordsets:new()},
-            filter_seqs(ActiveParts, EndSeqs))
+            couch_set_view_util:filter_seqs(ActiveParts, EndSeqs))
     end,
     case PassiveParts of
     [] ->
@@ -587,7 +580,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                   [GroupType, DDocId, SetName]),
         {FinalChangesCount, MaxSeqs2, PartVersions2, Rollbacks2} = lists:foldl(
             FoldFun, {ActiveChangesCount, MaxSeqs, PartVersions, Rollbacks},
-            filter_seqs(PassiveParts, EndSeqs))
+            couch_set_view_util:filter_seqs(PassiveParts, EndSeqs))
     end,
     {FinalChangesCount3, MaxSeqs3, PartVersions3, Rollbacks3} =
         load_changes_from_passive_parts_in_mailbox(DcpPid,
@@ -619,7 +612,7 @@ load_changes_from_passive_parts_in_mailbox(DcpPid,
     {new_passive_partitions, Parts0} ->
         Parts = get_more_passive_partitions(Parts0),
         AddPartVersions = [{P, [{0, 0}]} || P <- Parts],
-        {ok, AddMaxSeqs} = couch_set_view_util:get_seqs(DcpPid, Parts),
+        {ok, AddMaxSeqs} = couch_dcp_client:get_seqs(DcpPid, Parts),
         PartVersions = lists:ukeymerge(1, AddPartVersions, PartVersions0),
 
         MaxSeqs = lists:ukeymerge(1, AddMaxSeqs, MaxSeqs0),

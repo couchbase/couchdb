@@ -29,7 +29,7 @@ num_docs_pp() -> num_docs() div num_set_partitions().
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(53),
+    etap:plan(54),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -123,21 +123,24 @@ test() ->
     etap:is(Error, {rollback, 0},
         "Correct error for wrong failover log"),
 
-    {ok, [Seq0]} = couch_dcp_client:get_sequence_numbers(Pid, [0]),
-    etap:is(Seq0, num_docs() div num_set_partitions(),
+    {ok, [Seq0]} = couch_dcp_client:get_seqs(Pid, [0]),
+    etap:is(Seq0, {0, num_docs() div num_set_partitions()},
         "Sequence number of partition 0 is correct"),
-    {ok, [Seq1]} = couch_dcp_client:get_sequence_numbers(Pid, [1]),
-    etap:is(Seq1, num_docs() div num_set_partitions(),
+    {ok, [Seq1]} = couch_dcp_client:get_seqs(Pid, [1]),
+    etap:is(Seq1, {1, num_docs() div num_set_partitions()},
         "Sequence number of partition 1 is correct"),
-    {ok, [Seq2]} = couch_dcp_client:get_sequence_numbers(Pid, [2]),
-    etap:is(Seq2, num_docs() div num_set_partitions(),
+    {ok, [Seq2]} = couch_dcp_client:get_seqs(Pid, [2]),
+    etap:is(Seq2, {2, num_docs() div num_set_partitions()},
          "Sequence number of partition 2 is correct"),
-    {ok, [Seq3]} = couch_dcp_client:get_sequence_numbers(Pid, [3]),
-    etap:is(Seq3, num_docs() div num_set_partitions(),
+    {ok, [Seq3]} = couch_dcp_client:get_seqs(Pid, [3]),
+    etap:is(Seq3, {3, num_docs() div num_set_partitions()},
         "Sequence number of partition 3 is correct"),
-    SeqError = couch_dcp_client:get_sequence_numbers(Pid, [100000]),
-    etap:is(SeqError, {ok, [{error, not_my_vbucket}]},
+    SeqMissing = couch_dcp_client:get_seqs(Pid, [100000]),
+    etap:is(SeqMissing, {ok, []},
         "Too high partition number returns correct error"),
+    SeqAll = couch_dcp_client:get_seqs(Pid, nil),
+    etap:is(SeqAll, {ok, [Seq0, Seq1, Seq2, Seq3]},
+        "Returned all partition seqs correctly"),
 
 
     % Test snapshot markers types
@@ -427,7 +430,7 @@ test() ->
     % Tests for requesting persisted items only
 
     couch_dcp_fake_server:set_persisted_items_fun(fun(Seq) -> Seq  end),
-    {ok, [HighSeq1]} = couch_dcp_client:get_sequence_numbers(Pid, [1]),
+    {ok, [{1, HighSeq1}]} = couch_dcp_client:get_seqs(Pid, [1]),
     {ok, ExpectedDocs1, _} =
         couch_dcp_client:enum_docs_since(
             Pid, 0, InitialFailoverLog0, 0, HighSeq1, ?DCP_FLAG_NOFLAG,
@@ -441,7 +444,7 @@ test() ->
 
     couch_dcp_fake_server:set_persisted_items_fun(
        fun(Seq) -> Seq div 2 end),
-    {ok, [HighSeq2]} = couch_dcp_client:get_sequence_numbers(Pid, [1]),
+    {ok, [{1, HighSeq2}]} = couch_dcp_client:get_seqs(Pid, [1]),
     {ok, ExpectedDocs2, _} =
         couch_dcp_client:enum_docs_since(
             Pid, 0, InitialFailoverLog0, 0, HighSeq2 div 2, ?DCP_FLAG_NOFLAG,
@@ -454,7 +457,7 @@ test() ->
         "The persisted sequence number is correct, seq/2"),
 
     couch_dcp_fake_server:set_persisted_items_fun(fun(Seq) -> Seq - 1 end),
-    {ok, [HighSeq3]} = couch_dcp_client:get_sequence_numbers(Pid, [1]),
+    {ok, [{1, HighSeq3}]} = couch_dcp_client:get_seqs(Pid, [1]),
     {ok, ExpectedDocs3, _} =
         couch_dcp_client:enum_docs_since(
             Pid, 0, InitialFailoverLog0, 0, HighSeq3 - 1, ?DCP_FLAG_NOFLAG,

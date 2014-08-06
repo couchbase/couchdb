@@ -21,6 +21,9 @@
 -type partition_id()             :: non_neg_integer().
 -type update_seq()               :: non_neg_integer().
 -type uuid()                     :: uint64().
+-type partition_seq()            :: {partition_id(), update_seq()}.
+% Manipulate via ordsets or orddict, keep it ordered by partition id.
+-type partition_seqs()           :: ordsets:ordset(partition_seq()).
 -type partition_version()        :: [{uuid(), update_seq()}].
 % Manipulate via ordsets or orddict, keep it ordered by partition id.
 -type partition_versions()       :: ordsets:ordset({partition_id(), partition_version()}).

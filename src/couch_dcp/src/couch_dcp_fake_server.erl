@@ -950,7 +950,7 @@ num_items_with_dups(CurrentNum, ItemsPerSnapshot, DupsPerSnapshot,
 -spec list_partitions(binary()) -> [partition_id()].
 list_partitions(SetName) ->
     FilePaths = couch_server:all_known_databases_with_prefix(SetName),
-    lists:foldl(fun(P, Acc) ->
+    Parts = lists:foldl(fun(P, Acc) ->
         File = lists:last(binary:split(P, <<"/">>)),
         case File of
         <<"master">> ->
@@ -959,7 +959,8 @@ list_partitions(SetName) ->
             PartId = list_to_integer(binary_to_list(BinPartId)),
             [PartId | Acc]
         end
-    end, [], FilePaths).
+    end, [], FilePaths),
+    lists:sort(Parts).
 
 -spec send_vbucket_seqnos_stats(#state{}, binary(),
         socket(), request_id(), [partition_id()]) -> ok.

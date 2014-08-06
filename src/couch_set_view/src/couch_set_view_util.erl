@@ -36,7 +36,7 @@
 -export([send_group_header/2, receive_group_header/3]).
 -export([remove_group_views/2, update_group_views/3]).
 -export([send_group_info/2]).
--export([get_seqs/2]).
+-export([filter_seqs/2]).
 
 
 -include("couch_db.hrl").
@@ -818,16 +818,9 @@ send_group_info(Group, Port) ->
         Views).
 
 
--spec get_seqs(pid(), ordsets:ordset(partition_id())) ->
-                      {ok, partition_seqs()}.
-get_seqs(DcpPid, Partitions) ->
-    {ok, Seqs} = couch_dcp_client:get_sequence_numbers(DcpPid, Partitions),
-    SeqsResult = lists:zipwith(fun(PartId, Seq) ->
-        case Seq of
-        {error, not_my_vbucket} ->
-            {error, {PartId, not_found}};
-        Seq ->
-            {PartId, Seq}
-        end
-    end, Partitions, Seqs),
-    {ok, SeqsResult}.
+-spec filter_seqs(ordsets:ordset(partition_id()), partition_seqs()) ->
+                                        partition_seqs().
+filter_seqs(SortedParts, Seqs) ->
+    lists:filter(fun({PartId, _Seq}) ->
+        lists:member(PartId, SortedParts)
+    end, Seqs).

@@ -1371,7 +1371,7 @@ handle_info({get_stats, nil, StatsResponse}, State) ->
     {ok, Stats} ->
         Seqs = couch_dcp_client:parse_stats_seqnos(Stats),
         Partitions = group_partitions(Group),
-        Seqs2 = filter_seqs(Partitions, Seqs),
+        Seqs2 = couch_set_view_util:filter_seqs(Partitions, Seqs),
         NewCacheVal = #seqs_cache{
             timestamp = os:timestamp(),
             is_waiting = false,
@@ -1737,11 +1737,9 @@ get_group_info(State) ->
     IndexSeqs = ?set_seqs(Group),
     IndexPartitions = [PartId || {PartId, _} <- IndexSeqs],
     % Extract the seqnum from KV store for all indexible partitions.
-    {ok, GroupSeqs} = couch_set_view_util:get_seqs(?dcp_pid(State),
-        GroupPartitions),
-    PartSeqs = lists:filter(fun({PartId, _}) ->
-        lists:member(PartId, IndexPartitions)
-    end, GroupSeqs),
+    {ok, GroupSeqs} = couch_dcp_client:get_seqs(?dcp_pid(State), GroupPartitions),
+    PartSeqs = couch_set_view_util:filter_seqs(IndexPartitions, GroupSeqs),
+
     % Calculate the total sum over difference of Seqnum between KV
     % and Index partition.
     SeqDiffs = lists:zipwith(
@@ -2280,7 +2278,7 @@ persist_partition_states(State, ActiveList, PassiveList, CleanupList, PendingTra
 update_waiting_list([], _DcpPid, _AddActiveList, _AddPassiveList, _AddCleanupList) ->
     [];
 update_waiting_list(WaitList, DcpPid, AddActiveList, AddPassiveList, AddCleanupList) ->
-    {ok, AddActiveSeqs} = couch_set_view_util:get_seqs(DcpPid, AddActiveList),
+    {ok, AddActiveSeqs} = couch_dcp_client:get_seqs(DcpPid, AddActiveList),
     RemoveSet = ordsets:union(AddPassiveList, AddCleanupList),
     MapFun = fun(W) -> update_waiter_seqs(W, AddActiveSeqs, RemoveSet) end,
     [MapFun(W) || W <- WaitList].
@@ -2704,57 +2702,38 @@ cleaner(#state{group = Group}) ->
     {clean_group, NewGroup, TotalPurgedCount, Duration}.
 
 
--spec filter_seqs(list(partition_id()), partition_seqs()) ->
-                                        partition_seqs().
-filter_seqs(Parts, Seqs) ->
-    lists:foldr(fun(PartId, Acc) ->
-        case lists:keyfind(PartId, 1, Seqs) of
-        false ->
-            Acc;
-        PartSeq ->
-            [PartSeq | Acc]
-        end
-    end, [], Parts).
-
-
 -spec indexable_partition_seqs(#state{}) -> partition_seqs().
-indexable_partition_seqs(#state{group = Group} = State) ->
-    CurPartitions = [P || {P, _} <- ?set_seqs(Group)],
-    {ok, Seqs} = couch_set_view_util:get_seqs(?dcp_pid(State), CurPartitions),
+indexable_partition_seqs(State) ->
+    Partitions = group_partitions(State#state.group),
+    {ok, Seqs} = couch_dcp_client:get_seqs(?dcp_pid(State), Partitions),
     indexable_partition_seqs(State, Seqs).
 
 -spec indexable_partition_seqs(#state{}, partition_seqs()) -> partition_seqs().
 indexable_partition_seqs(#state{group = Group}, Seqs) ->
-    IndexSeqs = ?set_seqs(Group),
-    CurPartitions = [P || {P, _} <- IndexSeqs],
-    CurSeqs = case ?set_unindexable_seqs(Group) of
+    case ?set_unindexable_seqs(Group) of
     [] ->
-        filter_seqs(CurPartitions, Seqs);
+        Seqs;
     _ ->
+        IndexSeqs = ?set_seqs(Group),
+        CurPartitions = [P || {P, _} <- IndexSeqs],
         ReplicasOnTransfer = ?set_replicas_on_transfer(Group),
         Partitions = ordsets:union(CurPartitions, ReplicasOnTransfer),
         % Index unindexable replicas on transfer though (as the reason for the
         % transfer is to become active and indexable).
-        filter_seqs(Partitions, Seqs)
-    end,
-    lists:map(fun
-        ({PartId, {error, _}}) ->
-            lists:keyfind(PartId, 1, IndexSeqs);
-        (Seq) ->
-            Seq
-    end, CurSeqs).
+        couch_set_view_util:filter_seqs(Partitions, Seqs)
+    end.
 
 
 -spec active_partition_seqs(#state{}) -> partition_seqs().
 active_partition_seqs(#state{group = Group} = State) ->
     ActiveParts = couch_set_view_util:decode_bitmask(?set_abitmask(Group)),
-    {ok, CurSeqs} = couch_set_view_util:get_seqs(?dcp_pid(State), ActiveParts),
+    {ok, CurSeqs} = couch_dcp_client:get_seqs(?dcp_pid(State), ActiveParts),
     CurSeqs.
 
 -spec active_partition_seqs(#state{}, partition_seqs()) -> partition_seqs().
 active_partition_seqs(#state{group = Group}, Seqs) ->
     ActiveParts = couch_set_view_util:decode_bitmask(?set_abitmask(Group)),
-    filter_seqs(ActiveParts, Seqs).
+    couch_set_view_util:filter_seqs(ActiveParts, Seqs).
 
 
 -spec start_compactor(#state{}, compact_fun()) -> #state{}.
@@ -2969,8 +2948,8 @@ start_updater(#state{updater_pid = nil, updater_state = not_running} = State, Op
     [{seqs, Seqs} | Options2] ->
         ok;
     Options2 ->
-        CurPartitions = lists:seq(0, ?MAX_NUM_PARTITIONS - 1),
-        {ok, Seqs} = couch_set_view_util:get_seqs(?dcp_pid(State), CurPartitions)
+        Partitions = group_partitions(Group),
+        {ok, Seqs} = couch_dcp_client:get_seqs(?dcp_pid(State), Partitions)
     end,
     CurSeqs = indexable_partition_seqs(State, Seqs),
     case CurSeqs > ?set_seqs(Group) of
@@ -3380,8 +3359,8 @@ process_view_group_request(#set_view_group_req{stale = false} = Req, From, State
     } = State,
     #set_view_group_req{debug = Debug} = Req,
 
-    CurPartitions = lists:seq(0, ?MAX_NUM_PARTITIONS - 1),
-    {ok, Seqs} = couch_set_view_util:get_seqs(?dcp_pid(State), CurPartitions),
+    Partitions = group_partitions(Group),
+    {ok, Seqs} = couch_dcp_client:get_seqs(?dcp_pid(State), Partitions),
     Options = [{seqs, Seqs}],
     CurSeqs = active_partition_seqs(State, Seqs),
     Waiter = #waiter{from = From, debug = Debug, seqs = CurSeqs},
@@ -3645,7 +3624,7 @@ process_monitor_partition_update(#state{group = Group} = State, PartId, Ref, Pid
     false ->
         ok
     end,
-    {ok, [{PartId, CurSeq}]} = couch_set_view_util:get_seqs(?dcp_pid(State), [PartId]),
+    {ok, [{PartId, CurSeq}]} = couch_dcp_client:get_seqs(?dcp_pid(State), [PartId]),
     case IsPending of
     true ->
         Seq = 0;
@@ -4004,7 +3983,7 @@ try_update_seqs(#state{seqs_cache = SeqsCache} = State) ->
     false ->
         IsWaiting2 = case timer:now_diff(os:timestamp(), Ts) > ?SEQS_CACHE_TTL of
         true ->
-            couch_dcp_client:get_sequence_numbers_async(?dcp_pid(State)),
+            couch_dcp_client:get_seqs_async(?dcp_pid(State)),
             true;
         false ->
             false
