@@ -423,25 +423,31 @@ do_init({_, SetName, _} = InitArgs) ->
         DcpBufferSize = list_to_integer(couch_config:get("dcp",
             "flow_control_buffer_size", ?DCP_CONTROL_BUFFER_SIZE)),
         ?LOG_INFO("Flow control buffer size is ~p bytes", [DcpBufferSize]),
-        {ok, DcpPid} = couch_dcp_client:start(DcpName, SetName, User, Passwd,
-            DcpBufferSize),
-        State = #state{
-            init_args = InitArgs,
-            replica_group = ReplicaPid,
-            replica_partitions = ReplicaParts,
-            group = Group#set_view_group{
-                ref_counter = RefCounter,
-                replica_pid = ReplicaPid,
-                dcp_pid = DcpPid
-            }
-        },
-        true = ets:insert(
-             Group#set_view_group.stats_ets,
-             #set_view_group_stats{ets_key = ?set_view_group_stats_key(Group)}),
-        TmpDir = updater_tmp_dir(State),
-        ok = couch_set_view_util:delete_sort_files(TmpDir, all),
-        reset_util_stats(),
-        {ok, maybe_apply_pending_transition(State)};
+
+        case couch_dcp_client:start(DcpName, SetName, User, Passwd,
+            DcpBufferSize) of
+        {ok, DcpPid} ->
+            State = #state{
+                init_args = InitArgs,
+                replica_group = ReplicaPid,
+                replica_partitions = ReplicaParts,
+                group = Group#set_view_group{
+                    ref_counter = RefCounter,
+                    replica_pid = ReplicaPid,
+                    dcp_pid = DcpPid
+                }
+            },
+            true = ets:insert(
+                 Group#set_view_group.stats_ets,
+                 #set_view_group_stats{ets_key = ?set_view_group_stats_key(Group)}),
+            TmpDir = updater_tmp_dir(State),
+            ok = couch_set_view_util:delete_sort_files(TmpDir, all),
+            reset_util_stats(),
+            {ok, maybe_apply_pending_transition(State)};
+        Error ->
+            couch_file:close(Fd),
+            throw(Error)
+        end;
     Error ->
         throw(Error)
     end.

@@ -278,33 +278,38 @@ init([Name, Bucket, AdmUser, AdmPasswd, BufferSize]) ->
     DcpTimeout = list_to_integer(
         couch_config:get("dcp", "connection_timeout")),
     DcpPort = list_to_integer(couch_config:get("dcp", "port")),
-    {ok, Socket} = gen_tcp:connect("localhost", DcpPort,
-        [binary, {packet, raw}, {active, false}, {nodelay, true}]),
-    State = #state{
-        socket = Socket,
-        timeout = DcpTimeout,
-        request_id = 0
-    },
 
-    % Auth as admin and select bucket for the connection
-    case sasl_auth(AdmUser, AdmPasswd, State) of
-    {ok, State2} ->
-        case select_bucket(Bucket, State2) of
-        {ok, State3} ->
-            % Store the meta information to reconnect
-            Args = [Name, Bucket, AdmUser, AdmPasswd, BufferSize],
-            State4 = State3#state{args = Args},
-            case open_connection(Name, State4) of
-            {ok, State5} ->
-                Parent = self(),
-                process_flag(trap_exit, true),
-                WorkerPid = spawn_link(
-                    fun() -> receive_worker(Socket, DcpTimeout, Parent, []) end),
-                case set_buffer_size(State5, BufferSize) of
-                {ok, State6} ->
-                    {ok, State6#state{worker_pid = WorkerPid}};
+    case gen_tcp:connect("localhost", DcpPort,
+        [binary, {packet, raw}, {active, false}, {nodelay, true}], DcpTimeout) of
+    {ok, Socket} ->
+        State = #state{
+            socket = Socket,
+            timeout = DcpTimeout,
+            request_id = 0
+        },
+
+        % Auth as admin and select bucket for the connection
+        case sasl_auth(AdmUser, AdmPasswd, State) of
+        {ok, State2} ->
+            case select_bucket(Bucket, State2) of
+            {ok, State3} ->
+                % Store the meta information to reconnect
+                Args = [Name, Bucket, AdmUser, AdmPasswd, BufferSize],
+                State4 = State3#state{args = Args},
+                case open_connection(Name, State4) of
+                {ok, State5} ->
+                    Parent = self(),
+                    process_flag(trap_exit, true),
+                    WorkerPid = spawn_link(
+                        fun() -> receive_worker(Socket, DcpTimeout, Parent, []) end),
+                    case set_buffer_size(State5, BufferSize) of
+                    {ok, State6} ->
+                        {ok, State6#state{worker_pid = WorkerPid}};
+                    {error, Reason} ->
+                        exit(WorkerPid, shutdown),
+                        {stop, Reason}
+                    end;
                 {error, Reason} ->
-                    exit(WorkerPid, shutdown),
                     {stop, Reason}
                 end;
             {error, Reason} ->
@@ -314,7 +319,7 @@ init([Name, Bucket, AdmUser, AdmPasswd, BufferSize]) ->
             {stop, Reason}
         end;
     {error, Reason} ->
-        {stop, Reason}
+        {stop, {error, {dcp_socket_connect_failed, Reason}}}
     end.
 
 
