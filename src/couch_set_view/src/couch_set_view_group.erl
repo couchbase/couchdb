@@ -119,7 +119,6 @@
     pending_transition_waiters = []    :: [{From::{pid(), reference()}, #set_view_group_req{}}],
     update_listeners = dict:new()      :: dict(),
     compact_log_files = nil            :: 'nil' | {[[string()]], partition_seqs(), partition_versions()},
-    seqs_cache = #seqs_cache{}         :: #seqs_cache{},
     timeout = ?DEFAULT_TIMEOUT         :: non_neg_integer() | 'infinity'
 }).
 
@@ -437,6 +436,7 @@ do_init({_, SetName, _} = InitArgs) ->
                     dcp_pid = DcpPid
                 }
             },
+            init_seqs_cache(),
             true = ets:insert(
                  Group#set_view_group.stats_ets,
                  #set_view_group_stats{ets_key = ?set_view_group_stats_key(Group)}),
@@ -1364,9 +1364,9 @@ handle_info({'EXIT', Pid, Reason}, State) ->
 
 handle_info({get_stats, nil, StatsResponse}, State) ->
     #state{
-       seqs_cache = SeqsCache,
        group = Group
     } = State,
+    SeqsCache = erlang:get(seqs_cache),
     NewState = case StatsResponse of
     {ok, Stats} ->
         Seqs = couch_dcp_client:parse_stats_seqnos(Stats),
@@ -1394,10 +1394,11 @@ handle_info({get_stats, nil, StatsResponse}, State) ->
         % just discard the update seqs.
         case SeqsCache#seqs_cache.is_waiting of
         true ->
-            State2#state{seqs_cache = NewCacheVal};
+            erlang:put(seqs_cache, NewCacheVal);
         false ->
-            State2
-        end;
+            ok
+        end,
+        State2;
     _ ->
         ?LOG_ERROR("Set view `~s`, ~s (~s) group `~s`,"
                               " received bad response for update seqs"
@@ -1406,7 +1407,8 @@ handle_info({get_stats, nil, StatsResponse}, State) ->
                                ?category(State), ?group_id(State),
                                StatsResponse]),
         SeqsCache2 = SeqsCache#seqs_cache{is_waiting = false},
-        State#state{seqs_cache = SeqsCache2}
+        erlang:put(seqs_cache, SeqsCache2),
+        State
     end,
     {noreply, NewState}.
 
@@ -1737,7 +1739,7 @@ get_group_info(State) ->
     IndexSeqs = ?set_seqs(Group),
     IndexPartitions = [PartId || {PartId, _} <- IndexSeqs],
     % Extract the seqnum from KV store for all indexible partitions.
-    {ok, GroupSeqs} = couch_dcp_client:get_seqs(?dcp_pid(State), GroupPartitions),
+    {ok, GroupSeqs} = get_seqs(State, GroupPartitions),
     PartSeqs = couch_set_view_util:filter_seqs(IndexPartitions, GroupSeqs),
 
     % Calculate the total sum over difference of Seqnum between KV
@@ -2236,7 +2238,7 @@ persist_partition_states(State, ActiveList, PassiveList, CleanupList, PendingTra
     ok = set_state(ReplicaPid, ReplicasToMarkActive, [], ReplicasToCleanup2),
     % Need to update list of active partition sequence numbers for every blocked client.
     WaitList2 = update_waiting_list(
-        WaitList, ?dcp_pid(State), ActiveList2, PassiveList3, CleanupList),
+        WaitList, State, ActiveList2, PassiveList3, CleanupList),
     State3 = State2#state{waiting_list = WaitList2},
     case (dict:size(Listeners) > 0) andalso (CleanupList /= []) of
     true ->
@@ -2271,14 +2273,14 @@ persist_partition_states(State, ActiveList, PassiveList, CleanupList, PendingTra
 
 
 -spec update_waiting_list([#waiter{}],
-                          pid(),
+                          #state{},
                           ordsets:ordset(partition_id()),
                           ordsets:ordset(partition_id()),
                           ordsets:ordset(partition_id())) -> [#waiter{}].
-update_waiting_list([], _DcpPid, _AddActiveList, _AddPassiveList, _AddCleanupList) ->
+update_waiting_list([], _State, _AddActiveList, _AddPassiveList, _AddCleanupList) ->
     [];
-update_waiting_list(WaitList, DcpPid, AddActiveList, AddPassiveList, AddCleanupList) ->
-    {ok, AddActiveSeqs} = couch_dcp_client:get_seqs(DcpPid, AddActiveList),
+update_waiting_list(WaitList, State, AddActiveList, AddPassiveList, AddCleanupList) ->
+    {ok, AddActiveSeqs} = get_seqs(State, AddActiveList),
     RemoveSet = ordsets:union(AddPassiveList, AddCleanupList),
     MapFun = fun(W) -> update_waiter_seqs(W, AddActiveSeqs, RemoveSet) end,
     [MapFun(W) || W <- WaitList].
@@ -2705,7 +2707,7 @@ cleaner(#state{group = Group}) ->
 -spec indexable_partition_seqs(#state{}) -> partition_seqs().
 indexable_partition_seqs(State) ->
     Partitions = group_partitions(State#state.group),
-    {ok, Seqs} = couch_dcp_client:get_seqs(?dcp_pid(State), Partitions),
+    {ok, Seqs} = get_seqs(State, Partitions),
     indexable_partition_seqs(State, Seqs).
 
 -spec indexable_partition_seqs(#state{}, partition_seqs()) -> partition_seqs().
@@ -2727,7 +2729,7 @@ indexable_partition_seqs(#state{group = Group}, Seqs) ->
 -spec active_partition_seqs(#state{}) -> partition_seqs().
 active_partition_seqs(#state{group = Group} = State) ->
     ActiveParts = couch_set_view_util:decode_bitmask(?set_abitmask(Group)),
-    {ok, CurSeqs} = couch_dcp_client:get_seqs(?dcp_pid(State), ActiveParts),
+    {ok, CurSeqs} = get_seqs(State, ActiveParts),
     CurSeqs.
 
 -spec active_partition_seqs(#state{}, partition_seqs()) -> partition_seqs().
@@ -2949,7 +2951,7 @@ start_updater(#state{updater_pid = nil, updater_state = not_running} = State, Op
         ok;
     Options2 ->
         Partitions = group_partitions(Group),
-        {ok, Seqs} = couch_dcp_client:get_seqs(?dcp_pid(State), Partitions)
+        {ok, Seqs} = get_seqs(State, Partitions)
     end,
     CurSeqs = indexable_partition_seqs(State, Seqs),
     case CurSeqs > ?set_seqs(Group) of
@@ -3360,7 +3362,7 @@ process_view_group_request(#set_view_group_req{stale = false} = Req, From, State
     #set_view_group_req{debug = Debug} = Req,
 
     Partitions = group_partitions(Group),
-    {ok, Seqs} = couch_dcp_client:get_seqs(?dcp_pid(State), Partitions),
+    {ok, Seqs} = get_seqs(State, Partitions),
     Options = [{seqs, Seqs}],
     CurSeqs = active_partition_seqs(State, Seqs),
     Waiter = #waiter{from = From, debug = Debug, seqs = CurSeqs},
@@ -3393,15 +3395,14 @@ process_view_group_request(#set_view_group_req{stale = update_after} = Req, From
     nil ->
         % Do not start updater if we have triggered an async seqs update.
         % When the actual seqs are updated, it will trigger the updater.
-        State2 = try_update_seqs(State),
-        #state{seqs_cache = SeqsCache} = State2,
+        SeqsCache = try_update_seqs_cache(State),
         #seqs_cache{is_waiting = IsWaiting, seqs = Seqs} = SeqsCache,
         Options = [{seqs, Seqs}],
         case IsWaiting of
         true ->
-            State2;
+            State;
         false ->
-            start_updater(State2, Options)
+            start_updater(State, Options)
         end
     end.
 
@@ -3624,6 +3625,8 @@ process_monitor_partition_update(#state{group = Group} = State, PartId, Ref, Pid
     false ->
         ok
     end,
+    % This PartId is under transition. Hence get_seqs() method cannot be used.
+    % get_seqs() method only returns partition seqnos tracked by the current view group.
     {ok, [{PartId, CurSeq}]} = couch_dcp_client:get_seqs(?dcp_pid(State), [PartId]),
     case IsPending of
     true ->
@@ -3953,7 +3956,8 @@ rollback(State, RollbackPartSeqs) ->
         NewGroup2 = NewGroup#set_view_group{
             header_pos = NewHeaderPos
         },
-        {ok, State3#state{group = NewGroup2, seqs_cache = #seqs_cache{}}};
+        init_seqs_cache(),
+        {ok, State3#state{group = NewGroup2}};
     cannot_rollback ->
         {error, {cannot_rollback, State3}}
     end.
@@ -3970,16 +3974,20 @@ get_auth() ->
         get_auth()
     end.
 
+init_seqs_cache() ->
+    erlang:put(seqs_cache, #seqs_cache{}),
+    ok.
 
--spec try_update_seqs(#state{}) -> #state{}.
-try_update_seqs(#state{seqs_cache = SeqsCache} = State) ->
+-spec try_update_seqs_cache(#state{}) -> #seqs_cache{}.
+try_update_seqs_cache(State) ->
+    SeqsCache = erlang:get(seqs_cache),
     #seqs_cache{
         timestamp = Ts,
         is_waiting = IsWaiting
     } = SeqsCache,
     case IsWaiting of
     true ->
-        State;
+        SeqsCache;
     false ->
         IsWaiting2 = case timer:now_diff(os:timestamp(), Ts) > ?SEQS_CACHE_TTL of
         true ->
@@ -3989,7 +3997,8 @@ try_update_seqs(#state{seqs_cache = SeqsCache} = State) ->
             false
         end,
         SeqsCache2 = SeqsCache#seqs_cache{is_waiting = IsWaiting2},
-        State#state{seqs_cache = SeqsCache2}
+        erlang:put(seqs_cache, SeqsCache2),
+        SeqsCache2
     end.
 
 -spec group_partitions(#set_view_group{}) -> ordsets:ordset(partition_id()).
@@ -3997,3 +4006,26 @@ group_partitions(Group) ->
     Indexable = lists:map(fun({P, _S}) -> P end, ?set_seqs(Group)),
     Unindexable = lists:map(fun({P, _S}) -> P end, ?set_unindexable_seqs(Group)),
     ordsets:union(Indexable, Unindexable).
+
+
+% Returns subset of partitions seqs tracked by current group
+% If an error occured by reading seqs from EP-Engine, returns
+% cached seqs value.
+-spec get_seqs(#state{}, list(partition_id())) ->
+    {ok, partition_seqs()} | {error, term()}.
+get_seqs(State, Partitions) ->
+    case couch_dcp_client:get_seqs(?dcp_pid(State), nil) of
+    {ok, Seqs} ->
+        GroupParts = group_partitions(State#state.group),
+        Seqs2 = couch_set_view_util:filter_seqs(GroupParts, Seqs),
+        SeqsCache = #seqs_cache{
+            timestamp = os:timestamp(),
+            is_waiting = false,
+            seqs = Seqs2
+        },
+        erlang:put(seqs_cache, SeqsCache),
+        Seqs3 = couch_set_view_util:filter_seqs(Partitions, Seqs2),
+        {ok, Seqs3};
+    Error ->
+        Error
+    end.
