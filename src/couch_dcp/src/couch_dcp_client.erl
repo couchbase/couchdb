@@ -154,7 +154,8 @@ get_seqs(Pid, SortedPartIds) ->
         nil ->
             {ok, Seqs};
         _ ->
-            {ok, [{P, S} || {P, S} <- Seqs, ordsets:is_element(P, SortedPartIds)]}
+            Seqs2 = couch_set_view_util:filter_seqs(SortedPartIds, Seqs),
+            {ok, Seqs2}
         end;
     {error, _} = Error ->
         Error
