@@ -4014,6 +4014,7 @@ group_partitions(Group) ->
 -spec get_seqs(#state{}, list(partition_id())) ->
     {ok, partition_seqs()} | {error, term()}.
 get_seqs(State, Partitions) ->
+    % TODO 2014-08-08 Retry few times (Not applicable for localhost)
     case couch_dcp_client:get_seqs(?dcp_pid(State), nil) of
     {ok, Seqs} ->
         GroupParts = group_partitions(State#state.group),
@@ -4026,6 +4027,14 @@ get_seqs(State, Partitions) ->
         erlang:put(seqs_cache, SeqsCache),
         Seqs3 = couch_set_view_util:filter_seqs(Partitions, Seqs2),
         {ok, Seqs3};
+    {error, dcp_conn_closed} ->
+        ?LOG_ERROR("Set view `~s`, ~s (~s) group `~s`, get_seqs() using"
+                  " cached seqs (dcp_conn_closed)",
+                  [?set_name(State), ?type(State), ?category(State),
+                   ?group_id(State)]),
+        SeqsCache = erlang:get(seqs_cache),
+        Seqs = SeqsCache#seqs_cache.seqs,
+        couch_set_view_util:filter_seqs(Partitions, Seqs);
     Error ->
         Error
     end.
