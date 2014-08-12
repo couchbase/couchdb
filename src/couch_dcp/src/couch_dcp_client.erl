@@ -32,12 +32,19 @@
 -define(TIMEOUT, 60000).
 -define(TIMEOUT_STATS, 2000).
 -define(DCP_RETRY_TIMEOUT, 2000).
+-define(DCP_BUF_WINDOW, 65535).
+-define(SOCKET(BufSocket), BufSocket#bufsocket.sockpid).
 
 -type mutations_fold_fun() :: fun().
 -type mutations_fold_acc() :: any().
 
+-record(bufsocket, {
+    sockpid = nil                   :: socket() | nil,
+    sockbuf = <<>>                  :: binary()
+}).
+
 -record(state, {
-    socket = nil                    :: socket(),
+    bufsocket = nil                 :: #bufsocket{} | nil,
     timeout = 5000                  :: timeout(),
     request_id = 0                  :: request_id(),
     pending_requests = dict:new()   :: dict(),
@@ -215,9 +222,6 @@ get_stream_event_get_reply(Pid, ReqId, MRef) ->
         get_stream_event_get_reply(Pid, ReqId, MRef)
     end.
 
-
-
-
 -spec enum_docs_since(pid(), partition_id(), partition_version(), update_seq(),
                       update_seq(), 0..255, mutations_fold_fun(),
                       mutations_fold_acc()) ->
@@ -286,14 +290,15 @@ init([Name, Bucket, AdmUser, AdmPasswd, BufferSize]) ->
     DcpPort = list_to_integer(couch_config:get("dcp", "port")),
 
     case gen_tcp:connect("localhost", DcpPort,
-        [binary, {packet, raw}, {active, false}, {nodelay, true}], DcpTimeout) of
-    {ok, Socket} ->
+        [binary, {packet, raw}, {active, true}, {nodelay, true},
+                 {buffer, ?DCP_BUF_WINDOW}], DcpTimeout) of
+    {ok, SockPid} ->
+        BufSocket = #bufsocket{sockpid = SockPid, sockbuf = <<>>},
         State = #state{
-            socket = Socket,
+            bufsocket = BufSocket,
             timeout = DcpTimeout,
             request_id = 0
         },
-
         % Auth as admin and select bucket for the connection
         case sasl_auth(AdmUser, AdmPasswd, State) of
         {ok, State2} ->
@@ -306,8 +311,12 @@ init([Name, Bucket, AdmUser, AdmPasswd, BufferSize]) ->
                 {ok, State5} ->
                     Parent = self(),
                     process_flag(trap_exit, true),
+                    #state{bufsocket = BufSocket2} = State5,
                     WorkerPid = spawn_link(
-                        fun() -> receive_worker(Socket, DcpTimeout, Parent, []) end),
+                        fun() ->
+                            receive_worker(BufSocket2, DcpTimeout, Parent, [])
+                        end),
+                    gen_tcp:controlling_process(?SOCKET(BufSocket), WorkerPid),
                     case set_buffer_size(State5, BufferSize) of
                     {ok, State6} ->
                         {ok, State6#state{worker_pid = WorkerPid}};
@@ -346,11 +355,11 @@ handle_call({remove_stream, PartId}, From, State) ->
     State2 = remove_stream_info(PartId, State),
     #state{
        request_id = RequestId,
-       socket = Socket
+       bufsocket = BufSocket
     } = State2,
     StreamCloseRequest = couch_dcp_consumer:encode_stream_close(
         PartId, RequestId),
-    case gen_tcp:send(Socket, StreamCloseRequest) of
+    case bufsocket_send(BufSocket, StreamCloseRequest) of
     ok ->
         State3 = next_request_id(State2),
         State4 = add_pending_request(State3, RequestId, {remove_stream, PartId}, From),
@@ -369,11 +378,11 @@ handle_call(list_streams, _From, State) ->
 handle_call({get_failover_log, PartId}, From, State) ->
     #state{
        request_id = RequestId,
-       socket = Socket
+       bufsocket = BufSocket
     } = State,
     FailoverLogRequest = couch_dcp_consumer:encode_failover_log_request(
         PartId, RequestId),
-    case gen_tcp:send(Socket, FailoverLogRequest) of
+    case bufsocket_send(BufSocket, FailoverLogRequest) of
     ok ->
         State2 = next_request_id(State),
         State3 = add_pending_request(State2, RequestId, get_failover_log, From),
@@ -396,8 +405,8 @@ handle_call(flush_old_streams_meta, _From, State) ->
     {reply, ok, State#state{stream_info = dict:new()}};
 
 % Only used by unit test
-handle_call(get_socket, _From, #state{socket = Socket} = State) ->
-    {reply, Socket, State};
+handle_call(get_socket, _From, #state{bufsocket = BufSocket} = State) ->
+    {reply, BufSocket, State};
 
 % Only used by unit test
 handle_call({get_buffer_size, RequestId}, _From,
@@ -453,11 +462,11 @@ handle_info({get_stream_event, RequestId, From}, State) ->
 handle_info({get_stats, Stat, PartId, From}, State) ->
     #state{
        request_id = RequestId,
-       socket = Socket
+       bufsocket = BufSocket
     } = State,
     SeqStatRequest = couch_dcp_consumer:encode_stat_request(
         Stat, PartId, RequestId),
-    case gen_tcp:send(Socket, SeqStatRequest) of
+    case bufsocket_send(BufSocket, SeqStatRequest) of
     ok ->
         State2 = next_request_id(State),
         State3 = add_pending_request(State2, RequestId, get_stats, From),
@@ -520,11 +529,11 @@ handle_info({stream_response, RequestId, Msg}, State) ->
 % Respond with the no op message reply to server
 handle_info({stream_noop, RequestId}, State) ->
     #state {
-        socket = Socket
+        bufsocket = BufSocket
     } = State,
     NoOpResponse = couch_dcp_consumer:encode_noop_response(RequestId),
     % if noop reponse fails two times, server it self will close the connection
-    gen_tcp:send(Socket, NoOpResponse),
+    bufsocket_send(BufSocket, NoOpResponse),
     {noreply, State};
 
 % Handle events send by connection receiver worker
@@ -640,24 +649,27 @@ format_status(_Opt, [_PDict, #state{stream_queues = StreamQueues} = State]) ->
                             {error, sasl_auth_failed | closed | inet:posix()}.
 sasl_auth(User, Passwd, State) ->
     #state{
-        socket = Socket,
+        bufsocket = BufSocket,
         timeout = DcpTimeout,
         request_id = RequestId
     } = State,
     Authenticate = couch_dcp_consumer:encode_sasl_auth(User, Passwd, RequestId),
-    case gen_tcp:send(Socket, Authenticate) of
+    case bufsocket_send(BufSocket, Authenticate) of
     ok ->
-        case socket_recv(Socket, ?DCP_HEADER_LEN, DcpTimeout) of
-        {ok, Header} ->
+        case bufsocket_recv(BufSocket, ?DCP_HEADER_LEN, DcpTimeout) of
+        {ok, Header, BufSocket2} ->
             {sasl_auth, Status, RequestId, BodyLength} =
                 couch_dcp_consumer:parse_header(Header),
             % Receive the body so that it is not mangled with the next request,
             % we care about the status only though
-            case socket_recv(Socket, BodyLength, DcpTimeout) of
-            {ok, _} ->
+            case bufsocket_recv(BufSocket2, BodyLength, DcpTimeout) of
+            {ok, _, BufSocket3} ->
                 case Status of
                 ?DCP_STATUS_OK ->
-                    {ok, State#state{request_id = RequestId + 1}};
+                    {ok, State#state{
+                        request_id = RequestId + 1,
+                        bufsocket = BufSocket3
+                    }};
                 ?DCP_STATUS_SASL_AUTH_FAILED ->
                     {error, sasl_auth_failed}
                 end;
@@ -674,29 +686,35 @@ sasl_auth(User, Passwd, State) ->
 -spec select_bucket(binary(), #state{}) -> {ok, #state{}} | {error, term()}.
 select_bucket(Bucket, State) ->
     #state{
-        socket = Socket,
+        bufsocket = BufSocket,
         timeout = DcpTimeout,
         request_id = RequestId
     } = State,
     SelectBucket = couch_dcp_consumer:encode_select_bucket(Bucket, RequestId),
-    case gen_tcp:send(Socket, SelectBucket) of
+    case bufsocket_send(BufSocket, SelectBucket) of
     ok ->
-        case socket_recv(Socket, ?DCP_HEADER_LEN, DcpTimeout) of
-        {ok, Header} ->
+        case bufsocket_recv(BufSocket, ?DCP_HEADER_LEN, DcpTimeout) of
+        {ok, Header, BufSocket2} ->
             {select_bucket, Status, RequestId, BodyLength} =
                                     couch_dcp_consumer:parse_header(Header),
             case Status of
             ?DCP_STATUS_OK ->
-                {ok, State#state{request_id = RequestId + 1}};
+                {ok, State#state{
+                    request_id = RequestId + 1,
+                    bufsocket = BufSocket2
+                }};
             _ ->
                 case parse_error_response(
-                        Socket, DcpTimeout, BodyLength, Status) of
+                        BufSocket2, DcpTimeout, BodyLength, Status) of
                 % When the authentication happened with bucket name and
                 % password, then the correct bucket is already selected. In
                 % this case a select bucket command returns "not supported".
-                {error, not_supported} ->
-                    {ok, State#state{request_id = RequestId + 1}};
-                {error, _} = Error ->
+                {{error, not_supported}, BufSocket3} ->
+                    {ok, State#state{
+                        request_id = RequestId + 1,
+                        bufsocket = BufSocket3
+                    }};
+                {{error, _}, _} = Error ->
                     Error
                 end
             end;
@@ -710,18 +728,19 @@ select_bucket(Bucket, State) ->
 -spec open_connection(binary(), #state{}) -> {ok, #state{}} | {error, term()}.
 open_connection(Name, State) ->
     #state{
-        socket = Socket,
+        bufsocket = BufSocket,
         timeout = DcpTimeout,
         request_id = RequestId
     } = State,
     OpenConnection = couch_dcp_consumer:encode_open_connection(
         Name, RequestId),
-    case gen_tcp:send(Socket, OpenConnection) of
+    case bufsocket_send(BufSocket, OpenConnection) of
     ok ->
-        case socket_recv(Socket, ?DCP_HEADER_LEN, DcpTimeout) of
-        {ok, Header} ->
+        case bufsocket_recv(BufSocket, ?DCP_HEADER_LEN, DcpTimeout) of
+        {ok, Header, BufSocket2} ->
             {open_connection, RequestId} = couch_dcp_consumer:parse_header(Header),
-            {ok, next_request_id(State)};
+            State2 = State#state{bufsocket = BufSocket2},
+            {ok, next_request_id(State2)};
         {error, _} = Error ->
             Error
         end;
@@ -730,27 +749,27 @@ open_connection(Name, State) ->
     end.
 
 
--spec receive_snapshot_marker(socket(), timeout(),  size()) ->
+-spec receive_snapshot_marker(#bufsocket{}, timeout(),  size()) ->
                                      {ok, {update_seq(), update_seq(),
-                                      non_neg_integer()}} |
+                                           non_neg_integer()}, #bufsocket{}} |
                                      {error, closed}.
-receive_snapshot_marker(Socket, Timeout, BodyLength) ->
-    case socket_recv(Socket, BodyLength, Timeout) of
-    {ok, Body} ->
+receive_snapshot_marker(BufSocket, Timeout, BodyLength) ->
+    case bufsocket_recv(BufSocket, BodyLength, Timeout) of
+    {ok, Body, BufSocket2} ->
          {snapshot_marker, StartSeq, EndSeq, Type} =
              couch_dcp_consumer:parse_snapshot_marker(Body),
-         {ok, {StartSeq, EndSeq, Type}};
+         {ok, {StartSeq, EndSeq, Type}, BufSocket2};
     {error, _} = Error ->
         Error
     end.
 
--spec receive_snapshot_mutation(socket(), timeout(), partition_id(), size(),
+-spec receive_snapshot_mutation(#bufsocket{}, timeout(), partition_id(), size(),
                                 size(), size(), uint64(), dcp_data_type()) ->
-                                       #dcp_doc{} | {error, closed}.
-receive_snapshot_mutation(Socket, Timeout, PartId, KeyLength, BodyLength,
+                                {#dcp_doc{}, #bufsocket{}} | {error, closed}.
+receive_snapshot_mutation(BufSocket, Timeout, PartId, KeyLength, BodyLength,
         ExtraLength, Cas, DataType) ->
-    case socket_recv(Socket, BodyLength, Timeout) of
-    {ok, Body} ->
+    case bufsocket_recv(BufSocket, BodyLength, Timeout) of
+    {ok, Body, BufSocket2} ->
          {snapshot_mutation, Mutation} =
              couch_dcp_consumer:parse_snapshot_mutation(KeyLength, Body,
                  BodyLength, ExtraLength),
@@ -762,7 +781,7 @@ receive_snapshot_mutation(Socket, Timeout, PartId, KeyLength, BodyLength,
              key = Key,
              value = Value
          } = Mutation,
-         #dcp_doc{
+         {#dcp_doc{
              id = Key,
              body = Value,
              data_type = DataType,
@@ -773,23 +792,23 @@ receive_snapshot_mutation(Socket, Timeout, PartId, KeyLength, BodyLength,
              flags = Flags,
              expiration = Expiration,
              deleted = false
-         };
+         }, BufSocket2};
     {error, _} = Error ->
         Error
     end.
 
--spec receive_snapshot_deletion(socket(), timeout(), partition_id(), size(),
+-spec receive_snapshot_deletion(#bufsocket{}, timeout(), partition_id(), size(),
                                 size(), uint64(), dcp_data_type()) ->
-                                       #dcp_doc{} |
-                                       {error, closed | inet:posix()}.
-receive_snapshot_deletion(Socket, Timeout, PartId, KeyLength, BodyLength,
+                                        {#dcp_doc{}, #bufsocket{}} |
+                                        {error, closed | inet:posix()}.
+receive_snapshot_deletion(BufSocket, Timeout, PartId, KeyLength, BodyLength,
         Cas, DataType) ->
-    case socket_recv(Socket, BodyLength, Timeout) of
-    {ok, Body} ->
+    case bufsocket_recv(BufSocket, BodyLength, Timeout) of
+    {ok, Body, BufSocket2} ->
          {snapshot_deletion, Deletion} =
              couch_dcp_consumer:parse_snapshot_deletion(KeyLength, Body),
          {Seq, RevSeq, Key, _Metadata} = Deletion,
-         #dcp_doc{
+         {#dcp_doc{
              id = Key,
              body = <<>>,
              data_type = DataType,
@@ -800,17 +819,17 @@ receive_snapshot_deletion(Socket, Timeout, PartId, KeyLength, BodyLength,
              flags = 0,
              expiration = 0,
              deleted = true
-         };
+         }, BufSocket2};
     {error, Reason} ->
         {error, Reason}
     end.
 
--spec receive_stream_end(socket(), timeout(), size()) ->
-                            <<_:32>> | {error, closed | inet:posix()}.
-receive_stream_end(Socket, Timeout, BodyLength) ->
-    case socket_recv(Socket, BodyLength, Timeout) of
-    {ok, Flag} ->
-        Flag;
+-spec receive_stream_end(#bufsocket{}, timeout(), size()) ->
+            {<<_:32>>, #bufsocket{}} | {error, closed | inet:posix()}.
+receive_stream_end(BufSocket, Timeout, BodyLength) ->
+    case bufsocket_recv(BufSocket, BodyLength, Timeout) of
+    {ok, Flag, BufSocket2} ->
+        {Flag, BufSocket2};
     {error, Reason} ->
         {error, Reason}
     end.
@@ -818,16 +837,16 @@ receive_stream_end(Socket, Timeout, BodyLength) ->
 
 % Returns the failover log as a list 2-tuple pairs with
 % partition UUID and sequence number
--spec receive_failover_log(socket(), timeout(), char(), size()) ->
-            {'ok', list(partition_version())} | {error, closed | inet:posix()}.
-receive_failover_log(_Socket, _Timeout, _Status, 0) ->
+-spec receive_failover_log(#bufsocket{}, timeout(), char(), size()) ->
+        {{'ok', list(partition_version())}, #bufsocket{}} | {error, closed | inet:posix()}.
+receive_failover_log(_BufSocket, _Timeout, _Status, 0) ->
     {error, no_failover_log_found};
-receive_failover_log(Socket, Timeout, Status, BodyLength) ->
+receive_failover_log(BufSocket, Timeout, Status, BodyLength) ->
     case Status of
     ?DCP_STATUS_OK ->
-        case socket_recv(Socket, BodyLength, Timeout) of
-        {ok, Body} ->
-            couch_dcp_consumer:parse_failover_log(Body);
+        case bufsocket_recv(BufSocket, BodyLength, Timeout) of
+        {ok, Body, BufSocket2} ->
+            {couch_dcp_consumer:parse_failover_log(Body), BufSocket2};
         {error, _} = Error->
             Error
         end;
@@ -835,30 +854,30 @@ receive_failover_log(Socket, Timeout, Status, BodyLength) ->
         {error, Status}
     end.
 
--spec receive_rollback_seq(socket(), timeout(), size()) ->
-                  {ok, update_seq()} | {error, closed | inet:posix()}.
-receive_rollback_seq(Socket, Timeout, BodyLength) ->
-    case socket_recv(Socket, BodyLength, Timeout) of
-    {ok, <<RollbackSeq:?DCP_SIZES_BY_SEQ>>} ->
-        {ok, RollbackSeq};
+-spec receive_rollback_seq(#bufsocket{}, timeout(), size()) ->
+        {ok, update_seq(), #bufsocket{}} | {error, closed | inet:posix()}.
+receive_rollback_seq(BufSocket, Timeout, BodyLength) ->
+    case bufsocket_recv(BufSocket, BodyLength, Timeout) of
+    {ok, <<RollbackSeq:?DCP_SIZES_BY_SEQ>>, BufSocket2} ->
+        {ok, RollbackSeq, BufSocket2};
     {error, _} = Error->
         Error
     end.
 
 
--spec receive_stat(socket(), timeout(), dcp_status(), size(), size()) ->
-                          {ok, {binary(), binary()} |
-                           {error, {dcp_status(), binary()}}} |
-                          {error, closed}.
-receive_stat(Socket, Timeout, Status, BodyLength, KeyLength) ->
-    case socket_recv(Socket, BodyLength, Timeout) of
-    {ok, Body} ->
-        couch_dcp_consumer:parse_stat(
-            Body, Status, KeyLength, BodyLength - KeyLength);
+-spec receive_stat(#bufsocket{}, timeout(), dcp_status(), size(), size()) ->
+        {ok, {binary(), binary()} |
+        {ok, {binary(), binary()}, #bufsocket{}} |
+        {error, {dcp_status(), binary()}}} |
+        {error, closed}.
+receive_stat(BufSocket, Timeout, Status, BodyLength, KeyLength) ->
+    case bufsocket_recv(BufSocket, BodyLength, Timeout) of
+    {ok, Body, BufSocket2} ->
+        {couch_dcp_consumer:parse_stat(
+            Body, Status, KeyLength, BodyLength - KeyLength), BufSocket2};
     {error, Reason} ->
         {error, Reason}
     end.
-
 
 -spec receive_events(pid(), request_id(), mutations_fold_fun(),
                      mutations_fold_acc()) -> {ok, mutations_fold_acc()} |
@@ -878,14 +897,51 @@ receive_events(Pid, RequestId, CallbackFn, InAcc) ->
         receive_events(Pid, RequestId, CallbackFn, InAcc2)
     end.
 
+-spec socket_send(socket(), iodata()) ->
+        ok | {error, closed | inet:posix()}.
+socket_send(Socket, Packet) ->
+    gen_tcp:send(Socket, Packet).
 
--spec socket_recv(socket(), size(), timeout()) ->
-    {ok, binary()} | {error, closed | inet:posix()}.
-socket_recv(_Socket, 0, _Timeout) ->
-    {ok, <<>>};
-socket_recv(Socket, Length, Timeout) ->
-    gen_tcp:recv(Socket, Length, Timeout).
+-spec bufsocket_send(#bufsocket{}, iodata()) ->
+        ok | {error, closed | inet:posix()}.
+bufsocket_send(BufSocket, Packet) ->
+    socket_send(?SOCKET(BufSocket), Packet).
 
+-spec socket_recv(socket(), timeout()) ->
+        {ok, binary()} | {error, closed | inet:posix()}.
+socket_recv(SockPid, Timeout) ->
+    receive
+    {tcp, SockPid, Data} ->
+        {ok, Data};
+    {tcp_closed, SockPid} ->
+        {error, closed};
+    {tcp_error, SockPid, Reason} ->
+        {error, Reason}
+    after Timeout ->
+        {ok, <<>>}
+    end.
+
+-spec bufsocket_recv(#bufsocket{}, size(), timeout()) ->
+        {ok, binary(), #bufsocket{}} | {error, closed | inet:posix()}.
+bufsocket_recv(BufSocket, 0, _Timeout) ->
+    {ok, <<>>, BufSocket};
+bufsocket_recv(BufSocket, Length, Timeout) ->
+    #bufsocket{sockbuf = SockBuf} =  BufSocket,
+    case erlang:byte_size(SockBuf) >= Length of
+    true ->
+        <<Head:Length/binary, Tail/binary>> = SockBuf,
+        BufSocket2 = BufSocket#bufsocket{sockbuf = Tail},
+        {ok, Head, BufSocket2};
+    false ->
+        case socket_recv(?SOCKET(BufSocket), Timeout) of
+        {ok, Data} ->
+            Buf = <<SockBuf/binary, Data/binary>>,
+            BufSocket2 = BufSocket#bufsocket{sockbuf = Buf},
+            bufsocket_recv(BufSocket2, Length, Timeout);
+        {error, Reason} ->
+            {error, Reason}
+        end
+    end.
 
 -spec add_pending_request(#state{}, request_id(), term(), nil | {pid(), term()}) -> #state{}.
 add_pending_request(State, RequestId, ReqInfo, From) ->
@@ -1066,112 +1122,119 @@ find_stream_req_id(State, PartId) ->
         nil
     end.
 
--spec parse_error_response(socket(), timeout(), integer(), integer()) ->
-                                     {'error', atom() | {'status', integer()}}.
-parse_error_response(Socket, Timeout, BodyLength, Status) ->
-    case socket_recv(Socket, BodyLength, Timeout) of
-    {ok, _} ->
-        case Status of
-        ?DCP_STATUS_KEY_NOT_FOUND ->
-            {error, vbucket_stream_not_found};
-        ?DCP_STATUS_ERANGE ->
-            {error, wrong_start_sequence_number};
-        ?DCP_STATUS_KEY_EEXISTS ->
-            {error, vbucket_stream_already_exists};
-        ?DCP_STATUS_NOT_MY_VBUCKET ->
-            {error, server_not_my_vbucket};
-        ?DCP_STATUS_TMP_FAIL ->
-            {error, vbucket_stream_tmp_fail};
-        ?DCP_STATUS_NOT_SUPPORTED ->
-            {error, not_supported};
-        _ ->
-            {error, {status, Status}}
-        end;
+-spec parse_error_response(#bufsocket{}, timeout(), integer(), integer()) ->
+                    {'error', atom() | {'status', integer()}} |
+                    {'error', atom() | {'status', integer()}, #bufsocket{}}.
+parse_error_response(BufSocket, Timeout, BodyLength, Status) ->
+    case bufsocket_recv(BufSocket, BodyLength, Timeout) of
+    {ok, _, BufSocket2} ->
+        {status_to_error(Status), BufSocket2};
     {error, _} = Error ->
         Error
     end.
 
+-spec status_to_error(integer()) -> {'error', atom() | {'status', integer()}}.
+status_to_error(?DCP_STATUS_KEY_NOT_FOUND) ->
+    {error, vbucket_stream_not_found};
+status_to_error(?DCP_STATUS_ERANGE) ->
+    {error, wrong_start_sequence_number};
+status_to_error(?DCP_STATUS_KEY_EEXISTS) ->
+    {error, vbucket_stream_already_exists};
+status_to_error(?DCP_STATUS_NOT_MY_VBUCKET) ->
+    {error, server_not_my_vbucket};
+status_to_error(?DCP_STATUS_TMP_FAIL) ->
+    {error, vbucket_stream_tmp_fail};
+status_to_error(?DCP_STATUS_NOT_SUPPORTED) ->
+    {error, not_supported};
+status_to_error(Status) ->
+    {error, {status, Status}}.
+
 
 % The worker process for handling dcp connection downstream pipe
 % Read and parse downstream messages and send to the gen_server process
--spec receive_worker(socket(), timeout(), pid(), list()) -> closed | inet:posix().
-receive_worker(Socket, Timeout, Parent, MsgAcc0) ->
-    case socket_recv(Socket, ?DCP_HEADER_LEN, infinity) of
-    {ok, Header} ->
-        {Action, MsgAcc} =
+-spec receive_worker(#bufsocket{}, timeout(), pid(), list()) ->
+                                                    closed | inet:posix().
+receive_worker(BufSocket, Timeout, Parent, MsgAcc0) ->
+    case bufsocket_recv(BufSocket, ?DCP_HEADER_LEN, infinity) of
+    {ok, Header, BufSocket2} ->
+        {Action, MsgAcc, BufSocket3} =
         case couch_dcp_consumer:parse_header(Header) of
         {control_request, Status, RequestId} ->
-            {done, {stream_response, RequestId, {RequestId, Status}}};
+            {done, {stream_response, RequestId, {RequestId, Status}},
+                BufSocket2};
         {noop_request, RequestId} ->
-            {done, {stream_noop, RequestId}};
-        {buffer_ack, Status, _RequestId} ->
-            Status = ?DCP_STATUS_OK,
-            {true, []};
+            {done, {stream_noop, RequestId}, BufSocket2};
+        {buffer_ack, ?DCP_STATUS_OK, _RequestId} ->
+            {true, [], BufSocket2};
         {stream_request, Status, RequestId, BodyLength} ->
-            Response = case Status of
+            {Response, BufSocket5} = case Status of
             ?DCP_STATUS_OK ->
                 case receive_failover_log(
-                     Socket, Timeout, Status, BodyLength) of
-                {ok, FailoverLog} ->
-                    {failoverlog, FailoverLog};
+                    BufSocket2, Timeout, Status, BodyLength) of
+                {{ok, FailoverLog}, BufSocket4} ->
+                    {{failoverlog, FailoverLog}, BufSocket4};
                 Error ->
-                    Error
+                    {Error, BufSocket2}
                 end;
             ?DCP_STATUS_ROLLBACK ->
                 case receive_rollback_seq(
-                     Socket, Timeout, BodyLength) of
-                {ok, RollbackSeq} ->
-                    {rollback, RollbackSeq};
+                    BufSocket2, Timeout, BodyLength) of
+                {ok, RollbackSeq, BufSocket4} ->
+                    {{rollback, RollbackSeq}, BufSocket4};
                 Error ->
-                    Error
+                    {Error, BufSocket2}
                 end;
             _ ->
-                parse_error_response(Socket, Timeout, BodyLength, Status)
+                parse_error_response(BufSocket2, Timeout, BodyLength, Status)
             end,
-            {done, {stream_response, RequestId, {RequestId, Response}}};
+            {done, {stream_response, RequestId, {RequestId, Response}},
+                BufSocket5};
         {failover_log, Status, RequestId, BodyLength} ->
-            Response = receive_failover_log(Socket, Timeout, Status, BodyLength),
-            {done, {stream_response, RequestId, Response}};
+            {Response, BufSocket5} = receive_failover_log(
+                BufSocket2, Timeout, Status, BodyLength),
+            {done, {stream_response, RequestId, Response}, BufSocket5};
         {stream_close, Status, RequestId, BodyLength} ->
-            Response = case Status of
+            {Response, BufSocket5} = case Status of
             ?DCP_STATUS_OK ->
-                ok;
+                {ok, BufSocket2};
             _ ->
-                parse_error_response(Socket, Timeout, BodyLength, Status)
+                parse_error_response(BufSocket2, Timeout, BodyLength, Status)
             end,
-            {done, {stream_response, RequestId, Response}};
+            {done, {stream_response, RequestId, Response}, BufSocket5};
         {stats, Status, RequestId, BodyLength, KeyLength} ->
             case BodyLength of
             0 ->
                 case Status of
                 ?DCP_STATUS_OK ->
                     StatAcc = lists:reverse(MsgAcc0),
-                    {done, {stream_response, RequestId, {ok, StatAcc}}};
+                    {done, {stream_response, RequestId, {ok, StatAcc}},
+                        BufSocket2};
                 % Some errors might not contain a body
                 _ ->
                     Error = {error, {Status, <<>>}},
-                    {done, {stream_response, RequestId, Error}}
+                    {done, {stream_response, RequestId, Error}, BufSocket2}
                 end;
             _ ->
                 case receive_stat(
-                    Socket, Timeout, Status, BodyLength, KeyLength) of
-                {ok, Stat} ->
-                    {true, [Stat | MsgAcc0]};
+                    BufSocket2, Timeout, Status, BodyLength, KeyLength) of
+                {{ok, Stat}, BufSocket5} ->
+                    {true, [Stat | MsgAcc0], BufSocket5};
                 {error, _} = Error ->
-                    {done, {stream_response, RequestId, Error}}
+                    {done, {stream_response, RequestId, Error}, BufSocket2}
                 end
             end;
         {snapshot_marker, _PartId, RequestId, BodyLength} ->
-            {ok, SnapshotMarker} = receive_snapshot_marker(
-                Socket, Timeout, BodyLength),
+            {ok, SnapshotMarker, BufSocket5} = receive_snapshot_marker(
+                BufSocket2, Timeout, BodyLength),
             {done, {stream_event, RequestId,
-                {snapshot_marker, SnapshotMarker, BodyLength}}};
+                {snapshot_marker, SnapshotMarker, BodyLength}}, BufSocket5};
         {snapshot_mutation, PartId, RequestId, KeyLength, BodyLength,
                 ExtraLength, Cas, DataType} ->
-            Mutation = receive_snapshot_mutation(
-                Socket, Timeout, PartId, KeyLength, BodyLength, ExtraLength,
+            {Mutation, BufSocket5} = receive_snapshot_mutation(
+                BufSocket2, Timeout, PartId, KeyLength, BodyLength, ExtraLength,
                 Cas, DataType),
-            {done, {stream_event, RequestId, {snapshot_mutation, Mutation, BodyLength}}};
+            {done, {stream_event, RequestId,
+                    {snapshot_mutation, Mutation, BodyLength}}, BufSocket5};
         % For the indexer and XDCR there's no difference between a deletion
         % end an expiration. In both cases the items should get removed.
         % Hence the same code can be used after the initial header
@@ -1179,19 +1242,23 @@ receive_worker(Socket, Timeout, Parent, MsgAcc0) ->
         {OpCode, PartId, RequestId, KeyLength, BodyLength, Cas, DataType} when
                 OpCode =:= snapshot_deletion orelse
                 OpCode =:= snapshot_expiration ->
-            Deletion = receive_snapshot_deletion(
-                Socket, Timeout, PartId, KeyLength, BodyLength, Cas, DataType),
-            {done, {stream_event, RequestId, {snapshot_deletion, Deletion, BodyLength}}};
+            {Deletion, BufSocket5} = receive_snapshot_deletion(
+                BufSocket2, Timeout, PartId, KeyLength, BodyLength,
+                Cas, DataType),
+            {done, {stream_event, RequestId,
+                {snapshot_deletion, Deletion, BodyLength}}, BufSocket5};
         {stream_end, PartId, RequestId, BodyLength} ->
-            Flag = receive_stream_end(Socket, Timeout, BodyLength),
-            {done, {stream_event, RequestId, {stream_end, {RequestId, PartId, Flag}, BodyLength}}}
+            {Flag, BufSocket5} = receive_stream_end(BufSocket2,
+                Timeout, BodyLength),
+            {done, {stream_event, RequestId, {stream_end,
+                {RequestId, PartId, Flag}, BodyLength}}, BufSocket5}
         end,
         case Action of
         done ->
             Parent ! MsgAcc,
-            receive_worker(Socket, Timeout, Parent, []);
+            receive_worker(BufSocket3, Timeout, Parent, []);
         true ->
-            receive_worker(Socket, Timeout, Parent, MsgAcc)
+            receive_worker(BufSocket3, Timeout, Parent, MsgAcc)
         end;
     {error, Reason} ->
         exit({conn_error, Reason})
@@ -1206,7 +1273,7 @@ check_and_send_buffer_ack(State, _RequestId, {error, _, _}, _Type) ->
 
 check_and_send_buffer_ack(State, RequestId, Event, Type) ->
     #state{
-        socket = Socket,
+        bufsocket = BufSocket,
         max_buffer_size = MaxBufSize,
         stream_queues = StreamQueues,
         total_buffer_size = Size
@@ -1226,7 +1293,7 @@ check_and_send_buffer_ack(State, RequestId, Event, Type) ->
     {Status, Ret} = if
     Size2 > MaxAckSize ->
         BufferAckRequest = couch_dcp_consumer:encode_buffer_request(0, Size2),
-        case gen_tcp:send(Socket, BufferAckRequest) of
+        case bufsocket_send(BufSocket, BufferAckRequest) of
         ok ->
             {ok, 0};
         Error ->
@@ -1253,11 +1320,11 @@ check_and_send_buffer_ack(State, RequestId, Event, Type) ->
             {ok, #state{}} | {error, closed | inet:posix()}.
 send_buffer_ack(State) ->
     #state{
-       socket = Socket,
+        bufsocket = BufSocket,
         total_buffer_size = Size
     } = State,
     BufferAckRequest = couch_dcp_consumer:encode_buffer_request(0, Size),
-    case gen_tcp:send(Socket, BufferAckRequest) of
+    case bufsocket_send(BufSocket, BufferAckRequest) of
     ok ->
         {ok, State#state{total_buffer_size = 0}};
     {error, _Reason} = Error ->
@@ -1269,11 +1336,11 @@ send_buffer_ack(State) ->
                                             {error, closed | inet:posix()}.
 set_buffer_size(State, Size) ->
     #state{
-        socket = Socket,
+        bufsocket = BufSocket,
         request_id = RequestId
     } = State,
     ControlRequest = couch_dcp_consumer:encode_control_request(RequestId, connection, Size),
-    case gen_tcp:send(Socket, ControlRequest) of
+    case bufsocket_send(BufSocket, ControlRequest) of
     ok ->
         State2 = next_request_id(State),
         State3 = add_pending_request(State2, RequestId, {control_request, Size}, nil),
@@ -1343,12 +1410,12 @@ find_stream_info(RequestId, State) ->
 add_new_stream({PartId, PartUuid, StartSeq, EndSeq,
     {SnapSeqStart, SnapSeqEnd}, Flags}, From, State) ->
    #state{
-       socket = Socket,
+       bufsocket = BufSocket,
        request_id = RequestId
     } = State,
     StreamRequest = couch_dcp_consumer:encode_stream_request(
         PartId, RequestId, Flags, StartSeq, EndSeq, PartUuid, SnapSeqStart, SnapSeqEnd),
-    case gen_tcp:send(Socket, StreamRequest) of
+    case bufsocket_send(BufSocket, StreamRequest) of
     ok ->
         State2 = insert_stream_info(PartId, RequestId, PartUuid, StartSeq, EndSeq,
             State, Flags),
@@ -1368,12 +1435,12 @@ restart_worker(State) ->
         {stop, Reason, State};
     {ok, State2} ->
         #state{
-            socket = Socket,
+            bufsocket = BufSocket,
             worker_pid = WorkerPid
         } = State2,
         % Replace the socket
         State3 = State#state{
-            socket = Socket,
+            bufsocket = BufSocket,
             pending_requests = dict:new(),
             worker_pid = WorkerPid
         },
