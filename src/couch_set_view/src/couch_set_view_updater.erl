@@ -505,12 +505,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                         ChangesWrapper, {0, 0}),
                     case Result of
                     {ok, {AccCount2, AccEndSeq}, NewPartVersions} ->
-                        AccSeqs2 = case InitialBuild of
-                        true ->
-                            orddict:store(PartId, AccEndSeq, AccSeqs);
-                        false ->
-                            orddict:store(PartId, EndSeq, AccSeqs)
-                        end,
+                        AccSeqs2 = orddict:store(PartId, AccEndSeq, AccSeqs),
                         AccVersions2 = lists:ukeymerge(
                             1, [{PartId, NewPartVersions}], AccVersions),
                         AccRollbacks2 = AccRollbacks;
