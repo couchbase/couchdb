@@ -29,8 +29,6 @@
 
 -on_load(init/0).
 
--define(BUMP_REDUCTIONS, 1900).
-
 
 init() ->
     SoName = case code:priv_dir(?MODULE) of
@@ -53,47 +51,33 @@ init() ->
 
 start_map_context(MapFunSources) ->
     Ref = erlang:phash2(make_ref()),
-    erlang:bump_reductions(?BUMP_REDUCTIONS),
     start_map_context(MapFunSources, Ref).
 
 start_map_context(_MapFunSources, _Ref) ->
     erlang:nif_error(mapreduce_nif_not_loaded).
 
 
-map_doc(Context, Doc, Meta) ->
-    erlang:bump_reductions(?BUMP_REDUCTIONS),
-    map_doc_int(Context, Doc, Meta).
-map_doc_int(_Context, _Doc, _Meta) ->
+map_doc(_Context, _Doc, _Meta) ->
     erlang:nif_error(mapreduce_nif_not_loaded).
 
 
 start_reduce_context(ReduceFunSources) ->
     Ref = erlang:phash2(make_ref()),
-    erlang:bump_reductions(?BUMP_REDUCTIONS),
     start_reduce_context(ReduceFunSources, Ref).
 
 start_reduce_context(_ReduceFunSources, _Ref) ->
     erlang:nif_error(mapreduce_nif_not_loaded).
 
 
-reduce(Context, KvList) ->
-    erlang:bump_reductions(?BUMP_REDUCTIONS),
-    reduce_int(Context, KvList).
-reduce_int(_Context, _KvList) ->
+reduce(_Context, _KvList) ->
     erlang:nif_error(mapreduce_nif_not_loaded).
 
 
-reduce(Context, ReduceFunNumber, KvList) ->
-    erlang:bump_reductions(?BUMP_REDUCTIONS),
-    reduce_int(Context, ReduceFunNumber, KvList).
-reduce_int(_Context, _ReduceFunNumber, _KvList) ->
+reduce(_Context, _ReduceFunNumber, _KvList) ->
     erlang:nif_error(mapreduce_nif_not_loaded).
 
 
-rereduce(Context, ReduceFunNumber, ReductionsList) ->
-    erlang:bump_reductions(?BUMP_REDUCTIONS),
-    rereduce_int(Context, ReduceFunNumber, ReductionsList).
-rereduce_int(_Context, _ReduceFunNumber, _ReductionsList) ->
+rereduce(_Context, _ReduceFunNumber, _ReductionsList) ->
     erlang:nif_error(mapreduce_nif_not_loaded).
 
 
