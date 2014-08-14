@@ -4027,14 +4027,12 @@ get_seqs(State, Partitions) ->
         erlang:put(seqs_cache, SeqsCache),
         Seqs3 = couch_set_view_util:filter_seqs(Partitions, Seqs2),
         {ok, Seqs3};
-    {error, dcp_conn_closed} ->
+    {error, Error} ->
         ?LOG_ERROR("Set view `~s`, ~s (~s) group `~s`, get_seqs() using"
-                  " cached seqs (dcp_conn_closed)",
+                  " cached seqs (~p)",
                   [?set_name(State), ?type(State), ?category(State),
-                   ?group_id(State)]),
+                   ?group_id(State), Error]),
         SeqsCache = erlang:get(seqs_cache),
         Seqs = SeqsCache#seqs_cache.seqs,
-        couch_set_view_util:filter_seqs(Partitions, Seqs);
-    Error ->
-        Error
+        couch_set_view_util:filter_seqs(Partitions, Seqs)
     end.
