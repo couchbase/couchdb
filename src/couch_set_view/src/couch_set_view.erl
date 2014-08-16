@@ -740,6 +740,7 @@ get_map_view(SetName, DDoc, ViewName, Req) ->
         {ok, View} ->
             {ok, View, Group, Unindexed};
         Else ->
+            release_group(Group0),
             Else
         end
     catch
@@ -768,6 +769,7 @@ get_reduce_view(SetName, DDoc, ViewName, Req) ->
         {ok, View} ->
             {ok, View, Group, Unindexed};
         Else ->
+            release_group(Group0),
             Else
         end
     catch
