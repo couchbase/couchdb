@@ -127,8 +127,7 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
        BarrierEntryPid, NumChanges, CompactorRunning, Options) ->
     #writer_acc{
         owner = Owner,
-        group = Group,
-        max_seqs = CurrMaxSeqs
+        group = Group
     } = WriterAcc,
     #set_view_group{
         set_name = SetName,
@@ -216,19 +215,7 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
                                 seqs = MaxSeqs
                             }
                         }
-                    },
-                    SeqDiffs = lists:foldr(fun({PartId, Seq}, Acc) ->
-                        case lists:keyfind(PartId, 1, CurrMaxSeqs) of
-                        {PartId, Seq2} ->
-                            [Seq - Seq2 | Acc];
-                        false ->
-                            Acc
-                        end
-                    end, [], MaxSeqs),
-                    TotalSeqDiff = lists:sum(SeqDiffs),
-                    ?LOG_INFO("Set view `~s`, ~s group `~s`, updater processed ~p
-                        more seqs than expected",
-                        [SetName, Type, DDocId, TotalSeqDiff])
+                    }
                 end,
                 Parent ! {writer_finished, FinalWriterAcc}
             after
