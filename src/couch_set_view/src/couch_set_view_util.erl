@@ -430,7 +430,7 @@ header_bin_to_term(HeaderBin) ->
     <<_Signature:16/binary, HeaderBaseCompressed/binary>> = HeaderBin,
     Base = couch_compress:decompress(HeaderBaseCompressed),
     <<
-      Version:8,
+      Version0:8,
       NumParts:16,
       Abitmask:?MAX_NUM_PARTITIONS,
       Pbitmask:?MAX_NUM_PARTITIONS,
@@ -464,11 +464,17 @@ header_bin_to_term(HeaderBin) ->
       Rest8/binary
     >> = Rest7,
     {Unindexable, Rest9} = bin_to_seqs(UnindexableCount, Rest8, []),
-    <<
-      NumPartVersions:16,
-      Rest10/binary
-    >> = Rest9,
-    {PartVersions, <<>>} = bin_to_partition_versions(NumPartVersions, Rest10, []),
+    case Version0 of
+    1 ->
+        ?LOG_INFO("Upgrading index header from Couchbase 2.x to 3.x", []),
+        Version = 2,
+        PartVersions = nil;
+    _ ->
+        Version = Version0,
+        <<NumPartVersions:16, Rest10/binary>> = Rest9,
+        {PartVersions, <<>>} = bin_to_partition_versions(
+            NumPartVersions, Rest10, [])
+    end,
     #set_view_index_header{
         version = Version,
         num_partitions = NumParts,

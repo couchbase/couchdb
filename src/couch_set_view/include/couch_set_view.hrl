@@ -172,7 +172,7 @@
     % Pending partition states transition.
     pending_transition = nil                        :: 'nil' | #set_view_transition{},
     unindexable_seqs = []                           :: partition_seqs(),
-    partition_versions = []                         :: partition_versions()
+    partition_versions = []                         :: 'nil' | partition_versions()
 }).
 
 % Keep all stats values as valid EJSON (except ets key).

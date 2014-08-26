@@ -426,11 +426,12 @@ do_init({_, SetName, _} = InitArgs) ->
         case couch_dcp_client:start(DcpName, SetName, User, Passwd,
             DcpBufferSize) of
         {ok, DcpPid} ->
+            Group2 = maybe_upgrade_header(Group, DcpPid),
             State = #state{
                 init_args = InitArgs,
                 replica_group = ReplicaPid,
                 replica_partitions = ReplicaParts,
-                group = Group#set_view_group{
+                group = Group2#set_view_group{
                     ref_counter = RefCounter,
                     replica_pid = ReplicaPid,
                     dcp_pid = DcpPid
@@ -4035,4 +4036,42 @@ get_seqs(State, Partitions) ->
         SeqsCache = erlang:get(seqs_cache),
         Seqs = SeqsCache#seqs_cache.seqs,
         couch_set_view_util:filter_seqs(Partitions, Seqs)
+    end.
+
+
+% If view files from Couchbase 2.x are openend, upgrade the heeader as they
+% don't contain partition versions
+-spec maybe_upgrade_header(#set_view_group{}, pid()) -> #set_view_group{}.
+maybe_upgrade_header(Group, DcpPid) ->
+    #set_view_group{
+        index_header = Header,
+        set_name = SetName,
+        type = GroupType,
+        category = Category,
+        name = DDocId,
+        mod = Mod
+    } = Group,
+    #set_view_index_header{
+        partition_versions = PartVersions0,
+        seqs = Seqs
+    } = Header,
+    case PartVersions0 of
+    nil ->
+        PartIds = [PartId || {PartId, _} <- Seqs],
+        ?LOG_INFO("set view `~s`, ~p ~p (~s) group `~s` requests the "
+                  "current partition versions as the index was "
+                  "upgraded from Couchbase 2.x to 3.x",
+                  [SetName, Mod, GroupType, Category, DDocId]),
+        PartVersions = lists:map(fun(PartId) ->
+            {ok, PartVersion} = couch_dcp_client:get_failover_log(
+                DcpPid, PartId),
+            {PartId, PartVersion}
+        end, PartIds),
+        Group#set_view_group{
+            index_header = Header#set_view_index_header{
+                partition_versions = PartVersions
+            }
+        };
+    _ ->
+        Group
     end.
