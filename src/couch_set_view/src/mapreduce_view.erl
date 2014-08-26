@@ -384,7 +384,33 @@ design_doc_to_set_view_group(SetName, #doc{id = Id, body = {Fields}}) ->
         mod = ?MODULE,
         extension = index_extension()
     },
-    couch_set_view_util:set_view_sig(SetViewGroup).
+    set_view_sig(SetViewGroup).
+
+
+% Couchbase 2.x has a different #set_view{} record. Though it is used
+% for calculation the signature. Transform the new one into the old
+% one so that the signature stays the same.
+-spec set_view_for_sig(#set_view{}) -> tuple().
+set_view_for_sig(SetView) ->
+    #set_view{
+        id_num = Id,
+        def = Def,
+        ref = Ref,
+        indexer = #mapreduce_view{
+            map_names = MapNames,
+            btree = Btree,
+            reduce_funs = ReduceFuns,
+            options = Options
+        }
+    } = SetView,
+    {set_view, Id, MapNames, Def, Btree, ReduceFuns, Options, Ref}.
+
+
+-spec set_view_sig(#set_view_group{}) -> #set_view_group{}.
+set_view_sig(#set_view_group{views = Views} = Group) ->
+    SetViews2 = [set_view_for_sig(SetView) || SetView <- Views],
+    Sig = couch_util:md5(term_to_binary(SetViews2)),
+    Group#set_view_group{sig = Sig}.
 
 
 -spec index_extension() -> string().

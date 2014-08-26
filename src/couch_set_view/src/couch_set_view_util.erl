@@ -28,7 +28,6 @@
 -export([split_set_db_name/1]).
 -export([group_to_header_bin/1, header_bin_sig/1, header_bin_to_term/1]).
 -export([get_part_seq/2, has_part_seq/2, find_part_seq/2]).
--export([set_view_sig/1]).
 -export([check_primary_key_size/5, check_primary_value_size/5]).
 -export([refresh_viewgroup_header/1]).
 -export([shutdown_cleaner/2, shutdown_wait/1]).
@@ -179,13 +178,6 @@ get_ddoc_ids_with_sig(SetName, Group) ->
     Matching ->
         [DDocId || {_SetName, {DDocId, _Sig}} <- Matching]
     end.
-
-
--spec set_view_sig(#set_view_group{}) -> #set_view_group{}.
-set_view_sig(#set_view_group{
-            views = Views} = G) ->
-    Sig = couch_util:md5(term_to_binary(Views)),
-    G#set_view_group{sig = Sig}.
 
 
 -spec open_raw_read_fd(#set_view_group{}) -> 'ok'.
