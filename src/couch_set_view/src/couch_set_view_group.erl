@@ -1043,19 +1043,12 @@ handle_info({partial_update, Pid, AckTo, NewGroup}, #state{updater_pid = Pid} = 
         State2 = process_partial_update(State, NewGroup),
         AckTo ! update_processed,
         State3 = stop_updater(State2),
-        NewState = maybe_apply_pending_transition(State3),
-        WaitList2 = NewState#state.waiting_list;
+        NewState = maybe_apply_pending_transition(State3);
     false ->
         NewState = process_partial_update(State, NewGroup),
-        #state{
-           group = Group,
-           replica_partitions = ReplicaParts,
-           waiting_list = WaitList
-        } = NewState,
-        AckTo ! update_processed,
-        WaitList2 = reply_with_group(Group, ReplicaParts, WaitList)
+        AckTo ! update_processed
     end,
-    {noreply, NewState#state{waiting_list = WaitList2}};
+    {noreply, NewState};
 handle_info({partial_update, _, AckTo, _}, State) ->
     %% message from an old (probably pre-compaction) updater; ignore
     AckTo ! update_processed,
