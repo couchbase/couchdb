@@ -393,13 +393,11 @@ wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup) ->
 
 
 dcp_marker_to_string(Type) ->
-    case Type of
+    case Type band ?DCP_SNAPSHOT_TYPE_MASK of
     ?DCP_SNAPSHOT_TYPE_DISK ->
         "on-disk";
     ?DCP_SNAPSHOT_TYPE_MEMORY ->
         "in-memory";
-    ?DCP_SNAPSHOT_TYPE_CHK ->
-        "chk";
     _ ->
         io_lib:format("unknown (~w)", [Type])
     end.
@@ -458,8 +456,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                                 MaxDocSize, InitialBuild),
                             Acc;
                         ({snapshot_marker, {MarkerStartSeq, MarkerEndSeq, MarkerType}}, {Count, _})
-                            when (MarkerType =:= ?DCP_SNAPSHOT_TYPE_DISK)
-                                 orelse (MarkerType =:= ?DCP_SNAPSHOT_TYPE_MEMORY) ->
+                            when MarkerType band ?DCP_SNAPSHOT_TYPE_MASK =/= 0 ->
                             ?LOG_INFO(
                                 "set view `~s`, ~s (~s) group `~s`: received "
                                 "a snapshot marker (~s) for partition ~p from "
@@ -486,13 +483,14 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                                 {Count, MarkerEndSeq}
                             end;
                         ({snapshot_marker, {MarkerStartSeq, MarkerEndSeq, MarkerType}}, Acc) ->
-                            ?LOG_INFO(
+                            ?LOG_ERROR(
                                 "set view `~s`, ~s (~s) group `~s`: received "
                                 "a snapshot marker (~s) for partition ~p from "
                                 "sequence ~p to ~p",
                                 [SetName, GroupType, Category, DDocId,
                                     dcp_marker_to_string(MarkerType),
                                     PartId, MarkerStartSeq, MarkerEndSeq]),
+                            throw({error, unknown_snapshot_marker, MarkerType}),
                             Acc;
                         (#dcp_doc{} = Item, {Count, AccEndSeq}) ->
                             queue_doc(
