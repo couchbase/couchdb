@@ -15,7 +15,8 @@ MODULES = ["../test/etap"]
 
 def usage():
     print "Usage: %s -p builddir -l erl_libs_dir -m module_dir_paths" \
-    " -t testfile [ -v ] [ -c couchstore_install_path ]" %sys.argv[0]
+    " -f erl_flags -t testfile [ -v ] [ -c couchstore_install_path ]" \
+    % sys.argv[0]
     print
 
 def run_test(testfile, verbose = False):
@@ -60,9 +61,9 @@ def run_test(testfile, verbose = False):
 
 if __name__ == '__main__':
     try:
-        opts, args = getopt.getopt(sys.argv[1:], "p:l:m:t:hvc:", \
-                    ["path=", "libsdir=", "modules=", "test=", "help",
-                     "verbose", "couchstore-installdir="])
+        opts, args = getopt.getopt(sys.argv[1:], "p:l:m:f:t:hvc:", \
+                    ["path=", "libsdir=", "modules=", "flags=", "test=",
+                     "help", "verbose", "couchstore-installdir="])
     except getopt.GetoptError, err:
         print err
         usage()
@@ -76,16 +77,19 @@ if __name__ == '__main__':
     libsdir = None
     test = None
     modules = None
+    flags = None
     verbose = False
     couchstore_path = None
 
     for opt, arg in opts:
         if opt in ("-p", "--path"):
             path = arg
-        if opt in ("-l", "--libsdir"):
+        elif opt in ("-l", "--libsdir"):
             libsdir = arg
-        if opt in ("-m", "--modules"):
+        elif opt in ("-m", "--modules"):
             modules = arg
+        elif opt in ("-f", "--flags"):
+            flags = arg
         elif opt in ("-t", "--test"):
             test = arg
         elif opt in ("-v", "--verbose"):
@@ -103,21 +107,15 @@ if __name__ == '__main__':
     env = os.getenv("ERL_LIBS")
     if env:
         erl_libs.append(env)
-
     if libsdir:
         erl_libs.append(libsdir)
 
-    # Erlang modules expect posix path format
-    # which is respected by all platforms
-    # including Windows. So replace '\' by '/'
-    # Ensure spaces escaped by '\' are intact,
-    # since directory names might contain space
-    pattern = re.compile(r'\\(\S)')
-
-    erl_flags = ""
+    erl_flags = []
     env = os.getenv("ERL_FLAGS")
     if env:
-        erl_flags = env
+        erl_flags.append(env)
+    if flags:
+        erl_flags.append(flags)
 
     if path:
         erl_libs.append(path)
@@ -127,12 +125,20 @@ if __name__ == '__main__':
         MODULES += [d for d in os.listdir(path)
                    if os.path.isdir(os.path.join(path, d))]
 
-        flags = map(lambda x: " %s" %os.path.join(path, x), MODULES)
-        erl_flags = "-pa" + " ".join(flags)
-        env = os.getenv("ERL_FLAGS")
-        erl_flags += " -pa" + " ".join(flags)
-        erl_flags = pattern.sub(r'/\1', erl_flags)
-        os.putenv("ERL_FLAGS", erl_flags)
+        paths = map(lambda x: " %s" %os.path.join(path, x), MODULES)
+        erl_flags.append("-pa" + " ".join(paths))
+
+
+    # Erlang modules expect posix path format
+    # which is respected by all platforms
+    # including Windows. So replace '\' by '/'
+    # Ensure spaces escaped by '\' are intact,
+    # since directory names might contain space
+    pattern = re.compile(r'\\(\S)')
+
+    erl_flags = " ".join(erl_flags)
+    erl_flags = pattern.sub(r'/\1', erl_flags)
+    os.putenv("ERL_FLAGS", erl_flags)
 
     erl_libs = os.pathsep.join(erl_libs)
     erl_libs = pattern.sub(r'/\1', erl_libs)
