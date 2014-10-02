@@ -1,7 +1,6 @@
 PROJECT(CouchDB)
 CMAKE_MINIMUM_REQUIRED(VERSION 2.8)
-SET(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_CURRENT_SOURCE_DIR}")
-ADD_ERLANG_INCLUDE_DIR(${CMAKE_MODULE_PATH}/src/couchdb)
+ADD_ERLANG_INCLUDE_DIR(${CMAKE_CURRENT_SOURCE_DIR}/src/couchdb)
 
 SET(COUCHDB_RUNTEST ${CMAKE_CURRENT_SOURCE_DIR}/test/etap/runtest.py)
 SET(COUCHDB_BIN_PATH ${CMAKE_CURRENT_BINARY_DIR})
@@ -47,9 +46,17 @@ FILE(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/tmp/lib
 
 ADD_SUBDIRECTORY(test)
 
-ADD_CUSTOM_COMMAND(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/couchdb.plt
+
+SET(COUCHDB_PLT_FILE ${CMAKE_CURRENT_BINARY_DIR}/couchdb.plt)
+ADD_CUSTOM_TARGET(couchdb-check-plt
        COMMAND
-          dialyzer --output_plt ${CMAKE_CURRENT_BINARY_DIR}/couchdb.plt
+           ${CMAKE_COMMAND}
+               -DPLT_FILE=${COUCHDB_PLT_FILE}
+               -P ${CMAKE_MODULE_PATH}/ErlangCheckPlt.cmake)
+
+ADD_CUSTOM_COMMAND(OUTPUT ${COUCHDB_PLT_FILE}
+       COMMAND
+          dialyzer --output_plt ${COUCHDB_PLT_FILE}
                    --build_plt
                    -pa src/lhttpc
                    -pa src/couchdb
@@ -83,7 +90,7 @@ ADD_CUSTOM_COMMAND(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/couchdb.plt
 
 ADD_CUSTOM_TARGET(dialyzer
        COMMAND
-          dialyzer --plt ${CMAKE_CURRENT_BINARY_DIR}/couchdb.plt
+          dialyzer --plt ${COUCHDB_PLT_FILE}
                    --verbose
                    -Wno_improper_lists
                    -pa src/couchdb
@@ -103,4 +110,6 @@ ADD_CUSTOM_TARGET(dialyzer
                         src/lhttpc
                         src/mapreduce
                         src/couch_dcp
-                  DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/couchdb.plt)
+       DEPENDS
+          couchdb-check-plt
+          ${COUCHDB_PLT_FILE})
