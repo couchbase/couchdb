@@ -812,11 +812,12 @@ reduce_to_count(Reductions) ->
 % This case is triggered when at least one partition of the replica group is
 % active. This happens during failover, when a replica index is transferred
 % to the main index
+% The "ors" in the spec are for the spatial views
 -spec fold(#set_view_group{},
            #set_view{},
-           set_view_fold_fun(),
+           set_view_fold_fun() | fun((tuple(), term()) -> {ok, term()}),
            term(),
-           #view_query_args{}) -> {'ok', term(), term()}.
+           #view_query_args{} | tuple()) -> {'ok', term(), term()}.
 fold(#set_view_group{replica_group = #set_view_group{} = RepGroup} = Group, View, Fun, Acc, ViewQueryArgs) ->
     RepView = lists:nth(View#set_view.id_num + 1, RepGroup#set_view_group.views),
     ViewSpecs = [

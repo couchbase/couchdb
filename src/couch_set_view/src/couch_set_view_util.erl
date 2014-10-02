@@ -622,8 +622,8 @@ find_part_seq(PartId, Seqs) ->
     end.
 
 
--spec check_primary_key_size(binary(), pos_integer(), binary(), binary(),
-        #set_view_group{}) -> ok.
+-spec check_primary_key_size(binary(), pos_integer(), binary() | [number()],
+        binary(), #set_view_group{}) -> ok.
 check_primary_key_size(Bin, Max, Key, DocId, Group) when byte_size(Bin) > Max ->
     #set_view_group{set_name = SetName, name = DDocId, type = Type} = Group,
     KeyPrefix = lists:sublist(unicode:characters_to_list(Key), 100),
@@ -637,8 +637,8 @@ check_primary_key_size(_Bin, _Max, _Key, _DocId, _Group) ->
     ok.
 
 
--spec check_primary_value_size(binary(), pos_integer(), binary(), binary(),
-        #set_view_group{}) -> ok.
+-spec check_primary_value_size(binary(), pos_integer(), binary() | [number()],
+        binary(), #set_view_group{}) -> ok.
 check_primary_value_size(Bin, Max, Key, DocId, Group) when byte_size(Bin) > Max ->
     #set_view_group{set_name = SetName, name = DDocId, type = Type} = Group,
     Error = iolist_to_binary(
