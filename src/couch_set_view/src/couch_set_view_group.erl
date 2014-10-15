@@ -1296,7 +1296,7 @@ handle_info({'EXIT', Pid, {updater_error, Error}}, #state{updater_pid = Pid, gro
             {error, <<"Reducer: ", Msg/binary>>};
         {_, 87, _} ->
             {error, <<"reduction too large">>};
-        {error, _Reason} ->
+        {_, _Reason} ->
             Error;
         _ ->
             {error, Error}
