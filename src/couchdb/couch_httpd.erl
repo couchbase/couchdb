@@ -245,6 +245,9 @@ handle_request(MochiReq, DbFrontendModule, DefaultFun,
         throw:{error, set_view_outdated} = Error ->
             % More details logged by the view merger with INFO level
             send_error(HttpReq, Error);
+        throw:{query_parse_error, Reason} = Error->
+            ?LOG_ERROR("query parameter error: ~p", [Reason]),
+            send_error(HttpReq, Error);
         Tag:Error ->
             Stack = erlang:get_stacktrace(),
             ?LOG_ERROR("Uncaught error in HTTP request: ~p~n~n"
