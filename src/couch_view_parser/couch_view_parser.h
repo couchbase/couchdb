@@ -27,6 +27,7 @@
 #include "yajl/yajl_gen.h"
 
 #include "erl_nif_compat.h"
+#include "taskqueue.h"
 
 
 typedef enum {
@@ -181,6 +182,7 @@ typedef std::list< row_t *, NifStlAllocator<row_t *> >                 row_list_
 typedef std::list< error_entry_t *, NifStlAllocator<error_entry_t *> > error_entry_list_t;
 typedef std::list< debug_info_t *, NifStlAllocator<debug_info_t *> >   debug_info_list_t;
 
+struct parse_json_task;
 typedef struct {
     yajl_handle                 handle;
     // current object depth level
@@ -201,6 +203,14 @@ typedef struct {
     // when > 0, we're inside an object or an array
     int                         value_nesting;
 } ctx_t;
+
+typedef struct parse_json_task{
+    ErlNifEnv                                   *env;
+    ctx_t                                       *ctx;
+    ERL_NIF_TERM                                arg;
+    ErlNifPid                                   pid;
+    int                                         taskType;
+} parse_json_task_t;
 
 
 class JsonParseException {

@@ -23,6 +23,12 @@
 
 #include "couch_view_parser.h"
 
+
+#define PARSE_JSON_QUEUE_SIZE   32
+#define PARSE_JSON_TASKS        8
+#define PARSE_CHUNK             1
+#define NEXT_STATE              2
+
 static ERL_NIF_TERM ATOM_OK;
 static ERL_NIF_TERM ATOM_ERROR;
 static ERL_NIF_TERM ATOM_NEED_MORE_DATA;
@@ -41,6 +47,7 @@ static ERL_NIF_TERM nextState(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[
 
 // NIF API callbacks
 static int onLoad(ErlNifEnv *env, void **priv, ERL_NIF_TERM info);
+static void onUnload(ErlNifEnv *env, void *priv_data);
 
 // Utilities
 static inline ERL_NIF_TERM return_rows(ErlNifEnv *env, ctx_t *ctx);
@@ -50,11 +57,18 @@ static inline ERL_NIF_TERM make_errors_list(ErlNifEnv *env, ctx_t *ctx);
 static inline ERL_NIF_TERM return_debug_entries(ErlNifEnv *env, ctx_t *ctx);
 static inline ERL_NIF_TERM make_debug_entries_list(ErlNifEnv *env, ctx_t *ctx);
 static inline ERL_NIF_TERM makeError(ErlNifEnv *env, const std::string &msg);
+static void *doParseJsonLoop(void *arg);
+static void destroyQueues();
+static ERL_NIF_TERM doParseChunk(parse_json_task_t *);
+static ERL_NIF_TERM doNextState(parse_json_task_t *);
+static void free_parse_json_task(parse_json_task_t **t);
 
 // NIF resource functions
 static void freeContext(ErlNifEnv *env, void *res);
 
-
+// Globals
+ErlNifTid                                    *TidsParseJson;
+TaskQueue<struct parse_json_task *>          **parseJsonQueues;
 
 static ERL_NIF_TERM startContext(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
@@ -68,22 +82,38 @@ static ERL_NIF_TERM startContext(ErlNifEnv *env, int argc, const ERL_NIF_TERM ar
     return enif_make_tuple2(env, ATOM_OK, res);
 }
 
-
-static ERL_NIF_TERM parseChunk(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+void *doParseJsonLoop(void *arg)
 {
-    ctx_t *ctx;
+    TaskQueue<parse_json_task_t *> *q =
+        static_cast< TaskQueue < parse_json_task_t * > * >(arg);
 
-    if (!enif_get_resource(env, argv[0], CTX_RES, reinterpret_cast<void **>(&ctx))) {
-        return enif_make_badarg(env);
+    while (true) {
+        parse_json_task_t *t = q->dequeue();
+
+        if (t == NULL) {
+            break;
+        }
+
+        if (t->taskType == PARSE_CHUNK) {
+            enif_send(NULL, &(t->pid), t->env, doParseChunk(t));
+        }
+        else if(t->taskType == NEXT_STATE) {
+            enif_send(NULL, &(t->pid), t->env, doNextState(t));
+        }
+
+        free_parse_json_task(&t);
     }
 
-    if (ctx->error != NULL) {
-        return makeError(env, *ctx->error);
-    }
+    return NULL;
+}
 
+static ERL_NIF_TERM doParseChunk(parse_json_task_t *t)
+{
+    ctx_t *ctx = t->ctx;
+    ErlNifEnv *env = t->env;
     ErlNifBinary chunkBin;
 
-    if (!enif_inspect_iolist_as_binary(env, argv[1], &chunkBin)) {
+    if (!enif_inspect_iolist_as_binary(env, t->arg, &chunkBin)) {
         return enif_make_badarg(env);
     }
 
@@ -97,18 +127,88 @@ static ERL_NIF_TERM parseChunk(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
     }
 }
 
-
-static ERL_NIF_TERM nextState(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+static ERL_NIF_TERM parseChunk(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
-    ctx_t *ctx;
+    parse_json_task_t *t = static_cast< parse_json_task_t * >(
+            enif_alloc(sizeof(parse_json_task_t)));
 
-    if (!enif_get_resource(env, argv[0], CTX_RES, reinterpret_cast<void **>(&ctx))) {
+    if (t == NULL) {
+        return makeError(env, "memory allocation failure");
+    }
+
+    t->env = enif_alloc_env();
+    if (t->env == NULL) {
+        enif_free(t);
+        return makeError(env, "memory allocation failure");
+    }
+
+    if (!enif_get_resource(env, argv[0], CTX_RES,
+                reinterpret_cast<void **>(&(t->ctx)))) {
+        free_parse_json_task(&t);
         return enif_make_badarg(env);
     }
 
-    if (ctx->error != NULL) {
-        return makeError(env, *ctx->error);
+    if (t->ctx->error != NULL) {
+        std::string error = *t->ctx->error;
+        free_parse_json_task(&t);
+        return makeError(env, error);
     }
+
+    t->arg = argv[1];
+
+    if(!enif_get_local_pid(t->env, argv[2], &(t->pid))) {
+        free_parse_json_task(&t);
+        return enif_make_badarg(env);
+    }
+
+    t->taskType = PARSE_CHUNK;
+    parseJsonQueues[rand() % PARSE_JSON_TASKS]->enqueue(t);
+
+    return ATOM_OK;
+}
+
+static ERL_NIF_TERM nextState(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    parse_json_task_t *t = static_cast< parse_json_task_t * >(
+            enif_alloc(sizeof(parse_json_task_t)));
+
+    if (t == NULL) {
+        return makeError(env, "memory allocation failure");
+    }
+
+    t->env = enif_alloc_env();
+    if (t->env == NULL) {
+        enif_free(t);
+        return makeError(env, "memory allocation failure");
+    }
+
+    if (!enif_get_resource(env, argv[0], CTX_RES,
+                reinterpret_cast<void **>(&(t->ctx)))) {
+        free_parse_json_task(&t);
+        return enif_make_badarg(env);
+    }
+
+    if (t->ctx->error != NULL) {
+        std::string error = *t->ctx->error;
+        free_parse_json_task(&t);
+        return makeError(env, error);
+    }
+
+    if(!enif_get_local_pid(t->env, argv[1], &(t->pid))) {
+        free_parse_json_task(&t);
+        return enif_make_badarg(env);
+    }
+
+    t->taskType = NEXT_STATE;
+    parseJsonQueues[rand() % PARSE_JSON_TASKS]->enqueue(t);
+
+    return ATOM_OK;
+}
+
+static ERL_NIF_TERM doNextState(parse_json_task_t *t)
+{
+    ctx_t *ctx = t->ctx;
+    ErlNifEnv *env = t->env;
 
     switch (ctx->caller_state) {
     case debug_infos:
@@ -321,7 +421,6 @@ static ERL_NIF_TERM nextState(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[
 
     return makeError(env, "unexpected state");
 }
-
 
 static inline ERL_NIF_TERM return_rows(ErlNifEnv *env, ctx_t *ctx)
 {
@@ -570,17 +669,85 @@ static int onLoad(ErlNifEnv *env, void **priv, ERL_NIF_TERM info)
         return -1;
     }
 
+    try {
+        parseJsonQueues = new TaskQueue< parse_json_task_t*>*[PARSE_JSON_TASKS];
+        for(unsigned int i = 0; i < PARSE_JSON_TASKS; i++) {
+            parseJsonQueues[i] = NULL;
+        }
+        TidsParseJson = new ErlNifTid[PARSE_JSON_TASKS];
+    } catch (std::bad_alloc e) {
+        destroyQueues();
+        return -2;
+    }
+
+    for (unsigned int i = 0; i < PARSE_JSON_TASKS; i++) {
+        try {
+            parseJsonQueues[i] = new TaskQueue< parse_json_task_t * >
+                (PARSE_JSON_QUEUE_SIZE);
+        } catch(std::bad_alloc e) {
+            for (unsigned int j = 0; j < i; j++) {
+                void *result = NULL;
+                parseJsonQueues[j]->enqueue(NULL);
+                enif_thread_join(TidsParseJson[j], &result);
+            }
+            destroyQueues();
+            return -3;
+        }
+        if (enif_thread_create(const_cast<char*>("doParseJsonLoop"),
+                    &TidsParseJson[i], doParseJsonLoop,
+                    static_cast<void *>(parseJsonQueues[i]),
+                    NULL) != 0) {
+            for (unsigned int j = 0; j < i; j++) {
+                void *result = NULL;
+                parseJsonQueues[j]->enqueue(NULL);
+                enif_thread_join(TidsParseJson[j], &result);
+            }
+            destroyQueues();
+            return -4;
+        }
+    }
+
     return 0;
 }
 
+void onUnload(ErlNifEnv *env, void *priv_data)
+{
+    for (unsigned int i = 0; i < PARSE_JSON_TASKS; i++) {
+                void *result = NULL;
+                parseJsonQueues[i]->enqueue(NULL);
+                enif_thread_join(TidsParseJson[i], &result);
+            }
+
+    destroyQueues();
+}
+
+void destroyQueues()
+{
+    if (parseJsonQueues != NULL) {
+        for (unsigned int i = 0; i < PARSE_JSON_TASKS; i++) {
+            if (parseJsonQueues[i] != NULL) {
+                delete parseJsonQueues[i];
+            }
+        }
+        delete [] parseJsonQueues;
+    }
+    if (TidsParseJson != NULL) {
+        delete [] TidsParseJson;
+    }
+}
 
 static void freeContext(ErlNifEnv *env, void *res)
 {
     ctx_t *ctx = static_cast<ctx_t *>(res);
-
     destroyContext(ctx);
 }
 
+void free_parse_json_task(parse_json_task_t **t)
+{
+    enif_free_env((*t)->env);
+    enif_free(*t);
+    *t = NULL;
+}
 
 static ERL_NIF_TERM makeError(ErlNifEnv *env, const std::string &msg)
 {
@@ -597,8 +764,8 @@ static ERL_NIF_TERM makeError(ErlNifEnv *env, const std::string &msg)
 
 static ErlNifFunc nif_functions[] = {
     {"start_context", 0, startContext},
-    {"parse_chunk", 2, parseChunk},
-    {"next_state", 1, nextState}
+    {"parse_chunk_nif", 3, parseChunk},
+    {"next_state_nif", 2, nextState}
 };
 
 // Due to the stupid macros I need to manually do this in order
@@ -611,4 +778,4 @@ __attribute__ ((visibility("default"))) ErlNifEntry* nif_init(void);
 #endif
 }
 
-ERL_NIF_INIT(couch_view_parser, nif_functions, &onLoad, NULL, NULL, NULL)
+ERL_NIF_INIT(couch_view_parser, nif_functions, &onLoad, NULL, NULL, &onUnload)
