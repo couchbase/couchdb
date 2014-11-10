@@ -26,7 +26,7 @@ num_docs() -> 128.  % keep it a multiple of num_set_partitions()
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(5),
+    etap:plan(9),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -45,6 +45,7 @@ test() ->
     etap:diag("Testing the upgrade of the group header"),
 
     test_upgrade_header_2x_incremental(),
+    test_upgrade_header_2x_no_seqs(),
 
     couch_set_view_test_util:stop_server(),
     ok.
@@ -90,6 +91,49 @@ test_upgrade_header_2x_incremental() ->
 
     shutdown_group().
 
+
+test_upgrade_header_2x_no_seqs() ->
+    etap:diag("Testing upgrade header from 2.x to 3.x when no seqs "
+        "are set"),
+
+     setup_test(),
+
+    Fd = get_fd(),
+    {ok, HeaderBin1, HeaderPos1} = couch_file:read_header_bin(Fd),
+    Header1 = couch_set_view_util:header_bin_to_term(HeaderBin1),
+    HeaderSig1 = couch_set_view_util:header_bin_sig(HeaderBin1),
+
+    Header1NoSeqs = Header1#set_view_index_header{seqs = []},
+    Header1NoSeqsBin = couch_set_view_util:group_to_header_bin(
+        #set_view_group{index_header = Header1NoSeqs, sig = HeaderSig1}),
+
+    % Downgrade the header to a 2.x one
+    HeaderWithoutPartVersionBin = downgrade_header_to_2x(Header1NoSeqsBin),
+    HeaderWithoutPartVersion = couch_set_view_util:header_bin_to_term(
+    HeaderWithoutPartVersionBin),
+    etap:is(HeaderWithoutPartVersion#set_view_index_header.partition_versions,
+        nil, "The header was downgraded and can be parsed"),
+
+    {ok, HeaderPos2} = couch_file:write_header_bin(
+    Fd, HeaderWithoutPartVersionBin),
+    etap:isnt(HeaderPos2, HeaderPos1, "The downgraded header was written"),
+    {ok, HeaderBin2, HeaderPos2} = couch_file:read_header_bin(Fd),
+    Header2 = couch_set_view_util:header_bin_to_term(HeaderBin2),
+    etap:is(HeaderBin2, HeaderWithoutPartVersionBin,
+        "The downgraded header can be read"),
+
+    % Kill the group, it will respawn itself by `populate_set/2`
+    couch_util:shutdown_sync(get_group_pid()),
+
+    % In the logs you can also see a message of the upgrade:
+    % `Upgrading index header from Couchbase 2.x to 3.x`
+    populate_set(1, num_set_partitions()),
+    Fd2 = get_fd(),
+    {ok, HeaderBin3, _HeaderPos3} = couch_file:read_header_bin(Fd2),
+    Header3 = couch_set_view_util:header_bin_to_term(HeaderBin3),
+    etap:is(Header3#set_view_index_header.partition_versions, [],
+        "Header got upgraded, and now contains proper partition versions"),
+    shutdown_group().
 
 setup_test() ->
     couch_set_view_test_util:delete_set_dbs(

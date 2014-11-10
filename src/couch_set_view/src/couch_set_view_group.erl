@@ -4060,11 +4060,18 @@ maybe_upgrade_header(Group, DcpPid) ->
                 DcpPid, PartId),
             {PartId, PartVersion}
         end, PartIds),
-        Group#set_view_group{
+        Group2 = Group#set_view_group{
             index_header = Header#set_view_index_header{
                 partition_versions = PartVersions
             }
+        },
+        HeaderBin = couch_set_view_util:group_to_header_bin(Group2),
+        {ok, NewHeaderPos} = couch_file:write_header_bin(
+            Group2#set_view_group.fd, HeaderBin),
+        Group2#set_view_group{
+            header_pos = NewHeaderPos
         };
     _ ->
         Group
     end.
+
