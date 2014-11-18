@@ -651,6 +651,15 @@ http_index_folder(Mod, IndexSpec, MergeParams, DDoc, Queue) ->
         end
     end.
 
+get_node(Url) ->
+    {_, Loc, _, _, _} = mochiweb_util:urlsplit(Url),
+    case string:tokens(Loc, [$@]) of
+        [_, L] ->
+            L;
+        [L] ->
+            L
+    end.
+
 run_http_index_folder(Mod, IndexSpec, MergeParams, DDoc, Queue) ->
     {Url, Method, Headers, Body, BaseOptions} =
         http_index_folder_req_details(Mod, IndexSpec, MergeParams, DDoc),
@@ -676,7 +685,7 @@ run_http_index_folder(Mod, IndexSpec, MergeParams, DDoc, Queue) ->
                 ok = couch_http_view_streamer:parse(DataFun, Queue, get(from_url))
             end
         catch throw:{error, Error} ->
-            ok = couch_view_merger_queue:queue(Queue, {error, Url, Error})
+            ok = couch_view_merger_queue:queue(Queue, {error, get_node(Url), Error})
         after
             ok = couch_view_merger_queue:done(Queue)
         end;
@@ -691,24 +700,24 @@ run_http_index_folder(Mod, IndexSpec, MergeParams, DDoc, Queue) ->
         {Props} when is_list(Props) ->
             case {get_value(<<"error">>, Props), get_value(<<"reason">>, Props)} of
             {<<"not_found">>, Reason} when Reason =/= <<"missing">>, Reason =/= <<"deleted">> ->
-                ok = couch_view_merger_queue:queue(Queue, {error, Url, Reason});
+                ok = couch_view_merger_queue:queue(Queue, {error, get_node(Url), Reason});
             {<<"not_found">>, _} ->
-                ok = couch_view_merger_queue:queue(Queue, {error, Url, <<"not_found">>});
+                ok = couch_view_merger_queue:queue(Queue, {error, get_node(Url), <<"not_found">>});
             {<<"error">>, <<"revision_mismatch">>} ->
                 ok = couch_view_merger_queue:queue(Queue, revision_mismatch);
             {<<"error">>, <<"set_view_outdated">>} ->
                 ok = couch_view_merger_queue:queue(Queue, set_view_outdated);
             {<<"error">>, Reason} when is_binary(Reason) ->
-                ok = couch_view_merger_queue:queue(Queue, {error, Url, Reason});
+                ok = couch_view_merger_queue:queue(Queue, {error, get_node(Url), Reason});
             ErrorTuple ->
-                ok = couch_view_merger_queue:queue(Queue, {error, Url, to_binary(ErrorTuple)})
+                ok = couch_view_merger_queue:queue(Queue, {error, get_node(Url), to_binary(ErrorTuple)})
             end;
         _ ->
-            ok = couch_view_merger_queue:queue(Queue, {error, Url, to_binary(Error)})
+            ok = couch_view_merger_queue:queue(Queue, {error, get_node(Url), to_binary(Error)})
         end,
         ok = couch_view_merger_queue:done(Queue);
     {error, Error} ->
-        ok = couch_view_merger_queue:queue(Queue, {error, Url, Error}),
+        ok = couch_view_merger_queue:queue(Queue, {error, get_node(Url), Error}),
         ok = couch_view_merger_queue:done(Queue)
     end.
 
