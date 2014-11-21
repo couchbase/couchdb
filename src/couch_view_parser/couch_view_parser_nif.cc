@@ -78,6 +78,7 @@ static ERL_NIF_TERM startContext(ErlNifEnv *env, int argc, const ERL_NIF_TERM ar
     enif_release_resource(ctx);
 
     initContext(ctx);
+    ctx->queueIdx = (rand() % PARSE_JSON_TASKS);
 
     return enif_make_tuple2(env, ATOM_OK, res);
 }
@@ -162,7 +163,7 @@ static ERL_NIF_TERM parseChunk(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
     }
 
     t->taskType = PARSE_CHUNK;
-    parseJsonQueues[rand() % PARSE_JSON_TASKS]->enqueue(t);
+    parseJsonQueues[t->ctx->queueIdx]->enqueue(t);
 
     return ATOM_OK;
 }
@@ -200,7 +201,7 @@ static ERL_NIF_TERM nextState(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[
     }
 
     t->taskType = NEXT_STATE;
-    parseJsonQueues[rand() % PARSE_JSON_TASKS]->enqueue(t);
+    parseJsonQueues[t->ctx->queueIdx]->enqueue(t);
 
     return ATOM_OK;
 }
