@@ -54,48 +54,19 @@ init() ->
 start_context() ->
     erlang:nif_error(couch_view_parser_nif_not_loaded).
 
+
 -spec parse_chunk(Context::term(), iolist()) -> 'ok' | {'error', term()}.
-parse_chunk(Ctx, Chunk) ->
-    case parse_chunk_nif(Ctx, Chunk, self()) of
-    ok ->
-        receive
-        ok ->
-            ok;
-        {error, _} = Error ->
-            Error
-        end;
-    {error, _} = Error ->
-        Error
-    end.
-
-
--spec parse_chunk_nif(Context::term(), iolist(), pid()) -> ok | {error, term()}.
-parse_chunk_nif(_Ctx, _Chunk, _Pid) ->
+parse_chunk(_Ctx, _Chunk) ->
     erlang:nif_error(couch_view_parser_nif_not_loaded).
 
--spec next_state(Context::term()) ->
-                    {'ok', 'need_more_data'} |
-                    {'ok', 'debug_infos', [{From::binary(), Value::binary()}]} |
-                    {'ok', 'row_count', string()} |
-                    {'ok', 'rows', [view_row()]} |
-                    {'ok', 'errors', [{From::binary(), Reason::binary()}]} |
-                    {'ok', 'done'} |
-                    {'error', term()}.
-next_state(Ctx) ->
-    case next_state_nif(Ctx, self()) of
-    ok ->
-        receive
-        {ok, need_more_data} = State -> State;
-        {ok, debug_infos, _} = State -> State;
-        {ok, row_count, _} = State -> State;
-        {ok, rows, _} = State -> State;
-        {ok, errors, _} = State-> State;
-        {ok, done}  = State -> State;
-        {error, _} = Error -> Error
-        end;
-    {error, _} = Error -> Error
-    end.
 
--spec next_state_nif(Context::term(), pid()) -> ok | {error, term()}.
-next_state_nif(_Ctx, _Pid) ->
+-spec next_state(Context::term()) ->
+                        {'ok', 'need_more_data'} |
+                        {'ok', 'debug_infos', [{From::binary(), Value::binary()}]} |
+                        {'ok', 'row_count', string()} |
+                        {'ok', 'rows', [view_row()]} |
+                        {'ok', 'errors', [{From::binary(), Reason::binary()}]} |
+                        {'ok', 'done'} |
+                        {'error', term()}.
+next_state(_Ctx) ->
     erlang:nif_error(couch_view_parser_nif_not_loaded).
