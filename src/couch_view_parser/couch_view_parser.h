@@ -202,7 +202,6 @@ typedef struct {
     // nesting level of the object we're raw collecting
     // when > 0, we're inside an object or an array
     int                         value_nesting;
-    int                         queueIdx;
 } ctx_t;
 
 typedef struct parse_json_task{
