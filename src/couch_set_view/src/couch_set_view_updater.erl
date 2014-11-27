@@ -1015,7 +1015,8 @@ write_to_tmp_batch_files(ViewKeyValuesToAdd, DocIdViewIdKeys, WriterAcc) ->
         tmp_files = TmpFiles,
         group = #set_view_group{
             id_btree = IdBtree,
-            mod = Mod
+            mod = Mod,
+            fd = Fd
         }
     } = WriterAcc,
 
@@ -1102,6 +1103,30 @@ write_to_tmp_batch_files(ViewKeyValuesToAdd, DocIdViewIdKeys, WriterAcc) ->
         end,
         dict:new(), LookupResults),
 
+    case Mod of
+    mapreduce_view ->
+        ok;
+    % Wait for the native updater from a previous run to finish before we
+    % start to update the spatial view. Else we would end up with concurrent
+    % writes from the Erlang and C world which would skrew up things.
+    spatial_view ->
+        case erlang:erase(native_updater_for_spatial) of
+        undefined ->
+            ok;
+        NativeUpdater ->
+            case is_process_alive(NativeUpdater) of
+            true ->
+                MRef = erlang:monitor(process, NativeUpdater),
+                receive
+                {'DOWN', MRef, process, NativeUpdater, _} ->
+                    ok
+                end;
+            false ->
+                ok
+            end,
+            ok = couch_file:refresh_eof(Fd)
+        end
+    end,
     WriterAcc2 = Mod:update_tmp_files(
         WriterAcc#writer_acc{tmp_files = TmpFiles2}, ViewKeyValuesToAdd,
         KeysToRemoveByView),
@@ -1117,7 +1142,10 @@ maybe_update_btrees(WriterAcc0) ->
     #writer_acc{
         view_empty_kvs = ViewEmptyKVs,
         tmp_files = TmpFiles,
-        group = Group0,
+        group = #set_view_group{
+            views = Views,
+            mod = Mod
+        },
         final_batch = IsFinalBatch,
         owner = Owner,
         last_seqs = LastSeqs,
@@ -1125,7 +1153,7 @@ maybe_update_btrees(WriterAcc0) ->
         force_flush = ForceFlush
     } = WriterAcc0,
     IdTmpFileInfo = dict:fetch(ids_index, TmpFiles),
-    ShouldFlushViews = case Group0#set_view_group.mod of
+    ShouldFlushViews = case Mod of
     mapreduce_view ->
         lists:any(
             fun({#set_view{id_num = Id}, _}) ->
@@ -1167,7 +1195,7 @@ maybe_update_btrees(WriterAcc0) ->
                 ViewTmpFileInfo = dict:fetch(Id, TmpFiles),
                 ok = close_tmp_fd(ViewTmpFileInfo)
             end,
-            Group0#set_view_group.views),
+            Views),
         case erlang:erase(updater_worker) of
         undefined ->
             WriterAcc1 = WriterAcc0;
@@ -1192,8 +1220,22 @@ maybe_update_btrees(WriterAcc0) ->
             WriterAcc = WriterAcc1;
         _ ->
             WriterAcc2 = check_if_compactor_started(WriterAcc1),
-            NewUpdaterWorker = spawn_updater_worker(WriterAcc2, LastSeqs, PartVersions),
+            {NewUpdaterWorker, NativeUpdater} = spawn_updater_worker(
+                WriterAcc2, LastSeqs, PartVersions),
             erlang:put(updater_worker, NewUpdaterWorker),
+            case Mod of
+            mapreduce_view ->
+                ok;
+            spatial_view ->
+                % There's already an entry with the name `native_updater` in
+                % the process dictionary of the `DocLoader`. Adding an entry
+                % with the same name into the the process dictionary of this
+                % process would technically be possible, but it would make the
+                % code harder to understand/grep. Hence this entry is called
+                % `native_updater_for_spatial` as it is only needed for the
+                % spatial views.
+                erlang:put(native_updater_for_spatial, NativeUpdater)
+            end,
 
             TmpFiles2 = dict:map(
                 fun(_, _) -> #set_view_tmp_file_info{} end, TmpFiles),
@@ -1244,6 +1286,8 @@ send_log_compact_files(Owner, Files, Seqs, PartVersions) ->
     ok = gen_server:cast(Owner, {compact_log_files, Files, Seqs, PartVersions, Init}).
 
 
+-spec spawn_updater_worker(#writer_acc{}, partition_seqs(),
+                           partition_versions()) -> {reference(), pid()}.
 spawn_updater_worker(WriterAcc, PartIdSeqs, PartVersions) ->
     Parent = self(),
     Ref = make_ref(),
@@ -1300,7 +1344,7 @@ spawn_updater_worker(WriterAcc, PartIdSeqs, PartVersions) ->
         Parent ! {Ref, NewGroup2, NewStats2, NewCompactFiles}
     end),
     UpdaterPid ! {native_updater_pid, Pid},
-    Ref.
+    {Ref, Pid}.
 
 % Update id btree and view btrees with current batch of changes
 update_btrees(WriterAcc) ->
