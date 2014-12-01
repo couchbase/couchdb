@@ -1127,6 +1127,11 @@ write_to_tmp_batch_files(ViewKeyValuesToAdd, DocIdViewIdKeys, WriterAcc) ->
             ok = couch_file:refresh_eof(Fd)
         end
     end,
+    % Spatial views do not modify temporary files, but write the updates
+    % of the views directly into the view file (except for the ID b-tree).
+    % Hence the view information from the native updater run that updated the
+    % ID b-tree needs to be updated with the views updated from the Erlang
+    % side.
     WriterAcc2 = Mod:update_tmp_files(
         WriterAcc#writer_acc{tmp_files = TmpFiles2}, ViewKeyValuesToAdd,
         KeysToRemoveByView),
@@ -1182,8 +1187,19 @@ maybe_update_btrees(WriterAcc0) ->
                 send_log_compact_files(Owner, CompactFiles, ?set_seqs(UpGroup),
                     ?set_partition_versions(UpGroup)),
                 erlang:erase(updater_worker),
+                UpGroup2 = case Mod of
+                mapreduce_view ->
+                    UpGroup;
+                % The views of the spatial views are updated outside of
+                % the native updater, hence we add back the original views
+                % instead of the ones returned by the native updater (which
+                % was running concurrently, hence has an outdated version
+                % of the spatial views).
+                spatial_view ->
+                    UpGroup#set_view_group{views = Views}
+                end,
                 WriterAcc = check_if_compactor_started(
-                    WriterAcc0#writer_acc{group = UpGroup, stats = UpStats})
+                    WriterAcc0#writer_acc{group = UpGroup2, stats = UpStats})
             after 0 ->
                 WriterAcc = WriterAcc0
             end
@@ -1201,14 +1217,22 @@ maybe_update_btrees(WriterAcc0) ->
             WriterAcc1 = WriterAcc0;
         UpdaterWorker when is_reference(UpdaterWorker) ->
             receive
-            {UpdaterWorker, UpGroup2, UpStats2, CompactFiles2} ->
-                send_log_compact_files(Owner, CompactFiles2, ?set_seqs(UpGroup2),
-                    ?set_partition_versions(UpGroup2)),
+            {UpdaterWorker, UpGroup, UpStats, CompactFiles} ->
+                send_log_compact_files(Owner, CompactFiles, ?set_seqs(UpGroup),
+                    ?set_partition_versions(UpGroup)),
+                UpGroup2 = case Mod of
+                mapreduce_view ->
+                    UpGroup;
+                % The views of the spatial views are updated outside of
+                % the native updater, hence we add back the original views
+                % instead of the ones returned by the native updater (which
+                % was running concurrently, hence has an outdated version
+                % of the spatial views).
+                spatial_view ->
+                    UpGroup#set_view_group{views = Views}
+                end,
                 WriterAcc1 = check_if_compactor_started(
-                    WriterAcc0#writer_acc{
-                        group = UpGroup2,
-                        stats = UpStats2
-                    })
+                    WriterAcc0#writer_acc{group = UpGroup2, stats = UpStats})
             end
         end,
 
