@@ -395,14 +395,14 @@ set_view_for_sig(SetView) ->
     #set_view{
         id_num = Id,
         def = Def,
-        ref = Ref,
         indexer = #mapreduce_view{
             map_names = MapNames,
-            btree = Btree,
             reduce_funs = ReduceFuns,
             options = Options
         }
     } = SetView,
+    Btree = nil,
+    Ref = undefined,
     {set_view, Id, MapNames, Def, Btree, ReduceFuns, Options, Ref}.
 
 
