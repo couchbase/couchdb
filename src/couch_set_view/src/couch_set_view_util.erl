@@ -35,6 +35,7 @@
 -export([remove_group_views/2, update_group_views/3]).
 -export([send_group_info/2]).
 -export([filter_seqs/2]).
+-export([log_port_error/3]).
 
 
 -include("couch_db.hrl").
@@ -806,3 +807,18 @@ filter_seqs(SortedParts, Seqs) ->
     lists:filter(fun({PartId, _Seq}) ->
         lists:member(PartId, SortedParts)
     end, Seqs).
+
+-spec log_port_error(binary(), string(), [any()]) -> binary().
+log_port_error(<<"MAPREDUCE ", Msg/binary>>, ErrorMsg, ErrorArgs) ->
+    ?LOG_MAPREDUCE_ERROR(ErrorMsg, ErrorArgs ++ [Msg]),
+    Msg;
+log_port_error(<<"SPATIAL ", Msg/binary>>, ErrorMsg, ErrorArgs) ->
+    % As of now log errors from spatial views into mapreduce_errors.log
+    ?LOG_MAPREDUCE_ERROR(ErrorMsg, ErrorArgs ++ [Msg]),
+    Msg;
+log_port_error(<<"GENERIC ", Msg/binary>>, ErrorMsg, ErrorArgs) ->
+    ?LOG_ERROR(ErrorMsg, ErrorArgs ++ [Msg]),
+    Msg;
+log_port_error(Msg, ErrorMsg, ErrorArgs) ->
+    ?LOG_ERROR(ErrorMsg, ErrorArgs ++ [Msg]),
+    Msg.

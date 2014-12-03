@@ -271,13 +271,15 @@ update_btrees_wait_loop(Port, Group, Acc0, Stats) ->
         Stats2 = {IdInserted, IdDeleted, ViewInserted, ViewDeleted, Cleanups},
         update_btrees_wait_loop(Port, Group, Acc, Stats2);
     Msg ->
-        ?LOG_ERROR("Set view `~s`, ~s group `~s`, received error from index updater: ~s",
-                   [SetName, Type, DDocId, Msg]),
-        Msg2 = case Msg of
+        ErrorMsg = "Set view `~s`, ~s group `~s`, "
+                   "received error from index updater: ~s",
+        ErrorArgs = [SetName, Type, DDocId],
+        Msg2 = couch_set_view_util:log_port_error(Msg, ErrorMsg, ErrorArgs),
+        Msg3 = case Msg2 of
         <<"Error updating index", _/binary>> ->
-            Msg;
+            Msg2;
         _ ->
             <<>>
         end,
-        update_btrees_wait_loop(Port, Group, Msg2, Stats)
+        update_btrees_wait_loop(Port, Group, Msg3, Stats)
     end.

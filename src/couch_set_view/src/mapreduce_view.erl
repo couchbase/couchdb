@@ -185,6 +185,7 @@ finish_build(Group, TmpFiles, TmpDir) ->
     },
     {NewGroup, NewFd}.
 
+
 index_builder_wait_loop(Port, Group, Acc) ->
     #set_view_group{
         set_name = SetName,
@@ -209,17 +210,18 @@ index_builder_wait_loop(Port, Group, Acc) ->
             type = Type
         } = Group,
         Msg = ?l2b(lists:reverse([Data | Acc])),
-        ?LOG_ERROR("Set view `~s`, ~s group `~s`, received error from index builder: ~s",
-                   [SetName, Type, DDocId, Msg]),
-
+        ErrorMsg = "Set view `~s`, ~s group `~s`, "
+                   "received error from index builder: ~s",
+        ErrorArgs = [SetName, Type, DDocId],
+        Msg2 = couch_set_view_util:log_port_error(Msg, ErrorMsg, ErrorArgs),
         % Propogate this message to query response error message
-        Msg2 = case Msg of
+        Msg3 = case Msg2 of
         <<"Error building index", _/binary>> ->
-            [Msg];
+            [Msg2];
         _ ->
             []
         end,
-        index_builder_wait_loop(Port, Group, Msg2);
+        index_builder_wait_loop(Port, Group, Msg3);
     {Port, Error} ->
         throw({index_builder_error, Error});
     stop ->

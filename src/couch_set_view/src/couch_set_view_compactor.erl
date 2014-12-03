@@ -342,8 +342,10 @@ file_merger_wait_loop(Group, Port, Acc) ->
         file_merger_wait_loop(Group, Port, [Data | Acc]);
     {Port, {data, {eol, Data}}} ->
         Msg = ?l2b(lists:reverse([Data | Acc])),
-        ?LOG_ERROR("Set view `~s`, ~s group `~s`, received error from file merger: ~s",
-                   [SetName, Type, DDocId, Msg]),
+        ErrorMsg = "Set view `~s`, ~s group `~s`, "
+                   "received error from file merger: ~s",
+        ErrorArgs = [SetName, Type, DDocId],
+        _Msg2 = couch_set_view_util:log_port_error(Msg, ErrorMsg, ErrorArgs),
         file_merger_wait_loop(Group, Port, []);
     {Port, Error} ->
         throw({file_merger_error, Error});
