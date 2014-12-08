@@ -403,7 +403,8 @@ compact_btrees_wait_loop(Port, Group, EmptyGroup, Acc0, ResultAcc) ->
     #set_view_group{
         set_name = SetName,
         name = DDocId,
-        type = Type
+        type = Type,
+        mod = Mod
     } = Group,
     {Line, Acc} = couch_set_view_util:try_read_line(Acc0),
     case Line of
@@ -442,9 +443,7 @@ compact_btrees_wait_loop(Port, Group, EmptyGroup, Acc0, ResultAcc) ->
             NewIdBtree = couch_btree:set_state(IdBtree, NewIdBtreeRoot),
             NewViews = lists:zipwith(
                 fun(#set_view{indexer = View} = V, NewRoot) ->
-                    #mapreduce_view{btree = Bt} = View,
-                    NewBt = couch_btree:set_state(Bt, NewRoot),
-                    NewView = View#mapreduce_view{btree = NewBt},
+                    NewView = Mod:set_state(View, NewRoot),
                     V#set_view{indexer = NewView}
                 end,
                 Views, NewViewRoots),
