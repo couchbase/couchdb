@@ -15,7 +15,7 @@
 -module(couch_set_view_updater_helper).
 
 -export([update_btree/3, update_btree/5]).
--export([encode_btree_op/2, encode_btree_op/3]).
+-export([encode_op/2, encode_op/3]).
 -export([file_sorter_batch_format_fun/1]).
 -export([count_items_from_set/2]).
 -export([update_btrees/5]).
@@ -91,34 +91,34 @@ update_btree_loop(Fd, Bt, BufferSize, PurgeFun, PurgeAcc,
     end.
 
 
--spec encode_btree_op('remove', binary()) -> binary().
-encode_btree_op(remove = Op, Key) ->
-    Data = <<(btree_op_to_code(Op)):8, (byte_size(Key)):16, Key/binary>>,
+-spec encode_op('remove', binary()) -> binary().
+encode_op(remove = Op, Key) ->
+    Data = <<(op_to_code(Op)):8, (byte_size(Key)):16, Key/binary>>,
     <<(byte_size(Data)):32/native, Data/binary>>.
 
 
--spec encode_btree_op('insert', binary(), binary()) -> binary().
-encode_btree_op(insert = Op, Key, Value) ->
-    Data = <<(btree_op_to_code(Op)):8,
+-spec encode_op('insert', binary(), binary()) -> binary().
+encode_op(insert = Op, Key, Value) ->
+    Data = <<(op_to_code(Op)):8,
              (byte_size(Key)):16, Key/binary, Value/binary>>,
     <<(byte_size(Data)):32/native, Data/binary>>.
 
 
-btree_op_to_code(remove) ->
+op_to_code(remove) ->
     1;
-btree_op_to_code(insert) ->
+op_to_code(insert) ->
     2.
 
 
-code_to_btree_op(1) ->
+code_to_op(1) ->
     remove;
-code_to_btree_op(2) ->
+code_to_op(2) ->
     insert.
 
 
--spec file_sorter_batch_format_fun(binary()) -> view_btree_op().
+-spec file_sorter_batch_format_fun(binary()) -> view_op().
 file_sorter_batch_format_fun(<<Op:8, KeyLen:16, K:KeyLen/binary, Rest/binary>>) ->
-    case code_to_btree_op(Op) of
+    case code_to_op(Op) of
     remove ->
         {remove, K, nil};
     insert ->

@@ -1043,12 +1043,12 @@ write_to_tmp_batch_files(ViewKeyValuesToAdd, DocIdViewIdKeys, WriterAcc) ->
     AddDocIdViewIdKeys = convert_back_index_kvs_to_binary(AddDocIdViewIdKeys0, []),
 
     IdsData1 = lists:map(
-        fun(K) -> couch_set_view_updater_helper:encode_btree_op(remove, K) end,
+        fun(K) -> couch_set_view_updater_helper:encode_op(remove, K) end,
         RemoveDocIds),
 
     IdsData2 = lists:foldl(
         fun({K, V}, Acc) ->
-            Bin = couch_set_view_updater_helper:encode_btree_op(insert, K, V),
+            Bin = couch_set_view_updater_helper:encode_op(insert, K, V),
             [Bin | Acc]
         end,
         IdsData1,

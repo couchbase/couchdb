@@ -275,7 +275,7 @@ update_tmp_files(WriterAcc, ViewKeyValues, KeysToRemoveByView) ->
 
             {KeysToRemoveDict2, BatchData} = lists:foldl(
                 fun({K, V},{KeysToRemoveAcc, BinOpAcc}) ->
-                    Bin = couch_set_view_updater_helper:encode_btree_op(insert, K, V),
+                    Bin = couch_set_view_updater_helper:encode_op(insert, K, V),
                     BinOpAcc2 = [Bin | BinOpAcc],
                     case dict:find(K, KeysToRemoveAcc) of
                     {ok, _} ->
@@ -288,7 +288,7 @@ update_tmp_files(WriterAcc, ViewKeyValues, KeysToRemoveByView) ->
 
             BatchData2 = dict:fold(
                 fun(K, _V, BatchAcc) ->
-                    Bin = couch_set_view_updater_helper:encode_btree_op(remove, K),
+                    Bin = couch_set_view_updater_helper:encode_op(remove, K),
                     [Bin | BatchAcc]
                 end,
                 BatchData, KeysToRemoveDict2),

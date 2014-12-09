@@ -123,7 +123,7 @@
 -type set_view_fold_reduce_fun() :: fun((set_view_key(), Reduction::term(), Acc::term()) ->
                                     {'ok' | 'stop', FinalAcc::term()}).
 
--type view_btree_op()            :: {'insert', Key::binary(), Value::binary()} |
+-type view_op()                  :: {'insert', Key::binary(), Value::binary()} |
                                     {'remove', Key::binary(), 'nil'}.
 
 -type view_btree_less_fun()      :: fun((binary(), binary()) -> boolean()).
