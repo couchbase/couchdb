@@ -370,8 +370,8 @@ fold_view_btree(_Group, Btree, Fun, Acc, Args) ->
         Vals ->
             Val = {dups, lists:sort([?JSON_DECODE(V) || V <- Vals])}
         end,
-        {Key, Id} = couch_set_view_util:decode_key_docid(KeyDocId),
-        Fun({{Key, Id}, {PartId, Val}}, AccRed, Acc0)
+        {Key, Id} = couch_set_view_util:split_key_docid(KeyDocId),
+        Fun({{?JSON_DECODE(Key), Id}, {PartId, Val}}, AccRed, Acc0)
     end,
     couch_btree:fold(Btree, FunWrap, Acc, Args).
 

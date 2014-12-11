@@ -23,7 +23,7 @@
 -export([missing_changes_count/2]).
 -export([is_initial_build/1]).
 -export([new_sort_file_path/2, delete_sort_files/2]).
--export([encode_key_docid/2, decode_key_docid/1, split_key_docid/1]).
+-export([encode_key_docid/2, split_key_docid/1]).
 -export([parse_values/1, parse_reductions/1, parse_view_id_keys/1]).
 -export([split_set_db_name/1]).
 -export([group_to_header_bin/1, header_bin_sig/1, header_bin_to_term/1]).
@@ -327,11 +327,6 @@ do_delete_sort_files(RootDir, Suffix) ->
             _ = file2:delete(F)
         end,
         filelib:wildcard(WildCard)).
-
-
--spec decode_key_docid(binary()) -> {term(), binary()}.
-decode_key_docid(<<KeyLen:16, KeyJson:KeyLen/binary, DocId/binary>>) ->
-    {?JSON_DECODE(KeyJson), DocId}.
 
 
 -spec split_key_docid(binary()) -> {binary(), binary()}.
