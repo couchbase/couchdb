@@ -409,7 +409,7 @@ verify_btrees_1(Group) ->
         View0Btree,
         fun(Kv, _, Acc) ->
             V = ?JSON_ENCODE(Acc),
-            ExpectedKeyDocId = couch_set_view_util:encode_key_docid(
+            ExpectedKeyDocId = mapreduce_view:encode_key_docid(
                 ?JSON_ENCODE(doc_id(Acc)), doc_id(Acc)),
             ExpectedKv = {ExpectedKeyDocId, <<(Acc rem 64):16, (size(V)):24, V/binary>>},
             case ExpectedKv =:= Kv of

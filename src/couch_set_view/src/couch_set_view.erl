@@ -706,7 +706,7 @@ do_fold_reduce(Group, ViewInfo, Fun, Acc, Options0, ViewQueryArgs) ->
             0 ->
                 <<"null">>;
             _ when is_integer(GroupLevel) ->
-                {KeyJson, _DocId} = couch_set_view_util:decode_key_docid(KeyDocId),
+                {KeyJson, _DocId} = mapreduce_view:decode_key_docid(KeyDocId),
                 case is_array_key(KeyJson) of
                 true ->
                     ?JSON_ENCODE(lists:sublist(?JSON_DECODE(KeyJson), GroupLevel));
@@ -714,7 +714,7 @@ do_fold_reduce(Group, ViewInfo, Fun, Acc, Options0, ViewQueryArgs) ->
                     KeyJson
                 end;
             _ ->
-                {KeyJson, _DocId} = couch_set_view_util:decode_key_docid(KeyDocId),
+                {KeyJson, _DocId} = mapreduce_view:decode_key_docid(KeyDocId),
                 KeyJson
             end,
             <<_Count:40, _BitMap:?MAX_NUM_PARTITIONS, Reds/binary>> =
@@ -1277,8 +1277,8 @@ make_reduce_group_keys_fun(0) ->
     fun(_, _) -> true end;
 make_reduce_group_keys_fun(GroupLevel) when is_integer(GroupLevel) ->
     fun(KeyDocId1, KeyDocId2) ->
-        {Key1, _DocId1} = couch_set_view_util:decode_key_docid(KeyDocId1),
-        {Key2, _DocId2} = couch_set_view_util:decode_key_docid(KeyDocId2),
+        {Key1, _DocId1} = mapreduce_view:decode_key_docid(KeyDocId1),
+        {Key2, _DocId2} = mapreduce_view:decode_key_docid(KeyDocId2),
         case is_array_key(Key1) andalso is_array_key(Key2) of
         true ->
             lists:sublist(?JSON_DECODE(Key1), GroupLevel) ==
@@ -1289,8 +1289,8 @@ make_reduce_group_keys_fun(GroupLevel) when is_integer(GroupLevel) ->
     end;
 make_reduce_group_keys_fun(_) ->
     fun(KeyDocId1, KeyDocId2) ->
-        {Key1, _DocId1} = couch_set_view_util:decode_key_docid(KeyDocId1),
-        {Key2, _DocId2} = couch_set_view_util:decode_key_docid(KeyDocId2),
+        {Key1, _DocId1} = mapreduce_view:decode_key_docid(KeyDocId1),
+        {Key2, _DocId2} = mapreduce_view:decode_key_docid(KeyDocId2),
         couch_ejson_compare:less_json(Key1, Key2) == 0
     end.
 

@@ -18,6 +18,7 @@
 -export([write_kvs/3, finish_build/3, get_state/1, set_state/2,
          start_reduce_context/1, end_reduce_context/1, view_name/2,
          update_tmp_files/3, view_bitmap/1]).
+-export([encode_key_docid/2, decode_key_docid/1]).
 -export([update_index/5]).
 % For the group
 -export([design_doc_to_set_view_group/2, view_group_data_size/2,
@@ -86,7 +87,7 @@ write_kvs(Group, TmpFiles, ViewKVs) ->
 convert_primary_index_kvs_to_binary([], _Group, Acc) ->
     lists:reverse(Acc);
 convert_primary_index_kvs_to_binary([{{Key, DocId}, {PartId, V0}} | Rest], Group, Acc)->
-    KeyBin = couch_set_view_util:encode_key_docid(Key, DocId),
+    KeyBin = encode_key_docid(Key, DocId),
     couch_set_view_util:check_primary_key_size(
         KeyBin, ?MAX_KEY_SIZE, Key, DocId, Group),
     V = case V0 of
@@ -458,7 +459,7 @@ setup_views(Fd, BtreeOptions, Group, ViewStates, Views) ->
                         PrettyKVs = [
                             begin
                                 {KeyDocId, <<_PartId:16, Value/binary>>} = RawKV,
-                                {couch_set_view_util:decode_key_docid(KeyDocId), Value}
+                                {decode_key_docid(KeyDocId), Value}
                             end
                             || RawKV <- KVs2
                         ],
@@ -499,8 +500,8 @@ setup_views(Fd, BtreeOptions, Group, ViewStates, Views) ->
                 iolist_to_binary([<<Count:40, AllPartitionsBitMap:?MAX_NUM_PARTITIONS>> | UserReductions])
             end,
         Less = fun(A, B) ->
-            {Key1, DocId1} = couch_set_view_util:decode_key_docid(A),
-            {Key2, DocId2} = couch_set_view_util:decode_key_docid(B),
+            {Key1, DocId1} = decode_key_docid(A),
+            {Key2, DocId2} = decode_key_docid(B),
             case couch_ejson_compare:less_json(Key1, Key2) of
             0 ->
                 DocId1 < DocId2;
@@ -639,7 +640,7 @@ fold_fun(_Fun, [], _, Acc) ->
     {ok, Acc};
 fold_fun(Fun, [KV | Rest], {KVReds, Reds}, Acc) ->
     {KeyDocId, <<PartId:16, Value/binary>>} = KV,
-    {JsonKey, DocId} = couch_set_view_util:decode_key_docid(KeyDocId),
+    {JsonKey, DocId} = decode_key_docid(KeyDocId),
     case Fun({{{json, JsonKey}, DocId}, {PartId, {json, Value}}}, {KVReds, Reds}, Acc) of
     {ok, Acc2} ->
         fold_fun(Fun, Rest, {[KV | KVReds], Reds}, Acc2);
@@ -678,19 +679,16 @@ make_start_key_option(#view_query_args{start_key = Key, start_docid = DocId}) ->
     if Key == undefined ->
         [];
     true ->
-        [{start_key,
-            couch_set_view_util:encode_key_docid(?JSON_ENCODE(Key), DocId)}]
+        [{start_key, encode_key_docid(?JSON_ENCODE(Key), DocId)}]
     end.
 
 make_end_key_option(#view_query_args{end_key = undefined}) ->
     [];
 make_end_key_option(#view_query_args{end_key = Key, end_docid = DocId, inclusive_end = true}) ->
-    [{end_key,
-        couch_set_view_util:encode_key_docid(?JSON_ENCODE(Key), DocId)}];
+    [{end_key, encode_key_docid(?JSON_ENCODE(Key), DocId)}];
 make_end_key_option(#view_query_args{end_key = Key, end_docid = DocId,
         inclusive_end = false}) ->
-    [{end_key_gt,
-        couch_set_view_util:encode_key_docid(?JSON_ENCODE(Key),
+    [{end_key_gt, encode_key_docid(?JSON_ENCODE(Key),
         reverse_key_default(DocId))}].
 
 reverse_key_default(?MIN_STR) -> ?MAX_STR;
@@ -738,3 +736,13 @@ view_info(#mapreduce_view{reduce_funs = Funs}) ->
         end,
         [], Funs),
     [Prefix | Acc2].
+
+
+-spec decode_key_docid(binary()) -> {binary(), binary()}.
+decode_key_docid(<<KeyLen:16, JsonKey:KeyLen/binary, DocId/binary>>) ->
+    {JsonKey, DocId}.
+
+
+-spec encode_key_docid(binary(), binary()) -> binary().
+encode_key_docid(JsonKey, DocId) ->
+    <<(byte_size(JsonKey)):16, JsonKey/binary, DocId/binary>>.

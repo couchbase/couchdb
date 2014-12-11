@@ -1090,7 +1090,7 @@ write_to_tmp_batch_files(ViewKeyValuesToAdd, DocIdViewIdKeys, WriterAcc) ->
                     fun({ViewId, Keys}, KeysToRemoveByViewAcc2) ->
                         RemoveKeysDict = lists:foldl(
                             fun(Key, RemoveKeysDictAcc) ->
-                                EncodedKey = couch_set_view_util:encode_key_docid(Key, DocId),
+                                EncodedKey = Mod:encode_key_docid(Key, DocId),
                                 dict:store(EncodedKey, nil, RemoveKeysDictAcc)
                             end,
                         couch_util:dict_find(ViewId, KeysToRemoveByViewAcc2, dict:new()), Keys),
