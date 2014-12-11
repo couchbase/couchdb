@@ -333,7 +333,7 @@ encode_kvs([], Acc) ->
     lists:reverse(Acc);
 encode_kvs([KV | Rest], Acc) ->
     {KeyDocId, <<_PartId:16, Value/binary>>} = KV,
-    {Key, _DocId} = couch_set_view_util:split_key_docid(KeyDocId),
+    {Key, _DocId} = couch_set_view_util:decode_key_docid(KeyDocId),
     encode_kvs(Rest, [{Key, Value} | Acc]).
 
 

@@ -458,7 +458,7 @@ setup_views(Fd, BtreeOptions, Group, ViewStates, Views) ->
                         PrettyKVs = [
                             begin
                                 {KeyDocId, <<_PartId:16, Value/binary>>} = RawKV,
-                                {couch_set_view_util:split_key_docid(KeyDocId), Value}
+                                {couch_set_view_util:decode_key_docid(KeyDocId), Value}
                             end
                             || RawKV <- KVs2
                         ],
@@ -499,8 +499,8 @@ setup_views(Fd, BtreeOptions, Group, ViewStates, Views) ->
                 iolist_to_binary([<<Count:40, AllPartitionsBitMap:?MAX_NUM_PARTITIONS>> | UserReductions])
             end,
         Less = fun(A, B) ->
-            {Key1, DocId1} = couch_set_view_util:split_key_docid(A),
-            {Key2, DocId2} = couch_set_view_util:split_key_docid(B),
+            {Key1, DocId1} = couch_set_view_util:decode_key_docid(A),
+            {Key2, DocId2} = couch_set_view_util:decode_key_docid(B),
             case couch_ejson_compare:less_json(Key1, Key2) of
             0 ->
                 DocId1 < DocId2;
@@ -639,7 +639,7 @@ fold_fun(_Fun, [], _, Acc) ->
     {ok, Acc};
 fold_fun(Fun, [KV | Rest], {KVReds, Reds}, Acc) ->
     {KeyDocId, <<PartId:16, Value/binary>>} = KV,
-    {JsonKey, DocId} = couch_set_view_util:split_key_docid(KeyDocId),
+    {JsonKey, DocId} = couch_set_view_util:decode_key_docid(KeyDocId),
     case Fun({{{json, JsonKey}, DocId}, {PartId, {json, Value}}}, {KVReds, Reds}, Acc) of
     {ok, Acc2} ->
         fold_fun(Fun, Rest, {[KV | KVReds], Reds}, Acc2);
