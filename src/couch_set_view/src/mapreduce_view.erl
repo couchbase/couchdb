@@ -17,7 +17,7 @@
 % For the updater
 -export([write_kvs/3, finish_build/3, get_state/1, set_state/2,
          start_reduce_context/1, end_reduce_context/1, view_name/2,
-         update_tmp_files/3, view_bitmap/1]).
+         convert_primary_index_kvs_to_binary/3, view_bitmap/1]).
 -export([encode_key_docid/2, decode_key_docid/1]).
 -export([update_index/5]).
 -export([convert_back_index_kvs_to_binary/2]).
@@ -263,64 +263,6 @@ view_name(#set_view_group{views = SetViews}, ViewPos) ->
         ok
     end,
     Name.
-
-
-% Update the temporary files with the key-values from the indexer. Return
-% the updated writer accumulator.
-update_tmp_files(WriterAcc, ViewKeyValues, KeysToRemoveByView) ->
-    #writer_acc{
-       group = Group,
-       tmp_files = TmpFiles
-    } = WriterAcc,
-    TmpFiles2 = lists:foldl(
-        fun({#set_view{id_num = ViewId}, AddKeyValues}, AccTmpFiles) ->
-            AddKeyValuesBinaries = convert_primary_index_kvs_to_binary(AddKeyValues, Group, []),
-            KeysToRemoveDict = couch_util:dict_find(ViewId, KeysToRemoveByView, dict:new()),
-
-            {KeysToRemoveDict2, BatchData} = lists:foldl(
-                fun({K, V},{KeysToRemoveAcc, BinOpAcc}) ->
-                    Bin = couch_set_view_updater_helper:encode_op(insert, K, V),
-                    BinOpAcc2 = [Bin | BinOpAcc],
-                    case dict:find(K, KeysToRemoveAcc) of
-                    {ok, _} ->
-                        {dict:erase(K, KeysToRemoveAcc), BinOpAcc2};
-                    _ ->
-                        {KeysToRemoveAcc, BinOpAcc2}
-                    end
-                end,
-                {KeysToRemoveDict, []}, AddKeyValuesBinaries),
-
-            BatchData2 = dict:fold(
-                fun(K, _V, BatchAcc) ->
-                    Bin = couch_set_view_updater_helper:encode_op(remove, K),
-                    [Bin | BatchAcc]
-                end,
-                BatchData, KeysToRemoveDict2),
-
-            ViewTmpFileInfo = dict:fetch(ViewId, TmpFiles),
-            case ViewTmpFileInfo of
-            #set_view_tmp_file_info{fd = nil} ->
-                0 = ViewTmpFileInfo#set_view_tmp_file_info.size,
-                ViewTmpFilePath = couch_set_view_updater:new_sort_file_name(WriterAcc),
-                {ok, ViewTmpFileFd} = file2:open(ViewTmpFilePath, [raw, append, binary]),
-                ViewTmpFileSize = 0;
-            #set_view_tmp_file_info{fd = ViewTmpFileFd,
-                                    size = ViewTmpFileSize,
-                                    name = ViewTmpFilePath} ->
-                ok
-            end,
-            ok = file:write(ViewTmpFileFd, BatchData2),
-            ViewTmpFileInfo2 = ViewTmpFileInfo#set_view_tmp_file_info{
-                fd = ViewTmpFileFd,
-                name = ViewTmpFilePath,
-                size = ViewTmpFileSize + iolist_size(BatchData2)
-            },
-            dict:store(ViewId, ViewTmpFileInfo2, AccTmpFiles)
-        end,
-    TmpFiles, ViewKeyValues),
-    WriterAcc#writer_acc{
-        tmp_files = TmpFiles2
-    }.
 
 
 -spec update_index(#btree{},

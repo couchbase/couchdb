@@ -1101,10 +1101,90 @@ write_to_tmp_batch_files(ViewKeyValuesToAdd, DocIdViewIdKeys, WriterAcc) ->
         end,
         dict:new(), LookupResults),
 
-    WriterAcc2 = Mod:update_tmp_files(
-        WriterAcc#writer_acc{tmp_files = TmpFiles2}, ViewKeyValuesToAdd,
+    WriterAcc2 = update_tmp_files(
+        Mod, WriterAcc#writer_acc{tmp_files = TmpFiles2}, ViewKeyValuesToAdd,
         KeysToRemoveByView),
     maybe_update_btrees(WriterAcc2).
+
+
+% Update the temporary files with the key-values from the indexer. Return
+% the updated writer accumulator.
+-spec update_tmp_files(atom(), #writer_acc{},
+                       [{#set_view{}, [set_view_key_value()]}],
+                       dict:dict(non_neg_integer(), dict:dict(binary(), nil)))
+                      -> #writer_acc{}.
+update_tmp_files(Mod, WriterAcc, ViewKeyValues, KeysToRemoveByView) ->
+    #writer_acc{
+       group = Group,
+       tmp_files = TmpFiles
+    } = WriterAcc,
+    TmpFiles2 = lists:foldl(
+        fun({#set_view{id_num = ViewId}, AddKeyValues}, AccTmpFiles) ->
+            AddKeyValuesBinaries = Mod:convert_primary_index_kvs_to_binary(
+                AddKeyValues, Group, []),
+            KeysToRemoveDict = couch_util:dict_find(
+                ViewId, KeysToRemoveByView, dict:new()),
+
+            case Mod of
+            % The b-tree replaces nodes with the same key, hence we don't
+            % need to delete a node that gets updated anyway
+            mapreduce_view ->
+                {KeysToRemoveDict2, BatchData} = lists:foldl(
+                    fun({K, V}, {KeysToRemoveAcc, BinOpAcc}) ->
+                        Bin = couch_set_view_updater_helper:encode_op(
+                            insert, K, V),
+                        BinOpAcc2 = [Bin | BinOpAcc],
+                        case dict:find(K, KeysToRemoveAcc) of
+                        {ok, _} ->
+                            {dict:erase(K, KeysToRemoveAcc), BinOpAcc2};
+                        _ ->
+                            {KeysToRemoveAcc, BinOpAcc2}
+                        end
+                    end,
+                    {KeysToRemoveDict, []}, AddKeyValuesBinaries);
+            % In r-trees there are multiple possible paths to a key. Hence it's
+            % not easily possible to replace an existing node with a new one,
+            % as the insertion could happen in a subtree that is different
+            % from the subtree of the old value.
+            spatial_view ->
+                BatchData = [
+                    couch_set_view_updater_helper:encode_op(insert, K, V) ||
+                        {K, V} <- AddKeyValuesBinaries],
+                KeysToRemoveDict2 = KeysToRemoveDict
+            end,
+
+            BatchData2 = dict:fold(
+                fun(K, _V, BatchAcc) ->
+                    Bin = couch_set_view_updater_helper:encode_op(remove, K),
+                    [Bin | BatchAcc]
+                end,
+                BatchData, KeysToRemoveDict2),
+
+            ViewTmpFileInfo = dict:fetch(ViewId, TmpFiles),
+            case ViewTmpFileInfo of
+            #set_view_tmp_file_info{fd = nil} ->
+                0 = ViewTmpFileInfo#set_view_tmp_file_info.size,
+                ViewTmpFilePath = new_sort_file_name(WriterAcc),
+                {ok, ViewTmpFileFd} = file2:open(
+                    ViewTmpFilePath, [raw, append, binary]),
+                ViewTmpFileSize = 0;
+            #set_view_tmp_file_info{fd = ViewTmpFileFd,
+                                    size = ViewTmpFileSize,
+                                    name = ViewTmpFilePath} ->
+                ok
+            end,
+            ok = file:write(ViewTmpFileFd, BatchData2),
+            ViewTmpFileInfo2 = ViewTmpFileInfo#set_view_tmp_file_info{
+                fd = ViewTmpFileFd,
+                name = ViewTmpFilePath,
+                size = ViewTmpFileSize + iolist_size(BatchData2)
+            },
+            dict:store(ViewId, ViewTmpFileInfo2, AccTmpFiles)
+        end,
+    TmpFiles, ViewKeyValues),
+    WriterAcc#writer_acc{
+        tmp_files = TmpFiles2
+    }.
 
 
 is_new_partition(PartId, #writer_acc{initial_seqs = InitialSeqs}) ->
@@ -1124,19 +1204,12 @@ maybe_update_btrees(WriterAcc0) ->
         force_flush = ForceFlush
     } = WriterAcc0,
     IdTmpFileInfo = dict:fetch(ids_index, TmpFiles),
-    ShouldFlushViews = case Group0#set_view_group.mod of
-    mapreduce_view ->
+    ShouldFlushViews =
         lists:any(
             fun({#set_view{id_num = Id}, _}) ->
                 ViewTmpFileInfo = dict:fetch(Id, TmpFiles),
                 ViewTmpFileInfo#set_view_tmp_file_info.size >= ?INC_MAX_TMP_FILE_SIZE
-            end, ViewEmptyKVs);
-    % Currently the spatial views are updated through an code path within
-    % Erlang without using the new C based code. Though the ID b-tree of
-    % the spatial views is updated through the code path below
-    spatial_view ->
-        true
-    end,
+            end, ViewEmptyKVs),
     ShouldFlush = IsFinalBatch orelse
         ForceFlush orelse
         ((IdTmpFileInfo#set_view_tmp_file_info.size >= ?INC_MAX_TMP_FILE_SIZE) andalso
@@ -1311,9 +1384,6 @@ update_btrees(WriterAcc) ->
         compactor_running = CompactorRunning,
         max_insert_batch_size = MaxBatchSize
     } = WriterAcc,
-    % Remove spatial views from group
-    % The native updater can currently handle mapreduce views only
-    Group = couch_set_view_util:remove_group_views(Group0, spatial_view),
 
     % Prepare list of operation logs for each btree
     #set_view_tmp_file_info{name = IdFile} = dict:fetch(ids_index, TmpFiles),
@@ -1323,8 +1393,20 @@ update_btrees(WriterAcc) ->
                 name = ViewFile
             } = dict:fetch(Id, TmpFiles),
             ViewFile
-        end, Group#set_view_group.views),
-    LogFiles = [IdFile | ViewFiles],
+        end, Group0#set_view_group.views),
+    % `LogFiles` is supplied to the native updater. For spatial views only the
+    % ID b-tree is updated.
+    LogFiles = case Group0#set_view_group.mod of
+    mapreduce_view ->
+        [IdFile | ViewFiles];
+    spatial_view ->
+        [IdFile]
+    end,
+
+    % Remove spatial views from group
+    % The native updater can currently handle mapreduce views only, but it
+    % handles the ID b-tree of the spatial view
+    Group = couch_set_view_util:remove_group_views(Group0, spatial_view),
 
     {ok, NewGroup0, Stats2} = couch_set_view_updater_helper:update_btrees(
         Group, TmpDir, LogFiles, MaxBatchSize, false),
@@ -1333,6 +1415,23 @@ update_btrees(WriterAcc) ->
     % Add back spatial views
     NewGroup = couch_set_view_util:update_group_views(
         NewGroup0, Group0, spatial_view),
+
+    % The native update for the Id b-tree was run, now it's time to run the
+    % Erlang updater for the spatial views
+    NewGroup2 = case NewGroup#set_view_group.mod of
+    mapreduce_view ->
+        NewGroup;
+    spatial_view = Mod ->
+        ok = couch_file:refresh_eof(NewGroup#set_view_group.fd),
+        Views = Mod:update_spatial(NewGroup#set_view_group.views, ViewFiles,
+            MaxBatchSize),
+        NewGroup#set_view_group{
+            views = Views,
+            index_header = (NewGroup#set_view_group.index_header)#set_view_index_header{
+                view_states = [Mod:get_state(V#set_view.indexer) || V <- Views]
+            }
+        }
+    end,
 
     NewStats = Stats#set_view_updater_stats{
      inserted_ids = Stats#set_view_updater_stats.inserted_ids + IdsInserted,
@@ -1359,8 +1458,8 @@ update_btrees(WriterAcc) ->
                 ok = file2:delete(SortedFile),
                 AccCompactFiles
             end
-        end, [], LogFiles),
-    {ok, NewGroup, CleanupCount, NewStats, CompactFiles}.
+        end, [], [IdFile | ViewFiles]),
+    {ok, NewGroup2, CleanupCount, NewStats, CompactFiles}.
 
 
 update_seqs(PartIdSeqs, Seqs) ->

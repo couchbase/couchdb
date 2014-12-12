@@ -19,6 +19,8 @@
 -export([file_sorter_batch_format_fun/1]).
 -export([count_items_from_set/2]).
 -export([update_btrees/5]).
+% Used by spatial_view module
+-export([code_to_op/1]).
 
 
 -include("couch_db.hrl").
