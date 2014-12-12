@@ -391,7 +391,7 @@ verify_btrees_1(Group) ->
             end,
             true = (P < num_set_partitions()),
             V = ?JSON_ENCODE(doc_id(I)),
-            [ExpectedKv] = couch_set_view_updater:convert_back_index_kvs_to_binary(
+            [ExpectedKv] = mapreduce_view:convert_back_index_kvs_to_binary(
                 [{doc_id(I), {P, [{0, [V]}]}}], []),
             case ExpectedKv =:= Kv of
             true ->

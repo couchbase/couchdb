@@ -20,6 +20,7 @@
          update_tmp_files/3, view_bitmap/1]).
 -export([encode_key_docid/2, decode_key_docid/1]).
 -export([update_index/5]).
+-export([convert_back_index_kvs_to_binary/2]).
 % For the group
 -export([design_doc_to_set_view_group/2, view_group_data_size/2,
          reset_view/1, setup_views/5]).
@@ -746,3 +747,32 @@ decode_key_docid(<<KeyLen:16, JsonKey:KeyLen/binary, DocId/binary>>) ->
 -spec encode_key_docid(binary(), binary()) -> binary().
 encode_key_docid(JsonKey, DocId) ->
     <<(byte_size(JsonKey)):16, JsonKey/binary, DocId/binary>>.
+
+
+convert_back_index_kvs_to_binary([], Acc)->
+    lists:reverse(Acc);
+convert_back_index_kvs_to_binary([{DocId, {PartId, ViewIdKeys}} | Rest], Acc) ->
+    ViewIdKeysBinary = lists:foldl(
+        fun({ViewId, Keys}, Acc2) ->
+            KeyListBinary = lists:foldl(
+                fun(Key, AccKeys) ->
+                    <<AccKeys/binary, (byte_size(Key)):16, Key/binary>>
+                end,
+                <<>>, Keys),
+            NumKeys = length(Keys),
+            case NumKeys >= (1 bsl 16) of
+            true ->
+                ErrorMsg = io_lib:format(
+                    "Too many (~p) keys emitted for "
+                    "document `~s` (maximum allowed is ~p",
+                    [NumKeys, DocId, (1 bsl 16) - 1]),
+                throw({error, iolist_to_binary(ErrorMsg)});
+            false ->
+                ok
+            end,
+            <<Acc2/binary, ViewId:8, NumKeys:16, KeyListBinary/binary>>
+        end,
+        <<>>, ViewIdKeys),
+    KvBin = {<<PartId:16, DocId/binary>>,
+        <<PartId:16, ViewIdKeysBinary/binary>>},
+    convert_back_index_kvs_to_binary(Rest, [KvBin | Acc]).

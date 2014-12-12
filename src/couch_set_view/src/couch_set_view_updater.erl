@@ -17,8 +17,6 @@
 -export([update/6]).
 % Exported for the MapReduce specific stuff
 -export([new_sort_file_name/1]).
-% Exported for unit tests only.
--export([convert_back_index_kvs_to_binary/2]).
 
 -include("couch_db.hrl").
 -include("couch_set_view_updater.hrl").
@@ -872,7 +870,7 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
         fun({_DocId, {_PartId, []}}, Acc) ->
                 Acc;
             (Kv, Acc) ->
-                [{KeyBin, ValBin}] = convert_back_index_kvs_to_binary([Kv], []),
+                [{KeyBin, ValBin}] = Mod:convert_back_index_kvs_to_binary([Kv], []),
                 KvBin = [<<(byte_size(KeyBin)):16>>, KeyBin, ValBin],
                 [[<<(iolist_size(KvBin)):32/native>>, KvBin] | Acc]
         end,
@@ -1040,7 +1038,8 @@ write_to_tmp_batch_files(ViewKeyValuesToAdd, DocIdViewIdKeys, WriterAcc) ->
         end,
         {[], [], []}, DocIdViewIdKeys),
 
-    AddDocIdViewIdKeys = convert_back_index_kvs_to_binary(AddDocIdViewIdKeys0, []),
+    AddDocIdViewIdKeys = Mod:convert_back_index_kvs_to_binary(
+        AddDocIdViewIdKeys0, []),
 
     IdsData1 = lists:map(
         fun(K) -> couch_set_view_updater_helper:encode_op(remove, K) end,
@@ -1553,33 +1552,6 @@ new_sort_file_name(TmpDir, true) ->
     couch_set_view_util:new_sort_file_path(TmpDir, compactor);
 new_sort_file_name(TmpDir, false) ->
     couch_set_view_util:new_sort_file_path(TmpDir, updater).
-
-
-convert_back_index_kvs_to_binary([], Acc)->
-    lists:reverse(Acc);
-convert_back_index_kvs_to_binary([{DocId, {PartId, ViewIdKeys}} | Rest], Acc) ->
-    ViewIdKeysBinary = lists:foldl(
-        fun({ViewId, Keys}, Acc2) ->
-            KeyListBinary = lists:foldl(
-                fun(Key, AccKeys) ->
-                    <<AccKeys/binary, (byte_size(Key)):16, Key/binary>>
-                end,
-                <<>>, Keys),
-            NumKeys = length(Keys),
-            case NumKeys >= (1 bsl 16) of
-            true ->
-                ErrorMsg = io_lib:format("Too many (~p) keys emitted for "
-                                         "document `~s` (maximum allowed is ~p",
-                                         [NumKeys, DocId, (1 bsl 16) - 1]),
-                throw({error, iolist_to_binary(ErrorMsg)});
-            false ->
-                ok
-            end,
-            <<Acc2/binary, ViewId:8, NumKeys:16, KeyListBinary/binary>>
-        end,
-        <<>>, ViewIdKeys),
-    KvBin = {make_back_index_key(DocId, PartId), <<PartId:16, ViewIdKeysBinary/binary>>},
-    convert_back_index_kvs_to_binary(Rest, [KvBin | Acc]).
 
 
 make_back_index_key(DocId, PartId) ->
