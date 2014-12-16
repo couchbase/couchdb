@@ -1316,6 +1316,8 @@ send_log_compact_files(Owner, Files, Seqs, PartVersions) ->
     ok = gen_server:cast(Owner, {compact_log_files, Files, Seqs, PartVersions, Init}).
 
 
+-spec spawn_updater_worker(#writer_acc{}, partition_seqs(),
+                           partition_versions()) -> reference().
 spawn_updater_worker(WriterAcc, PartIdSeqs, PartVersions) ->
     Parent = self(),
     Ref = make_ref(),
