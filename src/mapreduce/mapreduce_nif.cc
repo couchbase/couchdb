@@ -21,7 +21,6 @@
 #include <cstring>
 #include <sstream>
 #include <map>
-#include <time.h>
 
 #if defined(WIN32) || defined(_WIN32)
 #include <windows.h>
@@ -456,28 +455,40 @@ void free_map_reduce_context(ErlNifEnv *env, void *res) {
 }
 
 
+#define SEC_TO_NSEC 1000000000ULL
+#define NSEC_TO_MSEC (1.0/1000000.0)
+
 void *terminatorLoop(void *args)
 {
     std::map< unsigned int, map_reduce_ctx_t* >::iterator it;
-    time_t now;
 
     while (!shutdownTerminator) {
+        // Convert maxTaskDuration to nanoseconds
+        const hrtime_t maxTaskTimeNSec = maxTaskDuration * SEC_TO_NSEC;
+        // gethrtime() returns values in nanoseconds
+        hrtime_t now, minTimeDiff = maxTaskTimeNSec;
+
         enif_mutex_lock(terminatorMutex);
-        // due to truncation of second's fraction lets pretend we're one second before
-        now = time(NULL) - 1;
+        now = gethrtime();
 
         for (it = contexts.begin(); it != contexts.end(); ++it) {
             map_reduce_ctx_t *ctx = (*it).second;
-
-            if (ctx->taskStartTime >= 0) {
-                if (ctx->taskStartTime + maxTaskDuration < now) {
+            if (ctx->taskStartTime > 0) {
+                int64_t  timeGap = maxTaskTimeNSec -
+                        (now - ctx->taskStartTime);
+                if ((int64_t)gethrtime_period() > timeGap) {
                     terminateTask(ctx);
+                }
+                else {
+                    minTimeDiff = std::min((hrtime_t)timeGap, minTimeDiff);
                 }
             }
         }
 
         enif_mutex_unlock(terminatorMutex);
-        doSleep(maxTaskDuration * 1000);
+        // Convert minTimeDiff to miliseconds
+        hrtime_t minTimeMSec = (hrtime_t)(minTimeDiff * NSEC_TO_MSEC);
+        doSleep(minTimeMSec);
     }
 
     return NULL;

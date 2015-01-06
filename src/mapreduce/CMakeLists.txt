@@ -17,12 +17,13 @@ SET(COUCH_VIEW_MR_SRC mapreduce_nif.cc
                       mapreduce.cc)
 
 INCLUDE_DIRECTORIES(BEFORE ${V8_INCLUDE_DIR}
+                           ${Platform_SOURCE_DIR}/include
                            ${ERLANG_INCLUDE_PATH})
 
 ADD_LIBRARY(mapreduce_nif MODULE ${COUCH_VIEW_MR_SRC})
 SET_TARGET_PROPERTIES(mapreduce_nif PROPERTIES PREFIX "")
 
-TARGET_LINK_LIBRARIES(mapreduce_nif ${COUCHBASE_UNRESOLVED}
+TARGET_LINK_LIBRARIES(mapreduce_nif platform ${COUCHBASE_UNRESOLVED}
                                     ${V8_LIBRARIES}
                                     ${COUCHBASE_MATH_LIBS})
 SET_TARGET_PROPERTIES(mapreduce_nif PROPERTIES

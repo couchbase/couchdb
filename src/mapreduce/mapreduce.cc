@@ -188,7 +188,7 @@ void doInitContext(map_reduce_ctx_t *ctx, const function_sources_list_t &funs)
     isoData->ctx = ctx;
 
     ctx->isolate->SetData(isoData);
-    ctx->taskStartTime = -1;
+    ctx->taskStartTime = 0;
 }
 
 
@@ -711,14 +711,14 @@ isolate_data_t *getIsolateData()
 
 void taskStarted(map_reduce_ctx_t *ctx)
 {
-    ctx->taskStartTime = time(NULL);
+    ctx->taskStartTime = gethrtime();
     ctx->kvs = NULL;
 }
 
 
 void taskFinished(map_reduce_ctx_t *ctx)
 {
-    ctx->taskStartTime = -1;
+    ctx->taskStartTime = 0;
 }
 
 

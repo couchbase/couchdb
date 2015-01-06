@@ -26,6 +26,7 @@
 #include <list>
 #include <vector>
 #include <v8.h>
+#include <platform/platform.h>
 
 #include "erl_nif_compat.h"
 #include "nif_stl_allocator.h"
@@ -75,7 +76,7 @@ typedef struct {
     kv_pair_list_t                               *kvs;
     unsigned int                                 key;
     ErlNifEnv                                    *env;
-    volatile time_t                              taskStartTime;
+    hrtime_t                            	 taskStartTime;
     int                                          emitKvSize;
     int                                          maxEmitKvSize;
 } map_reduce_ctx_t;
