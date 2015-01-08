@@ -134,7 +134,6 @@ compact_group(Group0, EmptyGroup, TmpDir, UpdaterPid, Owner, UserStatus) ->
     couch_task_status:set_update_frequency(5000),
 
     % Use native compactor for id_btrees and mapreduce views
-    % TODO vmx 2014-10-08: Compaction for spatial views is not yet implemented!
     ok = couch_file:flush(Fd),
     {ok, NewGroup, _} = compact_btrees(Group, EmptyGroup, TargetFile, Acc0),
     ok = couch_file:refresh_eof(Fd),
@@ -238,8 +237,7 @@ total_kv_count(#set_view_group{id_btree = IdBtree, views = Views, mod = Mod}) ->
 
 apply_log(Group0, LogFiles, NewSeqs, NewPartVersions, TmpDir) ->
     #set_view_group{
-        mod = Mod,
-        index_header = Header
+        mod = Mod
     } = Group0,
 
     [IdMergeFiles | ViewLogFilesList] = LogFiles,
@@ -248,11 +246,19 @@ apply_log(Group0, LogFiles, NewSeqs, NewPartVersions, TmpDir) ->
       fun(ViewFiles) ->
         merge_files(Group0, ViewFiles, TmpDir, false)
     end, ViewLogFilesList),
+    % `MergeFiles` is supplied to the native updater. For spatial views only
+    % the ID b-tree is updated.
+    MergeFiles = case Mod of
+    mapreduce_view ->
+        [IdMergeFile | ViewMergeFiles];
+    spatial_view ->
+        [IdMergeFile]
+    end,
 
     % Remove spatial views since native updater cannot handle them
     Group = couch_set_view_util:remove_group_views(Group0, spatial_view),
     {ok, NewGroup0, _} = couch_set_view_updater_helper:update_btrees(
-        Group, TmpDir, [IdMergeFile | ViewMergeFiles], ?SORTED_CHUNK_SIZE, true),
+        Group, TmpDir, MergeFiles, ?SORTED_CHUNK_SIZE, true),
 
     % Add back spatial views
     NewGroup = couch_set_view_util:update_group_views(
@@ -260,31 +266,35 @@ apply_log(Group0, LogFiles, NewSeqs, NewPartVersions, TmpDir) ->
 
     ok = file2:delete(IdMergeFile),
 
-    % For spatial views, execute erlang code for view compaction
-    Header2 = NewGroup#set_view_group.index_header,
-    case Mod of
+    % The native compactor for the Id b-tree was run, now it's time to run the
+    % Erlang compactor for the spatial views
+    NewGroup2 = case Mod of
     mapreduce_view ->
+        NewGroup;
+    spatial_view ->
+        ok = couch_file:refresh_eof(NewGroup#set_view_group.fd),
+        Views = Mod:update_spatial(NewGroup#set_view_group.views,
+            ViewMergeFiles, ?SORTED_CHUNK_SIZE),
+        NewHeader = NewGroup#set_view_group.index_header,
+        NewGroup#set_view_group{
+            views = Views,
+            index_header = NewHeader#set_view_index_header{
+                view_states = [Mod:get_state(V#set_view.indexer) || V <- Views]
+            }
+        }
+    end,
+
+    Header = NewGroup2#set_view_group.index_header,
         lists:foreach(
           fun(LogFile) ->
             ok = file2:delete(LogFile)
           end, ViewMergeFiles),
-        NewGroup#set_view_group{
-            index_header = Header2#set_view_index_header{
-                seqs = NewSeqs,
-                partition_versions = NewPartVersions
-            }
-        };
-    _ ->
-        NewViews = Mod:apply_log(Group, ViewMergeFiles),
-        NewGroup#set_view_group{
-            views = NewViews,
-            index_header = Header#set_view_index_header{
-                seqs = NewSeqs,
-                partition_versions = NewPartVersions,
-                view_states = [Mod:get_state(V#set_view.indexer) || V <- NewViews]
-            }
+    NewGroup2#set_view_group{
+        index_header = Header#set_view_index_header{
+            seqs = NewSeqs,
+            partition_versions = NewPartVersions
         }
-    end.
+    }.
 
 merge_files(_Group, [LogFile], _TmpDir, _IsIdFile) ->
     LogFile;
@@ -301,11 +311,23 @@ merge_files(Group, LogFiles, TmpDir, IsIdFile) ->
     true ->
         "i";
     false ->
-        "v"
+        case Group#set_view_group.mod of
+        mapreduce_view ->
+            "v";
+        spatial_view ->
+            "s"
+        end
     end,
     NumFiles = length(LogFiles),
     Port = open_port({spawn_executable, FileMergerCmd}, ?PORT_OPTS),
     true = port_command(Port, [FileType, $\n]),
+    % Spatial views need the tmp dir to sort the files before merging
+    case FileType of
+    "s" ->
+        true = port_command(Port, [TmpDir, $\n]);
+    _ ->
+        ok
+    end,
     true = port_command(Port, [integer_to_list(NumFiles), $\n]),
     ok = lists:foreach(
       fun(LogFile) ->
@@ -360,17 +382,7 @@ file_merger_wait_loop(Group, Port, Acc) ->
 % Invokes a native view compacter process to do the compaction.
 -spec compact_btrees(#set_view_group{}, #set_view_group{}, list(), #acc{}) ->
                                                {ok, #set_view_group{}, #acc{}}.
-compact_btrees(Group0, EmptyGroup, TargetFile, ResultAcc) ->
-    #set_view_group{
-        mod = Mod
-    } = Group0,
-    % For spatialview, only process id_btree
-    Group = case Mod of
-    mapreduce_view ->
-        Group0;
-    spatial_view ->
-        Group0#set_view_group{views = []}
-    end,
+compact_btrees(Group, EmptyGroup, TargetFile, ResultAcc) ->
     case os:find_executable("couch_view_group_compactor") of
     false ->
         Cmd = nil,
@@ -472,4 +484,3 @@ compact_btrees_wait_loop(Port, Group, EmptyGroup, Acc0, ResultAcc) ->
                    [SetName, Type, DDocId, Msg]),
         compact_btrees_wait_loop(Port, Group, EmptyGroup, <<>>, ResultAcc)
     end.
-
