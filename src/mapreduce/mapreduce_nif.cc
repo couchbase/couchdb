@@ -17,13 +17,18 @@
  * the License.
  **/
 
+#ifdef WIN32
+#define NOMINMAX
+#endif
+
+#include <platform/platform.h>
+#include <algorithm>
 #include <iostream>
 #include <cstring>
 #include <sstream>
 #include <map>
 
 #if defined(WIN32) || defined(_WIN32)
-#include <windows.h>
 #define doSleep(Ms) Sleep(Ms)
 #else
 #define doSleep(Ms)                             \
