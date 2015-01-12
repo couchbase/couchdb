@@ -19,6 +19,7 @@
 -export([file_sorter_batch_format_fun/1]).
 -export([count_items_from_set/2]).
 -export([update_btrees/5]).
+-export([index_builder_wait_loop/3]).
 % Used by spatial_view module
 -export([code_to_op/1]).
 
@@ -284,4 +285,50 @@ update_btrees_wait_loop(Port, Group, Acc0, Stats) ->
             <<>>
         end,
         update_btrees_wait_loop(Port, Group, Msg3, Stats)
+    end.
+
+
+index_builder_wait_loop(Port, Group, Acc) ->
+    #set_view_group{
+        set_name = SetName,
+        name = DDocId,
+        type = Type
+    } = Group,
+    receive
+    {Port, {exit_status, 0}} ->
+        ok;
+    {Port, {exit_status, 1}} ->
+        ?LOG_INFO("Set view `~s`, ~s group `~s`, index builder stopped successfully.",
+                   [SetName, Type, DDocId]),
+        exit(shutdown);
+    {Port, {exit_status, Status}} ->
+        throw({index_builder_exit, Status, ?l2b(Acc)});
+    {Port, {data, {noeol, Data}}} ->
+        index_builder_wait_loop(Port, Group, [Data | Acc]);
+    {Port, {data, {eol, Data}}} ->
+        #set_view_group{
+            set_name = SetName,
+            name = DDocId,
+            type = Type
+        } = Group,
+        Msg = ?l2b(lists:reverse([Data | Acc])),
+        ErrorMsg = "Set view `~s`, ~s group `~s`, "
+                   "received error from index builder: ~s",
+        ErrorArgs = [SetName, Type, DDocId],
+        Msg2 = couch_set_view_util:log_port_error(Msg, ErrorMsg, ErrorArgs),
+        % Propogate this message to query response error message
+        Msg3 = case Msg2 of
+        <<"Error building index", _/binary>> ->
+            [Msg2];
+        _ ->
+            []
+        end,
+        index_builder_wait_loop(Port, Group, Msg3);
+    {Port, Error} ->
+        throw({index_builder_error, Error});
+    stop ->
+        ?LOG_INFO("Set view `~s`, ~s group `~s`, sending stop message to index builder.",
+                   [SetName, Type, DDocId]),
+        port_command(Port, "exit"),
+        index_builder_wait_loop(Port, Group, Acc)
     end.
