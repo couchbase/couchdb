@@ -19,15 +19,12 @@
          start_reduce_context/1, end_reduce_context/1, view_name/2,
          convert_primary_index_kvs_to_binary/3, view_bitmap/1]).
 -export([encode_key_docid/2, decode_key_docid/1]).
--export([update_index/5]).
 -export([convert_back_index_kvs_to_binary/2]).
 % For the group
 -export([design_doc_to_set_view_group/2, view_group_data_size/2,
          reset_view/1, setup_views/5]).
 % For the utils
 -export([cleanup_view_group/1]).
-% For the compactor
--export([compact_view/6, apply_log/2]).
 % For the main module
 -export([get_row_count/1, make_wrapper_fun/2, fold/4, index_extension/0,
         make_key_options/1, should_filter/1]).
@@ -263,18 +260,6 @@ view_name(#set_view_group{views = SetViews}, ViewPos) ->
         ok
     end,
     Name.
-
-
--spec update_index(#btree{},
-                   string(),
-                   non_neg_integer(),
-                   set_view_btree_purge_fun() | 'nil',
-                   term()) ->
-                          {'ok', term(), #btree{},
-                           non_neg_integer(), non_neg_integer()}.
-update_index(Bt, FilePath, BufferSize, PurgeFun, PurgeAcc) ->
-    couch_set_view_updater_helper:update_btree(Bt, FilePath, BufferSize,
-        PurgeFun, PurgeAcc).
 
 
 -spec design_doc_to_set_view_group(binary(), #doc{}) -> #set_view_group{}.
@@ -520,28 +505,6 @@ cleanup_view_group_wait_loop(Port, Group, Acc, PurgedCount) ->
         cleanup_view_group_wait_loop(Port, Group, Acc, PurgedCount)
     end.
 
-compact_view(Fd, SetView, EmptySetView, FilterFun, BeforeKVWriteFun, Acc0) ->
-    EmptyView = EmptySetView#set_view.indexer,
-    #mapreduce_view{
-       btree = ViewBtree
-    } = EmptyView,
-
-    couch_set_view_mapreduce:start_reduce_context(SetView),
-    {ok, NewBtreeRoot, Acc2} = couch_btree_copy:copy(
-        (SetView#set_view.indexer)#mapreduce_view.btree, Fd,
-        [{before_kv_write, {BeforeKVWriteFun, Acc0}}, {filter, FilterFun}]),
-    couch_set_view_mapreduce:end_reduce_context(SetView),
-
-    NewSetView = EmptySetView#set_view{
-        indexer = EmptyView#mapreduce_view{
-            btree = ViewBtree#btree{
-                root = NewBtreeRoot
-            }
-        }
-    },
-    {NewSetView, Acc2}.
-
-
 -spec get_row_count(#set_view{}) -> non_neg_integer().
 get_row_count(SetView) ->
     Bt = (SetView#set_view.indexer)#mapreduce_view.btree,
@@ -549,21 +512,6 @@ get_row_count(SetView) ->
     {ok, <<Count:40, _/binary>>} = couch_btree:full_reduce(Bt),
     ok = couch_set_view_mapreduce:end_reduce_context(SetView),
     Count.
-
-
-apply_log(#set_view_group{views = SetViews}, ViewLogFiles) ->
-    lists:zipwith(fun(SetView, ViewLogFile) ->
-        View = SetView#set_view.indexer,
-        Bt = View#mapreduce_view.btree,
-        {ok, NewBt, _, _} = couch_set_view_updater_helper:update_btree(
-               Bt, ViewLogFile, ?SORTED_CHUNK_SIZE),
-        ok = file2:delete(ViewLogFile),
-        SetView#set_view{
-            indexer = View#mapreduce_view{
-                btree = NewBt
-            }
-        }
-    end, SetViews, ViewLogFiles).
 
 
 make_wrapper_fun(Fun, Filter) ->
