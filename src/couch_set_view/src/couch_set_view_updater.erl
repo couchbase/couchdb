@@ -19,7 +19,7 @@
 -export([new_sort_file_name/1]).
 
 -include("couch_db.hrl").
--include("couch_set_view_updater.hrl").
+-include_lib("couch_set_view/include/couch_set_view.hrl").
 -include_lib("couch_dcp/include/couch_dcp.hrl").
 
 -define(MAP_QUEUE_SIZE, 256 * 1024).
@@ -32,6 +32,30 @@
 % For file sorter and file merger commands.
 -define(PORT_OPTS,
         [exit_status, use_stdio, stderr_to_stdout, {line, 4096}, binary]).
+
+-record(writer_acc, {
+    parent,
+    owner,
+    group,
+    last_seqs = orddict:new(),
+    part_versions = orddict:new(),
+    compactor_running,
+    write_queue,
+    initial_build,
+    view_empty_kvs,
+    kvs = [],
+    kvs_size = 0,
+    state = updating_active,
+    final_batch = false,
+    max_seqs,
+    stats = #set_view_updater_stats{},
+    tmp_dir = nil,
+    initial_seqs,
+    max_insert_batch_size,
+    tmp_files = dict:new(),
+    throttle = 0,
+    force_flush = false
+}).
 
 
 -spec update(pid(), #set_view_group{},

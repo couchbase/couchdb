@@ -34,7 +34,7 @@
 
 
 -include("couch_db.hrl").
--include("couch_set_view_updater.hrl").
+-include_lib("couch_set_view/include/couch_set_view.hrl").
 
 % Same as in couch_btree.erl
 -define(KEY_BITS,       12).
