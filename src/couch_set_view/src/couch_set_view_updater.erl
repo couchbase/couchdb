@@ -839,10 +839,11 @@ flush_writes(#writer_acc{initial_build = false} = Acc0) ->
         last_seqs = LastSeqs,
         part_versions = PartVersions
     } = Acc0,
+    Mod = Group#set_view_group.mod,
     % Only incremental updates can contain multiple snapshots
     {MultipleSnapshots, Kvs2} = merge_snapshots(Kvs),
     {ViewKVs, DocIdViewIdKeys, NewLastSeqs, NewPartVersions} =
-        process_map_results(Kvs2, ViewEmptyKVs, LastSeqs, PartVersions),
+        process_map_results(Mod, Kvs2, ViewEmptyKVs, LastSeqs, PartVersions),
     Acc1 = Acc0#writer_acc{last_seqs = NewLastSeqs, part_versions = NewPartVersions},
     Acc = write_to_tmp_batch_files(ViewKVs, DocIdViewIdKeys, Acc1),
     #writer_acc{group = NewGroup} = Acc,
@@ -888,7 +889,7 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
         mod = Mod
     } = Group,
     {ViewKVs, DocIdViewIdKeys, MaxSeqs2, PartVersions2} = process_map_results(
-        Kvs, ViewEmptyKVs, MaxSeqs, PartVersions),
+        Mod, Kvs, ViewEmptyKVs, MaxSeqs, PartVersions),
 
     IdRecords = lists:foldr(
         fun({_DocId, {_PartId, []}}, Acc) ->
@@ -928,13 +929,13 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
     end.
 
 
-process_map_results(Kvs, ViewEmptyKVs, PartSeqs, PartVersions) ->
+process_map_results(Mod, Kvs, ViewEmptyKVs, PartSeqs, PartVersions) ->
     lists:foldl(
         fun({Seq, DocId, PartId, []}, {ViewKVsAcc, DocIdViewIdKeysAcc, PartIdSeqs, PartIdVersions}) ->
             PartIdSeqs2 = update_part_seq(Seq, PartId, PartIdSeqs),
             {ViewKVsAcc, [{DocId, {PartId, []}} | DocIdViewIdKeysAcc], PartIdSeqs2, PartIdVersions};
         ({Seq, DocId, PartId, QueryResults}, {ViewKVsAcc, DocIdViewIdKeysAcc, PartIdSeqs, PartIdVersions}) ->
-            {NewViewKVs, NewViewIdKeys} = view_insert_doc_query_results(
+            {NewViewKVs, NewViewIdKeys} = Mod:view_insert_doc_query_results(
                     DocId, PartId, QueryResults, ViewKVsAcc, [], []),
             PartIdSeqs2 = update_part_seq(Seq, PartId, PartIdSeqs),
             {NewViewKVs, [{DocId, {PartId, NewViewIdKeys}} | DocIdViewIdKeysAcc], PartIdSeqs2, PartIdVersions};
@@ -1000,35 +1001,6 @@ update_part_seq(Seq, PartId, Acc) ->
     partition_versions().
 update_part_versions(NewVersions, PartId, PartVersions) ->
     orddict:store(PartId, NewVersions, PartVersions).
-
-
-view_insert_doc_query_results(_DocId, _PartitionId, [], [], ViewKVsAcc, ViewIdKeysAcc) ->
-    {lists:reverse(ViewKVsAcc), lists:reverse(ViewIdKeysAcc)};
-view_insert_doc_query_results(DocId, PartitionId, [ResultKVs | RestResults],
-        [{View, KVs} | RestViewKVs], ViewKVsAcc, ViewIdKeysAcc) ->
-    % Take any identical keys and combine the values
-    {NewKVs, NewViewIdKeysAcc} = lists:foldl(
-        fun({Key, Val}, {[{{Key, PrevDocId} = Kd, PrevVal} | AccRest], AccVid}) when PrevDocId =:= DocId ->
-            AccKv2 = case PrevVal of
-            {PartitionId, {dups, Dups}} ->
-                [{Kd, {PartitionId, {dups, [Val | Dups]}}} | AccRest];
-            {PartitionId, UserPrevVal} ->
-                [{Kd, {PartitionId, {dups, [Val, UserPrevVal]}}} | AccRest]
-            end,
-            {AccKv2, AccVid};
-        ({Key, Val}, {AccKv, AccVid}) ->
-            {[{{Key, DocId}, {PartitionId, Val}} | AccKv], [Key | AccVid]}
-        end,
-        {KVs, []}, lists:sort(ResultKVs)),
-    NewViewKVsAcc = [{View, NewKVs} | ViewKVsAcc],
-    case NewViewIdKeysAcc of
-    [] ->
-        NewViewIdKeysAcc2 = ViewIdKeysAcc;
-    _ ->
-        NewViewIdKeysAcc2 = [{View#set_view.id_num, NewViewIdKeysAcc} | ViewIdKeysAcc]
-    end,
-    view_insert_doc_query_results(
-        DocId, PartitionId, RestResults, RestViewKVs, NewViewKVsAcc, NewViewIdKeysAcc2).
 
 
 % Incremental updates.

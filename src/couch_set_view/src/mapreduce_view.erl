@@ -20,6 +20,7 @@
          convert_primary_index_kvs_to_binary/3, view_bitmap/1]).
 -export([encode_key_docid/2, decode_key_docid/1]).
 -export([convert_back_index_kvs_to_binary/2]).
+-export([view_insert_doc_query_results/6]).
 % For the group
 -export([design_doc_to_set_view_group/2, view_group_data_size/2,
          reset_view/1, setup_views/5]).
@@ -622,3 +623,40 @@ convert_back_index_kvs_to_binary([{DocId, {PartId, ViewIdKeys}} | Rest], Acc) ->
     KvBin = {<<PartId:16, DocId/binary>>,
         <<PartId:16, ViewIdKeysBinary/binary>>},
     convert_back_index_kvs_to_binary(Rest, [KvBin | Acc]).
+
+
+-spec view_insert_doc_query_results(
+        binary(), partition_id(), [set_view_key_value()],
+        [set_view_key_value()], [set_view_key_value()], [set_view_key()]) ->
+            {[set_view_key_value()], [set_view_key()]}.
+view_insert_doc_query_results(_DocId, _PartitionId, [], [], ViewKVsAcc,
+        ViewIdKeysAcc) ->
+    {lists:reverse(ViewKVsAcc), lists:reverse(ViewIdKeysAcc)};
+view_insert_doc_query_results(DocId, PartitionId, [ResultKVs | RestResults],
+        [{View, KVs} | RestViewKVs], ViewKVsAcc, ViewIdKeysAcc) ->
+    % Take any identical keys and combine the values
+    {NewKVs, NewViewIdKeysAcc} = lists:foldl(
+        fun({Key, Val}, {[{{Key, PrevDocId} = Kd, PrevVal} | AccRest], AccVid})
+                when PrevDocId =:= DocId ->
+            AccKv2 = case PrevVal of
+            {PartitionId, {dups, Dups}} ->
+                [{Kd, {PartitionId, {dups, [Val | Dups]}}} | AccRest];
+            {PartitionId, UserPrevVal} ->
+                [{Kd, {PartitionId, {dups, [Val, UserPrevVal]}}} | AccRest]
+            end,
+            {AccKv2, AccVid};
+        ({Key, Val}, {AccKv, AccVid}) ->
+            {[{{Key, DocId}, {PartitionId, Val}} | AccKv], [Key | AccVid]}
+        end,
+        {KVs, []}, lists:sort(ResultKVs)),
+    NewViewKVsAcc = [{View, NewKVs} | ViewKVsAcc],
+    case NewViewIdKeysAcc of
+    [] ->
+        NewViewIdKeysAcc2 = ViewIdKeysAcc;
+    _ ->
+        NewViewIdKeysAcc2 = [
+            {View#set_view.id_num, NewViewIdKeysAcc} | ViewIdKeysAcc]
+    end,
+    view_insert_doc_query_results(
+        DocId, PartitionId, RestResults, RestViewKVs, NewViewKVsAcc,
+        NewViewIdKeysAcc2).
