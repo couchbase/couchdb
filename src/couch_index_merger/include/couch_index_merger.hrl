@@ -12,13 +12,6 @@
 
 -define(ON_ERROR_DEFAULT, continue).
 
--record(simple_index_spec, {
-    database,
-    ddoc_database = nil, % Couchbase specific
-    ddoc_id,
-    index_name
-}).
-
 % It's always remote.
 -record(merged_index_spec, {
     url,
@@ -26,7 +19,7 @@
 }).
 
 -record(index_merge, {
-   indexes = [],   % [ #simple_index_spec{} | #merged_index_spec{} ]
+   indexes = [],   % [ #merged_index_spec{} ]
    callback,
    user_acc,
    % parameters that matter only when there are remote views to merge

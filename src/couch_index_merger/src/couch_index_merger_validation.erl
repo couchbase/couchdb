@@ -41,21 +41,6 @@ views_param({[_ | _] = Views}) ->
     lists:flatten(lists:map(
         fun ({<<"sets">>, SetsSpec}) ->
             validate_sets_param(SetsSpec);
-        ({DbName, ViewName}) when is_binary(ViewName) ->
-            {DDocDbName, DDocId, Vn} = parse_view_name(ViewName),
-            #simple_index_spec{
-                database = DbName, ddoc_id = DDocId, index_name = Vn,
-                ddoc_database = DDocDbName
-            };
-        ({DbName, ViewNames}) when is_list(ViewNames) ->
-            lists:map(
-                fun(ViewName) ->
-                    {DDocDbName, DDocId, Vn} = parse_view_name(ViewName),
-                    #simple_index_spec{
-                        database = DbName, ddoc_id = DDocId, index_name = Vn,
-                        ddoc_database = DDocDbName
-                    }
-                end, ViewNames);
         ({MergeUrl, {[_ | _] = Props} = EJson}) ->
             case (catch lhttpc_lib:parse_url(?b2l(MergeUrl))) of
             #lhttpc_url{} ->
@@ -74,8 +59,7 @@ views_param({[_ | _] = Views}) ->
             {[_ | _]} = SubViews ->
                 SubViewSpecs = views_param(SubViews),
                 case lists:any(
-                    fun(#simple_index_spec{}) -> true;
-                       (#set_view_spec{}) -> true;
+                    fun(#set_view_spec{}) -> true;
                        (_) -> false
                     end,
                     SubViewSpecs) of
@@ -118,17 +102,7 @@ validate_sets_param({[_ | _] = Sets}) ->
                 ok
             end,
 
-            {DDocDbName, DDocId, Vn} = parse_view_name(ViewName),
-            case DDocDbName =/= nil orelse DDocId =:= nil of
-            true ->
-                Msg1 = io_lib:format(
-                    "Invalid `viewname` property for `~s` set view. "
-                    "Design document id and view name must specified.",
-                         [SetName]),
-                throw({bad_request, Msg1});
-            false ->
-                ok
-            end,
+            {DDocId, Vn} = parse_view_name(ViewName),
             case not(is_list(Partitions)) orelse
                 lists:any(fun (X) -> not(is_integer(X)) end, Partitions) of
             true ->
@@ -154,16 +128,10 @@ validate_sets_param(_) ->
 parse_view_name(Name) ->
     Tokens = string:tokens(couch_util:trim(?b2l(Name)), "/"),
     case [?l2b(couch_httpd:unquote(Token)) || Token <- Tokens] of
-    [<<"_all_docs">>] ->
-        {nil, nil, <<"_all_docs">>};
     [DDocName, ViewName] ->
-        {nil, <<"_design/", DDocName/binary>>, ViewName};
+        {<<"_design/", DDocName/binary>>, ViewName};
     [<<"_design">>, DDocName, ViewName] ->
-        {nil, <<"_design/", DDocName/binary>>, ViewName};
-    [DDocDbName, DDocName, ViewName] ->
-        {DDocDbName, <<"_design/", DDocName/binary>>, ViewName};
-    [DDocDbName, <<"_design">>, DDocName, ViewName] ->
-        {DDocDbName, <<"_design/", DDocName/binary>>, ViewName};
+        {<<"_design/", DDocName/binary>>, ViewName};
     _ ->
         throw({bad_request, "A `view` property must have the shape"
             " `ddoc_name/view_name`."})
