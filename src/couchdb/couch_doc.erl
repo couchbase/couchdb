@@ -145,12 +145,10 @@ mk_json_doc_from_binary(<<?LOCAL_DOC_PREFIX, _/binary>> = Id, Value) ->
     Error ->
         throw(Error)
     end;
-mk_json_doc_from_binary(Id, <<>>) ->
-    #doc{id=Id, body = <<>>, content_meta = ?CONTENT_META_INVALID_JSON};
 mk_json_doc_from_binary(Id, Value) ->
     % Docs should accept any JSON value, not just objs and arrays
     % (this would be anything that is acceptable as a value in an array
-    case ejson:validate([<<"[">>, Value, <<"]">>]) of
+    case ejson:validate([<<"[{},">>, Value, <<"]">>]) of
     {error, invalid_json} ->
         #doc{id=Id, body = Value,
             content_meta = ?CONTENT_META_INVALID_JSON};
