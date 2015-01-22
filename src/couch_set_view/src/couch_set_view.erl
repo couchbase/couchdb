@@ -372,7 +372,7 @@ demonitor_partition_update(Mod, SetName, DDocId, Ref) ->
 
 % Trigger a view group index update if there are at least N new changes
 % (from all the active/passive partitions) to index.
--spec trigger_update(atom(), binary(), binary(), non_neg_integer()) -> no_return().
+-spec trigger_update(atom(), binary(), binary(), non_neg_integer()) -> ok.
 trigger_update(Mod, SetName, DDocId, MinNumChanges) ->
     try
         Pid = get_group_pid(Mod, SetName, DDocId, prod),
@@ -384,7 +384,7 @@ trigger_update(Mod, SetName, DDocId, MinNumChanges) ->
 
 % Trigger a replica view group index update if there are at least N new
 % changes (from all the currently defined replica partitions) to index.
--spec trigger_replica_update(atom(), binary(), binary(), non_neg_integer()) -> no_return().
+-spec trigger_replica_update(atom(), binary(), binary(), non_neg_integer()) -> ok.
 trigger_replica_update(Mod, SetName, DDocId, MinNumChanges) ->
     try
         Pid = get_group_pid(Mod, SetName, DDocId, prod),
