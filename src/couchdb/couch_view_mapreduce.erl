@@ -63,7 +63,7 @@ map(Doc) ->
     Ctx = erlang:get(map_context),
     {DocBody, DocMeta} = couch_doc:to_raw_json_binary_views(Doc),
     case mapreduce:map_doc(Ctx, DocBody, DocMeta) of
-    {ok, Results} ->
+    {ok, Results, _LogLines} ->
         Fun = fun({error, _Reason} = Error) ->
                     Error;
             (KvList) ->

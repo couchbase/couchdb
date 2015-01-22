@@ -140,6 +140,7 @@ ERL_NIF_TERM doMapDoc(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         // pairs emitted by a map function for the document.
         map_results_list_t mapResults = mapDoc(ctx, docBin, metaBin);
         ERL_NIF_TERM outerList = enif_make_list(env, 0);
+        ERL_NIF_TERM logList = enif_make_list(env, 0);
         map_results_list_t::reverse_iterator i = mapResults.rbegin();
 
         for ( ; i != mapResults.rend(); ++i) {
@@ -171,8 +172,17 @@ ERL_NIF_TERM doMapDoc(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
                 break;
             }
         }
-
-        return enif_make_tuple2(env, ATOM_OK, outerList);
+        if (ctx->logResults) {
+            log_results_list_t::reverse_iterator k = ctx->logResults->rbegin();
+            for ( ; k != ctx->logResults->rend(); ++k) {
+                ERL_NIF_TERM logMsg = enif_make_binary(env, &(*k));
+                logList = enif_make_list_cell(env, logMsg, logList);
+            }
+            ctx->logResults->~log_results_list_t();
+            enif_free(ctx->logResults);
+            ctx->logResults = NULL;
+        }
+        return enif_make_tuple3(env, ATOM_OK, outerList, logList);
 
     } catch(MapReduceError &e) {
         return makeError(env, e.getMsg());

@@ -25,8 +25,7 @@
 
 main(_) ->
     test_util:init_code_path(),
-
-    etap:plan(122),
+    etap:plan(126),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -43,6 +42,10 @@ test() ->
     test_map_function_runtime_error(),
     test_multiple_map_functions_runtime_errors(),
     test_empty_results_single_function(),
+    test_log_function(),
+    test_multi_log_function(),
+    test_long_log_function(),
+    test_diffent_log_type_function(),
     test_empty_results_multiple_functions(),
     test_single_results_single_function(),
     test_single_results_single_function_meta(),
@@ -79,7 +82,7 @@ test_map_function_throw_exception() ->
     {ok, Ctx} = mapreduce:start_map_context([
         <<"function(doc) { throw('foobar'); }">>
     ]),
-    Results = mapreduce:map_doc(Ctx, <<"{\"_id\": \"doc1\", \"value\": 1}">>, <<"{}">>),
+    Results = map_doc(Ctx, <<"{\"_id\": \"doc1\", \"value\": 1}">>, <<"{}">>),
     etap:is(Results, {ok, [{error, <<"foobar">>}]},
             "Got error when map function throws exception").
 
@@ -88,7 +91,7 @@ test_map_function_runtime_error() ->
     {ok, Ctx} = mapreduce:start_map_context([
         <<"function(doc) { emit(doc.foo.bar.z, null); }">>
     ]),
-    Results = mapreduce:map_doc(Ctx, <<"{\"_id\": \"doc1\", \"value\": 1}">>, <<"{}">>),
+    Results = map_doc(Ctx, <<"{\"_id\": \"doc1\", \"value\": 1}">>, <<"{}">>),
     % {error,<<"TypeError: Cannot read property 'bar' of undefined">>}
     ?etap_match(Results, {ok, [{error, _}]}, "Got an error when map function applied over doc"),
     {ok, [{error, Reason}]} = Results,
@@ -97,7 +100,7 @@ test_map_function_runtime_error() ->
     {ok, Ctx2} = mapreduce:start_map_context([
         <<"function(doc, meta) { if (jsonType == 'player') { emit(meta.id, doc); } }">>
     ]),
-    Results2 = mapreduce:map_doc(Ctx2, <<"{\"value\": 1}">>, <<"{}">>),
+    Results2 = map_doc(Ctx2, <<"{\"value\": 1}">>, <<"{}">>),
     ?etap_match(Results2, {ok, [{error, _}]}, "Got error mapping document"),
     {ok, [{error, Reason2}]} = Results2,
     etap:is(is_binary(Reason2), true, "Error reason is a binary").
@@ -109,23 +112,23 @@ test_multiple_map_functions_runtime_errors() ->
         <<"function(doc) { emit(doc.value * 3, null); }">>,
         <<"function(doc) { if (doc.value % 3 == 0) { throw('foobar'); } else { emit(doc.value * 2, 1); } }">>
     ]),
-    Result1 = mapreduce:map_doc(Ctx, <<"{\"value\":1}">>, <<"{}">>),
+    Result1 = map_doc(Ctx, <<"{\"value\":1}">>, <<"{}">>),
     etap:is(Result1,
             {ok, [[{<<"1">>, <<"null">>}], [{<<"3">>, <<"null">>}], [{<<"2">>, <<"1">>}]]},
             "Got expected result for doc 1"),
-    Result2 = mapreduce:map_doc(Ctx, <<"{\"value\":2}">>, <<"{}">>),
+    Result2 = map_doc(Ctx, <<"{\"value\":2}">>, <<"{}">>),
     ?etap_match(Result2,
                 {ok, [{error, _}, [{<<"6">>, <<"null">>}], [{<<"4">>, <<"1">>}]]},
                 "Got expected result for doc 2"),
-    Result3 = mapreduce:map_doc(Ctx, <<"{\"value\":3}">>, <<"{}">>),
+    Result3 = map_doc(Ctx, <<"{\"value\":3}">>, <<"{}">>),
     ?etap_match(Result3,
                 {ok, [[{<<"3">>, <<"null">>}], [{<<"9">>, <<"null">>}], {error, <<"foobar">>}]},
                 "Got expected result for doc 3"),
-    Result4 = mapreduce:map_doc(Ctx, <<"{\"value\":4}">>, <<"{}">>),
+    Result4 = map_doc(Ctx, <<"{\"value\":4}">>, <<"{}">>),
     ?etap_match(Result4,
                 {ok, [{error, _}, [{<<"12">>, <<"null">>}], [{<<"8">>, <<"1">>}]]},
                 "Got expected result for doc 4"),
-    Result12 = mapreduce:map_doc(Ctx, <<"{\"value\":12}">>, <<"{}">>),
+    Result12 = map_doc(Ctx, <<"{\"value\":12}">>, <<"{}">>),
     ?etap_match(Result12,
                 {ok, [{error, _}, [{<<"36">>, <<"null">>}], {error, <<"foobar">>}]},
                 "Got expected result for doc 12"),
@@ -136,9 +139,43 @@ test_empty_results_single_function() ->
     {ok, Ctx} = mapreduce:start_map_context([
         <<"function(doc) { if (doc.type === 'foobar') { emit(doc._id, null); } }">>
     ]),
-    Results = mapreduce:map_doc(Ctx, <<"{\"_id\": \"doc1\", \"value\": 1}">>, <<"{}">>),
+    Results = map_doc(Ctx, <<"{\"_id\": \"doc1\", \"value\": 1}">>, <<"{}">>),
     etap:is(Results, {ok, [[]]}, "Map function didn't emit any key").
 
+test_log_function() ->
+    {ok, Ctx} = mapreduce:start_map_context([
+        <<"function(doc) { log(doc._id);emit(doc._id, null); }">>
+    ]),
+    Results = map_doc_with_log(Ctx, <<"{\"_id\": \"doc1\", \"value\": 1}">>, <<"{}">>),
+    etap:is(Results, {ok,[[{<<"\"doc1\"">>,<<"null">>}]],[<<"doc1">>]}, "Log was correct").
+
+test_multi_log_function() ->
+    {ok, Ctx} = mapreduce:start_map_context([
+        <<"function(doc) {log(\"this is log\" + doc._id);emit(doc._id, null);"
+            "log(\"this is second log\")}">>
+    ]),
+    Results = map_doc_with_log(Ctx, <<"{\"_id\": \"doc1\", \"value\": 1}">>, <<"{}">>),
+    Expected =  {ok,[[{<<"\"doc1\"">>,<<"null">>}]],
+                     [<<"this is logdoc1">>,<<"this is second log">>]},
+    etap:is(Results, Expected, "Multiple logs were correct").
+
+test_long_log_function() ->
+    {ok, Ctx} = mapreduce:start_map_context([
+        <<"function(doc) { var d = \"\"; for (i=0;i<1027;i++) { d = d + \"a\";}log(d);}">>
+    ]),
+    Results = map_doc_with_log(Ctx, <<"{\"_id\": \"doc1\", \"value\": 1}">>, <<"{}">>),
+    Expected = {ok,[[]], [create_msg(1024)]},
+    etap:is(Results, Expected, "Long log was correct").
+
+test_diffent_log_type_function() ->
+    {ok, Ctx} = mapreduce:start_map_context([
+        <<"function(doc) {log(\"this is log\" + 4);emit(doc._id, null); log(4)}">>
+    ]),
+    Results = map_doc_with_log(Ctx, <<"{\"_id\": \"doc1\", \"value\": 1}">>, <<"{}">>),
+    Expected = {ok,[[{<<"\"doc1\"">>,<<"null">>}]],
+                     [<<"this is log4">>,
+                      <<"Error while logging:Log value is not a string">>]},
+    etap:is(Results, Expected, "Different logs type were correct").
 
 test_empty_results_multiple_functions() ->
     {ok, Ctx} = mapreduce:start_map_context([
@@ -146,7 +183,7 @@ test_empty_results_multiple_functions() ->
         <<"function(doc) { if (doc.type === '123') { emit(doc._id, 123); } }">>,
         <<"function(doc) { }">>
     ]),
-    Results = mapreduce:map_doc(Ctx, <<"{\"_id\": \"doc1\", \"value\": 1}">>, <<"{}">>),
+    Results = map_doc(Ctx, <<"{\"_id\": \"doc1\", \"value\": 1}">>, <<"{}">>),
     etap:is(Results, {ok, [[], [], []]}, "Map functions didn't emit any keys").
 
 
@@ -154,14 +191,14 @@ test_single_results_single_function() ->
     {ok, Ctx} = mapreduce:start_map_context([
         <<"function(doc) { emit(doc._id, null); }">>
     ]),
-    Results = mapreduce:map_doc(Ctx, <<"{\"_id\": \"doc1\", \"value\": 1}">>, <<"{}">>),
+    Results = map_doc(Ctx, <<"{\"_id\": \"doc1\", \"value\": 1}">>, <<"{}">>),
     etap:is(Results, {ok, [[{<<"\"doc1\"">>, <<"null">>}]]}, "Map function emitted 1 key").
 
 test_single_results_single_function_meta() ->
     {ok, Ctx} = mapreduce:start_map_context([
         <<"function(doc, meta) { emit(meta.id, null); }">>
     ]),
-    Results = mapreduce:map_doc(Ctx, <<"{\"value\": 1}">>, <<"{\"id\": \"doc1\"}">>),
+    Results = map_doc(Ctx, <<"{\"value\": 1}">>, <<"{\"id\": \"doc1\"}">>),
     etap:is(Results, {ok, [[{<<"\"doc1\"">>, <<"null">>}]]}, "Map function emitted 1 key from meta").
 
 test_single_results_multiple_functions() ->
@@ -170,7 +207,7 @@ test_single_results_multiple_functions() ->
         <<"function(doc) { emit(doc._id, null); }">>,
         <<"function(doc) { if (doc.type === '123') { emit(doc._id, 123); } }">>
     ]),
-    Results = mapreduce:map_doc(Ctx, <<"{\"_id\": \"doc1\", \"value\": 1}">>, <<"{}">>),
+    Results = map_doc(Ctx, <<"{\"_id\": \"doc1\", \"value\": 1}">>, <<"{}">>),
     etap:is(Results, {ok, [[], [{<<"\"doc1\"">>, <<"null">>}], []]}, "Map functions emitted 1 key").
 
 
@@ -178,7 +215,7 @@ test_multiple_results_single_function() ->
     {ok, Ctx} = mapreduce:start_map_context([
         <<"function(doc) { emit(doc._id, 1); emit(doc._id, 2); }">>
     ]),
-    Results = mapreduce:map_doc(Ctx, <<"{\"_id\": \"doc1\", \"value\": 1}">>, <<"{}">>),
+    Results = map_doc(Ctx, <<"{\"_id\": \"doc1\", \"value\": 1}">>, <<"{}">>),
     Expected = [[{<<"\"doc1\"">>, <<"1">>}, {<<"\"doc1\"">>, <<"2">>}]],
     etap:is(Results, {ok, Expected}, "Map function emitted 2 keys").
 
@@ -188,7 +225,7 @@ test_multiple_results_multiple_functions() ->
         <<"function(doc) { emit(doc._id, 1); emit(doc._id, 2); }">>,
         <<"function(doc) { emit(doc._id, null); }">>
     ]),
-    Results = mapreduce:map_doc(Ctx, <<"{\"_id\": \"doc1\", \"value\": 1}">>, <<"{}">>),
+    Results = map_doc(Ctx, <<"{\"_id\": \"doc1\", \"value\": 1}">>, <<"{}">>),
     Expected = [
         [{<<"\"doc1\"">>, <<"1">>}, {<<"\"doc1\"">>, <<"2">>}],
         [{<<"\"doc1\"">>, <<"null">>}]
@@ -201,9 +238,9 @@ test_consecutive_maps() ->
         <<"function(doc) { emit(doc._id, doc.value); }">>,
         <<"function(doc) { emit(doc._id, doc.value * 3); }">>
     ]),
-    Results1 = mapreduce:map_doc(Ctx, <<"{\"_id\": \"doc1\", \"value\": 1}">>, <<"{}">>),
-    Results2 = mapreduce:map_doc(Ctx, <<"{\"_id\": \"doc2\", \"value\": 2}">>, <<"{}">>),
-    Results3 = mapreduce:map_doc(Ctx, <<"{\"_id\": \"doc3\", \"value\": 3}">>, <<"{}">>),
+    Results1 = map_doc(Ctx, <<"{\"_id\": \"doc1\", \"value\": 1}">>, <<"{}">>),
+    Results2 = map_doc(Ctx, <<"{\"_id\": \"doc2\", \"value\": 2}">>, <<"{}">>),
+    Results3 = map_doc(Ctx, <<"{\"_id\": \"doc3\", \"value\": 3}">>, <<"{}">>),
     Expected1 = [[{<<"\"doc1\"">>, <<"1">>}], [{<<"\"doc1\"">>, <<"3">>}]],
     Expected2 = [[{<<"\"doc2\"">>, <<"2">>}], [{<<"\"doc2\"">>, <<"6">>}]],
     Expected3 = [[{<<"\"doc3\"">>, <<"3">>}], [{<<"\"doc3\"">>, <<"9">>}]],
@@ -231,7 +268,7 @@ do_burst(N) ->
     lists:foldr(
         fun(I, Acc) ->
             Doc = io_lib:format("{\"_id\": \"~p\", \"value\": ~p}", [I, I]),
-            {ok, Res} = mapreduce:map_doc(Ctx, Doc, <<"{}">>),
+            {ok, Res} = map_doc(Ctx, Doc, <<"{}">>),
             [Res | Acc]
         end,
         [], lists:seq(1, N)).
@@ -269,16 +306,16 @@ test_utf8() ->
         <<"function(doc) { emit(doc._id, doc.value); }">>
     ]),
 
-    Results1 = mapreduce:map_doc(Ctx, <<"{\"_id\": \"doc1\", \"value\": \"\\u00c1\"}">>, <<"{}">>),
+    Results1 = map_doc(Ctx, <<"{\"_id\": \"doc1\", \"value\": \"\\u00c1\"}">>, <<"{}">>),
     ExpectedResults1 = {ok, [[{<<"\"doc1\"">>, <<"\"", 195, 129, "\"">>}]]},
-    Results2 = mapreduce:map_doc(Ctx, <<"{\"_id\": \"doc1\", \"value\": \"", 195, 129, "\"}">>, <<"{}">>),
+    Results2 = map_doc(Ctx, <<"{\"_id\": \"doc1\", \"value\": \"", 195, 129, "\"}">>, <<"{}">>),
     ExpectedResults2 = {ok, [[{<<"\"doc1\"">>, <<"\"", 195, 129, "\"">>}]]},
     etap:is(Results1, ExpectedResults1, "Right map value with A with accent"),
     etap:is(Results2, ExpectedResults2, "Right map value with A with accent"),
 
-    Results3 = mapreduce:map_doc(Ctx, <<"{\"_id\": \"doc1\", \"value\": \"\\u0179\"}">>, <<"{}">>),
+    Results3 = map_doc(Ctx, <<"{\"_id\": \"doc1\", \"value\": \"\\u0179\"}">>, <<"{}">>),
     ExpectedResults3 = {ok, [[{<<"\"doc1\"">>, <<"\"", 197, 185, "\"">>}]]},
-    Results4 = mapreduce:map_doc(Ctx, <<"{\"_id\": \"doc1\", \"value\": \"", 197, 185, "\"}">>, <<"{}">>),
+    Results4 = map_doc(Ctx, <<"{\"_id\": \"doc1\", \"value\": \"", 197, 185, "\"}">>, <<"{}">>),
     ExpectedResults4 = {ok, [[{<<"\"doc1\"">>, <<"\"", 197, 185, "\"">>}]]},
     etap:is(Results3, ExpectedResults3, "Right map value with Z with acute"),
     etap:is(Results4, ExpectedResults4, "Right map value with Z with acute"),
@@ -298,7 +335,7 @@ test_too_much_emit_kv_data_per_doc() ->
           "}">>
     ]),
 
-    Results = mapreduce:map_doc(
+    Results = map_doc(
         Ctx, <<"{\"_id\": \"doc1\", \"value\": \"foobar\"}">>, <<"{}">>),
     ExpectedResults = {ok, [
         {error, <<"too much data emitted: 504 bytes">>},
@@ -318,7 +355,7 @@ test_too_much_emit_key_data_per_doc() ->
           "}">>
     ]),
 
-    Results = mapreduce:map_doc(
+    Results = map_doc(
         Ctx, <<"{\"_id\": \"doc1\", \"value\": \"foobar\"}">>, <<"{}">>),
     ExpectedResults = {ok, [
         {error, <<"too long key emitted: 4098 bytes">>}
@@ -334,7 +371,7 @@ test_many_timeouts(NumProcesses) ->
                     <<"function(doc) { while (true) { }; }">>
                 ]),
                 Doc = <<"{\"_id\": \"doc1\", \"value\": 1}">>,
-                exit({ok, mapreduce:map_doc(Ctx, Doc, <<"{}">>)})
+                exit({ok, map_doc(Ctx, Doc, <<"{}">>)})
             end)
         end,
         lists:seq(1, NumProcesses)),
@@ -362,7 +399,7 @@ test_context_is_usable_after_timeout() ->
                     <<"function(doc) { if (doc._id == \"doc1\") {while (true) { };} else {emit(doc._id, null)} }">>
                 ]),
                 erlang:bump_reductions(100000),
-                RVs = [mapreduce:map_doc(Ctx, D, <<"{}">>) || D <- [Doc1, Doc2]],
+                RVs = [map_doc(Ctx, D, <<"{}">>) || D <- [Doc1, Doc2]],
                 exit({ok, RVs})
             end)
         end,
@@ -393,7 +430,7 @@ test_half_timeouts(NumProcesses) ->
                 end,
                 {ok, Ctx} = mapreduce:start_map_context([FunSrc]),
                 Doc = <<"{\"_id\": \"doc1\", \"value\": 1}">>,
-                exit({ok, mapreduce:map_doc(Ctx, Doc, <<"{}">>)})
+                exit({ok, map_doc(Ctx, Doc, <<"{}">>)})
             end)
         end,
         lists:seq(1, NumProcesses)),
@@ -414,3 +451,18 @@ test_half_timeouts(NumProcesses) ->
             end
         end,
         lists:zip(lists:seq(1, NumProcesses), Pids)).
+
+map_doc(Ctx, Doc, Meta) ->
+    case mapreduce:map_doc(Ctx, Doc, Meta) of
+    {ok, Ret, _Log} ->
+        {ok, Ret};
+    Other ->
+        Other
+    end.
+
+map_doc_with_log(Ctx, Doc, Meta) ->
+    mapreduce:map_doc(Ctx, Doc, Meta).
+
+create_msg(N) ->
+    Data = string:copies("a", N),
+    list_to_binary(string:concat("Truncated: ", Data)).

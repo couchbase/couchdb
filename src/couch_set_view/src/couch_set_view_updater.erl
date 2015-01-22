@@ -754,7 +754,7 @@ do_maps(Group, MapQueue, WriteQueue) ->
                     deleted = false
                 },
                 try
-                    {ok, Result} = couch_set_view_mapreduce:map(Doc),
+                    {ok, Result, LogList} = couch_set_view_mapreduce:map(Doc),
                     {Result2, _} = lists:foldr(
                         fun({error, Reason}, {AccRes, Pos}) ->
                             ErrorMsg = "Bucket `~s`, ~s group `~s`, error mapping"
@@ -768,6 +768,13 @@ do_maps(Group, MapQueue, WriteQueue) ->
                             {[KVs | AccRes], Pos - 1}
                         end,
                         {[], ViewCount}, Result),
+                    lists:foreach(
+                        fun(Msg) ->
+                            DebugMsg = "Bucket `~s`, ~s group `~s`, map function"
+                                " log for document `~s`: ~s",
+                            Args = [SetName, Type, DDocId, Id, binary_to_list(Msg)],
+                            ?LOG_MAPREDUCE_ERROR(DebugMsg, Args)
+                        end, LogList),
                     Item = {Seq, Id, PartId, Result2},
                     [Item | Acc]
                 catch _:{error, Reason} ->

@@ -34,6 +34,7 @@
 class MapReduceError;
 
 typedef std::list<ErlNifBinary, NifStlAllocator<ErlNifBinary> >  json_results_list_t;
+typedef std::list<ErlNifBinary, NifStlAllocator<ErlNifBinary> >  log_results_list_t;
 typedef std::pair<ErlNifBinary, ErlNifBinary>  kv_pair_t;
 typedef std::list< kv_pair_t, NifStlAllocator< kv_pair_t > >  kv_pair_list_t;
 
@@ -76,9 +77,10 @@ typedef struct {
     kv_pair_list_t                               *kvs;
     unsigned int                                 key;
     ErlNifEnv                                    *env;
-    hrtime_t                            	 taskStartTime;
+    hrtime_t                                     taskStartTime;
     int                                          emitKvSize;
     int                                          maxEmitKvSize;
+    log_results_list_t                           *logResults;
 } map_reduce_ctx_t;
 
 

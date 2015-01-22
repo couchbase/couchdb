@@ -27,6 +27,7 @@
 #include <time.h>
 
 #include "mapreduce.h"
+#define MAX_LOG_STRING_SIZE 1024
 
 #define MAX_EMIT_KEY_SIZE 4096
 
@@ -102,9 +103,11 @@ static void doInitContext(map_reduce_ctx_t *ctx, const function_sources_list_t &
 #ifdef V8_POST_3_19_API
 static Local<Context> createJsContext(map_reduce_ctx_t *ctx);
 static void emit(const v8::FunctionCallbackInfo<Value>& args);
+static void log(const v8::FunctionCallbackInfo<Value>& args);
 #else
 static Persistent<Context> createJsContext(map_reduce_ctx_t *ctx);
 static Handle<Value> emit(const Arguments& args);
+static Handle<Value> log(const Arguments& args);
 #endif
 
 static void loadFunctions(map_reduce_ctx_t *ctx, const function_sources_list_t &funs);
@@ -119,6 +122,7 @@ static inline isolate_data_t *getIsolateData();
 static inline void taskStarted(map_reduce_ctx_t *ctx);
 static inline void taskFinished(map_reduce_ctx_t *ctx);
 static std::string exceptionString(const TryCatch &tryCatch);
+static void freeLogResults(map_reduce_ctx_t *ctx);
 
 
 
@@ -325,6 +329,7 @@ json_results_list_t runReduce(map_reduce_ctx_t *ctx,
     }
 
     taskFinished(ctx);
+    freeLogResults(ctx);
 
     return results;
 }
@@ -366,6 +371,7 @@ ErlNifBinary runReduce(map_reduce_ctx_t *ctx,
     Handle<Value> result = fun->Call(fun, 3, args);
 
     taskFinished(ctx);
+    freeLogResults(ctx);
 
     if (result.IsEmpty()) {
         if (!trycatch.CanContinue()) {
@@ -413,6 +419,7 @@ ErlNifBinary runRereduce(map_reduce_ctx_t *ctx,
     Handle<Value> result = fun->Call(fun, 3, args);
 
     taskFinished(ctx);
+    freeLogResults(ctx);
 
     if (result.IsEmpty()) {
         if (!trycatch.CanContinue()) {
@@ -483,6 +490,8 @@ Persistent<Context> createJsContext(map_reduce_ctx_t *ctx)
 
     global->Set(String::New("emit"), FunctionTemplate::New(emit));
 
+    global->Set(String::New("log"), FunctionTemplate::New(log));
+
 #ifdef V8_POST_3_19_API
     Handle<Context> context = Context::New(ctx->isolate, NULL, global);
 #else
@@ -503,6 +512,62 @@ Persistent<Context> createJsContext(map_reduce_ctx_t *ctx)
     return handleScope.Close(context);
 #else
     return context;
+#endif
+}
+
+#define TRUNCATE_STR "Truncated: "
+
+#ifdef V8_POST_3_19_API
+static void log(const v8::FunctionCallbackInfo<Value>& args)
+#else
+Handle<Value> log(const Arguments& args)
+#endif
+{
+    try {
+        isolate_data_t *isoData = getIsolateData();
+        map_reduce_ctx_t *ctx = isoData->ctx;
+        /* Initialize only if log function is used */
+        if (ctx->logResults == NULL) {
+            ctx->logResults = (log_results_list_t *) enif_alloc(sizeof
+                    (log_results_list_t));
+            if (ctx->logResults == NULL) {
+                throw std::bad_alloc();
+            }
+            ctx->logResults = new (ctx->logResults) log_results_list_t();
+        }
+        /* use only first argument */
+        Handle<Value> logMsg = args[0];
+        Handle<String> str;
+        unsigned int len = 0;
+        if (logMsg->IsString()) {
+            str = Handle<String>::Cast(logMsg);
+            len = str->Length();
+            if (len > MAX_LOG_STRING_SIZE) {
+                str = Handle<String>(String::Concat(String::New(TRUNCATE_STR), str)),
+                len = MAX_LOG_STRING_SIZE + sizeof(TRUNCATE_STR) - 1;
+            }
+        } else {
+            str = Handle<String>(String::New("Error while logging:Log value is" \
+              " not a string"));
+            len = str->Length();
+        }
+        ErlNifBinary resultBin;
+        if (!enif_alloc_binary_compat(isoData->ctx->env, len, &resultBin)) {
+            throw std::bad_alloc();
+        }
+        str->WriteUtf8(reinterpret_cast<char *>(resultBin.data),
+                len, NULL, String::NO_NULL_TERMINATION);
+        ctx->logResults->push_back(resultBin);
+    } catch(Handle<Value> &ex) {
+#ifdef V8_POST_3_19_API
+        ThrowException(ex);
+#else
+        return ThrowException(ex);
+#endif
+    }
+
+#ifndef V8_POST_3_19_API
+    return Undefined();
 #endif
 }
 
@@ -801,5 +866,22 @@ void freeJsonData(const json_results_list_t &data)
     for ( ; it != data.end(); ++it) {
         ErlNifBinary bin = *it;
         enif_release_binary(&bin);
+    }
+}
+
+// Free the logresults with data. For avoiding one extra allocation
+// of logResults, allocation is done in log function, so which can cause
+// memory leak if it is called from other (reduce, rereduce) context,
+// so free that memory here.
+void freeLogResults(map_reduce_ctx_t *ctx)
+{
+    if (ctx->logResults) {
+        log_results_list_t::reverse_iterator k = ctx->logResults->rbegin();
+        for ( ; k != ctx->logResults->rend(); ++k) {
+            enif_release_binary_compat(ctx->env, &(*k));
+        }
+        ctx->logResults->~log_results_list_t();
+        enif_free(ctx->logResults);
+        ctx->logResults = NULL;
     }
 }
