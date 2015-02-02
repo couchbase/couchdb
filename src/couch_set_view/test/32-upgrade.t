@@ -68,6 +68,7 @@ test_upgrade_header_2x_incremental() ->
         nil, "The header was downgraded and can be parsed"),
     {ok, HeaderPos2} = couch_file:write_header_bin(
         Fd, HeaderWithoutPartVersionBin),
+    couch_file:flush(Fd),
     etap:isnt(HeaderPos2, HeaderPos1, "The downgraded header was written"),
     {ok, HeaderBin2, HeaderPos2} = couch_file:read_header_bin(Fd),
     Header2 = couch_set_view_util:header_bin_to_term(HeaderBin2),
@@ -116,6 +117,7 @@ test_upgrade_header_2x_no_seqs() ->
 
     {ok, HeaderPos2} = couch_file:write_header_bin(
     Fd, HeaderWithoutPartVersionBin),
+    couch_file:flush(Fd),
     etap:isnt(HeaderPos2, HeaderPos1, "The downgraded header was written"),
     {ok, HeaderBin2, HeaderPos2} = couch_file:read_header_bin(Fd),
     Header2 = couch_set_view_util:header_bin_to_term(HeaderBin2),
