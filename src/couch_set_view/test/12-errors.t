@@ -265,11 +265,8 @@ test_too_long_map_key() ->
     MonRef = erlang:monitor(process, GroupPid),
 
     QueryResult = (catch query_map_view(DDocId, <<"test">>, false)),
-    ExpectedResult = {error, <<"key emitted for document `doc1` is too long: "
-                               "\"doc1doc1doc1doc1doc1doc1doc1doc1doc1doc1doc1"
-                               "doc1doc1doc1doc1doc1doc1doc1doc1doc1doc1doc1"
-                               "doc1doc1doc... (4104 bytes)">>},
-    etap:is(QueryResult, ExpectedResult, "Got an error when a key is too long"),
+    ExpectedResult = {ok, []},
+    etap:is(QueryResult, ExpectedResult, "No key emitted when a key is too long"),
 
     receive
     {'DOWN', MonRef, _, _, _} ->

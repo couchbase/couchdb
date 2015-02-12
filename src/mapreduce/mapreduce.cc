@@ -28,6 +28,8 @@
 
 #include "mapreduce.h"
 
+#define MAX_EMIT_KEY_SIZE 4096
+
 using namespace v8;
 
 typedef struct {
@@ -521,8 +523,20 @@ Handle<Value> emit(const Arguments& args)
 #endif
     }
 
+    ErlNifBinary keyJson = jsonStringify(args[0]);
+
+    if (keyJson.size >= MAX_EMIT_KEY_SIZE) {
+        std::stringstream msg;
+        msg << "too long key emitted: " << keyJson.size << " bytes";
+
+#ifdef V8_POST_3_19_API
+        ThrowException(Handle<Value>(String::New(msg.str().c_str())));
+#else
+        return ThrowException(Handle<Value>(String::New(msg.str().c_str())));
+#endif
+    }
+
     try {
-        ErlNifBinary keyJson = jsonStringify(args[0]);
         ErlNifBinary valueJson = jsonStringify(args[1]);
 
         kv_pair_t result = kv_pair_t(keyJson, valueJson);

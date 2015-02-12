@@ -26,7 +26,7 @@
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(121),
+    etap:plan(122),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -51,7 +51,8 @@ test() ->
     test_multiple_results_multiple_functions(),
     test_consecutive_maps(),
     test_utf8(),
-    test_too_much_emit_data_per_doc(),
+    test_too_much_emit_kv_data_per_doc(),
+    test_too_much_emit_key_data_per_doc(),
     test_burst(1000),
     test_burst(10000),
     test_burst(100000),
@@ -284,7 +285,7 @@ test_utf8() ->
     ok.
 
 
-test_too_much_emit_data_per_doc() ->
+test_too_much_emit_kv_data_per_doc() ->
     ok = mapreduce:set_max_kv_size_per_doc(500),
     {ok, Ctx} = mapreduce:start_map_context([
         <<"function(doc, meta) {",
@@ -303,8 +304,26 @@ test_too_much_emit_data_per_doc() ->
         {error, <<"too much data emitted: 504 bytes">>},
         [{<<"\"foobar\"">>, <<"\"doc1\"">>}]
     ]},
-    etap:is(Results, ExpectedResults, "Got max emit kz size reached error"),
+    etap:is(Results, ExpectedResults, "Got max emit kv size reached error"),
     ok = mapreduce:set_max_kv_size_per_doc(1 * 1024 * 1024).
+
+test_too_much_emit_key_data_per_doc() ->
+    {ok, Ctx} = mapreduce:start_map_context([
+        <<"function(doc, meta) {",
+		"var key = doc._id;\n"
+                "while (key.length < 4096) {\n"
+                "    key = key.concat(key);\n"
+                "}\n"
+                "emit(key, null);\n"
+          "}">>
+    ]),
+
+    Results = mapreduce:map_doc(
+        Ctx, <<"{\"_id\": \"doc1\", \"value\": \"foobar\"}">>, <<"{}">>),
+    ExpectedResults = {ok, [
+        {error, <<"too long key emitted: 4098 bytes">>}
+    ]},
+    etap:is(Results, ExpectedResults, "Got max emit key size reached error").
 
 
 test_many_timeouts(NumProcesses) ->
