@@ -425,33 +425,8 @@ rereduce(Rows, #merge_params{extra = #view_merge{rereduce_fun = FunSrc}}) ->
         throw(Error)
     end.
 
-
 get_set_view(GetSetViewFn, SetName, DDoc, ViewName, ViewGroupReq) ->
-    ViewGroupReq1 = case ViewGroupReq#set_view_group_req.stale of
-    ok ->
-        ViewGroupReq;
-    update_after ->
-        ViewGroupReq;
-    false ->
-        ViewGroupReq#set_view_group_req{update_stats = false}
-    end,
-    case GetSetViewFn(SetName, DDoc, ViewName, ViewGroupReq1) of
-    {ok, StaleView, StaleGroup, []} ->
-        case ViewGroupReq#set_view_group_req.stale of
-        ok ->
-            {ok, StaleView, StaleGroup, []};
-        update_after ->
-            {ok, StaleView, StaleGroup, []};
-        false ->
-            couch_set_view:release_group(StaleGroup),
-            ViewGroupReq2 = ViewGroupReq#set_view_group_req{
-                update_stats = true
-            },
-            GetSetViewFn(SetName, DDoc, ViewName, ViewGroupReq2)
-        end;
-    Other ->
-        Other
-    end.
+    GetSetViewFn(SetName, DDoc, ViewName, ViewGroupReq).
 
 prepare_set_view(ViewSpec, ViewGroupReq, DDoc, Queue, GetSetViewFn) ->
     #set_view_spec{
