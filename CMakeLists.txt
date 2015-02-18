@@ -56,7 +56,7 @@ ADD_CUSTOM_TARGET(couchdb-check-plt
 
 ADD_CUSTOM_COMMAND(OUTPUT ${COUCHDB_PLT_FILE}
        COMMAND
-          dialyzer --output_plt ${COUCHDB_PLT_FILE}
+          ${DIALYZER_EXECUTABLE} --output_plt ${COUCHDB_PLT_FILE}
                    --build_plt
                    -pa src/lhttpc
                    -pa src/couchdb
@@ -90,7 +90,7 @@ ADD_CUSTOM_COMMAND(OUTPUT ${COUCHDB_PLT_FILE}
 
 ADD_CUSTOM_TARGET(dialyzer
        COMMAND
-          dialyzer --plt ${COUCHDB_PLT_FILE}
+          ${DIALYZER_EXECUTABLE} --plt ${COUCHDB_PLT_FILE}
                    --verbose
                    -Wno_improper_lists
                    -pa src/couchdb
