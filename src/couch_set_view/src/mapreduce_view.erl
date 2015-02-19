@@ -28,7 +28,7 @@
 -export([cleanup_view_group/1]).
 % For the main module
 -export([get_row_count/1, make_wrapper_fun/2, fold/4, index_extension/0,
-        make_key_options/1, should_filter/1]).
+        make_key_options/1, should_filter/1, query_args_view_name/1]).
 -export([stats_ets/1, server_name/1, sig_to_pid_ets/1, name_to_sig_ets/1,
          pid_to_sig_ets/1]).
 -export([view_info/1]).
@@ -660,3 +660,8 @@ view_insert_doc_query_results(DocId, PartitionId, [ResultKVs | RestResults],
     view_insert_doc_query_results(
         DocId, PartitionId, RestResults, RestViewKVs, NewViewKVsAcc,
         NewViewIdKeysAcc2).
+
+
+-spec query_args_view_name(#view_query_args{}) -> binary().
+query_args_view_name(#view_query_args{view_name = ViewName}) ->
+    ViewName.

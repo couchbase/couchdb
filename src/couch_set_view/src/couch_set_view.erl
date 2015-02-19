@@ -825,11 +825,24 @@ inc_group_access_stat(Group) ->
            #view_query_args{} | tuple()) -> {'ok', term(), term()}.
 fold(#set_view_group{replica_group = #set_view_group{} = RepGroup} = Group, View, Fun, Acc, ViewQueryArgs) ->
     RepView = lists:nth(View#set_view.id_num + 1, RepGroup#set_view_group.views),
+    case ViewQueryArgs of
+    #view_query_args{keys = Keys} ->
+        Extra = #view_merge{
+            keys = Keys,
+            make_row_fun = fun(RowData) -> RowData end
+        },
+        Merger = couch_view_merger;
+    _ ->
+        Extra = nil,
+        Merger = spatial_merger
+    end,
+    Mod = Group#set_view_group.mod,
+    ViewName = Mod:query_args_view_name(ViewQueryArgs),
     ViewSpecs = [
         #set_view_spec{
             name = Group#set_view_group.set_name,
             ddoc_id = Group#set_view_group.name,
-            view_name = ViewQueryArgs#view_query_args.view_name,
+            view_name = ViewName,
             partitions = [],  % not needed in this context
             group = Group#set_view_group{replica_group = nil},
             view = View
@@ -837,7 +850,7 @@ fold(#set_view_group{replica_group = #set_view_group{} = RepGroup} = Group, View
         #set_view_spec{
             name = RepGroup#set_view_group.set_name,
             ddoc_id = RepGroup#set_view_group.name,
-            view_name = ViewQueryArgs#view_query_args.view_name,
+            view_name = ViewName,
             partitions = [],  % not needed in this context
             % We want the partitions filtered like it would be a main group
             group = RepGroup#set_view_group{type = main},
@@ -850,12 +863,10 @@ fold(#set_view_group{replica_group = #set_view_group{} = RepGroup} = Group, View
         user_acc = #merge_acc{fold_fun = Fun, acc = Acc},
         user_ctx = #user_ctx{roles = [<<"_admin">>]},
         http_params = ViewQueryArgs,
-        extra = #view_merge{
-            keys = ViewQueryArgs#view_query_args.keys,
-            make_row_fun = fun(RowData) -> RowData end
-        }
+        extra = Extra
     },
-    #merge_acc{acc = FinalAcc} = couch_index_merger:query_index(couch_view_merger, MergeParams),
+    #merge_acc{acc = FinalAcc} = couch_index_merger:query_index(
+        Merger, MergeParams),
     {ok, nil, FinalAcc};
 
 fold(Group, View, Fun, Acc, #view_query_args{keys = Keys} = ViewQueryArgs0)
