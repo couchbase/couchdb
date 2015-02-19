@@ -231,37 +231,6 @@ view_row_obj_map({{Key, DocId}, Value}, _DebugMode) ->
       ",\"key\":", (?JSON_ENCODE(Key))/binary,
       ",\"value\":", (?JSON_ENCODE(Value))/binary, "}">>;
 
-% Row from local node with ?include_docs=true
-view_row_obj_map({{Key, DocId}, {PartId, Value}, Doc}, true) when is_integer(PartId) ->
-    {json, RawValue} = Value,
-    {json, RawDoc} = Doc,
-    <<"{\"id\":", (?JSON_ENCODE(DocId))/binary,
-      ",\"key\":", (?JSON_ENCODE(Key))/binary,
-      ",\"partition\":", (?l2b(integer_to_list(PartId)))/binary,
-      ",\"node\":\"", (?LOCAL)/binary, "\"",
-      ",\"value\":", RawValue/binary,
-      ",\"doc\":", RawDoc/binary, "}">>;
-
-% Row from remote node queried with ?debug=true and ?include_docs=true
-view_row_obj_map({{Key, DocId}, {PartId, Node, Value}, Doc}, true) when is_integer(PartId) ->
-    {json, RawValue} = Value,
-    {json, RawDoc} = Doc,
-    <<"{\"id\":", (?JSON_ENCODE(DocId))/binary,
-      ",\"key\":", (?JSON_ENCODE(Key))/binary,
-      ",\"partition\":", (?l2b(integer_to_list(PartId)))/binary,
-      ",\"node\":", (?JSON_ENCODE(Node))/binary,
-      ",\"value\":", RawValue/binary,
-      ",\"doc\":", RawDoc/binary, "}">>;
-
-% Row from local node with ?include_docs=true and ?debug=false
-view_row_obj_map({{Key, DocId}, {PartId, Value}, Doc}, false) when is_integer(PartId) ->
-    {json, RawValue} = Value,
-    {json, RawDoc} = Doc,
-    <<"{\"id\":", (?JSON_ENCODE(DocId))/binary,
-      ",\"key\":", (?JSON_ENCODE(Key))/binary,
-      ",\"value\":", RawValue/binary,
-      ",\"doc\":", RawDoc/binary, "}">>;
-
 % Row from local node, old couchdb views (no partition id)
 view_row_obj_map({{Key, DocId}, Value, Doc}, _DebugMode) ->
     <<"{\"id\":", (?JSON_ENCODE(DocId))/binary,
@@ -477,11 +446,11 @@ queue_get_view_group_error(Error, _SetName, _DDocId) ->
     {error, ?LOCAL, Error}.
 
 
-map_view_folder(_Db, #set_view_spec{} = ViewSpec, MergeParams, UserCtx, DDoc, Queue) ->
-    map_set_view_folder(ViewSpec, MergeParams, UserCtx, DDoc, Queue).
+map_view_folder(_Db, #set_view_spec{} = ViewSpec, MergeParams, _UserCtx, DDoc, Queue) ->
+    map_set_view_folder(ViewSpec, MergeParams, DDoc, Queue).
 
 
-map_set_view_folder(ViewSpec, MergeParams, UserCtx, DDoc, Queue) ->
+map_set_view_folder(ViewSpec, MergeParams, DDoc, Queue) ->
     #set_view_spec{
         name = SetName,
         ddoc_id = DDocId,
@@ -491,7 +460,6 @@ map_set_view_folder(ViewSpec, MergeParams, UserCtx, DDoc, Queue) ->
         http_params = ViewArgs
     } = MergeParams,
     #view_query_args{
-        include_docs = IncludeDocs,
         stale = Stale,
         debug = Debug,
         type = IndexType
@@ -543,7 +511,7 @@ map_set_view_folder(ViewSpec, MergeParams, UserCtx, DDoc, Queue) ->
     {View, Group} ->
         queue_debug_info(Debug, Group, ViewGroupReq2, Queue),
         try
-            FoldFun = make_map_set_fold_fun(IncludeDocs, SetName, UserCtx, Queue),
+            FoldFun = make_map_set_fold_fun(Queue),
 
             case not(couch_index_merger:should_check_rev(MergeParams, DDoc)) orelse
                 couch_index_merger:ddoc_unchanged(DDocDbName, DDoc) of
@@ -781,20 +749,12 @@ reduce_set_view_folder(ViewSpec, MergeParams, DDoc, Queue) ->
     end.
 
 
-make_map_set_fold_fun(false, _SetName, _UserCtx, Queue) ->
-    fun({{_Key, _DocId}, {_PartId, _Value}} = Kv, _, Acc) ->
+make_map_set_fold_fun(Queue) ->
+    fun(Kv, _, Acc) ->
         ok = couch_view_merger_queue:queue(Queue, Kv),
         {ok, Acc}
-    end;
-
-make_map_set_fold_fun(true, SetName, UserCtx, Queue) ->
-    fun({{Key, DocId}, {PartId, Value}}, _, Acc) ->
-        JsonDoc = couch_set_view_http:get_row_doc(
-                DocId, PartId, SetName, UserCtx, []),
-        Row = {{Key, DocId}, {PartId, Value}, JsonDoc},
-        ok = couch_view_merger_queue:queue(Queue, Row),
-        {ok, Acc}
     end.
+
 
 view_undefined_msg(SetName, DDocId) ->
     Msg = io_lib:format(
@@ -810,7 +770,6 @@ view_qs(ViewArgs, MergeParams) ->
         inclusive_end = IncEnd,
         group_level = GroupLevel,
         view_type = ViewType,
-        include_docs = IncDocs,
         conflicts = Conflicts,
         stale = Stale,
         limit = Limit,
@@ -887,12 +846,6 @@ view_qs(ViewArgs, MergeParams) ->
         ["reduce=false"];
     _ ->
         []
-    end ++
-    case IncDocs =:= DefViewArgs#view_query_args.include_docs of
-    true ->
-        [];
-    false ->
-        ["include_docs=" ++ atom_to_list(IncDocs)]
     end ++
     case Conflicts =:= DefViewArgs#view_query_args.conflicts of
     true ->
@@ -1185,13 +1138,10 @@ simple_set_view_query(Params, DDoc, Req) ->
 
 simple_set_view_map_query(Params, Group, View, ViewArgs) ->
     #index_merge{
-        indexes = [#set_view_spec{name = SetName}],
         callback = Callback,
-        user_acc = UserAcc,
-        user_ctx = UserCtx
+        user_acc = UserAcc
     } = Params,
     #view_query_args{
-        include_docs = IncludeDocs,
         limit = Limit,
         skip = Skip,
         debug = DebugMode
@@ -1201,16 +1151,8 @@ simple_set_view_map_query(Params, Group, View, ViewArgs) ->
             {stop, Acc};
         (_Kv, _, {AccLim, AccSkip, UAcc}) when AccSkip > 0 ->
             {ok, {AccLim, AccSkip - 1, UAcc}};
-        ({{Key, DocId}, {PartId, Value}} = Kv, _, {AccLim, 0, UAcc}) ->
-            case IncludeDocs of
-            true ->
-                JsonDoc = couch_set_view_http:get_row_doc(
-                    DocId, PartId, SetName, UserCtx, []),
-                RowDetails = {{Key, DocId}, {PartId, Value}, JsonDoc};
-            false ->
-                RowDetails = Kv
-            end,
-            Row = view_row_obj_map(RowDetails, DebugMode),
+        (Kv, _, {AccLim, 0, UAcc}) ->
+            Row = view_row_obj_map(Kv, DebugMode),
             {ok, UAcc2} = Callback({row, Row}, UAcc),
             {ok, {AccLim - 1, 0, UAcc2}}
     end,

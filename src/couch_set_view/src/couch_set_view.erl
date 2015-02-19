@@ -849,8 +849,7 @@ fold(#set_view_group{replica_group = #set_view_group{} = RepGroup} = Group, View
         callback = fun map_view_merge_callback/2,
         user_acc = #merge_acc{fold_fun = Fun, acc = Acc},
         user_ctx = #user_ctx{roles = [<<"_admin">>]},
-        % FoldFun does include_docs=true logic
-        http_params = ViewQueryArgs#view_query_args{include_docs = false},
+        http_params = ViewQueryArgs,
         extra = #view_merge{
             keys = ViewQueryArgs#view_query_args.keys,
             make_row_fun = fun(RowData) -> RowData end
