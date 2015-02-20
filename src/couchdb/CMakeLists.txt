@@ -19,7 +19,6 @@ SET(COUCHDB_SRC erl_diag.erl
             couch_db_consistency_check.erl
             couch_db_update_notifier_sup.erl
             couch_doc.erl
-            couch_drv.erl
             couch_ejson_compare.erl
             couch_event_sup.erl
             couch_file.erl
