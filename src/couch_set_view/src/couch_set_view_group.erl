@@ -25,6 +25,7 @@
 -export([mark_as_unindexable/2, mark_as_indexable/2]).
 -export([monitor_partition_update/4, demonitor_partition_update/2]).
 -export([reset_utilization_stats/1, get_utilization_stats/1]).
+-export([inc_access_stat/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -330,6 +331,9 @@ reset_utilization_stats(Pid) ->
 get_utilization_stats(Pid) ->
     gen_server:call(Pid, get_utilization_stats, infinity).
 
+-spec inc_access_stat(pid()) -> 'ok'.
+inc_access_stat(Pid) ->
+    gen_server:call(Pid, increment_stat, infinity).
 
 start_link({RootDir, SetName, Group}) ->
     Args = {RootDir, SetName, Group#set_view_group{type = main}},
@@ -664,6 +668,10 @@ handle_call({mark_as_indexable, Partitions}, _From, State) ->
     throw:Error ->
         {reply, Error, State, ?GET_TIMEOUT(State)}
     end;
+
+handle_call(increment_stat, _From, State) ->
+    ?inc_accesses(State#state.group),
+    {reply, ok, State, ?GET_TIMEOUT(State)};
 
 handle_call(#set_view_group_req{} = Req, From, State) ->
     #state{
