@@ -36,6 +36,7 @@
 -export([get_row_count/2, reduce_to_count/1, extract_map_view/1]).
 -export([map_view_key_compare/2, reduce_view_key_compare/2]).
 -export([get_map_view0/2, get_reduce_view0/2]).
+-export([inc_group_access_stat/1]).
 
 % Exported for spatial index
 -export([modify_bitmasks/2]).
@@ -808,6 +809,10 @@ reduce_to_count(Reductions) ->
         end, Reductions),
     Count.
 
+-spec inc_group_access_stat(#set_view_group{}) -> 'ok'.
+inc_group_access_stat(Group) ->
+    GroupPid = get_group_server(Group#set_view_group.set_name, Group),
+    ok = couch_set_view_group:inc_access_stat(GroupPid).
 
 % This case is triggered when at least one partition of the replica group is
 % active. This happens during failover, when a replica index is transferred
