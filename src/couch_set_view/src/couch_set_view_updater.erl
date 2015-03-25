@@ -24,6 +24,10 @@
 
 -define(MAP_QUEUE_SIZE, 256 * 1024).
 -define(WRITE_QUEUE_SIZE, 512 * 1024).
+% The size of the accumulator the emitted key-values are queued up in before
+% they get actually queued. The bigger the value, the less the lock contention,
+% but the higher the possible memory consumption is.
+-define(QUEUE_ACC_BATCH_SIZE, 256 * 1024).
 
 % incremental updates
 -define(INC_MAX_TMP_FILE_SIZE, 31457280).
@@ -719,16 +723,30 @@ do_maps(Group, MapQueue, WriteQueue) ->
         couch_work_queue:close(WriteQueue);
     {ok, Queue, _QueueSize} ->
         ViewCount = length(Group#set_view_group.views),
-        Items = lists:foldr(
-            fun(#dcp_doc{deleted = true} = DcpDoc, Acc) ->
+        {Items, _} = lists:foldl(
+            fun(#dcp_doc{deleted = true} = DcpDoc, {Acc, Size}) ->
                 #dcp_doc{
                     id = Id,
                     partition = PartId,
                     seq = Seq
                 } = DcpDoc,
                 Item = {Seq, Id, PartId, []},
-                [Item | Acc];
-            (#dcp_doc{deleted = false} = DcpDoc, Acc) ->
+                {[Item | Acc], Size};
+            (#dcp_doc{deleted = false} = DcpDoc, {Acc0, Size0}) ->
+                % When there are a lot of emits per document the memory can
+                % grow almost indefinitely as the queue size is only limited
+                % by the number of documents and not their emits.
+                % In case the accumulator grows huge, queue the items early
+                % into the writer queue. Only take emits into account, the
+                % other cases in this `foldl` won't ever have an significant
+                % size.
+                {Acc, Size} = case Size0 > ?QUEUE_ACC_BATCH_SIZE of
+                true ->
+                    couch_work_queue:queue(WriteQueue, lists:reverse(Acc0)),
+                    {[], 0};
+                false ->
+                    {Acc0, Size0}
+                end,
                 #dcp_doc{
                     id = Id,
                     body = Body,
@@ -776,20 +794,20 @@ do_maps(Group, MapQueue, WriteQueue) ->
                             ?LOG_MAPREDUCE_ERROR(DebugMsg, Args)
                         end, LogList),
                     Item = {Seq, Id, PartId, Result2},
-                    [Item | Acc]
+                    {[Item | Acc], Size + erlang:external_size(Result2)}
                 catch _:{error, Reason} ->
                     ErrorMsg = "Bucket `~s`, ~s group `~s`, error mapping document `~s`: ~s",
                     Args = [SetName, Type, DDocId, Id, couch_util:to_binary(Reason)],
                     ?LOG_MAPREDUCE_ERROR(ErrorMsg, Args),
-                    [{Seq, Id, PartId, []} | Acc]
+                    {[{Seq, Id, PartId, []} | Acc], Size}
                 end;
-            (snapshot_marker, Acc) ->
-                [snapshot_marker | Acc];
-            ({part_versions, _} = PartVersions, Acc) ->
-                [PartVersions | Acc]
+            (snapshot_marker, {Acc, Size}) ->
+                {[snapshot_marker | Acc], Size};
+            ({part_versions, _} = PartVersions, {Acc, Size}) ->
+                {[PartVersions | Acc], Size}
             end,
-            [], Queue),
-        ok = couch_work_queue:queue(WriteQueue, Items),
+            {[], 0}, Queue),
+        ok = couch_work_queue:queue(WriteQueue, lists:reverse(Items)),
         do_maps(Group, MapQueue, WriteQueue)
     end.
 
