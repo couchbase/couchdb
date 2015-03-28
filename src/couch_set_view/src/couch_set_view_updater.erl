@@ -815,35 +815,42 @@ flush_writes(#writer_acc{initial_build = false} = Acc0) ->
         parent = Parent,
         owner = Owner,
         last_seqs = LastSeqs,
+        final_batch = IsFinalBatch,
         part_versions = PartVersions
     } = Acc0,
     % Only incremental updates can contain multiple snapshots
     {MultipleSnapshots, Kvs2} = merge_snapshots(Kvs),
+    Acc1 = case MultipleSnapshots of
+    true ->
+        Acc2 = maybe_update_btrees(Acc0#writer_acc{force_flush = true}),
+        checkpoint(Acc2);
+    false ->
+        Acc0
+    end,
     {ViewKVs, DocIdViewIdKeys, NewLastSeqs, NewPartVersions} =
         process_map_results(Kvs2, ViewEmptyKVs, LastSeqs, PartVersions),
-    Acc1 = Acc0#writer_acc{last_seqs = NewLastSeqs, part_versions = NewPartVersions},
-    Acc = write_to_tmp_batch_files(ViewKVs, DocIdViewIdKeys, Acc1),
-    #writer_acc{group = NewGroup} = Acc,
+    Acc3 = Acc1#writer_acc{last_seqs = NewLastSeqs, part_versions = NewPartVersions},
+    Acc4 = write_to_tmp_batch_files(ViewKVs, DocIdViewIdKeys, Acc3),
+    #writer_acc{group = NewGroup} = Acc4,
     case ?set_seqs(NewGroup) =/= ?set_seqs(Group) of
     true ->
-        Acc2 = checkpoint(Acc),
-        case (Acc#writer_acc.state =:= updating_active) andalso
+        Acc5 = checkpoint(Acc4),
+        case (Acc4#writer_acc.state =:= updating_active) andalso
             lists:any(fun({PartId, _}) ->
                 ((1 bsl PartId) band ?set_pbitmask(Group) =/= 0)
             end, NewLastSeqs) of
         true ->
             notify_owner(Owner, {state, updating_passive}, Parent),
-            Acc2#writer_acc{state = updating_passive};
+            Acc5#writer_acc{state = updating_passive};
         false ->
-            Acc2
+            Acc5
         end;
     false ->
-        case MultipleSnapshots of
+        case IsFinalBatch of
         true ->
-            Acc2 = maybe_update_btrees(Acc#writer_acc{force_flush = true}),
-            checkpoint(Acc2);
+            checkpoint(Acc4);
         false ->
-            Acc
+            Acc4
         end
     end;
 
