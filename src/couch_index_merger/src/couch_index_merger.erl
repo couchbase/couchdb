@@ -220,6 +220,7 @@ do_query_index(Mod, IndexMergeParams, DDoc, IndexName) ->
         end
     after
         unlink(Queue),
+        erlang:erase(reduce_context),
         lists:foreach(fun erlang:unlink/1, Folders),
         % Important, shutdown the queue first. This ensures any blocked
         % HTTP folders (bloked by queue calls) will get an error/exit and
