@@ -39,6 +39,11 @@ typedef std::pair<ErlNifBinary, ErlNifBinary>  kv_pair_t;
 typedef std::list< kv_pair_t, NifStlAllocator< kv_pair_t > >  kv_pair_list_t;
 
 typedef enum {
+    VIEW_INDEX_TYPE_MAPREDUCE,
+    VIEW_INDEX_TYPE_SPATIAL
+}  view_index_type_t;
+
+typedef enum {
     MAP_KVS,
     MAP_ERROR
 } map_result_type_t;
@@ -81,10 +86,12 @@ typedef struct {
     int                                          emitKvSize;
     int                                          maxEmitKvSize;
     log_results_list_t                           *logResults;
+    view_index_type_t                            viewType;
 } map_reduce_ctx_t;
 
 
-void initContext(map_reduce_ctx_t *ctx, const function_sources_list_t &funs);
+void initContext(map_reduce_ctx_t *ctx, const function_sources_list_t &funs,
+                 const view_index_type_t viewType);
 void destroyContext(map_reduce_ctx_t *ctx);
 
 map_results_list_t mapDoc(map_reduce_ctx_t *ctx,

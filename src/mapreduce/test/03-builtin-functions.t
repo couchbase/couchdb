@@ -40,14 +40,14 @@ test() ->
 
 
 test_sum_function() ->
-    {ok, Ctx} = mapreduce:start_map_context([
+    {ok, Ctx} = mapreduce:start_map_context(mapreduce_view, [
         <<"function(doc) { emit(doc._id, sum(doc.values)); }">>
     ]),
     Results = mapreduce:map_doc(Ctx, <<"{\"_id\": \"doc1\", \"values\": [1, 2, 3, 4]}">>, <<"{}">>),
     etap:is(Results, {ok, [[{<<"\"doc1\"">>, <<"10">>}]], []}, "sum() builtin function works").
 
 test_base64decode_function() ->
-    {ok, Ctx} = mapreduce:start_map_context([
+    {ok, Ctx} = mapreduce:start_map_context(mapreduce_view, [
         <<"function(doc) { emit(doc._id, String.fromCharCode.apply(this, decodeBase64(doc._bin))); }">>
     ]),
     Results = mapreduce:map_doc(Ctx, <<"{ \"_id\": \"counter\", \"_bin\": \"NQ==\" }">>, <<"{}">>),
@@ -55,7 +55,7 @@ test_base64decode_function() ->
 
 
 test_dateToArray_function() ->
-    {ok, Ctx} = mapreduce:start_map_context([
+    {ok, Ctx} = mapreduce:start_map_context(mapreduce_view, [
         <<"function(doc, meta) { emit(dateToArray(doc.date), meta.id); }">>
     ]),
     Results = mapreduce:map_doc(Ctx, <<"{ \"date\":\"+033658-09-27T01:46:40.000Z\"}">>, <<"{\"id\":\"foo\"}">>),

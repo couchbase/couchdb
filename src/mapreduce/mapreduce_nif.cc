@@ -86,9 +86,23 @@ static void *terminatorLoop(void *);
 
 ERL_NIF_TERM startMapContext(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
+    char viewTypeAtom[256];
+    view_index_type_t viewType;
     function_sources_list_t mapFunctions;
 
-    if (!parseFunctions(env, argv[0], mapFunctions)) {
+    if (!enif_get_atom(env, argv[0], viewTypeAtom, sizeof(viewTypeAtom),
+                       ERL_NIF_LATIN1)) {
+        return enif_make_badarg(env);
+    }
+    if (!strcmp(viewTypeAtom, "mapreduce_view")) {
+        viewType = VIEW_INDEX_TYPE_MAPREDUCE;
+    } else if (!strcmp(viewTypeAtom, "spatial_view")) {
+        viewType = VIEW_INDEX_TYPE_SPATIAL;
+    } else {
+        return makeError(env, "unknown view type");
+    }
+
+    if (!parseFunctions(env, argv[1], mapFunctions)) {
         return enif_make_badarg(env);
     }
 
@@ -96,12 +110,12 @@ ERL_NIF_TERM startMapContext(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]
         enif_alloc_resource(MAP_REDUCE_CTX_RES, sizeof(map_reduce_ctx_t)));
 
     try {
-        initContext(ctx, mapFunctions);
+        initContext(ctx, mapFunctions, viewType);
 
         ERL_NIF_TERM res = enif_make_resource(env, ctx);
         enif_release_resource(ctx);
 
-        registerContext(ctx, env, argv[1]);
+        registerContext(ctx, env, argv[2]);
 
         return enif_make_tuple2(env, ATOM_OK, res);
 
@@ -204,7 +218,7 @@ ERL_NIF_TERM startReduceContext(ErlNifEnv *env, int argc, const ERL_NIF_TERM arg
         enif_alloc_resource(MAP_REDUCE_CTX_RES, sizeof(map_reduce_ctx_t)));
 
     try {
-        initContext(ctx, reduceFunctions);
+        initContext(ctx, reduceFunctions, VIEW_INDEX_TYPE_MAPREDUCE);
 
         ERL_NIF_TERM res = enif_make_resource(env, ctx);
         enif_release_resource(ctx);
@@ -531,7 +545,7 @@ void unregisterContext(map_reduce_ctx_t *ctx)
 
 
 static ErlNifFunc nif_functions[] = {
-    {"start_map_context", 2, startMapContext},
+    {"start_map_context", 3, startMapContext},
     {"map_doc", 3, doMapDoc},
     {"start_reduce_context", 2, startReduceContext},
     {"reduce", 2, doReduce},

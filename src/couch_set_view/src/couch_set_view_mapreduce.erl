@@ -27,8 +27,9 @@
 -define(SUM_ERROR_MSG,   <<"Builtin _sum function requires map values to be numbers">>).
 
 
-start_map_context(#set_view_group{views = Views}) ->
-    {ok, Ctx} = mapreduce:start_map_context([View#set_view.def || View <- Views]),
+start_map_context(#set_view_group{mod = Mod, views = Views}) ->
+    {ok, Ctx} = mapreduce:start_map_context(
+        Mod, [View#set_view.def || View <- Views]),
     erlang:put(map_context, Ctx),
     ok.
 
@@ -396,7 +397,7 @@ validate_view_map_function(ViewName, MapDef) when not is_binary(MapDef) ->
                              "a json string.", [ViewName]),
     throw({error, iolist_to_binary(ErrorMsg)});
 validate_view_map_function(ViewName, MapDef) ->
-    case mapreduce:start_map_context([MapDef]) of
+    case mapreduce:start_map_context(mapreduce_view, [MapDef]) of
     {ok, _Ctx} ->
         ok;
     {error, Reason} ->

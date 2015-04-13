@@ -20,7 +20,8 @@
 
 
 start_map_context(#group{views = Views}) ->
-    {ok, Ctx} = mapreduce:start_map_context([View#view.def || View <- Views]),
+    {ok, Ctx} = mapreduce:start_map_context(
+        mapreduce_view, [View#view.def || View <- Views]),
     erlang:put(map_context, Ctx),
     ok.
 

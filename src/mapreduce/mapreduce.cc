@@ -99,7 +99,9 @@ static const char *BASE64_FUNCTION_STRING =
     "    return arr;"
     "})";
 
-static void doInitContext(map_reduce_ctx_t *ctx, const function_sources_list_t &funs);
+static void doInitContext(map_reduce_ctx_t *ctx,
+                          const function_sources_list_t &funs,
+                          const view_index_type_t viewType);
 #ifdef V8_POST_3_19_API
 static Local<Context> createJsContext(map_reduce_ctx_t *ctx);
 static void emit(const v8::FunctionCallbackInfo<Value>& args);
@@ -126,10 +128,11 @@ static void freeLogResults(map_reduce_ctx_t *ctx);
 
 
 
-void initContext(map_reduce_ctx_t *ctx, const function_sources_list_t &funs)
+void initContext(map_reduce_ctx_t *ctx, const function_sources_list_t &funs,
+                 const view_index_type_t viewType)
 {
     ctx = new (ctx) map_reduce_ctx_t();
-    doInitContext(ctx, funs);
+    doInitContext(ctx, funs, viewType);
 
     try {
         Locker locker(ctx->isolate);
@@ -150,8 +153,10 @@ void initContext(map_reduce_ctx_t *ctx, const function_sources_list_t &funs)
 }
 
 
-void doInitContext(map_reduce_ctx_t *ctx, const function_sources_list_t &funs)
+void doInitContext(map_reduce_ctx_t *ctx, const function_sources_list_t &funs,
+                   const view_index_type_t viewType)
 {
+    ctx->viewType = viewType;
     ctx->isolate = Isolate::New();
     Locker locker(ctx->isolate);
     Isolate::Scope isolateScope(ctx->isolate);
@@ -590,7 +595,12 @@ Handle<Value> emit(const Arguments& args)
 
     ErlNifBinary keyJson = jsonStringify(args[0]);
 
-    if (keyJson.size >= MAX_EMIT_KEY_SIZE) {
+    // Spatial views may emit a geometry that is bigger, when serialized
+    // to JSON, than the allowed size of a key. In later steps it will then
+    // be reduced to a bouning box. Hence don't check the string size of the
+    // key of spatial views here.
+    if (isoData->ctx->viewType != VIEW_INDEX_TYPE_SPATIAL &&
+            keyJson.size >= MAX_EMIT_KEY_SIZE) {
         std::stringstream msg;
         msg << "too long key emitted: " << keyJson.size << " bytes";
 

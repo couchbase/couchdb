@@ -18,7 +18,7 @@
 
 -module(mapreduce).
 
--export([start_map_context/1]).
+-export([start_map_context/2]).
 -export([map_doc/3]).
 
 -export([start_reduce_context/1]).
@@ -49,11 +49,11 @@ init() ->
     end.
 
 
-start_map_context(MapFunSources) ->
+start_map_context(Mod, MapFunSources) ->
     Ref = erlang:phash2(make_ref()),
-    start_map_context(MapFunSources, Ref).
+    start_map_context(Mod, MapFunSources, Ref).
 
-start_map_context(_MapFunSources, _Ref) ->
+start_map_context(_Mod, _MapFunSources, _Ref) ->
     erlang:nif_error(mapreduce_nif_not_loaded).
 
 
