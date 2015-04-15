@@ -17,6 +17,7 @@
 % export callbacks
 -export([parse_http_params/4, make_funs/3, get_skip_and_limit/1]).
 -export([make_event_fun/2, view_qs/2, process_extra_params/2]).
+-export([map_view_merge_callback/2, reduce_view_merge_callback/2]).
 -export([simple_set_view_query/3]).
 
 % exports for spatial_merger
@@ -66,11 +67,11 @@ parse_http_params(Req, DDoc, ViewName, #view_merge{keys = Keys}) ->
 make_funs(DDoc, ViewName, IndexMergeParams) ->
     #index_merge{
        extra = Extra,
-       http_params = ViewArgs
+       http_params = ViewArgs,
+       make_row_fun = MakeRowFun0
     } = IndexMergeParams,
     #view_merge{
-       rereduce_fun = InRedFun,
-       make_row_fun = MakeRowFun0
+       rereduce_fun = InRedFun
     } = Extra,
     #view_query_args{
         debug = DebugMode,
@@ -147,6 +148,48 @@ process_extra_params(#view_merge{keys = nil}, EJson) ->
     EJson;
 process_extra_params(#view_merge{keys = Keys}, EJson) ->
     [{<<"keys">>, Keys} | EJson].
+
+% callback!
+map_view_merge_callback(start, Acc) ->
+    {ok, Acc};
+map_view_merge_callback({start, _}, Acc) ->
+    {ok, Acc};
+map_view_merge_callback(stop, Acc) ->
+    {ok, Acc};
+map_view_merge_callback({row, Row}, Macc) ->
+    #merge_acc{
+        fold_fun = Fun,
+        acc = Acc
+    } = Macc,
+    case Fun(Row, nil, Acc) of
+    {ok, Acc2} ->
+        {ok, Macc#merge_acc{acc = Acc2}};
+    {stop, Acc2} ->
+        {stop, Macc#merge_acc{acc = Acc2}}
+    end;
+map_view_merge_callback({debug_info, _From, _Info}, Acc) ->
+    {ok, Acc}.
+
+
+reduce_view_merge_callback(start, Acc) ->
+    {ok, Acc};
+reduce_view_merge_callback({start, _}, Acc) ->
+    {ok, Acc};
+reduce_view_merge_callback(stop, Acc) ->
+    {ok, Acc};
+reduce_view_merge_callback({row, {Key, Red}}, Macc) ->
+    #merge_acc{
+        fold_fun = Fun,
+        acc = Acc
+    } = Macc,
+    case Fun(Key, Red, Acc) of
+    {ok, Acc2} ->
+        {ok, Macc#merge_acc{acc = Acc2}};
+    {stop, Acc2} ->
+        {stop, Macc#merge_acc{acc = Acc2}}
+    end;
+reduce_view_merge_callback({debug_info, _From, _Info}, Acc) ->
+    {ok, Acc}.
 
 
 view_type(DDoc, ViewName) ->

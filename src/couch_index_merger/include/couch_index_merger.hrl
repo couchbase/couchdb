@@ -28,6 +28,7 @@
    ddoc_revision = nil,              % nil | auto | Revision
    http_params = nil,
    user_ctx = nil,
+   make_row_fun = nil,
    % extra is for index implementation specific properties
    extra = nil
 }).
@@ -48,4 +49,9 @@
    timeout,
    headers = [{"Accept", "application/json"}],
    lhttpc_options = []
+}).
+
+-record(merge_acc, {
+    fold_fun,
+    acc
 }).

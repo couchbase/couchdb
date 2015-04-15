@@ -61,11 +61,6 @@
     indexer         :: mapreduce_view | spatial_view
 }).
 
--record(merge_acc, {
-    fold_fun,
-    acc
-}).
-
 
 % For a "set view" we have multiple databases which are indexed.
 % The set has a name which is a prefix common to all source databases.
@@ -616,13 +611,13 @@ fold_reduce(#set_view_group{replica_group = #set_view_group{} = RepGroup} = Grou
     ],
     MergeParams = #index_merge{
         indexes = ViewSpecs,
-        callback = fun reduce_view_merge_callback/2,
+        callback = fun couch_view_merger:reduce_view_merge_callback/2,
         user_acc = #merge_acc{fold_fun = FoldFun, acc = FoldAcc},
         user_ctx = #user_ctx{roles = [<<"_admin">>]},
         http_params = ViewQueryArgs,
+        make_row_fun = fun(RowData) -> RowData end,
         extra = #view_merge{
-            keys = ViewQueryArgs#view_query_args.keys,
-            make_row_fun = fun(RowData) -> RowData end
+            keys = ViewQueryArgs#view_query_args.keys
         }
     },
     #merge_acc{acc = FinalAcc} = couch_index_merger:query_index(couch_view_merger, MergeParams),
@@ -827,10 +822,7 @@ fold(#set_view_group{replica_group = #set_view_group{} = RepGroup} = Group, View
     RepView = lists:nth(View#set_view.id_num + 1, RepGroup#set_view_group.views),
     case ViewQueryArgs of
     #view_query_args{keys = Keys} ->
-        Extra = #view_merge{
-            keys = Keys,
-            make_row_fun = fun(RowData) -> RowData end
-        },
+        Extra = #view_merge{keys = Keys},
         Merger = couch_view_merger;
     _ ->
         Extra = nil,
@@ -859,10 +851,11 @@ fold(#set_view_group{replica_group = #set_view_group{} = RepGroup} = Group, View
     ],
     MergeParams = #index_merge{
         indexes = ViewSpecs,
-        callback = fun map_view_merge_callback/2,
+        callback = fun Merger:map_view_merge_callback/2,
         user_acc = #merge_acc{fold_fun = Fun, acc = Acc},
         user_ctx = #user_ctx{roles = [<<"_admin">>]},
         http_params = ViewQueryArgs,
+        make_row_fun = fun(RowData) -> RowData end,
         extra = Extra
     },
     #merge_acc{acc = FinalAcc} = couch_index_merger:query_index(
@@ -1225,49 +1218,6 @@ make_handle_db_event_fun(Mod, ServerName, SigToPidEts, NameToSigEts) ->
     (_) ->
         ok
     end.
-
-
-map_view_merge_callback(start, Acc) ->
-    {ok, Acc};
-
-map_view_merge_callback({start, _}, Acc) ->
-    {ok, Acc};
-
-map_view_merge_callback(stop, Acc) ->
-    {ok, Acc};
-
-map_view_merge_callback({row, Row}, #merge_acc{fold_fun = Fun, acc = Acc} = Macc) ->
-    case Fun(Row, nil, Acc) of
-    {ok, Acc2} ->
-        {ok, Macc#merge_acc{acc = Acc2}};
-    {stop, Acc2} ->
-        {stop, Macc#merge_acc{acc = Acc2}}
-    end;
-
-map_view_merge_callback({debug_info, _From, _Info}, Acc) ->
-    {ok, Acc}.
-
-
-
-reduce_view_merge_callback(start, Acc) ->
-    {ok, Acc};
-
-reduce_view_merge_callback({start, _}, Acc) ->
-    {ok, Acc};
-
-reduce_view_merge_callback(stop, Acc) ->
-    {ok, Acc};
-
-reduce_view_merge_callback({row, {Key, Red}}, #merge_acc{fold_fun = Fun, acc = Acc} = Macc) ->
-    case Fun(Key, Red, Acc) of
-    {ok, Acc2} ->
-        {ok, Macc#merge_acc{acc = Acc2}};
-    {stop, Acc2} ->
-        {stop, Macc#merge_acc{acc = Acc2}}
-    end;
-
-reduce_view_merge_callback({debug_info, _From, _Info}, Acc) ->
-    {ok, Acc}.
 
 
 % Returns whether the results should be filtered based on a bitmask or not
