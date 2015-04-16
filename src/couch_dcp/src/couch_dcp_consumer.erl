@@ -20,7 +20,7 @@
     encode_failover_log_request/2, encode_stat_request/3, encode_stream_close/2,
     encode_select_bucket/2]).
 -export([encode_noop_response/1, encode_buffer_request/2,
-    encode_control_request/3]).
+    encode_control_request/3, parse_all_seqs/3, encode_all_seqs_request/1]).
 
 -include_lib("couch_dcp/include/couch_dcp.hrl").
 -include_lib("couch_dcp/include/couch_dcp_typespecs.hrl").
@@ -67,7 +67,9 @@ parse_header(<<?DCP_MAGIC_RESPONSE,
     ?DCP_OPCODE_DCP_BUFFER ->
         {buffer_ack, Status, RequestId};
     ?DCP_OPCODE_DCP_CONTROL ->
-        {control_request, Status, RequestId}
+        {control_request, Status, RequestId};
+    ?DCP_OPCODE_SEQS ->
+        {all_seqs, Status, RequestId, BodyLength}
     end;
 parse_header(<<?DCP_MAGIC_REQUEST,
                Opcode,
@@ -170,6 +172,17 @@ parse_stat(Body, ?DCP_STATUS_OK, KeyLength, ValueLength) ->
     <<Key:KeyLength/binary, Value:ValueLength/binary>> = Body,
     {ok, {Key, Value}}.
 
+-spec parse_all_seqs(dcp_status(), binary(), list()) ->
+                        {ok, list()} |
+                        {error, {dcp_status(), binary()}}.
+parse_all_seqs(?DCP_STATUS_OK, <<Key:?DCP_SIZES_PARTITION, Value:
+        ?DCP_SIZES_BY_SEQ, Rest/binary>>, Acc) ->
+    Acc2 = [{Key, Value} | Acc],
+    parse_all_seqs(?DCP_STATUS_OK, Rest, Acc2);
+parse_all_seqs(?DCP_STATUS_OK, <<>>, Acc) ->
+    {ok, lists:reverse(Acc)};
+parse_all_seqs(Status, Body, _Acc) ->
+    {error, {Status, Body}}.
 
 -spec encode_sasl_auth(binary(), binary(), request_id()) -> binary().
 encode_sasl_auth(User, Passwd, RequestId) ->
@@ -385,6 +398,29 @@ encode_stat_request(Stat, PartId, RequestId) ->
                RequestId:?DCP_SIZES_OPAQUE,
                0:?DCP_SIZES_CAS>>,
     <<Header/binary, Body/binary>>.
+
+%GET_ALL_VB_SEQNOS command
+%Field        (offset) (value)
+%Magic        (0)    : 0x80
+%Opcode       (1)    : 0x48
+%Key length   (2,3)  : 0x0000
+%Extra length (4)    : 0x00
+%Data type    (5)    : 0x00
+%VBucket      (6,7)  : 0x0000
+%Total body   (8-11) : 0x00000000
+%Opaque       (12-15): 0x00000000
+%CAS          (16-23): 0x0000000000000000
+encode_all_seqs_request(RequestId) ->
+    Header = <<?DCP_MAGIC_REQUEST,
+               ?DCP_OPCODE_SEQS,
+               0:?DCP_SIZES_KEY_LENGTH,
+               0,
+               0,
+               0:?DCP_SIZES_PARTITION,
+               0:?DCP_SIZES_BODY,
+               RequestId:?DCP_SIZES_OPAQUE,
+               0:?DCP_SIZES_CAS>>,
+    <<Header/binary>>.
 
 %DCP_CONTROL_BINARY_REQUEST command
 %Field        (offset) (value)

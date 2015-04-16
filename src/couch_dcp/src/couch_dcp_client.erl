@@ -19,7 +19,7 @@
     get_failover_log/2]).
 -export([get_stream_event/2, remove_stream/2, list_streams/1]).
 -export([enum_docs_since/8, restart_worker/1]).
--export([get_seqs_async/1, parse_stats_seqnos/1]).
+-export([get_seqs_async/1]).
 
 % gen_server callbacks
 -export([init/1, terminate/2, handle_call/3, handle_cast/2, handle_info/2, code_change/3]).
@@ -111,12 +111,25 @@ get_stats_reply(Pid, MRef) ->
     {'DOWN', MRef, process, Pid, Reason} ->
         exit({dcp_client_died, Pid, Reason})
     after ?TIMEOUT_STATS ->
-        ?LOG_ERROR("dcp client (~p): vbucket-seqno stats timed out after ~p seconds."
+        ?LOG_ERROR("dcp client (~p): stats timed out after ~p seconds."
                    " Waiting...",
             [Pid, ?TIMEOUT_STATS / 1000]),
         get_stats_reply(Pid, MRef)
     end.
 
+-spec get_all_seqs_reply(pid(), reference()) -> term().
+get_all_seqs_reply(Pid, MRef) ->
+    receive
+    {all_seqs, MRef, Reply} ->
+        Reply;
+    {'DOWN', MRef, process, Pid, Reason} ->
+        exit({dcp_client_died, Pid, Reason})
+    after ?TIMEOUT_STATS ->
+        ?LOG_ERROR("dcp client (~p): dcp all seqs timed out after ~p seconds."
+                   " Waiting...",
+            [Pid, ?TIMEOUT_STATS / 1000]),
+        get_all_seqs_reply(Pid, MRef)
+    end.
 
 -spec get_stats(pid(), binary(), partition_id() | nil) -> term().
 get_stats(Pid, Name, PartId) ->
@@ -127,35 +140,19 @@ get_stats(Pid, Name, PartId) ->
     Reply.
 
 
-% The async get_seqs API requests asynchronous stats.
+% The async get_seqs API requests seq numbers asynchronously.
 % The response will be sent to the caller process asynchronously in the
 % following message format:
-% {get_stats, nil, StatsResponse}.
-% The receiver needs to use parse_stats_seqnos() method to parse the
-% response to valid seqnos format.
+% {all_seqs, nil, StatsResponse}.
 -spec get_seqs_async(pid()) -> ok.
 get_seqs_async(Pid) ->
-    Pid ! {get_stats, <<"vbucket-seqno">>, nil, {nil, self()}},
+    Pid ! {get_all_seqs, {nil, self()}},
     ok.
-
--spec parse_stats_seqnos([{binary(), binary()}]) -> [{partition_id(), update_seq()}].
-parse_stats_seqnos(Stats) ->
-    lists:foldr(fun({Key, SeqBin}, Acc) ->
-        case binary:split(Key, <<":">>) of
-        [<<"vb_", PartIdBin/binary>>, <<"high_seqno">>] ->
-            PartId = list_to_integer(binary_to_list(PartIdBin)),
-            Seq = list_to_integer(binary_to_list(SeqBin)),
-            [{PartId, Seq} | Acc];
-        _ ->
-            Acc
-        end
-    end, [], Stats).
-
 
 -spec get_seqs(pid(), ordsets:ordset(partition_id()) | nil) ->
          {ok, partition_seqs()} | {error, term()}.
 get_seqs(Pid, SortedPartIds) ->
-    case get_seqs(Pid) of
+    case get_all_seqs(Pid) of
     {ok, Seqs} ->
         case SortedPartIds of
         nil ->
@@ -168,16 +165,13 @@ get_seqs(Pid, SortedPartIds) ->
         Error
     end.
 
-get_seqs(Pid) ->
-    Reply = get_stats(Pid, <<"vbucket-seqno">>, nil),
-    case Reply of
-    {ok, Stats} ->
-        Seqs = parse_stats_seqnos(Stats),
-        {ok, Seqs};
-    {error, _Error} = Error ->
-        Error
-    end.
-
+-spec get_all_seqs(pid()) -> term().
+get_all_seqs(Pid) ->
+    MRef = erlang:monitor(process, Pid),
+    Pid ! {get_all_seqs, {MRef, self()}},
+    Reply = get_all_seqs_reply(Pid, MRef),
+    erlang:demonitor(MRef, [flush]),
+    Reply.
 
 -spec get_num_items(pid(), partition_id()) ->
                            {ok, non_neg_integer()} | {error, not_my_vbucket}.
@@ -475,6 +469,20 @@ handle_info({get_stats, Stat, PartId, From}, State) ->
         {reply, Error, State}
     end;
 
+handle_info({get_all_seqs, From}, State) ->
+    #state{
+       request_id = RequestId,
+       bufsocket = BufSocket
+    } = State,
+    SeqStatRequest = couch_dcp_consumer:encode_all_seqs_request(RequestId),
+    case bufsocket_send(BufSocket, SeqStatRequest) of
+    ok ->
+        State2 = next_request_id(State),
+        State3 = add_pending_request(State2, RequestId, all_seqs, From),
+        {noreply, State3};
+    Error ->
+        {reply, Error, State}
+    end;
 
 % Handle response message send by connection receiver worker
 % Reply back to waiting callers
@@ -515,6 +523,10 @@ handle_info({stream_response, RequestId, Msg}, State) ->
         get_stats ->
             {MRef, From} = SendTo,
             From ! {get_stats, MRef, Msg},
+            State;
+        all_seqs ->
+            {MRef, From} = SendTo,
+            From ! {all_seqs, MRef, Msg},
             State;
         _ ->
             gen_server:reply(SendTo, Msg),
@@ -875,6 +887,18 @@ receive_stat(BufSocket, Timeout, Status, BodyLength, KeyLength) ->
     {ok, Body, BufSocket2} ->
         {couch_dcp_consumer:parse_stat(
             Body, Status, KeyLength, BodyLength - KeyLength), BufSocket2};
+    {error, Reason} ->
+        {error, Reason}
+    end.
+
+-spec receive_all_seqs(#bufsocket{}, timeout(), dcp_status(), size()) ->
+        {ok, list()} |
+        {error, {dcp_status(), binary()}} |
+        {error, closed}.
+receive_all_seqs(BufSocket, Timeout, Status, BodyLength) ->
+    case bufsocket_recv(BufSocket, BodyLength, Timeout) of
+    {ok, Body, BufSocket2} ->
+        {couch_dcp_consumer:parse_all_seqs(Status, Body, []), BufSocket2};
     {error, Reason} ->
         {error, Reason}
     end.
@@ -1251,7 +1275,11 @@ receive_worker(BufSocket, Timeout, Parent, MsgAcc0) ->
             {Flag, BufSocket5} = receive_stream_end(BufSocket2,
                 Timeout, BodyLength),
             {done, {stream_event, RequestId, {stream_end,
-                {RequestId, PartId, Flag}, BodyLength}}, BufSocket5}
+                {RequestId, PartId, Flag}, BodyLength}}, BufSocket5};
+        {all_seqs, Status, RequestId, BodyLength} ->
+            {Resp, BufSocket5} = receive_all_seqs(
+                BufSocket2, Timeout, Status, BodyLength),
+            {done, {stream_response, RequestId, Resp}, BufSocket5}
         end,
         case Action of
         done ->
