@@ -305,6 +305,23 @@ handle_call({set_dups_per_snapshot, Num}, _From, State) ->
         dups_per_snapshot = Num
     }};
 
+handle_call({all_seqs, Socket, RequestId}, _From, State) ->
+  #state{
+        setname = SetName,
+        items_per_snapshot = ItemsPerSnapshot,
+        dups_per_snapshot = DupsPerSnapshot
+    } = State,
+    Partitions = list_partitions(SetName),
+    Result = lists:foldl(fun(PartId, Acc) ->
+        case get_sequence_number(SetName, PartId, ItemsPerSnapshot,
+            DupsPerSnapshot) of
+        {ok, Seq} ->
+            [{PartId, Seq} | Acc]
+        end
+    end, [], Partitions),
+    Data = couch_dcp_producer:encode_seqs(RequestId, lists:reverse(Result)),
+    ok = gen_tcp:send(Socket, Data),
+    {reply, ok, State};
 
 handle_call({send_stat, Stat, Socket, RequestId, PartId}, _From, State) ->
     #state{
@@ -608,7 +625,9 @@ read(Socket) ->
         {control_request, BodyLength, RequestId} ->
             handle_control_request(Socket, BodyLength, RequestId);
         {buffer_ack, BodyLength, RequestId} ->
-            handle_buffer_ack_request(Socket, BodyLength, RequestId)
+            handle_buffer_ack_request(Socket, BodyLength, RequestId);
+        {all_seqs, RequestId} ->
+            handle_all_seqs(Socket, RequestId)
         end,
         read(Socket);
     {error, closed} ->
@@ -808,6 +827,8 @@ handle_stats_body(Socket, BodyLength, RequestId, PartId) ->
         {error, closed}
     end.
 
+handle_all_seqs(Socket, RequestId) ->
+    gen_server:call(?MODULE, {all_seqs, Socket, RequestId}).
 
 % XXX vmx: 2014-01-24: Proper logging/error handling is missing
 -spec handle_sasl_auth_body(socket(), size(), request_id()) ->

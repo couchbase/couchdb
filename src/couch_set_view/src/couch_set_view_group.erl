@@ -1364,14 +1364,13 @@ handle_info({'EXIT', Pid, Reason}, State) ->
                 ?group_id(State), Pid, Reason]),
     {stop, Reason, State};
 
-handle_info({get_stats, nil, StatsResponse}, State) ->
+handle_info({all_seqs, nil, StatsResponse}, State) ->
     #state{
        group = Group
     } = State,
     SeqsCache = erlang:get(seqs_cache),
     NewState = case StatsResponse of
-    {ok, Stats} ->
-        Seqs = couch_dcp_client:parse_stats_seqnos(Stats),
+    {ok, Seqs} ->
         Partitions = group_partitions(Group),
         Seqs2 = couch_set_view_util:filter_seqs(Partitions, Seqs),
         NewCacheVal = #seqs_cache{
