@@ -225,9 +225,9 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
                         % most recent one, but only to a lower one. Update the
                         % group header and stats with the correct information.
                         MaxSeqs = lists:ukeymerge(
-                            1, RealMaxSeqs, WriterAcc3#writer_acc.max_seqs),
+                            1, RealMaxSeqs, WriterAccHeader#set_view_index_header.seqs),
                         Stats = WriterAccStats#set_view_updater_stats{
-                            seqs = lists:sum([S || {_, S} <- MaxSeqs])
+                            seqs = lists:sum([S || {_, S} <- RealMaxSeqs])
                         };
                     false ->
                         MaxSeqs = WriterAccHeader#set_view_index_header.seqs,
