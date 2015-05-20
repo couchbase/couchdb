@@ -254,7 +254,8 @@ update_btrees_wait_loop(Port, Group, Acc0, Stats) ->
                 views = NewViews,
                 index_header = Header
             },
-            {NewGroup0, Rest};
+            NewGroup2 = couch_set_view_group:remove_duplicate_partitions(NewGroup0),
+            {NewGroup2, Rest};
         {error, Error, Rest} ->
             self() ! Error,
             {Group, Rest}

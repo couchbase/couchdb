@@ -25,7 +25,7 @@
 -export([mark_as_unindexable/2, mark_as_indexable/2]).
 -export([monitor_partition_update/4, demonitor_partition_update/2]).
 -export([reset_utilization_stats/1, get_utilization_stats/1]).
--export([inc_access_stat/1]).
+-export([inc_access_stat/1, remove_duplicate_partitions/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -2562,13 +2562,19 @@ update_header(State, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs,
             partition_versions = NewPartVersions
         }
     },
+    NewGroup2 = remove_duplicate_partitions(NewGroup),
+    #set_view_group{
+        index_header = #set_view_index_header{
+            partition_versions = NewPartVersions2
+        }
+    } = NewGroup2,
     NewState = State#state{
-        group = NewGroup,
+        group = NewGroup2,
         replica_partitions = NewReplicaParts
     },
     FsyncHeader = (NewCbitmask /= Cbitmask),
     {ok, HeaderPos} = commit_header(NewState#state.group, FsyncHeader),
-    NewGroup2 = (NewState#state.group)#set_view_group{
+    NewGroup3 = (NewState#state.group)#set_view_group{
         header_pos = HeaderPos
     },
     ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`, partition states updated~n"
@@ -2613,8 +2619,8 @@ update_header(State, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs,
                ?pending_transition_passive(NewPendingTrans),
                ?pending_transition_unindexable(NewPendingTrans),
                PartVersions,
-               NewPartVersions]),
-    NewState#state{group = NewGroup2}.
+               NewPartVersions2]),
+    NewState#state{group = NewGroup3}.
 
 
 -spec maybe_start_cleaner(#state{}) -> #state{}.
@@ -4082,3 +4088,51 @@ maybe_upgrade_header(Group, DcpPid) ->
         Group
     end.
 
+% This is added to avoid duplicate partitions(MB-14068) and it doesn't fix
+% the rootcause.
+-spec remove_duplicate_partitions(#set_view_group{}) -> #set_view_group{}.
+remove_duplicate_partitions(Group) ->
+    #set_view_group{
+        set_name = SetName,
+        type = GroupType,
+        category = Category,
+        name = DDocId,
+        mod = Mod,
+        index_header = #set_view_index_header{
+            partition_versions = PartVersions
+        }
+    } = Group,
+    [Stats] = ets:lookup(Group#set_view_group.stats_ets,
+        ?set_view_group_stats_key(Group)),
+    DupPartitionCounter = Stats#set_view_group_stats.dup_partitions_counter,
+    try
+        case ordsets:is_set(PartVersions) of
+        true ->
+            case DupPartitionCounter > 0 of
+            true ->
+                ?LOG_INFO("set view `~s`, ~p ~p (~s) group `~s` has a non zero "
+                    "duplicate partition counter (~p) ", [SetName, Mod, GroupType,
+                    Category, DDocId, DupPartitionCounter]);
+            false ->
+                ok
+            end,
+            Group;
+        false ->
+            throw("duplicate partitions")
+        end
+    catch
+    _ ->
+        ?LOG_ERROR("set view `~s`, ~p ~p (~s) group `~s` have the duplicate "
+            "partition versions ~p stacktrace ~p", [SetName, Mod, GroupType, Category,
+            DDocId, PartVersions, erlang:get_stacktrace()]),
+        Stats2 = Stats#set_view_group_stats{
+            dup_partitions_counter = DupPartitionCounter + 1
+        },
+        true = ets:insert(Group#set_view_group.stats_ets, Stats2),
+        NewPartVersions = lists:usort(PartVersions),
+        Group#set_view_group{
+            index_header = #set_view_index_header{
+                partition_versions = NewPartVersions
+            }
+        }
+    end.
