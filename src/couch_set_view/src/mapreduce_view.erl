@@ -181,7 +181,8 @@ finish_build(Group, TmpFiles, TmpDir) ->
         index_header = NewHeader,
         header_pos = NewHeaderPos
     },
-    {NewGroup, NewFd}.
+    NewGroup2 = couch_set_view_group:remove_duplicate_partitions(NewGroup),
+    {NewGroup2, NewFd}.
 
 
 % Return the state of a view (which will be stored in the header)

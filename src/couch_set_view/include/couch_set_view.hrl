@@ -199,7 +199,8 @@
     update_errors = 0       :: non_neg_integer(),
     update_history = []     :: [ejson_object()],
     compaction_history = [] :: [ejson_object()],
-    cleanup_history = []    :: [ejson_object()]
+    cleanup_history = []    :: [ejson_object()],
+    dup_partitions_counter = 0 :: non_neg_integer()
 }).
 
 -record(set_view_debug_info, {
