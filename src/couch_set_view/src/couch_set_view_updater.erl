@@ -814,7 +814,6 @@ flush_writes(#writer_acc{initial_build = false} = Acc0) ->
         group = Group,
         parent = Parent,
         owner = Owner,
-        last_seqs = LastSeqs,
         final_batch = IsFinalBatch,
         part_versions = PartVersions
     } = Acc0,
@@ -827,6 +826,7 @@ flush_writes(#writer_acc{initial_build = false} = Acc0) ->
     false ->
         Acc0
     end,
+    #writer_acc{last_seqs = LastSeqs} = Acc1,
     {ViewKVs, DocIdViewIdKeys, NewLastSeqs, NewPartVersions} =
         process_map_results(Kvs2, ViewEmptyKVs, LastSeqs, PartVersions),
     Acc3 = Acc1#writer_acc{last_seqs = NewLastSeqs, part_versions = NewPartVersions},
