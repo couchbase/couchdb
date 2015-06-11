@@ -92,7 +92,7 @@ test_map_function_bad_syntax() ->
 test_map_function_throw_exception() ->
     {ok, Ctx} = start_map_context([<<"function(doc) { throw('foobar'); }">>]),
     Results = map_doc(Ctx, <<"{\"_id\": \"doc1\", \"value\": 1}">>, <<"{}">>),
-    etap:is(Results, {ok, [{error, <<"foobar">>}]},
+    etap:is(Results, {ok, [{error, <<"foobar (line 1:17)">>}]},
             "Got error when map function throws exception").
 
 
@@ -131,7 +131,7 @@ test_multiple_map_functions_runtime_errors() ->
                 "Got expected result for doc 2"),
     Result3 = map_doc(Ctx, <<"{\"value\":3}">>, <<"{}">>),
     ?etap_match(Result3,
-                {ok, [[{<<"3">>, <<"null">>}], [{<<"9">>, <<"null">>}], {error, <<"foobar">>}]},
+                {ok, [[{<<"3">>, <<"null">>}], [{<<"9">>, <<"null">>}], {error, <<"foobar (line 1:43)">>}]},
                 "Got expected result for doc 3"),
     Result4 = map_doc(Ctx, <<"{\"value\":4}">>, <<"{}">>),
     ?etap_match(Result4,
@@ -139,7 +139,7 @@ test_multiple_map_functions_runtime_errors() ->
                 "Got expected result for doc 4"),
     Result12 = map_doc(Ctx, <<"{\"value\":12}">>, <<"{}">>),
     ?etap_match(Result12,
-                {ok, [{error, _}, [{<<"36">>, <<"null">>}], {error, <<"foobar">>}]},
+                {ok, [{error, _}, [{<<"36">>, <<"null">>}], {error, <<"foobar (line 1:43)">>}]},
                 "Got expected result for doc 12"),
     ok.
 
@@ -347,7 +347,7 @@ test_too_much_emit_kv_data_per_doc() ->
     Results = map_doc(
         Ctx, <<"{\"_id\": \"doc1\", \"value\": \"foobar\"}">>, <<"{}">>),
     ExpectedResults = {ok, [
-        {error, <<"too much data emitted: 504 bytes">>},
+        {error, <<"too much data emitted: 504 bytes (line 1:65)">>},
         [{<<"\"foobar\"">>, <<"\"doc1\"">>}]
     ]},
     etap:is(Results, ExpectedResults, "Got max emit kv size reached error"),
@@ -367,7 +367,7 @@ test_too_much_emit_key_data_per_doc() ->
     Results = map_doc(
         Ctx, <<"{\"_id\": \"doc1\", \"value\": \"foobar\"}">>, <<"{}">>),
     ExpectedResults = {ok, [
-        {error, <<"too long key emitted: 4098 bytes">>}
+        {error, <<"too long key emitted: 4098 bytes (line 5:0)">>}
     ]},
     etap:is(Results, ExpectedResults, "Got max emit key size reached error").
 
