@@ -724,7 +724,7 @@ validate_ddoc(#doc{content_meta = ?CONTENT_META_JSON} = DDoc0) ->
     try
         couch_set_view_mapreduce:validate_ddoc_views(DDoc),
         try
-            couch_spatial_validation:validate_ddoc_spatial(DDoc)
+            spatial_view:validate_ddoc(DDoc)
         catch error:undef ->
             % Ignore, happens during make check or standalone CouchDB
             ok
