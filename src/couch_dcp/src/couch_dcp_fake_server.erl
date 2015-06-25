@@ -36,6 +36,7 @@
 
 -define(dbname(SetName, PartId),
     <<SetName/binary, $/, (list_to_binary(integer_to_list(PartId)))/binary>>).
+-define(master_dbname(SetName), <<SetName/binary, "/master">>).
 
 
 % #doc_info{}, #doc{}, #db{} are copy & pasted from couch_db.hrl
@@ -901,6 +902,17 @@ open_db(SetName, PartId) ->
     end.
 
 
+-spec open_master_db(binary()) ->
+                     {ok, #db{}} | {error, cannot_open_db}.
+open_master_db(SetName) ->
+    case couch_db:open_int(?master_dbname(SetName), []) of
+    {ok, PartDb} ->
+        {ok, PartDb};
+    _Error ->
+        {error, cannot_open_db}
+    end.
+
+
 -spec ceil_div(non_neg_integer(), pos_integer()) -> non_neg_integer().
 ceil_div(Numerator, Denominator) ->
     (Numerator div Denominator) + min(Numerator rem Denominator, 1).
@@ -970,17 +982,19 @@ num_items_with_dups(CurrentNum, ItemsPerSnapshot, DupsPerSnapshot,
 
 -spec list_partitions(binary()) -> [partition_id()].
 list_partitions(SetName) ->
-    FilePaths = couch_server:all_known_databases_with_prefix(SetName),
-    Parts = lists:foldl(fun(P, Acc) ->
-        File = lists:last(binary:split(P, <<"/">>)),
-        case File of
-        <<"master">> ->
-            Acc;
-        BinPartId ->
-            PartId = list_to_integer(binary_to_list(BinPartId)),
-            [PartId | Acc]
+    {ok, MasterDb} = open_master_db(SetName),
+    DbDir = filename:dirname(MasterDb#db.filepath),
+    ok = couch_db:close(MasterDb),
+    FilePaths = filelib:wildcard(filename:join([DbDir, "*.couch.[0-9]*"])),
+    Parts = lists:filtermap(fun(Path) ->
+        File = filename:basename(Path),
+        case string:tokens(File, ".") of
+        ["master", "couch", _] ->
+            false;
+        [ListPartId, "couch", _] ->
+            {true, list_to_integer(ListPartId)}
         end
-    end, [], FilePaths),
+    end, FilePaths),
     lists:sort(Parts).
 
 -spec send_vbucket_seqnos_stats(#state{}, binary(),
