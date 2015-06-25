@@ -68,12 +68,15 @@ start_server(SetName) ->
     ok = couch_config:set("couchdb", "view_index_dir", NewIndexDir, false),
     start_server(),
     % Also start the fake DCP server that is needed for testing
-    {ok, _} = couch_dcp_fake_server:start(SetName),
+    {ok, DcpPid} = couch_dcp_fake_server:start(SetName),
+    put(test_util_dcp_pid, DcpPid),
     ok.
 
 
 stop_server() ->
     ok = timer:sleep(1000),
+    DcpPid = get(test_util_dcp_pid),
+    couch_util:shutdown_sync(DcpPid),
     couch_server_sup:stop().
 
 
