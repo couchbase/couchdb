@@ -26,7 +26,7 @@ num_docs() -> 128.  % keep it a multiple of num_set_partitions()
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(67),
+    etap:plan(66),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -50,7 +50,7 @@ test() ->
     test_rollback_different_seqs(5, 8),
     test_rollback_different_seqs(1, 6),
     test_rollback_not_exactly(),
-    test_rollback_not_possible(),
+    test_rollback_to_first_header(),
     test_rollback_during_compaction(),
     test_rollback_unindexable_seqs(),
     test_rollback_nonexistent(),
@@ -167,7 +167,7 @@ test_rollback_not_exactly() ->
     shutdown_group().
 
 
-test_rollback_not_possible() ->
+test_rollback_to_first_header() ->
     etap:diag("Testing rollback to a previous header which doesn't "
       "exist anymore due to compaction"),
     setup_test(30),
@@ -194,10 +194,10 @@ test_rollback_not_possible() ->
         etap:bail("Timeout waiting for main group compaction to finish")
     end,
 
-    Fd = get_fd(),
+    Fd2 = get_fd(),
 
     % Verify that the file got compacted
-    {ok, HeaderBin2, Pos2} = couch_file:read_header_bin(Fd),
+    {ok, HeaderBin2, Pos2} = couch_file:read_header_bin(Fd2),
     Header2 = couch_set_view_util:header_bin_to_term(HeaderBin2),
     HeaderSeqs2 = Header2#set_view_index_header.seqs,
     etap:is(HeaderSeqs2, HeaderSeqs1, "The sequence numbers in the "
@@ -205,14 +205,9 @@ test_rollback_not_possible() ->
     etap:ok(Pos2 < Pos1, "Header is further at the front of the file"),
 
     %  Verify that are no previous headers left
-    {ok, HeaderBin3, Pos3} = couch_file:find_header_bin(Fd, Pos2 - 1),
-    Header3 = couch_set_view_util:header_bin_to_term(HeaderBin3),
-    HeaderSeqs3 = Header3#set_view_index_header.seqs,
+    {ok, HeaderBin3, Pos3} = couch_file:find_header_bin(Fd2, Pos2 - 1),
     etap:is(Pos3, 0,
         "There are no headers other than the one the file starts with"),
-    etap:is(HeaderSeqs3, HeaderSeqs2,
-        "The file opening header has the same sequence number "
-        "as the current one"),
 
     % Pick a sequence number that is lower than the one from the header,
     % hence doesn't exist in the file
@@ -220,9 +215,17 @@ test_rollback_not_possible() ->
     PartSeq = couch_set_view_util:get_part_seq(PartId, HeaderSeqs2) - 1,
 
     % Rollback the index
-    RollbackResult = rollback_group([{PartId, PartSeq}]),
-    etap:is(RollbackResult, cannot_rollback,
-        "The header wasn't found as expected"),
+    ok = rollback_group([{PartId, PartSeq}]),
+
+    % The rollback is to the first header of the file, which means
+    % that a complete re-indexing is needed.
+    Fd3 = get_fd(),
+    {ok, HeaderBin4, Pos4} = couch_file:read_header_bin(Fd3),
+    Header4 = couch_set_view_util:header_bin_to_term(HeaderBin4),
+    HeaderSeqs4 = Header4#set_view_index_header.seqs,
+    etap:is(HeaderSeqs4, [{PartId, 0} || {PartId, _Seq} <- HeaderSeqs1],
+        "The sequence numbers are reset to 0"),
+
     shutdown_group().
 
 
@@ -683,6 +686,7 @@ test_rollback_added_partitions() ->
 
     ok = rollback_group([{PartId, PartSeq}]),
 
+    trigger_updater(),
     couch_set_view_test_util:wait_for_updater_to_finish(GroupPid, ?MAX_WAIT_TIME),
     Fd2 = get_fd(),
     {ok, HeaderBin2, _Pos2} = couch_file:read_header_bin(Fd2),
@@ -844,7 +848,7 @@ get_group_snapshot() ->
     GroupPid = couch_set_view:get_group_pid(
         mapreduce_view, test_set_name(), ddoc_id(), prod),
     {ok, Group, 0} = gen_server:call(
-        GroupPid, #set_view_group_req{stale = false, debug = true}, infinity),
+        GroupPid, #set_view_group_req{stale = ok, debug = true}, infinity),
     Group.
 
 
