@@ -818,10 +818,10 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
                    ?group_id(State), Duration, CleanupKVCount]),
         inc_util_stat(#util_stats.compaction_time, Duration),
         ok = couch_file:only_snapshot_reads(OldFd),
-        ok = couch_file:delete(?root_dir(State), OldFilepath),
         %% After rename call we're sure the header was written to the file
         %% (no need for couch_file:flush/1 call).
         ok = couch_file:rename(NewGroup#set_view_group.fd, NewFilepath),
+        ok = couch_file:delete(?root_dir(State), OldFilepath),
 
         %% cleanup old group
         unlink(CompactorPid),
