@@ -2653,6 +2653,14 @@ stop_cleaner(#state{cleaner_pid = Pid, group = Group} = State) when is_pid(Pid) 
     unlink(Pid),
     ?LOG_INFO("Stopping cleanup process for set view `~s`, group `~s` (~s)",
               [?set_name(State), ?group_id(State), ?category(State)]),
+    % NOTE vmx 2015-06-29: There is currently no way to cleanly stop the
+    % spatial view cleaner while it is running. Hence do a hard stop right way.
+    case Group#set_view_group.mod of
+    spatial_view ->
+        couch_util:shutdown_sync(Pid);
+    _ ->
+        ok
+    end,
     NewState = receive
     {'EXIT', Pid, Reason} ->
         after_cleaner_stopped(State, Reason);
