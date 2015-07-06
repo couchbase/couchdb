@@ -1728,7 +1728,11 @@ get_group_info(State) ->
         {cleanup_interruptions, Stats#set_view_group_stats.cleanup_stops},
         {update_history, Stats#set_view_group_stats.update_history},
         {compaction_history, Stats#set_view_group_stats.compaction_history},
-        {cleanup_history, Stats#set_view_group_stats.cleanup_history}
+        {cleanup_history, Stats#set_view_group_stats.cleanup_history},
+        {accesses, Stats#set_view_group_stats.accesses},
+        {update_errors, Stats#set_view_group_stats.update_errors},
+        {duplicated_partition_versions_seen,
+         Stats#set_view_group_stats.dup_partitions_counter}
     ]},
     {ok, Size} = couch_file:bytes(Fd),
     GroupPartitions = ordsets:from_list(
