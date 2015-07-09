@@ -388,13 +388,12 @@ chunkify([InElement | RestInList], ChunkThreshold, OutList, OutListSize, OutputC
     end.
 
 modify_node(Bt, RootPointerInfo, Actions, QueryOutput, Acc, PurgeFun, PurgeFunAcc, KeepPurging) ->
-    case RootPointerInfo of
+    {NodeType, NodeList} = case RootPointerInfo of
     nil ->
-        NodeType = kv_node,
-        NodeList = [];
+        {kv_node, []};
     _Tuple ->
         Pointer = element(1, RootPointerInfo),
-        {NodeType, NodeList} = get_node(Bt, Pointer)
+        get_node(Bt, Pointer)
     end,
 
     case NodeType of
@@ -996,13 +995,12 @@ guided_purge(#btree{root = Root} = Bt, GuideFun, GuideAcc0) ->
 
 guided_purge(Bt, NodeState, GuideFun, GuideAcc) ->
     % inspired by modify_node/5
-    case NodeState of
+    {NodeType, NodeList} = case NodeState of
     nil ->
-        NodeType = kv_node,
-        NodeList = [];
+        {kv_node, []};
     _Tuple ->
         Pointer = element(1, NodeState),
-        {NodeType, NodeList} = get_node(Bt, Pointer)
+        get_node(Bt, Pointer)
     end,
     {ok, NewNodeList, GuideAcc2, Bt2, Go} =
     case NodeType of
