@@ -27,18 +27,9 @@
 #include <cstring>
 #include <sstream>
 #include <map>
-
-#if defined(WIN32) || defined(_WIN32)
-#define doSleep(Ms) Sleep(Ms)
-#else
-#define doSleep(Ms)                             \
-    do {                                        \
-        struct timespec ts;                     \
-        ts.tv_sec = Ms / 1000;                  \
-        ts.tv_nsec = (Ms % 1000) * 1000000;     \
-        nanosleep(&ts, NULL);                   \
-    } while(0)
-#endif
+#include <chrono>
+#include <mutex>
+#include <condition_variable>
 
 #include "erl_nif_compat.h"
 #include "mapreduce.h"
@@ -54,6 +45,7 @@ static int                                         maxKvSize = 1 * 1024 * 1024;
 static ErlNifResourceType                          *MAP_REDUCE_CTX_RES;
 static ErlNifTid                                   terminatorThreadId;
 static ErlNifMutex                                 *terminatorMutex;
+static std::condition_variable                     cv;
 static volatile int                                shutdownTerminator = 0;
 static std::map< unsigned int, map_reduce_ctx_t* > contexts;
 
@@ -370,6 +362,8 @@ ERL_NIF_TERM setTimeout(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
     maxTaskDuration = (timeout + 999) / 1000;
 
+    cv.notify_one();
+
     return ATOM_OK;
 }
 
@@ -517,7 +511,9 @@ void *terminatorLoop(void *args)
         enif_mutex_unlock(terminatorMutex);
         // Convert minTimeDiff to miliseconds
         hrtime_t minTimeMSec = (hrtime_t)(minTimeDiff * NSEC_TO_MSEC);
-        doSleep(minTimeMSec);
+        std::mutex  cvMutex;
+        std::unique_lock<std::mutex> lk(cvMutex);
+        cv.wait_for(lk, std::chrono::milliseconds(minTimeMSec));
     }
 
     return NULL;

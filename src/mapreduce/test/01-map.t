@@ -25,7 +25,7 @@
 
 main(_) ->
     test_util:init_code_path(),
-    etap:plan(126),
+    etap:plan(132),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -68,8 +68,19 @@ test() ->
     test_many_timeouts(5),
     test_many_timeouts(10),
     test_half_timeouts(10),
+    % Minimum timeout is 1000 ms
+    test_timeout_within2x(10, false),
+    % Test map task times out in < 2000 ms
+    test_timeout_within2x(1000, true),
+    % Timeouts are multiple of 1000 ms ceiled to 3s
+    test_timeout_within2x(2250, true),
+    % Timeout close to next step. Timeout set to 3s
+    test_timeout_within2x(2950, true),
+    % Test a large timeout value 10s
+    test_timeout_within2x(10000, true),
+    % Test with default value of 5s
+    test_timeout_within2x(5000, true),
     ok.
-
 
 test_map_function_bad_syntax() ->
     Result = start_map_context([<<"function(doc) { emit(doc._id, 1); ">>]),
@@ -449,6 +460,18 @@ test_half_timeouts(NumProcesses) ->
             end
         end,
         lists:zip(lists:seq(1, NumProcesses), Pids)).
+
+test_timeout_within2x(Timeout, ExpectedCond) ->
+    ok = mapreduce:set_timeout(Timeout),
+    {ok, Ctx} = start_map_context([
+        <<"function(doc) { while (true) { }; }">>
+    ]),
+    Doc = <<"{\"_id\": \"doc1\", \"value\": 1}">>,
+    StartTime = os:timestamp(),
+    map_doc(Ctx, Doc, <<"{}">>),
+    EndTime = os:timestamp(),
+    DiffTime = timer:now_diff(EndTime, StartTime)/1000,
+    etap:is(ExpectedCond, DiffTime < 2*Timeout, "Worker terminated in < 2x time").
 
 map_doc(Ctx, Doc, Meta) ->
     case mapreduce:map_doc(Ctx, Doc, Meta) of
