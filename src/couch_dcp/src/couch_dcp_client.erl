@@ -1478,6 +1478,9 @@ restart_worker(State) ->
             get_stats ->
                 {MRef, From} = SendTo,
                 From ! {get_stats, MRef, Error};
+	    all_seqs ->
+                {MRef, From} = SendTo,
+                From ! {all_seqs, MRef, Error};
             {control_request, _} ->
                 ok;
             _ ->
