@@ -62,6 +62,9 @@
     id = <<>>,
     rev = {0, <<>>},
 
+    seq = 0,
+    partition = 0,
+
     % the binary body
     body = <<"{}">>,
     content_meta = 0, % should be 0-255 only.

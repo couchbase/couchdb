@@ -15,7 +15,7 @@
 % the License.
 
 %% XXX: Figure out how to -include("couch_db.hrl")
--record(doc, {id= <<"">>, rev={0, <<>>}, body={[]},
+-record(doc, {id= <<"">>, rev={0, <<>>}, seq=0, partition=0, body={[]},
         content_meta=0, deleted=false, meta=[]}).
 
 main(_) ->
@@ -55,7 +55,7 @@ test_to_json_success() ->
         },
         {
             #doc{rev={5, <<0>>}},
-            '{"meta":{"id":"","rev":"5-00"},"json":{}}',
+            '{"meta":{"id":"","rev":"5-00","doc_seqno":"5","vb_seqno":"0","vb":"0"},"json":{}}',
             "_rev is added."
         },
         {
