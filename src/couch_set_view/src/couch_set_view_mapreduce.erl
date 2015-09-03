@@ -19,7 +19,7 @@
 
 -export([start_map_context/1, start_reduce_context/1]).
 -export([end_map_context/0, end_reduce_context/1]).
--export([map/1, reduce/2, reduce/3, rereduce/2, rereduce/3]).
+-export([map/3, reduce/2, reduce/3, rereduce/2, rereduce/3]).
 -export([builtin_reduce/3]).
 -export([validate_ddoc_views/1]).
 
@@ -74,9 +74,9 @@ end_reduce_context(#set_view{ref = Ref}) ->
     ok.
 
 
-map(Doc) ->
+map(Doc, PartId, Seq) ->
     Ctx = erlang:get(map_context),
-    {DocBody, DocMeta} = couch_doc:to_raw_json_binary_views(Doc),
+    {DocBody, DocMeta} = couch_doc:to_raw_json_binary_views(Doc, PartId, Seq),
     case mapreduce:map_doc(Ctx, DocBody, DocMeta) of
     {ok, _Results, _LogList} = Ok ->
         Ok;

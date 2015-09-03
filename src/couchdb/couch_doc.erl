@@ -16,7 +16,8 @@
 -export([from_json_obj/1,to_json_obj/2,to_json_obj/1,to_json_bin/1,from_binary/3]).
 -export([validate_docid/1,with_uncompressed_body/1]).
 -export([with_ejson_body/1,with_json_body/1]).
--export([to_raw_json_binary_views/1,to_json_base64/1]).
+-export([to_raw_json_binary_views/1, to_raw_json_binary_views/3]).
+-export([to_json_base64/1]).
 
 -include("couch_db.hrl").
 
@@ -26,6 +27,10 @@ to_json_rev(0, _) ->
     [];
 to_json_rev(Start, RevId) ->
     [{<<"rev">>, ?l2b([integer_to_list(Start),"-",revid_to_str(RevId)])}].
+
+to_json_vbinfo(PartId, Seq) ->
+    [{<<"seq">>, integer_to_binary(Seq)}]
+    ++ [{<<"vb">>, integer_to_binary(PartId)}].
 
 to_ejson_body({Body}, _ContentMeta) ->
     {<<"json">>, {Body}};
@@ -44,8 +49,8 @@ revid_to_str(RevId) ->
 
 rev_to_str({Pos, RevId}) ->
     ?l2b([integer_to_list(Pos),"-",revid_to_str(RevId)]).
-                    
-                    
+
+
 revs_to_strs([]) ->
     [];
 revs_to_strs([{Pos, RevId}| Rest]) ->
@@ -91,10 +96,16 @@ to_deleted_meta(_) ->
     [].
 
 to_full_ejson_meta(#doc{id=Id,deleted=Del,rev={Start, RevId},
-        meta=Meta, content_meta=ContentMeta}=Doc, IncludeType) ->
+        meta=Meta, content_meta=ContentMeta}=Doc, PartId, Seq, IncludeType) ->
     {
         [json_id(Id)]
         ++ to_json_rev(Start, RevId)
+        ++ case (PartId =:= nil andalso Seq =:= nil) of
+           true ->
+               [];
+           false ->
+               to_json_vbinfo(PartId, Seq)
+           end
         ++ to_json_meta(Meta)
         ++ to_memcached_meta(Doc)
         ++ to_deleted_meta(Del)
@@ -107,6 +118,8 @@ to_full_ejson_meta(#doc{id=Id,deleted=Del,rev={Start, RevId},
            []
         end
     }.
+to_full_ejson_meta(Doc, IncludeType) ->
+    to_full_ejson_meta(Doc, nil, nil, IncludeType).
 
 to_json_obj(Doc0)->
     to_json_obj(Doc0, []).
@@ -294,9 +307,14 @@ json_id(Id) ->
         {<<"id">>, Id}
     end.
 
-to_raw_json_binary_views(Doc0) ->
+to_raw_json_binary_views(Doc0, PartId, Seq) ->
     Doc = with_json_body(Doc0),
-    MetaBin = ?JSON_ENCODE(to_full_ejson_meta(Doc, true)),
+    MetaBin = case (PartId =:= nil andalso Seq =:= nil) of
+    false ->
+        ?JSON_ENCODE(to_full_ejson_meta(Doc, PartId, Seq, true));
+    true ->
+        ?JSON_ENCODE(to_full_ejson_meta(Doc, true))
+    end,
     ContentBin = case Doc#doc.content_meta of
     ?CONTENT_META_JSON ->
         iolist_to_binary(Doc#doc.body);
@@ -304,3 +322,5 @@ to_raw_json_binary_views(Doc0) ->
         iolist_to_binary([<<"\"">>, base64:encode(iolist_to_binary(Doc#doc.body)), <<"\"">>])
     end,
     {ContentBin, MetaBin}.
+to_raw_json_binary_views(Doc0) ->
+    to_raw_json_binary_views(Doc0, nil, nil).
