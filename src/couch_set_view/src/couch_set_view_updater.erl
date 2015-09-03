@@ -772,7 +772,8 @@ do_maps(Group, MapQueue, WriteQueue) ->
                     deleted = false
                 },
                 try
-                    {ok, Result, LogList} = couch_set_view_mapreduce:map(Doc),
+                    {ok, Result, LogList} = couch_set_view_mapreduce:map(
+                        Doc, PartId, Seq),
                     {Result2, _} = lists:foldr(
                         fun({error, Reason}, {AccRes, Pos}) ->
                             ErrorMsg = "Bucket `~s`, ~s group `~s`, error mapping"
