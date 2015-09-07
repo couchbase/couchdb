@@ -54,7 +54,8 @@
     {
     id = <<>>,
     rev = {0, <<>>},
-
+    partition = 0, % should be 0-1023 indicating vbucket number
+    seq = 0, % partition seq number as reported by memcached
     % the binary body
     body = <<"{}">>,
     content_meta = 0, % should be 0-255 only.

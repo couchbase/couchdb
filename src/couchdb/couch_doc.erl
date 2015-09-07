@@ -27,6 +27,13 @@ to_json_rev(0, _) ->
 to_json_rev(Start, RevId) ->
     [{<<"rev">>, ?l2b([integer_to_list(Start),"-",revid_to_str(RevId)])}].
 
+to_json_privinfo(0, _, _) ->
+    [];
+to_json_privinfo(Start, PartId, Seq) ->
+    [{<<"doc_seqno">>, integer_to_binary(Start)}]
+    ++ [{<<"vb_seqno">>, integer_to_binary(Seq)}]
+    ++ [{<<"vb">>, integer_to_binary(PartId)}].
+
 to_ejson_body({Body}, _ContentMeta) ->
     {<<"json">>, {Body}};
 to_ejson_body(<<"{}">>, ?CONTENT_META_JSON) ->
@@ -44,8 +51,8 @@ revid_to_str(RevId) ->
 
 rev_to_str({Pos, RevId}) ->
     ?l2b([integer_to_list(Pos),"-",revid_to_str(RevId)]).
-                    
-                    
+
+
 revs_to_strs([]) ->
     [];
 revs_to_strs([{Pos, RevId}| Rest]) ->
@@ -91,10 +98,12 @@ to_deleted_meta(_) ->
     [].
 
 to_full_ejson_meta(#doc{id=Id,deleted=Del,rev={Start, RevId},
-        meta=Meta, content_meta=ContentMeta}=Doc, IncludeType) ->
+        meta=Meta, content_meta=ContentMeta, seq = Seq,
+        partition = PartId}=Doc, IncludeType) ->
     {
         [json_id(Id)]
         ++ to_json_rev(Start, RevId)
+        ++ to_json_privinfo(Start, PartId, Seq)
         ++ to_json_meta(Meta)
         ++ to_memcached_meta(Doc)
         ++ to_deleted_meta(Del)

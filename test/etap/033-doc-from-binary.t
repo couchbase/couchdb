@@ -15,7 +15,7 @@
 % the License.
 
 %% XXX: Figure out how to -include("couch_db.hrl")
--record(doc, {id= <<"">>, rev={0, <<>>}, body= <<"{}">>,
+-record(doc, {id= <<"">>, rev={0, <<>>}, seq=0, partition=0, body= <<"{}">>,
         content_meta=0, deleted=false, meta=[]}).
 -define(CONTENT_META_JSON, 0).
 -define(CONTENT_META_INVALID_JSON, 1).

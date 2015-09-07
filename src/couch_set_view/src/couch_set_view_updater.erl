@@ -749,8 +749,8 @@ do_maps(Group, MapQueue, WriteQueue) ->
                 end,
                 #dcp_doc{
                     id = Id,
-                    body = Body,
                     partition = PartId,
+                    body = Body,
                     rev_seq = RevSeq,
                     seq = Seq,
                     cas = Cas,
@@ -767,6 +767,8 @@ do_maps(Group, MapQueue, WriteQueue) ->
                 Doc = #doc{
                     id = Id,
                     rev = {RevSeq, <<Cas:64, Expiration:32, Flags:32>>},
+                    partition = PartId,
+                    seq = Seq,
                     body = Body,
                     content_meta = DataType,
                     deleted = false
