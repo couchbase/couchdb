@@ -17,6 +17,12 @@ ADD_LIBRARY(couch_ejson_compare MODULE ${COUCH_EJSON_COMPARE_SRC})
 SET_TARGET_PROPERTIES(couch_ejson_compare PROPERTIES PREFIX "")
 TARGET_LINK_LIBRARIES(couch_ejson_compare ${COUCHBASE_UNRESOLVED} ${ICU_LIBRARIES})
 
+IF (APPLE)
+    # map from lib/couchdb/erlang/lib/couch-1.2.0a-961ad59-git/priv/lib to lib/
+    SET_TARGET_PROPERTIES(couch_ejson_compare PROPERTIES
+                          INSTALL_RPATH "@loader_path/../../../../../..")
+ENDIF ()
+
 INSTALL(TARGETS couch_ejson_compare
         DESTINATION ${COUCH_PRIV_LIB_PREFIX})
 

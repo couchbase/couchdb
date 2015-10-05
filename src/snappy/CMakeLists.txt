@@ -24,6 +24,12 @@ SET_TARGET_PROPERTIES(snappy_nif PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/priv"
 )
 
+IF (APPLE)
+    # map from lib/couchdb/erlang/lib/snappy-1.0.4/priv/ to lib/
+    SET_TARGET_PROPERTIES(snappy_nif PROPERTIES
+                          INSTALL_RPATH "@loader_path/../../../../..")
+ENDIF ()
+
 ERL_BUILD("snappy" ${SRC})
 
 INSTALL(TARGETS snappy_nif

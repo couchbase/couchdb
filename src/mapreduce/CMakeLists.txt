@@ -31,6 +31,11 @@ SET_TARGET_PROPERTIES(mapreduce_nif PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/priv"
 )
 
+IF (APPLE)
+    # map from lib/couchdb/erlang/lib/mapreduce-1.0/priv/ to lib/
+    SET_TARGET_PROPERTIES(mapreduce_nif PROPERTIES
+                          INSTALL_RPATH "@loader_path/../../../../..")
+ENDIF ()
 
 ERL_BUILD("mapreduce" ${SRC})
 
