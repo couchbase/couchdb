@@ -987,6 +987,10 @@ handle_cast({ddoc_updated, NewSig, Aliases}, State) ->
     CurSig ->
         State2 = State#state{shutdown = false, shutdown_aliases = undefined},
         {noreply, State2, ?GET_TIMEOUT(State2)};
+    <<>> ->
+        State2 = State#state{shutdown = true, shutdown_aliases = Aliases},
+        Error = {error, <<"Design document was deleted">>},
+        {stop, normal, reply_all(State2, Error)};
     _ ->
         State2 = State#state{shutdown = true, shutdown_aliases = Aliases},
         case Waiters of
