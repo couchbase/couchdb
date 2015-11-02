@@ -59,13 +59,8 @@ typedef struct {
 typedef std::list< map_result_t,
                    NifStlAllocator< map_result_t > >  map_results_list_t;
 
-#ifdef V8_POST_3_19_API
 typedef std::vector< v8::Persistent<v8::Function>*,
                      NifStlAllocator< v8::Persistent<v8::Function>* > >  function_vector_t;
-#else
-typedef std::vector< v8::Persistent<v8::Function>,
-                     NifStlAllocator< v8::Persistent<v8::Function> > >  function_vector_t;
-#endif
 
 typedef std::basic_string< char,
                            std::char_traits<char>,
