@@ -231,10 +231,12 @@ refresh_eof(Fd) ->
 
 
 delete(RootDir, Filepath) ->
-    delete(RootDir, Filepath, true).
-
+    delete(RootDir, Filepath, true, false).
 
 delete(RootDir, Filepath, Async) ->
+    delete(RootDir, Filepath, Async, false).
+
+delete(RootDir, Filepath, Async, Retry) ->
     DelFile = filename:join([RootDir,".delete", ?b2l(couch_uuids:random())]),
     ?LOG_INFO("Deleting couch file ~p with renaming it to ~p", [Filepath,
         DelFile]),
@@ -246,6 +248,10 @@ delete(RootDir, Filepath, Async) ->
         true ->
             file2:delete(DelFile)
         end;
+    % The target directory might not exist, create it and retry
+    {error, enoent} when Retry =:= false ->
+        ok = file2:ensure_dir(DelFile),
+        delete(RootDir, Filepath, Async, true);
     Error ->
         Error
     end.
