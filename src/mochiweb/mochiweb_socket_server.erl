@@ -130,21 +130,13 @@ parse_options([{profile_fun, ProfileFun} | Rest], State) when is_function(Profil
     parse_options(Rest, State#mochiweb_socket_server{profile_fun=ProfileFun}).
 
 
-start_server(F, State=#mochiweb_socket_server{ssl=Ssl, name=Name}) ->
-    ok = prep_ssl(Ssl),
+start_server(F, State=#mochiweb_socket_server{name=Name}) ->
     case Name of
         undefined ->
             gen_server:F(?MODULE, State, []);
         _ ->
             gen_server:F(Name, ?MODULE, State, [])
     end.
-
-prep_ssl(true) ->
-    ok = mochiweb:ensure_started(crypto),
-    ok = mochiweb:ensure_started(public_key),
-    ok = mochiweb:ensure_started(ssl);
-prep_ssl(false) ->
-    ok.
 
 ensure_int(N) when is_integer(N) ->
     N;
