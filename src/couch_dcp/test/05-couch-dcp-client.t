@@ -29,7 +29,7 @@ num_docs_pp() -> num_docs() div num_set_partitions().
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(54),
+    etap:plan(56),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -45,6 +45,14 @@ main(_) ->
 test() ->
     couch_set_view_test_util:start_server(test_set_name()),
     setup_test(),
+
+    tests(),
+    test_close_during_request(),
+
+    couch_set_view_test_util:stop_server(),
+    ok.
+
+tests() ->
     % Populate failover log
     FailoverLogs = lists:map(fun(PartId) ->
         FailoverLog = [
@@ -468,9 +476,52 @@ test() ->
             TestFun, []),
     etap:is(PersistedDocs3, ExpectedDocs3,
         "The persisted sequence number is correct, seq - 1"),
-
-    couch_set_view_test_util:stop_server(),
     ok.
+
+% Test robustness when the connection is dropped during a get all sequence
+% numbers or stats request
+% This is a regression test for MB-15922 and MB-17026
+test_close_during_request() ->
+    %timer:sleep(1),
+    %couch_set_view_test_util:start_server(test_set_name()),
+    %setup_test(),
+
+    {auth, User, Passwd} = cb_auth_info:get(),
+    {ok, Pid} = couch_dcp_client:start(
+        test_set_name(), test_set_name(), User, Passwd, 1024),
+
+    ParentPid = self(),
+
+    % Get sequencenumbers request
+    spawn(fun() ->
+        couch_dcp_fake_server:close_on_next(),
+        Closed = couch_dcp_client:get_seqs(Pid, [0]),
+        ParentPid ! {ok, Closed}
+    end),
+    receive
+    {ok, Closed} ->
+        etap:is(Closed, {error, dcp_conn_closed},
+            "The connection got (as expected) closed "
+            "during the get sequence numbers request")
+    after 10000 ->
+         etap:bail("Cannot get sequence number on time, the DCP client hangs")
+    end,
+
+    % Stats request
+    spawn(fun() ->
+        couch_dcp_fake_server:close_on_next(),
+        catch couch_dcp_client:get_num_items(Pid, 0),
+        ParentPid ! ok
+    end),
+    receive
+    ok ->
+        etap:ok(true,
+            "The connection got (as expected) closed during the stats request")
+    after 10000 ->
+         etap:bail("Cannot get stats on time, the DCP client hangs")
+    end,
+    ok.
+
 
 try_until_throttled(Pid, ReqId, N, MaxSize) when N > 0 ->
     ok = couch_dcp_fake_server:send_single_mutation(),

@@ -22,6 +22,7 @@
     pause_mutations/0, ceil_div/2, num_items_with_dups/3]).
 -export([send_single_mutation/0, continue_mutations/0]).
 -export([get_num_buffer_acks/0, is_control_req/0, close_connection/1]).
+-export([close_on_next/0]).
 
 % Needed for internal process spawning
 -export([accept/1, accept_loop/1]).
@@ -110,7 +111,10 @@
     % The number of duplicates a snapshot should contain. This option needs
     % to be combined with items_per_snapshot. A snapshot will contain the
     % given number of items from a previous snapshot (randomly chosen).
-    dups_per_snapshot = 0
+    dups_per_snapshot = 0,
+    % Whether to close the connection on the next gen_server call
+    % NOTE vmx 2015-12-15: Currently only seqs and stats request are closed
+    close_on_next = false
 }).
 
 
@@ -176,6 +180,10 @@ close_connection(PartId) ->
 send_single_mutation() ->
     ?MODULE ! send_mutations,
     ok.
+
+% Used by unit test. Closes the connectio on the next command it receives.
+close_on_next() ->
+    ok = gen_server:call(?MODULE, close_on_next).
 
 % gen_server callbacks
 
@@ -306,6 +314,11 @@ handle_call({set_dups_per_snapshot, Num}, _From, State) ->
         dups_per_snapshot = Num
     }};
 
+handle_call({all_seqs, Socket, _}, _From,
+            #state{close_on_next = true} = State) ->
+    ok = gen_tcp:close(Socket),
+    {reply, ok, State#state{close_on_next = false}};
+
 handle_call({all_seqs, Socket, RequestId}, _From, State) ->
   #state{
         setname = SetName,
@@ -323,6 +336,11 @@ handle_call({all_seqs, Socket, RequestId}, _From, State) ->
     Data = couch_dcp_producer:encode_seqs(RequestId, lists:reverse(Result)),
     ok = gen_tcp:send(Socket, Data),
     {reply, ok, State};
+
+handle_call({send_stat, _, Socket, _, _}, _From,
+            #state{close_on_next = true} = State) ->
+    ok = gen_tcp:close(Socket),
+    {reply, ok, State#state{close_on_next = false}};
 
 handle_call({send_stat, Stat, Socket, RequestId, PartId}, _From, State) ->
     #state{
@@ -453,7 +471,11 @@ handle_call({close_connection, PartId}, _From, State) ->
         end,
     [], Streams),
     State2 = State#state{streams = Streams2},
-    {reply, ok, State2}.
+    {reply, ok, State2};
+
+% Close the connection after the next received command
+handle_call(close_on_next, _from, State) ->
+    {reply, ok, State#state{close_on_next = true}}.
 
 -spec handle_cast(any(), #state{}) ->
                          {stop, {unexpected_cast, any()}, #state{}}.
