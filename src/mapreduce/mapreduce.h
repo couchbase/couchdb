@@ -25,7 +25,7 @@
 #include <string>
 #include <list>
 #include <vector>
-#include <v8.h>
+#include <include/v8.h>
 #include <platform/platform.h>
 
 #include "erl_nif_compat.h"
@@ -69,10 +69,26 @@ typedef std::basic_string< char,
 typedef std::list< function_source_t,
                    NifStlAllocator< function_source_t > >  function_sources_list_t;
 
+class ArrayBufferAllocator : public v8::ArrayBuffer::Allocator {
+public:
+    virtual void* Allocate(size_t length) {
+        void* data = AllocateUninitialized(length);
+        return data == NULL ? data : memset(data, 0, length);
+    }
+
+    virtual void* AllocateUninitialized(size_t length) {
+        return malloc(length);
+    }
+
+    virtual void Free(void* data, size_t) {
+        free(data);
+    }
+};
 
 typedef struct {
     v8::Persistent<v8::Context>                  jsContext;
     v8::Isolate                                  *isolate;
+    ArrayBufferAllocator                         *bufAllocator;
     function_vector_t                            *functions;
     kv_pair_list_t                               *kvs;
     unsigned int                                 key;
@@ -107,6 +123,19 @@ ErlNifBinary runRereduce(map_reduce_ctx_t *ctx,
 
 void terminateTask(map_reduce_ctx_t *ctx);
 
+/**
+* This API needs to be called once per process to initialize
+* v8 javascript engine. This needs to be called before
+* any v8 APIs like creating v8 isolate and v8 context.
+**/
+void initV8();
+
+/**
+* This API needs to be called once per process to cleanup
+* v8 resources. This needs to be called after disposing all
+* v8 thread contexts like v8 isolate and v8 context.
+**/
+void deinitV8();
 
 class MapReduceError {
 public:

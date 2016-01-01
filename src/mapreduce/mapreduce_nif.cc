@@ -413,6 +413,7 @@ int onLoad(ErlNifEnv *env, void **priv, ERL_NIF_TERM info)
         return -4;
     }
 
+    initV8();
     return 0;
 }
 
@@ -424,6 +425,7 @@ void onUnload(ErlNifEnv *env, void *priv_data)
     shutdownTerminator = 1;
     enif_thread_join(terminatorThreadId, &result);
     enif_mutex_destroy(terminatorMutex);
+    deinitV8();
 }
 
 

@@ -23,10 +23,11 @@
 #include <string>
 #include <string.h>
 #include <sstream>
-#include <v8.h>
 #include <time.h>
-
 #include "mapreduce.h"
+// This is libv8_libplatform library which handles garbage collection for v8
+#include <include/libplatform/libplatform.h>
+
 #define MAX_LOG_STRING_SIZE 1024
 
 #define MAX_EMIT_KEY_SIZE 4096
@@ -106,7 +107,8 @@ static Local<Context> createJsContext(map_reduce_ctx_t *ctx);
 static void emit(const v8::FunctionCallbackInfo<Value>& args);
 static void log(const v8::FunctionCallbackInfo<Value>& args);
 
-static void loadFunctions(map_reduce_ctx_t *ctx, const function_sources_list_t &funs);
+static void loadFunctions(map_reduce_ctx_t *ctx,
+                          const function_sources_list_t &funs);
 static void freeJsonData(const json_results_list_t &data);
 static void freeMapResult(const map_result_t &data);
 static void freeMapResultList(const map_results_list_t &results);
@@ -120,7 +122,21 @@ static inline void taskFinished(map_reduce_ctx_t *ctx);
 static std::string exceptionString(const TryCatch &tryCatch);
 static void freeLogResults(map_reduce_ctx_t *ctx);
 
+static Platform *v8platform;
+void initV8()
+{
+    V8::InitializeICU();
+    v8platform = platform::CreateDefaultPlatform();
+    V8::InitializePlatform(v8platform);
+    V8::Initialize();
+}
 
+void deinitV8()
+{
+    V8::Dispose();
+    V8::ShutdownPlatform();
+    delete v8platform;
+}
 
 void initContext(map_reduce_ctx_t *ctx, const function_sources_list_t &funs,
                  const view_index_type_t viewType)
@@ -130,9 +146,11 @@ void initContext(map_reduce_ctx_t *ctx, const function_sources_list_t &funs,
 
     try {
         Locker locker(ctx->isolate);
-        Isolate::Scope isolateScope(ctx->isolate);
-        HandleScope handleScope(ctx->isolate);
-        Context::Scope contextScope(ctx->isolate, ctx->jsContext);
+        Isolate::Scope isolate_scope(ctx->isolate);
+        HandleScope handle_scope(ctx->isolate);
+        Local<Context> context =
+            Local<Context>::New(ctx->isolate, ctx->jsContext);
+        Context::Scope context_scope(context);
 
         loadFunctions(ctx, funs);
     } catch (...) {
@@ -141,27 +159,50 @@ void initContext(map_reduce_ctx_t *ctx, const function_sources_list_t &funs,
     }
 }
 
+static Local<String> createUtf8String(Isolate *isolate, const char *str)
+{
+    return String::NewFromUtf8(isolate, str,
+        NewStringType::kNormal).ToLocalChecked();
+}
+
+static Local<String> createUtf8String(Isolate *isolate, const char *str,
+                                      size_t len)
+{
+    return String::NewFromUtf8(isolate, str,
+        NewStringType::kNormal, len).ToLocalChecked();
+}
+
 
 void doInitContext(map_reduce_ctx_t *ctx, const function_sources_list_t &funs,
                    const view_index_type_t viewType)
 {
     ctx->viewType = viewType;
-    ctx->isolate = Isolate::New();
+    ctx->bufAllocator = new ArrayBufferAllocator();
+    Isolate::CreateParams createParams;
+    createParams.array_buffer_allocator = ctx->bufAllocator;
+    ctx->isolate = Isolate::New(createParams);
     ctx->logResults = NULL;
     Locker locker(ctx->isolate);
-    Isolate::Scope isolateScope(ctx->isolate);
-    HandleScope handleScope(ctx->isolate);
+    Isolate::Scope isolate_scope(ctx->isolate);
+    HandleScope handle_scope(ctx->isolate);
 
     ctx->jsContext.Reset(ctx->isolate, createJsContext(ctx));
     Local<Context> context = Local<Context>::New(ctx->isolate, ctx->jsContext);
-    Context::Scope contextScope(context);
+    Context::Scope context_scope(context);
 
-    Handle<Object> jsonObject = Local<Object>::Cast(context->Global()->Get(String::New("JSON")));
+    Local<String> jsonString = createUtf8String(ctx->isolate, "JSON");
+    Handle<Object> jsonObject =
+        Local<Object>::Cast(context->Global()->Get(jsonString));
 
-    Handle<Function> parseFun = Local<Function>::Cast(jsonObject->Get(String::New("parse")));
-    Handle<Function> stringifyFun = Local<Function>::Cast(jsonObject->Get(String::New("stringify")));
+    Local<String> parseString = createUtf8String(ctx->isolate, "parse");
+    Handle<Function> parseFun =
+        Local<Function>::Cast(jsonObject->Get(parseString));
+    Local<String> stringifyString = createUtf8String(ctx->isolate, "stringify");
+    Handle<Function> stringifyFun =
+        Local<Function>::Cast(jsonObject->Get(stringifyString));
 
-    isolate_data_t *isoData = (isolate_data_t *) enif_alloc(sizeof(isolate_data_t));
+    isolate_data_t *isoData =
+        (isolate_data_t *) enif_alloc(sizeof(isolate_data_t));
     if (isoData == NULL) {
         throw std::bad_alloc();
     }
@@ -173,7 +214,7 @@ void doInitContext(map_reduce_ctx_t *ctx, const function_sources_list_t &funs,
 
     isoData->ctx = ctx;
 
-    ctx->isolate->SetData(isoData);
+    ctx->isolate->SetData(0, (void *)isoData);
     ctx->taskStartTime = 0;
 }
 
@@ -183,9 +224,10 @@ map_results_list_t mapDoc(map_reduce_ctx_t *ctx,
                           const ErlNifBinary &meta)
 {
     Locker locker(ctx->isolate);
-    Isolate::Scope isolateScope(ctx->isolate);
-    HandleScope handleScope(ctx->isolate);
-    Context::Scope contextScope(ctx->isolate, ctx->jsContext);
+    Isolate::Scope isolate_scope(ctx->isolate);
+    HandleScope handle_scope(ctx->isolate);
+    Local<Context> context = Local<Context>::New(ctx->isolate, ctx->jsContext);
+    Context::Scope context_scope(context);
     Handle<Value> docObject = jsonParse(doc);
     Handle<Value> metaObject = jsonParse(meta);
 
@@ -200,11 +242,13 @@ map_results_list_t mapDoc(map_reduce_ctx_t *ctx,
 
     for (unsigned int i = 0; i < ctx->functions->size(); ++i) {
         map_result_t mapResult;
-        Local<Function> fun = Local<Function>::New(ctx->isolate, *(*ctx->functions)[i]);
-        TryCatch trycatch;
+        Local<Function> fun =
+            Local<Function>::New(ctx->isolate, *(*ctx->functions)[i]);
+        TryCatch try_catch(ctx->isolate);
 
         mapResult.type = MAP_KVS;
-        mapResult.result.kvs = (kv_pair_list_t *) enif_alloc(sizeof(kv_pair_list_t));
+        mapResult.result.kvs =
+            (kv_pair_list_t *) enif_alloc(sizeof(kv_pair_list_t));
 
         if (mapResult.result.kvs == NULL) {
             freeMapResultList(results);
@@ -214,30 +258,33 @@ map_results_list_t mapDoc(map_reduce_ctx_t *ctx,
         mapResult.result.kvs = new (mapResult.result.kvs) kv_pair_list_t();
         ctx->kvs = mapResult.result.kvs;
         ctx->emitKvSize = 0;
-        Handle<Value> result = fun->Call(fun, 2, funArgs);
+        Handle<Value> result = fun->Call(context->Global(), 2, funArgs);
 
         if (result.IsEmpty()) {
             freeMapResult(mapResult);
 
-            if (!trycatch.CanContinue()) {
+            if (!try_catch.CanContinue()) {
                 freeMapResultList(results);
                 throw MapReduceError("timeout");
             }
 
             mapResult.type = MAP_ERROR;
-            std::string exceptString = exceptionString(trycatch);
+            std::string exceptString = exceptionString(try_catch);
             size_t len = exceptString.length();
 
-            mapResult.result.error = (ErlNifBinary *) enif_alloc(sizeof(ErlNifBinary));
+            mapResult.result.error =
+                (ErlNifBinary *) enif_alloc(sizeof(ErlNifBinary));
             if (mapResult.result.error == NULL) {
                 freeMapResultList(results);
                 throw std::bad_alloc();
             }
-            if (!enif_alloc_binary_compat(ctx->env, len, mapResult.result.error)) {
+            if (!enif_alloc_binary_compat(ctx->env, len,
+                    mapResult.result.error)) {
                 freeMapResultList(results);
                 throw std::bad_alloc();
             }
-            // Caller responsible for invoking enif_make_binary() or enif_release_binary()
+            // Caller responsible for invoking enif_make_binary()
+            // or enif_release_binary()
             memcpy(mapResult.result.error->data, exceptString.data(), len);
         }
 
@@ -255,30 +302,33 @@ json_results_list_t runReduce(map_reduce_ctx_t *ctx,
                               const json_results_list_t &values)
 {
     Locker locker(ctx->isolate);
-    Isolate::Scope isolateScope(ctx->isolate);
-    HandleScope handleScope(ctx->isolate);
-    Context::Scope contextScope(ctx->isolate, ctx->jsContext);
+    Isolate::Scope isolate_scope(ctx->isolate);
+    HandleScope handle_scope(ctx->isolate);
+    Local<Context> context = Local<Context>::New(ctx->isolate, ctx->jsContext);
+    Context::Scope context_scope(context);
     Handle<Array> keysArray = jsonListToJsArray(keys);
     Handle<Array> valuesArray = jsonListToJsArray(values);
     json_results_list_t results;
 
-    Handle<Value> args[] = { keysArray, valuesArray, Boolean::New(false) };
+    Handle<Value> args[] = { keysArray, valuesArray,
+                             Boolean::New(ctx->isolate, false) };
 
     taskStarted(ctx);
 
     for (unsigned int i = 0; i < ctx->functions->size(); ++i) {
-        Local<Function> fun = Local<Function>::New(ctx->isolate, *(*ctx->functions)[i]);
-        TryCatch trycatch;
-        Handle<Value> result = fun->Call(fun, 3, args);
+        Local<Function> fun =
+            Local<Function>::New(ctx->isolate, *(*ctx->functions)[i]);
+        TryCatch try_catch(ctx->isolate);
+        Handle<Value> result = fun->Call(context->Global(), 3, args);
 
         if (result.IsEmpty()) {
             freeJsonData(results);
 
-            if (!trycatch.CanContinue()) {
+            if (!try_catch.CanContinue()) {
                 throw MapReduceError("timeout");
             }
 
-            throw MapReduceError(exceptionString(trycatch));
+            throw MapReduceError(exceptionString(try_catch));
         }
 
         try {
@@ -303,9 +353,10 @@ ErlNifBinary runReduce(map_reduce_ctx_t *ctx,
                        const json_results_list_t &values)
 {
     Locker locker(ctx->isolate);
-    Isolate::Scope isolateScope(ctx->isolate);
-    HandleScope handleScope(ctx->isolate);
-    Context::Scope contextScope(ctx->isolate, ctx->jsContext);
+    Isolate::Scope isolate_scope(ctx->isolate);
+    HandleScope handle_scope(ctx->isolate);
+    Local<Context> context = Local<Context>::New(ctx->isolate, ctx->jsContext);
+    Context::Scope context_scope(context);
 
     reduceFunNum -= 1;
     if (reduceFunNum < 0 ||
@@ -313,25 +364,27 @@ ErlNifBinary runReduce(map_reduce_ctx_t *ctx,
         throw MapReduceError("invalid reduce function number");
     }
 
-    Local<Function> fun = Local<Function>::New(ctx->isolate, *(*ctx->functions)[reduceFunNum]);
+    Local<Function> fun =
+        Local<Function>::New(ctx->isolate, *(*ctx->functions)[reduceFunNum]);
     Handle<Array> keysArray = jsonListToJsArray(keys);
     Handle<Array> valuesArray = jsonListToJsArray(values);
-    Handle<Value> args[] = { keysArray, valuesArray, Boolean::New(false) };
+    Handle<Value> args[] = { keysArray, valuesArray,
+                             Boolean::New(ctx->isolate, false) };
 
     taskStarted(ctx);
 
-    TryCatch trycatch;
-    Handle<Value> result = fun->Call(fun, 3, args);
+    TryCatch try_catch(ctx->isolate);
+    Handle<Value> result = fun->Call(context->Global(), 3, args);
 
     taskFinished(ctx);
     freeLogResults(ctx);
 
     if (result.IsEmpty()) {
-        if (!trycatch.CanContinue()) {
+        if (!try_catch.CanContinue()) {
             throw MapReduceError("timeout");
         }
 
-        throw MapReduceError(exceptionString(trycatch));
+        throw MapReduceError(exceptionString(try_catch));
     }
 
     return jsonStringify(result);
@@ -343,9 +396,10 @@ ErlNifBinary runRereduce(map_reduce_ctx_t *ctx,
                        const json_results_list_t &reductions)
 {
     Locker locker(ctx->isolate);
-    Isolate::Scope isolateScope(ctx->isolate);
-    HandleScope handleScope(ctx->isolate);
-    Context::Scope contextScope(ctx->isolate, ctx->jsContext);
+    Isolate::Scope isolate_scope(ctx->isolate);
+    HandleScope handle_scope(ctx->isolate);
+    Local<Context> context = Local<Context>::New(ctx->isolate, ctx->jsContext);
+    Context::Scope context_scope(context);
 
     reduceFunNum -= 1;
     if (reduceFunNum < 0 ||
@@ -353,24 +407,26 @@ ErlNifBinary runRereduce(map_reduce_ctx_t *ctx,
         throw MapReduceError("invalid reduce function number");
     }
 
-    Local<Function> fun = Local<Function>::New(ctx->isolate, *(*ctx->functions)[reduceFunNum]);
+    Local<Function> fun =
+        Local<Function>::New(ctx->isolate, *(*ctx->functions)[reduceFunNum]);
     Handle<Array> valuesArray = jsonListToJsArray(reductions);
-    Handle<Value> args[] = { Null(), valuesArray, Boolean::New(true) };
+    Handle<Value> args[] =
+        { Null(ctx->isolate), valuesArray, Boolean::New(ctx->isolate, true) };
 
     taskStarted(ctx);
 
-    TryCatch trycatch;
-    Handle<Value> result = fun->Call(fun, 3, args);
+    TryCatch try_catch(ctx->isolate);
+    Handle<Value> result = fun->Call(context->Global(), 3, args);
 
     taskFinished(ctx);
     freeLogResults(ctx);
 
     if (result.IsEmpty()) {
-        if (!trycatch.CanContinue()) {
+        if (!try_catch.CanContinue()) {
             throw MapReduceError("timeout");
         }
 
-        throw MapReduceError(exceptionString(trycatch));
+        throw MapReduceError(exceptionString(try_catch));
     }
 
     return jsonStringify(result);
@@ -381,12 +437,14 @@ void destroyContext(map_reduce_ctx_t *ctx)
 {
     {
         Locker locker(ctx->isolate);
-        Isolate::Scope isolateScope(ctx->isolate);
-        HandleScope handleScope(ctx->isolate);
-        Context::Scope contextScope(ctx->isolate, ctx->jsContext);
+        Isolate::Scope isolate_scope(ctx->isolate);
+        HandleScope handle_scope(ctx->isolate);
+        Local<Context> context =
+            Local<Context>::New(ctx->isolate, ctx->jsContext);
+        Context::Scope context_scope(context);
 
         for (unsigned int i = 0; i < ctx->functions->size(); ++i) {
-            (*ctx->functions)[i]->Dispose();
+            (*ctx->functions)[i]->Reset();
             (*ctx->functions)[i]->~Persistent<v8::Function>();
             enif_free((*ctx->functions)[i]);
         }
@@ -394,55 +452,61 @@ void destroyContext(map_reduce_ctx_t *ctx)
         enif_free(ctx->functions);
 
         isolate_data_t *isoData = getIsolateData();
-        isoData->jsonObject.Dispose();
-        isoData->jsonObject.Clear();
-        isoData->jsonParseFun.Dispose();
-        isoData->jsonParseFun.Clear();
-        isoData->stringifyFun.Dispose();
-        isoData->stringifyFun.Clear();
+        isoData->jsonObject.Reset();
+        isoData->jsonParseFun.Reset();
+        isoData->stringifyFun.Reset();
         isoData->~isolate_data_t();
         enif_free(isoData);
 
-        ctx->jsContext.Dispose();
-        ctx->jsContext.Clear();
+        ctx->jsContext.Reset();
     }
 
     ctx->isolate->Dispose();
+    delete ctx->bufAllocator;
     ctx->~map_reduce_ctx_t();
 }
 
 
 static Local<Context> createJsContext(map_reduce_ctx_t *ctx)
 {
-    HandleScope handleScope(ctx->isolate);
+    EscapableHandleScope handle_scope(ctx->isolate);
     Handle<ObjectTemplate> global = ObjectTemplate::New();
 
-    global->Set(String::New("emit"), FunctionTemplate::New(emit));
+    global->Set(createUtf8String(ctx->isolate, "emit"),
+            FunctionTemplate::New(ctx->isolate, emit));
 
-    global->Set(String::New("log"), FunctionTemplate::New(log));
+    global->Set(createUtf8String(ctx->isolate, "log"),
+            FunctionTemplate::New(ctx->isolate, log));
 
     Handle<Context> context = Context::New(ctx->isolate, NULL, global);
-    Context::Scope contextScope(context);
+    Context::Scope context_scope(context);
 
     Handle<Function> sumFun = compileFunction(SUM_FUNCTION_STRING);
-    context->Global()->Set(String::New("sum"), sumFun);
+    context->Global()->Set(createUtf8String(ctx->isolate, "sum"), sumFun);
 
-    Handle<Function> decodeBase64Fun = compileFunction(BASE64_FUNCTION_STRING);
-    context->Global()->Set(String::New("decodeBase64"), decodeBase64Fun);
+    Handle<Function> decodeBase64Fun =
+        compileFunction(BASE64_FUNCTION_STRING);
+    context->Global()->Set(createUtf8String(ctx->isolate, "decodeBase64"),
+        decodeBase64Fun);
 
-    Handle<Function> dateToArrayFun = compileFunction(DATE_FUNCTION_STRING);
-    context->Global()->Set(String::New("dateToArray"), dateToArrayFun);
+    Handle<Function> dateToArrayFun =
+        compileFunction(DATE_FUNCTION_STRING);
+    context->Global()->Set(createUtf8String(ctx->isolate, "dateToArray"),
+                           dateToArrayFun);
 
-    return handleScope.Close(context);
+    // Use EscapableHandleScope and return using .Escape
+    // This will ensure that return values are not garbage collected
+    // as soon as the function returns.
+    return handle_scope.Escape(context);
 }
 
 #define TRUNCATE_STR "Truncated: "
 
 static void log(const v8::FunctionCallbackInfo<Value>& args)
 {
+    isolate_data_t *isoData = getIsolateData();
+    map_reduce_ctx_t *ctx = isoData->ctx;
     try {
-        isolate_data_t *isoData = getIsolateData();
-        map_reduce_ctx_t *ctx = isoData->ctx;
         /* Initialize only if log function is used */
         if (ctx->logResults == NULL) {
             ctx->logResults = (log_results_list_t *) enif_alloc(sizeof
@@ -460,12 +524,13 @@ static void log(const v8::FunctionCallbackInfo<Value>& args)
             str = Handle<String>::Cast(logMsg);
             len = str->Length();
             if (len > MAX_LOG_STRING_SIZE) {
-                str = Handle<String>(String::Concat(String::New(TRUNCATE_STR), str)),
+                str = Handle<String>(String::Concat(
+                          createUtf8String(ctx->isolate, TRUNCATE_STR), str)),
                 len = MAX_LOG_STRING_SIZE + sizeof(TRUNCATE_STR) - 1;
             }
         } else {
-            str = Handle<String>(String::New("Error while logging:Log value is" \
-              " not a string"));
+            str = Handle<String>(createUtf8String(ctx->isolate,
+                        "Error while logging:Log value is not a string"));
             len = str->Length();
         }
         ErlNifBinary resultBin;
@@ -475,8 +540,8 @@ static void log(const v8::FunctionCallbackInfo<Value>& args)
         str->WriteUtf8(reinterpret_cast<char *>(resultBin.data),
                 len, NULL, String::NO_NULL_TERMINATION);
         ctx->logResults->push_back(resultBin);
-    } catch(Handle<Value> &ex) {
-        ThrowException(ex);
+    } catch(Handle<String> &ex) {
+        ctx->isolate->ThrowException(ex);
     }
 }
 
@@ -500,7 +565,10 @@ static void emit(const v8::FunctionCallbackInfo<Value>& args)
         std::stringstream msg;
         msg << "too long key emitted: " << keyJson.size << " bytes";
 
-        ThrowException(Handle<Value>(String::New(msg.str().c_str())));
+        isoData->ctx->isolate->ThrowException(
+                createUtf8String(isoData->ctx->isolate, msg.str().c_str())
+                                             );
+	return;
     }
 
     try {
@@ -511,8 +579,8 @@ static void emit(const v8::FunctionCallbackInfo<Value>& args)
         isoData->ctx->emitKvSize += keyJson.size;
         isoData->ctx->emitKvSize += valueJson.size;
 
-    } catch(Handle<Value> &ex) {
-        ThrowException(ex);
+    } catch(Handle<String> &ex) {
+        isoData->ctx->isolate->ThrowException(ex);
     }
 
     if ((isoData->ctx->maxEmitKvSize > 0) &&
@@ -520,7 +588,8 @@ static void emit(const v8::FunctionCallbackInfo<Value>& args)
         std::stringstream msg;
         msg << "too much data emitted: " << isoData->ctx->emitKvSize << " bytes";
 
-        ThrowException(Handle<Value>(String::New(msg.str().c_str())));
+        isoData->ctx->isolate->ThrowException(
+                createUtf8String(isoData->ctx->isolate, msg.str().c_str()));
     }
 }
 
@@ -529,19 +598,22 @@ ErlNifBinary jsonStringify(const Handle<Value> &obj)
 {
     isolate_data_t *isoData = getIsolateData();
     Handle<Value> args[] = { obj };
-    TryCatch trycatch;
-    Local<Function> stringifyFun = Local<Function>::New(Isolate::GetCurrent(), isoData->stringifyFun);
-    Local<Object> jsonObject = Local<Object>::New(Isolate::GetCurrent(), isoData->jsonObject);
+    TryCatch try_catch(isoData->ctx->isolate);
+    Local<Function> stringifyFun =
+        Local<Function>::New(isoData->ctx->isolate, isoData->stringifyFun);
+    Local<Object> jsonObject =
+        Local<Object>::New(isoData->ctx->isolate, isoData->jsonObject);
     Handle<Value> result = stringifyFun->Call(jsonObject, 1, args);
 
     if (result.IsEmpty()) {
-        if (trycatch.HasCaught()) {
-            Local<Message> m = trycatch.Message();
+        if (try_catch.HasCaught()) {
+            Local<Message> m = try_catch.Message();
             if (!m.IsEmpty()) {
                 throw Local<String>(m->Get());
             }
         }
-        throw Handle<Value>(String::New("JSON.stringify() error"));
+        throw Handle<Value>(createUtf8String(isoData->ctx->isolate,
+                    "JSON.stringify() error"));
     }
 
     unsigned len;
@@ -563,7 +635,8 @@ ErlNifBinary jsonStringify(const Handle<Value> &obj)
                        len, NULL, String::NO_NULL_TERMINATION);
     }
 
-    // Caller responsible for invoking enif_make_binary() or enif_release_binary()
+    // Caller responsible for invoking enif_make_binary()
+    // or enif_release_binary()
     return resultBin;
 }
 
@@ -571,23 +644,28 @@ ErlNifBinary jsonStringify(const Handle<Value> &obj)
 Handle<Value> jsonParse(const ErlNifBinary &thing)
 {
     isolate_data_t *isoData = getIsolateData();
-    Handle<Value> args[] = { String::New(reinterpret_cast<char *>(thing.data), thing.size) };
-    TryCatch trycatch;
-    Local<Function> jsonParseFun = Local<Function>::New(Isolate::GetCurrent(), isoData->jsonParseFun);
-    Local<Object> jsonObject = Local<Object>::New(Isolate::GetCurrent(), isoData->jsonObject);
+    Handle<Value> args[] = { createUtf8String(isoData->ctx->isolate,
+                             reinterpret_cast<char *>(thing.data),
+                             (size_t)thing.size) };
+    TryCatch try_catch(isoData->ctx->isolate);
+    Local<Function> jsonParseFun =
+        Local<Function>::New(isoData->ctx->isolate, isoData->jsonParseFun);
+    Local<Object> jsonObject =
+        Local<Object>::New(isoData->ctx->isolate, isoData->jsonObject);
     Handle<Value> result = jsonParseFun->Call(jsonObject, 1, args);
 
     if (result.IsEmpty()) {
-        throw MapReduceError(exceptionString(trycatch));
+        throw MapReduceError(exceptionString(try_catch));
     }
 
     return result;
 }
 
 
-void loadFunctions(map_reduce_ctx_t *ctx, const function_sources_list_t &funStrings)
+void loadFunctions(map_reduce_ctx_t *ctx,
+                   const function_sources_list_t &funStrings)
 {
-    HandleScope handleScope(ctx->isolate);
+    HandleScope handle_scope(ctx->isolate);
 
     ctx->functions = (function_vector_t *) enif_alloc(sizeof(function_vector_t));
 
@@ -600,7 +678,8 @@ void loadFunctions(map_reduce_ctx_t *ctx, const function_sources_list_t &funStri
 
     for ( ; it != funStrings.end(); ++it) {
         Handle<Function> fun = compileFunction(*it);
-        Persistent<Function> *perFn = (Persistent<Function> *) enif_alloc(sizeof(Persistent<Function>));
+        Persistent<Function> *perFn =
+            (Persistent<Function> *) enif_alloc(sizeof(Persistent<Function>));
         if (perFn == NULL) {
             throw std::bad_alloc();
         }
@@ -613,38 +692,46 @@ void loadFunctions(map_reduce_ctx_t *ctx, const function_sources_list_t &funStri
 
 Handle<Function> compileFunction(const function_source_t &funSource)
 {
-    HandleScope handleScope(Isolate::GetCurrent());
-    TryCatch trycatch;
-    Handle<String> source = String::New(funSource.data(), funSource.length());
-    Handle<Script> script = Script::Compile(source);
+    Isolate *isolate = Isolate::GetCurrent();
+    Local<Context> context(isolate->GetCurrentContext());
+    EscapableHandleScope handle_scope(isolate);
+    TryCatch try_catch(isolate);
+    Handle<String> source =
+        createUtf8String(isolate, funSource.data(), funSource.length());
+    Local<Script> script;
+    if (!Script::Compile(context, source).ToLocal(&script)) {
+        throw MapReduceError(exceptionString(try_catch));
+    }
 
     if (script.IsEmpty()) {
-        throw MapReduceError(exceptionString(trycatch));
+        throw MapReduceError(exceptionString(try_catch));
     }
 
     Handle<Value> result = script->Run();
 
     if (result.IsEmpty()) {
-        throw MapReduceError(exceptionString(trycatch));
+        throw MapReduceError(exceptionString(try_catch));
     }
 
     if (!result->IsFunction()) {
-        throw MapReduceError(std::string("Invalid function: ") + funSource.c_str());
+        throw MapReduceError(std::string("Invalid function: ") +
+                funSource.c_str());
     }
 
-    return handleScope.Close(Handle<Function>::Cast(result));
+    return handle_scope.Escape(Handle<Function>::Cast(result));
 }
 
 
 Handle<Array> jsonListToJsArray(const json_results_list_t &list)
 {
-    Handle<Array> array = Array::New(list.size());
+    Isolate *isolate = Isolate::GetCurrent();
+    Handle<Array> array = Array::New(isolate, list.size());
     json_results_list_t::const_iterator it = list.begin();
     int i = 0;
 
     for ( ; it != list.end(); ++it, ++i) {
         Handle<Value> v = jsonParse(*it);
-        array->Set(Number::New(i), v);
+        array->Set(Number::New(isolate, i), v);
     }
 
     return array;
@@ -654,7 +741,7 @@ Handle<Array> jsonListToJsArray(const json_results_list_t &list)
 isolate_data_t *getIsolateData()
 {
     Isolate *isolate = Isolate::GetCurrent();
-    return reinterpret_cast<isolate_data_t*>(isolate->GetData());
+    return reinterpret_cast<isolate_data_t*>(isolate->GetData(0));
 }
 
 
@@ -680,7 +767,7 @@ void terminateTask(map_reduce_ctx_t *ctx)
 
 std::string exceptionString(const TryCatch &tryCatch)
 {
-    HandleScope handleScope(Isolate::GetCurrent());
+    HandleScope handle_scope(Isolate::GetCurrent());
     String::Utf8Value exception(tryCatch.Exception());
     const char *exceptionString = (*exception);
 
