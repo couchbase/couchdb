@@ -346,6 +346,15 @@ init({_, _, Group} = InitArgs) ->
         do_init(InitArgs)
     catch
     _:Error ->
+        % An error might occur before the file handler is associated with the
+        % group. There's a message once the file handler is created, so that
+        % we can close the file and make the write guard happy.
+        receive
+        {group_fd, Fd} ->
+                couch_file:close(Fd)
+        after 0 ->
+            ok
+        end,
         ?LOG_ERROR("~s error opening set view group `~s` (~s), signature `~s',"
                    " from set `~s`: ~p",
                    [?MODULE, Group#set_view_group.name,
@@ -367,6 +376,9 @@ do_init({_, SetName, _} = InitArgs) ->
             category = Category,
             mod = Mod
         } = Group,
+        % Send the file handler to yourself, so that in case of an error
+        % we can clean up the write guard properly
+        self() ! {group_fd, Fd},
         RefCounter = new_fd_ref_counter(Fd),
         case Header#set_view_index_header.has_replica of
         false ->
@@ -1415,7 +1427,11 @@ handle_info({all_seqs, nil, StatsResponse}, State) ->
         erlang:put(seqs_cache, SeqsCache2),
         State
     end,
-    {noreply, NewState}.
+    {noreply, NewState};
+
+handle_info({group_fd, _Fd}, State) ->
+    % If no error occured, we don't care about the fd message
+    {noreply, State, ?GET_TIMEOUT(State)}.
 
 
 terminate(Reason, #state{group = #set_view_group{sig = Sig} = Group} = State) ->
@@ -1545,33 +1561,42 @@ prepare_group({RootDir, SetName, Group0}, ForceReset)->
     Group = Group0#set_view_group{filepath = Filepath},
     case open_index_file(Filepath) of
     {ok, Fd} ->
-        if ForceReset ->
-            % this can happen if we missed a purge
-            {ok, reset_file(Fd, Group)};
-        true ->
-            case (catch couch_file:read_header_bin(Fd)) of
-            {ok, HeaderBin, HeaderPos} ->
-                HeaderSig = couch_set_view_util:header_bin_sig(HeaderBin);
-            _ ->
-                HeaderPos = 0,  % keep dialyzer happy
-                HeaderSig = <<>>,
-                HeaderBin = <<>>
-            end,
-            case HeaderSig == Sig of
+        try
+            if ForceReset ->
+                % this can happen if we missed a purge
+                {ok, reset_file(Fd, Group)};
             true ->
-                HeaderInfo = couch_set_view_util:header_bin_to_term(HeaderBin),
-                {ok, init_group(Fd, Group, HeaderInfo, HeaderPos)};
-            _ ->
-                % this happens on a new file
-                case (not ForceReset) andalso (Type =:= main) of
-                true ->
-                    % initializing main view group
-                    ok = delete_index_file(RootDir, Group, replica);
-                false ->
-                    ok
+                case (catch couch_file:read_header_bin(Fd)) of
+                {ok, HeaderBin, HeaderPos} ->
+                    HeaderSig = couch_set_view_util:header_bin_sig(HeaderBin);
+                _ ->
+                    HeaderPos = 0,  % keep dialyzer happy
+                    HeaderSig = <<>>,
+                    HeaderBin = <<>>
                 end,
-                {ok, reset_file(Fd, Group)}
+                case HeaderSig == Sig of
+                true ->
+                    HeaderInfo = couch_set_view_util:header_bin_to_term(HeaderBin),
+                    {ok, init_group(Fd, Group, HeaderInfo, HeaderPos)};
+                _ ->
+                    % this happens on a new file
+                    case (not ForceReset) andalso (Type =:= main) of
+                    true ->
+                        % initializing main view group
+                        ok = delete_index_file(RootDir, Group, replica);
+                    false ->
+                        ok
+                    end,
+                    {ok, reset_file(Fd, Group)}
+                end
             end
+        catch
+        _:Error ->
+            % In case of any error, we need to close the file as it isn't yet
+            % associated with the group, hence can't be cleaned up during
+            % group cleanup.
+            couch_file:close(Fd),
+            Error
         end;
     {error, emfile} = Error ->
         ?LOG_ERROR("Can't open set view `~s`, ~s (~s) group `~s`:"
