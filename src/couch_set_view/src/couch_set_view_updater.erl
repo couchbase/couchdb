@@ -946,7 +946,8 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
     false ->
         WriterAcc#writer_acc{
             max_seqs = MaxSeqs2,
-            stats = Stats2
+            stats = Stats2,
+            tmp_files = TmpFiles2
         };
     true ->
         ?LOG_INFO("Updater for set view `~s`, ~s group `~s`, starting btree "
