@@ -176,7 +176,8 @@ restore_backup_db_file() ->
     timer:sleep(3000),
     DbFile = test_util:build_file("tmp/lib/" ++
         binary_to_list(test_db_name()) ++ ".couch.1"),
-    ok = file:delete(DbFile),
+    % NOTE vmx 2016-01-25: overwrite the original file via renaming. This
+    % works well on Windows (as opposed to deleting the file first).
     ok = file:rename(DbFile ++ ".backup", DbFile),
     couch_server_sup:start_link(test_util:config_files()),
     timer:sleep(1000),
