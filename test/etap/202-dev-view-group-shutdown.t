@@ -255,13 +255,16 @@ get_group_index_file_name() ->
     {ok, Info} = couch_view:get_group_info({data_db_name(), master_db_name()}, ddoc_name()),
     RootDir = couch_config:get("couchdb", "view_index_dir"),
     BaseName = binary_to_list(couch_util:get_value(signature, Info)) ++ ".view",
-    RootDir ++ "/." ++ binary_to_list(master_db_name()) ++ "_design" ++ "/" ++ BaseName.
+    Filename = RootDir ++ "/." ++ binary_to_list(master_db_name()) ++
+        "_design" ++ "/" ++ BaseName,
+    string:to_lower(Filename).
 
 
 list_index_files() ->
     RootDir = couch_config:get("couchdb", "view_index_dir"),
-    filelib:wildcard(
-        RootDir ++ "/." ++ binary_to_list(master_db_name()) ++ "_design" ++ "/*.view").
+    Files = filelib:wildcard(
+        RootDir ++ "/." ++ binary_to_list(master_db_name()) ++ "_design" ++ "/*.view"),
+    [string:to_lower(File) || File <- Files].
 
 
 cleanup_index_files() ->

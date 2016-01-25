@@ -47,7 +47,7 @@ test() ->
 
     % abs_pathname
     {ok, Cwd} = file:get_cwd(),
-    etap:is(Cwd ++ "/foo", couch_util:abs_pathname("./foo"),
+    etap:is(string:to_lower(Cwd) ++ "/foo", string:to_lower(couch_util:abs_pathname("./foo")),
         "foo is in this directory."),
 
     % should_flush
