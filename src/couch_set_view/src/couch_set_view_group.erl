@@ -3057,26 +3057,12 @@ maybe_fix_replica_group(ReplicaPid, Group) ->
     {ok, RepGroup} = gen_server:call(ReplicaPid, request_group, infinity),
     RepGroupActive = couch_set_view_util:decode_bitmask(?set_abitmask(RepGroup)),
     RepGroupPassive = couch_set_view_util:decode_bitmask(?set_pbitmask(RepGroup)),
-    CleanupList = lists:foldl(
-        fun(PartId, Acc) ->
-            case lists:member(PartId, ?set_replicas_on_transfer(Group)) of
-            true ->
-                Acc;
-            false ->
-                [PartId | Acc]
-            end
-        end,
-        [], RepGroupActive),
-    ActiveList = lists:foldl(
-        fun(PartId, Acc) ->
-            case lists:member(PartId, ?set_replicas_on_transfer(Group)) of
-            true ->
-                [PartId | Acc];
-            false ->
-                Acc
-            end
-        end,
-        [], RepGroupPassive),
+    CleanupList = lists:filter(fun(PartId) ->
+        lists:member(PartId, ?set_replicas_on_transfer(Group))
+    end, RepGroupActive),
+    ActiveList = lists:filter(fun(PartId) ->
+        lists:member(PartId, ?set_replicas_on_transfer(Group))
+    end, RepGroupPassive),
     case CleanupList of
     [] ->
         ok;
