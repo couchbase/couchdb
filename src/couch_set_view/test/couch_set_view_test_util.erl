@@ -20,7 +20,7 @@
 -export([populate_set_alternated/3, populate_set_sequentially/3]).
 -export([populate_set_randomly/3, update_ddoc/2, delete_ddoc/2]).
 -export([define_set_view/5]).
--export([query_view/3, query_view/4]).
+-export([query_view/3, query_view/4, query_view/5]).
 -export([are_view_keys_sorted/2]).
 -export([get_db_ref_counters/2, compact_set_dbs/3]).
 -export([get_db_seqs/2]).
@@ -244,6 +244,9 @@ query_view(SetName, DDocId, ViewName) ->
     query_view(SetName, DDocId, ViewName, []).
 
 query_view(SetName, DDocId, ViewName, QueryString) ->
+    query_view(SetName, DDocId, ViewName, QueryString, 200).
+
+query_view(SetName, DDocId, ViewName, QueryString, ExpectedCode) ->
     QueryUrl = set_view_url(SetName, DDocId, ViewName) ++
         case QueryString of
         [] ->
@@ -253,11 +256,12 @@ query_view(SetName, DDocId, ViewName, QueryString) ->
         end,
     {ok, Code, _Headers, Body} = test_util:request(QueryUrl, [], get),
     case Code of
-    200 ->
+    ExpectedCode ->
         ok;
     _ ->
         io:format(standard_error, "~nView response body: ~p~n~n", [Body]),
-        etap:bail("View response status is not 200 (got " ++
+        etap:bail("View response status is not " ++
+            integer_to_list(ExpectedCode) ++ " (got " ++
             integer_to_list(Code) ++ ")")
     end,
     {ok, ejson:decode(Body)}.
