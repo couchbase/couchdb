@@ -71,7 +71,8 @@ make_funs(DDoc, ViewName, IndexMergeParams) ->
        make_row_fun = MakeRowFun0
     } = IndexMergeParams,
     #view_merge{
-       rereduce_fun = InRedFun
+       rereduce_fun = InRedFun,
+       keys = Keys
     } = Extra,
     #view_query_args{
         debug = DebugMode,
@@ -92,7 +93,7 @@ make_funs(DDoc, ViewName, IndexMergeParams) ->
     _ ->
         nil
     end,
-    LessFun = view_less_fun(Dir, ViewType),
+    LessFun = view_less_fun(Dir, ViewType, Keys),
     {FoldFun, MergeFun} = case ViewType of
     reduce ->
         {fun reduce_view_folder/6, fun merge_reduce_views/1};
@@ -225,7 +226,9 @@ get_view_def(#doc{body = DDoc, id = DDocId}, ViewName) ->
     end.
 
 
-view_less_fun(Dir, ViewType) ->
+-spec view_less_fun(fwd | rev, map | red_map | reduce, nil | list()) ->
+                           fun((term(), term()) -> boolean()).
+view_less_fun(Dir, ViewType, nil) ->
     LessFun = case ViewType of
     reduce ->
         fun couch_set_view:reduce_view_key_compare/2;
@@ -237,7 +240,45 @@ view_less_fun(Dir, ViewType) ->
         fun(RowA, RowB) -> LessFun(element(1, RowA), element(1, RowB)) end;
     rev ->
         fun(RowA, RowB) -> not LessFun(element(1, RowA), element(1, RowB)) end
+    end;
+view_less_fun(_Dir, ViewType, Keys) ->
+    KeysEncoded = [?JSON_ENCODE(K) || K <- Keys],
+    case ViewType of
+    reduce ->
+        fun(RowA, RowB) ->
+            % The row tuple can have 2 or 3 elements
+            {json, KeyA} = RowKeyA = element(1, RowA),
+            {json, KeyB} = RowKeyB = element(1, RowB),
+            case KeyA =:= KeyB of
+            true ->
+                couch_set_view:reduce_view_key_compare(RowKeyA, RowKeyB);
+            false ->
+                first_key_matches(KeysEncoded, KeyA, KeyB)
+            end
+        end;
+    _ ->
+        fun({{{json, KeyA}, _} = KeyDocIdA, _},
+            {{{json, KeyB}, _} = KeyDocIdB, _}) ->
+            case KeyA =:= KeyB of
+            true ->
+                couch_set_view:map_view_key_compare(KeyDocIdA, KeyDocIdB);
+            false ->
+                first_key_matches(KeysEncoded, KeyA, KeyB)
+            end
+        end
     end.
+
+
+% The case of an empty list never happens, as result keys always match one
+% of the supplied keys.
+-spec first_key_matches([binary()], binary(), binary()) -> boolean().
+first_key_matches([KeyA | _], KeyA, _) ->
+    true;
+first_key_matches([KeyB | _], _, KeyB) ->
+    false;
+first_key_matches([_ | T], KeyA, KeyB) ->
+    first_key_matches(T, KeyA, KeyB).
+
 
 % Optimized path, row assembled by couch_http_view_streamer
 view_row_obj_map({_KeyDocId, {row_json, RowJson}}, _Debug) ->
