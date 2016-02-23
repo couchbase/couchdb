@@ -5,7 +5,8 @@ SET(TEST_FILES
   00-prepare.t
   01-load.t
   04-view-groups.t
-  05-couch-dcp-client.t)
+  05-couch-dcp-client.t
+  06-rollback.t)
 
 FOREACH (it ${TEST_FILES})
    GET_FILENAME_COMPONENT(testname ${it} NAME_WE)
