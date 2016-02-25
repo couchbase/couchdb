@@ -22,6 +22,8 @@
 -define(MIN_STR, <<"">>).
 -define(MAX_STR, <<255>>). % illegal utf string
 
+-define(QUERY_TIMING_STATS_ETS, view_query_timing_stats).
+
 % the lowest possible database sequence number
 -define(LOWEST_SEQ, 0).
 

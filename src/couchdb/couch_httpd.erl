@@ -29,7 +29,7 @@
 -export([send_response/4,send_method_not_allowed/2,send_error/4, send_redirect/2,send_chunked_error/2]).
 -export([send_json/2,send_json/3,send_json/4,last_chunk/1,parse_multipart_request/3]).
 -export([accepted_encodings/1,validate_referer/1,validate_ctype/2]).
--export([is_ctype/2]).
+-export([is_ctype/2, negotiate_content_type/1]).
 
 start_link() ->
     start_link(http).

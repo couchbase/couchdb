@@ -50,12 +50,20 @@ query_index(Mod, #index_merge{http_params = HttpParams, user_ctx = UserCtx} = In
     query_index_loop(Mod, IndexMergeParams, DDoc, IndexName, ?MAX_RETRIES).
 
 % Special and simpler case, trigger a lighter and faster code path.
-query_index(Mod, #index_merge{indexes = [#set_view_spec{}]} = Params, Req) ->
+query_index(Mod, #index_merge{indexes = [#set_view_spec{}]} = Params0, Req) ->
     #index_merge{
         indexes = Indexes,
         conn_timeout = Timeout,
         ddoc_revision = DesiredDDocRevision
-    } = Params,
+    } = Params0,
+    Params = case Req#httpd.method of
+    'GET' ->
+        Params0#index_merge{
+            start_timer = os:timestamp()
+        };
+    'POST' ->
+        Params0
+    end,
     {ok, DDoc, _} = get_first_ddoc(Indexes, Req#httpd.user_ctx, Timeout),
     DDocRev = ddoc_rev(DDoc),
     case should_check_rev(Params, DDoc) of
@@ -86,6 +94,7 @@ query_index(Mod, IndexMergeParams0, #httpd{user_ctx = UserCtx} = Req) ->
     } = IndexMergeParams0,
     {ok, DDoc, IndexName} = get_first_ddoc(Indexes, UserCtx, Timeout),
     IndexMergeParams = IndexMergeParams0#index_merge{
+        start_timer = os:timestamp(),
         user_ctx = UserCtx,
         http_params = Mod:parse_http_params(Req, DDoc, IndexName, Extra)
     },
@@ -113,7 +122,8 @@ query_index_loop(Mod, IndexMergeParams, DDoc, IndexName, N) ->
 do_query_index(Mod, IndexMergeParams, DDoc, IndexName) ->
     #index_merge{
        indexes = Indexes, callback = Callback, user_acc = UserAcc,
-       ddoc_revision = DesiredDDocRevision, user_ctx = UserCtx
+       ddoc_revision = DesiredDDocRevision, user_ctx = UserCtx,
+       start_timer = StartTimer
     } = IndexMergeParams,
 
     DDocRev = ddoc_rev(DDoc),
@@ -218,6 +228,16 @@ do_query_index(Mod, IndexMergeParams, DDoc, IndexName) ->
             Resp
         end
     after
+        DDocId = DDoc#doc.id,
+        case StartTimer of
+        nil ->
+            start_timer_not_set;
+        _ ->
+            TimeElapsed = timer:now_diff(
+                os:timestamp(), StartTimer) / 1000,
+            couch_view_merger:update_timing_stat(
+                DDocId, IndexName, TimeElapsed)
+        end,
         unlink(Queue),
         erlang:erase(reduce_context),
         lists:foreach(fun erlang:unlink/1, Folders),

@@ -108,6 +108,15 @@ route_request(#httpd{method = 'GET'} = Req, SetName, DDocId, [<<"_get_utilizatio
         mapreduce_view, SetName, DDocId),
     couch_httpd:send_json(Req, 200, {Stats});
 
+route_request(#httpd{method = 'GET'} = Req, _SetName, DDocId, [<<"_get_query_stats">>]) ->
+    DDocStats = ets:lookup(?QUERY_TIMING_STATS_ETS, DDocId),
+    DefaultHeaders = [{"Content-Type", couch_httpd:negotiate_content_type(Req)},
+                      {"Cache-Control", "must-revalidate"}],
+    % using mochijson2:encode because ejson:encode doesn't work
+    % with nested arrays
+    Body = [mochijson2:encode([{query_timing_in_ms, DDocStats}])],
+    couch_httpd:send_response(Req, 200, DefaultHeaders, Body);
+
 route_request(#httpd{method = 'GET'} = Req, SetName, DDocId, [<<"_view">>, ViewName]) ->
     Keys = couch_httpd:qs_json_value(Req, "keys", nil),
     FilteredPartitions = couch_httpd:qs_json_value(Req, "partitions", []),

@@ -132,6 +132,12 @@ init([]) ->
     ets:new(couch_dbs_by_name, [ordered_set, protected, named_table]),
     ets:new(couch_dbs_by_pid, [set, private, named_table]),
     ets:new(couch_sys_dbs, [set, private, named_table]),
+
+    % ets tables to capture view query timing stats
+    % marking it public because it needs to be accessed by
+    % modules within couch_index_merger
+    ets:new(?QUERY_TIMING_STATS_ETS, [ordered_set, public, named_table,
+                                      {write_concurrency, true}]),
     process_flag(trap_exit, true),
     {ok, #server{root_dir=RootDir,
                 dbname_regexp=RegExp,

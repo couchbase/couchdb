@@ -24,6 +24,8 @@
 -export([queue_debug_info/4, debug_info/3, get_set_view/5,
          prepare_set_view/5]).
 
+-export([update_timing_stat/3]).
+
 -include("couch_db.hrl").
 -include_lib("couch_index_merger/include/couch_index_merger.hrl").
 -include_lib("couch_index_merger/include/couch_view_merger.hrl").
@@ -1113,6 +1115,89 @@ set_view_group_stats_ejson(Stats) ->
         [],
         lists:zip(StatNames, StatPoses))}.
 
+-spec stat_ets_initial_insert(atom(), binary(), binary()) -> boolean().
+stat_ets_initial_insert(EtsTable, DDocId, ViewName) ->
+    % Populating slabs from 1ms to 100sec
+    ViewStats = [{ViewName,[
+        {<<"1">>, 0},
+        {<<"10">>, 0},
+        {<<"100">>, 0},
+        {<<"1000">>, 0},
+        {<<"10000">>, 0},
+        {<<"100000">>, 0}]}],
+    DDocStats = case EtsTable of
+    ?QUERY_TIMING_STATS_ETS ->
+        case ets:lookup(?QUERY_TIMING_STATS_ETS, DDocId) of
+        % case where ddoc already exists but a new view has been added to it
+        [{DDocId, DDocStats0}] ->
+            lists:append(DDocStats0, ViewStats);
+        [] ->
+            % case where new ddoc has been created
+            ViewStats
+        end
+    end,
+    ets:insert(?QUERY_TIMING_STATS_ETS, {DDocId, DDocStats}).
+
+check_key_in_ets(EtsTable, DDocId, ViewName) ->
+    case ets:lookup(EtsTable, DDocId) of
+    [{DDocId, DDocStats}] ->
+        case lists:keyfind(ViewName, 1, DDocStats) of
+        {ViewName, _} ->
+            true;
+        _ ->
+            false
+        end;
+    [] ->
+        false
+    end.
+
+check_and_set_key(EtsTable, DDocId, ViewName) ->
+    case check_key_in_ets(EtsTable, DDocId, ViewName) of
+    false ->
+        stat_ets_initial_insert(EtsTable, DDocId, ViewName);
+    true ->
+        already_exists
+    end.
+
+update_ets_key(EtsTable, DDocId, ViewName, Exp0) ->
+    case EtsTable of
+    ?QUERY_TIMING_STATS_ETS ->
+        [{DDocId, DDocStats0}] = ets:lookup(?QUERY_TIMING_STATS_ETS, DDocId),
+        case lists:keyfind(ViewName, 1, DDocStats0) of
+        {ViewName, ViewStats0} ->
+            % If query latency is too high then put
+            % it in last timeslab i.e. 100s
+            Exp = case Exp0 < length(ViewStats0) + 1 of
+            true ->
+                Exp0;
+            false ->
+                length(ViewStats0)
+            end,
+            {TimeSlab, CurrentCounter} = lists:nth(Exp, ViewStats0),
+            NewTuple = {TimeSlab, CurrentCounter + 1},
+
+            % updating the TimeSlab counter within the view stats
+            ViewStats = lists:keyreplace(
+                TimeSlab, 1, ViewStats0, NewTuple),
+
+            % updating the ddoc stat with updated view stats
+            DDocStats = lists:keyreplace(
+                ViewName, 1, DDocStats0, {ViewName, ViewStats}),
+
+            ets:insert(?QUERY_TIMING_STATS_ETS, {DDocId, DDocStats})
+        end
+    end.
+
+update_timing_stat(DDocId, ViewName, TimeElapsed) ->
+    Exp = case TimeElapsed > 1 of
+    true ->
+        % Incrementing the exponent by 1 because lists:nth starts index from 1
+        round(math:log10(TimeElapsed)) + 1;
+    false ->
+        1
+    end,
+    check_and_set_key(?QUERY_TIMING_STATS_ETS, DDocId, ViewName),
+    update_ets_key(?QUERY_TIMING_STATS_ETS, DDocId, ViewName, Exp).
 
 % Query with a single view to merge, trigger a simpler code path
 % (no queue, no child processes, etc).
@@ -1121,7 +1206,8 @@ simple_set_view_query(Params, DDoc, Req) ->
         callback = Callback,
         user_acc = UserAcc,
         indexes = [SetViewSpec],
-        extra = #view_merge{keys = Keys}
+        extra = #view_merge{keys = Keys},
+        start_timer = StartTimer
     } = Params,
     #set_view_spec{
         name = SetName,
@@ -1216,6 +1302,19 @@ simple_set_view_query(Params, DDoc, Req) ->
             simple_set_view_map_query(Params2, Group, View, QueryArgs2)
         end
     after
+        case StartTimer of
+        nil ->
+            start_timer_not_set;
+        _ ->
+            case Req#httpd.method of
+            'GET' ->
+                TimeElapsed = timer:now_diff(
+                    os:timestamp(), StartTimer) / 1000,
+                update_timing_stat(DDocId, ViewName, TimeElapsed);
+            'POST' ->
+                    ignore_subquery_stat
+            end
+        end,
         couch_set_view:release_group(Group)
     end.
 

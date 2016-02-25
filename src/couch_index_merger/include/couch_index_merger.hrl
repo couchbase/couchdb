@@ -30,7 +30,9 @@
    user_ctx = nil,
    make_row_fun = nil,
    % extra is for index implementation specific properties
-   extra = nil
+   extra = nil,
+   % captures the timestamp for start of query processing pipeline
+   start_timer = nil :: erlang:timestamp() | nil
 }).
 
 -record(merge_params, {
