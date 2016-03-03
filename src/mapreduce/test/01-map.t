@@ -25,7 +25,7 @@
 
 main(_) ->
     test_util:init_code_path(),
-    etap:plan(132),
+    etap:plan(133),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -48,6 +48,7 @@ test() ->
     test_diffent_log_type_function(),
     test_empty_results_multiple_functions(),
     test_single_results_single_function(),
+    test_ecma6_results_single_function(),
     test_single_results_single_function_meta(),
     test_single_results_multiple_functions(),
     test_multiple_results_single_function(),
@@ -202,6 +203,13 @@ test_single_results_single_function() ->
     ]),
     Results = map_doc(Ctx, <<"{\"_id\": \"doc1\", \"value\": 1}">>, <<"{}">>),
     etap:is(Results, {ok, [[{<<"\"doc1\"">>, <<"null">>}]]}, "Map function emitted 1 key").
+
+test_ecma6_results_single_function() ->
+    {ok, Ctx} = start_map_context([
+        <<"function(doc) { var x = new Uint8Array(2); x[0]=0; x[1]=1; emit(doc._id, x); }">>
+    ]),
+    Results = map_doc(Ctx, <<"{\"_id\": \"doc1\", \"value\": 1}">>, <<"{}">>),
+    etap:is(Results, {ok, [[{<<"\"doc1\"">>, <<"{\"0\":0,\"1\":1}">>}]]}, "Map function emitted Unit8Array").
 
 test_single_results_single_function_meta() ->
     {ok, Ctx} = start_map_context([
