@@ -1,4 +1,3 @@
-FILE(GLOB SRC *.erl)
 SET(MR_VERSION "1.0")
 SET(MR_PREFIX ${CMAKE_ERL_LIB_INSTALL_PREFIX}/mapreduce-${MR_VERSION})
 SET(MR_EBIN_PREFIX ${MR_PREFIX}/ebin)
@@ -37,7 +36,7 @@ IF (APPLE)
                           INSTALL_RPATH "@loader_path/../../../../..")
 ENDIF ()
 
-ERL_BUILD("mapreduce" ${SRC})
+ERL_BUILD("mapreduce" mapreduce.erl)
 
 INSTALL(TARGETS mapreduce_nif
         DESTINATION ${MR_PRIV_PREFIX})

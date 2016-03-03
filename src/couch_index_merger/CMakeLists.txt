@@ -1,5 +1,14 @@
-FILE(GLOB SOURCES src/*.erl)
-FILE(GLOB HEADERS include/*.hrl)
+SET(SOURCES
+  src/couch_httpd_view_merger.erl
+  src/couch_http_view_streamer.erl
+  src/couch_index_merger.erl
+  src/couch_index_merger_validation.erl
+  src/couch_skew.erl
+  src/couch_view_merger.erl
+  src/couch_view_merger_queue.erl)
+SET(HEADERS
+  include/couch_index_merger.hrl
+  include/couch_view_merger.hrl)
 
 ADD_ERLANG_INCLUDE_DIR(${CMAKE_CURRENT_SOURCE_DIR}/../../src)
 ADD_ERLANG_INCLUDE_DIR(${CMAKE_CURRENT_SOURCE_DIR}/../../src/couchdb)

@@ -1,5 +1,3 @@
-FILE(GLOB SRC *.erl)
-
 CONFIGURE_FILE(${CMAKE_CURRENT_SOURCE_DIR}/snappy.app.in
                ${CMAKE_CURRENT_BINARY_DIR}/snappy.app)
 
@@ -30,7 +28,7 @@ IF (APPLE)
                           INSTALL_RPATH "@loader_path/../../../../..")
 ENDIF ()
 
-ERL_BUILD("snappy" ${SRC})
+ERL_BUILD("snappy" snappy.erl)
 
 INSTALL(TARGETS snappy_nif
         DESTINATION ${COUCH_SNAPPY_PRIV_PREFIX})
