@@ -37,7 +37,7 @@ SET(SOURCES
 CONFIGURE_FILE(${CMAKE_CURRENT_SOURCE_DIR}/mochiweb.app.src
                ${CMAKE_CURRENT_BINARY_DIR}/mochiweb.app)
 
-ERL_BUILD("mochiweb" ${SOURCES})
+ERL_BUILD(APPNAME "mochiweb" SOURCES ${SOURCES} DEPENDS internal.hrl)
 INSTALL(FILES ${outfiles}
                ${CMAKE_CURRENT_BINARY_DIR}/mochiweb.app
         DESTINATION ${CMAKE_ERL_LIB_INSTALL_PREFIX}/mochiweb-1.4.1/ebin)

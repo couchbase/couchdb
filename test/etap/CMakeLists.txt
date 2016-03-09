@@ -44,4 +44,5 @@ CONFIGURE_FILE(${CMAKE_CURRENT_SOURCE_DIR}/test_util.erl.in
 CONFIGURE_FILE(${CMAKE_CURRENT_SOURCE_DIR}/run.tpl
                ${CMAKE_CURRENT_BINARY_DIR}/run)
 
-ERL_BUILD("etap_test" test_web.erl ${CMAKE_CURRENT_BINARY_DIR}/test_util.erl)
+ERL_BUILD(APPNAME "etap_test"
+          SOURCES test_web.erl ${CMAKE_CURRENT_BINARY_DIR}/test_util.erl)

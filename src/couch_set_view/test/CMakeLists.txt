@@ -49,4 +49,4 @@ FOREACH (it ${TEST_FILES})
      -m couch_set_view/test -e ${ESCRIPT_EXECUTABLE} -t ${fullpath} --verbose)
 ENDFOREACH (it)
 
-ERL_BUILD("couch_set_view_test" couch_set_view_test_util.erl)
+ERL_BUILD(APPNAME "couch_set_view_test" SOURCES couch_set_view_test_util.erl)

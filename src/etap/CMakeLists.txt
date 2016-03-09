@@ -1,3 +1,3 @@
-ERL_BUILD("etap" etap.erl)
+ERL_BUILD(APPNAME "etap" SOURCES etap.erl)
 INSTALL(FILES ${outfiles}
     DESTINATION ${CMAKE_ERL_LIB_INSTALL_PREFIX}/etap/ebin)

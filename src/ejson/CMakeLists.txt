@@ -30,7 +30,7 @@ SET_TARGET_PROPERTIES(ejson PROPERTIES
 
 
 
-ERL_BUILD("ejson_build" ejson.erl)
+ERL_BUILD(APPNAME "ejson_build" SOURCES ejson.erl)
 
 INSTALL(TARGETS ejson
         DESTINATION ${EJSON_PRIV_PREFIX})

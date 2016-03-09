@@ -36,7 +36,7 @@ IF (APPLE)
                           INSTALL_RPATH "@loader_path/../../../../..")
 ENDIF ()
 
-ERL_BUILD("mapreduce" mapreduce.erl)
+ERL_BUILD(APPNAME "mapreduce" SOURCES mapreduce.erl)
 
 INSTALL(TARGETS mapreduce_nif
         DESTINATION ${MR_PRIV_PREFIX})

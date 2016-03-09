@@ -28,7 +28,7 @@ IF (APPLE)
                           INSTALL_RPATH "@loader_path/../../../../..")
 ENDIF ()
 
-ERL_BUILD("snappy" snappy.erl)
+ERL_BUILD(APPNAME "snappy" SOURCES snappy.erl)
 
 INSTALL(TARGETS snappy_nif
         DESTINATION ${COUCH_SNAPPY_PRIV_PREFIX})

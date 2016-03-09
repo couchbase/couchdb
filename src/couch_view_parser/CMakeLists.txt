@@ -38,7 +38,7 @@ SET_TARGET_PROPERTIES(couch_view_parser_nif PROPERTIES
 )
 
 
-ERL_BUILD("couch_view_parser" couch_view_parser.erl)
+ERL_BUILD(APPNAME "couch_view_parser" SOURCES couch_view_parser.erl)
 
 INSTALL(TARGETS couch_view_parser_nif
         DESTINATION ${COUCH_VIEW_PARSER_PRIV_PREFIX})
