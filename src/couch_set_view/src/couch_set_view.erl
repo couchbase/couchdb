@@ -678,7 +678,6 @@ do_fold_reduce(Group, ViewInfo, Fun, Acc, Options0, ViewQueryArgs) ->
     end,
     PreResultPadding = lists:duplicate(NthRed - 1, <<>>),
     PostResultPadding = lists:duplicate(length(RedFuns) - NthRed, <<>>),
-    couch_set_view_mapreduce:start_reduce_context(View),
     ReduceFun =
         fun(reduce, KVs) ->
             KVs2 = couch_set_view_util:expand_dups(KVs, []),
@@ -722,8 +721,7 @@ do_fold_reduce(Group, ViewInfo, Fun, Acc, Options0, ViewQueryArgs) ->
     try
         couch_btree:fold_reduce(Bt, WrapperFun, Acc, Options)
     after
-        couch_set_view_util:close_raw_read_fd(Group),
-        couch_set_view_mapreduce:end_reduce_context(View)
+        couch_set_view_util:close_raw_read_fd(Group)
     end.
 
 

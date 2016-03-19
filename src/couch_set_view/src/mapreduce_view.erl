@@ -15,8 +15,7 @@
 -module(mapreduce_view).
 
 % For the updater
--export([write_kvs/3, finish_build/3, get_state/1, set_state/2,
-         start_reduce_context/1, end_reduce_context/1, view_name/2,
+-export([write_kvs/3, finish_build/3, get_state/1, set_state/2, view_name/2,
          convert_primary_index_kvs_to_binary/3, view_bitmap/1]).
 -export([encode_key_docid/2, decode_key_docid/1]).
 -export([convert_back_index_kvs_to_binary/2]).
@@ -198,13 +197,6 @@ view_bitmap(View) ->
     {ok, <<_Size:40, Bm:?MAX_NUM_PARTITIONS, _/binary>>} =
         couch_btree:full_reduce(View#mapreduce_view.btree),
     Bm.
-
-
-start_reduce_context(Group) ->
-    couch_set_view_mapreduce:start_reduce_context(Group).
-
-end_reduce_context(Group) ->
-    couch_set_view_mapreduce:end_reduce_context(Group).
 
 
 view_name(#set_view_group{views = SetViews}, ViewPos) ->
@@ -464,9 +456,7 @@ cleanup_view_group_wait_loop(Port, Group, Acc, PurgedCount) ->
 -spec get_row_count(#set_view{}) -> non_neg_integer().
 get_row_count(SetView) ->
     Bt = (SetView#set_view.indexer)#mapreduce_view.btree,
-    ok = couch_set_view_mapreduce:start_reduce_context(SetView),
     {ok, <<Count:40, _/binary>>} = couch_btree:full_reduce(Bt),
-    ok = couch_set_view_mapreduce:end_reduce_context(SetView),
     Count.
 
 

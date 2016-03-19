@@ -159,8 +159,7 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
         set_name = SetName,
         type = Type,
         name = DDocId,
-        sig = GroupSig,
-        mod = Mod
+        sig = GroupSig
     } = Group,
 
     StartTime = os:timestamp(),
@@ -172,12 +171,7 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
 
     Mapper = spawn_link(fun() ->
         try
-            couch_set_view_mapreduce:start_map_context(Group),
-            try
-                do_maps(Group, MapQueue, WriteQueue)
-            after
-                couch_set_view_mapreduce:end_map_context()
-            end
+            do_maps(Group, MapQueue, WriteQueue)
         catch _:Error ->
             Stacktrace = erlang:get_stacktrace(),
             ?LOG_ERROR("Set view `~s`, ~s group `~s`, mapper error~n"
@@ -209,44 +203,39 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
         }),
         ok = couch_set_view_util:open_raw_read_fd(Group),
         try
-            Mod:start_reduce_context(Group),
-            try
-                WriterAcc3 = do_writes(WriterAcc2),
-                receive
-                {doc_loader_finished, {PartVersions0, RealMaxSeqs}} ->
-                    WriterAccStats = WriterAcc3#writer_acc.stats,
-                    WriterAccGroup = WriterAcc3#writer_acc.group,
-                    WriterAccHeader = WriterAccGroup#set_view_group.index_header,
-                    PartVersions = lists:ukeymerge(1, PartVersions0,
-                        WriterAccHeader#set_view_index_header.partition_versions),
-                    case WriterAcc3#writer_acc.initial_build of
-                    true ->
-                        % The doc loader might not load the mutations up to the
-                        % most recent one, but only to a lower one. Update the
-                        % group header and stats with the correct information.
-                        MaxSeqs = lists:ukeymerge(
-                            1, RealMaxSeqs, WriterAccHeader#set_view_index_header.seqs),
-                        Stats = WriterAccStats#set_view_updater_stats{
-                            seqs = lists:sum([S || {_, S} <- RealMaxSeqs])
-                        };
-                    false ->
-                        MaxSeqs = WriterAccHeader#set_view_index_header.seqs,
-                        Stats = WriterAcc3#writer_acc.stats
-                    end,
-                    FinalWriterAcc = WriterAcc3#writer_acc{
-                        stats = Stats,
-                        group = WriterAccGroup#set_view_group{
-                            index_header = WriterAccHeader#set_view_index_header{
-                                partition_versions = PartVersions,
-                                seqs = MaxSeqs
-                            }
+            WriterAcc3 = do_writes(WriterAcc2),
+            receive
+            {doc_loader_finished, {PartVersions0, RealMaxSeqs}} ->
+                WriterAccStats = WriterAcc3#writer_acc.stats,
+                WriterAccGroup = WriterAcc3#writer_acc.group,
+                WriterAccHeader = WriterAccGroup#set_view_group.index_header,
+                PartVersions = lists:ukeymerge(1, PartVersions0,
+                    WriterAccHeader#set_view_index_header.partition_versions),
+                case WriterAcc3#writer_acc.initial_build of
+                true ->
+                    % The doc loader might not load the mutations up to the
+                    % most recent one, but only to a lower one. Update the
+                    % group header and stats with the correct information.
+                    MaxSeqs = lists:ukeymerge(
+                        1, RealMaxSeqs, WriterAccHeader#set_view_index_header.seqs),
+                    Stats = WriterAccStats#set_view_updater_stats{
+                        seqs = lists:sum([S || {_, S} <- RealMaxSeqs])
+                    };
+                false ->
+                    MaxSeqs = WriterAccHeader#set_view_index_header.seqs,
+                    Stats = WriterAcc3#writer_acc.stats
+                end,
+                FinalWriterAcc = WriterAcc3#writer_acc{
+                    stats = Stats,
+                    group = WriterAccGroup#set_view_group{
+                        index_header = WriterAccHeader#set_view_index_header{
+                            partition_versions = PartVersions,
+                            seqs = MaxSeqs
                         }
                     }
-                end,
-                Parent ! {writer_finished, FinalWriterAcc}
-            after
-                Mod:end_reduce_context(Group)
-            end
+                }
+            end,
+            Parent ! {writer_finished, FinalWriterAcc}
         catch _:Error ->
             Stacktrace = erlang:get_stacktrace(),
             ?LOG_ERROR("Set view `~s`, ~s group `~s`, writer error~n"
@@ -773,7 +762,7 @@ do_maps(Group, MapQueue, WriteQueue) ->
                 },
                 try
                     {ok, Result, LogList} = couch_set_view_mapreduce:map(
-                        Doc, PartId, Seq),
+                        Doc, PartId, Seq, Group),
                     {Result2, _} = lists:foldr(
                         fun({error, Reason}, {AccRes, Pos}) ->
                             ErrorMsg = "Bucket `~s`, ~s group `~s`, error mapping"

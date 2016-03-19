@@ -1000,10 +1000,12 @@ handle_cast({ddoc_updated, NewSig, Aliases}, State) ->
         State2 = State#state{shutdown = false, shutdown_aliases = undefined},
         {noreply, State2, ?GET_TIMEOUT(State2)};
     <<>> ->
+        remove_mapreduce_context_store(State#state.group),
         State2 = State#state{shutdown = true, shutdown_aliases = Aliases},
         Error = {error, <<"Design document was deleted">>},
         {stop, normal, reply_all(State2, Error)};
     _ ->
+        remove_mapreduce_context_store(State#state.group),
         State2 = State#state{shutdown = true, shutdown_aliases = Aliases},
         case Waiters of
         [] ->
@@ -4164,3 +4166,10 @@ remove_duplicate_partitions(Group) ->
             }
         }
     end.
+
+-spec remove_mapreduce_context_store(#set_view_group{}) -> ok.
+remove_mapreduce_context_store(Group) ->
+    #set_view_group{sig = Sig, views = Views} = Group,
+    ets:delete(map_context_store, Sig),
+    [ets:delete(reduce_context_store, View#set_view.ref) || View <- Views],
+    ok.

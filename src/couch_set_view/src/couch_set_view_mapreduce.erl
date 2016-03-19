@@ -17,9 +17,7 @@
 -include("couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
 
--export([start_map_context/1, start_reduce_context/1]).
--export([end_map_context/0, end_reduce_context/1]).
--export([map/3, reduce/2, reduce/3, rereduce/2, rereduce/3]).
+-export([map/4, reduce/2, reduce/3, rereduce/2, rereduce/3]).
 -export([builtin_reduce/3]).
 -export([validate_ddoc_views/1]).
 
@@ -27,22 +25,18 @@
 -define(SUM_ERROR_MSG,   <<"Builtin _sum function requires map values to be numbers">>).
 
 
-start_map_context(#set_view_group{mod = Mod, views = Views}) ->
-    {ok, Ctx} = mapreduce:start_map_context(
-        Mod, [View#set_view.def || View <- Views]),
-    erlang:put(map_context, Ctx),
-    ok.
+get_map_context(#set_view_group{mod = Mod, views = Views, sig = Sig}) ->
+    case ets:lookup(map_context_store, Sig) of
+    [] ->
+        {ok, Ctx} = mapreduce:start_map_context(
+            Mod, [View#set_view.def || View <- Views]),
+        ets:insert(map_context_store, {Sig, Ctx}),
+        Ctx;
+    [{Sig, Ctx}] ->
+        Ctx
+    end.
 
-
-end_map_context() ->
-    erlang:erase(map_context),
-    ok.
-
-
-start_reduce_context(#set_view_group{views = Views}) ->
-    lists:foreach(fun start_reduce_context/1, Views);
-
-start_reduce_context(SetView) ->
+get_reduce_context(SetView) ->
     #set_view{
         ref = Ref,
         indexer = #mapreduce_view{
@@ -60,22 +54,18 @@ start_reduce_context(SetView) ->
     [] ->
         ok;
     _ ->
-        {ok, Ctx} = mapreduce:start_reduce_context(FunSrcs),
-        erlang:put({reduce_context, Ref}, Ctx),
-        ok
+        case ets:lookup(reduce_context_store, Ref) of
+        [] ->
+            {ok, Ctx} = mapreduce:start_reduce_context(FunSrcs),
+            ets:insert(reduce_context_store, {Ref, Ctx}),
+            Ctx;
+        [{Ref, Ctx}] ->
+            Ctx
+        end
     end.
 
-
-end_reduce_context(#set_view_group{views = Views}) ->
-    lists:foreach(fun end_reduce_context/1, Views);
-
-end_reduce_context(#set_view{ref = Ref}) ->
-    erlang:erase({reduce_context, Ref}),
-    ok.
-
-
-map(Doc, PartId, Seq) ->
-    Ctx = erlang:get(map_context),
+map(Doc, PartId, Seq, Group) ->
+    Ctx = get_map_context(Group),
     {DocBody, DocMeta} = couch_doc:to_raw_json_binary_views(Doc, PartId, Seq),
     case mapreduce:map_doc(Ctx, DocBody, DocMeta) of
     {ok, _Results, _LogList} = Ok ->
@@ -89,7 +79,6 @@ reduce(#set_view{indexer = #mapreduce_view{reduce_funs = []}}, _KVs) ->
     {ok, []};
 reduce(SetView, KVs0) ->
     #set_view{
-        ref = Ref,
         indexer = #mapreduce_view{
             reduce_funs = RedFuns
         }
@@ -104,7 +93,7 @@ reduce(SetView, KVs0) ->
         builtin_reduce(reduce, NativeFuns, KVs, []);
     _ ->
         {ok, NativeResults} = builtin_reduce(reduce, NativeFuns, KVs, []),
-        Ctx = erlang:get({reduce_context, Ref}),
+        Ctx = get_reduce_context(SetView),
         case mapreduce:reduce(Ctx, KVs) of
         {ok, JsResults} ->
             recombine_reduce_results(RedFunSources, JsResults, NativeResults, []);
@@ -119,7 +108,6 @@ reduce(#set_view{indexer = #mapreduce_view{reduce_funs = []}},
     {ok, []};
 reduce(SetView, NthRed, KVs0) ->
     #set_view{
-        ref = Ref,
         indexer = #mapreduce_view{
             reduce_funs = RedFuns
         }
@@ -130,7 +118,7 @@ reduce(SetView, NthRed, KVs0) ->
     <<"_", _/binary>> ->
         builtin_reduce(reduce, [FunSrc], KVs, []);
     _ ->
-        Ctx = erlang:get({reduce_context, Ref}),
+        Ctx = get_reduce_context(SetView),
         NthRed2 = lists:foldl(
             fun({_, <<"_", _/binary>>}, Acc) ->
                     Acc - 1;
@@ -153,18 +141,17 @@ rereduce(#set_view{indexer = #mapreduce_view{reduce_funs = []}},
     {ok, []};
 rereduce(SetView, ReducedValues) ->
     #set_view{
-        ref = Ref,
         indexer = #mapreduce_view{
             reduce_funs = RedFuns
         }
     } = SetView,
     Grouped = group_reductions_results(ReducedValues),
-    Ctx = erlang:get({reduce_context, Ref}),
     Results = lists:zipwith(
         fun({native, FunSrc}, Values) ->
             {ok, [Result]} = builtin_reduce(rereduce, [FunSrc], [{[], V} || V <- Values], []),
             Result;
         (Idx, Values) ->
+            Ctx = get_reduce_context(SetView),
             case mapreduce:rereduce(Ctx, Idx, Values) of
             {ok, Reduction} ->
                 Reduction;
@@ -180,7 +167,6 @@ rereduce(#set_view{indexer = #mapreduce_view{reduce_funs = []}},
     {ok, []};
 rereduce(SetView, NthRed, ReducedValues) ->
     #set_view{
-        ref = Ref,
         indexer = #mapreduce_view{
             reduce_funs = RedFuns
         }
@@ -191,7 +177,7 @@ rereduce(SetView, NthRed, ReducedValues) ->
     <<"_", _/binary>> ->
         builtin_reduce(rereduce, [FunSrc], [{[], V} || V <- Values], []);
     _ ->
-        Ctx = erlang:get({reduce_context, Ref}),
+        Ctx = get_reduce_context(SetView),
         NthRed2 = lists:foldl(
             fun({_, <<"_", _/binary>>}, Acc) ->
                     Acc - 1;

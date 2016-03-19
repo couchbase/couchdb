@@ -138,6 +138,8 @@ init([]) ->
     % modules within couch_index_merger
     ets:new(?QUERY_TIMING_STATS_ETS, [ordered_set, public, named_table,
                                       {write_concurrency, true}]),
+    ets:new(map_context_store, [set, public, named_table, {read_concurrency, true}]),
+    ets:new(reduce_context_store, [set, public, named_table, {read_concurrency, true}]),
     process_flag(trap_exit, true),
     {ok, #server{root_dir=RootDir,
                 dbname_regexp=RegExp,
