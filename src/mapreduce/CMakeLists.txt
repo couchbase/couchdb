@@ -13,7 +13,8 @@ CONFIGURE_FILE(${CMAKE_CURRENT_SOURCE_DIR}/mapreduce.app.in
 
 
 SET(COUCH_VIEW_MR_SRC mapreduce_nif.cc
-                      mapreduce.cc)
+                      mapreduce.cc
+                      ${CMAKE_CURRENT_BINARY_DIR}/jsfunctions/jsfunctions_data.cc)
 
 INCLUDE_DIRECTORIES(BEFORE ${V8_INCLUDE_DIR}
                            ${Platform_SOURCE_DIR}/include
@@ -45,3 +46,4 @@ INSTALL(FILES ${outfiles}
         DESTINATION ${MR_EBIN_PREFIX})
 
 ADD_SUBDIRECTORY(test)
+ADD_SUBDIRECTORY(jsfunctions)

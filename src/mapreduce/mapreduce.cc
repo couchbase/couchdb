@@ -27,6 +27,7 @@
 #include "mapreduce.h"
 // This is libv8_libplatform library which handles garbage collection for v8
 #include <include/libplatform/libplatform.h>
+#include "jsfunctions/jsfunctions_data.h"
 
 #define MAX_LOG_STRING_SIZE 1024
 
@@ -40,65 +41,6 @@ typedef struct {
     Persistent<Function>  stringifyFun;
     map_reduce_ctx_t      *ctx;
 } isolate_data_t;
-
-
-static const char *SUM_FUNCTION_STRING =
-    "(function(values) {"
-    "    var sum = 0;"
-    "    for (var i = 0; i < values.length; ++i) {"
-    "        sum += values[i];"
-    "    }"
-    "    return sum;"
-    "})";
-
-static const char *DATE_FUNCTION_STRING =
-    // I wish it was on the prototype, but that will require bigger
-    // C changes as adding to the date prototype should be done on
-    // process launch. The code you see here may be faster, but it
-    // is less JavaScripty.
-    // "Date.prototype.toArray = (function() {"
-    "(function(date) {"
-    "    date = date.getUTCDate ? date : new Date(date);"
-    "    return isFinite(date.valueOf()) ?"
-    "      [date.getUTCFullYear(),"
-    "      (date.getUTCMonth() + 1),"
-    "       date.getUTCDate(),"
-    "       date.getUTCHours(),"
-    "       date.getUTCMinutes(),"
-    "       date.getUTCSeconds()] : null;"
-    "})";
-
-static const char *BASE64_FUNCTION_STRING =
-    "(function(b64) {"
-    "    var i, j, l, tmp, scratch, arr = [];"
-    "    var lookup = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';"
-    "    if (typeof b64 !== 'string') {"
-    "        throw 'Input is not a string';"
-    "    }"
-    "    if (b64.length % 4 > 0) {"
-    "        throw 'Invalid base64 source.';"
-    "    }"
-    "    scratch = b64.indexOf('=');"
-    "    scratch = scratch > 0 ? b64.length - scratch : 0;"
-    "    l = scratch > 0 ? b64.length - 4 : b64.length;"
-    "    for (i = 0, j = 0; i < l; i += 4, j += 3) {"
-    "        tmp = (lookup.indexOf(b64[i]) << 18) | (lookup.indexOf(b64[i + 1]) << 12);"
-    "        tmp |= (lookup.indexOf(b64[i + 2]) << 6) | lookup.indexOf(b64[i + 3]);"
-    "        arr.push((tmp & 0xFF0000) >> 16);"
-    "        arr.push((tmp & 0xFF00) >> 8);"
-    "        arr.push(tmp & 0xFF);"
-    "    }"
-    "    if (scratch === 2) {"
-    "        tmp = (lookup.indexOf(b64[i]) << 2) | (lookup.indexOf(b64[i + 1]) >> 4);"
-    "        arr.push(tmp & 0xFF);"
-    "    } else if (scratch === 1) {"
-    "        tmp = (lookup.indexOf(b64[i]) << 10) | (lookup.indexOf(b64[i + 1]) << 4);"
-    "        tmp |= (lookup.indexOf(b64[i + 2]) >> 2);"
-    "        arr.push((tmp >> 8) & 0xFF);"
-    "        arr.push(tmp & 0xFF);"
-    "    }"
-    "    return arr;"
-    "})";
 
 static void doInitContext(map_reduce_ctx_t *ctx,
                           const function_sources_list_t &funs,
@@ -123,12 +65,14 @@ static std::string exceptionString(const TryCatch &tryCatch);
 static void freeLogResults(map_reduce_ctx_t *ctx);
 
 static Platform *v8platform;
+static StartupData startupData;
 void initV8()
 {
     V8::InitializeICU();
     v8platform = platform::CreateDefaultPlatform();
     V8::InitializePlatform(v8platform);
     V8::Initialize();
+    startupData = V8::CreateSnapshotDataBlob((char *)jsFunction_src);
 }
 
 void deinitV8()
@@ -136,6 +80,7 @@ void deinitV8()
     V8::Dispose();
     V8::ShutdownPlatform();
     delete v8platform;
+    delete[] startupData.data;
 }
 
 void initContext(map_reduce_ctx_t *ctx, const function_sources_list_t &funs,
@@ -179,6 +124,7 @@ void doInitContext(map_reduce_ctx_t *ctx, const function_sources_list_t &funs,
     ctx->viewType = viewType;
     ctx->bufAllocator = new ArrayBufferAllocator();
     Isolate::CreateParams createParams;
+    createParams.snapshot_blob = &startupData;
     createParams.array_buffer_allocator = ctx->bufAllocator;
     ctx->isolate = Isolate::New(createParams);
     ctx->logResults = NULL;
@@ -480,19 +426,6 @@ static Local<Context> createJsContext(map_reduce_ctx_t *ctx)
 
     Handle<Context> context = Context::New(ctx->isolate, NULL, global);
     Context::Scope context_scope(context);
-
-    Handle<Function> sumFun = compileFunction(SUM_FUNCTION_STRING);
-    context->Global()->Set(createUtf8String(ctx->isolate, "sum"), sumFun);
-
-    Handle<Function> decodeBase64Fun =
-        compileFunction(BASE64_FUNCTION_STRING);
-    context->Global()->Set(createUtf8String(ctx->isolate, "decodeBase64"),
-        decodeBase64Fun);
-
-    Handle<Function> dateToArrayFun =
-        compileFunction(DATE_FUNCTION_STRING);
-    context->Global()->Set(createUtf8String(ctx->isolate, "dateToArray"),
-                           dateToArrayFun);
 
     // Use EscapableHandleScope and return using .Escape
     // This will ensure that return values are not garbage collected
