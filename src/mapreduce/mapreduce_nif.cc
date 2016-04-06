@@ -40,13 +40,14 @@ static ERL_NIF_TERM ATOM_OK;
 static ERL_NIF_TERM ATOM_ERROR;
 
 // maxTaskDuration is in seconds
-static volatile int                                maxTaskDuration = 5;
+static std::atomic<int>                            maxTaskDuration;
 static int                                         maxKvSize = 1 * 1024 * 1024;
 static ErlNifResourceType                          *MAP_REDUCE_CTX_RES;
 static ErlNifTid                                   terminatorThreadId;
 static ErlNifMutex                                 *terminatorMutex;
 static std::condition_variable                     cv;
-static volatile int                                shutdownTerminator = 0;
+static std::mutex                                  cvMutex;
+static std::atomic<bool>                           shutdownTerminator;
 static std::map< unsigned int, map_reduce_ctx_t* > contexts;
 
 
@@ -360,6 +361,7 @@ ERL_NIF_TERM setTimeout(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         return enif_make_badarg(env);
     }
 
+    std::lock_guard<std::mutex> lk(cvMutex);
     maxTaskDuration = (timeout + 999) / 1000;
 
     cv.notify_one();
@@ -404,6 +406,8 @@ int onLoad(ErlNifEnv *env, void **priv, ERL_NIF_TERM info)
         return -2;
     }
 
+    shutdownTerminator = false;
+    maxTaskDuration = 5;
     if (enif_thread_create(const_cast<char *>("terminator thread"),
                            &terminatorThreadId,
                            terminatorLoop,
@@ -422,7 +426,8 @@ void onUnload(ErlNifEnv *env, void *priv_data)
 {
     void *result = NULL;
 
-    shutdownTerminator = 1;
+    shutdownTerminator = true;
+    cv.notify_one();
     enif_thread_join(terminatorThreadId, &result);
     enif_mutex_destroy(terminatorMutex);
     deinitV8();
@@ -513,7 +518,6 @@ void *terminatorLoop(void *args)
         enif_mutex_unlock(terminatorMutex);
         // Convert minTimeDiff to miliseconds
         hrtime_t minTimeMSec = (hrtime_t)(minTimeDiff * NSEC_TO_MSEC);
-        std::mutex  cvMutex;
         std::unique_lock<std::mutex> lk(cvMutex);
         cv.wait_for(lk, std::chrono::milliseconds(minTimeMSec));
     }
