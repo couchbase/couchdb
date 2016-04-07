@@ -114,7 +114,7 @@ route_request(#httpd{method = 'GET'} = Req, _SetName, DDocId, [<<"_get_query_sta
                       {"Cache-Control", "must-revalidate"}],
     % using mochijson2:encode because ejson:encode doesn't work
     % with nested arrays
-    Body = [mochijson2:encode([{query_timing_in_ms, DDocStats}])],
+    Body = [mochijson2:encode([{query_timing_in_ms, DDocStats}]), $\n],
     couch_httpd:send_response(Req, 200, DefaultHeaders, Body);
 
 route_request(#httpd{method = 'GET'} = Req, SetName, DDocId, [<<"_view">>, ViewName]) ->
