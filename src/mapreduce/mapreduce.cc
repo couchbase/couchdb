@@ -97,9 +97,9 @@ void initContext(map_reduce_ctx_t *ctx, const function_sources_list_t &funs,
                  const view_index_type_t viewType)
 {
     ctx = new (ctx) map_reduce_ctx_t();
-    doInitContext(ctx, funs, viewType);
 
     try {
+        doInitContext(ctx, funs, viewType);
         Locker locker(ctx->isolate);
         Isolate::Scope isolate_scope(ctx->isolate);
         HandleScope handle_scope(ctx->isolate);

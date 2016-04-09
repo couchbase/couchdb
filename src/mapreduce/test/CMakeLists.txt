@@ -1,7 +1,8 @@
 SET(TEST_FILES
   01-map.t
   02-reduce.t
-  03-builtin-functions.t)
+  03-builtin-functions.t
+  04-optimize_doc_load.t)
 
 FOREACH (it ${TEST_FILES})
    GET_FILENAME_COMPONENT(testname ${it} NAME_WE)
