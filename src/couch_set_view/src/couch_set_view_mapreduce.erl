@@ -20,6 +20,7 @@
 -export([map/4, reduce/2, reduce/3, rereduce/2, rereduce/3]).
 -export([builtin_reduce/3]).
 -export([validate_ddoc_views/1]).
+-export([is_doc_used/1]).
 
 -define(STATS_ERROR_MSG, <<"Builtin _stats function requires map values to be numbers">>).
 -define(SUM_ERROR_MSG,   <<"Builtin _sum function requires map values to be numbers">>).
@@ -74,6 +75,18 @@ map(Doc, PartId, Seq, Group) ->
         throw(Error)
     end.
 
+-spec is_doc_used(#set_view_group{}) -> {ok, doc_fields_used} | {ok, doc_fields_unused}.
+is_doc_used(Group) ->
+    OptimizeDocLoad = list_to_atom(couch_config:get("mapreduce",
+                         "optimize_doc_loading")),
+    case OptimizeDocLoad of
+    true ->
+        Ctx = get_map_context(Group),
+        mapreduce:is_doc_used(Ctx);
+    _ ->
+        % When in doubt always pull doc from ep engine
+        {ok, doc_fields_used}
+    end.
 
 reduce(#set_view{indexer = #mapreduce_view{reduce_funs = []}}, _KVs) ->
     {ok, []};

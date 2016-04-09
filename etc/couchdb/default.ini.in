@@ -223,6 +223,10 @@ function_timeout = 10000
 ; The maximum byte size allowed to be emitted for a single document. This is the
 ; sum of the sizes of all emitted keys and values. A maximum of 0 means no limit.
 max_kv_size_per_doc = 1048576
+; Do not pull document when document fields are not used in any of
+; map functions defined in a given design document
+; This is to optimize view indexing time.
+optimize_doc_loading = true
 
 [set_views]
 ddoc_cache_size = 1048576

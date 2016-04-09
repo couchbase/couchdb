@@ -903,11 +903,16 @@ init({Category, Indexer}) ->
         fun("mapreduce", "function_timeout", NewTimeout) ->
                 ok = mapreduce:set_timeout(list_to_integer(NewTimeout));
             ("mapreduce", "max_kv_size_per_doc", NewMax) ->
-                ok = mapreduce:set_max_kv_size_per_doc(list_to_integer(NewMax))
+                ok = mapreduce:set_max_kv_size_per_doc(list_to_integer(NewMax));
+            ("mapreduce", "optimize_doc_load", NewFlag) ->
+                ok = mapreduce:set_optimize_doc_load(list_to_atom(NewFlag))
         end),
 
     ok = mapreduce:set_timeout(list_to_integer(
         couch_config:get("mapreduce", "function_timeout", "10000"))),
+
+    ok = mapreduce:set_optimize_doc_load(list_to_atom(
+        couch_config:get("mapreduce", "optimize_doc_load", "true"))),
 
     Server = init_server(Category, Indexer),
     % {SetName, {DDocId, Signature}}

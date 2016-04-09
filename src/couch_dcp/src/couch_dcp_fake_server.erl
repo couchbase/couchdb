@@ -712,6 +712,8 @@ handle_stream_request_body(Socket, BodyLength, RequestId, PartId) ->
                 EndSeq;
             ?DCP_FLAG_USELATEST_ENDSEQNO ->
                 EndSeq;
+            ?DCP_FLAG_NOVALUE ->
+                EndSeq;
             Flags when (Flags band ?DCP_FLAG_DISKONLY) =/= 0 ->
                 % Either of the following flags:
                 % DCP_FLAG_DISKONLY

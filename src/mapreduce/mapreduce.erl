@@ -26,6 +26,7 @@
 -export([rereduce/3]).
 
 -export([set_timeout/1, set_max_kv_size_per_doc/1]).
+-export([is_doc_used/1, set_optimize_doc_load/1]).
 
 -on_load(init/0).
 
@@ -86,4 +87,10 @@ set_timeout(_TimeoutMs) ->
 
 
 set_max_kv_size_per_doc(_Max) ->
+    erlang:nif_error(mapreduce_nif_not_loaded).
+
+is_doc_used(_Ctx) ->
+    erlang:nif_error(mapreduce_nif_not_loaded).
+
+set_optimize_doc_load(_Flag) ->
     erlang:nif_error(mapreduce_nif_not_loaded).

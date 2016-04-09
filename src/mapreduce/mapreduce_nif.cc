@@ -59,6 +59,8 @@ static ERL_NIF_TERM doReduce(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]
 static ERL_NIF_TERM doRereduce(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
 static ERL_NIF_TERM setTimeout(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
 static ERL_NIF_TERM setMaxKvSize(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
+static ERL_NIF_TERM isDocUsed(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
+static ERL_NIF_TERM setOptimizeDocLoad(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
 
 // NIF API callbacks
 static int onLoad(ErlNifEnv* env, void** priv, ERL_NIF_TERM info);
@@ -383,6 +385,36 @@ ERL_NIF_TERM setMaxKvSize(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     return ATOM_OK;
 }
 
+ERL_NIF_TERM isDocUsed(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    map_reduce_ctx_t *ctx;
+    const char *retAtom;
+
+    if (!enif_get_resource(env, argv[0], MAP_REDUCE_CTX_RES, reinterpret_cast<void **>(&ctx))) {
+        return enif_make_badarg(env);
+    }
+
+    if (ctx->isDocUsed) {
+        retAtom = "doc_fields_used";
+    }
+    else {
+        retAtom = "doc_fields_unused";
+    }
+    return enif_make_tuple2(env, ATOM_OK, enif_make_atom(env, retAtom));
+}
+
+ERL_NIF_TERM setOptimizeDocLoad(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    char optimizeDocLoadAtom[8];
+
+    if (!enif_get_atom(env, argv[0], optimizeDocLoadAtom, sizeof(optimizeDocLoadAtom),
+                       ERL_NIF_LATIN1)) {
+        return enif_make_badarg(env);
+    }
+    setOptimizeDocLoadFlag(optimizeDocLoadAtom);
+
+    return ATOM_OK;
+}
 
 int onLoad(ErlNifEnv *env, void **priv, ERL_NIF_TERM info)
 {
@@ -554,7 +586,9 @@ static ErlNifFunc nif_functions[] = {
     {"reduce", 3, doReduce},
     {"rereduce", 3, doRereduce},
     {"set_timeout", 1, setTimeout},
-    {"set_max_kv_size_per_doc", 1, setMaxKvSize}
+    {"set_max_kv_size_per_doc", 1, setMaxKvSize},
+    {"is_doc_used", 1, isDocUsed},
+    {"set_optimize_doc_load", 1, setOptimizeDocLoad}
 };
 
 // Due to the stupid macros I need to manually do this in order

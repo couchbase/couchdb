@@ -27,6 +27,7 @@
 #include "mapreduce.h"
 // This is libv8_libplatform library which handles garbage collection for v8
 #include <include/libplatform/libplatform.h>
+// Esprima unused and builtin JavaScript contents in raw string format
 #include "jsfunctions/jsfunctions_data.h"
 
 #define MAX_LOG_STRING_SIZE 1024
@@ -42,6 +43,7 @@ typedef struct {
     map_reduce_ctx_t      *ctx;
 } isolate_data_t;
 
+static bool optimize_doc_load = true;
 static void doInitContext(map_reduce_ctx_t *ctx,
                           const function_sources_list_t &funs,
                           const view_index_type_t viewType);
@@ -81,6 +83,14 @@ void deinitV8()
     V8::ShutdownPlatform();
     delete v8platform;
     delete[] startupData.data;
+}
+
+void setOptimizeDocLoadFlag(const char *flag)
+{
+    if(!strcmp(flag, "true"))
+        optimize_doc_load = true;
+    else
+        optimize_doc_load = false;
 }
 
 void initContext(map_reduce_ctx_t *ctx, const function_sources_list_t &funs,
@@ -599,9 +609,24 @@ void loadFunctions(map_reduce_ctx_t *ctx,
                    const function_sources_list_t &funStrings)
 {
     HandleScope handle_scope(ctx->isolate);
+    Local<Context> context = Local<Context>::New(ctx->isolate, ctx->jsContext);
+    Context::Scope context_scope(context);
+
+    bool isDocUsed;
+    if(optimize_doc_load) {
+        // If esprima compilation fails restore back to pulling in documents.
+        try {
+            compileFunction("is_doc_unused");
+            isDocUsed = false;
+        } catch(...) {
+            isDocUsed = true;
+        }
+    }
+    else {
+        isDocUsed = true;
+    }
 
     ctx->functions = (function_vector_t *) enif_alloc(sizeof(function_vector_t));
-
     if (ctx->functions == NULL) {
         throw std::bad_alloc();
     }
@@ -611,6 +636,17 @@ void loadFunctions(map_reduce_ctx_t *ctx,
 
     for ( ; it != funStrings.end(); ++it) {
         Handle<Function> fun = compileFunction(*it);
+        if(optimize_doc_load) {
+            Handle<Value> val = context->Global()->Get(
+                createUtf8String(ctx->isolate, "is_doc_unused"));
+            Handle<Function> unusedFun = Handle<Function>::Cast(val);
+            Handle<Value> arg = createUtf8String(ctx->isolate, it->data());
+            Handle<Value> js_result = unusedFun->Call(context->Global(), 1, &arg);
+            bool isDocUnused = js_result->BooleanValue();
+            if (isDocUnused == false) {
+                isDocUsed = true;
+            }
+        }
         Persistent<Function> *perFn =
             (Persistent<Function> *) enif_alloc(sizeof(Persistent<Function>));
         if (perFn == NULL) {
@@ -620,6 +656,7 @@ void loadFunctions(map_reduce_ctx_t *ctx,
         perFn->Reset(ctx->isolate, fun);
         ctx->functions->push_back(perFn);
     }
+    ctx->isDocUsed = isDocUsed;
 }
 
 

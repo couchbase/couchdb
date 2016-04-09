@@ -97,6 +97,7 @@ typedef struct {
     std::atomic<hrtime_t>                        taskStartTime;
     int                                          emitKvSize;
     int                                          maxEmitKvSize;
+    bool                                         isDocUsed;
     log_results_list_t                           *logResults;
     view_index_type_t                            viewType;
 } map_reduce_ctx_t;
@@ -137,6 +138,8 @@ void initV8();
 * v8 thread contexts like v8 isolate and v8 context.
 **/
 void deinitV8();
+
+void setOptimizeDocLoadFlag(const char *);
 
 class MapReduceError {
 public:
