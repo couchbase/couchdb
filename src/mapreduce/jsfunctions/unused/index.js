@@ -13,11 +13,7 @@
  *
  */
 
-var esprima = require('esprima');
-
-var Context = require('./lib/context');
-
-// return a list of unused variables in the source
+// return AST and a list of unused variables in the source
 function unused(src) {
     var ast = esprima.parse(src, {
         loc: true
@@ -247,9 +243,5 @@ function unused(src) {
 
     Array.prototype.push.apply(unused_vars, ctx.unused());
 
-    return unused_vars;
+    return { "ast" : ast, "unused_vars" : unused_vars}
 }
-
-module.exports = unused;
-
-

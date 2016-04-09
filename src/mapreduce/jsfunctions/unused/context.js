@@ -75,5 +75,3 @@ Context.prototype.unused = function() {
         return self.variables[key];
     });
 };
-
-module.exports = Context;
