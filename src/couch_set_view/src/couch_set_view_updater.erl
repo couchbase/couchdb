@@ -613,8 +613,8 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
     end,
 
     couch_work_queue:close(MapQueue),
-    ?LOG_INFO("Updater for ~s set view group `~s`, set `~s` (~s), read a total
-              of ~p changes and ~p",
+    ?LOG_INFO("Updater for ~s set view group `~s`, set `~s` (~s), "
+              "read a total of ~p changes and ~p",
               [GroupType, DDocId, SetName, Category, FinalChangesCount3, IsDocUsed]),
     ?LOG_DEBUG("Updater for ~s set view group `~s`, set `~s`, max partition seqs found:~n~w",
                [GroupType, DDocId, SetName, MaxSeqs3]),
