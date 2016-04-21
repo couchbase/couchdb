@@ -39,6 +39,7 @@ SET(TEST_FILES
   33-dcp-duplicates.t
   34-truncate.t
   35-meta-params.t
+  35-partition-versions.t
   36-write-guard.t)
 
 FOREACH (it ${TEST_FILES})

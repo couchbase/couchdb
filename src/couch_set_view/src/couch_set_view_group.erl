@@ -4130,7 +4130,7 @@ remove_duplicate_partitions(Group) ->
         mod = Mod,
         index_header = #set_view_index_header{
             partition_versions = PartVersions
-        }
+        } = Header
     } = Group,
     [Stats] = ets:lookup(Group#set_view_group.stats_ets,
         ?set_view_group_stats_key(Group)),
@@ -4161,7 +4161,7 @@ remove_duplicate_partitions(Group) ->
         true = ets:insert(Group#set_view_group.stats_ets, Stats2),
         NewPartVersions = lists:usort(PartVersions),
         Group#set_view_group{
-            index_header = #set_view_index_header{
+            index_header = Header#set_view_index_header{
                 partition_versions = NewPartVersions
             }
         }
