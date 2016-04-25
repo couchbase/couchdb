@@ -25,9 +25,9 @@
 #include <atomic>
 #include <cstring>
 #include <iostream>
-#include <map>
 #include <platform/platform.h>
 #include <sstream>
+#include <unordered_set>
 
 #include "erl_nif_compat.h"
 #include "mapreduce.h"
@@ -46,7 +46,7 @@ static ErlNifMutex                                 *terminatorMutex;
 static cb_cond_t                                   cv;
 static cb_mutex_t                                  cvMutex;
 static std::atomic<bool>                           shutdownTerminator;
-static std::map< unsigned int, map_reduce_ctx_t* > contexts;
+static std::unordered_set< map_reduce_ctx_t* >     contexts;
 
 
 // NIF API functions
@@ -71,7 +71,7 @@ static bool parseFunctions(ErlNifEnv *env, ERL_NIF_TERM functionsArg, function_s
 // NIF resource functions
 static void free_map_reduce_context(ErlNifEnv *env, void *res);
 
-static inline void registerContext(map_reduce_ctx_t *ctx, ErlNifEnv *env, const ERL_NIF_TERM &refTerm);
+static inline void registerContext(map_reduce_ctx_t *ctx);
 static inline void unregisterContext(map_reduce_ctx_t *ctx);
 static void *terminatorLoop(void *);
 
@@ -108,7 +108,7 @@ ERL_NIF_TERM startMapContext(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]
         ERL_NIF_TERM res = enif_make_resource(env, ctx);
         enif_release_resource(ctx);
 
-        registerContext(ctx, env, argv[2]);
+        registerContext(ctx);
 
         return enif_make_tuple2(env, ATOM_OK, res);
 
@@ -216,7 +216,7 @@ ERL_NIF_TERM startReduceContext(ErlNifEnv *env, int argc, const ERL_NIF_TERM arg
         ERL_NIF_TERM res = enif_make_resource(env, ctx);
         enif_release_resource(ctx);
 
-        registerContext(ctx, env, argv[1]);
+        registerContext(ctx);
 
         return enif_make_tuple2(env, ATOM_OK, res);
 
@@ -526,8 +526,6 @@ void free_map_reduce_context(ErlNifEnv *env, void *res) {
 
 void *terminatorLoop(void *args)
 {
-    std::map< unsigned int, map_reduce_ctx_t* >::iterator it;
-
     while (!shutdownTerminator) {
         // Convert maxTaskDuration to nanoseconds
         const hrtime_t maxTaskTimeNSec = maxTaskDuration * SEC_TO_NSEC;
@@ -537,8 +535,7 @@ void *terminatorLoop(void *args)
         enif_mutex_lock(terminatorMutex);
         now = gethrtime();
 
-        for (it = contexts.begin(); it != contexts.end(); ++it) {
-            map_reduce_ctx_t *ctx = (*it).second;
+        for (map_reduce_ctx_t *ctx : contexts) {
             if (ctx->taskStartTime > 0) {
                 int64_t  timeGap = maxTaskTimeNSec -
                         (now - ctx->taskStartTime);
@@ -563,30 +560,27 @@ void *terminatorLoop(void *args)
 }
 
 
-void registerContext(map_reduce_ctx_t *ctx, ErlNifEnv *env, const ERL_NIF_TERM &refTerm)
+void registerContext(map_reduce_ctx_t *ctx)
 {
-    if (!enif_get_uint(env, refTerm, &ctx->key)) {
-        throw MapReduceError("invalid context reference");
-    }
-
     enif_mutex_lock(terminatorMutex);
-    contexts[ctx->key] = ctx;
+    bool inserted = contexts.insert(ctx).second;
     enif_mutex_unlock(terminatorMutex);
+    assert(inserted == true);
 }
 
 
 void unregisterContext(map_reduce_ctx_t *ctx)
 {
     enif_mutex_lock(terminatorMutex);
-    contexts.erase(ctx->key);
+    contexts.erase(ctx);
     enif_mutex_unlock(terminatorMutex);
 }
 
 
 static ErlNifFunc nif_functions[] = {
-    {"start_map_context", 3, startMapContext},
+    {"start_map_context", 2, startMapContext},
     {"map_doc", 3, doMapDoc},
-    {"start_reduce_context", 2, startReduceContext},
+    {"start_reduce_context", 1, startReduceContext},
     {"reduce", 2, doReduce},
     {"reduce", 3, doReduce},
     {"rereduce", 3, doRereduce},

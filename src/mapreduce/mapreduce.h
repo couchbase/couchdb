@@ -92,7 +92,6 @@ typedef struct {
     ArrayBufferAllocator                         *bufAllocator;
     function_vector_t                            *functions;
     kv_pair_list_t                               *kvs;
-    unsigned int                                 key;
     ErlNifEnv                                    *env;
     std::atomic<hrtime_t>                        taskStartTime;
     int                                          emitKvSize;

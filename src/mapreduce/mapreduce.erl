@@ -50,11 +50,7 @@ init() ->
     end.
 
 
-start_map_context(Mod, MapFunSources) ->
-    Ref = erlang:phash2(make_ref()),
-    start_map_context(Mod, MapFunSources, Ref).
-
-start_map_context(_Mod, _MapFunSources, _Ref) ->
+start_map_context(_Mod, _MapFunSources) ->
     erlang:nif_error(mapreduce_nif_not_loaded).
 
 
@@ -62,11 +58,7 @@ map_doc(_Context, _Doc, _Meta) ->
     erlang:nif_error(mapreduce_nif_not_loaded).
 
 
-start_reduce_context(ReduceFunSources) ->
-    Ref = erlang:phash2(make_ref()),
-    start_reduce_context(ReduceFunSources, Ref).
-
-start_reduce_context(_ReduceFunSources, _Ref) ->
+start_reduce_context(_ReduceFunSources) ->
     erlang:nif_error(mapreduce_nif_not_loaded).
 
 
