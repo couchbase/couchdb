@@ -109,7 +109,8 @@ void initContext(map_reduce_ctx_t *ctx, const function_sources_list_t &funs,
 
         loadFunctions(ctx, funs);
     } catch (...) {
-        destroyContext(ctx);
+        // Releasing resource will invoke NIF destructor that calls destroyCtx
+        enif_release_resource(ctx);
         throw;
     }
 }
@@ -399,20 +400,24 @@ void destroyContext(map_reduce_ctx_t *ctx)
             Local<Context>::New(ctx->isolate, ctx->jsContext);
         Context::Scope context_scope(context);
 
-        for (unsigned int i = 0; i < ctx->functions->size(); ++i) {
-            (*ctx->functions)[i]->Reset();
-            (*ctx->functions)[i]->~Persistent<v8::Function>();
-            enif_free((*ctx->functions)[i]);
+        if (ctx->functions) {
+            for (unsigned int i = 0; i < ctx->functions->size(); ++i) {
+                (*ctx->functions)[i]->Reset();
+                (*ctx->functions)[i]->~Persistent<v8::Function>();
+                enif_free((*ctx->functions)[i]);
+            }
+            ctx->functions->~function_vector_t();
+            enif_free(ctx->functions);
         }
-        ctx->functions->~function_vector_t();
-        enif_free(ctx->functions);
 
         isolate_data_t *isoData = getIsolateData();
-        isoData->jsonObject.Reset();
-        isoData->jsonParseFun.Reset();
-        isoData->stringifyFun.Reset();
-        isoData->~isolate_data_t();
-        enif_free(isoData);
+        if(isoData) {
+            isoData->jsonObject.Reset();
+            isoData->jsonParseFun.Reset();
+            isoData->stringifyFun.Reset();
+            isoData->~isolate_data_t();
+            enif_free(isoData);
+        }
 
         ctx->jsContext.Reset();
     }
@@ -636,7 +641,8 @@ void loadFunctions(map_reduce_ctx_t *ctx,
 
     for ( ; it != funStrings.end(); ++it) {
         Handle<Function> fun = compileFunction(*it);
-        if(optimize_doc_load) {
+        // Do this if is_doc_unused function compilation is successful
+        if(optimize_doc_load && !isDocUsed) {
             Handle<Value> val = context->Global()->Get(
                 createUtf8String(ctx->isolate, "is_doc_unused"));
             Handle<Function> unusedFun = Handle<Function>::Cast(val);
