@@ -66,6 +66,9 @@ start_server(SetName) ->
     end,
     ok = couch_config:set("couchdb", "database_dir", NewDbDir, false),
     ok = couch_config:set("couchdb", "view_index_dir", NewIndexDir, false),
+    % The build slaves can be slow, hence set the DCP connection timeout
+    % high enough to prevent sporadic failures
+    ok = couch_config:set("dcp", "connection_timeout", "10000", false),
     start_server(),
     % Also start the fake DCP server that is needed for testing
     {ok, DcpPid} = couch_dcp_fake_server:start(SetName),

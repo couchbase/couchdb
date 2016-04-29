@@ -21,15 +21,13 @@
 #define NOMINMAX
 #endif
 
-#include <platform/platform.h>
 #include <algorithm>
-#include <iostream>
+#include <atomic>
 #include <cstring>
-#include <sstream>
+#include <iostream>
 #include <map>
-#include <chrono>
-#include <mutex>
-#include <condition_variable>
+#include <platform/platform.h>
+#include <sstream>
 
 #include "erl_nif_compat.h"
 #include "mapreduce.h"
@@ -45,8 +43,8 @@ static int                                         maxKvSize = 1 * 1024 * 1024;
 static ErlNifResourceType                          *MAP_REDUCE_CTX_RES;
 static ErlNifTid                                   terminatorThreadId;
 static ErlNifMutex                                 *terminatorMutex;
-static std::condition_variable                     cv;
-static std::mutex                                  cvMutex;
+static cb_cond_t                                   cv;
+static cb_mutex_t                                  cvMutex;
 static std::atomic<bool>                           shutdownTerminator;
 static std::map< unsigned int, map_reduce_ctx_t* > contexts;
 
@@ -363,10 +361,10 @@ ERL_NIF_TERM setTimeout(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         return enif_make_badarg(env);
     }
 
-    std::lock_guard<std::mutex> lk(cvMutex);
+    cb_mutex_enter(&cvMutex);
     maxTaskDuration = (timeout + 999) / 1000;
-
-    cv.notify_one();
+    cb_cond_signal(&cv);
+    cb_mutex_exit(&cvMutex);
 
     return ATOM_OK;
 }
@@ -440,6 +438,8 @@ int onLoad(ErlNifEnv *env, void **priv, ERL_NIF_TERM info)
 
     shutdownTerminator = false;
     maxTaskDuration = 5;
+    cb_cond_initialize(&cv);
+    cb_mutex_initialize(&cvMutex);
     if (enif_thread_create(const_cast<char *>("terminator thread"),
                            &terminatorThreadId,
                            terminatorLoop,
@@ -458,10 +458,14 @@ void onUnload(ErlNifEnv *env, void *priv_data)
 {
     void *result = NULL;
 
+    cb_mutex_enter(&cvMutex);
     shutdownTerminator = true;
-    cv.notify_one();
+    cb_cond_signal(&cv);
+    cb_mutex_exit(&cvMutex);
     enif_thread_join(terminatorThreadId, &result);
     enif_mutex_destroy(terminatorMutex);
+    cb_mutex_destroy(&cvMutex);
+    cb_cond_destroy(&cv);
     deinitV8();
 }
 
@@ -550,8 +554,9 @@ void *terminatorLoop(void *args)
         enif_mutex_unlock(terminatorMutex);
         // Convert minTimeDiff to miliseconds
         hrtime_t minTimeMSec = (hrtime_t)(minTimeDiff * NSEC_TO_MSEC);
-        std::unique_lock<std::mutex> lk(cvMutex);
-        cv.wait_for(lk, std::chrono::milliseconds(minTimeMSec));
+        cb_mutex_enter(&cvMutex);
+        cb_cond_timedwait(&cv, &cvMutex, minTimeMSec);
+        cb_mutex_exit(&cvMutex);
     }
 
     return NULL;
