@@ -291,9 +291,9 @@ json_results_list_t runReduce(map_reduce_ctx_t *ctx,
         try {
             ErlNifBinary jsonResult = jsonStringify(result);
             results.push_back(jsonResult);
-        } catch(...) {
+        } catch(Handle<String> &ex) {
             freeJsonData(results);
-            throw;
+            ctx->isolate->ThrowException(ex);
         }
     }
 
@@ -344,7 +344,14 @@ ErlNifBinary runReduce(map_reduce_ctx_t *ctx,
         throw MapReduceError(exceptionString(try_catch));
     }
 
-    return jsonStringify(result);
+    ErlNifBinary jsonResult;
+    try {
+        jsonResult = jsonStringify(result);
+    } catch(Handle<String> &ex) {
+        ctx->isolate->ThrowException(ex);
+    }
+
+    return jsonResult;
 }
 
 
@@ -386,7 +393,14 @@ ErlNifBinary runRereduce(map_reduce_ctx_t *ctx,
         throw MapReduceError(exceptionString(try_catch));
     }
 
-    return jsonStringify(result);
+    ErlNifBinary jsonResult;
+    try {
+        jsonResult = jsonStringify(result);
+    } catch(Handle<String> &ex) {
+        ctx->isolate->ThrowException(ex);
+    }
+
+    return jsonResult;
 }
 
 
@@ -502,7 +516,13 @@ static void emit(const v8::FunctionCallbackInfo<Value>& args)
         return;
     }
 
-    ErlNifBinary keyJson = jsonStringify(args[0]);
+    ErlNifBinary keyJson;
+    try {
+        keyJson = jsonStringify(args[0]);
+    } catch(Handle<String> &ex) {
+        isoData->ctx->isolate->ThrowException(ex);
+        return;
+    }
 
     // Spatial views may emit a geometry that is bigger, when serialized
     // to JSON, than the allowed size of a key. In later steps it will then
