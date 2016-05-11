@@ -73,12 +73,12 @@ query_index(Mod, #index_merge{indexes = [#set_view_spec{}]} = Params0, Req) ->
             ok;
         DDocRev ->
             ok;
-        OtherDDocRev ->
+        _ ->
             ?LOG_ERROR("View merger, revision mismatch for design document `~s',"
-                       " wanted ~s, got ~s",
+                       " revision on local node ~s, revision on remote node ~s",
                        [DDoc#doc.id,
                         rev_str(DesiredDDocRevision),
-                        rev_str(OtherDDocRev)]),
+                        rev_str(DDocRev)]),
             throw({error, revision_mismatch})
         end;
     false ->
@@ -134,12 +134,12 @@ do_query_index(Mod, IndexMergeParams, DDoc, IndexName) ->
             ok;
         DDocRev ->
             ok;
-        OtherDDocRev ->
+        _ ->
             ?LOG_ERROR("View merger, revision mismatch for design document `~s',"
-                       " wanted ~s, got ~s",
+                       " revision on local node ~s, revision on remote node ~s",
                        [DDoc#doc.id,
                         rev_str(DesiredDDocRevision),
-                        rev_str(OtherDDocRev)]),
+                        rev_str(DDocRev)]),
             throw({error, revision_mismatch})
         end;
     false ->
@@ -214,12 +214,12 @@ do_query_index(Mod, IndexMergeParams, DDoc, IndexName) ->
             case DesiredDDocRevision of
             auto ->
                 throw(retry);
-            OtherDDocRev2 ->
+            _ ->
                 ?LOG_ERROR("View merger, revision mismatch for design document `~s',"
-                           " wanted ~s, got ~s",
+                           " revision on local node ~s, revision on remote node ~s",
                            [DDoc#doc.id,
                             rev_str(DesiredDDocRevision),
-                            rev_str(OtherDDocRev2)]),
+                            rev_str(DDocRev)]),
                 throw({error, revision_mismatch})
             end;
         {ok, Resp} ->
