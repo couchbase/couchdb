@@ -956,7 +956,16 @@ handle_call(get_utilization_stats, _From, #state{replica_group = RepPid} = State
     false ->
         StatsList = StatsList1
     end,
-    {reply, {ok, StatsList}, State, ?GET_TIMEOUT(State)}.
+    {reply, {ok, StatsList}, State, ?GET_TIMEOUT(State)};
+
+handle_call(before_master_delete, _From, State) ->
+    Error = {error, {db_deleted, ?master_dbname((?set_name(State)))}},
+    State2 = reply_all(State, Error),
+    ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`, going to shutdown because "
+              "master database is being deleted",
+              [?set_name(State), ?type(State), ?category(State),
+               ?group_id(State)]),
+    {stop, shutdown, ok, State2}.
 
 
 handle_cast(_Msg, State) when not ?is_defined(State) ->
@@ -1014,15 +1023,6 @@ handle_cast({ddoc_updated, NewSig, Aliases}, State) ->
             {noreply, State2}
         end
     end;
-
-handle_cast(before_master_delete, State) ->
-    Error = {error, {db_deleted, ?master_dbname((?set_name(State)))}},
-    State2 = reply_all(State, Error),
-    ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`, going to shutdown because "
-              "master database is being deleted",
-              [?set_name(State), ?type(State), ?category(State),
-               ?group_id(State)]),
-    {stop, shutdown, State2};
 
 handle_cast({update, MinNumChanges}, #state{group = Group} = State) ->
     case is_pid(State#state.updater_pid) of
