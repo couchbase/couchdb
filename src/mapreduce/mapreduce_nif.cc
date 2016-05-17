@@ -26,6 +26,7 @@
 #include <cstring>
 #include <iostream>
 #include <platform/platform.h>
+#include <platform/cbassert.h>
 #include <sstream>
 #include <unordered_set>
 
@@ -565,7 +566,7 @@ void registerContext(map_reduce_ctx_t *ctx)
     enif_mutex_lock(terminatorMutex);
     bool inserted = contexts.insert(ctx).second;
     enif_mutex_unlock(terminatorMutex);
-    assert(inserted == true);
+    cb_assert(inserted == true);
 }
 
 

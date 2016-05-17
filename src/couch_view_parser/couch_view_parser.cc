@@ -17,10 +17,10 @@
  * the License.
  **/
 
-#include <iostream>
-#include <string.h>
-#include <assert.h>
 #include <algorithm>
+#include <iostream>
+#include <platform/cbassert.h>
+#include <string.h>
 
 #include "couch_view_parser.h"
 
@@ -566,7 +566,7 @@ static int start_object_callback(void *ctx)
     ++context->level;
 
     if (context->level == 1) {
-        assert(context->parser_state == parser_starting);
+        cb_assert(context->parser_state == parser_starting);
         context->parser_state = parser_debug_info;
         context->parser_sub_state = parser_find_debug_info_key;
     } else if (context->level == 2) {
@@ -637,14 +637,14 @@ static int end_object_callback(void *ctx)
         } else if (context->parser_state == parser_rows &&
                    context->parser_sub_state == parser_get_row) {
             // finished parsing a row
-            assert(context->tmp_row != NULL);
+            cb_assert(context->tmp_row != NULL);
             context->rows->push_back(context->tmp_row);
             context->tmp_row = NULL;
             context->parser_sub_state = parser_get_row;
         } else if (context->parser_state == parser_errors &&
                    context->parser_sub_state == parser_get_error_entry) {
             // finished parsing an error entry
-            assert(context->tmp_error_entry != NULL);
+            cb_assert(context->tmp_error_entry != NULL);
             context->error_entries->push_back(context->tmp_error_entry);
             context->tmp_error_entry = NULL;
             context->parser_sub_state = parser_get_error_entry;
@@ -723,7 +723,7 @@ static int object_key_callback(void *ctx, const unsigned char *key, size_t len)
             context->parser_sub_state == parser_get_debug_infos) {
 
             // starting to parse a debug info entry (relative to one node)
-            assert(context->tmp_debug_info == NULL);
+            cb_assert(context->tmp_debug_info == NULL);
             context->tmp_debug_info = (debug_info_t *) enif_alloc(sizeof(debug_info_t));
             if (context->tmp_debug_info == NULL) {
                 throw std::bad_alloc();
@@ -867,7 +867,7 @@ static int end_array_callback(void *ctx)
         return 1;
     case parser_get_row_doc:
         add_array_end(context, context->tmp_row->doc);
-        assert(context->value_nesting > 0);
+        cb_assert(context->value_nesting > 0);
         return 1;
     default:
         break;
@@ -999,7 +999,7 @@ static inline void add_array_end(ctx_t *context, parser_string_t &buffer)
 static inline void maybe_debug_entry_end(ctx_t *context)
 {
     if (context->value_nesting == 0) {
-        assert(context->tmp_debug_info != NULL);
+        cb_assert(context->tmp_debug_info != NULL);
         context->debug_infos->push_back(context->tmp_debug_info);
         context->tmp_debug_info = NULL;
         context->parser_sub_state = parser_get_debug_infos;

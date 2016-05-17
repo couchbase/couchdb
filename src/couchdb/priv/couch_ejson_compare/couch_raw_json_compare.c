@@ -17,7 +17,7 @@
  * the License.
  */
 
-#include <assert.h>
+#include <platform/cbassert.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -245,7 +245,7 @@ static const char * createStringFromJSON(const char **in, int *length,
             }
             *dst++ = c;
         }
-        assert(dst - buf == (int) *length);
+        cb_assert(dst - buf == (int) *length);
         start = buf;
     }
 

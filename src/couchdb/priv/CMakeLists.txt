@@ -5,6 +5,7 @@ CONFIGURE_FILE(${CMAKE_CURRENT_SOURCE_DIR}/stat_descriptions.cfg.in
                ${CMAKE_CURRENT_BINARY_DIR}/stat_descriptions.cfg)
 
 INCLUDE_DIRECTORIES(BEFORE ${ICU_INCLUDE_DIR}
+                           ${Platform_SOURCE_DIR}/include
                            ${ERLANG_INCLUDE_PATH})
 
 ADD_DEFINITIONS(-DXP_UNIX)
@@ -15,7 +16,7 @@ SET(COUCH_EJSON_COMPARE_SRC couch_ejson_compare/couch_ejson_compare.c
 
 ADD_LIBRARY(couch_ejson_compare MODULE ${COUCH_EJSON_COMPARE_SRC})
 SET_TARGET_PROPERTIES(couch_ejson_compare PROPERTIES PREFIX "")
-TARGET_LINK_LIBRARIES(couch_ejson_compare ${COUCHBASE_UNRESOLVED} ${ICU_LIBRARIES})
+TARGET_LINK_LIBRARIES(couch_ejson_compare ${COUCHBASE_UNRESOLVED} ${ICU_LIBRARIES} platform)
 
 IF (APPLE)
     # map from lib/couchdb/erlang/lib/couch-1.2.0a-961ad59-git/priv/lib to lib/
