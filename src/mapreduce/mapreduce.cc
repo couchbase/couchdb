@@ -19,11 +19,11 @@
 
 #include <iostream>
 #include <list>
-#include <vector>
 #include <string>
 #include <string.h>
 #include <sstream>
 #include <time.h>
+#include <vector>
 #include "mapreduce.h"
 // This is libv8_libplatform library which handles garbage collection for v8
 #include <include/libplatform/libplatform.h>
@@ -108,6 +108,7 @@ void initContext(map_reduce_ctx_t *ctx, const function_sources_list_t &funs,
         Context::Scope context_scope(context);
 
         loadFunctions(ctx, funs);
+        cb_mutex_initialize(&ctx->exitMutex);
     } catch (...) {
         // Releasing resource will invoke NIF destructor that calls destroyCtx
         enif_release_resource(ctx);
@@ -750,14 +751,16 @@ void taskStarted(map_reduce_ctx_t *ctx)
 
 void taskFinished(map_reduce_ctx_t *ctx)
 {
+    cb_mutex_enter(&ctx->exitMutex);
     ctx->taskStartTime = 0;
+    cb_mutex_exit(&ctx->exitMutex);
 }
 
 
 void terminateTask(map_reduce_ctx_t *ctx)
 {
     V8::TerminateExecution(ctx->isolate);
-    taskFinished(ctx);
+    ctx->taskStartTime = 0;
 }
 
 

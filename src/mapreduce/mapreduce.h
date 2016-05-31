@@ -99,6 +99,7 @@ typedef struct {
     bool                                         isDocUsed;
     log_results_list_t                           *logResults;
     view_index_type_t                            viewType;
+    cb_mutex_t                                   exitMutex;
 } map_reduce_ctx_t;
 
 

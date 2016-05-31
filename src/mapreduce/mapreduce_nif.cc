@@ -25,7 +25,6 @@
 #include <atomic>
 #include <cstring>
 #include <iostream>
-#include <platform/platform.h>
 #include <platform/cbassert.h>
 #include <sstream>
 #include <unordered_set>
@@ -537,9 +536,11 @@ void *terminatorLoop(void *args)
         now = gethrtime();
 
         for (map_reduce_ctx_t *ctx : contexts) {
-            if (ctx->taskStartTime > 0) {
+            cb_mutex_enter(&ctx->exitMutex);
+            hrtime_t startTime = ctx->taskStartTime;
+            if (startTime > 0) {
                 int64_t  timeGap = maxTaskTimeNSec -
-                        (now - ctx->taskStartTime);
+                        (now - startTime);
                 if ((int64_t)gethrtime_period() > timeGap) {
                     terminateTask(ctx);
                 }
@@ -547,6 +548,7 @@ void *terminatorLoop(void *args)
                     minTimeDiff = std::min((hrtime_t)timeGap, minTimeDiff);
                 }
             }
+            cb_mutex_exit(&ctx->exitMutex);
         }
 
         enif_mutex_unlock(terminatorMutex);
