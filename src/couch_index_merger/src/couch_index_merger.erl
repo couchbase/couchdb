@@ -43,17 +43,15 @@
 query_index(Mod, #index_merge{http_params = HttpParams, user_ctx = UserCtx} = IndexMergeParams) when HttpParams =/= nil, UserCtx =/= nil ->
     #index_merge{
         indexes = Indexes,
-        user_ctx = UserCtx,
-        conn_timeout = Timeout
+        user_ctx = UserCtx
     } = IndexMergeParams,
-    {ok, DDoc, IndexName} = get_first_ddoc(Indexes, UserCtx, Timeout),
+    {ok, DDoc, IndexName} = get_first_ddoc(Indexes, UserCtx),
     query_index_loop(Mod, IndexMergeParams, DDoc, IndexName, ?MAX_RETRIES).
 
 % Special and simpler case, trigger a lighter and faster code path.
 query_index(Mod, #index_merge{indexes = [#set_view_spec{}]} = Params0, Req) ->
     #index_merge{
         indexes = Indexes,
-        conn_timeout = Timeout,
         ddoc_revision = DesiredDDocRevision
     } = Params0,
     Params = case Req#httpd.method of
@@ -64,7 +62,7 @@ query_index(Mod, #index_merge{indexes = [#set_view_spec{}]} = Params0, Req) ->
     'POST' ->
         Params0
     end,
-    {ok, DDoc, _} = get_first_ddoc(Indexes, Req#httpd.user_ctx, Timeout),
+    {ok, DDoc, _} = get_first_ddoc(Indexes, Req#httpd.user_ctx),
     DDocRev = ddoc_rev(DDoc),
     case should_check_rev(Params, DDoc) of
     true ->
@@ -89,10 +87,9 @@ query_index(Mod, #index_merge{indexes = [#set_view_spec{}]} = Params0, Req) ->
 query_index(Mod, IndexMergeParams0, #httpd{user_ctx = UserCtx} = Req) ->
     #index_merge{
         indexes = Indexes,
-        conn_timeout = Timeout,
         extra = Extra
     } = IndexMergeParams0,
-    {ok, DDoc, IndexName} = get_first_ddoc(Indexes, UserCtx, Timeout),
+    {ok, DDoc, IndexName} = get_first_ddoc(Indexes, UserCtx),
     IndexMergeParams = IndexMergeParams0#index_merge{
         start_timer = os:timestamp(),
         user_ctx = UserCtx,
@@ -111,10 +108,9 @@ query_index_loop(Mod, IndexMergeParams, DDoc, IndexName, N) ->
         timer:sleep(?RETRY_INTERVAL),
         #index_merge{
             indexes = Indexes,
-            user_ctx = UserCtx,
-            conn_timeout = Timeout
+            user_ctx = UserCtx
         } = IndexMergeParams,
-        {ok, DDoc2, IndexName} = get_first_ddoc(Indexes, UserCtx, Timeout),
+        {ok, DDoc2, IndexName} = get_first_ddoc(Indexes, UserCtx),
         query_index_loop(Mod, IndexMergeParams, DDoc2, IndexName, N - 1)
     end.
 
@@ -281,10 +277,10 @@ clean_exit_messages(FinalReason) ->
     end.
 
 
-get_first_ddoc([], _UserCtx, _Timeout) ->
+get_first_ddoc([], _UserCtx) ->
     throw({error, <<"A view spec can not consist of merges exclusively.">>});
 
-get_first_ddoc([#set_view_spec{} = Spec | _], _UserCtx, _Timeout) ->
+get_first_ddoc([#set_view_spec{} = Spec | _], _UserCtx) ->
     #set_view_spec {
         name = SetName, ddoc_id = Id, view_name = ViewName
     } = Spec,
@@ -300,8 +296,8 @@ get_first_ddoc([#set_view_spec{} = Spec | _], _UserCtx, _Timeout) ->
         throw({not_found, ddoc_not_found_msg(?master_dbname(SetName), Id)})
     end;
 
-get_first_ddoc([_MergeSpec | Rest], UserCtx, Timeout) ->
-    get_first_ddoc(Rest, UserCtx, Timeout).
+get_first_ddoc([_MergeSpec | Rest], UserCtx) ->
+    get_first_ddoc(Rest, UserCtx).
 
 
 open_db(<<"http://", _/binary>> = DbName, _UserCtx, Timeout) ->
