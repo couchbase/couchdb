@@ -38,6 +38,8 @@
 
 -define(RETRY_INTERVAL, 1000).
 -define(MAX_RETRIES, 30).
+% Default timeout for the internal HTTP requests (during scatter phase)
+-define(DEFAULT_INTERNAL_HTTP_TIMEOUT, 60000).
 
 
 query_index(Mod, #index_merge{http_params = HttpParams, user_ctx = UserCtx} = IndexMergeParams) when HttpParams =/= nil, UserCtx =/= nil ->
@@ -550,7 +552,15 @@ dec_counter(N) -> N - 1.
 
 
 index_folder(Mod, #merged_index_spec{} = IndexSpec,
-        MergeParams, _UserCtx, DDoc, Queue, _FoldFun) ->
+        MergeParams0, _UserCtx, DDoc, Queue, _FoldFun) ->
+    MergeParams = case MergeParams0#index_merge.conn_timeout of
+    nil ->
+        MergeParams0#index_merge{
+              conn_timeout = ?DEFAULT_INTERNAL_HTTP_TIMEOUT
+        };
+    _ ->
+        MergeParams0
+    end,
     http_index_folder(Mod, IndexSpec, MergeParams, DDoc, Queue);
 
 index_folder(_Mod, #set_view_spec{} = ViewSpec, MergeParams,

@@ -23,7 +23,7 @@
    callback,
    user_acc,
    % parameters that matter only when there are remote views to merge
-   conn_timeout = 60000,             % milliseconds
+   conn_timeout = nil,               % milliseconds
    on_error = ?ON_ERROR_DEFAULT,     % 'continue' | 'stop'
    ddoc_revision = nil,              % nil | auto | Revision
    http_params = nil,
