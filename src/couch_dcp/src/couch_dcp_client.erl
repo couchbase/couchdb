@@ -488,8 +488,6 @@ handle_info({get_all_seqs, From}, State) ->
 % Reply back to waiting callers
 handle_info({stream_response, RequestId, Msg}, State) ->
     State3 = case find_pending_request(State, RequestId) of
-    {_, nil} ->
-        State;
     {ReqInfo, SendTo} ->
         State2 = case ReqInfo of
         {add_stream, PartId} ->
