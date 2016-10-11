@@ -496,7 +496,12 @@ handle_info({stream_response, RequestId, Msg}, State) ->
             {_, {failoverlog, _}} ->
                 add_request_queue(State, PartId, RequestId);
             _ ->
-                State
+                % Remove possible leak in stream_info
+                #state{
+                    stream_info = StreamData
+                } = State,
+                StreamData2 = dict:erase(RequestId, StreamData),
+                State#state{stream_info = StreamData2}
             end;
         {remove_stream, PartId} ->
             gen_server:reply(SendTo, Msg),
