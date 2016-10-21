@@ -18,7 +18,7 @@
 -export([add_stream/6, get_seqs/2, get_num_items/2,
     get_failover_log/2]).
 -export([get_stream_event/2, remove_stream/2, list_streams/1]).
--export([enum_docs_since/8, restart_worker/1]).
+-export([enum_docs_since/9, restart_worker/1]).
 -export([get_seqs_async/1]).
 
 % gen_server callbacks
@@ -32,6 +32,7 @@
 -define(TIMEOUT, 60000).
 -define(TIMEOUT_STATS, 2000).
 -define(DCP_RETRY_TIMEOUT, 2000).
+-define(DCP_LIST_STREAMS_TIMEOUT, 100).
 -define(DCP_BUF_WINDOW, 65535).
 -define(SOCKET(BufSocket), BufSocket#bufsocket.sockpid).
 
@@ -98,10 +99,10 @@ remove_stream(Pid, PartId) ->
     gen_server:call(Pid, {remove_stream, PartId}, ?TIMEOUT).
 
 
--spec list_streams(pid()) -> list().
+-spec list_streams(pid()) -> {active_list_streams, list()} |
+                             {retry_list_streams, timeout()}.
 list_streams(Pid) ->
-    gen_server:call(Pid, list_streams).
-
+        gen_server:call(Pid, list_streams).
 
 -spec get_stats_reply(pid(), reference()) -> term().
 get_stats_reply(Pid, MRef) ->
@@ -218,17 +219,17 @@ get_stream_event_get_reply(Pid, ReqId, MRef) ->
 
 -spec enum_docs_since(pid(), partition_id(), partition_version(), update_seq(),
                       update_seq(), 0..255, mutations_fold_fun(),
-                      mutations_fold_acc()) ->
+                      mutations_fold_acc(), fun()) ->
                              {error, vbucket_stream_not_found |
                               wrong_start_sequence_number |
                               too_large_failover_log } |
                              {rollback, update_seq()} |
                              {ok, mutations_fold_acc(), partition_version()}.
-enum_docs_since(_, _, [], _, _, _, _, _) ->
+enum_docs_since(_, _, [], _, _, _, _, _, _) ->
     % No matching partition version found. Recreate the index from scratch
     {rollback, 0};
 enum_docs_since(Pid, PartId, PartVersions, StartSeq, EndSeq0, Flags,
-        CallbackFn, InAcc) ->
+        CallbackFn, InAcc, AddStreamFun) ->
     [PartVersion | PartVersionsRest] = PartVersions,
     {PartUuid, _} = PartVersion,
     EndSeq = case EndSeq0 < StartSeq of
@@ -241,7 +242,7 @@ enum_docs_since(Pid, PartId, PartVersions, StartSeq, EndSeq0, Flags,
         EndSeq0
     end,
 
-    case add_stream(Pid, PartId, PartUuid, StartSeq, EndSeq, Flags) of
+    case AddStreamFun(Pid, PartId, PartUuid, StartSeq, EndSeq, Flags) of
     {error, _} = Error ->
         Error;
     {RequestId, Resp} ->
@@ -261,13 +262,13 @@ enum_docs_since(Pid, PartId, PartVersions, StartSeq, EndSeq0, Flags,
             end;
         {error, vbucket_stream_not_found} ->
             enum_docs_since(Pid, PartId, PartVersionsRest, StartSeq, EndSeq,
-                Flags, CallbackFn, InAcc);
+                Flags, CallbackFn, InAcc, AddStreamFun);
         {error, vbucket_stream_tmp_fail} ->
             ?LOG_INFO("dcp client (~p): Temporary failure on stream request "
                 "on partition ~p. Retrying...", [Pid, PartId]),
             timer:sleep(100),
             enum_docs_since(Pid, PartId, PartVersions, StartSeq, EndSeq,
-                Flags, CallbackFn, InAcc);
+                Flags, CallbackFn, InAcc, AddStreamFun);
         _ ->
             Resp
         end
@@ -364,9 +365,15 @@ handle_call({remove_stream, PartId}, From, State) ->
 
 handle_call(list_streams, _From, State) ->
     #state{
-       active_streams = ActiveStreams
+        active_streams = ActiveStreams,
+        pending_requests = PendingRequests
     } = State,
-    Reply = lists:foldl(fun({PartId, _}, Acc) -> [PartId | Acc] end, [], ActiveStreams),
+    Reply = case dict:size(PendingRequests) of
+    0 ->
+        {active_list_streams, lists:foldl(fun({PartId, _}, Acc) -> [PartId | Acc] end, [], ActiveStreams)};
+    _ ->
+        {retry_list_streams, ?DCP_LIST_STREAMS_TIMEOUT}
+    end,
     {reply, Reply, State};
 
 handle_call({get_failover_log, PartId}, From, State) ->

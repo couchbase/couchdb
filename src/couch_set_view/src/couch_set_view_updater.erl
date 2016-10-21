@@ -326,6 +326,34 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
     DocLoader ! updater_finished,
     exit(Result).
 
+-spec get_active_dcp_streams(pid()) -> list().
+get_active_dcp_streams(DcpPid) ->
+    case couch_dcp_client:list_streams(DcpPid) of
+    {active_list_streams, ActiveStreams} ->
+        ActiveStreams;
+    {retry_list_streams, Timeout} ->
+        receive
+        after Timeout ->
+            get_active_dcp_streams(DcpPid)
+        end
+    end.
+
+-spec stop_dcp_streams(pid()) -> ok.
+stop_dcp_streams(DcpPid) ->
+    ActiveStreams = get_active_dcp_streams(DcpPid),
+    lists:foreach(fun(ActiveStream) ->
+        case couch_dcp_client:remove_stream(DcpPid, ActiveStream) of
+        ok ->
+            ok;
+        {error, vbucket_stream_not_found} ->
+            ok;
+        Error ->
+            ?LOG_ERROR("Unexpected error for closing stream of partition ~p",
+                [ActiveStream]),
+            throw(Error)
+        end
+    end, ActiveStreams),
+    ok.
 
 wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup) ->
     #set_view_group{set_name = SetName, name = DDocId, type = Type} = OldGroup,
@@ -379,6 +407,7 @@ wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup) ->
         couch_util:shutdown_sync(DocLoader),
         couch_util:shutdown_sync(Mapper),
         couch_util:shutdown_sync(Writer),
+        stop_dcp_streams(OldGroup#set_view_group.dcp_pid),
         {updater_error, Reason};
     {native_updater_start, Writer} ->
         % We need control over spawning native updater process
@@ -403,9 +432,14 @@ wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup) ->
                 couch_util:shutdown_sync(DocLoader),
                 couch_util:shutdown_sync(Mapper),
                 couch_util:shutdown_sync(Writer)
-            end
+            end,
+            stop_dcp_streams(OldGroup#set_view_group.dcp_pid)
         end,
-        exit({updater_error, shutdown})
+        exit({updater_error, shutdown});
+    {add_stream, DcpPid, PartId, PartUuid, StartSeq, EndSeq, Flags} ->
+        Result = couch_dcp_client:add_stream(DcpPid, PartId, PartUuid, StartSeq, EndSeq, Flags),
+        DocLoader ! {add_stream_result, Result},
+        wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup)
     end.
 
 
@@ -436,6 +470,11 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
 
     MaxDocSize = list_to_integer(
         couch_config:get("set_views", "indexer_max_doc_size", "0")),
+    AddStreamFun = fun(Pid, PartId, PartUuid, StartSeq, EndSeq, Flags) ->
+        Updater ! {add_stream, Pid, PartId, PartUuid, StartSeq, EndSeq, Flags},
+        receive {add_stream_result, Result} -> Result end,
+        Result
+    end,
     FoldFun = fun({PartId, EndSeq}, {AccCount, AccSeqs, AccVersions, AccRollbacks}) ->
         case couch_set_view_util:has_part_seq(PartId, ?set_unindexable_seqs(Group))
             andalso not lists:member(PartId, ?set_replicas_on_transfer(Group)) of
@@ -518,7 +557,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                         end,
                     Result = couch_dcp_client:enum_docs_since(
                         DcpPid, PartId, PartVersions, Since, EndSeq, Flags2,
-                        ChangesWrapper, {0, 0}),
+                        ChangesWrapper, {0, 0}, AddStreamFun),
                     case Result of
                     {ok, {AccCount2, AccEndSeq}, NewPartVersions} ->
                         AccSeqs2 = orddict:store(PartId, AccEndSeq, AccSeqs),
@@ -551,7 +590,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                 ChangesWrapper = fun(_, _) -> ok end,
                 Result = couch_dcp_client:enum_docs_since(
                     DcpPid, PartId, PartVersions, Since, Since, Flags2,
-                    ChangesWrapper, ok),
+                    ChangesWrapper, ok, AddStreamFun),
                 case Result of
                 {ok, _, _} ->
                     AccRollbacks2 = AccRollbacks;

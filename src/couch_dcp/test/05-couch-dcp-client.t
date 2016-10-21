@@ -72,6 +72,10 @@ tests() ->
         end
     end,
 
+    AddStreamFun = fun(Pid, PartId, PartUuid, StartSeq, EndSeq, Flags) ->
+        couch_dcp_client:add_stream(Pid, PartId, PartUuid, StartSeq, EndSeq, Flags)
+    end,
+
     {auth, User, Passwd} = cb_auth_info:get(),
     {ok, Pid} = couch_dcp_client:start(
         test_set_name(), test_set_name(), User, Passwd, 1024, 0),
@@ -83,14 +87,14 @@ tests() ->
     % First parameter is the partition, the second is the sequence number
     % to start at.
     {ok, Docs1, FailoverLog1} = couch_dcp_client:enum_docs_since(
-        Pid, 0, InitialFailoverLog0, 4, 10, ?DCP_FLAG_NOFLAG, TestFun, []),
+        Pid, 0, InitialFailoverLog0, 4, 10, ?DCP_FLAG_NOFLAG, TestFun, [], AddStreamFun),
     etap:is(length(Docs1), 6, "Correct number of docs (6) in partition 0"),
     etap:is(FailoverLog1, lists:nth(1, FailoverLogs),
         "Failoverlog from partition 0 is correct"),
 
     {ok, InitialFailoverLog1} = couch_dcp_client:get_failover_log(Pid, 1),
     {ok, Docs2, FailoverLog2} = couch_dcp_client:enum_docs_since(
-        Pid, 1, InitialFailoverLog1, 46, 165, ?DCP_FLAG_NOFLAG, TestFun, []),
+        Pid, 1, InitialFailoverLog1, 46, 165, ?DCP_FLAG_NOFLAG, TestFun, [], AddStreamFun),
     etap:is(length(Docs2), 119, "Correct number of docs (109) partition 1"),
     etap:is(FailoverLog2, lists:nth(2, FailoverLogs),
         "Failoverlog from partition 1 is correct"),
@@ -98,7 +102,7 @@ tests() ->
     {ok, InitialFailoverLog2} = couch_dcp_client:get_failover_log(Pid, 2),
     {ok, Docs3, FailoverLog3} = couch_dcp_client:enum_docs_since(
         Pid, 2, InitialFailoverLog2, 80, num_docs() div num_set_partitions(),
-        ?DCP_FLAG_NOFLAG, TestFun, []),
+        ?DCP_FLAG_NOFLAG, TestFun, [], AddStreamFun),
     Expected3 = (num_docs() div num_set_partitions()) - 80,
     etap:is(length(Docs3), Expected3,
         io_lib:format("Correct number of docs (~p) partition 2", [Expected3])),
@@ -107,14 +111,14 @@ tests() ->
 
     {ok, InitialFailoverLog3} = couch_dcp_client:get_failover_log(Pid, 3),
     {ok, Docs4, FailoverLog4} = couch_dcp_client:enum_docs_since(
-        Pid, 3, InitialFailoverLog3, 0, 5, ?DCP_FLAG_NOFLAG, TestFun, []),
+        Pid, 3, InitialFailoverLog3, 0, 5, ?DCP_FLAG_NOFLAG, TestFun, [], AddStreamFun),
     etap:is(length(Docs4), 5, "Correct number of docs (5) partition 3"),
     etap:is(FailoverLog4, lists:nth(4, FailoverLogs),
         "Failoverlog from partition 3 is correct"),
 
     % Try a too high sequence number to get a erange error response
     {error, ErangeError} = couch_dcp_client:enum_docs_since(
-        Pid, 0, InitialFailoverLog0, 400, 450, ?DCP_FLAG_NOFLAG, TestFun, []),
+        Pid, 0, InitialFailoverLog0, 400, 450, ?DCP_FLAG_NOFLAG, TestFun, [], AddStreamFun),
     etap:is(ErangeError, wrong_start_sequence_number,
         "Correct error message for too high sequence number"),
 
@@ -127,7 +131,7 @@ tests() ->
         "Correct error message for start sequence > end sequence"),
 
     Error = couch_dcp_client:enum_docs_since(
-        Pid, 1, [{4455667788, 1243}], 46, 165, ?DCP_FLAG_NOFLAG, TestFun, []),
+        Pid, 1, [{4455667788, 1243}], 46, 165, ?DCP_FLAG_NOFLAG, TestFun, [], AddStreamFun),
     etap:is(Error, {rollback, 0},
         "Correct error for wrong failover log"),
 
@@ -168,7 +172,7 @@ tests() ->
     SnapshotEnd1 = num_docs() div (num_set_partitions() * 2),
     {ok, Markers1, SnapshotFailoverLog1} = couch_dcp_client:enum_docs_since(
         Pid, 2, [{0, 0}], SnapshotStart1, SnapshotEnd1, ?DCP_FLAG_NOFLAG,
-        TestSnapshotFun, []),
+        TestSnapshotFun, [], AddStreamFun),
     ExpectedMarkers1 = [{SnapshotStart1, SnapshotEnd1,
         ?DCP_SNAPSHOT_TYPE_DISK}],
     etap:is(Markers1, ExpectedMarkers1,
@@ -178,7 +182,7 @@ tests() ->
     SnapshotEnd2 = num_docs() div num_set_partitions(),
     {ok, Markers2, SnapshotFailoverLog2} = couch_dcp_client:enum_docs_since(
         Pid, 2, SnapshotFailoverLog1, SnapshotStart2, SnapshotEnd2,
-        ?DCP_FLAG_NOFLAG, TestSnapshotFun, []),
+        ?DCP_FLAG_NOFLAG, TestSnapshotFun, [], AddStreamFun),
     ExpectedMarkers2 = [{SnapshotStart2, SnapshotEnd2,
         ?DCP_SNAPSHOT_TYPE_MEMORY}],
     etap:is(Markers2, ExpectedMarkers2,
@@ -195,7 +199,7 @@ tests() ->
     SnapshotEnd3 = num_docs() div num_set_partitions(),
     {ok, All3, SnapshotFailoverLog3} = couch_dcp_client:enum_docs_since(
         Pid, 2, [{0, 0}], SnapshotStart3, SnapshotEnd3, ?DCP_FLAG_NOFLAG,
-        TestAllFun, []),
+        TestAllFun, [], AddStreamFun),
     Markers3 = [M || {snapshot_marker, M} <- All3],
     ExpectedMarkers3 = [{0, ItemsPerSnapshot, ?DCP_SNAPSHOT_TYPE_DISK}] ++
         lists:map(fun(I) ->
@@ -210,7 +214,7 @@ tests() ->
     {ok, ExpectedMutations3, SnapshotFailoverLog3} =
             couch_dcp_client:enum_docs_since(
         Pid, 2, [{0, 0}], SnapshotStart3, SnapshotEnd3, ?DCP_FLAG_NOFLAG,
-        TestFun, []),
+        TestFun, [], AddStreamFun),
     etap:is(Mutations3, ExpectedMutations3,
         "Received the expected mutations within the several snapshots"),
 
@@ -227,7 +231,7 @@ tests() ->
 
     {ok, AllDups2, DupsFailoverLog2} = couch_dcp_client:enum_docs_since(
         Pid, 2, [{0, 0}], DupsStart2, DupsEnd2, ?DCP_FLAG_NOFLAG,
-        TestAllFun, []),
+        TestAllFun, [], AddStreamFun),
     DupsMutations2 = [M || #dcp_doc{} = M <- AllDups2],
     DupsMarkers2 = [M || {snapshot_marker, M} <- AllDups2],
     etap:is(length(DupsMutations2), DupsEnd2,
@@ -277,7 +281,7 @@ tests() ->
     etap:is(length(MutationsPart2), 10,
         "Stream2 has 10 mutations"),
 
-    StreamList0 = couch_dcp_client:list_streams(Pid),
+    {active_list_streams, StreamList0} = couch_dcp_client:list_streams(Pid),
     etap:is(StreamList0, [], "Stream list is empty"),
 
     couch_dcp_fake_server:pause_mutations(),
@@ -303,11 +307,11 @@ tests() ->
     couch_dcp_client:add_stream(
         Pid, 2, first_uuid(InitialFailoverLog2), 100, 200, ?DCP_FLAG_NOFLAG),
 
-    StreamList1 = couch_dcp_client:list_streams(Pid),
+    {active_list_streams, StreamList1} = couch_dcp_client:list_streams(Pid),
     etap:is(StreamList1, [1,2], "Stream list contains parititon 1,2"),
 
     StreamRemoveResp0 = couch_dcp_client:remove_stream(Pid, 1),
-    StreamList2 = couch_dcp_client:list_streams(Pid),
+    {active_list_streams, StreamList2} = couch_dcp_client:list_streams(Pid),
     etap:is({StreamRemoveResp0, StreamList2}, {ok, [2]},
         "Removed parititon stream 1 and parition stream 2 is left"),
 
@@ -322,7 +326,7 @@ tests() ->
     PartId = 1,
     couch_dcp_fake_server:set_failover_log(PartId, TooLargeFailoverLog),
     TooLargeError = couch_dcp_client:enum_docs_since(
-          Pid, PartId, [{0, 0}], 0, 100, ?DCP_FLAG_NOFLAG, TestFun, []),
+          Pid, PartId, [{0, 0}], 0, 100, ?DCP_FLAG_NOFLAG, TestFun, [], AddStreamFun),
     etap:is(TooLargeError, {error, too_large_failover_log},
         "Too large failover log returns correct error"),
 
@@ -396,7 +400,7 @@ tests() ->
     ok = couch_dcp_fake_server:send_single_mutation(),
     ErrorResp = couch_dcp_client:get_stream_event(Pid, StreamReq0_5),
     etap:is({error, dcp_conn_closed}, ErrorResp, "Got the error response after connection close"),
-    EmptyStreamList = couch_dcp_client:list_streams(Pid),
+    {active_list_streams, EmptyStreamList} = couch_dcp_client:list_streams(Pid),
     etap:is([], EmptyStreamList, "Stream is correctly removed after connection close"),
 
     ok = couch_dcp_fake_server:close_connection(nil),
@@ -442,11 +446,11 @@ tests() ->
     {ok, ExpectedDocs1, _} =
         couch_dcp_client:enum_docs_since(
             Pid, 0, InitialFailoverLog0, 0, HighSeq1, ?DCP_FLAG_NOFLAG,
-            TestFun, []),
+            TestFun, [], AddStreamFun),
     {ok, PersistedDocs1, _} =
         couch_dcp_client:enum_docs_since(
             Pid, 0, InitialFailoverLog0, 0, HighSeq1, ?DCP_FLAG_DISKONLY,
-            TestFun, []),
+            TestFun, [], AddStreamFun),
     etap:is(PersistedDocs1, ExpectedDocs1,
         "The persisted sequence number is correct, seq"),
 
@@ -456,11 +460,11 @@ tests() ->
     {ok, ExpectedDocs2, _} =
         couch_dcp_client:enum_docs_since(
             Pid, 0, InitialFailoverLog0, 0, HighSeq2 div 2, ?DCP_FLAG_NOFLAG,
-            TestFun, []),
+            TestFun, [], AddStreamFun),
     {ok, PersistedDocs2, _} =
         couch_dcp_client:enum_docs_since(
             Pid, 0, InitialFailoverLog0, 0, HighSeq2, ?DCP_FLAG_DISKONLY,
-            TestFun, []),
+            TestFun, [], AddStreamFun),
     etap:is(PersistedDocs2, ExpectedDocs2,
         "The persisted sequence number is correct, seq/2"),
 
@@ -469,11 +473,11 @@ tests() ->
     {ok, ExpectedDocs3, _} =
         couch_dcp_client:enum_docs_since(
             Pid, 0, InitialFailoverLog0, 0, HighSeq3 - 1, ?DCP_FLAG_NOFLAG,
-            TestFun, []),
+            TestFun, [], AddStreamFun),
     {ok, PersistedDocs3, _} =
         couch_dcp_client:enum_docs_since(
             Pid, 0, InitialFailoverLog0, 0, HighSeq3, ?DCP_FLAG_DISKONLY,
-            TestFun, []),
+            TestFun, [], AddStreamFun),
     etap:is(PersistedDocs3, ExpectedDocs3,
         "The persisted sequence number is correct, seq - 1"),
     ok.
