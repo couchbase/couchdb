@@ -509,9 +509,7 @@ handle_info({stream_response, RequestId, Msg}, State) ->
                 ok ->
                     remove_request_queue(NewState, StreamReqId);
                 {error, vbucket_stream_not_found} ->
-                    remove_request_queue(NewState, StreamReqId);
-                _ ->
-                    NewState
+                    remove_request_queue(NewState, StreamReqId)
                 end;
             {error, Error} ->
                 throw({control_ack_failed, Error}),
