@@ -503,19 +503,11 @@ handle_info({stream_response, RequestId, Msg}, State) ->
         {remove_stream, PartId} ->
             gen_server:reply(SendTo, Msg),
             StreamReqId = find_stream_req_id(State, PartId),
-            case check_and_send_buffer_ack(State, StreamReqId, nil, remove_stream) of
-            {ok, NewState} ->
-                case Msg of
-                ok ->
-                    remove_request_queue(NewState, StreamReqId);
-                {error, vbucket_stream_not_found} ->
-                    remove_request_queue(NewState, StreamReqId);
-                _ ->
-                    NewState
-                end;
-            {error, Error} ->
-                throw({control_ack_failed, Error}),
-                State
+            case Msg of
+            ok ->
+                remove_request_queue(State, StreamReqId);
+            {error, vbucket_stream_not_found} ->
+                remove_request_queue(State, StreamReqId)
             end;
         % Server sent the response for the internal control request
         {control_request, Size} ->
@@ -1021,13 +1013,17 @@ remove_request_queue(State, RequestId) ->
     case lists:keyfind(RequestId, 2, ActiveStreams) of
     {_PartId, RequestId, MRef} ->
         erlang:demonitor(MRef, [flush]),
+
+        {ok, State1} =
+            check_and_send_buffer_ack(State, RequestId, nil, remove_stream),
+
         ActiveStreams2 = lists:keydelete(RequestId, 2, ActiveStreams),
 
         % All active streams have finished reading
         % Let us ack for remaining unacked bytes
         case length(ActiveStreams2) of
         0 ->
-            {ok, State2} = send_buffer_ack(State);
+            {ok, State2} = send_buffer_ack(State1);
         _ ->
             State2 = State
         end,
