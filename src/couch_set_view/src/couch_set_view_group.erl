@@ -790,8 +790,7 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
                        ?group_id(State)]),
             % Decided to switch to compacted file
             % Compactor has caught up and hence discard the running updater
-            couch_set_view_util:shutdown_wait(UpdaterPid),
-            stop_dcp_streams(State);
+            couch_set_view_util:shutdown_wait(UpdaterPid);
         true ->
             ok
         end,
@@ -1311,7 +1310,6 @@ handle_info({'EXIT', Pid, {updater_error, Error}}, #state{updater_pid = Pid, gro
         updater_state = not_running,
         update_listeners = Listeners2
     },
-    stop_dcp_streams(State),
     ?inc_updater_errors(State2#state.group),
     case State#state.shutdown of
     true ->
@@ -2846,25 +2844,6 @@ compact_group(#state{group = Group} = State) ->
     reset_file(Fd, Group#set_view_group{filepath = CompactFilepath}).
 
 
--spec stop_dcp_streams(#state{}) -> ok.
-stop_dcp_streams(State) ->
-    DcpPid = ?dcp_pid(State),
-    ActiveStreams = couch_dcp_client:list_streams(DcpPid),
-    lists:foreach(fun(ActiveStream) ->
-        case couch_dcp_client:remove_stream(DcpPid, ActiveStream) of
-        ok ->
-            ok;
-        {error, vbucket_stream_not_found} ->
-            ok;
-        Error ->
-            ?LOG_ERROR("Unexpected error for closing stream of partition ~p",
-                [ActiveStream]),
-            throw(Error)
-        end
-    end, ActiveStreams),
-    ok.
-
-
 -spec stop_updater(#state{}) -> #state{}.
 stop_updater(#state{updater_pid = nil} = State) ->
     State;
@@ -2876,7 +2855,6 @@ stop_updater(#state{updater_pid = Pid, initial_build = true} = State) when is_pi
               [?set_name(State), ?type(State), ?category(State),
                ?group_id(State), LostTime]),
     couch_set_view_util:shutdown_wait(Pid),
-    stop_dcp_streams(State),
     inc_util_stat(#util_stats.updater_interruptions, 1),
     inc_util_stat(#util_stats.wasted_indexing_time, LostTime),
     State#state{
@@ -2899,7 +2877,6 @@ stop_updater(#state{updater_pid = Pid} = State) when is_pid(Pid) ->
         receive {'EXIT', Pid, _} -> ok after 0 -> ok end,
         after_updater_stopped(State2, Reason)
     end,
-    stop_dcp_streams(State),
     ok = couch_file:refresh_eof((State#state.group)#set_view_group.fd),
     erlang:demonitor(MRef, [flush]),
     NewState.
