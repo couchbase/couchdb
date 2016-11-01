@@ -366,7 +366,7 @@ handle_call(list_streams, _From, State) ->
     #state{
        active_streams = ActiveStreams
     } = State,
-    Reply = lists:foldl(fun({PartId, _, _}, Acc) -> [PartId | Acc] end, [], ActiveStreams),
+    Reply = lists:foldl(fun({PartId, _}, Acc) -> [PartId | Acc] end, [], ActiveStreams),
     {reply, Reply, State};
 
 handle_call({get_failover_log, PartId}, From, State) ->
@@ -488,26 +488,34 @@ handle_info({get_all_seqs, From}, State) ->
 % Reply back to waiting callers
 handle_info({stream_response, RequestId, Msg}, State) ->
     State3 = case find_pending_request(State, RequestId) of
+    {_, nil} ->
+        State;
     {ReqInfo, SendTo} ->
         State2 = case ReqInfo of
         {add_stream, PartId} ->
-            {SendToPid, _} = SendTo,
             gen_server:reply(SendTo, Msg),
             case Msg of
             {_, {failoverlog, _}} ->
-                add_request_queue(State, PartId, RequestId, SendToPid);
+                add_request_queue(State, PartId, RequestId);
             _ ->
-                % Remove possible leak in stream_info
-                remove_stream_info_by_reqid(RequestId, State)
+                State
             end;
         {remove_stream, PartId} ->
             gen_server:reply(SendTo, Msg),
             StreamReqId = find_stream_req_id(State, PartId),
-            case Msg of
-            ok ->
-                remove_request_queue(State, StreamReqId);
-            {error, vbucket_stream_not_found} ->
-                remove_request_queue(State, StreamReqId)
+            case check_and_send_buffer_ack(State, StreamReqId, nil, remove_stream) of
+            {ok, NewState} ->
+                case Msg of
+                ok ->
+                    remove_request_queue(NewState, StreamReqId);
+                {error, vbucket_stream_not_found} ->
+                    remove_request_queue(NewState, StreamReqId);
+                _ ->
+                    NewState
+                end;
+            {error, Error} ->
+                throw({control_ack_failed, Error}),
+                State
             end;
         % Server sent the response for the internal control request
         {control_request, Size} ->
@@ -619,13 +627,6 @@ handle_info({print_log, ReqId}, State) ->
             [Bucket, Name, ?TIMEOUT / 1000, ReqId, PartId, Start, End])
     end,
     {noreply, State};
-
-handle_info({'DOWN', MRef, process, _Pid, _Reason},
-            #state{active_streams = ActiveStreams} = State) ->
-    {_PartId, RequestId, MRef} = lists:keyfind(MRef, 3, ActiveStreams),
-    State2 = remove_stream_info_by_reqid(RequestId, State),
-    State3 = remove_request_queue(State2, RequestId),
-    {noreply, State3};
 
 handle_info(Msg, State) ->
     {stop, {unexpected_info, Msg}, State}.
@@ -1010,44 +1011,31 @@ remove_request_queue(State, RequestId) ->
        active_streams = ActiveStreams,
        stream_queues = StreamQueues
     } = State,
-    case lists:keyfind(RequestId, 2, ActiveStreams) of
-    {_PartId, RequestId, MRef} ->
-        erlang:demonitor(MRef, [flush]),
+    ActiveStreams2 = lists:keydelete(RequestId, 2, ActiveStreams),
 
-        {ok, State1} =
-            check_and_send_buffer_ack(State, RequestId, nil, remove_stream),
-
-        ActiveStreams2 = lists:keydelete(RequestId, 2, ActiveStreams),
-
-        % All active streams have finished reading
-        % Let us ack for remaining unacked bytes
-        case length(ActiveStreams2) of
-        0 ->
-            {ok, State2} = send_buffer_ack(State1);
-        _ ->
-            State2 = State
-        end,
-
-        StreamQueues2 = dict:erase(RequestId, StreamQueues),
-        State2#state{
-            active_streams = ActiveStreams2,
-            stream_queues = StreamQueues2
-        };
+    % All active streams have finished reading
+    % Let us ack for remaining unacked bytes
+    case length(ActiveStreams2) of
+    0 ->
+        {ok, State2} = send_buffer_ack(State);
     _ ->
-        State
-    end.
+        State2 = State
+    end,
+
+    StreamQueues2 = dict:erase(RequestId, StreamQueues),
+    State2#state{
+       active_streams = ActiveStreams2,
+       stream_queues = StreamQueues2
+    }.
 
 
--spec add_request_queue(#state{}, partition_id(), request_id(), pid()) -> #state{}.
-add_request_queue(State, PartId, RequestId, Pid) ->
+-spec add_request_queue(#state{}, partition_id(), request_id()) -> #state{}.
+add_request_queue(State, PartId, RequestId) ->
     #state{
        active_streams = ActiveStreams,
        stream_queues = StreamQueues
     } = State,
-
-   MRef = erlang:monitor(process, Pid),
-
-   ActiveStreams2 =  [{PartId, RequestId, MRef} | ActiveStreams],
+   ActiveStreams2 =  [{PartId, RequestId} | ActiveStreams],
    StreamQueues2 = dict:store(RequestId, {nil, queue:new()}, StreamQueues),
    State#state{
        active_streams = ActiveStreams2,
@@ -1152,7 +1140,7 @@ find_stream_req_id(State, PartId) ->
        active_streams = ActiveStreams
     } = State,
     case lists:keyfind(PartId, 1, ActiveStreams) of
-    {PartId, StreamReqId, _} ->
+    {PartId, StreamReqId} ->
         StreamReqId;
     false ->
         nil
@@ -1407,20 +1395,16 @@ get_event_size({_Type, _Doc, BodyLength}) ->
 -spec remove_stream_info(partition_id(), #state{}) -> #state{}.
 remove_stream_info(PartId, State) ->
     #state{
-        active_streams = ActiveStreams
+        active_streams = ActiveStreams,
+        stream_info = StreamData
     } = State,
     case lists:keyfind(PartId, 1, ActiveStreams) of
     false ->
         State;
-    {_, RequestId, _} ->
-        remove_stream_info_by_reqid(RequestId, State)
+    {_, RequestId} ->
+        StreamData2 = dict:erase(RequestId, StreamData),
+        State#state{stream_info = StreamData2}
     end.
-
--spec remove_stream_info_by_reqid(request_id(), #state{}) -> #state{}.
-remove_stream_info_by_reqid(RequestId,
-                            #state{stream_info = StreamData} = State) ->
-    StreamData2 = dict:erase(RequestId, StreamData),
-    State#state{stream_info = StreamData2}.
 
 -spec insert_stream_info(partition_id(), request_id(), uuid(), non_neg_integer(),
                         non_neg_integer(), #state{}, non_neg_integer()) -> #state{}.
