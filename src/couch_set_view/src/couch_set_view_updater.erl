@@ -1549,18 +1549,7 @@ maybe_fix_group(#set_view_group{index_header = Header} = Group) ->
     receive
     {new_passive_partitions, Parts} ->
         Bitmask = couch_set_view_util:build_bitmask(Parts),
-        {Seqs, PartVersions} = lists:foldl(
-            fun(PartId, {SeqAcc, PartVersionsAcc} = Acc) ->
-                case couch_set_view_util:has_part_seq(PartId, SeqAcc) of
-                true ->
-                    Acc;
-                false ->
-                    {ordsets:add_element({PartId, 0}, SeqAcc),
-                        ordsets:add_element({PartId, [{0, 0}]},
-                            PartVersionsAcc)}
-                end
-            end,
-            {?set_seqs(Group), ?set_partition_versions(Group)}, Parts),
+        {Seqs, PartVersions} = couch_set_view_util:fix_partitions(Group, Parts),
         Group#set_view_group{
             index_header = Header#set_view_index_header{
                 seqs = Seqs,

@@ -2550,7 +2550,7 @@ set_cleanup_partitions([PartId | Rest], Abitmask, Pbitmask, Cbitmask, Seqs,
                     Versions2);
             0 ->
                 set_cleanup_partitions(
-                    Rest, Abitmask, Pbitmask, Cbitmask,Seqs, Versions2)
+                    Rest, Abitmask, Pbitmask, Cbitmask, Seqs, Versions)
             end
         end
     end.
@@ -3779,18 +3779,7 @@ fix_updater_group(UpdaterGroup, OurGroup) ->
     % Confront with logic in ?MODULE:updater_needs_restart/4.
     Missing = missing_partitions(UpdaterGroup, OurGroup),
     UpdaterHeader = UpdaterGroup#set_view_group.index_header,
-    {Seqs, PartVersions} = lists:foldl(
-        fun(PartId, {SeqAcc, PartVersionsAcc} = Acc) ->
-            case couch_set_view_util:has_part_seq(PartId, SeqAcc) of
-            true ->
-                Acc;
-            false ->
-                {ordsets:add_element({PartId, 0}, SeqAcc),
-                    ordsets:add_element({PartId, [{0, 0}]}, PartVersionsAcc)}
-            end
-        end,
-        {?set_seqs(UpdaterGroup), ?set_partition_versions(UpdaterGroup)},
-            Missing),
+    {Seqs, PartVersions} = couch_set_view_util:fix_partitions(UpdaterGroup, Missing),
     UpdaterGroup#set_view_group{
         index_header = UpdaterHeader#set_view_index_header{
             abitmask = ?set_abitmask(OurGroup),

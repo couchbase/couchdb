@@ -36,6 +36,7 @@
 -export([send_group_info/2]).
 -export([filter_seqs/2]).
 -export([log_port_error/3]).
+-export([fix_partitions/2]).
 
 
 -include("couch_db.hrl").
@@ -822,3 +823,22 @@ log_port_error(<<"GENERIC ", Msg/binary>>, ErrorMsg, ErrorArgs) ->
 log_port_error(Msg, ErrorMsg, ErrorArgs) ->
     ?LOG_ERROR(ErrorMsg, ErrorArgs ++ [Msg]),
     Msg.
+
+-spec fix_partitions(#set_view_group{}, ordsets:ordset(partition_id())) ->
+    {partition_seqs(), partition_versions()}.
+fix_partitions(Group, PartList) ->
+    lists:foldl(
+        fun(PartId, {SeqAcc, PartVersionsAcc} = Acc) ->
+            case has_part_seq(PartId, SeqAcc) of
+            true ->
+                Acc;
+            false ->
+                % Since we are treating this vbucket as a fresh partition, we are resetting
+                % the older partition version and seq number information.
+                {lists:ukeymerge(1, [{PartId, 0}], SeqAcc),
+                 lists:ukeymerge(1, [{PartId, [{0, 0}]}], PartVersionsAcc)}
+            end
+        end,
+        {?set_seqs(Group), ?set_partition_versions(Group)},
+        PartList).
+
