@@ -682,7 +682,7 @@ handle_buffer_ack_request(Socket, BodyLength, RequestId) ->
 handle_open_connection_body(Socket, BodyLength, RequestId) ->
     case gen_tcp:recv(Socket, BodyLength) of
     {ok, <<_SeqNo:?DCP_SIZES_SEQNO,
-           ?DCP_FLAG_PRODUCER:?DCP_SIZES_FLAGS,
+           _Flags:?DCP_SIZES_FLAGS,
            _Name/binary>>} ->
         OpenConnection = couch_dcp_producer:encode_open_connection(RequestId),
         ok = gen_tcp:send(Socket, OpenConnection);
@@ -711,8 +711,6 @@ handle_stream_request_body(Socket, BodyLength, RequestId, PartId) ->
             ?DCP_FLAG_NOFLAG ->
                 EndSeq;
             ?DCP_FLAG_USELATEST_ENDSEQNO ->
-                EndSeq;
-            ?DCP_FLAG_NOVALUE ->
                 EndSeq;
             Flags when (Flags band ?DCP_FLAG_DISKONLY) =/= 0 ->
                 % Either of the following flags:

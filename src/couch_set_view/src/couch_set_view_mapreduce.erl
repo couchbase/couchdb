@@ -17,6 +17,7 @@
 -include("couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
 
+-export([get_map_context/1, get_reduce_context/1]).
 -export([map/4, reduce/2, reduce/3, rereduce/2, rereduce/3]).
 -export([builtin_reduce/3]).
 -export([validate_ddoc_views/1]).

@@ -69,6 +69,8 @@
 % Seqs cache ttl in microseconds
 -define(SEQS_CACHE_TTL, 300000).
 
+-define(DCP_OPEN_NO_VALUE, 16#08).
+
 -record(util_stats, {
     useful_indexing_time = 0.0  :: float(),
     wasted_indexing_time = 0.0  :: float(),
@@ -430,6 +432,17 @@ do_init({_, SetName, _} = InitArgs) ->
                            []
                        end)
         end,
+        couch_set_view_mapreduce:get_map_context(Group),
+        DcpFlags = case couch_set_view_mapreduce:is_doc_used(Group) of
+        {ok, doc_fields_unused} ->
+            ?LOG_INFO("~s set view group `~s`, set `~s` (~s), doc_fields_unused",
+              [Type, Group#set_view_group.name, SetName, Category]),
+            ?DCP_OPEN_NO_VALUE;
+        {ok, doc_fields_used} ->
+            ?LOG_INFO("~s set view group `~s`, set `~s` (~s), doc_fields_used",
+              [Type, Group#set_view_group.name, SetName, Category]),
+            0
+        end,
         DcpName = <<(atom_to_binary(Mod, latin1))/binary, ": ",
             SetName/binary, " ", (Group#set_view_group.name)/binary,
             " (", (atom_to_binary(Category, latin1))/binary, "/",
@@ -440,7 +453,7 @@ do_init({_, SetName, _} = InitArgs) ->
         ?LOG_INFO("Flow control buffer size is ~p bytes", [DcpBufferSize]),
 
         case couch_dcp_client:start(DcpName, SetName, User, Passwd,
-            DcpBufferSize) of
+            DcpBufferSize, DcpFlags) of
         {ok, DcpPid} ->
             Group2 = maybe_upgrade_header(Group, DcpPid),
             State = #state{

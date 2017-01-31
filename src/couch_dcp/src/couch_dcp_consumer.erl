@@ -16,7 +16,7 @@
 
 -export([parse_header/1, parse_snapshot_marker/1, parse_snapshot_mutation/4,
     parse_snapshot_deletion/2, parse_failover_log/1, parse_stat/4]).
--export([encode_sasl_auth/3, encode_open_connection/2, encode_stream_request/8,
+-export([encode_sasl_auth/3, encode_open_connection/3, encode_stream_request/8,
     encode_failover_log_request/2, encode_stat_request/3, encode_stream_close/2,
     encode_select_bucket/2]).
 -export([encode_noop_response/1, encode_buffer_request/2,
@@ -248,11 +248,11 @@ encode_select_bucket(Bucket, RequestId) ->
 %  seqno      (24-27): 0x00000000
 %  flags      (28-31): 0x00000000 (consumer)
 %Key          (32-55): bucketstream vb[100-105]
--spec encode_open_connection(binary(), request_id()) -> binary().
-encode_open_connection(Name, RequestId) ->
+-spec encode_open_connection(binary(), non_neg_integer(), request_id()) -> binary().
+encode_open_connection(Name, Flags, RequestId) ->
     Body = <<0:?DCP_SIZES_SEQNO,
-             ?DCP_FLAG_PRODUCER:?DCP_SIZES_FLAGS,
-             Name/binary>>,
+            (Flags bor ?DCP_FLAG_PRODUCER):?DCP_SIZES_FLAGS,
+            Name/binary>>,
 
     KeyLength = byte_size(Name),
     BodyLength = byte_size(Body),

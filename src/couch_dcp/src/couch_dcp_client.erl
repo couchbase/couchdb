@@ -14,7 +14,7 @@
 -behaviour(gen_server).
 
 % Public API
--export([start/5]).
+-export([start/6]).
 -export([add_stream/6, get_seqs/2, get_num_items/2,
     get_failover_log/2]).
 -export([get_stream_event/2, remove_stream/2, list_streams/1]).
@@ -80,10 +80,10 @@
 
 % Public API
 
--spec start(binary(), binary(), binary(), binary(), non_neg_integer()) -> {ok, pid()} | ignore |
-                                   {error, {already_started, pid()} | term()}.
-start(Name, Bucket, AdmUser, AdmPasswd, BufferSize) ->
-    gen_server:start_link(?MODULE, [Name, Bucket, AdmUser, AdmPasswd, BufferSize], []).
+-spec start(binary(), binary(), binary(), binary(), non_neg_integer(), non_neg_integer()) ->
+    {ok, pid()} | ignore | {error, {already_started, pid()} | term()}.
+start(Name, Bucket, AdmUser, AdmPasswd, BufferSize, Flags) ->
+    gen_server:start_link(?MODULE, [Name, Bucket, AdmUser, AdmPasswd, BufferSize, Flags], []).
 
 -spec add_stream(pid(), partition_id(), uuid(), update_seq(),
     update_seq(), dcp_data_type()) -> {error, term()} | {request_id(), term()}.
@@ -278,7 +278,7 @@ enum_docs_since(Pid, PartId, PartVersions, StartSeq, EndSeq0, Flags,
 
 -spec init([binary() | non_neg_integer()]) -> {ok, #state{}} |
                     {stop, sasl_auth_failed | closed | inet:posix()}.
-init([Name, Bucket, AdmUser, AdmPasswd, BufferSize]) ->
+init([Name, Bucket, AdmUser, AdmPasswd, BufferSize, Flags]) ->
     DcpTimeout = list_to_integer(
         couch_config:get("dcp", "connection_timeout")),
     DcpPort = list_to_integer(couch_config:get("dcp", "port")),
@@ -299,9 +299,9 @@ init([Name, Bucket, AdmUser, AdmPasswd, BufferSize]) ->
             case select_bucket(Bucket, State2) of
             {ok, State3} ->
                 % Store the meta information to reconnect
-                Args = [Name, Bucket, AdmUser, AdmPasswd, BufferSize],
+                Args = [Name, Bucket, AdmUser, AdmPasswd, BufferSize, Flags],
                 State4 = State3#state{args = Args},
-                case open_connection(Name, State4) of
+                case open_connection(Name, Flags, State4) of
                 {ok, State5} ->
                     Parent = self(),
                     process_flag(trap_exit, true),
@@ -590,7 +590,7 @@ handle_info({stream_event, RequestId, Event}, State) ->
     end;
 
 handle_info({'EXIT', Pid, {conn_error, Reason}}, #state{worker_pid = Pid} = State) ->
-    [Name, Bucket, _AdmUser, _AdmPasswd, _BufferSize] = State#state.args,
+    [Name, Bucket, _AdmUser, _AdmPasswd, _BufferSize, _Flags] = State#state.args,
     ?LOG_ERROR("dcp client (~s, ~s): dcp receive worker failed due to reason: ~p."
         " Restarting dcp receive worker...",
         [Bucket, Name, Reason]),
@@ -601,7 +601,7 @@ handle_info({'EXIT', Pid, Reason}, #state{worker_pid = Pid} = State) ->
     {stop, Reason, State};
 
 handle_info({print_log, ReqId}, State) ->
-    [Name, Bucket, _AdmUser, _AdmPasswd, _BufferSize] = State#state.args,
+    [Name, Bucket, _AdmUser, _AdmPasswd, _BufferSize, _Flags] = State#state.args,
     case find_stream_info(ReqId, State) of
     nil ->
         ?LOG_ERROR(
@@ -736,15 +736,16 @@ select_bucket(Bucket, State) ->
         Error
     end.
 
--spec open_connection(binary(), #state{}) -> {ok, #state{}} | {error, term()}.
-open_connection(Name, State) ->
+-spec open_connection(binary(), non_neg_integer(), #state{}) ->
+    {ok, #state{}} | {error, term()}.
+open_connection(Name, Flags, State) ->
     #state{
         bufsocket = BufSocket,
         timeout = DcpTimeout,
         request_id = RequestId
     } = State,
     OpenConnection = couch_dcp_consumer:encode_open_connection(
-        Name, RequestId),
+        Name, Flags, RequestId),
     case bufsocket_send(BufSocket, OpenConnection) of
     ok ->
         case bufsocket_recv(BufSocket, ?DCP_HEADER_LEN, DcpTimeout) of

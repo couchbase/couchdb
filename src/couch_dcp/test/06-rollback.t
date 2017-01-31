@@ -54,7 +54,7 @@ test_index_post_rollback() ->
     setup_test(),
     {auth, User, Passwd} = cb_auth_info:get(),
     {ok, _Pid} = couch_dcp_client:start(
-        test_set_name(), test_set_name(), User, Passwd, 1024),
+        test_set_name(), test_set_name(), User, Passwd, 1024, 0),
 
     {ok, MainGroupInfo} = couch_set_view:get_group_info(
         mapreduce_view, test_set_name(), ddoc_id(), prod),

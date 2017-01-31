@@ -74,7 +74,7 @@ tests() ->
 
     {auth, User, Passwd} = cb_auth_info:get(),
     {ok, Pid} = couch_dcp_client:start(
-        test_set_name(), test_set_name(), User, Passwd, 1024),
+        test_set_name(), test_set_name(), User, Passwd, 1024, 0),
 
     % Get the latest partition version first
     {ok, InitialFailoverLog0} = couch_dcp_client:get_failover_log(Pid, 0),
@@ -488,7 +488,7 @@ test_close_during_request() ->
 
     {auth, User, Passwd} = cb_auth_info:get(),
     {ok, Pid} = couch_dcp_client:start(
-        test_set_name(), test_set_name(), User, Passwd, 1024),
+        test_set_name(), test_set_name(), User, Passwd, 1024, 0),
 
     ParentPid = self(),
 

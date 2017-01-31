@@ -173,7 +173,6 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
 
     Mapper = spawn_link(fun() ->
         try
-            Parent ! couch_set_view_mapreduce:is_doc_used(Group),
             do_maps(Group, MapQueue, WriteQueue)
         catch _:Error ->
             Stacktrace = erlang:get_stacktrace(),
@@ -184,8 +183,6 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
             exit(Error)
         end
     end),
-
-    receive {ok, IsDocUsed} -> IsDocUsed end,
 
     Writer = spawn_link(fun() ->
         BarrierEntryPid ! shutdown,
@@ -287,7 +284,7 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
             {PartVersions, MaxSeqs} = load_changes(
                 Owner, Parent, Group, MapQueue, ActiveParts, PassiveParts,
                 WriterAcc#writer_acc.max_seqs,
-                WriterAcc#writer_acc.initial_build, IsDocUsed),
+                WriterAcc#writer_acc.initial_build),
             Parent ! {doc_loader_finished, {PartVersions, MaxSeqs}}
         catch
         throw:purge ->
@@ -424,7 +421,7 @@ dcp_marker_to_string(Type) ->
 
 
 load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
-        EndSeqs, InitialBuild, IsDocUsed) ->
+        EndSeqs, InitialBuild) ->
     #set_view_group{
         set_name = SetName,
         name = DDocId,
@@ -463,12 +460,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
             _ ->
                 Flags
             end,
-            Flags3 = case IsDocUsed of
-            doc_fields_unused ->
-                Flags2 bor ?DCP_FLAG_NOVALUE;
-            doc_fields_used ->
-                Flags2
-            end,
+
             case AccRollbacks of
             [] ->
                 case EndSeq =:= Since of
@@ -525,7 +517,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                             {Count + 1, AccEndSeq}
                         end,
                     Result = couch_dcp_client:enum_docs_since(
-                        DcpPid, PartId, PartVersions, Since, EndSeq, Flags3,
+                        DcpPid, PartId, PartVersions, Since, EndSeq, Flags2,
                         ChangesWrapper, {0, 0}),
                     case Result of
                     {ok, {AccCount2, AccEndSeq}, NewPartVersions} ->
@@ -558,7 +550,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                 % partition (i.e. a request with start seq == end seq)
                 ChangesWrapper = fun(_, _) -> ok end,
                 Result = couch_dcp_client:enum_docs_since(
-                    DcpPid, PartId, PartVersions, Since, Since, Flags3,
+                    DcpPid, PartId, PartVersions, Since, Since, Flags2,
                     ChangesWrapper, ok),
                 case Result of
                 {ok, _, _} ->
@@ -614,8 +606,8 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
 
     couch_work_queue:close(MapQueue),
     ?LOG_INFO("Updater for ~s set view group `~s`, set `~s` (~s), "
-              "read a total of ~p changes and ~p",
-              [GroupType, DDocId, SetName, Category, FinalChangesCount3, IsDocUsed]),
+              "read a total of ~p changes",
+              [GroupType, DDocId, SetName, Category, FinalChangesCount3]),
     ?LOG_DEBUG("Updater for ~s set view group `~s`, set `~s`, max partition seqs found:~n~w",
                [GroupType, DDocId, SetName, MaxSeqs3]),
     {PartVersions3, MaxSeqs3}.
