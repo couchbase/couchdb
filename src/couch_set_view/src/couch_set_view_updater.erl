@@ -1449,11 +1449,11 @@ update_btrees(WriterAcc) ->
     spatial_view = Mod ->
         process_flag(trap_exit, true),
         ok = couch_file:refresh_eof(NewGroup#set_view_group.fd),
-        Pid = spawn_link(exit(fun() ->
+        Pid = spawn_link(fun() ->
             Views = Mod:update_spatial(NewGroup#set_view_group.views, ViewFiles,
                 MaxBatchSize),
-            {spatial_views_updater_result, Views}
-            end)),
+            exit({spatial_views_updater_result, Views})
+            end),
         receive
         {'EXIT', Pid, Result} ->
             case Result of
