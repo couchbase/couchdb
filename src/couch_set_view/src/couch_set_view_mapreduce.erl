@@ -18,7 +18,7 @@
 -include_lib("couch_set_view/include/couch_set_view.hrl").
 
 -export([get_map_context/1, get_reduce_context/1]).
--export([map/4, reduce/2, reduce/3, rereduce/2, rereduce/3]).
+-export([map/5, reduce/2, reduce/3, rereduce/2, rereduce/3]).
 -export([builtin_reduce/3]).
 -export([validate_ddoc_views/1]).
 -export([is_doc_used/1]).
@@ -66,9 +66,12 @@ get_reduce_context(SetView) ->
         end
     end.
 
-map(Doc, PartId, Seq, Group) ->
+map(Doc, XATTRs, PartId, Seq, Group) ->
     Ctx = get_map_context(Group),
-    {DocBody, DocMeta} = couch_doc:to_raw_json_binary_views(Doc, PartId, Seq),
+    {DocBody, DocMeta0} = couch_doc:to_raw_json_binary_views(Doc, PartId, Seq),
+    MetaLen = byte_size(DocMeta0),
+    TempDocMeta = binary:part(DocMeta0, 0, MetaLen-1),
+    DocMeta = <<TempDocMeta/binary, ",", XATTRs/binary, "}">>,
     case mapreduce:map_doc(Ctx, DocBody, DocMeta) of
     {ok, _Results, _LogList} = Ok ->
         Ok;

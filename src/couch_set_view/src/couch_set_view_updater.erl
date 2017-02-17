@@ -703,6 +703,26 @@ queue_doc(Doc, MapQueue, Group, MaxDocSize, InitialBuild) ->
         update_task(1)
     end.
 
+-spec accumulate_xattr(binary(), binary(), non_neg_integer(), non_neg_integer()) ->
+    {binary(), binary()}.
+accumulate_xattr(Data, Acc, XATTRSize, AccSum) when AccSum =:= XATTRSize ->
+    {Data, <<Acc/binary, "}">>};
+accumulate_xattr(Body, Acc, XATTRSize, AccSum) ->
+    <<DataSize:32, Rest/binary>> = Body,
+    AccSum2 = AccSum + DataSize + 4,
+    <<Data0:DataSize/binary, Rest2/binary>> = Rest,
+    % Remove last zero value from  XATTR
+    Data = binary:part(Data0, 0, DataSize-1),
+    % Jsonify key and value
+    Data2 = case AccSum2 of
+    XATTRSize ->
+        <<"\"", Data/binary>>;
+    _ ->
+        <<"\"", Data/binary, ",">>
+    end,
+    % Replace zero byte after key with colon
+    Xattr = binary:replace(Data2, <<0>>, <<"\":">>),
+    accumulate_xattr(Rest2, <<Acc/binary, Xattr/binary>>, XATTRSize, AccSum2).
 
 do_maps(Group, MapQueue, WriteQueue) ->
     #set_view_group{
@@ -751,22 +771,32 @@ do_maps(Group, MapQueue, WriteQueue) ->
                     flags = Flags,
                     data_type = DcpDataType
                 } = DcpDoc,
-                DataType = case DcpDataType of
+                {DataType, DocBody, XATTRs} = case DcpDataType of
                 ?DCP_DATA_TYPE_RAW ->
-                    ?CONTENT_META_NON_JSON_MODE;
+                    {DocBody2, XATTRs2} = accumulate_xattr(Body, <<"\"xattrs\":{">>, 0, 0),
+                    {?CONTENT_META_NON_JSON_MODE, DocBody2, XATTRs2};
                 ?DCP_DATA_TYPE_JSON ->
-                    ?CONTENT_META_JSON
+                    {DocBody3, XATTRs3} = accumulate_xattr(Body, <<"\"xattrs\":{">>, 0, 0),
+                    {?CONTENT_META_JSON, DocBody3, XATTRs3};
+                ?DCP_DATA_TYPE_BINARY_XATTR ->
+                    <<XATTRSize:32, Rest/binary>> = Body,
+                    {DocBody4, XATTRs4} = accumulate_xattr(Rest, <<"\"xattrs\":{">>, XATTRSize, 0),
+                    {?CONTENT_META_NON_JSON_MODE, DocBody4, XATTRs4};
+                ?DCP_DATA_TYPE_JSON_XATTR ->
+                    <<XATTRSize:32, Rest/binary>> = Body,
+                    {DocBody5, XATTRs5} = accumulate_xattr(Rest, <<"\"xattrs\":{">>, XATTRSize, 0),
+                    {?CONTENT_META_JSON, DocBody5, XATTRs5}
                 end,
                 Doc = #doc{
                     id = Id,
                     rev = {RevSeq, <<Cas:64, Expiration:32, Flags:32>>},
-                    body = Body,
+                    body = DocBody,
                     content_meta = DataType,
                     deleted = false
                 },
                 try
                     {ok, Result, LogList} = couch_set_view_mapreduce:map(
-                        Doc, PartId, Seq, Group),
+                        Doc, XATTRs, PartId, Seq, Group),
                     {Result2, _} = lists:foldr(
                         fun({error, Reason}, {AccRes, Pos}) ->
                             ErrorMsg = "Bucket `~s`, ~s group `~s`, error mapping"

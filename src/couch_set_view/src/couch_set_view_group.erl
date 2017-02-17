@@ -69,6 +69,7 @@
 % Seqs cache ttl in microseconds
 -define(SEQS_CACHE_TTL, 300000).
 
+-define(DCP_OPEN_INCLUDE_XATTRS, 16#04).
 -define(DCP_OPEN_NO_VALUE, 16#08).
 
 -record(util_stats, {
@@ -437,11 +438,11 @@ do_init({_, SetName, _} = InitArgs) ->
         {ok, doc_fields_unused} ->
             ?LOG_INFO("~s set view group `~s`, set `~s` (~s), doc_fields_unused",
               [Type, Group#set_view_group.name, SetName, Category]),
-            ?DCP_OPEN_NO_VALUE;
+            ?DCP_OPEN_NO_VALUE bor ?DCP_OPEN_INCLUDE_XATTRS;
         {ok, doc_fields_used} ->
             ?LOG_INFO("~s set view group `~s`, set `~s` (~s), doc_fields_used",
               [Type, Group#set_view_group.name, SetName, Category]),
-            0
+            ?DCP_OPEN_INCLUDE_XATTRS
         end,
         DcpName = <<(atom_to_binary(Mod, latin1))/binary, ": ",
             SetName/binary, " ", (Group#set_view_group.name)/binary,

@@ -55,7 +55,7 @@ docs_per_partition() -> num_docs() div num_set_partitions().
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(24),
+    etap:plan(40),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -88,6 +88,18 @@ test() ->
     test_map_query_updated(1),
     test_map_query_updated(2),
     test_map_query_updated(3),
+
+    % Test xattrs when document does not contain extra attribute
+    test_map_query_noxattrs(0),
+    test_map_query_noxattrs(1),
+    test_map_query_noxattrs(2),
+    test_map_query_noxattrs(3),
+
+    % Test xattrs when document contains extra attribute
+    test_map_query_xattrs(0),
+    test_map_query_xattrs(1),
+    test_map_query_xattrs(2),
+    test_map_query_xattrs(3),
 
     couch_set_view_test_util:delete_set_dbs(test_set_name(),
         num_set_partitions()),
@@ -130,13 +142,37 @@ test_map_query_updated(PartitionId) ->
 
     shutdown_group().
 
+test_map_query_noxattrs(PartitionId) ->
+    setup_test_noxattrs(),
+    ok = configure_view_group(ddoc_id(), PartitionId),
+
+    {ok, Rows} = (catch query_map_view(<<"test">>)),
+    etap:is(length(Rows), docs_per_partition(),
+        "Got " ++ integer_to_list(docs_per_partition()) ++ " view rows"),
+    verify_rows_noxattrs(Rows, PartitionId),
+
+    shutdown_group().
+
+test_map_query_xattrs(PartitionId) ->
+    setup_test_xattrs(),
+    ok = configure_view_group(ddoc_id(), PartitionId),
+
+    {ok, Rows} = (catch query_map_view(<<"test">>)),
+    etap:is(length(Rows), docs_per_partition(),
+        "Got " ++ integer_to_list(docs_per_partition()) ++ " view rows"),
+    verify_rows_xattrs(Rows, PartitionId),
+
+    shutdown_group().
+
+
+
 % As the partitions are populated sequentially we can easily verify them
 verify_rows_vb(Rows, PartitionId) ->
     Offset = (PartitionId * docs_per_partition()),
     PartId = list_to_binary(integer_to_list(PartitionId)),
     DocList = lists:map(fun(Doc) ->
         {[{<<"meta">>, {[{<<"id">>, DocId}]}},
-          {<<"json">>, {[{<<"value">>, Value}]}}]} = Doc,
+          {<<"json">>, {[{<<"value">>, _Value}]}}]} = Doc,
         {<<"\"", DocId/binary, "\"">>, DocId,
             <<"\"", PartId/binary, "\"">>}
     end, create_docs(1 + Offset, Offset + docs_per_partition())),
@@ -146,13 +182,34 @@ verify_rows_seq(Rows, PartitionId, From, To) ->
     Offset = (PartitionId * docs_per_partition()),
     DocList = lists:zipwith(fun(Doc, I) ->
         {[{<<"meta">>, {[{<<"id">>, DocId}]}},
-          {<<"json">>, {[{<<"value">>, Value}]}}]} = Doc,
+          {<<"json">>, {[{<<"value">>, _Value}]}}]} = Doc,
           Seq = list_to_binary(integer_to_list(I)),
         {<<"\"", DocId/binary, "\"">>, DocId,
             <<"\"", Seq/binary, "\"">>}
     end, lists:sort(create_docs(1 + Offset, Offset + docs_per_partition())),
          lists:seq(From, To)),
     etap:is(Rows, lists:sort(DocList), "Returned correct rows").
+
+verify_rows_noxattrs(Rows, PartitionId) ->
+    Offset = (PartitionId * docs_per_partition()),
+    DocList = lists:map(fun(Doc) ->
+        {[{<<"meta">>, {[{<<"id">>, DocId}]}},
+          {<<"json">>, {[{<<"value">>, _Value}]}}]} = Doc,
+        {<<"\"", DocId/binary, "\"">>, DocId, <<"{}">>}
+    end, create_docs(1 + Offset, Offset + docs_per_partition())),
+    etap:is(Rows, lists:sort(DocList), "Returned correct rows").
+
+verify_rows_xattrs(Rows, PartitionId) ->
+    Offset = (PartitionId * docs_per_partition()),
+    DocList = lists:zipwith(fun(Doc, I) ->
+        {[{<<"meta">>, {[{<<"id">>, DocId}]}},
+          {<<"json">>, {[{<<"value">>, _Value}]}}]} = Doc,
+        Id = list_to_binary(integer_to_list(I)),
+        {<<"\"", DocId/binary, "\"">>, DocId, <<"{\"xattr_key\":",Id/binary, "}">>}
+    end, create_docs(1 + Offset, Offset + docs_per_partition()),
+         lists:seq(1+Offset, Offset + docs_per_partition())),
+    etap:is(Rows, lists:sort(DocList), "Returned correct rows").
+
 
 query_map_view(ViewName) ->
     etap:diag("Querying map view " ++ binary_to_list(ddoc_id()) ++ "/" ++
@@ -213,6 +270,43 @@ setup_test_seq() ->
     ]},
     populate_set(DDoc).
 
+setup_test_noxattrs() ->
+    couch_set_view_test_util:delete_set_dbs(test_set_name(),
+        num_set_partitions()),
+    couch_set_view_test_util:create_set_dbs(test_set_name(),
+        num_set_partitions()),
+
+    DDoc = {[
+        {<<"meta">>, {[{<<"id">>, ddoc_id()}]}},
+        {<<"json">>, {[
+            {<<"views">>, {[
+                {<<"test">>, {[
+                    {<<"map">>, <<"function(doc, meta)
+                        { emit(meta.id, meta.xattrs); }">>}
+                ]}}
+            ]}}
+        ]}}
+    ]},
+    populate_set(DDoc).
+
+setup_test_xattrs() ->
+    couch_set_view_test_util:delete_set_dbs(test_set_name(),
+        num_set_partitions()),
+    couch_set_view_test_util:create_set_dbs(test_set_name(),
+        num_set_partitions()),
+
+    DDoc = {[
+        {<<"meta">>, {[{<<"id">>, ddoc_id()}]}},
+        {<<"json">>, {[
+            {<<"views">>, {[
+                {<<"test">>, {[
+                    {<<"map">>, <<"function(doc, meta)
+                        { emit(meta.id, meta.xattrs); }">>}
+                ]}}
+            ]}}
+        ]}}
+    ]},
+    populate_set_xattrs(DDoc).
 
 create_docs(From, To) ->
     lists:map(
@@ -224,6 +318,18 @@ create_docs(From, To) ->
             ]}
         end,
         lists:seq(From, To)).
+
+create_docs_xattrs(From, To) ->
+    lists:map(
+        fun(I) ->
+            {[
+                {<<"meta">>, {[{<<"id">>, iolist_to_binary(["doc",
+                    integer_to_list(I)])}]}},
+                {<<"json">>, {[{<<"xattrs">>, I}, {<<"value">>, I}]}}
+            ]}
+        end,
+        lists:seq(From, To)).
+
 
 update_docs(From, To) ->
     lists:map(
@@ -252,6 +358,17 @@ populate_set(DDoc) ->
         test_set_name(),
         lists:seq(0, num_set_partitions() - 1),
         DocList).
+
+populate_set_xattrs(DDoc) ->
+    etap:diag("Populating the " ++ integer_to_list(num_set_partitions()) ++
+        " databases with " ++ integer_to_list(num_docs()) ++ " documents"),
+    ok = couch_set_view_test_util:update_ddoc(test_set_name(), DDoc),
+    DocList = create_docs_xattrs(1, num_docs()),
+    ok = couch_set_view_test_util:populate_set_sequentially(
+        test_set_name(),
+        lists:seq(0, num_set_partitions() - 1),
+        DocList).
+
 
 configure_view_group(DDocId, PartitionId) ->
     etap:diag("Configuring view group"),

@@ -163,11 +163,35 @@ encode_snapshot_marker(PartId, RequestId, StartSeq, EndSeq, Type) ->
                                       binary().
 encode_snapshot_mutation(PartId, RequestId, Cas, Seq, RevSeq, Flags,
                          Expiration, LockTime, Key, Value) ->
-    % XXX vmx 2014-01-08: No metadata support for now
+    {DataType, XATTRBody} = case ejson:validate(Value) of
+    ok ->
+        case binary:match(Value, <<"\"xattrs\"">>) of
+        nomatch ->
+            {?DCP_DATA_TYPE_JSON, <<>>};
+        _ ->
+            Temp = binary:split(Value, <<",">>),
+            [Xattr | _] = Temp,
+            <<"{\"xattrs\":", Random/binary>> = Xattr,
+            XattrKey = <<"xattr_key",0>>,
+            XattrVal = <<Random/binary, 0>>,
+            Xattr2 = <<XattrKey/binary, XattrVal/binary>>,
+            XattrSize = byte_size(Xattr2),
+            TotalXattrSize = XattrSize + 4,
+            XattrBody = <<TotalXattrSize:32, XattrSize:32, Xattr2/binary>>,
+            {?DCP_DATA_TYPE_JSON_XATTR, XattrBody}
+        end;
+    _ ->
+        {?DCP_DATA_TYPE_RAW, <<>>}
+    end,
+     % XXX vmx 2014-01-08: No metadata support for now
     MetadataLength = 0,
     % NRU is set intentionally to some strange value, to simulate
     % that it could be anything and should be ignored.
     Nru = 87,
+    KeyLength = byte_size(Key),
+
+    XattrValue = <<XATTRBody/binary, Value/binary>>,
+    ValueLength = byte_size(XattrValue),
     Body = <<Seq:?DCP_SIZES_BY_SEQ,
              RevSeq:?DCP_SIZES_REV_SEQ,
              Flags:?DCP_SIZES_FLAGS,
@@ -176,19 +200,10 @@ encode_snapshot_mutation(PartId, RequestId, Cas, Seq, RevSeq, Flags,
              MetadataLength:?DCP_SIZES_METADATA_LENGTH,
              Nru:?DCP_SIZES_NRU_LENGTH,
              Key/binary,
-             Value/binary>>,
+             XattrValue/binary>>,
 
-    KeyLength = byte_size(Key),
-    ValueLength = byte_size(Value),
     BodyLength = byte_size(Body),
     ExtraLength = BodyLength - KeyLength - ValueLength - MetadataLength,
-
-    DataType = case ejson:validate(Value) of
-    ok ->
-        ?DCP_DATA_TYPE_JSON;
-    _ ->
-        ?DCP_DATA_TYPE_RAW
-    end,
     Header = <<?DCP_MAGIC_REQUEST,
                ?DCP_OPCODE_MUTATION,
                KeyLength:?DCP_SIZES_KEY_LENGTH,
