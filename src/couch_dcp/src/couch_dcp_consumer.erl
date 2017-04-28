@@ -146,7 +146,8 @@ parse_snapshot_deletion(KeyLength, Body) ->
       RevSeq:?DCP_SIZES_REV_SEQ,
       MetadataLength:?DCP_SIZES_METADATA_LENGTH,
       Key:KeyLength/binary,
-      Metadata:MetadataLength/binary>> = Body,
+      Metadata:MetadataLength/binary,
+      _XATTRs/binary>> = Body,
     {snapshot_deletion, {Seq, RevSeq, Key, Metadata}}.
 
 
