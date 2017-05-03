@@ -1477,37 +1477,15 @@ update_btrees(WriterAcc) ->
     mapreduce_view ->
         NewGroup;
     spatial_view = Mod ->
-        process_flag(trap_exit, true),
         ok = couch_file:refresh_eof(NewGroup#set_view_group.fd),
-        Pid = spawn_link(fun() ->
-            Views = Mod:update_spatial(NewGroup#set_view_group.views, ViewFiles,
-                MaxBatchSize),
-            exit({spatial_views_updater_result, Views})
-            end),
-        receive
-        {'EXIT', Pid, Result} ->
-            case Result of
-            {spatial_views_updater_result, Views} ->
-                NewGroup#set_view_group{
-                    views = Views,
-                    index_header = (NewGroup#set_view_group.index_header)#set_view_index_header{
-                        view_states = [Mod:get_state(V#set_view.indexer) || V <- Views]
-                    }
-                };
-            _ ->
-                exit(Result)
-            end;
-        stop ->
-            #set_view_group{
-                set_name = SetName,
-                name = DDocId,
-                type = Type
-            } = NewGroup,
-            ?LOG_INFO("Set view `~s`, ~s group `~s`, index updater (spatial"
-                      "update) stopped successfully.", [SetName, Type, DDocId]),
-            couch_util:shutdown_sync(Pid),
-            exit(shutdown)
-        end
+        Views = Mod:update_spatial(NewGroup#set_view_group.views, ViewFiles,
+            MaxBatchSize),
+        NewGroup#set_view_group{
+            views = Views,
+            index_header = (NewGroup#set_view_group.index_header)#set_view_index_header{
+                view_states = [Mod:get_state(V#set_view.indexer) || V <- Views]
+            }
+        }
     end,
 
     NewStats = Stats#set_view_updater_stats{
