@@ -147,8 +147,8 @@ parse_snapshot_deletion(KeyLength, Body) ->
       MetadataLength:?DCP_SIZES_METADATA_LENGTH,
       Key:KeyLength/binary,
       Metadata:MetadataLength/binary,
-      _XATTRs/binary>> = Body,
-    {snapshot_deletion, {Seq, RevSeq, Key, Metadata}}.
+      XATTRs/binary>> = Body,
+    {snapshot_deletion, {Seq, RevSeq, Key, Metadata, XATTRs}}.
 
 
 -spec parse_failover_log(binary(), partition_version()) ->

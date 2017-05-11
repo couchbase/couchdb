@@ -819,10 +819,16 @@ receive_snapshot_deletion(BufSocket, Timeout, PartId, KeyLength, BodyLength,
     {ok, Body, BufSocket2} ->
          {snapshot_deletion, Deletion} =
              couch_dcp_consumer:parse_snapshot_deletion(KeyLength, Body),
-         {Seq, RevSeq, Key, _Metadata} = Deletion,
+         {Seq, RevSeq, Key, _Metadata, XATTRs} = Deletion,
+         Deleted = case XATTRs of
+         <<>> ->
+            true;
+         _ ->
+            false
+         end,
          {#dcp_doc{
              id = Key,
-             body = <<>>,
+             body = XATTRs,
              data_type = DataType,
              partition = PartId,
              cas = Cas,
@@ -830,7 +836,7 @@ receive_snapshot_deletion(BufSocket, Timeout, PartId, KeyLength, BodyLength,
              seq = Seq,
              flags = 0,
              expiration = 0,
-             deleted = true
+             deleted = Deleted
          }, BufSocket2};
     {error, Reason} ->
         {error, Reason}
