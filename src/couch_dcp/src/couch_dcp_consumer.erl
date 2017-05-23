@@ -137,7 +137,7 @@ parse_snapshot_mutation(KeyLength, Body, BodyLength, ExtraLength) ->
 -spec parse_snapshot_deletion(size(), binary()) ->
                                      {snapshot_deletion,
                                       {update_seq(), non_neg_integer(),
-                                       binary(), binary()}}.
+                                       binary(), binary(), binary()}}.
 parse_snapshot_deletion(KeyLength, Body) ->
     % XXX vmx 2014-01-07: No metadata support for now. Make it so it breaks
     % once it's there.
