@@ -55,7 +55,7 @@ docs_per_partition() -> num_docs() div num_set_partitions().
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(40),
+    etap:plan(52),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -90,16 +90,31 @@ test() ->
     test_map_query_updated(3),
 
     % Test xattrs when document does not contain extra attribute
-    test_map_query_noxattrs(0),
-    test_map_query_noxattrs(1),
-    test_map_query_noxattrs(2),
-    test_map_query_noxattrs(3),
+    test_map_query_xattrs(0, false, false),
+    test_map_query_xattrs(1, false, false),
+    test_map_query_xattrs(2, false, false),
+    test_map_query_xattrs(3, false, false),
 
     % Test xattrs when document contains extra attribute
-    test_map_query_xattrs(0),
-    test_map_query_xattrs(1),
-    test_map_query_xattrs(2),
-    test_map_query_xattrs(3),
+    test_map_query_xattrs(0, true, false),
+    test_map_query_xattrs(1, true, false),
+    test_map_query_xattrs(2, true, false),
+    test_map_query_xattrs(3, true, false),
+
+    % Test xattrs when document is deleted
+    % and does not contain extra attribute
+    test_map_query_xattrs(0, false, true),
+    test_map_query_xattrs(1, false, true),
+    test_map_query_xattrs(2, false, true),
+    test_map_query_xattrs(3, false, true),
+
+    % Test xattrs when document is deleted
+    % and contains extra attribute
+    test_map_query_xattrs(0, true, true),
+    test_map_query_xattrs(1, true, true),
+    test_map_query_xattrs(2, true, true),
+    test_map_query_xattrs(3, true, true),
+
 
     couch_set_view_test_util:delete_set_dbs(test_set_name(),
         num_set_partitions()),
@@ -142,71 +157,66 @@ test_map_query_updated(PartitionId) ->
 
     shutdown_group().
 
-test_map_query_noxattrs(PartitionId) ->
-    setup_test_noxattrs(),
+test_map_query_xattrs(PartitionId, HasXattrs, Deleted) ->
+    setup_test_xattrs(HasXattrs, Deleted),
     ok = configure_view_group(ddoc_id(), PartitionId),
 
     {ok, Rows} = (catch query_map_view(<<"test">>)),
-    etap:is(length(Rows), docs_per_partition(),
-        "Got " ++ integer_to_list(docs_per_partition()) ++ " view rows"),
-    verify_rows_noxattrs(Rows, PartitionId),
-
+    case HasXattrs of
+    true ->
+        etap:is(length(Rows), docs_per_partition(),
+            "Got " ++ integer_to_list(docs_per_partition()) ++ " view rows"),
+        verify_rows_xattrs(Rows, PartitionId, HasXattrs);
+    false ->
+        case Deleted of
+        true ->
+            etap:is(length(Rows), 0,
+                "Got " ++ integer_to_list(0) ++ " view rows");
+        false ->
+            etap:is(length(Rows), docs_per_partition(),
+                "Got " ++ integer_to_list(docs_per_partition()) ++ " view rows"),
+            verify_rows_xattrs(Rows, PartitionId, HasXattrs)
+        end
+    end,
     shutdown_group().
-
-test_map_query_xattrs(PartitionId) ->
-    setup_test_xattrs(),
-    ok = configure_view_group(ddoc_id(), PartitionId),
-
-    {ok, Rows} = (catch query_map_view(<<"test">>)),
-    etap:is(length(Rows), docs_per_partition(),
-        "Got " ++ integer_to_list(docs_per_partition()) ++ " view rows"),
-    verify_rows_xattrs(Rows, PartitionId),
-
-    shutdown_group().
-
-
 
 % As the partitions are populated sequentially we can easily verify them
 verify_rows_vb(Rows, PartitionId) ->
     Offset = (PartitionId * docs_per_partition()),
     PartId = list_to_binary(integer_to_list(PartitionId)),
     DocList = lists:map(fun(Doc) ->
-        {[{<<"meta">>, {[{<<"id">>, DocId}]}},
+        {[{<<"meta">>, {[{<<"deleted">>, false}, {<<"id">>, DocId}]}},
           {<<"json">>, {[{<<"value">>, _Value}]}}]} = Doc,
         {<<"\"", DocId/binary, "\"">>, DocId,
             <<"\"", PartId/binary, "\"">>}
-    end, create_docs(1 + Offset, Offset + docs_per_partition())),
+    end, create_docs(1 + Offset, Offset + docs_per_partition(), false)),
     etap:is(Rows, lists:sort(DocList), "Returned correct rows").
 
 verify_rows_seq(Rows, PartitionId, From, To) ->
     Offset = (PartitionId * docs_per_partition()),
     DocList = lists:zipwith(fun(Doc, I) ->
-        {[{<<"meta">>, {[{<<"id">>, DocId}]}},
+        {[{<<"meta">>, {[{<<"deleted">>, false}, {<<"id">>, DocId}]}},
           {<<"json">>, {[{<<"value">>, _Value}]}}]} = Doc,
           Seq = list_to_binary(integer_to_list(I)),
         {<<"\"", DocId/binary, "\"">>, DocId,
             <<"\"", Seq/binary, "\"">>}
-    end, lists:sort(create_docs(1 + Offset, Offset + docs_per_partition())),
+    end, lists:sort(create_docs(1 + Offset, Offset + docs_per_partition(), false)),
          lists:seq(From, To)),
     etap:is(Rows, lists:sort(DocList), "Returned correct rows").
 
-verify_rows_noxattrs(Rows, PartitionId) ->
-    Offset = (PartitionId * docs_per_partition()),
-    DocList = lists:map(fun(Doc) ->
-        {[{<<"meta">>, {[{<<"id">>, DocId}]}},
-          {<<"json">>, {[{<<"value">>, _Value}]}}]} = Doc,
-        {<<"\"", DocId/binary, "\"">>, DocId, <<"{}">>}
-    end, create_docs(1 + Offset, Offset + docs_per_partition())),
-    etap:is(Rows, lists:sort(DocList), "Returned correct rows").
-
-verify_rows_xattrs(Rows, PartitionId) ->
+verify_rows_xattrs(Rows, PartitionId, HasXattrs) ->
     Offset = (PartitionId * docs_per_partition()),
     DocList = lists:zipwith(fun(Doc, I) ->
-        {[{<<"meta">>, {[{<<"id">>, DocId}]}},
+        {[{<<"meta">>, {[{<<"deleted">>, false}, {<<"id">>, DocId}]}},
           {<<"json">>, {[{<<"value">>, _Value}]}}]} = Doc,
         Id = list_to_binary(integer_to_list(I)),
-        {<<"\"", DocId/binary, "\"">>, DocId, <<"{\"xattr_key\":",Id/binary, "}">>}
-    end, create_docs(1 + Offset, Offset + docs_per_partition()),
+        case HasXattrs of
+        true ->
+            {<<"\"", DocId/binary, "\"">>, DocId, <<"{\"xattr_key\":",Id/binary, "}">>};
+        false ->
+            {<<"\"", DocId/binary, "\"">>, DocId, <<"{}">>}
+        end
+    end, create_docs(1 + Offset, Offset + docs_per_partition(), false),
          lists:seq(1+Offset, Offset + docs_per_partition())),
     etap:is(Rows, lists:sort(DocList), "Returned correct rows").
 
@@ -249,7 +259,7 @@ setup_test_vb() ->
             ]}}
         ]}}
     ]},
-    populate_set(DDoc).
+    populate_set(DDoc, false).
 
 setup_test_seq() ->
     couch_set_view_test_util:delete_set_dbs(test_set_name(),
@@ -268,9 +278,9 @@ setup_test_seq() ->
             ]}}
         ]}}
     ]},
-    populate_set(DDoc).
+    populate_set(DDoc, false).
 
-setup_test_noxattrs() ->
+setup_test_xattrs(HasXattrs, Deleted) ->
     couch_set_view_test_util:delete_set_dbs(test_set_name(),
         num_set_partitions()),
     couch_set_view_test_util:create_set_dbs(test_set_name(),
@@ -287,46 +297,34 @@ setup_test_noxattrs() ->
             ]}}
         ]}}
     ]},
-    populate_set(DDoc).
+    populate_set_xattrs(DDoc, HasXattrs, Deleted).
 
-setup_test_xattrs() ->
-    couch_set_view_test_util:delete_set_dbs(test_set_name(),
-        num_set_partitions()),
-    couch_set_view_test_util:create_set_dbs(test_set_name(),
-        num_set_partitions()),
-
-    DDoc = {[
-        {<<"meta">>, {[{<<"id">>, ddoc_id()}]}},
-        {<<"json">>, {[
-            {<<"views">>, {[
-                {<<"test">>, {[
-                    {<<"map">>, <<"function(doc, meta)
-                        { emit(meta.id, meta.xattrs); }">>}
-                ]}}
-            ]}}
-        ]}}
-    ]},
-    populate_set_xattrs(DDoc).
-
-create_docs(From, To) ->
+create_docs(From, To, Deleted) ->
     lists:map(
         fun(I) ->
             {[
-                {<<"meta">>, {[{<<"id">>, iolist_to_binary(["doc",
+                {<<"meta">>, {[{<<"deleted">>, Deleted}, {<<"id">>, iolist_to_binary(["doc",
                     integer_to_list(I)])}]}},
                 {<<"json">>, {[{<<"value">>, I}]}}
             ]}
         end,
         lists:seq(From, To)).
 
-create_docs_xattrs(From, To) ->
+create_docs_xattrs(From, To, HasXattrs, Deleted) ->
     lists:map(
         fun(I) ->
-            {[
-                {<<"meta">>, {[{<<"id">>, iolist_to_binary(["doc",
+            {
+                case HasXattrs of
+                true ->
+                [{<<"meta">>, {[{<<"id">>, iolist_to_binary(["doc",
                     integer_to_list(I)])}]}},
-                {<<"json">>, {[{<<"xattrs">>, I}, {<<"value">>, I}]}}
-            ]}
+                    {<<"json">>, {[{<<"xattrs">>, I}, {<<"deleted">>, Deleted}, {<<"value">>, I}]}}];
+                false ->
+                [{<<"meta">>, {[{<<"deleted">>, Deleted}, {<<"id">>, iolist_to_binary(["doc",
+                    integer_to_list(I)])}]}},
+                    {<<"json">>, {[{<<"value">>, I}]}}]
+                end
+            }
         end,
         lists:seq(From, To)).
 
@@ -349,21 +347,21 @@ update_docs() ->
         lists:seq(0, num_set_partitions() - 1),
         DocList).
 
-populate_set(DDoc) ->
+populate_set(DDoc, Deleted) ->
     etap:diag("Populating the " ++ integer_to_list(num_set_partitions()) ++
         " databases with " ++ integer_to_list(num_docs()) ++ " documents"),
     ok = couch_set_view_test_util:update_ddoc(test_set_name(), DDoc),
-    DocList = create_docs(1, num_docs()),
+    DocList = create_docs(1, num_docs(), Deleted),
     ok = couch_set_view_test_util:populate_set_sequentially(
         test_set_name(),
         lists:seq(0, num_set_partitions() - 1),
         DocList).
 
-populate_set_xattrs(DDoc) ->
+populate_set_xattrs(DDoc, HasXattrs, Deleted) ->
     etap:diag("Populating the " ++ integer_to_list(num_set_partitions()) ++
         " databases with " ++ integer_to_list(num_docs()) ++ " documents"),
     ok = couch_set_view_test_util:update_ddoc(test_set_name(), DDoc),
-    DocList = create_docs_xattrs(1, num_docs()),
+    DocList = create_docs_xattrs(1, num_docs(), HasXattrs, Deleted),
     ok = couch_set_view_test_util:populate_set_sequentially(
         test_set_name(),
         lists:seq(0, num_set_partitions() - 1),

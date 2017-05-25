@@ -136,6 +136,18 @@ encode_snapshot_marker(PartId, RequestId, StartSeq, EndSeq, Type) ->
                0:?DCP_SIZES_CAS>>,
     <<Header/binary, Body/binary>>.
 
+-spec generate_xattr_body(binary()) -> binary().
+generate_xattr_body(Value) ->
+    Temp = binary:split(Value, <<",">>),
+    [Xattr | _] = Temp,
+    <<"{\"xattrs\":", Random/binary>> = Xattr,
+    XattrKey = <<"xattr_key",0>>,
+    XattrVal = <<Random/binary, 0>>,
+    Xattr2 = <<XattrKey/binary, XattrVal/binary>>,
+    XattrSize = byte_size(Xattr2),
+    TotalXattrSize = XattrSize + 4,
+    <<TotalXattrSize:32, XattrSize:32, Xattr2/binary>>.
+
 %DCP_MUTATION command
 %Field        (offset) (value)
 %Magic        (0)    : 0x80
@@ -163,36 +175,29 @@ encode_snapshot_marker(PartId, RequestId, StartSeq, EndSeq, Type) ->
                                       binary().
 encode_snapshot_mutation(PartId, RequestId, Cas, Seq, RevSeq, Flags,
                          Expiration, LockTime, Key, Value) ->
-    {DataType, XATTRBody} = case ejson:validate(Value) of
-    ok ->
-        case binary:match(Value, <<"\"xattrs\"">>) of
-        nomatch ->
-            {?DCP_DATA_TYPE_JSON, <<>>};
+    case binary:match(Value, <<"\"deleted\"">>) of
+    nomatch ->
+        {DataType, XATTRBody} = case ejson:validate(Value) of
+        ok ->
+            case binary:match(Value, <<"\"xattrs\"">>) of
+            nomatch ->
+                {?DCP_DATA_TYPE_JSON, <<>>};
+            _ ->
+                {?DCP_DATA_TYPE_JSON_XATTR, generate_xattr_body(Value)}
+            end;
         _ ->
-            Temp = binary:split(Value, <<",">>),
-            [Xattr | _] = Temp,
-            <<"{\"xattrs\":", Random/binary>> = Xattr,
-            XattrKey = <<"xattr_key",0>>,
-            XattrVal = <<Random/binary, 0>>,
-            Xattr2 = <<XattrKey/binary, XattrVal/binary>>,
-            XattrSize = byte_size(Xattr2),
-            TotalXattrSize = XattrSize + 4,
-            XattrBody = <<TotalXattrSize:32, XattrSize:32, Xattr2/binary>>,
-            {?DCP_DATA_TYPE_JSON_XATTR, XattrBody}
-        end;
-    _ ->
-        {?DCP_DATA_TYPE_RAW, <<>>}
-    end,
-     % XXX vmx 2014-01-08: No metadata support for now
-    MetadataLength = 0,
-    % NRU is set intentionally to some strange value, to simulate
-    % that it could be anything and should be ignored.
-    Nru = 87,
-    KeyLength = byte_size(Key),
+            {?DCP_DATA_TYPE_RAW, <<>>}
+        end,
+        % XXX vmx 2014-01-08: No metadata support for now
+        MetadataLength = 0,
+        % NRU is set intentionally to some strange value, to simulate
+        % that it could be anything and should be ignored.
+        Nru = 87,
+        KeyLength = byte_size(Key),
 
-    XattrValue = <<XATTRBody/binary, Value/binary>>,
-    ValueLength = byte_size(XattrValue),
-    Body = <<Seq:?DCP_SIZES_BY_SEQ,
+        XattrValue = <<XATTRBody/binary, Value/binary>>,
+        ValueLength = byte_size(XattrValue),
+        Body = <<Seq:?DCP_SIZES_BY_SEQ,
              RevSeq:?DCP_SIZES_REV_SEQ,
              Flags:?DCP_SIZES_FLAGS,
              Expiration:?DCP_SIZES_EXPIRATION,
@@ -202,9 +207,9 @@ encode_snapshot_mutation(PartId, RequestId, Cas, Seq, RevSeq, Flags,
              Key/binary,
              XattrValue/binary>>,
 
-    BodyLength = byte_size(Body),
-    ExtraLength = BodyLength - KeyLength - ValueLength - MetadataLength,
-    Header = <<?DCP_MAGIC_REQUEST,
+        BodyLength = byte_size(Body),
+        ExtraLength = BodyLength - KeyLength - ValueLength - MetadataLength,
+        Header = <<?DCP_MAGIC_REQUEST,
                ?DCP_OPCODE_MUTATION,
                KeyLength:?DCP_SIZES_KEY_LENGTH,
                ExtraLength,
@@ -213,7 +218,10 @@ encode_snapshot_mutation(PartId, RequestId, Cas, Seq, RevSeq, Flags,
                BodyLength:?DCP_SIZES_BODY,
                RequestId:?DCP_SIZES_OPAQUE,
                Cas:?DCP_SIZES_CAS>>,
-    <<Header/binary, Body/binary>>.
+        <<Header/binary, Body/binary>>;
+    _ ->
+        encode_snapshot_deletion(PartId, RequestId, Cas, Seq, RevSeq, Key, Value)
+    end.
 
 %DCP_DELETION command
 %Field        (offset) (value)
@@ -255,6 +263,46 @@ encode_snapshot_deletion(PartId, RequestId, Cas, Seq, RevSeq, Key) ->
                RequestId:?DCP_SIZES_OPAQUE,
                Cas:?DCP_SIZES_CAS>>,
     <<Header/binary, Body/binary>>.
+
+-spec encode_snapshot_deletion(partition_id(), request_id(), non_neg_integer(),
+                               non_neg_integer(), non_neg_integer(),
+                               binary(), binary()) -> binary().
+encode_snapshot_deletion(PartId, RequestId, Cas, Seq, RevSeq, Key, Value) ->
+    % XXX vmx 2014-01-08: No metadata support for now
+    {DataType, XATTRBody} = case ejson:validate(Value) of
+    ok ->
+        case binary:match(Value, <<"\"xattrs\"">>) of
+        nomatch ->
+            {?DCP_DATA_TYPE_RAW, <<>>};
+        _ ->
+            {?DCP_DATA_TYPE_BINARY_XATTR, generate_xattr_body(Value)}
+        end;
+    _ ->
+        {?DCP_DATA_TYPE_RAW, <<>>}
+    end,
+
+    MetadataLength = 0,
+    ValueLength = byte_size(XATTRBody),
+    Body = <<Seq:?DCP_SIZES_BY_SEQ,
+             RevSeq:?DCP_SIZES_REV_SEQ,
+             MetadataLength:?DCP_SIZES_METADATA_LENGTH,
+             Key/binary, XATTRBody/binary>>,
+
+    KeyLength = byte_size(Key),
+    BodyLength = byte_size(Body),
+    ExtraLength = BodyLength - KeyLength - ValueLength - MetadataLength,
+
+    Header = <<?DCP_MAGIC_REQUEST,
+               ?DCP_OPCODE_DELETION,
+               KeyLength:?DCP_SIZES_KEY_LENGTH,
+               ExtraLength,
+               DataType,
+               PartId:?DCP_SIZES_PARTITION,
+               BodyLength:?DCP_SIZES_BODY,
+               RequestId:?DCP_SIZES_OPAQUE,
+               Cas:?DCP_SIZES_CAS>>,
+    <<Header/binary, Body/binary>>.
+
 
 %DCP_STREAM_REQ response
 %Field        (offset) (value)
