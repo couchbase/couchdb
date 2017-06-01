@@ -55,7 +55,7 @@ docs_per_partition() -> num_docs() div num_set_partitions().
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(52),
+    etap:plan(56),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -90,30 +90,38 @@ test() ->
     test_map_query_updated(3),
 
     % Test xattrs when document does not contain extra attribute
-    test_map_query_xattrs(0, false, false),
-    test_map_query_xattrs(1, false, false),
-    test_map_query_xattrs(2, false, false),
-    test_map_query_xattrs(3, false, false),
+    test_map_query_xattrs(0, false, false, false),
+    test_map_query_xattrs(1, false, false, false),
+    test_map_query_xattrs(2, false, false, false),
+    test_map_query_xattrs(3, false, false, false),
 
     % Test xattrs when document contains extra attribute
-    test_map_query_xattrs(0, true, false),
-    test_map_query_xattrs(1, true, false),
-    test_map_query_xattrs(2, true, false),
-    test_map_query_xattrs(3, true, false),
+    test_map_query_xattrs(0, true, false, true),
+    test_map_query_xattrs(1, true, false, true),
+    test_map_query_xattrs(2, true, false, true),
+    test_map_query_xattrs(3, true, false, true),
 
     % Test xattrs when document is deleted
     % and does not contain extra attribute
-    test_map_query_xattrs(0, false, true),
-    test_map_query_xattrs(1, false, true),
-    test_map_query_xattrs(2, false, true),
-    test_map_query_xattrs(3, false, true),
+    test_map_query_xattrs(0, false, true, false),
+    test_map_query_xattrs(1, false, true, false),
+    test_map_query_xattrs(2, false, true, false),
+    test_map_query_xattrs(3, false, true, false),
 
     % Test xattrs when document is deleted
-    % and contains extra attribute
-    test_map_query_xattrs(0, true, true),
-    test_map_query_xattrs(1, true, true),
-    test_map_query_xattrs(2, true, true),
-    test_map_query_xattrs(3, true, true),
+    % and contains extra attribute that are indexed
+    test_map_query_xattrs(0, true, true, true),
+    test_map_query_xattrs(1, true, true, true),
+    test_map_query_xattrs(2, true, true, true),
+    test_map_query_xattrs(3, true, true, true),
+
+    % Test xattrs when document is deleted
+    % and contains extra attribute that are not to be indexed
+    test_map_query_xattrs(0, true, true, false),
+    test_map_query_xattrs(1, true, true, false),
+    test_map_query_xattrs(2, true, true, false),
+    test_map_query_xattrs(3, true, true, false),
+
 
 
     couch_set_view_test_util:delete_set_dbs(test_set_name(),
@@ -157,25 +165,39 @@ test_map_query_updated(PartitionId) ->
 
     shutdown_group().
 
-test_map_query_xattrs(PartitionId, HasXattrs, Deleted) ->
-    setup_test_xattrs(HasXattrs, Deleted),
+verify_zero_rows(Rows) ->
+    etap:is(length(Rows), 0,
+        "Got " ++ integer_to_list(0) ++ " view rows").
+
+verify_nonzero_rows(Rows, PartitionId, HasXattrs) ->
+    etap:is(length(Rows), docs_per_partition(),
+        "Got " ++ integer_to_list(docs_per_partition()) ++ " view rows"),
+    verify_rows_xattrs(Rows, PartitionId, HasXattrs).
+
+test_map_query_xattrs(PartitionId, HasXattrs, Deleted, IndexXattrs) ->
+    setup_test_xattrs(HasXattrs, Deleted, IndexXattrs),
     ok = configure_view_group(ddoc_id(), PartitionId),
 
     {ok, Rows} = (catch query_map_view(<<"test">>)),
     case HasXattrs of
     true ->
-        etap:is(length(Rows), docs_per_partition(),
-            "Got " ++ integer_to_list(docs_per_partition()) ++ " view rows"),
-        verify_rows_xattrs(Rows, PartitionId, HasXattrs);
+        case Deleted of
+        false ->
+            verify_nonzero_rows(Rows, PartitionId, HasXattrs);
+        true ->
+            case IndexXattrs of
+            true ->
+                verify_nonzero_rows(Rows, PartitionId, HasXattrs);
+            false ->
+                verify_zero_rows(Rows)
+            end
+        end;
     false ->
         case Deleted of
         true ->
-            etap:is(length(Rows), 0,
-                "Got " ++ integer_to_list(0) ++ " view rows");
+            verify_zero_rows(Rows);
         false ->
-            etap:is(length(Rows), docs_per_partition(),
-                "Got " ++ integer_to_list(docs_per_partition()) ++ " view rows"),
-            verify_rows_xattrs(Rows, PartitionId, HasXattrs)
+            verify_nonzero_rows(Rows, PartitionId, HasXattrs)
         end
     end,
     shutdown_group().
@@ -280,7 +302,7 @@ setup_test_seq() ->
     ]},
     populate_set(DDoc, false).
 
-setup_test_xattrs(HasXattrs, Deleted) ->
+setup_test_xattrs(HasXattrs, Deleted, IndexXattrs) ->
     couch_set_view_test_util:delete_set_dbs(test_set_name(),
         num_set_partitions()),
     couch_set_view_test_util:create_set_dbs(test_set_name(),
@@ -294,7 +316,8 @@ setup_test_xattrs(HasXattrs, Deleted) ->
                     {<<"map">>, <<"function(doc, meta)
                         { emit(meta.id, meta.xattrs); }">>}
                 ]}}
-            ]}}
+            ]}},
+            {<<"index_xattr_on_deleted_docs">>, IndexXattrs}
         ]}}
     ]},
     populate_set_xattrs(DDoc, HasXattrs, Deleted).

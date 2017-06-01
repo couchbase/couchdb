@@ -820,12 +820,6 @@ receive_snapshot_deletion(BufSocket, Timeout, PartId, KeyLength, BodyLength,
          {snapshot_deletion, Deletion} =
              couch_dcp_consumer:parse_snapshot_deletion(KeyLength, Body),
          {Seq, RevSeq, Key, _Metadata, XATTRs} = Deletion,
-         Deleted = case XATTRs of
-         <<>> ->
-            true;
-         _ ->
-            false
-         end,
          {#dcp_doc{
              id = Key,
              body = XATTRs,
@@ -836,7 +830,7 @@ receive_snapshot_deletion(BufSocket, Timeout, PartId, KeyLength, BodyLength,
              seq = Seq,
              flags = 0,
              expiration = 0,
-             deleted = Deleted
+             deleted = true
          }, BufSocket2};
     {error, Reason} ->
         {error, Reason}

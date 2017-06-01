@@ -255,13 +255,15 @@ design_doc_to_set_view_group(SetName, #doc{id = Id, body = {Fields}}) ->
             {SetView#set_view{id_num = N}, N + 1}
         end,
         0, lists:sort(dict:to_list(DictBySrc))),
+    IndexXATTRonDeletedDocs = couch_util:get_value(<<"index_xattr_on_deleted_docs">>, Fields, false),
     SetViewGroup = #set_view_group{
         set_name = SetName,
         name = Id,
         views = SetViews,
         design_options = DesignOptions,
         mod = ?MODULE,
-        extension = index_extension()
+        extension = index_extension(),
+        index_xattr_on_deleted_docs = IndexXATTRonDeletedDocs
     },
     set_view_sig(SetViewGroup).
 

@@ -659,29 +659,46 @@ queue_doc({part_versions, _} = PartVersions, MapQueue, _Group, _MaxDocSize,
     _InitialBuild) ->
     couch_work_queue:queue(MapQueue, PartVersions);
 queue_doc(Doc, MapQueue, Group, MaxDocSize, InitialBuild) ->
-    case Doc#dcp_doc.deleted of
+    Doc2 = case Doc#dcp_doc.deleted of
+    true ->
+        case Group#set_view_group.index_xattr_on_deleted_docs of
+        true ->
+            case Doc#dcp_doc.body of
+            <<>> ->
+                Doc#dcp_doc{deleted = true};
+            _ ->
+                Doc#dcp_doc{deleted = false}
+            end;
+        false ->
+            Doc
+        end;
+    false ->
+        Doc
+    end,
+
+    case Doc2#dcp_doc.deleted of
     true when InitialBuild ->
         Entry = nil;
     true ->
-        Entry = Doc;
+        Entry = Doc2;
     false ->
         #set_view_group{
            set_name = SetName,
            name = DDocId,
            type = GroupType
         } = Group,
-        case couch_util:validate_utf8(Doc#dcp_doc.id) of
+        case couch_util:validate_utf8(Doc2#dcp_doc.id) of
         true ->
             case (MaxDocSize > 0) andalso
-                (iolist_size(Doc#dcp_doc.body) > MaxDocSize) of
+                (iolist_size(Doc2#dcp_doc.body) > MaxDocSize) of
             true ->
                 ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, skipping "
                     "document with ID `~s`: too large body (~p bytes)",
                     [SetName, GroupType, DDocId,
-                     ?b2l(Doc#dcp_doc.id), iolist_size(Doc#dcp_doc.body)]),
-                Entry = Doc#dcp_doc{deleted = true};
+                     ?b2l(Doc2#dcp_doc.id), iolist_size(Doc2#dcp_doc.body)]),
+                Entry = Doc2#dcp_doc{deleted = true};
             false ->
-                Entry = Doc
+                Entry = Doc2
             end;
         false ->
             % If the id isn't utf8 (memcached allows it), then log an error
@@ -691,8 +708,8 @@ queue_doc(Doc, MapQueue, Group, MaxDocSize, InitialBuild) ->
             % not reprocess again.
             ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, skipping "
                 "document with non-utf8 id. Doc id bytes: ~w",
-                [SetName, GroupType, DDocId, ?b2l(Doc#dcp_doc.id)]),
-            Entry = Doc#dcp_doc{deleted = true}
+                [SetName, GroupType, DDocId, ?b2l(Doc2#dcp_doc.id)]),
+            Entry = Doc2#dcp_doc{deleted = true}
         end
     end,
     case Entry of
