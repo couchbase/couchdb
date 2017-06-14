@@ -1060,6 +1060,22 @@ handle_cast({update_replica, MinNumChanges}, #state{replica_group = Pid} = State
     {noreply, State}.
 
 
+handle_info({'DOWN', MRef, process, Pid, _Reason}, State) ->
+    #state{update_listeners = Listeners} = State,
+    case dict:find(MRef, Listeners) of
+    error ->
+        ?LOG_INFO("Listner ~p is down and its reference ~p is not stored in dictonary", [Pid, MRef]),
+        {noreply, State};
+    {ok, #up_listener{monref = MonRef, partition = PartId}} ->
+        ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`, removing partition ~p"
+                   "update monitor, reference ~p",
+                   [?set_name(State), ?type(State), ?category(State),
+                    ?group_id(State), PartId, MRef]),
+        erlang:demonitor(MonRef, [flush]),
+        State2 = State#state{update_listeners = dict:erase(MRef, Listeners)},
+        {noreply, State2}
+    end;
+
 handle_info(timeout, State) when not ?is_defined(State) ->
     {noreply, State};
 
