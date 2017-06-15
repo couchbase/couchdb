@@ -471,12 +471,18 @@ verify_is_server_admin(#user_ctx{roles=Roles}) ->
     end.
 
 log_request(#httpd{mochi_req=MochiReq,peer=Peer}, Code) ->
-    ?LOG_INFO("~s - - ~s ~s ~B", [
+    Content = [
         Peer,
         MochiReq:get(method),
         MochiReq:get(raw_path),
         Code
-    ]).
+    ],
+    Format = "~s - - ~s ~s ~B",
+    if Code < 400 ->
+            ?LOG_DEBUG(Format, Content);
+        true ->
+            ?LOG_INFO(Format, Content)
+    end.
 
 start_response_length(#httpd{mochi_req=MochiReq}=Req, Code, Headers, Length) ->
     log_request(Req, Code),
@@ -937,5 +943,3 @@ partial_find(B, D, N, K) ->
         _ ->
             partial_find(B, D, 1 + N, K - 1)
     end.
-
-

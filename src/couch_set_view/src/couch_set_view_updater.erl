@@ -118,8 +118,7 @@ update(Owner, Group, CurSeqs, CompactorRunning, TmpDir, Options) ->
               "    unindexable:      ~w~n"
               "Initial build:        ~s~n"
               "Compactor running:    ~s~n"
-              "Min # changes:        ~p~n"
-              "Partition versions:   ~w~n",
+              "Min # changes:        ~p~n",
               [SetName, Type, DDocId,
                ActiveParts,
                PassiveParts,
@@ -130,9 +129,12 @@ update(Owner, Group, CurSeqs, CompactorRunning, TmpDir, Options) ->
                ?pending_transition_unindexable(?set_pending_transition(Group)),
                InitialBuild,
                CompactorRunning,
-               NumChanges,
-               ?set_partition_versions(Group)
+               NumChanges
               ]),
+    ?LOG_DEBUG("Updater set view `~s`, ~s group `~s` Partition versions ~w",
+                       [SetName, Type, DDocId, ?set_partition_versions(Group)]),
+
+
 
     WriterAcc0 = #writer_acc{
         parent = self(),
@@ -483,7 +485,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                             Acc;
                         ({snapshot_marker, {MarkerStartSeq, MarkerEndSeq, MarkerType}}, {Count, _})
                             when MarkerType band ?DCP_SNAPSHOT_TYPE_MASK =/= 0 ->
-                            ?LOG_INFO(
+                            ?LOG_DEBUG(
                                 "set view `~s`, ~s (~s) group `~s`: received "
                                 "a snapshot marker (~s) for partition ~p from "
                                 "sequence ~p to ~p",
