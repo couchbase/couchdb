@@ -204,11 +204,11 @@ get_failover_log(Pid, PartId) ->
 get_stream_event(Pid, ReqId) ->
     MRef = erlang:monitor(process, Pid),
     Pid ! {get_stream_event, ReqId, self()},
-    Reply = get_stream_event_get_reply(Pid, ReqId, MRef),
+    Reply = get_stream_event_get_reply(Pid, ReqId, MRef, ?TIMEOUT),
     erlang:demonitor(MRef, [flush]),
     Reply.
 
-get_stream_event_get_reply(Pid, ReqId, MRef) ->
+get_stream_event_get_reply(Pid, ReqId, MRef, RetryTimeout) ->
     receive
     {stream_event, ReqId, Reply} ->
         Reply;
@@ -217,7 +217,15 @@ get_stream_event_get_reply(Pid, ReqId, MRef) ->
     after ?TIMEOUT ->
         Msg = {print_log, ReqId},
         Pid ! Msg,
-        get_stream_event_get_reply(Pid, ReqId, MRef)
+        case RetryTimeout >= (2 * ?DEFAULT_NOOP_INTERVAL) of
+        true ->
+            ?LOG_ERROR("Not got any response from KV after 2x noop_interval ~p seconds, "
+                       "exiting updater ~p.", [(2 * ?DEFAULT_NOOP_INTERVAL)/1000, self()]),
+            exit(timeout);
+        false ->
+            get_stream_event_get_reply(Pid, ReqId, MRef,
+                                       RetryTimeout + ?TIMEOUT)
+        end
     end.
 
 -spec enum_docs_since(pid(), partition_id(), partition_version(), update_seq(),
@@ -550,7 +558,7 @@ handle_info({stream_response, RequestId, Msg}, State) ->
                         false ->
                             State#state{noop_enable = false}
                     end;
-                {noop_interval,Interval} ->
+                {noop_interval, Interval} ->
                     State#state{noop_interval = Interval}
             end;
         get_stats ->
@@ -1441,13 +1449,14 @@ noop_interval(State) ->
         request_id = RequestId,
         noop_interval = Interval
     } = State,
+    % KV expects values in seconds. We need to pass 120 as default noop interval
     ControlRequest = couch_dcp_consumer:
-        encode_control_request(RequestId, set_noop_interval, Interval),
+        encode_control_request(RequestId, set_noop_interval, Interval div 1000),
     case bufsocket_send(BufSocket,ControlRequest) of
         ok ->
             State2 = next_request_id(State),
             State3 = add_pending_request(State2, RequestId,
-                        {control_request, {noop_interval,Interval}}, nil),
+                        {control_request, {noop_interval, Interval}}, nil),
             {ok, State3};
         {error,Error} ->
             {error, Error}
