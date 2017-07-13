@@ -30,6 +30,7 @@
 -include_lib("couch_dcp/include/couch_dcp_typespecs.hrl").
 -define(MAX_BUF_SIZE, 10485760).
 -define(TIMEOUT, 60000).
+-define(DEFAULT_NOOP_INTERVAL, 120000).
 -define(TIMEOUT_STATS, 2000).
 -define(DCP_RETRY_TIMEOUT, 2000).
 -define(DCP_LIST_STREAMS_TIMEOUT, 100).
@@ -45,17 +46,19 @@
 }).
 
 -record(state, {
-    bufsocket = nil                 :: #bufsocket{} | nil,
-    timeout = 5000                  :: timeout(),
-    request_id = 0                  :: request_id(),
-    pending_requests = dict:new()   :: dict(),
-    stream_queues = dict:new()      :: dict(),
-    active_streams = []             :: list(),
-    worker_pid                      :: pid(),
-    max_buffer_size = ?MAX_BUF_SIZE :: integer(),
-    total_buffer_size = 0           :: non_neg_integer(),
-    stream_info = dict:new()        :: dict(),
-    args = []                       :: list()
+    bufsocket = nil                         :: #bufsocket{} | nil,
+    timeout = 5000                          :: timeout(),
+    request_id = 0                          :: request_id(),
+    pending_requests = dict:new()           :: dict(),
+    stream_queues = dict:new()              :: dict(),
+    active_streams = []                     :: list(),
+    worker_pid                              :: pid(),
+    max_buffer_size = ?MAX_BUF_SIZE         :: integer(),
+    total_buffer_size = 0                   :: non_neg_integer(),
+    stream_info = dict:new()                :: dict(),
+    args = []                               :: list(),
+    noop_enable = true                      :: atom(),
+    noop_interval = ?DEFAULT_NOOP_INTERVAL  :: non_neg_integer()
 }).
 
 -record(stream_info, {
@@ -314,9 +317,14 @@ init([Name, Bucket, AdmUser, AdmPasswd, BufferSize, Flags]) ->
                     gen_tcp:controlling_process(?SOCKET(BufSocket), WorkerPid),
                     case set_buffer_size(State5, BufferSize) of
                     {ok, State6} ->
-                        {ok, State6#state{worker_pid = WorkerPid}};
+                            case enable_noop(State6, true) of
+                                {ok, State7} ->
+                                    {ok, State7#state{worker_pid = WorkerPid}};
+                                {error, Reason} ->
+                                    exit(WorkerPid, shutdown),
+                                    {stop, Reason}
+                            end;
                     {error, Reason} ->
-                        exit(WorkerPid, shutdown),
                         {stop, Reason}
                     end;
                 {error, Reason} ->
@@ -528,8 +536,23 @@ handle_info({stream_response, RequestId, Msg}, State) ->
                 State
             end;
         % Server sent the response for the internal control request
-        {control_request, Size} ->
-            State#state{max_buffer_size = Size};
+        {control_request, Type} ->
+            case Type of
+                {size,Size} ->
+                    State#state{max_buffer_size = Size};
+                {enable_noop,Enable} ->
+                    case Enable of
+                        true ->
+                            % If noop_interval returns {error,Error}
+                            % dcp_client will crash, restart and retry
+                            {ok, State4} = noop_interval(State),
+                            State4#state{noop_enable = true};
+                        false ->
+                            State#state{noop_enable = false}
+                    end;
+                {noop_interval,Interval} ->
+                    State#state{noop_interval = Interval}
+            end;
         get_stats ->
             {MRef, From} = SendTo,
             From ! {get_stats, MRef, Msg},
@@ -1378,16 +1401,59 @@ set_buffer_size(State, Size) ->
         bufsocket = BufSocket,
         request_id = RequestId
     } = State,
-    ControlRequest = couch_dcp_consumer:encode_control_request(RequestId, connection, Size),
+    ControlRequest = couch_dcp_consumer:
+        encode_control_request(RequestId, connection, Size),
     case bufsocket_send(BufSocket, ControlRequest) of
     ok ->
         State2 = next_request_id(State),
-        State3 = add_pending_request(State2, RequestId, {control_request, Size}, nil),
+        State3 = add_pending_request(State2, RequestId,
+                        {control_request, {size,Size}}, nil),
         State4 = State3#state{max_buffer_size = Size},
         {ok, State4};
     {error, Error} ->
         {error, Error}
     end.
+
+-spec enable_noop(#state{}, boolean()) -> {ok ,#state{}} |
+                                            {error, closed | inet:posix()}.
+enable_noop(State, Enable) ->
+    #state{
+        bufsocket = BufSocket,
+        request_id = RequestId
+    } = State,
+    ControlRequest = couch_dcp_consumer:
+        encode_control_request(RequestId, enable_noop, Enable),
+    case bufsocket_send(BufSocket,ControlRequest) of
+        ok ->
+            State2 = next_request_id(State),
+            State3 = add_pending_request(State2, RequestId,
+                        {control_request, {enable_noop, Enable}}, nil),
+            {ok, State3};
+        {error,Error} ->
+            {error, Error}
+    end.
+
+-spec noop_interval(#state{}) -> {ok ,#state{}} |
+                                {error, closed | inet:posix()}.
+noop_interval(State) ->
+    #state{
+        bufsocket = BufSocket,
+        request_id = RequestId,
+        noop_interval = Interval
+    } = State,
+    ControlRequest = couch_dcp_consumer:
+        encode_control_request(RequestId, set_noop_interval, Interval),
+    case bufsocket_send(BufSocket,ControlRequest) of
+        ok ->
+            State2 = next_request_id(State),
+            State3 = add_pending_request(State2, RequestId,
+                        {control_request, {noop_interval,Interval}}, nil),
+            {ok, State3};
+        {error,Error} ->
+            {error, Error}
+    end.
+
+
 
 -spec get_queue_size(queue(), non_neg_integer()) -> non_neg_integer().
 get_queue_size(EvQueue, Size) ->
@@ -1489,7 +1555,7 @@ restart_worker(State) ->
             get_stats ->
                 {MRef, From} = SendTo,
                 From ! {get_stats, MRef, Error};
-	    all_seqs ->
+            all_seqs ->
                 {MRef, From} = SendTo,
                 From ! {all_seqs, MRef, Error};
             {control_request, _} ->

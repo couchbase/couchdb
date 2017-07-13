@@ -436,15 +436,26 @@ encode_all_seqs_request(RequestId) ->
 %CAS          (16-23): 0x0000000000000000
 %Key                 : connection_buffer_size
 %Value               : 0x31303234
--spec encode_control_request(request_id(), connection | stream, integer())
+-spec encode_control_request(request_id(), atom(), integer()|boolean())
                                                                 -> binary().
-encode_control_request(RequestId, Type, BufferSize) ->
-    Key = case Type of
-    connection ->
-        <<"connection_buffer_size">>
+encode_control_request(RequestId, Key0, Value0) ->
+    Key = case Key0 of
+        connection ->
+            <<"connection_buffer_size">>;
+        enable_noop ->
+            <<"enable_noop">>;
+        set_noop_interval ->
+            <<"set_noop_interval">>
     end,
-    BufferSize2 = list_to_binary(integer_to_list(BufferSize)),
-    Body = <<Key/binary, BufferSize2/binary>>,
+    Value = case Key0 of
+        connection ->
+            list_to_binary(integer_to_list(Value0));
+        enable_noop ->
+            list_to_binary(atom_to_list(Value0));
+        set_noop_interval ->
+            list_to_binary(integer_to_list(Value0))
+    end,
+    Body = <<Key/binary, Value/binary>>,
 
     KeyLength =  byte_size(Key),
     BodyLength = byte_size(Body),

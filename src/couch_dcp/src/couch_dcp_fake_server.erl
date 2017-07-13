@@ -661,7 +661,13 @@ read(Socket) ->
 handle_control_request(Socket, BodyLength, RequestId) ->
     case gen_tcp:recv(Socket, BodyLength) of
     {ok, <<"connection_buffer_size", Size/binary>>} ->
-        ok = gen_server:call(?MODULE, {handle_control_req, Size})
+        ok = gen_server:call(?MODULE, {handle_control_req, Size});
+    % Temporary fix to let testing proceed
+    % To-Do : Mimic actual DCP logic
+    {ok, <<"enable_noop", _Enable/binary>>} ->
+        ok;
+    {ok, <<"set_noop_interval", _Interval/binary>>} ->
+        ok
     end,
     ControlResponse = couch_dcp_producer:encode_control_flow_ok(RequestId),
     ok = gen_tcp:send(Socket, ControlResponse).
