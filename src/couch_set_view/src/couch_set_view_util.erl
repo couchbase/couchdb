@@ -37,7 +37,7 @@
 -export([filter_seqs/2]).
 -export([log_port_error/3]).
 -export([fix_partitions/2]).
-
+-export([condense/1]).
 
 -include("couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
@@ -842,3 +842,48 @@ fix_partitions(Group, PartList) ->
         {?set_seqs(Group), ?set_partition_versions(Group)},
         PartList).
 
+% The condense function converts [1,2,3,6,9] ->
+%                          [ "[", ",", "1-3", ",", "6", ",", "9", "]" ]
+% "[" "]" and "," are explicitly included for io:format("~s",[output]).
+-spec condense(ordsets:ordset(partition_id())|[partition_id()]) -> any().
+condense(List) ->
+    try condense_inner(List) of
+        Result ->
+            Result
+    catch _:_ ->
+            io_lib:format("~w",[List])
+    end.
+
+-spec condense_inner(ordsets:ordset(partition_id())|[partition_id()]) -> any().
+condense_inner([]) ->
+    "[]"; % base-case
+condense_inner([H]) ->
+    lists:flatten(io_lib:format("[~B]", [H])); % base-case
+condense_inner([H|Rest]) ->
+    condense_inner(Rest, #condense{start=H, last=H}). % call recursive
+
+-spec condense_inner(ordsets:ordset(partition_id())|[partition_id()],
+                     #condense{}) -> any().
+condense_inner([], #condense{start=Start, last=Last, acc=Acc}) ->
+    Range = case Last > Start of % flush last range
+                true ->
+                    lists:flatten(io_lib:format("~B-~B]", [Start, Last]));
+                false ->
+                    lists:flatten(io_lib:format("~B]", [Start]))
+                end,
+    lists:reverse([Range|Acc]);
+condense_inner([H|Rest], #condense{start=Start, last=Last, acc=Acc} = State) ->
+    case H == (Last + 1) of % main code path
+        true ->
+            State2 = State#condense{last = H},
+            condense_inner(Rest, State2);
+        false ->
+            Range = case Last > Start of
+                true ->
+                    lists:flatten(io_lib:format("~B-~B,", [Start, Last]));
+                false ->
+                    lists:flatten(io_lib:format("~B,", [Start]))
+                end,
+            State2 = State#condense{start=H, last=H, acc=[Range|Acc]},
+            condense_inner(Rest, State2)
+    end.

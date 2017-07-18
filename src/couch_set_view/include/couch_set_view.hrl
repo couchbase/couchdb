@@ -302,3 +302,9 @@
     % within the file
     extra = nil
 }).
+
+-record(condense, {
+    start = -1,
+    last = -1,
+    acc = ["["]
+}).

@@ -18,6 +18,9 @@
 % Exported for the MapReduce specific stuff
 -export([new_sort_file_name/1]).
 
+% Imported for log cleanup
+-import(couch_set_view_util, [condense/1]).
+
 -include("couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
 -include_lib("couch_dcp/include/couch_dcp.hrl").
@@ -108,25 +111,25 @@ update(Owner, Group, CurSeqs, CompactorRunning, TmpDir, Options) ->
     CleanupParts = couch_set_view_util:decode_bitmask(?set_cbitmask(Group)),
     InitialBuild = couch_set_view_util:is_initial_build(Group),
     ?LOG_INFO("Updater for set view `~s`, ~s group `~s` started~n"
-              "Active partitions:    ~w~n"
-              "Passive partitions:   ~w~n"
-              "Cleanup partitions:   ~w~n"
-              "Replicas to transfer: ~w~n"
+              "Active partitions:    ~s~n"
+              "Passive partitions:   ~s~n"
+              "Cleanup partitions:   ~s~n"
+              "Replicas to transfer: ~s~n"
               "Pending transition:   ~n"
-              "    active:           ~w~n"
-              "    passive:          ~w~n"
-              "    unindexable:      ~w~n"
+              "    active:           ~s~n"
+              "    passive:          ~s~n"
+              "    unindexable:      ~s~n"
               "Initial build:        ~s~n"
               "Compactor running:    ~s~n"
               "Min # changes:        ~p~n",
               [SetName, Type, DDocId,
-               ActiveParts,
-               PassiveParts,
-               CleanupParts,
-               ?set_replicas_on_transfer(Group),
-               ?pending_transition_active(?set_pending_transition(Group)),
-               ?pending_transition_passive(?set_pending_transition(Group)),
-               ?pending_transition_unindexable(?set_pending_transition(Group)),
+               condense(ActiveParts),
+               condense(PassiveParts),
+               condense(CleanupParts),
+               condense(?set_replicas_on_transfer(Group)),
+               condense(?pending_transition_active(?set_pending_transition(Group))),
+               condense(?pending_transition_passive(?set_pending_transition(Group))),
+               condense(?pending_transition_unindexable(?set_pending_transition(Group))),
                InitialBuild,
                CompactorRunning,
                NumChanges
@@ -669,9 +672,9 @@ load_changes_from_passive_parts_in_mailbox(DcpPid,
         PartVersions = lists:ukeymerge(1, AddPartVersions, PartVersions0),
 
         MaxSeqs = lists:ukeymerge(1, AddMaxSeqs, MaxSeqs0),
-        ?LOG_INFO("Updater reading changes from new passive partitions ~w to "
+        ?LOG_INFO("Updater reading changes from new passive partitions ~s to "
                   "update ~s set view group `~s` from set `~s`",
-                  [Parts, GroupType, DDocId, SetName]),
+                  [condense(Parts), GroupType, DDocId, SetName]),
         {ChangesCount2, MaxSeqs2, PartVersions2, Rollbacks2} = lists:foldl(
             FoldFun, {ChangesCount, MaxSeqs, PartVersions, Rollbacks}, AddMaxSeqs),
         load_changes_from_passive_parts_in_mailbox(DcpPid,
@@ -1632,7 +1635,7 @@ checkpoint(#writer_acc{owner = Owner, parent = Parent, group = Group} = Acc) ->
         name = DDocId,
         type = Type
     } = Group,
-    ?LOG_INFO("Updater checkpointing set view `~s` update for ~s group `~s`",
+    ?LOG_DEBUG("Updater checkpointing set view `~s` update for ~s group `~s`",
               [SetName, Type, DDocId]),
     NewGroup = maybe_fix_group(Group),
     ok = couch_file:refresh_eof(NewGroup#set_view_group.fd),
