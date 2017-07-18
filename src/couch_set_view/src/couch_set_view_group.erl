@@ -31,6 +31,9 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
+%% Imported for log cleanup
+-import(couch_set_view_util, [condense/1]).
+
 -include("couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
 
@@ -399,23 +402,26 @@ do_init({_, SetName, _} = InitArgs) ->
         true ->
             ?LOG_INFO("Started ~s (~s) set view group `~s`, group `~s`,"
                       " signature `~s', view count ~p~n"
-                      "active partitions:      ~w~n"
-                      "passive partitions:     ~w~n"
-                      "cleanup partitions:     ~w~n"
+                      "active partitions:      ~s~n"
+                      "passive partitions:     ~s~n"
+                      "cleanup partitions:     ~s~n"
                       "unindexable partitions: ~w~n"
                       "~sreplica support~n" ++
                       case Header#set_view_index_header.has_replica of
                       true ->
-                          "replica partitions: ~w~n"
-                          "replica partitions on transfer: ~w~n";
+                          "replica partitions: ~s~n"
+                          "replica partitions on transfer: ~s~n";
                       false ->
                           ""
                       end,
                       [Type, Category, SetName, Group#set_view_group.name,
                        hex_sig(Group), ViewCount,
-                       couch_set_view_util:decode_bitmask(Header#set_view_index_header.abitmask),
-                       couch_set_view_util:decode_bitmask(Header#set_view_index_header.pbitmask),
-                       couch_set_view_util:decode_bitmask(Header#set_view_index_header.cbitmask),
+                       condense(couch_set_view_util:decode_bitmask(
+                                  Header#set_view_index_header.abitmask)),
+                       condense(couch_set_view_util:decode_bitmask(
+                                  Header#set_view_index_header.pbitmask)),
+                       condense(couch_set_view_util:decode_bitmask(
+                                  Header#set_view_index_header.cbitmask)),
                        Header#set_view_index_header.unindexable_seqs,
                        case Header#set_view_index_header.has_replica of
                        true ->
@@ -425,7 +431,8 @@ do_init({_, SetName, _} = InitArgs) ->
                        end] ++
                        case Header#set_view_index_header.has_replica of
                        true ->
-                           [ReplicaParts, ?set_replicas_on_transfer(Group)];
+                           [condense(ReplicaParts),
+                            condense(?set_replicas_on_transfer(Group))];
                        false ->
                            []
                        end)
@@ -528,15 +535,15 @@ handle_call({define_view, NumPartitions, ActiveList, ActiveBitmask,
               " configured with:~n"
               "~p partitions~n"
               "~sreplica support~n"
-              "initial active partitions ~w~n"
-              "initial passive partitions ~w",
+              "initial active partitions ~s~n"
+              "initial passive partitions ~s",
               [?set_name(State), ?type(State), ?category(State), DDocId,
                hex_sig(Group), NumPartitions,
                case UseReplicaIndex of
                true ->  "";
                false -> "no "
                end,
-        ActiveList, PassiveList]),
+        condense(ActiveList),condense(PassiveList)]),
     NewGroup2 = (State2#state.group)#set_view_group{
         header_pos = HeaderPos
     },
@@ -574,11 +581,11 @@ handle_call({add_replicas, BitMask}, _From, #state{replica_group = ReplicaPid} =
         BitMask;
     Common1 ->
         ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`, ignoring request to"
-                  " set partitions ~w to replica state because they are"
+                  " set partitions ~s to replica state because they are"
                   " currently marked as active",
                   [?set_name(State), ?type(State), ?category(State),
                    ?group_id(State),
-                   couch_set_view_util:decode_bitmask(Common1)]),
+                   condense(couch_set_view_util:decode_bitmask(Common1))]),
         BitMask bxor Common1
     end,
     BitMask3 = case BitMask2 band ?set_pbitmask(Group) of
@@ -586,21 +593,21 @@ handle_call({add_replicas, BitMask}, _From, #state{replica_group = ReplicaPid} =
         BitMask2;
     Common2 ->
         ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`, ignoring request to"
-                  " set partitions  ~w to replica state because they are"
+                  " set partitions  ~s to replica state because they are"
                   " currently marked as passive",
                   [?set_name(State), ?type(State), ?category(State),
                    ?group_id(State),
-                   couch_set_view_util:decode_bitmask(Common2)]),
+                   condense(couch_set_view_util:decode_bitmask(Common2))]),
         BitMask2 bxor Common2
     end,
     Parts = couch_set_view_util:decode_bitmask(BitMask3),
     ok = set_state(ReplicaPid, [], Parts, []),
     NewReplicaParts = ordsets:union(ReplicaParts, Parts),
     ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`,"
-              " defined new replica partitions: ~w~n"
-              "New full set of replica partitions is: ~w~n",
+              " defined new replica partitions: ~s~n"
+              "New full set of replica partitions is: ~s~n",
               [?set_name(State), ?type(State), ?category(State),
-               ?group_id(State), Parts, NewReplicaParts]),
+               ?group_id(State), condense(Parts), condense(NewReplicaParts)]),
     State2 = State#state{
         replica_partitions = NewReplicaParts
     },
@@ -658,9 +665,9 @@ handle_call({remove_replicas, Partitions}, _From, #state{replica_group = Replica
         NewState = maybe_start_cleaner(State6)
     end,
     ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`, marked the following"
-              " replica partitions for removal: ~w",
+              " replica partitions for removal: ~s",
               [?set_name(State), ?type(State), ?category(State),
-               ?group_id(State), Partitions]),
+               ?group_id(State), condense(Partitions)]),
     {reply, ok, NewState, ?GET_TIMEOUT(NewState)};
 
 handle_call({mark_as_unindexable, Partitions}, _From, State) ->
@@ -1119,30 +1126,31 @@ handle_info({'EXIT', Pid, {clean_group, CleanGroup, Count, Time}}, #state{cleane
     NewGroup = update_clean_group_seqs(OldGroup, NewGroup0),
     ?LOG_INFO("Cleanup finished for set view `~s`, ~s (~s) group `~s`~n"
               "Removed ~p values from the index in ~.3f seconds~n"
-              "active partitions before:  ~w~n"
-              "active partitions after:   ~w~n"
-              "passive partitions before: ~w~n"
-              "passive partitions after:  ~w~n"
-              "cleanup partitions before: ~w~n"
-              "cleanup partitions after:  ~w~n" ++
+              "active partitions before:  ~s~n"
+              "active partitions after:   ~s~n"
+              "passive partitions before: ~s~n"
+              "passive partitions after:  ~s~n"
+              "cleanup partitions before: ~s~n"
+              "cleanup partitions after:  ~s~n" ++
           case is_pid(State#state.replica_group) of
           true ->
-              "Current set of replica partitions: ~w~n"
-              "Current set of replicas on transfer: ~w~n";
+              "Current set of replica partitions: ~s~n"
+              "Current set of replicas on transfer: ~s~n";
           false ->
               []
           end,
           [?set_name(State), ?type(State), ?category(State), ?group_id(State),
            Count, Time,
-           couch_set_view_util:decode_bitmask(?set_abitmask(OldGroup)),
-           couch_set_view_util:decode_bitmask(?set_abitmask(NewGroup)),
-           couch_set_view_util:decode_bitmask(?set_pbitmask(OldGroup)),
-           couch_set_view_util:decode_bitmask(?set_pbitmask(NewGroup)),
-           couch_set_view_util:decode_bitmask(?set_cbitmask(OldGroup)),
-           couch_set_view_util:decode_bitmask(?set_cbitmask(NewGroup))] ++
+           condense(couch_set_view_util:decode_bitmask(?set_abitmask(OldGroup))),
+           condense(couch_set_view_util:decode_bitmask(?set_abitmask(NewGroup))),
+           condense(couch_set_view_util:decode_bitmask(?set_pbitmask(OldGroup))),
+           condense(couch_set_view_util:decode_bitmask(?set_pbitmask(NewGroup))),
+           condense(couch_set_view_util:decode_bitmask(?set_cbitmask(OldGroup))),
+           condense(couch_set_view_util:decode_bitmask(?set_cbitmask(NewGroup)))] ++
               case is_pid(State#state.replica_group) of
               true ->
-                  [State#state.replica_partitions, ?set_replicas_on_transfer(NewGroup)];
+                  [condense(State#state.replica_partitions),
+                   condense(?set_replicas_on_transfer(NewGroup))];
               false ->
                   []
               end),
@@ -2015,7 +2023,8 @@ maybe_update_partition_states(ActiveList0, PassiveList0, CleanupList0, State) ->
             ok;
         _ ->
             ErrorMsg1 = io_lib:format("Intersection between requested active list "
-                "and current unindexable partitions: ~w", [ActiveMarkedAsUnindexable]),
+                "and current unindexable partitions: ~s",
+                [condense(ActiveMarkedAsUnindexable)]),
             throw({error, iolist_to_binary(ErrorMsg1)})
         end,
         PassiveMarkedAsUnindexable = [
@@ -2026,7 +2035,8 @@ maybe_update_partition_states(ActiveList0, PassiveList0, CleanupList0, State) ->
             ok;
         _ ->
             ErrorMsg2 = io_lib:format("Intersection between requested passive list "
-                "and current unindexable partitions: ~w", [PassiveMarkedAsUnindexable]),
+                "and current unindexable partitions: ~s",
+                [condense(PassiveMarkedAsUnindexable)]),
             throw({error, iolist_to_binary(ErrorMsg2)})
         end,
         CleanupMarkedAsUnindexable = [
@@ -2037,7 +2047,7 @@ maybe_update_partition_states(ActiveList0, PassiveList0, CleanupList0, State) ->
             ok;
         _ ->
             ErrorMsg3 = io_lib:format("Intersection between requested cleanup list "
-                "and current unindexable partitions: ~w", [CleanupMarkedAsUnindexable]),
+                "and current unindexable partitions: ~s", [condense(CleanupMarkedAsUnindexable)]),
             throw({error, iolist_to_binary(ErrorMsg3)})
         end
     end,
@@ -2367,12 +2377,12 @@ maybe_apply_pending_transition(State) ->
     true ->
         ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`,"
                   " applying state transitions from pending transition:~n"
-                  "  Active partitions:  ~w~n"
-                  "  Passive partitions: ~w~n"
-                  "  Unindexable:        ~w~n",
+                  "  Active partitions:  ~s~n"
+                  "  Passive partitions: ~s~n"
+                  "  Unindexable:        ~s~n",
                   [?set_name(State), ?type(State), ?category(State),
-                   ?group_id(State), ApplyActiveList, ApplyPassiveList,
-                   ApplyUnindexableList]),
+                   ?group_id(State), condense(ApplyActiveList),
+                   condense(ApplyPassiveList), condense(ApplyUnindexableList)]),
         case (ActiveInCleanup == []) andalso (PassiveInCleanup == []) of
         true ->
             NewPendingTrans = nil;
@@ -2612,48 +2622,51 @@ update_header(State, NewAbitmask, NewPbitmask, NewCbitmask, NewSeqs,
         header_pos = HeaderPos
     },
     ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`, partition states updated~n"
-              "active partitions before:    ~w~n"
-              "active partitions after:     ~w~n"
-              "passive partitions before:   ~w~n"
-              "passive partitions after:    ~w~n"
-              "cleanup partitions before:   ~w~n"
-              "cleanup partitions after:    ~w~n"
+              "active partitions before:    ~s~n"
+              "active partitions after:     ~s~n"
+              "passive partitions before:   ~s~n"
+              "passive partitions after:    ~s~n"
+              "cleanup partitions before:   ~s~n"
+              "cleanup partitions after:    ~s~n"
               "unindexable partitions:      ~w~n"
-              "replica partitions before:   ~w~n"
-              "replica partitions after:    ~w~n"
-              "replicas on transfer before: ~w~n"
-              "replicas on transfer after:  ~w~n"
+              "replica partitions before:   ~s~n"
+              "replica partitions after:    ~s~n"
+              "replicas on transfer before: ~s~n"
+              "replicas on transfer after:  ~s~n"
               "pending transition before:~n"
-              "  active:      ~w~n"
-              "  passive:     ~w~n"
-              "  unindexable: ~w~n"
+              "  active:      ~s~n"
+              "  passive:     ~s~n"
+              "  unindexable: ~s~n"
               "pending transition after:~n"
-              "  active:      ~w~n"
-              "  passive:     ~w~n"
-              "  unindexable: ~w~n"
-              "partition versions before:~n~w~n"
-              "partition versions after:~n~w~n",
+              "  active:      ~s~n"
+              "  passive:     ~s~n"
+              "  unindexable: ~s~n",
               [?set_name(State), ?type(State), ?category(State),
                ?group_id(State),
-               couch_set_view_util:decode_bitmask(Abitmask),
-               couch_set_view_util:decode_bitmask(NewAbitmask),
-               couch_set_view_util:decode_bitmask(Pbitmask),
-               couch_set_view_util:decode_bitmask(NewPbitmask),
-               couch_set_view_util:decode_bitmask(Cbitmask),
-               couch_set_view_util:decode_bitmask(NewCbitmask),
+               condense(couch_set_view_util:decode_bitmask(Abitmask)),
+               condense(couch_set_view_util:decode_bitmask(NewAbitmask)),
+               condense(couch_set_view_util:decode_bitmask(Pbitmask)),
+               condense(couch_set_view_util:decode_bitmask(NewPbitmask)),
+               condense(couch_set_view_util:decode_bitmask(Cbitmask)),
+               condense(couch_set_view_util:decode_bitmask(NewCbitmask)),
                UnindexableSeqs,
-               ReplicaParts,
-               NewReplicaParts,
-               ReplicasOnTransfer,
-               NewRelicasOnTransfer,
-               ?pending_transition_active(PendingTrans),
-               ?pending_transition_passive(PendingTrans),
-               ?pending_transition_unindexable(PendingTrans),
-               ?pending_transition_active(NewPendingTrans),
-               ?pending_transition_passive(NewPendingTrans),
-               ?pending_transition_unindexable(NewPendingTrans),
-               PartVersions,
-               NewPartVersions2]),
+               condense(ReplicaParts),
+               condense(NewReplicaParts),
+               condense(ReplicasOnTransfer),
+               condense(NewRelicasOnTransfer),
+               condense(?pending_transition_active(PendingTrans)),
+               condense(?pending_transition_passive(PendingTrans)),
+               condense(?pending_transition_unindexable(PendingTrans)),
+               condense(?pending_transition_active(NewPendingTrans)),
+               condense(?pending_transition_passive(NewPendingTrans)),
+               condense(?pending_transition_unindexable(NewPendingTrans))]),
+    ?LOG_DEBUG("Set view `~s`, ~s (~s) group `~s`, partition states updated~n"
+               "partition versions before:~n~w~n"
+               "partition versions after:~n~w~n",
+               [?set_name(State), ?type(State), ?category(State),
+                ?group_id(State),
+                PartVersions,
+                NewPartVersions2]),
     NewState#state{group = NewGroup3}.
 
 
@@ -2720,12 +2733,14 @@ after_cleaner_stopped(State, {clean_group, CleanGroup, Count, Time}) ->
     ?LOG_INFO("Stopped cleanup process for"
               " set view `~s`, ~s (~s) group `~s`.~n"
               "Removed ~p values from the index in ~.3f seconds~n"
-              "New set of partitions to cleanup: ~w~n"
-              "Old set of partitions to cleanup: ~w~n",
+              "New set of partitions to cleanup: ~s~n"
+              "Old set of partitions to cleanup: ~s~n",
               [?set_name(State), ?type(State), ?category(State),
                ?group_id(State), Count, Time,
-               couch_set_view_util:decode_bitmask(?set_cbitmask(NewGroup)),
-               couch_set_view_util:decode_bitmask(?set_cbitmask(OldGroup))]),
+               condense(couch_set_view_util:decode_bitmask(
+                          ?set_cbitmask(NewGroup))),
+               condense(couch_set_view_util:decode_bitmask(
+                          ?set_cbitmask(OldGroup)))]),
     case ?set_cbitmask(NewGroup) of
     0 ->
         inc_cleanups(State#state.group, Time, Count, false);
@@ -3101,22 +3116,22 @@ maybe_fix_replica_group(ReplicaPid, Group) ->
         ok;
     _ ->
         ?LOG_INFO("Set view `~s`, main (~s) group `~s`, fixing replica group"
-                  " by marking partitions ~w  for cleanup because they were"
+                  " by marking partitions ~s  for cleanup because they were"
                   " already transferred into the main group",
                   [Group#set_view_group.set_name,
                    Group#set_view_group.category, Group#set_view_group.name,
-                   CleanupList])
+                   condense(CleanupList)])
     end,
     case ActiveList of
     [] ->
         ok;
     _ ->
         ?LOG_INFO("Set view `~s`, main (~s) group `~s`, fixing replica group"
-                  " by marking partitions ~w as active because they are"
+                  " by marking partitions ~s as active because they are"
                   " marked as on transfer in the main group",
                   [Group#set_view_group.set_name,
                    Group#set_view_group.category, Group#set_view_group.name,
-                   ActiveList])
+                   condense(ActiveList)])
     end,
     ok = set_state(ReplicaPid, ActiveList, [], CleanupList).
 
@@ -3136,11 +3151,11 @@ process_partial_update(State, NewGroup0) ->
         NewGroup1 = fix_updater_group(NewGroup0, Group);
     _ ->
         ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`,"
-                  " completed transferral of replica partitions ~w~n"
-                  "New group of replica partitions to transfer is ~w~n",
+                  " completed transferral of replica partitions ~s~n"
+                  "New group of replica partitions to transfer is ~s~n",
                   [?set_name(State), ?type(State), ?category(State),
-                   ?group_id(State), ReplicasTransferred,
-                   ?set_replicas_on_transfer(NewGroup0)]),
+                   ?group_id(State), condense(ReplicasTransferred),
+                   condense(?set_replicas_on_transfer(NewGroup0))]),
         ok = set_state(State#state.replica_group, [], [], ReplicasTransferred),
         NewRepParts = ordsets:subtract(State#state.replica_partitions, ReplicasTransferred),
         NewGroup1 = NewGroup0
@@ -3949,7 +3964,7 @@ rollback(State, RollbackPartSeqs) ->
                   "unindexable partitions after:  ~w~n",
                   [?set_name(State3), ?type(State3), ?category(State3),
                    ?group_id(State3), RollbackPartSeqs,
-                   GroupIndexable, Indexable, GroupUnindexable, Unindexable]),
+                    GroupIndexable, Indexable, GroupUnindexable, Unindexable]),
 
         % Mark all partitions that the on-disk header contains, but
         % are not part of the current group header for cleanup and

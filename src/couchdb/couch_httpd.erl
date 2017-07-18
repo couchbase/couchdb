@@ -470,18 +470,27 @@ verify_is_server_admin(#user_ctx{roles=Roles}) ->
     false -> throw({unauthorized, <<"You are not a server admin.">>})
     end.
 
-log_request(#httpd{mochi_req=MochiReq,peer=Peer}, Code) ->
-    Content = [
-        Peer,
-        MochiReq:get(method),
-        MochiReq:get(raw_path),
-        Code
-    ],
-    Format = "~s - - ~s ~s ~B",
-    if Code < 400 ->
-            ?LOG_DEBUG(Format, Content);
-        true ->
-            ?LOG_INFO(Format, Content)
+log_request(#httpd{mochi_req=MochiReq,peer=Peer}=Req, Code) ->
+    ?LOG_INFO("~s - - ~s ~s ~B", [Peer,
+                                  MochiReq:get(method),
+                                  MochiReq:get(raw_path),
+                                  Code]),
+    try log_post_request(Req) of _ -> ok
+    catch _:_ -> ok end.
+
+log_post_request(#httpd{mochi_req=MochiReq}=Req) ->
+    case MochiReq:get(method) of 'POST' ->
+        Views = proplists:get_value(<<"views">>, element(1, json_body_obj(Req))),
+        Sets = proplists:get_value(<<"sets">>, element(1, Views)),
+        {BucketBin, DDocList} = lists:nth(1, element(1, Sets)),
+        Bucket = binary_to_list(BucketBin),
+        ViewBin = proplists:get_value(<<"view">>, element(1, DDocList)),
+        Tokens = string:tokens(binary_to_list(ViewBin),"/"),
+        View = lists:last(Tokens),
+        ViewList = lists:subtract(Tokens, [View]) ++ ["_view",View],
+        DDocView = string:join(ViewList, "/"),
+        ?LOG_INFO("POST - Bucket: ~s, View: ~s",[Bucket, DDocView]);
+     _ -> ok
     end.
 
 start_response_length(#httpd{mochi_req=MochiReq}=Req, Code, Headers, Length) ->
