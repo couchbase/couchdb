@@ -51,6 +51,7 @@
     request_id = 0                          :: request_id(),
     pending_requests = dict:new()           :: dict(),
     stream_queues = dict:new()              :: dict(),
+    enum_start_seq = dict:new()             :: dict(),
     active_streams = []                     :: list(),
     worker_pid                              :: pid(),
     max_buffer_size = ?MAX_BUF_SIZE         :: integer(),
@@ -359,7 +360,10 @@ handle_call({add_stream, PartId, PartUuid, StartSeq, EndSeq, Flags},
     {error, Reason} ->
         {reply, {error, Reason}, State};
     State2 ->
-        {noreply, State2}
+        EnumStartSeq = State2#state.enum_start_seq,
+        State3 = State2#state{enum_start_seq =
+                                  dict:store(PartId, StartSeq, EnumStartSeq)},
+        {noreply, State3}
     end;
 
 handle_call({remove_stream, PartId}, From, State) ->
@@ -661,11 +665,25 @@ handle_info({print_log, ReqId}, State) ->
         #stream_info{
            start_seq = Start,
            end_seq = End,
-           part_id = PartId
+           part_id = PartId,
+           snapshot_seq = Boundary
         } = StreamInfo,
-        ?LOG_ERROR("dcp client (~s, ~s): Obtaining mutation from server timed out "
-            "after ~p seconds [RequestId ~p, PartId ~p, StartSeq ~p, EndSeq ~p]. Waiting...",
-            [Bucket, Name, ?TIMEOUT / 1000, ReqId, PartId, Start, End])
+        % The Start seq stored in stream_info is updated each time
+        % we get a mutation and is actually the "current" seq number.
+        % IndexStartSeq is the seq persisted during enum_docs_since
+        % call and is the original start seq number
+        EnumStartSeq = State#state.enum_start_seq,
+        IndexStartSeq = case dict:find(PartId, EnumStartSeq) of
+                            {ok, EStartSeq} -> EStartSeq;
+                            error -> "error_fetching_start_seq"
+                        end,
+        Format = "dcp client (~s, ~s): Obtaining mutation from server timed out "
+                 "after ~p seconds [RequestId ~p, PartId ~p, StartSeq ~p, "
+                 "CurrentSnapshotSeq ~p, EndSeq ~p, SnapshotBoundary ~w] "
+                 "Waiting..." ,
+        Content = [Bucket, Name, ?TIMEOUT / 1000, ReqId, PartId, IndexStartSeq,
+                   Start, End, Boundary],
+        ?LOG_ERROR(Format, Content)
     end,
     {noreply, State};
 
