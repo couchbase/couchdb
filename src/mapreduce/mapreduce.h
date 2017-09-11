@@ -26,7 +26,7 @@
 #include <list>
 #include <vector>
 #include <atomic>
-#include <include/v8.h>
+#include <v8.h>
 #include <platform/platform.h>
 
 #include "erl_nif_compat.h"
@@ -70,26 +70,9 @@ typedef std::basic_string< char,
 typedef std::list< function_source_t,
                    NifStlAllocator< function_source_t > >  function_sources_list_t;
 
-class ArrayBufferAllocator : public v8::ArrayBuffer::Allocator {
-public:
-    virtual void* Allocate(size_t length) {
-        void* data = AllocateUninitialized(length);
-        return data == NULL ? data : memset(data, 0, length);
-    }
-
-    virtual void* AllocateUninitialized(size_t length) {
-        return malloc(length);
-    }
-
-    virtual void Free(void* data, size_t) {
-        free(data);
-    }
-};
-
 typedef struct {
     v8::Persistent<v8::Context>                  jsContext;
     v8::Isolate                                  *isolate;
-    ArrayBufferAllocator                         *bufAllocator;
     function_vector_t                            *functions;
     kv_pair_list_t                               *kvs;
     ErlNifEnv                                    *env;
