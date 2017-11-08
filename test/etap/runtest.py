@@ -191,7 +191,7 @@ if __name__ == '__main__':
         os.putenv("PATH", env)
 
     if test:
-        setup()
+        #setup()
         sys.exit(run_test(test, escript_path, verbose))
     else:
         sys.exit("ERROR: No test specified")

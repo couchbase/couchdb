@@ -1,13 +1,7 @@
-SET(COUCHDB_SRC erl_diag.erl
-            file2.erl
+SET(COUCHDB_SRC file2.erl
             file_sorter_2.erl
-            couch.erl
-            couch_api_wrap.erl
-            couch_api_wrap_httpc.erl
-            couch_app.erl
             couch_btree.erl
             couch_btree_copy.erl
-            couch_btree_stats.erl
             couch_changes.erl
             couch_compaction_daemon.erl
             couch_compress.erl
@@ -15,7 +9,6 @@ SET(COUCHDB_SRC erl_diag.erl
             couch_config_writer.erl
             couch_db.erl
             couch_db_update_notifier.erl
-            couch_db_consistency_check.erl
             couch_db_update_notifier_sup.erl
             couch_doc.erl
             couch_ejson_compare.erl
@@ -28,9 +21,7 @@ SET(COUCHDB_SRC erl_diag.erl
             couch_httpd_external.erl
             couch_httpd_view.erl
             couch_httpd_misc_handlers.erl
-            couch_httpd_replicator.erl
             couch_log.erl
-            couch_native_process.erl
             couch_os_process.erl
             couch_primary_sup.erl
             couch_query_servers.erl
