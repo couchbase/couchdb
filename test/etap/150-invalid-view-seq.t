@@ -24,22 +24,29 @@ test_db_name() ->
     <<"couch_test_invalid_view_seq">>.
 
 main(_) ->
-    test_util:init_code_path(),
-
-    etap:plan(10),
-    case (catch test()) of
-        ok ->
-            etap:end_tests();
-        Other ->
-            etap:diag(io_lib:format("Test died abnormally: ~p", [Other])),
-            etap:bail(Other)
+    etap:plan(20),
+    case {run_test(false), run_test(true)} of
+    {ok, ok} ->
+        etap:end_tests();
+    Other ->
+        etap:diag(io_lib:format("test died abnormally: ~p", [Other])),
+        etap:bail(Other)
     end,
     ok.
 
-%% NOTE: since during the test we stop the server,
+run_test(IsIPv6) ->
+    test_util:init_code_path(),
+    case (catch test(IsIPv6)) of
+        ok -> ok;
+        Other -> Other
+    end.
+
+    %% NOTE: since during the test we stop the server,
 %%       a huge and ugly but harmless stack trace is sent to stderr
 %%
-test() ->
+test(IsIPv6) ->
+    ets:new(ipv6, [set, protected, named_table]),
+    ets:insert(ipv6, {is_ipv6, IsIPv6}),
     couch_server_sup:start_link(test_util:config_files()),
     timer:sleep(1000),
     delete_db(),
@@ -51,7 +58,14 @@ test() ->
     % make DB file backup
     backup_db_file(),
 
-    put(addr, couch_config:get("httpd", "bind_address", "127.0.0.1")),
+    case IsIPv6 of
+    false ->
+        put(addr, couch_config:get("httpd", "ip4_bind_address", "127.0.0.1"));
+    true ->
+        IP6Addr = couch_config:get("httpd", "ip6_bind_address", "::1"),
+        IP6Addr2 = "[" ++ IP6Addr ++ "]",
+        put(addr, IP6Addr2)
+    end,
     put(port, integer_to_list(mochiweb_socket_server:get(couch_httpd, port))),
 
     create_new_doc(),
@@ -63,6 +77,7 @@ test() ->
     query_view_after_restore_backup(),
 
     delete_db(),
+    ets:delete(ipv6),
     couch_server_sup:stop(),
     ok.
 

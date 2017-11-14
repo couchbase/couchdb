@@ -19,7 +19,7 @@ default_config() ->
 
 main(_) ->
     test_util:init_code_path(),
-    etap:plan(5),
+    etap:plan(6),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -64,11 +64,19 @@ test() ->
 
     % Implicitly checking that we *don't* call the function
     etap:is(
-        couch_config:get("httpd", "bind_address"),
+        couch_config:get("httpd", "ip4_bind_address"),
         "127.0.0.1",
-        "{httpd, bind_address} is not '0.0.0.0'"
+        "{httpd, ip4_bind_address} is not '0.0.0.0'"
     ),
-    ok = couch_config:set("httpd", "bind_address", "0.0.0.0", false),
+    ok = couch_config:set("httpd", "ip4_bind_address", "0.0.0.0", false),
+
+    etap:is(
+        couch_config:get("httpd", "ip6_bind_address"),
+        "::1",
+        "{httpd, ip6_bind_address} is not ::"
+    ),
+    ok = couch_config:set("httpd", "ip6_bind_address", "::", false),
+
 
     % Ping-Pong kill process
     SentinelPid ! {ping, self()},

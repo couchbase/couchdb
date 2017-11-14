@@ -24,23 +24,26 @@ num_docs() -> 1024.  % keep it a multiple of num_set_partitions()
 
 
 main(_) ->
-    test_util:init_code_path(),
-
-    etap:plan(1),
-    case (catch test()) of
-        ok ->
-            etap:end_tests();
-        Other ->
-            etap:diag(io_lib:format("Test died abnormally: ~p", [Other])),
-            etap:bail(Other)
+    etap:plan(2),
+    case {run_test(false), run_test(true)} of
+    {ok, ok} ->
+        etap:end_tests();
+    Other ->
+        etap:diag(io_lib:format("test died abnormally: ~p", [Other])),
+        etap:bail(Other)
     end,
     ok.
 
+run_test(IsIPv6) ->
+    test_util:init_code_path(),
+    case (catch test(IsIPv6)) of
+        ok -> ok;
+        Other -> Other
+    end.
 
-test() ->
-    etap:diag("Testing rollback of indexes"),
+test(IsIPv6) ->
+    couch_set_view_test_util:start_server(test_set_name(), IsIPv6),
 
-    couch_set_view_test_util:start_server(test_set_name()),
     ReduceValue = setup_test(5000),
 
     populate_set(1, num_docs()),

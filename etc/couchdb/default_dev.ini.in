@@ -24,7 +24,8 @@ checkpoint_after = 5242880 ; checkpoint after every N bytes were written
 
 [httpd]
 port = 5984
-bind_address = 127.0.0.1
+ip4_bind_address = 127.0.0.1
+ip6_bind_address = ::1
 authentication_handlers =
 default_handler = {couch_httpd_db, handle_request}
 allow_jsonp = false
