@@ -6,6 +6,8 @@ import getopt
 import os
 import subprocess
 import re
+import platform
+import shlex
 
 TEST_COUNT_RE = r"^1\.\.(\d+)"
 TEST_OK_RE = r"(^ok)\b"
@@ -20,7 +22,33 @@ def usage():
     % sys.argv[0]
     print
 
-def run_test(testfile, escript_path, verbose = False):
+def setup():
+    """Configure LD_LIBRARY_PATH"""
+    if platform.system() == "Linux":
+        dname, fname = os.path.split(os.path.abspath(__file__))
+        cpath = dname.split('couchdb')[0]
+        nspath = os.path.join(cpath, 'ns_server')
+
+        def read_configuration():
+            cfig = os.path.join(nspath, 'build', 'cluster_run.configuration')
+            with open(cfig) as f:
+                def fn(line):
+                    k, v = line.strip().split('=')
+                    return k, shlex.split(v)[0]
+                return dict(fn(line) for line in f.readlines())
+
+        config = read_configuration()
+        PREFIX = config['prefix']
+
+        LIBS = os.path.join(PREFIX, 'lib')
+        MEMCACHED = os.path.join(LIBS, 'memcached')
+        LD_LIBRARY_PATH = LIBS + os.pathsep + MEMCACHED
+        env = os.environ.copy()
+        if 'LD_LIBRARY_PATH' in env:
+            LD_LIBRARY_PATH += os.pathsep + env['LD_LIBRARY_PATH']
+        os.environ['LD_LIBRARY_PATH'] = LD_LIBRARY_PATH
+
+def run_test(testfile,eescript_path, verbose = False):
     test_total = -1
     test_passed = 0
     exit_status = 0
@@ -163,6 +191,7 @@ if __name__ == '__main__':
         os.putenv("PATH", env)
 
     if test:
+        setup()
         sys.exit(run_test(test, escript_path, verbose))
     else:
         sys.exit("ERROR: No test specified")
