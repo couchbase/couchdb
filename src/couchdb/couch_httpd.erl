@@ -700,54 +700,14 @@ error_info({Status, Error, Reason}) ->
 error_info(Error) ->
     {500, <<"unknown_error">>, couch_util:to_binary(Error)}.
 
-error_headers(#httpd{mochi_req=MochiReq}=Req, Code, ErrorStr, ReasonStr) ->
+error_headers(#httpd{mochi_req=MochiReq}, Code) ->
     if Code == 401 ->
         % this is where the basic auth popup is triggered
         case MochiReq:get_header_value("X-CouchDB-WWW-Authenticate") of
         undefined ->
             case couch_config:get("httpd", "WWW-Authenticate", nil) of
             nil ->
-                % If the client is a browser and the basic auth popup isn't turned on
-                % redirect to the session page.
-                case ErrorStr of
-                <<"unauthorized">> ->
-                    case couch_config:get("couch_httpd_auth", "authentication_redirect", nil) of
-                    nil -> {Code, []};
-                    AuthRedirect ->
-                        case couch_config:get("couch_httpd_auth", "require_valid_user", "false") of
-                        "true" ->
-                            % send the browser popup header no matter what if we are require_valid_user
-                            {Code, [{"WWW-Authenticate", "Basic realm=\"server\""}]};
-                        _False ->
-                            case MochiReq:accepts_content_type("application/json") of
-                            true ->
-                                {Code, []};
-                            false ->
-                                case MochiReq:accepts_content_type("text/html") of
-                                true ->
-                                    % Redirect to the path the user requested, not
-                                    % the one that is used internally.
-                                    UrlReturnRaw = case MochiReq:get_header_value("x-couchdb-vhost-path") of
-                                    undefined ->
-                                        MochiReq:get(path);
-                                    VHostPath ->
-                                        VHostPath
-                                    end,
-                                    RedirectLocation = lists:flatten([
-                                        AuthRedirect,
-                                        "?return=", couch_util:url_encode(UrlReturnRaw),
-                                        "&reason=", couch_util:url_encode(ReasonStr)
-                                    ]),
-                                    {302, [{"Location", absolute_uri(Req, RedirectLocation)}]};
-                                false ->
-                                    {Code, []}
-                                end
-                            end
-                        end
-                    end;
-                _Else ->
-                    {Code, []}
-                end;
+                {Code, []};
             Type ->
                 {Code, [{"WWW-Authenticate", Type}]}
             end;
@@ -763,7 +723,7 @@ send_error(_Req, {already_sent, Resp, _Error}) ->
 
 send_error(Req, Error) ->
     {Code, ErrorStr, ReasonStr} = error_info(Error),
-    {Code1, Headers} = error_headers(Req, Code, ErrorStr, ReasonStr),
+    {Code1, Headers} = error_headers(Req, Code),
     send_error(Req, Code1, Headers, ErrorStr, ReasonStr).
 
 send_error(Req, Code, ErrorStr, ReasonStr) ->

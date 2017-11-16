@@ -26,7 +26,6 @@ checkpoint_after = 5242880 ; checkpoint after every N bytes were written
 port = 5984
 bind_address = 127.0.0.1
 authentication_handlers =
-; authentication_handlers = {couch_httpd_oauth, oauth_authentication_handler}, {couch_httpd_auth, cookie_authentication_handler}, {couch_httpd_auth, default_authentication_handler}
 default_handler = {couch_httpd_db, handle_request}
 allow_jsonp = false
 db_frontend = couch_db_frontend
@@ -43,13 +42,6 @@ file = ${CMAKE_INSTALL_PREFIX}/var/log/couchdb/couch.log
 level = info
 include_sasl = true
 
-[couch_httpd_auth]
-authentication_db = _users
-authentication_redirect = /_utils/session.html
-require_valid_user = false
-timeout = 600 ; number of seconds before automatic logout
-auth_cache_size = 50 ; size is number of cache entries
-
 [daemons]
 view_manager={couch_view, start_link, []}
 set_view_manager={couch_set_view, start_link, [prod, mapreduce_view]}
@@ -58,7 +50,6 @@ index_merger_pool={lhttpc_manager, start_link, [[{connection_timeout, 90000}, {p
 query_servers={couch_query_servers, start_link, []}
 httpd={couch_httpd, start_link, []}
 uuids={couch_uuids, start, []}
-auth_cache={couch_auth_cache, start_link, []}
 couch_set_view_ddoc_cache={couch_set_view_ddoc_cache, start_link, []}
 replication_manager={couch_replication_manager, start_link, []}
 compaction_daemon={couch_compaction_daemon, start_link, []}

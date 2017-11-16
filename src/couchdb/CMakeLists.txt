@@ -5,7 +5,6 @@ SET(COUCHDB_SRC erl_diag.erl
             couch_api_wrap.erl
             couch_api_wrap_httpc.erl
             couch_app.erl
-            couch_auth_cache.erl
             couch_btree.erl
             couch_btree_copy.erl
             couch_btree_stats.erl
@@ -26,8 +25,6 @@ SET(COUCHDB_SRC erl_diag.erl
             couch_db_frontend.erl
             couch_httpd.erl
             couch_httpd_db.erl
-            couch_httpd_auth.erl
-            couch_httpd_oauth.erl
             couch_httpd_external.erl
             couch_httpd_view.erl
             couch_httpd_misc_handlers.erl
