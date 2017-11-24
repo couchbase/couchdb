@@ -20,14 +20,14 @@
 #ifndef _MAPREDUCE_H
 #define _MAPREDUCE_H
 
+#include <chrono>
 #include <cstddef>
 #include <iostream>
 #include <string>
 #include <list>
 #include <vector>
-#include <atomic>
+#include <mutex>
 #include <v8.h>
-#include <platform/platform.h>
 
 #include "erl_nif_compat.h"
 #include "nif_stl_allocator.h"
@@ -76,13 +76,13 @@ typedef struct {
     function_vector_t                            *functions;
     kv_pair_list_t                               *kvs;
     ErlNifEnv                                    *env;
-    std::atomic<hrtime_t>                        taskStartTime;
+    std::chrono::high_resolution_clock::time_point                             taskStartTime;
     int                                          emitKvSize;
     int                                          maxEmitKvSize;
     bool                                         isDocUsed;
     log_results_list_t                           *logResults;
     view_index_type_t                            viewType;
-    cb_mutex_t                                   exitMutex;
+    std::mutex                                   exitMutex;
 } map_reduce_ctx_t;
 
 

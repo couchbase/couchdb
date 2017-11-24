@@ -165,7 +165,6 @@ void initContext(map_reduce_ctx_t *ctx, const function_sources_list_t &funs,
         Context::Scope context_scope(context);
 
         loadFunctions(ctx, funs);
-        cb_mutex_initialize(&ctx->exitMutex);
     } catch (...) {
         // Releasing resource will invoke NIF destructor that calls destroyCtx
         enif_release_resource(ctx);
@@ -229,7 +228,7 @@ void doInitContext(map_reduce_ctx_t *ctx, const function_sources_list_t &funs,
     isoData->ctx = ctx;
 
     ctx->isolate->SetData(0, (void *)isoData);
-    ctx->taskStartTime = 0;
+    ctx->taskStartTime = {};
 }
 
 
@@ -813,23 +812,25 @@ isolate_data_t *getIsolateData()
 
 void taskStarted(map_reduce_ctx_t *ctx)
 {
-    ctx->taskStartTime = gethrtime();
+    ctx->exitMutex.lock();
+    ctx->taskStartTime = std::chrono::high_resolution_clock::now();
+    ctx->exitMutex.unlock();
     ctx->kvs = NULL;
 }
 
 
 void taskFinished(map_reduce_ctx_t *ctx)
 {
-    cb_mutex_enter(&ctx->exitMutex);
-    ctx->taskStartTime = 0;
-    cb_mutex_exit(&ctx->exitMutex);
+    ctx->exitMutex.lock();
+    ctx->taskStartTime = {};
+    ctx->exitMutex.unlock();
 }
 
 
 void terminateTask(map_reduce_ctx_t *ctx)
 {
     V8::TerminateExecution(ctx->isolate);
-    ctx->taskStartTime = 0;
+    ctx->taskStartTime = {};
 }
 
 
