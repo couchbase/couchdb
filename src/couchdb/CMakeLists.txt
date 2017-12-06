@@ -1,4 +1,5 @@
 SET(COUCHDB_SRC file2.erl
+            couch_app.erl
             file_sorter_2.erl
             couch_btree.erl
             couch_btree_copy.erl

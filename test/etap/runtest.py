@@ -26,7 +26,7 @@ def setup():
     """Configure LD_LIBRARY_PATH"""
     if platform.system() == "Linux":
         dname, fname = os.path.split(os.path.abspath(__file__))
-        cpath = dname.split('couchdb')[0]
+        cpath = dname.rsplit('couchdb')[0]
         nspath = os.path.join(cpath, 'ns_server')
 
         def read_configuration():
@@ -191,7 +191,10 @@ if __name__ == '__main__':
         os.putenv("PATH", env)
 
     if test:
-        #setup()
+        """
+        Uncomment to fix mapreduce_nif_not_loaded
+        setup()
+        """
         sys.exit(run_test(test, escript_path, verbose))
     else:
         sys.exit("ERROR: No test specified")
