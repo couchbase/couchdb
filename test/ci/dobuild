@@ -109,9 +109,6 @@ else
 fi
 
 cd $WORKSPACE/goproj/src/github.com/couchbase/eventing
-echo "Switching eventing to unstable"
-git checkout unstable 1>>$WORKSPACE/make.log 2>&1 || error_exit "git checkout unstable"
-git pull 1>>$WORKSPACE/make.log 2>&1 || error_exit "git pull"
 current="`git rev-parse HEAD`"
 test -f ~/eventing.good || (echo $current > ~/eventing.good)
 good="`cat ~/eventing.good`"
@@ -164,6 +161,9 @@ else
 fi
 
 cd $WORKSPACE/couchdb
+echo "Switching couchdb to unstable"
+git checkout unstable 1>>$WORKSPACE/make.log 2>&1 || error_exit "git checkout unstable"
+git pull 1>>$WORKSPACE/make.log 2>&1 || error_exit "git pull"
 current="`git rev-parse HEAD`"
 test -f ~/couchdb.good || (echo $current > ~/couchdb.good)
 good="`cat ~/couchdb.good`"
