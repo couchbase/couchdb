@@ -1,0 +1,16 @@
+#!/bin/bash
+
+export PATH=$PATH:~/bin
+
+rm -rf ~/.ciscripts
+git clone -q git://github.com/couchbase/couchdb ~/.ciscripts
+cd ~/.ciscripts
+git checkout unstable
+
+while true; do
+  git pull -q
+  find test/ci -not -name 'build' -and -not -name '.*' -type f -exec cp -v {} ~/bin/ \;
+  domain
+  sleep 600
+done
+

@@ -1,0 +1,172 @@
+#!/bin/bash
+
+source ~/.cienv
+
+echo '</pre><h3>Testing</h3><pre>'
+
+if [ "$WORKSPACE" = "" ]; then
+  echo 'WORKSPACE not set'
+  exit 2
+fi
+
+if [ "$MODE" = "" ]; then
+  echo 'MODE not set'
+  exit 2
+fi
+
+if [ "$TS" = "" ]; then
+  TS="adhoc"
+fi
+
+start_cluster() {
+  echo "Starting server"
+  for a in {1..3}; do
+    echo "Starting server: attempt $a"
+    stop_cluster
+    cd $WORKSPACE/ns_server
+    ./cluster_run -n4 1>$WORKSPACE/run.log 2>&1 &
+    disown
+    for i in {1..120}; do
+      grep -qs 'Couchbase Server has started' logs/n_0/info.log && \
+        grep -qs 'Couchbase Server has started' logs/n_1/info.log && \
+          wget -qO- http://localhost:9000/ &>/dev/null &&
+            wget -qO- http://localhost:9001/ &>/dev/null &&
+              ok_run=1 && break
+      sleep 3
+    done
+    sleep 30
+    test "$ok_run" && break
+  done
+  test "$ok_run" || error_exit "Server startup failed even after 3 tries"
+}
+
+stop_cluster() {
+  pkill -f cluster_
+  pkill -f $WORKSPACE/install/bin
+  pkill -f testrunner
+  pkill -f $WORKSPACE/install
+  pkill -f testrunner
+  killall beam.smp epmd memcached eventing-producer eventing-consumer python memcached.json 1>/dev/null 2>&1
+  sleep 10
+  killall -9 beam.smp epmd memcached eventing-producer eventing-consumer python memcached.json 1>/dev/null 2>&1
+  cd $WORKSPACE/ns_server
+  make dataclean 1>/dev/null 2>&1
+  sudo rm -f /tmp/core*
+  sleep 10
+}
+
+collect_logs() {
+  if [ "$phase" = "" ]; then phase=unknown; fi
+  tar -C $WORKSPACE --transform "s/^/logs-$phase-/" -uf $WORKSPACE/logs.tar ns_server/logs 1>/dev/null 2>&1
+  tar -C $WORKSPACE --transform "s/^/logs-$phase-/" -uf $WORKSPACE/logs.tar testrunner/logs 1>/dev/null 2>&1
+  tar -C $WORKSPACE --transform "s/^/logs-$phase-/" -uf $WORKSPACE/logs.tar test.log 1>/dev/null 2>&1
+  tar -C $WORKSPACE --transform "s/^/logs-$phase-/" -uf $WORKSPACE/logs.tar run.log 1>/dev/null 2>&1
+}
+
+error_email() {
+  if [ ! -f ~/.cigreen ]; then return; fi
+  rm ~/.cigreen
+
+  if test "`find ~ -maxdepth 1 -name .cinotify -mmin -1440`"; then return; fi
+  touch ~/.cinotify
+
+  if [ "$WATCHERS" = "" ]; then return; fi
+  cat /var/www/views-current.html | \
+     sendemail -q \
+       -s west.smtp.mx.exch029.serverdata.net:25 \
+       -f 'Eventing CI <community_admin@couchbase.com>' \
+       -t $WATCHERS \
+       -u 'Eventing CI just broke'
+}
+
+error_exit() {
+  echo "</pre><h4>Testing Failed: $1</h4><pre>"
+  echo "$2"
+  collect_logs
+  stop_cluster
+  error_email
+  exit 2
+}
+
+# Setup workspace
+echo "Testing mode: $MODE"
+stop_cluster
+rm -f $WORKSPACE/logs.tar.* $WORKSPACE/test.log $WORKSPACE/run.log /tmp/core-*
+> $WORKSPACE/test.log
+
+# Test the base
+echo "</pre><h4>Simple Test</h4><pre>"
+export phase=sanity
+cd $WORKSPACE/testrunner
+(timeout 1h make simple-test 2>&1 | ts) | tee -a $WORKSPACE/test.log | egrep 'pass|fail|summary|ok$'
+
+# Functional tests
+export phase=functional
+start_cluster
+ulimit -c 2097152
+sudo bash -c "echo /tmp/core-%e.$TS.%p > /proc/sys/kernel/core_pattern"
+perl -pi -e 's/num_files, 10/num_files, 50/' $WORKSPACE/install/etc/couchbase/static_config
+(timeout 1h echo "No functional tests defined" 2>&1 | ts) | tee -a $WORKSPACE/test.log | egrep 'pass|fail|summary|ok$'
+collect_logs
+stop_cluster
+
+# Integration tests
+echo "</pre><h4>Integration tests</h4><pre>"
+export phase=integration
+cd $WORKSPACE/testrunner
+(timeout 2h "No integration tests defined" 2>&1 | ts) | tee -a $WORKSPACE/test.log
+collect_logs
+
+# Verify results
+> /tmp/fail.log
+cd $WORKSPACE/couchdb
+grep 'make:\s\*\*\*\s\[test-view.*\]\s' $WORKSPACE/test.log >> /tmp/fail.log
+grep '\sfail\s*$' $WORKSPACE/test.log >> /tmp/fail.log
+grep 'FAIL\s*github.com/couchbase' $WORKSPACE/test.log >> /tmp/fail.log
+grep -- '--- FAIL:' $WORKSPACE/test.log >> /tmp/fail.log
+grep '^\s*2i' $WORKSPACE/test.log | grep 'fail\s*$' >> /tmp/fail.log
+skiplist="`cat test/ci/skip.txt`"
+for tst in $skiplist; do
+  echo "$tst" | grep -qs '^\s*#' && continue
+  echo "$tst" | grep -qs '^\s*$' && continue
+  grep -v "$tst" /tmp/fail.log > /tmp/fail-out.log
+  mv /tmp/fail-out.log /tmp/fail.log
+done
+faillog="`cat /tmp/fail.log`"
+if [ "$faillog" != "" ]; then error_exit "Required test failed" "$faillog"; fi
+echo "</pre><h4>Testing Succeeded</h4><pre>"
+if [ "$skiplist" != "" ]; then
+  echo "But we ignored these tests:"
+  echo "$skiplist"
+fi
+echo
+
+# Note versions
+cd $WORKSPACE/goproj/src/github.com/couchbase/eventing
+git rev-parse HEAD > ~/eventing.good
+cd $WORKSPACE/goproj/src/github.com/couchbase/indexing
+git rev-parse HEAD > ~/indexing.good
+cd $WORKSPACE/goproj/src/github.com/couchbase/query
+git rev-parse HEAD > ~/query.good
+cd $WORKSPACE/goproj/src/github.com/couchbase/gometa
+git rev-parse HEAD > ~/gometa.good
+cd $WORKSPACE/forestdb
+git rev-parse HEAD > ~/forestdb.good
+cd $WORKSPACE/ns_server
+git rev-parse HEAD > ~/ns_server.good
+cd $WORKSPACE/couchdb
+git rev-parse HEAD > ~/couchdb.good
+cd $WORKSPACE/couchstore
+git rev-parse HEAD > ~/couchstore.good
+cd $WORKSPACE/goproj/src/github.com/couchbase/plasma
+git rev-parse HEAD > ~/plasma.good
+cd $WORKSPACE/goproj/src/github.com/couchbase/nitro
+git rev-parse HEAD > ~/nitro.good
+cd $WORKSPACE/testrunner
+git rev-parse HEAD > ~/testrunner.good
+cd $WORKSPACE/kv_engine
+git rev-parse HEAD > ~/kv_engine.good
+
+touch ~/.cigreen
+exit 0
+
