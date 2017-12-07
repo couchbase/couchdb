@@ -100,6 +100,24 @@ export phase=sanity
 cd $WORKSPACE/testrunner
 (timeout 1h make simple-test 2>&1 | ts) | tee -a $WORKSPACE/test.log | egrep 'pass|fail|summary|ok$'
 
+# Unit tests
+echo "</pre><h4>Unit Tests sans couch_set_view and couch_dcp</h4><pre>"
+export phase=sanity
+cd $WORKSPACE/build/couchdb
+(timeout 1h ctest -E "couch_dcp|couch_set_view" 2>&1 | ts) | tee -a $WORKSPACE/test.log | egrep 'pass|fail|summary|ok$'
+
+# Test the premerge tests
+echo "</pre><h4>Views Pre merge test without createdelete views</h4><pre>"
+export phase=sanity
+cd $WORKSPACE/testrunner
+(timeout 1h make test-views-pre-merge-viewci 2>&1 | ts) | tee -a $WORKSPACE/test.log | egrep 'pass|fail|summary|ok$'
+
+# Test the viewmerge tests
+echo "</pre><h4>Viewmerge tests without devview test</h4><pre>"
+export phase=sanity
+cd $WORKSPACE/testrunner
+(timeout 1h make test-viewmerge-viewci 2>&1 | ts) | tee -a $WORKSPACE/test.log | egrep 'pass|fail|summary|ok$'
+
 # Functional tests
 export phase=functional
 start_cluster
