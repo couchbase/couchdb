@@ -1,0 +1,14 @@
+#!/bin/bash
+killall build
+killall domain
+killall dobuild
+killall dotest
+killall make
+pkill -e -f cluster_
+pkill -e -f /opt/
+killall beam.smp epmd
+killall python
+killall -9 memcached.json
+killall -9 memcached
+killall -9 eventing-consumer
+killall -9 eventing-producer

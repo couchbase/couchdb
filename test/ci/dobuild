@@ -1,0 +1,266 @@
+#!/bin/bash
+
+source ~/.cienv
+
+if [ "$WORKSPACE" = "" ]; then
+  echo 'WORKSPACE not set'
+  exit 2
+fi
+
+if [ "$RELEASE" = "" ]; then
+  echo 'RELEASE not set'
+  exit 2
+fi
+
+if [ "$MANIFEST" = "" ]; then
+  echo 'MANIFEST not set'
+  exit 2
+fi
+
+if [ "$PEGGED" = "" ]; then
+  export BLD_NUM=0
+else
+  export BLD_NUM=$PEGGED
+fi
+
+error_exit() {
+  echo "</pre><h3>Server build failed: $1</h3><pre>"
+  exit 2
+}
+
+echo '</pre><h3>Building</h3><pre>'
+> $WORKSPACE/versions.cfg
+> $WORKSPACE/make.log
+
+if [ ! -d ~/.reference ]; then
+  mkdir ~/.reference
+  cd ~/.reference
+  repo init -u https://github.com/couchbase/manifest -b master -m $MANIFEST -g all --mirror 1>>$WORKSPACE/make.log 2>&1
+  test $? -eq 0 || error_exit "Repo Init"
+fi
+
+test "$BLD_NUM" = "0" || echo "Using pegged server, $BLD_NUM build"
+echo "Calculating base"
+rm -rf ~/.manifests
+git clone https://github.com/couchbase/build-team-manifests ~/.manifests 1>>$WORKSPACE/make.log 2>&1
+cd ~/.manifests
+
+test "$BLD_NUM" = "0" && BLD_NUM="`git log --oneline | grep "couchbase-server" | grep "$RELEASE-[0-9]" | head -1 | awk -F- '{print $3}'`"
+SHA=`git log --oneline | grep "couchbase-server" | grep "$RELEASE-$BLD_NUM" | head -1 | awk '{print $1}'`
+git branch thisrun $SHA 1>>$WORKSPACE/make.log 2>&1
+
+echo "Updating mirror"
+cd ~/.reference
+repo sync --jobs=32 1>>$WORKSPACE/make.log 2>&1
+
+echo "Basing run on $RELEASE-$BLD_NUM <a href=https://github.com/couchbase/build-team-manifests/blob/$SHA/$MANIFEST>$SHA</a>"
+find $WORKSPACE -mindepth 1 -not -name '*.log' -exec rm -rf {} + 1>>$WORKSPACE/make.log 2>&1
+mkdir -p $WORKSPACE 1>>$WORKSPACE/make.log 2>&1
+cd $WORKSPACE
+repo init -u ~/.manifests -b thisrun -m $MANIFEST -g all --reference=~/.reference 1>>$WORKSPACE/make.log 2>&1
+test $? -eq 0 || error_exit "Repo Init at $SHA"
+
+echo "Updating tree for run $TS"
+cd $WORKSPACE
+repo sync --jobs=32 1>>$WORKSPACE/make.log 2>&1
+test $? -eq 0 || error_exit "Updating tree"
+test $WORKSPACE/cbbuild && test $WORKSPACE/voltron || error_exit "Unable to find voltron"
+
+cd $WORKSPACE
+chmod a+w CMakeLists.txt
+
+cd $WORKSPACE/goproj/src/github.com/couchbase/plasma
+current="`git rev-parse HEAD`"
+test -f ~/plasma.good || (echo $current > ~/plasma.good)
+good="`cat ~/plasma.good`"
+echo -n "plasma is at <a href='https://github.com/couchbase/plasma/commit/$current'>${current:0:7}</a>, changes since last good build: "
+if [ "$current" != "$good" ]; then
+  echo
+  git log --pretty='format: <a href="https://github.com/couchbase/plasma/commit/%H">%h</a> %s' $good..HEAD
+  echo
+else
+  echo "none"
+fi
+
+cd $WORKSPACE/goproj/src/github.com/couchbase/nitro
+current="`git rev-parse HEAD`"
+test -f ~/nitro.good || (echo $current > ~/nitro.good)
+good="`cat ~/nitro.good`"
+echo -n "nitro is at <a href='https://github.com/couchbase/nitro/commit/$current'>${current:0:7}</a>, changes since last good build: "
+if [ "$current" != "$good" ]; then
+  echo
+  git log --pretty='format: <a href="https://github.com/couchbase/nitro/commit/%H">%h</a> %s' $good..HEAD
+  echo
+else
+  echo "none"
+fi
+
+cd $WORKSPACE/goproj/src/github.com/couchbase/indexing
+current="`git rev-parse HEAD`"
+test -f ~/indexing.good || (echo $current > ~/indexing.good)
+good="`cat ~/indexing.good`"
+echo -n "indexing is at <a href='https://github.com/couchbase/indexing/commit/$current'>${current:0:7}</a>, changes since last good build: "
+if [ "$current" != "$good" ]; then
+  echo
+  git log --pretty='format: <a href="https://github.com/couchbase/indexing/commit/%H">%h</a> %s' $good..HEAD
+  echo
+else
+  echo "none"
+fi
+
+cd $WORKSPACE/goproj/src/github.com/couchbase/eventing
+current="`git rev-parse HEAD`"
+test -f ~/eventing.good || (echo $current > ~/eventing.good)
+good="`cat ~/eventing.good`"
+echo -n "eventing is at <a href='https://github.com/couchbase/eventing/commit/$current'>${current:0:7}</a>, changes since last good build: "
+if [ "$current" != "$good" ]; then
+  echo
+  git log --pretty='format: <a href="https://github.com/couchbase/eventing/commit/%H">%h</a> %s' $good..HEAD
+  echo
+else
+  echo "none"
+fi
+
+cd $WORKSPACE/goproj/src/github.com/couchbase/query
+current="`git rev-parse HEAD`"
+test -f ~/query.good || (echo $current > ~/query.good)
+good="`cat ~/query.good`"
+echo -n "query is at <a href='https://github.com/couchbase/query/commit/$current'>${current:0:7}</a>, changes since last good build: "
+if [ "$current" != "$good" ]; then
+  echo
+  git log --pretty='format: <a href="https://github.com/couchbase/query/commit/%H">%h</a> %s' $good..HEAD
+  echo
+else
+  echo "none"
+fi
+
+cd $WORKSPACE/goproj/src/github.com/couchbase/gometa
+current="`git rev-parse HEAD`"
+test -f ~/gometa.good || (echo $current > ~/gometa.good)
+good="`cat ~/gometa.good`"
+echo -n "gometa is at <a href='https://github.com/couchbase/gometa/commit/$current'>${current:0:7}</a>, changes since last good build: "
+if [ "$current" != "$good" ]; then
+  echo
+  git log --pretty='format: <a href="https://github.com/couchbase/gometa/commit/%H">%h</a> %s' $good..HEAD
+  echo
+else
+  echo "none"
+fi
+
+cd $WORKSPACE/ns_server
+current="`git rev-parse HEAD`"
+test -f ~/ns_server.good || (echo $current > ~/ns_server.good)
+good="`cat ~/ns_server.good`"
+echo -n "ns_server is at <a href='https://github.com/couchbase/ns_server/commit/$current'>${current:0:7}</a>, changes since last good build: "
+if [ "$current" != "$good" ]; then
+  echo
+  git log --pretty='format: <a href="https://github.com/couchbase/ns_server/commit/%H">%h</a> %s' $good..HEAD
+  echo
+else
+  echo "none"
+fi
+
+cd $WORKSPACE/couchdb
+echo "Switching couchdb to unstable"
+git checkout unstable 1>>$WORKSPACE/make.log 2>&1 || error_exit "git checkout unstable"
+git pull 1>>$WORKSPACE/make.log 2>&1 || error_exit "git pull"
+current="`git rev-parse HEAD`"
+test -f ~/couchdb.good || (echo $current > ~/couchdb.good)
+good="`cat ~/couchdb.good`"
+echo -n "couchdb is at <a href='https://github.com/couchbase/couchdb/commit/$current'>${current:0:7}</a>, changes since last good build: "
+if [ "$current" != "$good" ]; then
+  echo
+  git log --pretty='format: <a href="https://github.com/couchbase/couchdb/commit/%H">%h</a> %s' $good..HEAD
+  echo
+else
+  echo "none"
+fi
+
+cd $WORKSPACE/couchstore
+current="`git rev-parse HEAD`"
+test -f ~/couchstore.good || (echo $current > ~/couchstore.good)
+good="`cat ~/couchstore.good`"
+echo -n "couchstore is at <a href='https://github.com/couchbase/couchstore/commit/$current'>${current:0:7}</a>, changes since last good build: "
+if [ "$current" != "$good" ]; then
+  echo
+  git log --pretty='format: <a href="https://github.com/couchbase/couchstore/commit/%H">%h</a> %s' $good..HEAD
+  echo
+else
+  echo "none"
+fi
+
+cd $WORKSPACE/forestdb
+current="`git rev-parse HEAD`"
+test -f ~/forestdb.good || (echo $current > ~/forestdb.good)
+good="`cat ~/forestdb.good`"
+echo -n "forestdb is at <a href='https://github.com/couchbase/forestdb/commit/$current'>${current:0:7}</a>, changes since last good build: "
+if [ "$current" != "$good" ]; then
+  echo
+  git log --pretty='format: <a href="https://github.com/couchbase/forestdb/commit/%H">%h</a> %s' $good..HEAD
+  echo
+else
+  echo "none"
+fi
+
+cd $WORKSPACE/kv_engine
+current="`git rev-parse HEAD`"
+test -f ~/kv_engine.good || (echo $current > ~/kv_engine.good)
+good="`cat ~/kv_engine.good`"
+echo -n "kv_engine is at <a href='https://github.com/couchbase/kv_engine/commit/$current'>${current:0:7}</a>, changes since last good build: "
+if [ "$current" != "$good" ]; then
+  echo
+  git log --pretty='format: <a href="https://github.com/couchbase/kv_engine/commit/%H">%h</a> %s' $good..HEAD
+  echo
+else
+  echo "none"
+fi
+
+cd $WORKSPACE/testrunner
+current="`git rev-parse HEAD`"
+test -f ~/testrunner.good || (echo $current > ~/testrunner.good)
+good="`cat ~/testrunner.good`"
+echo -n "testrunner is at <a href='https://github.com/couchbase/testrunner/commit/$current'>${current:0:7}</a>, changes since last good build: "
+if [ "$current" != "$good" ]; then
+  echo
+  git log --pretty='format: <a href="https://github.com/couchbase/testrunner/commit/%H">%h</a> %s' $good..HEAD
+  echo
+else
+  echo "none"
+fi
+
+cd $WORKSPACE
+PRODUCT_VERSION=${RELEASE}-${BLD_NUM}-rel
+rm -f *.rpm *.deb
+rm -rf ~/rpmbuild
+rm -rf $WORKSPACE/voltron/build/deb
+rm -rf $WORKSPACE/install/*
+find goproj godeps -name \*.a -print0 | xargs -0 rm -f
+
+cd $WORKSPACE
+mkdir -p build
+cd build
+
+echo "Building main product"
+cmake -D CMAKE_INSTALL_PREFIX=$WORKSPACE/install \
+      -D CMAKE_PREFIX_PATH=$WORKSPACE/install \
+      -D CMAKE_BUILD_TYPE=RelWithDebInfo \
+      -D PRODUCT_VERSION=${PRODUCT_VERSION} \
+      -D BUILD_ENTERPRISE=TRUE \
+      -D CB_DOWNLOAD_DEPS=1 \
+      -D SNAPPY_OPTION=Disable \
+      .. 1>>$WORKSPACE/make.log 2>&1
+test $? -eq 0 || error_exit "Main build"
+
+make -j8 install 1>>$WORKSPACE/make.log 2>&1
+test $? -eq 0 || error_exit "Making Install"
+
+cd $WORKSPACE
+repo manifest -r > current.xml
+repo manifest -r > manifest.xml
+
+echo "Actual Versions:" >> $WORKSPACE/versions.cfg
+cd $WORKSPACE
+repo forall -c 'echo "$REPO_PROJECT `git log --oneline HEAD...HEAD^`"' 2>/dev/null 1>>$WORKSPACE/versions.cfg
+
+chmod a+r /var/www/*
+
