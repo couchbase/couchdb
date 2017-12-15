@@ -108,7 +108,11 @@ start_server(IniFiles) ->
 
     unlink(ConfigPid),
 
-    Ip = couch_config:get("httpd", "bind_address"),
+    Field = case misc:is_ipv6() of
+                true -> "ip6_bind_address";
+                false -> "ip4_bind_address"
+            end,
+    Ip = couch_config:get("httpd", Field, any),
     io:format("Apache CouchDB has started. Time to relax.~n"),
     Uris = [get_uri(Name, Ip) || Name <- [couch_httpd, https]],
     [begin
@@ -118,7 +122,7 @@ start_server(IniFiles) ->
         end
     end
     || Uri <- Uris],
-    case couch_config:get("couchdb", "uri_file", null) of 
+    case couch_config:get("couchdb", "uri_file", null) of
     null -> ok;
     UriFile ->
         Lines = [begin case Uri of

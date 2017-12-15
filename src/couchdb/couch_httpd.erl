@@ -58,7 +58,11 @@ start_link(Name, Options) ->
     % just stop if one of the config settings change. couch_server_sup
     % will restart us and then we will pick up the new settings.
 
-    BindAddress = couch_config:get("httpd", "bind_address", any),
+    Field = case misc:is_ipv6() of
+                true -> "ip6_bind_address";
+                false -> "ip4_bind_address"
+            end,
+    BindAddress = couch_config:get("httpd", Field, any),
     DefaultSpec = "{couch_httpd_db, handle_request}",
     DefaultFun = make_arity_1_fun(
         couch_config:get("httpd", "default_handler", DefaultSpec)
@@ -123,7 +127,9 @@ start_link(Name, Options) ->
 stop() ->
     mochiweb_http:stop(?MODULE).
 
-config_change("httpd", "bind_address") ->
+config_change("httpd", "ip4_bind_address") ->
+    ?MODULE:stop();
+config_change("httpd", "ip6_bind_address") ->
     ?MODULE:stop();
 config_change("httpd", "port") ->
     ?MODULE:stop();

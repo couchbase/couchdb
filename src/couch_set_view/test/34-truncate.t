@@ -27,23 +27,25 @@ num_docs() -> 128.  % keep it a multiple of num_set_partitions()
 
 
 main(_) ->
-    test_util:init_code_path(),
-
-    etap:plan(5),
-    case (catch test()) of
-        ok ->
-            etap:end_tests();
-        Other ->
-            etap:diag(io_lib:format("Test died abnormally: ~p", [Other])),
-            etap:bail(Other)
+    etap:plan(10),
+    case {run_test(false), run_test(true)} of
+    {ok, ok} ->
+        etap:end_tests();
+    Other ->
+        etap:diag(io_lib:format("test died abnormally: ~p", [Other])),
+        etap:bail(Other)
     end,
-    %init:stop(),
-    %receive after infinity -> ok end,
     ok.
 
+run_test(IsIPv6) ->
+    test_util:init_code_path(),
+    case (catch test(IsIPv6)) of
+        ok -> ok;
+        Other -> Other
+    end.
 
-test() ->
-    couch_set_view_test_util:start_server(test_set_name()),
+test(IsIPv6) ->
+    couch_set_view_test_util:start_server(test_set_name(), IsIPv6),
 
     etap:diag("Testing truncating a view file after compaction"),
 
@@ -67,7 +69,7 @@ test() ->
     couch_file:sync(Fd1),
 
     % Restart with the corrupted file
-    restart_server(),
+    restart_server(IsIPv6),
 
     % Check if truncation was successful
     Fd2 = get_fd(),
@@ -94,11 +96,11 @@ test() ->
     ok.
 
 
-restart_server() ->
-    timer:sleep(1000),
+restart_server(IsIPv6) ->
+    ets:delete(ipv6),
     couch_util:shutdown_sync(get(test_util_dcp_pid)),
     couch_util:shutdown_sync(whereis(couch_server_sup)),
-    couch_set_view_test_util:start_server(test_set_name()),
+    couch_set_view_test_util:start_server(test_set_name(), IsIPv6),
     ok.
 
 

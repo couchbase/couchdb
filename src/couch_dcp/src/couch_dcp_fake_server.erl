@@ -482,12 +482,15 @@ handle_call(close_on_next, _from, State) ->
 handle_cast(Msg, State) ->
     {stop, {unexpected_cast, Msg}, State}.
 
--spec handle_info({'EXIT', {pid(), reference()}, normal} |
+-spec handle_info({'EXIT', {pid(), reference()}, normal|shutdown} |
                   send_mutations,
                   #state{}) -> {noreply, #state{}}.
 handle_info({'EXIT', _From, normal}, State)  ->
+    ok = timer:sleep(1000),
     {noreply, State};
-
+handle_info({'EXIT', _From, shutdown}, State)  ->
+    ok = timer:sleep(1000),
+    {stop, shutdown, State};
 handle_info(send_mutations, State) ->
     #state{
        streams = Streams,
@@ -619,11 +622,14 @@ accept(Listen) ->
 
 -spec accept_loop(socket()) -> ok.
 accept_loop(Listen) ->
-    {ok, Socket} = gen_tcp:accept(Listen),
+    Socket2 = case gen_tcp:accept(Listen) of
+                {ok, Socket} -> Socket;
+                {error, _Reason} -> accept_loop(Listen)
+            end,
     % Let the server spawn a new process and replace this loop
     % with the read loop, to avoid blocking
     accept(Listen),
-    read(Socket).
+    read(Socket2).
 
 
 -spec read(socket()) -> ok.

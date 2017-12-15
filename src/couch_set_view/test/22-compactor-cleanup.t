@@ -26,21 +26,25 @@ num_docs_0() -> 27712.  % keep it a multiple of num_set_partitions()
 
 
 main(_) ->
-    test_util:init_code_path(),
-
-    etap:plan(21),
-    case (catch test()) of
-        ok ->
-            etap:end_tests();
-        Other ->
-            etap:diag(io_lib:format("Test died abnormally: ~p", [Other])),
-            etap:bail(Other)
+    etap:plan(42),
+    case {run_test(false), run_test(true)} of
+    {ok, ok} ->
+        etap:end_tests();
+    Other ->
+        etap:diag(io_lib:format("Test died abnormally: ~p", [Other])),
+        etap:bail(Other)
     end,
     ok.
 
+run_test(IsIPv6) ->
+    test_util:init_code_path(),
+    case (catch test(IsIPv6)) of
+        ok -> ok;
+        Other -> Other
+    end.
 
-test() ->
-    couch_set_view_test_util:start_server(test_set_name()),
+test(IsIPv6) ->
+    couch_set_view_test_util:start_server(test_set_name(), IsIPv6),
 
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
     couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
@@ -93,7 +97,6 @@ test() ->
             "# of compactions is 1"),
 
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
-    ok = timer:sleep(1000),
     couch_set_view_test_util:stop_server(),
     ok.
 

@@ -60,21 +60,25 @@ initial_num_docs() -> 70400.  % must be multiple of num_set_partitions()
 
 
 main(_) ->
-    test_util:init_code_path(),
-
-    etap:plan(34),
-    case (catch test()) of
-        ok ->
-            etap:end_tests();
-        Other ->
-            etap:diag(io_lib:format("Test died abnormally: ~p", [Other])),
-            etap:bail(Other)
+    etap:plan(68),
+    case {run_test(false), run_test(true)} of
+    {ok, ok} ->
+        etap:end_tests();
+    Other ->
+        etap:diag(io_lib:format("test died abnormally: ~p", [Other])),
+        etap:bail(Other)
     end,
     ok.
 
+run_test(IsIPv6) ->
+    test_util:init_code_path(),
+    case (catch test(IsIPv6)) of
+        ok -> ok;
+        Other -> Other
+    end.
 
-test() ->
-    couch_set_view_test_util:start_server(test_set_name()),
+test(IsIPv6) ->
+    couch_set_view_test_util:start_server(test_set_name(), IsIPv6),
 
     ValueGenFun1 = fun(I) -> I end,
     create_set(),
@@ -110,7 +114,6 @@ test() ->
     etap:is(QueryResult44, -1501, "Query result is -1501"),
 
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
-    ok = timer:sleep(1000),
     couch_set_view_test_util:stop_server(),
     ok.
 

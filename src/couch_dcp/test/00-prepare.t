@@ -15,25 +15,29 @@
 % the License.
 
 main(_) ->
-    test_util:init_code_path(),
-
-    etap:plan(1),
-    case (catch test()) of
-        ok ->
-            etap:end_tests();
-        Other ->
-            etap:diag(io_lib:format("Test died abnormally: ~p", [Other])),
-            etap:bail(Other)
+    etap:plan(2),
+    case {run_test(false), run_test(true)} of
+    {ok, ok} ->
+        etap:end_tests();
+    Other ->
+        etap:diag(io_lib:format("test died abnormally: ~p", [Other])),
+        etap:bail(Other)
     end,
     ok.
 
+run_test(IsIPv6) ->
+    test_util:init_code_path(),
+    case (catch test(IsIPv6)) of
+        ok -> ok;
+        Other -> Other
+    end.
 
-test() ->
+test(IsIPv6) ->
     % Purpose of this test is to create all system databases (_users, _replicator)
     % before we start running all other tests in parallel. When the other tests start
     % in parallel, if the system databases don't exist, they will all attempt to create
     % them, and 1 succeeds while others will fail.
-    couch_set_view_test_util:start_server(),
+    couch_set_view_test_util:start_server(IsIPv6),
     {ok, RepDb} = couch_db:open_int(<<"_replicator">>, []),
     {ok, _} = couch_db:ensure_full_commit(RepDb),
     ok = couch_db:close(RepDb),

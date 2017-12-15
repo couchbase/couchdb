@@ -45,6 +45,8 @@ main(_) ->
 
 
 test() ->
+    ets:new(ipv6, [set, protected, named_table]),
+    ets:insert(ipv6, {is_ipv6, false}),
     couch_server_sup:start_link(test_util:config_files()),
 
     create_db(data_db_name()),
@@ -136,6 +138,7 @@ test() ->
 
     delete_db(master_db_name()),
     couch_server_sup:stop(),
+    ets:delete(ipv6),
     ok.
 
 

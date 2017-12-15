@@ -23,24 +23,28 @@ ddoc_id() -> <<"_design/test">>.
 num_docs() -> 2000.
 
 main(_) ->
-    test_util:init_code_path(),
-
-    etap:plan(1),
-    case (catch test()) of
-        ok ->
-            etap:end_tests();
-        Other ->
-            etap:diag(io_lib:format("Test died abnormally: ~p", [Other])),
-            etap:bail(Other)
+    etap:plan(2),
+        case {run_test(false), run_test(true)} of
+    {ok, ok} ->
+        etap:end_tests();
+    Other ->
+        etap:diag(io_lib:format("test died abnormally: ~p", [Other])),
+        etap:bail(Other)
     end,
-    %init:stop(),
-    %receive after infinity -> ok end,
     ok.
 
-test() ->
+run_test(IsIPv6) ->
+    test_util:init_code_path(),
+    case (catch test(IsIPv6)) of
+        ok -> ok;
+        Other -> Other
+    end.
+
+test(IsIPv6) ->
+    couch_set_view_test_util:start_server(test_set_name(), IsIPv6),
+
     etap:diag("Testing that there are no duplicates in the final output "
         "(MB-13160)"),
-    couch_set_view_test_util:start_server(test_set_name()),
     create_set(),
 
     etap:diag("Insert documents within two large snapshots without any "

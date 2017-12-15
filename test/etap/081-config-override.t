@@ -41,7 +41,7 @@ run_tests(IniFiles, Tests) ->
 
 main(_) ->
     test_util:init_code_path(),
-    etap:plan(15),
+    etap:plan(19),
 
     case (catch test()) of
         ok ->
@@ -149,15 +149,27 @@ test() ->
         ),
 
         etap:is(
-            couch_config:delete("httpd", "bind_address"),
+            couch_config:delete("httpd", "ip4_bind_address"),
             ok,
-            "Deleting {httpd, bind_address} succeeds"
+            "Deleting {httpd, ip4_bind_address} succeeds"
         ),
 
         etap:is(
-            couch_config:get("httpd", "bind_address"),
+            couch_config:get("httpd", "ip4_bind_address"),
             undefined,
-            "{httpd, bind_address} was actually deleted."
+            "{httpd, ip4_bind_address} was actually deleted."
+        ),
+
+        etap:is(
+            couch_config:delete("httpd", "ip6_bind_address"),
+            ok,
+            "Deleting {httpd, ip6_bind_address} succeeds"
+        ),
+
+        etap:is(
+            couch_config:get("httpd", "ip6_bind_address"),
+            undefined,
+            "{httpd, ip6_bind_address} was actually deleted."
         )
     end,
 
@@ -173,9 +185,15 @@ test() ->
         ),
 
         etap:is(
-            couch_config:get("httpd", "bind_address"),
+            couch_config:get("httpd", "ip4_bind_address"),
             "127.0.0.1",
-            "{httpd, bind_address} was not deleted form the primary INI file."
+            "{httpd, ip4_bind_address} was not deleted form the primary INI file."
+        ),
+
+        etap:is(
+            couch_config:get("httpd", "ip6_bind_address"),
+            "::1",
+            "{httpd, ip6_bind_address} was not deleted form the primary INI file."
         )
     end,
 
@@ -190,9 +208,15 @@ test() ->
         ),
 
         etap:is(
-            couch_config:get("httpd", "bind_address"),
+            couch_config:get("httpd", "ip4_bind_address"),
             undefined,
-            "{httpd, bind_address} is still \"\" after reopening."
+            "{httpd, ip4_bind_address} is still \"\" after reopening."
+        ),
+
+        etap:is(
+            couch_config:get("httpd", "ip6_bind_address"),
+            undefined,
+            "{httpd, ip6_bind_address} is still \"\" after reopening."
         )
     end,
 
