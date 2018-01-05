@@ -40,14 +40,14 @@ static ERL_NIF_TERM ATOM_OK;
 static ERL_NIF_TERM ATOM_ERROR;
 
 // maxTaskDuration is in seconds
-static volatile int                                maxTaskDuration = 5;
+static std::atomic<int>                            maxTaskDuration;
 static int                                         maxKvSize = 1 * 1024 * 1024;
 static ErlNifResourceType                          *MAP_REDUCE_CTX_RES;
 static ErlNifTid                                   terminatorThreadId;
 static ErlNifMutex                                 *terminatorMutex;
 static std::atomic<bool>                           shutdownTerminator;
 static std::unordered_set< map_reduce_ctx_t* >     contexts;
-static std::condition_variable                     cv;
+static std::condition_variable                     *cv;
 
 
 // NIF API functions
@@ -364,7 +364,7 @@ ERL_NIF_TERM setTimeout(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
     maxTaskDuration = (timeout + 999) / 1000;
 
-    cv.notify_one();
+    cv->notify_one();
 
     return ATOM_OK;
 }
@@ -431,10 +431,20 @@ int onLoad(ErlNifEnv *env, void **priv, ERL_NIF_TERM info)
         return -1;
     }
 
+    shutdownTerminator = false;
+    maxTaskDuration = 5;
+
     terminatorMutex = enif_mutex_create(const_cast<char *>("terminator mutex"));
     if (terminatorMutex == NULL) {
         return -2;
     }
+
+    try {
+        cv = new std::condition_variable();
+    } catch (std::bad_alloc) {
+        return -3;
+    }
+
 
     if (enif_thread_create(const_cast<char *>("terminator thread"),
                            &terminatorThreadId,
@@ -442,10 +452,12 @@ int onLoad(ErlNifEnv *env, void **priv, ERL_NIF_TERM info)
                            NULL,
                            NULL) != 0) {
         enif_mutex_destroy(terminatorMutex);
+        delete cv;
         return -4;
     }
 
     initV8();
+
     return 0;
 }
 
@@ -454,9 +466,11 @@ void onUnload(ErlNifEnv *env, void *priv_data)
 {
     void *result = NULL;
 
-    shutdownTerminator = 1;
+    shutdownTerminator = true;
+    cv->notify_one();
     enif_thread_join(terminatorThreadId, &result);
     enif_mutex_destroy(terminatorMutex);
+    delete cv;
     deinitV8();
 }
 
@@ -539,7 +553,7 @@ void *terminatorLoop(void *args)
         enif_mutex_unlock(terminatorMutex);
         std::mutex  cvMutex;
         std::unique_lock<std::mutex> lk(cvMutex);
-        cv.wait_for(lk, std::chrono::milliseconds(minTimeDiff));
+        cv->wait_for(lk, std::chrono::milliseconds(minTimeDiff));
     }
 
     return NULL;
