@@ -159,8 +159,6 @@ if [ "$current" != "$good" ]; then
 else
   echo "none"
 fi
-echo "cherry picking ipv6 ns_server patch"
-git fetch http://review.couchbase.org/ns_server refs/changes/41/86641/2 && git cherry-pick FETCH_HEAD
 
 cd $WORKSPACE/couchdb
 echo "Switching couchdb to unstable"
