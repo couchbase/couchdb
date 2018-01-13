@@ -346,9 +346,10 @@ setup_views(Fd, BtreeOptions, Group, ViewStates, Views) ->
                         ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, error executing"
                                              " reduce function for view `~s'~n"
                                              "  reason:                ~s~n"
-                                             "  input key-value pairs: ~p~n",
-                                             [SetName, Type, DDocId, ViewName,
-                                              couch_util:to_binary(Reason), PrettyKVs]),
+                                             "  input key-value pairs: ~s~n",
+                                             [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId),
+                                              ?LOG_USERDATA(ViewName), couch_util:to_binary(Reason),
+                                              ?LOG_USERDATA(PrettyKVs)]),
                         throw(Error)
                     end,
                 if length(Reduced) > 255 ->
@@ -371,9 +372,10 @@ setup_views(Fd, BtreeOptions, Group, ViewStates, Views) ->
                         ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, error executing"
                                              " rereduce function for view `~s'~n"
                                              "  reason:           ~s~n"
-                                             "  input reductions: ~p~n",
-                                             [SetName, Type, DDocId, ViewName,
-                                              couch_util:to_binary(Reason), UserReds]),
+                                             "  input reductions: ~s~n",
+                                             [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId),
+                                              ?LOG_USERDATA(ViewName), couch_util:to_binary(Reason),
+                                              ?LOG_USERDATA(UserReds)]),
                         throw(Error)
                     end,
                 UserReductions = encode_reductions(Reduced),
@@ -432,7 +434,7 @@ cleanup_view_group_wait_loop(Port, Group, Acc, PurgedCount) ->
         {ok, PurgedCount};
     {Port, {exit_status, 1}} ->
         ?LOG_INFO("Set view `~s`, ~s group `~s`, index cleaner stopped successfully.",
-                   [SetName, Type, DDocId]),
+                   [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId)]),
         throw(stopped);
     {Port, {exit_status, Status}} ->
         throw({view_group_cleanup_exit, Status});
@@ -444,13 +446,13 @@ cleanup_view_group_wait_loop(Port, Group, Acc, PurgedCount) ->
     {Port, {data, {eol, Data}}} ->
         Msg = lists:reverse([Data | Acc]),
         ?LOG_ERROR("Set view `~s`, ~s group `~s`, received error from index cleanup: ~s",
-                   [SetName, Type, DDocId, Msg]),
+                   [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId), Msg]),
         cleanup_view_group_wait_loop(Port, Group, [], PurgedCount);
     {Port, Error} ->
         throw({view_group_cleanup_error, Error});
     stop ->
         ?LOG_INFO("Set view `~s`, ~s group `~s`, sending stop message to index cleaner.",
-                   [SetName, Type, DDocId]),
+                   [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId)]),
         port_command(Port, "exit"),
         cleanup_view_group_wait_loop(Port, Group, Acc, PurgedCount)
     end.
@@ -605,7 +607,7 @@ convert_back_index_kvs_to_binary([{DocId, {PartId, ViewIdKeys}} | Rest], Acc) ->
                 ErrorMsg = io_lib:format(
                     "Too many (~p) keys emitted for "
                     "document `~s` (maximum allowed is ~p",
-                    [NumKeys, DocId, (1 bsl 16) - 1]),
+                    [NumKeys, ?LOG_USERDATA(DocId), (1 bsl 16) - 1]),
                 throw({error, iolist_to_binary(ErrorMsg)});
             false ->
                 ok

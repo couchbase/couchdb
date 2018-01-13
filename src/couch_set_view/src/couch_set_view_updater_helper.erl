@@ -207,7 +207,7 @@ update_btrees_wait_loop(Port, Group, Acc0, Stats) ->
             {ok, {Group, Stats}};
         {Port, {exit_status, 1}} ->
             ?LOG_INFO("Set view `~s`, ~s group `~s`, index updater stopped successfully.",
-                       [SetName, Type, DDocId]),
+                       [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId)]),
             exit(shutdown);
         {Port, {exit_status, Status}} ->
             throw({view_group_index_updater_exit, Status, Acc});
@@ -215,7 +215,7 @@ update_btrees_wait_loop(Port, Group, Acc0, Stats) ->
             throw({view_group_index_updater_error, Error});
         stop ->
             ?LOG_INFO("Set view `~s`, ~s group `~s`, sending stop message to index updater.",
-                       [SetName, Type, DDocId]),
+                       [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId)]),
             port_command(Port, "exit"),
             update_btrees_wait_loop(Port, Group, Acc, Stats)
         end;
@@ -277,7 +277,7 @@ update_btrees_wait_loop(Port, Group, Acc0, Stats) ->
     Msg ->
         ErrorMsg = "Set view `~s`, ~s group `~s`, "
                    "received error from index updater: ~s",
-        ErrorArgs = [SetName, Type, DDocId],
+        ErrorArgs = [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId)],
         Msg2 = couch_set_view_util:log_port_error(Msg, ErrorMsg, ErrorArgs),
         Msg3 = case Msg2 of
         <<"Error updating index", _/binary>> ->
@@ -300,7 +300,7 @@ index_builder_wait_loop(Port, Group, Acc) ->
         ok;
     {Port, {exit_status, 1}} ->
         ?LOG_INFO("Set view `~s`, ~s group `~s`, index builder stopped successfully.",
-                   [SetName, Type, DDocId]),
+                   [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId)]),
         exit(shutdown);
     {Port, {exit_status, Status}} ->
         throw({index_builder_exit, Status, ?l2b(Acc)});
@@ -315,7 +315,7 @@ index_builder_wait_loop(Port, Group, Acc) ->
         Msg = ?l2b(lists:reverse([Data | Acc])),
         ErrorMsg = "Set view `~s`, ~s group `~s`, "
                    "received error from index builder: ~s",
-        ErrorArgs = [SetName, Type, DDocId],
+        ErrorArgs = [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId)],
         Msg2 = couch_set_view_util:log_port_error(Msg, ErrorMsg, ErrorArgs),
         % Propogate this message to query response error message
         Msg3 = case Msg2 of
@@ -329,7 +329,7 @@ index_builder_wait_loop(Port, Group, Acc) ->
         throw({index_builder_error, Error});
     stop ->
         ?LOG_INFO("Set view `~s`, ~s group `~s`, sending stop message to index builder.",
-                   [SetName, Type, DDocId]),
+                   [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId)]),
         port_command(Port, "exit"),
         index_builder_wait_loop(Port, Group, Acc)
     end.

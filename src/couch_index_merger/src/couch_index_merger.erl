@@ -76,7 +76,7 @@ query_index(Mod, #index_merge{indexes = [#set_view_spec{}]} = Params0, Req) ->
         _ ->
             ?LOG_ERROR("View merger, revision mismatch for design document `~s',"
                        " revision on local node ~s, revision on remote node ~s",
-                       [DDoc#doc.id,
+                       [?LOG_USERDATA(DDoc#doc.id),
                         rev_str(DesiredDDocRevision),
                         rev_str(DDocRev)]),
             throw({error, revision_mismatch})
@@ -135,7 +135,7 @@ do_query_index(Mod, IndexMergeParams, DDoc, IndexName) ->
         _ ->
             ?LOG_ERROR("View merger, revision mismatch for design document `~s',"
                        " revision on local node ~s, revision on remote node ~s",
-                       [DDoc#doc.id,
+                       [?LOG_USERDATA(DDoc#doc.id),
                         rev_str(DesiredDDocRevision),
                         rev_str(DDocRev)]),
             throw({error, revision_mismatch})
@@ -215,7 +215,7 @@ do_query_index(Mod, IndexMergeParams, DDoc, IndexName) ->
             _ ->
                 ?LOG_ERROR("View merger, revision mismatch for design document `~s',"
                            " revision on local node ~s, revision on remote node ~s",
-                           [DDoc#doc.id,
+                           [?LOG_USERDATA(DDoc#doc.id),
                             rev_str(DesiredDDocRevision),
                             rev_str(DDocRev)]),
                 throw({error, revision_mismatch})

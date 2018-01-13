@@ -370,7 +370,6 @@ keep_sending_changes(Args, Callback, UserAcc, Db, StartSeq, Prepend, Timeout,
     true ->
         case wait_db_updated(Timeout, TimeoutFun, UserAcc2) of
         {updated, UserAcc3} ->
-            % ?LOG_INFO("wait_db_updated updated ~p",[{Db#db.name, EndSeq}]),
             DbOptions1 = [{user_ctx, Db#db.user_ctx} | DbOptions],
             case couch_db:open(Db#db.name, DbOptions1) of
             {ok, Db2} ->
@@ -389,7 +388,6 @@ keep_sending_changes(Args, Callback, UserAcc, Db, StartSeq, Prepend, Timeout,
                 end_sending_changes(Callback, UserAcc2, EndSeq, ResponseType)
             end;
         {stop, UserAcc3} ->
-            % ?LOG_INFO("wait_db_updated stop ~p",[{Db#db.name, EndSeq}]),
             end_sending_changes(Callback, UserAcc3, EndSeq, ResponseType)
         end
     end.

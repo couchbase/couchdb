@@ -214,7 +214,7 @@ validate_docid(Id) when is_binary(Id) ->
     ok;
 
 validate_docid(Id) ->
-    ?LOG_DEBUG("Document id is not a string: ~p", [Id]),
+    ?LOG_DEBUG("Document id is not a string: ~p", [?LOG_USERDATA(Id)]),
     throw({bad_request, <<"Document id must be a string">>}).
 
 

@@ -190,7 +190,7 @@ db_req(#httpd{method='POST',
                 case catch(DbFrontend:update_doc(Db, Doc, [])) of
                 ok -> ok;
                 Error ->
-                    ?LOG_INFO("Batch doc error (~s): ~p",[DocId, Error])
+                    ?LOG_INFO("Batch doc error (~s): ~p",[?LOG_USERDATA(DocId), Error])
                 end
             end),
             
@@ -435,7 +435,7 @@ all_docs_view(Req, Db, Keys) ->
                     not_found ->
                         {{Key, error}, not_found};
                     _ ->
-                        ?LOG_ERROR("Invalid DocInfo: ~p", [DocInfo]),
+                        ?LOG_ERROR("Invalid DocInfo: ~p", [?LOG_USERDATA(DocInfo)]),
                         throw({error, invalid_doc_info})
                     end,
                     {_, FoldAcc2} = FoldlFun(Doc, 0, FoldAcc),

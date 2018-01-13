@@ -248,7 +248,7 @@ handle_call({create, DbName, Options}, From, Server) ->
         {reply, file_exists, Server}
     end;
 handle_call({delete, DbName, _Options}, _From, Server) ->
-    ?LOG_INFO("Deleting database ~s", [DbName]),
+    ?LOG_INFO("Deleting database ~s", [?LOG_USERDATA(DbName)]),
     DbNameList = binary_to_list(DbName),
     case check_dbname(Server, DbNameList) of
     ok ->

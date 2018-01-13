@@ -183,7 +183,7 @@ maybe_retry_compact(CompactResult0, StartTime, TmpDir, Owner, Retries) ->
         ?LOG_INFO("Compactor for set view `~s`, ~s group `~s`, "
                   "applying delta of ~p changes (retry number ~p, "
                   "max # of log files per btree ~p)",
-                  [SetName, Type, DDocId, MissingCount, Retries,
+                  [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId), MissingCount, Retries,
                    length(hd(LogFiles))]),
         [TotalChanges] = couch_task_status:get([total_changes]),
         TotalChanges2 = TotalChanges + MissingCount,
@@ -356,7 +356,7 @@ file_merger_wait_loop(Group, Port, Acc) ->
         ok;
     {Port, {exit_status, 1}} ->
         ?LOG_INFO("Set view `~s`, ~s group `~s`, file merger stopped successfully.",
-                   [SetName, Type, DDocId]),
+                   [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId)]),
         exit(shutdown);
     {Port, {exit_status, Status}} ->
         throw({couch_view_file_merger, Status, ?l2b(Acc)});
@@ -366,14 +366,14 @@ file_merger_wait_loop(Group, Port, Acc) ->
         Msg = ?l2b(lists:reverse([Data | Acc])),
         ErrorMsg = "Set view `~s`, ~s group `~s`, "
                    "received error from file merger: ~s",
-        ErrorArgs = [SetName, Type, DDocId],
+        ErrorArgs = [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId)],
         _Msg2 = couch_set_view_util:log_port_error(Msg, ErrorMsg, ErrorArgs),
         file_merger_wait_loop(Group, Port, []);
     {Port, Error} ->
         throw({file_merger_error, Error});
     stop ->
         ?LOG_INFO("Set view `~s`, ~s group `~s`, sending stop message to file merger.",
-                   [SetName, Type, DDocId]),
+                   [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId)]),
         port_command(Port, "exit"),
         file_merger_wait_loop(Group, Port, Acc)
     end.
@@ -477,10 +477,10 @@ compact_btrees_wait_loop(Port, Group, EmptyGroup, Acc0, ResultAcc) ->
         % Read resulting stats from stdout
         {ok, [Inserts], []} = io_lib:fread("inserts : ~d", binary_to_list(Data)),
         ?LOG_INFO("Set view `~s`, ~s group `~s`, view compactor inserted ~p kvs.",
-                   [SetName, Type, DDocId, Inserts]),
+                   [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId), Inserts]),
         compact_btrees_wait_loop(Port, Group, EmptyGroup, Acc, ResultAcc);
     Msg ->
         ?LOG_ERROR("Set view `~s`, ~s group `~s`, received error from index compactor: ~s",
-                   [SetName, Type, DDocId, Msg]),
+                   [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId), ?LOG_USERDATA(Msg)]),
         compact_btrees_wait_loop(Port, Group, EmptyGroup, <<>>, ResultAcc)
     end.
