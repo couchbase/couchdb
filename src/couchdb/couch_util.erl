@@ -29,6 +29,7 @@
 -export([encode_doc_id/1]).
 -export([brace/1, debrace/1]).
 -export([split_iolist/2]).
+-export([log_data/2]).
 
 -include("couch_db.hrl").
 
@@ -427,4 +428,7 @@ split_iolist([Sublist| Rest], SplitAt, BeginAcc) when is_list(Sublist) ->
 split_iolist([Byte | Rest], SplitAt, BeginAcc) when is_integer(Byte) ->
     split_iolist(Rest, SplitAt - 1, [Byte | BeginAcc]).
 
-
+log_data(Tag, Arg) when is_binary(Arg) ->
+    io_lib:format("<~p>~s</~p>", [Tag, Arg, Tag]);
+log_data(Tag, Arg) ->
+    io_lib:format("<~p>~p</~p>", [Tag, Arg, Tag]).

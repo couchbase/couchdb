@@ -69,7 +69,7 @@
     end).
 
 -define(LOG_WITH_TAGS(Tag, Arg),
-        couch_log:log_data(Tag, Arg)
+        couch_util:log_data(Tag, Arg)
         ).
 
 -define(LOG_USERDATA(Arg),
