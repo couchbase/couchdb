@@ -53,7 +53,7 @@ prompt(Pid, Data) ->
         {ok, Result} ->
             Result;
         Error ->
-            ?LOG_ERROR("OS Process Error ~p :: ~p",[Pid,Error]),
+            ?LOG_ERROR("OS Process Error ~p :: ~p",[Pid, Error]),
             throw(Error)
     end.
 
@@ -115,12 +115,12 @@ readline(#os_proc{port = Port} = OsProc, Acc) ->
 % Standard JSON functions
 writejson(OsProc, Data) when is_record(OsProc, os_proc) ->
     JsonData = ?JSON_ENCODE(Data),
-    ?LOG_DEBUG("OS Process ~p Input  :: ~s", [OsProc#os_proc.port, JsonData]),
+    ?LOG_DEBUG("OS Process ~p Input  :: ~s", [OsProc#os_proc.port, ?LOG_USERDATA(JsonData)]),
     true = writeline(OsProc, JsonData).
 
 readjson(OsProc) when is_record(OsProc, os_proc) ->
     Line = iolist_to_binary(readline(OsProc)),
-    ?LOG_DEBUG("OS Process ~p Output :: ~s", [OsProc#os_proc.port, Line]),
+    ?LOG_DEBUG("OS Process ~p Output :: ~s", [OsProc#os_proc.port, ?LOG_USERDATA(Line)]),
     try
         % Don't actually parse the whole JSON. Just try to see if it's
         % a command or a doc map/reduce/filter/show/list/update output.
@@ -134,7 +134,7 @@ readjson(OsProc) when is_record(OsProc, os_proc) ->
         case ?JSON_DECODE(Line) of
         [<<"log">>, Msg] when is_binary(Msg) ->
             % we got a message to log. Log it and continue
-            ?LOG_INFO("OS Process ~p Log :: ~s", [OsProc#os_proc.port, Msg]),
+            ?LOG_INFO("OS Process ~p Log :: ~s", [OsProc#os_proc.port, ?LOG_USERDATA(Msg)]),
             readjson(OsProc);
         [<<"error">>, Id, Reason] ->
             throw({error, {couch_util:to_existing_atom(Id),Reason}});
@@ -224,7 +224,7 @@ handle_cast({send, Data}, #os_proc{writer=Writer}=OsProc) ->
         {noreply, OsProc}
     catch
         throw:OsError ->
-            ?LOG_ERROR("Failed sending data: ~p -> ~p", [Data, OsError]),
+            ?LOG_ERROR("Failed sending data: ~p -> ~p", [?LOG_USERDATA(Data), OsError]),
             {stop, normal, OsProc}
     end;
 handle_cast(stop, OsProc) ->

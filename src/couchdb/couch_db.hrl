@@ -68,6 +68,20 @@
         ?LOG_ERROR(Format, Args)
     end).
 
+-define(LOG_WITH_TAGS(Tag, Arg),
+        couch_util:log_data(Tag, Arg)
+        ).
+
+-define(LOG_USERDATA(Arg),
+        ?LOG_WITH_TAGS(ud, Arg)
+       ).
+-define(LOG_SYSTEMDATA(Arg),
+        ?LOG_WITH_TAGS(sd, Arg)
+       ).
+-define(LOG_METADATA(Arg),
+        ?LOG_WITH_TAGS(md, Arg)
+       ).
+
 -define(CONTENT_META_JSON, 0).
 -define(CONTENT_META_INVALID_JSON, 1).
 -define(CONTENT_META_NON_JSON_MODE, 3).

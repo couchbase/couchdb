@@ -517,11 +517,11 @@ proc_with_ddoc(DDoc, DDocKey, LangProcs) ->
         end, LangProcs),
     case DDocProcs of
         [DDocProc|_] ->
-            ?LOG_DEBUG("DDocProc found for DDocKey: ~p",[DDocKey]),
+            ?LOG_DEBUG("DDocProc found for DDocKey: ~s",[?LOG_USERDATA(DDocKey)]),
             {ok, DDocProc};
         [] ->
             [TeachProc|_] = LangProcs,
-            ?LOG_DEBUG("Teach ddoc to new proc ~p with DDocKey: ~p",[TeachProc, DDocKey]),
+            ?LOG_DEBUG("Teach ddoc to new proc ~p with DDocKey: ~s",[TeachProc, ?LOG_USERDATA(DDocKey)]),
             {ok, SmartProc} = teach_ddoc(DDoc, DDocKey, TeachProc),
             {ok, SmartProc}
     end.

@@ -736,7 +736,15 @@ void loadFunctions(map_reduce_ctx_t *ctx,
                 createUtf8String(ctx->isolate, "is_doc_unused"));
             Handle<Function> unusedFun = Handle<Function>::Cast(val);
             Handle<Value> arg = createUtf8String(ctx->isolate, it->data());
+            TryCatch try_catch(ctx->isolate);
             Handle<Value> js_result = unusedFun->Call(context->Global(), 1, &arg);
+            if (try_catch.HasCaught()) {
+                throw MapReduceError(exceptionString(try_catch));
+            }
+            if (js_result.IsEmpty()) {
+                // Some error during static analysis of map function
+                throw MapReduceError("Malformed map function");
+            }
             bool isDocUnused = js_result->BooleanValue();
             if (isDocUnused == false) {
                 isDocUsed = true;

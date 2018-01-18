@@ -257,7 +257,7 @@ handle_request(MochiReq, DbFrontendModule, DefaultFun,
         Tag:Error ->
             Stack = erlang:get_stacktrace(),
             ?LOG_ERROR("Uncaught error in HTTP request: ~p~n~n"
-                       "Stacktrace: ~p", [{Tag, Error}, Stack]),
+                       "Stacktrace: ~s", [{Tag, Error}, ?LOG_USERDATA(Stack)]),
             send_error(HttpReq, Error)
     end,
     {ok, Resp}.
@@ -477,9 +477,9 @@ verify_is_server_admin(#user_ctx{roles=Roles}) ->
     end.
 
 log_request(#httpd{mochi_req=MochiReq,peer=Peer}=Req, Code) ->
-    ?LOG_INFO("~s - - ~s ~s ~B", [Peer,
-                                  MochiReq:get(method),
-                                  MochiReq:get(raw_path),
+    ?LOG_INFO("~s - - ~s ~s ~B", [?LOG_USERDATA(Peer),
+                                  ?LOG_USERDATA(MochiReq:get(method)),
+                                  ?LOG_USERDATA(MochiReq:get(raw_path)),
                                   Code]),
     try log_post_request(Req) of _ -> ok
     catch _:_ -> ok end.
@@ -495,7 +495,7 @@ log_post_request(#httpd{mochi_req=MochiReq}=Req) ->
         View = lists:last(Tokens),
         ViewList = lists:subtract(Tokens, [View]) ++ ["_view",View],
         DDocView = string:join(ViewList, "/"),
-        ?LOG_INFO("POST - Bucket: ~s, View: ~s",[Bucket, DDocView]);
+        ?LOG_INFO("POST - Bucket: ~s, View: ~s",[?LOG_USERDATA(Bucket), ?LOG_USERDATA(DDocView)]);
      _ -> ok
     end.
 
@@ -564,7 +564,7 @@ send_response(#httpd{mochi_req=MochiReq}=Req, Code, Headers, Body) ->
     log_request(Req, Code),
     Headers2 = http_1_0_keep_alive(MochiReq, Headers),
     if Code >= 400 ->
-        ?LOG_DEBUG("httpd ~p error response:~n ~s", [Code, Body]);
+        ?LOG_DEBUG("httpd ~p error response:~n ~s", [?LOG_USERDATA(Code), ?LOG_USERDATA(Body)]);
     true -> ok
     end,
     {ok, MochiReq:respond({Code, Headers2, Body})}.

@@ -68,7 +68,7 @@ replication_started(#rep{id = {BaseId, _} = RepId}) ->
             {<<"_replication_id">>, ?l2b(BaseId)}]),
         ok = gen_server:call(?MODULE, {rep_started, RepId}, infinity),
         ?LOG_INFO("Document `~s` triggered replication `~s`",
-            [DocId, pp_rep_id(RepId)])
+            [?LOG_USERDATA(DocId), pp_rep_id(RepId)])
     end.
 
 
@@ -80,7 +80,7 @@ replication_completed(#rep{id = RepId}) ->
         update_rep_doc(DocId, [{<<"_replication_state">>, <<"completed">>}]),
         ok = gen_server:call(?MODULE, {rep_complete, RepId}, infinity),
         ?LOG_INFO("Replication `~s` finished (triggered by document `~s`)",
-            [pp_rep_id(RepId), DocId])
+            [pp_rep_id(RepId), ?LOG_USERDATA(DocId)])
     end.
 
 
@@ -341,7 +341,7 @@ rep_db_update_error(Error, DocId) ->
         Reason = to_binary(Error)
     end,
     ?LOG_ERROR("Replication manager, error processing document `~s`: ~s",
-        [DocId, Reason]),
+        [?LOG_USERDATA(DocId), Reason]),
     update_rep_doc(DocId, [{<<"_replication_state">>, <<"error">>}]).
 
 
@@ -370,19 +370,19 @@ maybe_start_replication(State, DocId, RepDoc) ->
         true = ets:insert(?REP_TO_STATE, {RepId, RepState}),
         true = ets:insert(?DOC_TO_REP, {DocId, RepId}),
         ?LOG_INFO("Attempting to start replication `~s` (document `~s`).",
-            [pp_rep_id(RepId), DocId]),
+            [pp_rep_id(RepId), ?LOG_USERDATA(DocId)]),
         Pid = spawn_link(fun() -> start_replication(Rep, 0) end),
         State#state{rep_start_pids = [Pid | State#state.rep_start_pids]};
     #rep_state{rep = #rep{doc_id = DocId}} ->
         State;
     #rep_state{starting = false, rep = #rep{doc_id = OtherDocId}} ->
         ?LOG_INFO("The replication specified by the document `~s` was already"
-            " triggered by the document `~s`", [DocId, OtherDocId]),
+            " triggered by the document `~s`", [?LOG_USERDATA(DocId), ?LOG_USERDATA(OtherDocId)]),
         maybe_tag_rep_doc(DocId, RepDoc, ?l2b(BaseId)),
         State;
     #rep_state{starting = true, rep = #rep{doc_id = OtherDocId}} ->
         ?LOG_INFO("The replication specified by the document `~s` is already"
-            " being triggered by the document `~s`", [DocId, OtherDocId]),
+            " being triggered by the document `~s`", [?LOG_USERDATA(DocId), ?LOG_USERDATA(OtherDocId)]),
         maybe_tag_rep_doc(DocId, RepDoc, ?l2b(BaseId)),
         State
     end.
@@ -446,7 +446,7 @@ rep_doc_deleted(DocId) ->
         true = ets:delete(?REP_TO_STATE, RepId),
         true = ets:delete(?DOC_TO_REP, DocId),
         ?LOG_INFO("Stopped replication `~s` because replication document `~s`"
-            " was deleted", [pp_rep_id(RepId), DocId]);
+            " was deleted", [pp_rep_id(RepId), ?LOG_USERDATA(DocId)]);
     [] ->
         ok
     end.
@@ -470,7 +470,7 @@ maybe_retry_replication(#rep_state{retries_left = 0} = RepState, Error, State) -
     true = ets:delete(?DOC_TO_REP, DocId),
     ?LOG_ERROR("Error in replication `~s` (triggered by document `~s`): ~s"
         "~nReached maximum retry attempts (~p).",
-        [pp_rep_id(RepId), DocId, to_binary(error_reason(Error)), MaxRetries]),
+        [pp_rep_id(RepId), ?LOG_USERDATA(DocId), to_binary(error_reason(Error)), MaxRetries]),
     State;
 
 maybe_retry_replication(RepState, Error, State) ->
@@ -481,7 +481,7 @@ maybe_retry_replication(RepState, Error, State) ->
     true = ets:insert(?REP_TO_STATE, {RepId, NewRepState}),
     ?LOG_ERROR("Error in replication `~s` (triggered by document `~s`): ~s"
         "~nRestarting replication in ~p seconds.",
-        [pp_rep_id(RepId), DocId, to_binary(error_reason(Error)), Wait]),
+        [pp_rep_id(RepId), ?LOG_USERDATA(DocId), to_binary(error_reason(Error)), Wait]),
     Pid = spawn_link(fun() -> start_replication(Rep, Wait) end),
     State#state{rep_start_pids = [Pid | State#state.rep_start_pids]}.
 
@@ -511,7 +511,7 @@ update_rep_doc(RepDocId, KVs) ->
         % Shouldn't happen, as by default only the role _replicator can
         % update replication documents.
         ?LOG_ERROR("Conflict error when updating replication document `~s`."
-            " Retrying.", [RepDocId]),
+            " Retrying.", [?LOG_USERDATA(RepDocId)]),
         ok = timer:sleep(5),
         update_rep_doc(RepDocId, KVs)
     after

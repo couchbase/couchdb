@@ -311,8 +311,8 @@ test_too_long_map_value() ->
     MonRef = erlang:monitor(process, GroupPid),
 
     QueryResult = (catch query_map_view(DDocId, <<"test">>, false)),
-    ExpectedResult = {error, <<"value emitted for key `\"doc1\"`, document "
-                               "`doc1`, is too big (16777218 bytes)">>},
+    ExpectedResult = {error, <<"value emitted for key `<ud>\"doc1\"</ud>`, document "
+                               "`<ud>doc1</ud>`, is too big (16777218 bytes)">>},
     etap:is(QueryResult, ExpectedResult, "Got an error when a value is too long"),
 
     receive
@@ -354,7 +354,7 @@ test_too_many_keys_per_doc() ->
 
     QueryResult = (catch query_map_view(DDocId, <<"test">>, false)),
     ExpectedResult = {error, <<"Too many (70000) keys emitted for document"
-                               " `doc1` (maximum allowed is 65535">>},
+                               " `<ud>doc1</ud>` (maximum allowed is 65535">>},
     etap:is(QueryResult, ExpectedResult,
             "Got an error when too many keys are emitted per document"),
 

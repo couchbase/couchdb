@@ -197,7 +197,7 @@ open_raw_read_fd(Group) ->
     {error, Reason} ->
         ?LOG_INFO("Warning, could not open raw fd for fast reads for "
             "~s view group `~s`, set `~s`: ~s",
-            [Type, DDocId, SetName, file:format_error(Reason)]),
+            [Type, ?LOG_USERDATA(DDocId), ?LOG_USERDATA(SetName), file:format_error(Reason)]),
         ok
     end.
 
@@ -615,9 +615,9 @@ check_primary_key_size(Bin, Max, Key, DocId, Group) when byte_size(Bin) > Max ->
     KeyPrefix = lists:sublist(unicode:characters_to_list(Key), 100),
     Error = iolist_to_binary(
         io_lib:format("key emitted for document `~s` is too long: ~s... (~p bytes)",
-                      [DocId, KeyPrefix, byte_size(Bin)])),
+                      [?LOG_USERDATA(DocId), ?LOG_USERDATA(KeyPrefix), byte_size(Bin)])),
     ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, ~s",
-                         [SetName, Type, DDocId, Error]),
+                         [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId), Error]),
     throw({error, Error});
 check_primary_key_size(_Bin, _Max, _Key, _DocId, _Group) ->
     ok.
@@ -629,9 +629,9 @@ check_primary_value_size(Bin, Max, Key, DocId, Group) when byte_size(Bin) > Max 
     #set_view_group{set_name = SetName, name = DDocId, type = Type} = Group,
     Error = iolist_to_binary(
         io_lib:format("value emitted for key `~s`, document `~s`, is too big"
-                      " (~p bytes)", [Key, DocId, byte_size(Bin)])),
+                      " (~p bytes)", [?LOG_USERDATA(Key), ?LOG_USERDATA(DocId), byte_size(Bin)])),
     ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, ~s",
-                         [SetName, Type, DDocId, Error]),
+                         [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId), Error]),
     throw({error, Error});
 check_primary_value_size(_Bin, _Max, _Key, _DocId, _Group) ->
     ok.
@@ -811,17 +811,17 @@ filter_seqs(SortedParts, Seqs) ->
 
 -spec log_port_error(binary(), string(), [any()]) -> binary().
 log_port_error(<<"MAPREDUCE ", Msg/binary>>, ErrorMsg, ErrorArgs) ->
-    ?LOG_MAPREDUCE_ERROR(ErrorMsg, ErrorArgs ++ [Msg]),
+    ?LOG_MAPREDUCE_ERROR(ErrorMsg, ErrorArgs ++ [?LOG_USERDATA(Msg)]),
     Msg;
 log_port_error(<<"SPATIAL ", Msg/binary>>, ErrorMsg, ErrorArgs) ->
     % As of now log errors from spatial views into mapreduce_errors.log
-    ?LOG_MAPREDUCE_ERROR(ErrorMsg, ErrorArgs ++ [Msg]),
+    ?LOG_MAPREDUCE_ERROR(ErrorMsg, ErrorArgs ++ [?LOG_USERDATA(Msg)]),
     Msg;
 log_port_error(<<"GENERIC ", Msg/binary>>, ErrorMsg, ErrorArgs) ->
-    ?LOG_ERROR(ErrorMsg, ErrorArgs ++ [Msg]),
+    ?LOG_ERROR(ErrorMsg, ErrorArgs ++ [?LOG_USERDATA(Msg)]),
     Msg;
 log_port_error(Msg, ErrorMsg, ErrorArgs) ->
-    ?LOG_ERROR(ErrorMsg, ErrorArgs ++ [Msg]),
+    ?LOG_ERROR(ErrorMsg, ErrorArgs ++ [?LOG_USERDATA(Msg)]),
     Msg.
 
 -spec fix_partitions(#set_view_group{}, ordsets:ordset(partition_id())) ->
