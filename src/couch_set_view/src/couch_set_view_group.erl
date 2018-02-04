@@ -1406,9 +1406,9 @@ handle_info({'EXIT', Pid, Reason}, #state{compactor_pid = Pid} = State) ->
 handle_info({'EXIT', Pid, Reason},
         #state{group = #set_view_group{dcp_pid = Pid}} = State) ->
     ?LOG_ERROR("Set view `~s`, ~s (~s) group `~s`,"
-               " DCP process ~p died with unexpected reason: ~p",
+               " DCP process ~p died with unexpected reason: ~s",
                [?LOG_USERDATA(?set_name(State)), ?type(State), ?category(State),
-                ?LOG_USERDATA(?group_id(State)), Pid, Reason]),
+                ?LOG_USERDATA(?group_id(State)), Pid, ?LOG_USERDATA(Reason)]),
     {stop, {dcp_died, Reason}, State};
 
 handle_info({'EXIT', Pid, Reason}, State) ->
@@ -1474,9 +1474,9 @@ handle_info({group_fd, _Fd}, State) ->
 
 terminate(Reason, #state{group = #set_view_group{sig = Sig} = Group} = State) ->
     ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`, signature `~s`,"
-              " terminating with reason: ~p",
+              " terminating with reason: ~s",
               [?LOG_USERDATA(?set_name(State)), ?type(State), ?category(State),
-               ?LOG_USERDATA(?group_id(State)), hex_sig(Sig), Reason]),
+               ?LOG_USERDATA(?group_id(State)), hex_sig(Sig), ?LOG_USERDATA(Reason)]),
     Listeners2 = error_notify_update_listeners(
         State, State#state.update_listeners, {shutdown, Reason}),
     State2 = reply_all(State#state{update_listeners = Listeners2}, Reason),
