@@ -17,7 +17,7 @@
 -export([validate_docid/1,with_uncompressed_body/1]).
 -export([with_ejson_body/1,with_json_body/1]).
 -export([to_raw_json_binary_views/1, to_raw_json_binary_views/3]).
--export([to_json_base64/1]).
+-export([to_json_base64/1, to_json_obj_with_bin_body/1]).
 
 -include("couch_db.hrl").
 
@@ -127,6 +127,19 @@ to_json_obj(Doc0)->
 to_json_obj(Doc0, _Options)->
     JSONBin = to_json_bin(Doc0),
     ?JSON_DECODE(JSONBin).
+
+to_json_obj_with_bin_body(Doc0) ->
+    Doc = #doc{content_meta = ContentMeta, body = Body} = with_json_body(Doc0),
+    Meta = to_full_ejson_meta(Doc, false),
+
+    BodyTuple =
+        case ContentMeta of
+            ?CONTENT_META_JSON ->
+                {json, Body};
+            _ ->
+                {base64, base64:encode(Body)}
+        end,
+    {[{meta, Meta}, BodyTuple]}.
 
 to_json_base64(Doc)->
     #doc{body = Body} = Doc2 = with_uncompressed_body(Doc),
