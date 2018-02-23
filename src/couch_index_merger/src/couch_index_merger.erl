@@ -54,17 +54,35 @@ query_index(Mod, #index_merge{http_params = HttpParams, user_ctx = UserCtx} = In
 query_index(Mod, #index_merge{indexes = [#set_view_spec{}]} = Params0, Req) ->
     #index_merge{
         indexes = Indexes,
-        ddoc_revision = DesiredDDocRevision
+        ddoc_revision = DesiredDDocRevision,
+        conn_timeout = Timeout
     } = Params0,
-    Params = case Req#httpd.method of
+    {ok, DDoc, _} = get_first_ddoc(Indexes, Req#httpd.user_ctx),
+    case Req#httpd.method of
     'GET' ->
-        Params0#index_merge{
+        Params = Params0#index_merge{
             start_timer = os:timestamp()
         };
     'POST' ->
-        Params0
+        Params = Params0,
+        % Force close the socket conservatively if we
+        % do not reply in the stipulated time period
+        try
+            case Timeout =/= nil of
+            true ->
+                {ok, TRef} = timer:kill_after(Timeout),
+                % The query executes in the same process
+                put(tref, TRef);
+            false ->
+                ok
+            end
+        catch
+            Error ->
+                ?LOG_ERROR("Could not enable socket watchdog "
+                           "for design document `~s` err:  ~p",
+                           [?LOG_USERDATA(DDoc#doc.id), ?LOG_USERDATA(Error)])
+        end
     end,
-    {ok, DDoc, _} = get_first_ddoc(Indexes, Req#httpd.user_ctx),
     DDocRev = ddoc_rev(DDoc),
     case should_check_rev(Params, DDoc) of
     true ->

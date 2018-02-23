@@ -864,7 +864,10 @@ view_qs(ViewArgs, MergeParams) ->
         type = IndexType,
         skip = Skip
     } = ViewArgs,
-    #index_merge{on_error = OnError} = MergeParams,
+    #index_merge{
+        on_error = OnError,
+        conn_timeout = Timeout
+    } = MergeParams,
 
     QsList = case StartKey =:= DefViewArgs#view_query_args.start_key of
     true ->
@@ -975,7 +978,8 @@ view_qs(ViewArgs, MergeParams) ->
         [];
     false ->
         ["_type=" ++ atom_to_list(IndexType)]
-    end,
+    end ++
+    ["connection_timeout=" ++ integer_to_list(Timeout)],
 
     case QsList of
     [] ->

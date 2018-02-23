@@ -127,6 +127,15 @@ http_sender(start, #sender_acc{req = Req} = SAcc) ->
     {ok, SAcc#sender_acc{resp = Resp, acc = <<"\r\n">>}};
 
 http_sender({start, RowCount}, #sender_acc{req = Req} = SAcc) ->
+    % The remote node is ready to start streaming the response
+    % Call off the hit
+    case get(tref) of
+    nil ->
+        ok;
+    TRef ->
+        timer:cancel(TRef),
+        erase(tref)
+    end,
     #httpd{mochi_req = MReq} = Req,
     ok = mochiweb_socket:setopts(MReq:get(socket), [{nodelay, true}]),
     {ok, Resp} = couch_httpd:start_json_response(Req, 200, []),
