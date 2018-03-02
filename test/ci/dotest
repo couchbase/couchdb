@@ -74,9 +74,9 @@ error_email() {
   cat /var/www/views-current.html | \
      sendemail -q \
        -s west.smtp.mx.exch029.serverdata.net:25 \
-       -f 'Eventing CI <community_admin@couchbase.com>' \
+       -f 'Views CI <community_admin@couchbase.com>' \
        -t $WATCHERS \
-       -u 'Eventing CI just broke'
+       -u 'Views CI just broke'
 }
 
 error_exit() {
