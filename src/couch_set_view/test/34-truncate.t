@@ -100,6 +100,7 @@ restart_server(IsIPv6) ->
     ets:delete(ipv6),
     couch_util:shutdown_sync(get(test_util_dcp_pid)),
     couch_util:shutdown_sync(whereis(couch_server_sup)),
+    timer:sleep(2000),
     couch_set_view_test_util:start_server(test_set_name(), IsIPv6),
     ok.
 

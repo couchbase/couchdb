@@ -65,6 +65,8 @@ test(IsIPv6) ->
 
     % Shutdown the group, so that it fails when it starts up again
     couch_util:shutdown_sync(whereis(couch_setview_server_name_prod)),
+    % wait for server to come up
+    timer:sleep(2000),
 
     % The first query leads to an error due to the invalid header
     {ok, Body1} = couch_set_view_test_util:query_view(
