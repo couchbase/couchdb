@@ -981,12 +981,7 @@ view_qs(ViewArgs, MergeParams) ->
     end ++
     ["connection_timeout=" ++ integer_to_list(Timeout)],
 
-    case QsList of
-    [] ->
-        [];
-    _ ->
-        "?" ++ string:join(QsList, "&")
-    end.
+    "?" ++ string:join(QsList, "&").
 
 json_qs_val(Value) ->
     couch_httpd:quote(?b2l(iolist_to_binary(?JSON_ENCODE(Value)))).
