@@ -1493,7 +1493,7 @@ noop_interval(State) ->
 
 
 
--spec get_queue_size(queue(), non_neg_integer()) -> non_neg_integer().
+-spec get_queue_size(queue:queue(), non_neg_integer()) -> non_neg_integer().
 get_queue_size(EvQueue, Size) ->
     case queue:out(EvQueue) of
     {empty, _} ->
