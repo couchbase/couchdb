@@ -108,7 +108,7 @@ convert_primary_index_kvs_to_binary([{{Key, DocId}, {PartId, V0}} | Rest], Group
     convert_primary_index_kvs_to_binary(Rest, Group, [{KeyBin, V} | Acc]).
 
 
--spec finish_build(#set_view_group{}, dict(), string()) ->
+-spec finish_build(#set_view_group{}, dict:dict(), string()) ->
                           {#set_view_group{}, pid()}.
 finish_build(Group, TmpFiles, TmpDir) ->
     #set_view_group{
