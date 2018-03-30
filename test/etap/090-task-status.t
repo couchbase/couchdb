@@ -48,8 +48,7 @@ get_task_prop(Pid, Prop) ->
     end.
 
 now_ts() ->
-    {Mega, Secs, _} = erlang:now(),
-    Mega * 1000000 + Secs.
+    erlang:system_time(second).
 
 loop() ->
     receive

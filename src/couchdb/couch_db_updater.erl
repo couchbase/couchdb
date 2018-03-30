@@ -490,10 +490,8 @@ init_db(DbName, Filepath, Fd, Header, Options) ->
     true -> ok = couch_file:sync(Fd);
     _ -> ok
     end,
-    % convert start time tuple to microsecs and store as a binary string
-    {MegaSecs, Secs, MicroSecs} = now(),
     StartTime = ?l2b(io_lib:format("~p",
-            [(MegaSecs*1000000*1000000) + (Secs*1000000) + MicroSecs])),
+            [erlang:system_time(microsecond)])),
     {ok, RefCntr} = couch_ref_counter:start([Fd]),
     Db = #db{
         update_pid=self(),
@@ -816,8 +814,9 @@ initial_copy_compact(#db{docinfo_by_seq_btree=SrcBySeq,
     % now dump the new by_seq to a temp file, sort and output to new file
     ok = couch_file:flush(DestFd),
     DbRootDir = couch_config:get("couchdb", "database_dir", "."),
-    {A,B,C}=now(),
-    TempName = lists:flatten(io_lib:format("~p.~p.~p",[A,B,C])),
+    A = erlang:system_time(microsecond),
+    B = erlang:unique_integer([positive, monotonic]),
+    TempName = lists:flatten(io_lib:format("~p.~p",[A, B])),
     TempDir = couch_file:get_delete_dir(DbRootDir),
     TempFilepath = filename:join(TempDir, TempName),
     {ok, TempFd} = file:open(TempFilepath, [raw, delayed_write, append]),
@@ -915,7 +914,9 @@ start_copy_compact(#db{name=Name,filepath=Filepath}=Db, Options) ->
     % and generate a random number. Default to 10%
     CheckRatio = list_to_float(couch_config:get("couchdb",
                                "consistency_check_ratio", "0.1")),
-    random:seed(now()),
+    random:seed(erlang:phash2([node()]),
+                erlang:monotonic_time(),
+                erlang:unique_integer()),
     Rand = random:uniform(),
     case couch_config:get("couchdb", "consistency_check_precompacted", "false") of
     "true" when Rand =< CheckRatio ->

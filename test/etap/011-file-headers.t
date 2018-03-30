@@ -19,8 +19,9 @@ sizeblock() -> 4096. % Need to keep this in sync with couch_file.erl
 
 main(_) ->
     test_util:init_code_path(),
-    {S1, S2, S3} = now(),
-    random:seed(S1, S2, S3),
+    random:seed(erlang:phash2([node()]),
+                erlang:monotonic_time(),
+                erlang:unique_integer()),
 
     etap:plan(34),
     case (catch test()) of
