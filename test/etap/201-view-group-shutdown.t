@@ -173,7 +173,7 @@ populate_main_db(Db, BatchSize, N) when N > 0 ->
                     {<<"id">>, couch_uuids:new()}
                 ]}},
                 {<<"json">>, {[
-                    {<<"value">>, base64:encode(crypto:rand_bytes(1000))}
+                    {<<"value">>, base64:encode(crypto:strong_rand_bytes(1000))}
                 ]}}
             ]})
         end,

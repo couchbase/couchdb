@@ -30,7 +30,7 @@ new() ->
     gen_server:call(?MODULE, create).
 
 random() ->
-    list_to_binary(couch_util:to_hex(crypto:rand_bytes(16))).
+    list_to_binary(couch_util:to_hex(couch_util:strong_rand_bytes(16))).
 
 utc_random() ->
     Now = {_, _, Micro} = erlang:timestamp(),
@@ -38,7 +38,7 @@ utc_random() ->
     Nowsecs = calendar:datetime_to_gregorian_seconds(Nowish),
     Then = calendar:datetime_to_gregorian_seconds({{1970, 1, 1}, {0, 0, 0}}),
     Prefix = io_lib:format("~14.16.0b", [(Nowsecs - Then) * 1000000 + Micro]),
-    list_to_binary(Prefix ++ couch_util:to_hex(crypto:rand_bytes(9))).
+    list_to_binary(Prefix ++ couch_util:to_hex(couch_util:strong_rand_bytes(9))).
 
 init([]) ->
     ok = couch_config:register(
@@ -76,7 +76,7 @@ code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 new_prefix() ->
-    couch_util:to_hex((crypto:rand_bytes(13))).
+    couch_util:to_hex((couch_util:strong_rand_bytes(13))).
 
 inc() ->
     crypto:rand_uniform(1, 16#ffe).

@@ -30,6 +30,7 @@
 -export([brace/1, debrace/1]).
 -export([split_iolist/2]).
 -export([log_data/2]).
+-export([strong_rand_bytes/1]).
 
 -include("couch_db.hrl").
 
@@ -432,3 +433,17 @@ log_data(Tag, Arg) when is_binary(Arg) ->
     io_lib:format("<~p>~s</~p>", [Tag, Arg, Tag]);
 log_data(Tag, Arg) ->
     io_lib:format("<~p>~p</~p>", [Tag, Arg, Tag]).
+
+strong_rand_bytes(N) ->
+    strong_rand_bytes(N, 10).
+
+strong_rand_bytes(N, Retries) ->
+    try
+        crypto:strong_rand_bytes(N)
+    catch
+        error:low_entropy when N > 1 ->
+            SeedTerm = {erlang:monotonic_time(), erlang:unique_integer()},
+            SeedBin = crypto:hash(sha256, term_to_binary(SeedTerm)),
+            crypto:rand_seed(SeedBin),
+            strong_rand_bytes(N, Retries - 1)
+    end.
