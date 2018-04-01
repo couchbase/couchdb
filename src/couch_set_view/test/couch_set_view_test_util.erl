@@ -210,7 +210,7 @@ populate_set_randomly(SetName, Partitions, DocList) ->
     NumDbs = length(Dbs),
     lists:foreach(
         fun(DocJson) ->
-            Db = lists:nth(random:uniform(NumDbs), Dbs),
+            Db = lists:nth(rand:uniform(NumDbs), Dbs),
             Doc = couch_doc:from_json_obj(DocJson),
             ok = couch_db:update_doc(Db, Doc, [])
         end,

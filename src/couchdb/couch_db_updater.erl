@@ -914,10 +914,10 @@ start_copy_compact(#db{name=Name,filepath=Filepath}=Db, Options) ->
     % and generate a random number. Default to 10%
     CheckRatio = list_to_float(couch_config:get("couchdb",
                                "consistency_check_ratio", "0.1")),
-    random:seed(erlang:phash2([node()]),
-                erlang:monotonic_time(),
-                erlang:unique_integer()),
-    Rand = random:uniform(),
+    rand:seed(exrop, {erlang:phash2([node()]),
+                      erlang:monotonic_time(),
+                      erlang:unique_integer()}),
+    Rand = rand:uniform(),
     case couch_config:get("couchdb", "consistency_check_precompacted", "false") of
     "true" when Rand =< CheckRatio ->
         couch_db_consistency_check:check_db_file(Db);

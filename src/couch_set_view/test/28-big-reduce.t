@@ -76,8 +76,8 @@ setup_test(ReduceSize) ->
     ReduceValue.
 
 random_binary(N) ->
-    random:seed({1, 2, 3}),
-    << <<(random:uniform(20) + 100):8>> ||  _ <- lists:seq(1, N) >>.
+    rand:seed(exrop, {1, 2, 3}),
+    << <<(rand:uniform(20) + 100):8>> ||  _ <- lists:seq(1, N) >>.
 
 
 shutdown_group() ->

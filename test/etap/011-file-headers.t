@@ -19,9 +19,9 @@ sizeblock() -> 4096. % Need to keep this in sync with couch_file.erl
 
 main(_) ->
     test_util:init_code_path(),
-    random:seed(erlang:phash2([node()]),
-                erlang:monotonic_time(),
-                erlang:unique_integer()),
+    rand:seed(exrop, {erlang:phash2([node()]),
+                      erlang:monotonic_time(),
+                      erlang:unique_integer()}),
 
     etap:plan(34),
     case (catch test()) of
@@ -222,14 +222,14 @@ check_header_recovery(CheckFun) ->
     ok.
 
 write_random_data(Fd) ->
-    write_random_data(Fd, 100 + random:uniform(1000)).
+    write_random_data(Fd, 100 + rand:uniform(1000)).
 
 write_random_data(Fd, 0) ->
     {ok, Bytes} = couch_file:bytes(Fd),
     {ok, (1 + Bytes div sizeblock()) * sizeblock()};
 write_random_data(Fd, N) ->
     Choices = [foo, bar, <<"bizzingle">>, "bank", ["rough", stuff]],
-    Term = lists:nth(random:uniform(4) + 1, Choices),
+    Term = lists:nth(rand:uniform(4) + 1, Choices),
     {ok, _, _} = couch_file:append_term(Fd, Term),
     write_random_data(Fd, N-1).
 
