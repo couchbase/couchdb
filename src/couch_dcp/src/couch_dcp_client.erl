@@ -189,7 +189,9 @@ get_num_items(Pid, PartId) ->
             <<"vb_", BinPartId/binary, ":num_items">>, 1, Stats),
         {ok, list_to_integer(binary_to_list(NumItems))};
     {error, {?DCP_STATUS_NOT_MY_VBUCKET, _}} ->
-        {error, not_my_vbucket}
+        {error, not_my_vbucket};
+    {error, Reason} ->
+        {error, Reason}
     end.
 
 
@@ -328,7 +330,19 @@ init([Name, Bucket, AdmUser, AdmPasswd, BufferSize, Flags]) ->
                     {ok, State6} ->
                             case enable_noop(State6, true) of
                                 {ok, State7} ->
-                                    {ok, State7#state{worker_pid = WorkerPid}};
+                                    case State7#state.noop_enable of
+                                    true ->
+                                        case noop_interval(State7) of
+                                        {ok, State8} ->
+                                            {ok, State8#state{worker_pid = WorkerPid}};
+                                        {error, Reason} ->
+                                            exit(WorkerPid, shutdown),
+                                            {stop, Reason}
+                                        end;
+                                    false ->
+                                        exit(WorkerPid, shutdown),
+                                        {stop, noop_not_enabled}
+                                    end;
                                 {error, Reason} ->
                                     exit(WorkerPid, shutdown),
                                     {stop, Reason}
@@ -550,15 +564,12 @@ handle_info({stream_response, RequestId, Msg}, State) ->
         % Server sent the response for the internal control request
         {control_request, Type} ->
             case Type of
-                {size,Size} ->
+                {size, Size} ->
                     State#state{max_buffer_size = Size};
-                {enable_noop,Enable} ->
+                {enable_noop, Enable} ->
                     case Enable of
                         true ->
-                            % If noop_interval returns {error,Error}
-                            % dcp_client will crash, restart and retry
-                            {ok, State4} = noop_interval(State),
-                            State4#state{noop_enable = true};
+                            State#state{noop_enable = true};
                         false ->
                             State#state{noop_enable = false}
                     end;

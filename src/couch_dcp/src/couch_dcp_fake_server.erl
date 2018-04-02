@@ -134,42 +134,42 @@ reset() ->
 % Only used by tests to populate the failover log
 -spec set_failover_log(partition_id(), partition_version()) -> ok.
 set_failover_log(PartId, FailoverLog) ->
-    gen_server:call(?MODULE, {set_failover_log, PartId, FailoverLog}).
+    gen_server:call(?MODULE, {set_failover_log, PartId, FailoverLog}, infinity).
 
 % For unit tests only
 -spec set_persisted_items_fun(fun((update_seq()) -> update_seq())) -> ok.
 set_persisted_items_fun(Fun) ->
-    gen_server:call(?MODULE, {set_persisted_items_fun, Fun}).
+    gen_server:call(?MODULE, {set_persisted_items_fun, Fun}, infinity).
 
 % For unit tests only
 -spec set_items_per_snapshot(non_neg_integer()) -> ok.
 set_items_per_snapshot(Num) ->
-    gen_server:call(?MODULE, {set_items_per_snapshot, Num}).
+    gen_server:call(?MODULE, {set_items_per_snapshot, Num}, infinity).
 
 % For unit tests only
 -spec set_dups_per_snapshot(non_neg_integer()) -> ok.
 set_dups_per_snapshot(Num) ->
-    gen_server:call(?MODULE, {set_dups_per_snapshot, Num}).
+    gen_server:call(?MODULE, {set_dups_per_snapshot, Num}, infinity).
 
 -spec pause_mutations() -> ok.
 pause_mutations() ->
-    gen_server:call(?MODULE, {pause_mutations, true}).
+    gen_server:call(?MODULE, {pause_mutations, true}, infinity).
 
 -spec continue_mutations() -> ok.
 continue_mutations() ->
-    ok = gen_server:call(?MODULE, {pause_mutations, false}),
+    ok = gen_server:call(?MODULE, {pause_mutations, false}, infinity),
     ?MODULE ! send_mutations,
     ok.
 
 % Used by unit tests. Check if server got buffer ack.
 -spec get_num_buffer_acks() -> integer().
 get_num_buffer_acks() ->
-    gen_server:call(?MODULE, get_num_buffer_acks).
+    gen_server:call(?MODULE, get_num_buffer_acks, infinity).
 
 % Used by unit tests. Check if server got control request.
 -spec is_control_req() -> boolean().
 is_control_req() ->
-    gen_server:call(?MODULE, is_control_req).
+    gen_server:call(?MODULE, is_control_req, infinity).
 
 % Used by unit test.
 close_connection(PartId) ->
@@ -207,6 +207,12 @@ init([Port, SetName]) ->
         setname = SetName
     }}.
 
+socket_send(Socket, Buffer) ->
+    case gen_tcp:send(Socket, Buffer) of
+        ok -> ok;
+        _ ->
+            gen_tcp:close(Socket)
+    end.
 
 -spec handle_call(tuple() | atom(), {pid(), reference()}, #state{}) ->
                          {reply, any(), #state{}}.
@@ -221,7 +227,7 @@ handle_call({add_stream, PartId, RequestId, StartSeq, EndSeq, Socket, FailoverLo
     false ->
         StreamOk = couch_dcp_producer:encode_stream_request_ok(
             RequestId, FailoverLog),
-        ok = gen_tcp:send(Socket, StreamOk),
+        ok = socket_send(Socket, StreamOk),
         Mutations = case DupsPerSnapshot > 0 of
         true ->
             NumSnapshots = ceil_div(EndSeq - StartSeq, ItemsPerSnapshot),
@@ -261,7 +267,7 @@ handle_call({add_stream, PartId, RequestId, StartSeq, EndSeq, Socket, FailoverLo
         case Pause of
         true ->
             ok;
-        false ->
+        _ ->
             % For unit tests it's OK to pretend that only snapshots
             % received from the start are on-disk snapshots.
             SnapshotType = case StartSeq of
@@ -272,14 +278,14 @@ handle_call({add_stream, PartId, RequestId, StartSeq, EndSeq, Socket, FailoverLo
             end,
             Marker = couch_dcp_producer:encode_snapshot_marker(
                 PartId, RequestId, StartSeq, StartSeq + Num, SnapshotType),
-            ok = gen_tcp:send(Socket, Marker),
+            ok = socket_send(Socket, Marker),
             self() ! send_mutations
         end,
         {reply, ok, State#state{streams = Streams2}};
     _ ->
         StreamExists = couch_dcp_producer:encode_stream_request_error(
                          RequestId, ?DCP_STATUS_KEY_EEXISTS),
-        ok = gen_tcp:send(Socket, StreamExists),
+        ok = socket_send(Socket, StreamExists),
         {reply, ok, State}
     end;
 
@@ -334,7 +340,7 @@ handle_call({all_seqs, Socket, RequestId}, _From, State) ->
         end
     end, [], Partitions),
     Data = couch_dcp_producer:encode_seqs(RequestId, lists:reverse(Result)),
-    ok = gen_tcp:send(Socket, Data),
+    ok = socket_send(Socket, Data),
     {reply, ok, State};
 
 handle_call({send_stat, _, Socket, _, _}, _From,
@@ -363,14 +369,14 @@ handle_call({send_stat, Stat, Socket, RequestId, PartId}, _From, State) ->
             % stats, but we only care about the num_items
             NumItemsStat = couch_dcp_producer:encode_stat(
                 RequestId, NumItemsKey, NumItemsValue),
-            ok = gen_tcp:send(Socket, NumItemsStat),
+            ok = socket_send(Socket, NumItemsStat),
 
             EndStat = couch_dcp_producer:encode_stat(RequestId, <<>>, <<>>),
-            ok = gen_tcp:send(Socket, EndStat);
+            ok = socket_send(Socket, EndStat);
         {error, not_my_partition} ->
             StatError = couch_dcp_producer:encode_stat_error(
                 RequestId, ?DCP_STATUS_NOT_MY_VBUCKET, <<>>),
-            ok = gen_tcp:send(Socket, StatError)
+            ok = socket_send(Socket, StatError)
         end
     end,
     {reply, ok, State};
@@ -485,12 +491,12 @@ handle_cast(Msg, State) ->
 -spec handle_info({'EXIT', {pid(), reference()}, normal|shutdown} |
                   send_mutations,
                   #state{}) -> {noreply, #state{}}.
-handle_info({'EXIT', _From, normal}, State)  ->
-    ok = timer:sleep(1000),
-    {noreply, State};
 handle_info({'EXIT', _From, shutdown}, State)  ->
     ok = timer:sleep(1000),
     {stop, shutdown, State};
+handle_info({'EXIT', _From, normal}, State)  ->
+    ok = timer:sleep(1000),
+    {noreply, State};
 handle_info(send_mutations, State) ->
     #state{
        streams = Streams,
@@ -507,7 +513,7 @@ handle_info(send_mutations, State) ->
                 Marker = couch_dcp_producer:encode_snapshot_marker(
                     VBucketId, RequestId, Seq - 1, Seq + NumItems - 1,
                     ?DCP_SNAPSHOT_TYPE_MEMORY),
-                ok = gen_tcp:send(Socket, Marker),
+                ok = socket_send(Socket, Marker),
                 1;
             false ->
                 NumSent0 + 1
@@ -521,11 +527,11 @@ handle_info(send_mutations, State) ->
                 VBucketId, RequestId, Cas, Seq, RevSeq, Flags, Expiration,
                 LockTime, Key, Value)
             end,
-            ok = gen_tcp:send(Socket, Encoded),
+            ok = socket_send(Socket, Encoded),
             [{VBucketId, {RequestId, Rest, Socket, NumSent}} | Acc];
         ({VBucketId, {RequestId, [], Socket, _NumSent}}, Acc) ->
             StreamEnd = couch_dcp_producer:encode_stream_end(VBucketId, RequestId),
-            ok = gen_tcp:send(Socket, StreamEnd),
+            ok = socket_send(Socket, StreamEnd),
             Acc
         end, [], Streams),
     case length(Streams2) of
@@ -555,7 +561,7 @@ code_change(_OldVsn, State, _Extra) ->
 
 -spec get_failover_log(partition_id()) -> partition_version().
 get_failover_log(PartId) ->
-    gen_server:call(?MODULE, {get_failover_log, PartId}).
+    gen_server:call(?MODULE, {get_failover_log, PartId}, infinity).
 
 -spec get_failover_log(partition_id(), #state{}) -> partition_version().
 get_failover_log(PartId, State) ->
@@ -573,8 +579,8 @@ get_failover_log(PartId, State) ->
                                  {ok, update_seq()} |
                                  {error, not_my_partition}.
 get_sequence_number(SetName, PartId) ->
-    ItemsPerSnapshot = gen_server:call(?MODULE, get_items_per_snapshot),
-    DupsPerSnapshot = gen_server:call(?MODULE, get_dups_per_snapshot),
+    ItemsPerSnapshot = gen_server:call(?MODULE, get_items_per_snapshot, infinity),
+    DupsPerSnapshot = gen_server:call(?MODULE, get_dups_per_snapshot, infinity),
     get_sequence_number(SetName, PartId, ItemsPerSnapshot,
         DupsPerSnapshot).
 
@@ -667,7 +673,7 @@ read(Socket) ->
 handle_control_request(Socket, BodyLength, RequestId) ->
     case gen_tcp:recv(Socket, BodyLength) of
     {ok, <<"connection_buffer_size", Size/binary>>} ->
-        ok = gen_server:call(?MODULE, {handle_control_req, Size});
+        ok = gen_server:call(?MODULE, {handle_control_req, Size}, infinity);
     % Temporary fix to let testing proceed
     % To-Do : Mimic actual DCP logic
     {ok, <<"enable_noop", _Enable/binary>>} ->
@@ -676,16 +682,16 @@ handle_control_request(Socket, BodyLength, RequestId) ->
         ok
     end,
     ControlResponse = couch_dcp_producer:encode_control_flow_ok(RequestId),
-    ok = gen_tcp:send(Socket, ControlResponse).
+    ok = socket_send(Socket, ControlResponse).
 
 -spec handle_buffer_ack_request(socket(), size(), request_id()) -> ok .
 handle_buffer_ack_request(Socket, BodyLength, RequestId) ->
     case gen_tcp:recv(Socket, BodyLength) of
     {ok, <<Size:?DCP_SIZES_BUFFER_SIZE>>} ->
-        gen_server:call(?MODULE, {handle_buffer_ack, Size})
+        gen_server:call(?MODULE, {handle_buffer_ack, Size}, infinity)
     end,
     BufferResponse = couch_dcp_producer:encode_buffer_ack_ok(RequestId),
-    ok = gen_tcp:send(Socket, BufferResponse).
+    ok = socket_send(Socket, BufferResponse).
 
 
 % XXX vmx: 2014-01-24: Proper logging/error handling is missing
@@ -697,7 +703,7 @@ handle_open_connection_body(Socket, BodyLength, RequestId) ->
            _Flags:?DCP_SIZES_FLAGS,
            _Name/binary>>} ->
         OpenConnection = couch_dcp_producer:encode_open_connection(RequestId),
-        ok = gen_tcp:send(Socket, OpenConnection);
+        ok = socket_send(Socket, OpenConnection);
     {error, closed} ->
         {error, closed}
     end.
@@ -729,11 +735,11 @@ handle_stream_request_body(Socket, BodyLength, RequestId, PartId) ->
                 % DCP_FLAG_DISKONLY
                 % (DCP_FLAG_DISKONLY bor DCP_FLAG_USELATEST_ENDSEQNO)
                 ItemsPerSnapshot = gen_server:call(
-                    ?MODULE, get_items_per_snapshot),
+                    ?MODULE, get_items_per_snapshot, infinity),
                 case ItemsPerSnapshot of
                 0 ->
                     PersistedItemsFun = gen_server:call(
-                        ?MODULE, get_persisted_items_fun),
+                        ?MODULE, get_persisted_items_fun, infinity),
                     PersistedItemsFun(EndSeq);
                 % The items per snapshot have higher priority than the
                 % persisted items function
@@ -762,7 +768,7 @@ handle_stream_request_body(Socket, BodyLength, RequestId, PartId) ->
     end.
 
 handle_stream_close_body(Socket, RequestId, PartId) ->
-    Status = case gen_server:call(?MODULE, {remove_stream, PartId}) of
+    Status = case gen_server:call(?MODULE, {remove_stream, PartId}, infinity) of
     ok ->
         ?DCP_STATUS_OK;
     vbucket_stream_not_found ->
@@ -770,21 +776,21 @@ handle_stream_close_body(Socket, RequestId, PartId) ->
     end,
     Resp = couch_dcp_producer:encode_stream_close_response(
         RequestId, Status),
-    ok = gen_tcp:send(Socket, Resp).
+    ok = socket_send(Socket, Resp).
 
 handle_select_bucket_body(Socket, BodyLength, RequestId) ->
     {ok, _} = gen_tcp:recv(Socket, BodyLength),
     Status = ?DCP_STATUS_OK,
     Resp = couch_dcp_producer:encode_select_bucket_response(
         RequestId, Status),
-    ok = gen_tcp:send(Socket, Resp).
+    ok = socket_send(Socket, Resp).
 
 -spec send_ok_or_error(socket(), request_id(), partition_id(), update_seq(),
                        update_seq(), uuid(), update_seq(),
                        partition_version()) -> ok.
 send_ok_or_error(Socket, RequestId, PartId, StartSeq, EndSeq, PartUuid,
         PartVersionSeq, FailoverLog) ->
-    SetName = gen_server:call(?MODULE, get_set_name),
+    SetName = gen_server:call(?MODULE, get_set_name, infinity),
     {ok, HighSeq} = get_sequence_number(SetName, PartId),
 
     case StartSeq =:= 0 of
@@ -828,19 +834,19 @@ send_ok_or_error(Socket, RequestId, PartId, StartSeq, EndSeq, PartUuid,
               update_seq(), partition_version()) -> ok.
 send_ok(Socket, RequestId, PartId, StartSeq, EndSeq, FailoverLog) ->
         ok = gen_server:call(?MODULE, {add_stream, PartId, RequestId,
-                                       StartSeq, EndSeq, Socket, FailoverLog}).
+                                       StartSeq, EndSeq, Socket, FailoverLog}, infinity).
 
 -spec send_rollback(socket(), request_id(), update_seq()) -> ok.
 send_rollback(Socket, RequestId, RollbackSeq) ->
     StreamRollback = couch_dcp_producer:encode_stream_request_rollback(
         RequestId, RollbackSeq),
-    ok = gen_tcp:send(Socket, StreamRollback).
+    ok = socket_send(Socket, StreamRollback).
 
 -spec send_error(socket(), request_id(), dcp_status()) -> ok.
 send_error(Socket, RequestId, Status) ->
     StreamError = couch_dcp_producer:encode_stream_request_error(
         RequestId, Status),
-    ok = gen_tcp:send(Socket, StreamError).
+    ok = socket_send(Socket, StreamError).
 
 
 -spec handle_failover_log(socket(), request_id(), partition_id()) -> ok.
@@ -848,7 +854,7 @@ handle_failover_log(Socket, RequestId, PartId) ->
     FailoverLog = get_failover_log(PartId),
     FailoverLogResponse = couch_dcp_producer:encode_failover_log(
         RequestId, FailoverLog),
-    ok = gen_tcp:send(Socket, FailoverLogResponse).
+    ok = socket_send(Socket, FailoverLogResponse).
 
 
 -spec handle_stats_body(socket(), size(), request_id(), partition_id()) ->
@@ -857,13 +863,13 @@ handle_failover_log(Socket, RequestId, PartId) ->
 handle_stats_body(Socket, BodyLength, RequestId, PartId) ->
     case gen_tcp:recv(Socket, BodyLength) of
     {ok, Stat} ->
-        gen_server:call(?MODULE, {send_stat, Stat, Socket, RequestId, PartId});
+        gen_server:call(?MODULE, {send_stat, Stat, Socket, RequestId, PartId}, infinity);
     {error, closed} ->
         {error, closed}
     end.
 
 handle_all_seqs(Socket, RequestId) ->
-    gen_server:call(?MODULE, {all_seqs, Socket, RequestId}).
+    gen_server:call(?MODULE, {all_seqs, Socket, RequestId}, infinity).
 
 % XXX vmx: 2014-01-24: Proper logging/error handling is missing
 -spec handle_sasl_auth_body(socket(), size(), request_id()) ->
@@ -875,7 +881,7 @@ handle_sasl_auth_body(Socket, BodyLength, RequestId) ->
     % was successful
     {ok, _} ->
         Authenticated = couch_dcp_producer:encode_sasl_auth(RequestId),
-        ok = gen_tcp:send(Socket, Authenticated);
+        ok = socket_send(Socket, Authenticated);
     {error, closed} ->
         {error, closed}
     end.
@@ -1048,14 +1054,14 @@ send_vbucket_seqnos_stats(State, SetName, Socket, RequestId, Partitions) ->
             SeqValue = list_to_binary(integer_to_list(Seq)),
             SeqStat = couch_dcp_producer:encode_stat(
                 RequestId, SeqKey, SeqValue),
-            ok = gen_tcp:send(Socket, SeqStat),
+            ok = socket_send(Socket, SeqStat),
 
             UuidKey = <<"vb_", BinPartId/binary ,":vb_uuid">>,
             FailoverLog = get_failover_log(PartId, State),
             {UuidValue, _} = hd(FailoverLog),
             UuidStat = couch_dcp_producer:encode_stat(
                 RequestId, UuidKey, <<UuidValue:64/integer>>),
-            ok = gen_tcp:send(Socket, UuidStat),
+            ok = socket_send(Socket, UuidStat),
             true;
         {error, not_my_partition} ->
             % TODO sarath 2014-07-15: Fix get_stats API for single partition
@@ -1065,14 +1071,14 @@ send_vbucket_seqnos_stats(State, SetName, Socket, RequestId, Partitions) ->
             %StatError = couch_dcp_producer:encode_stat_error(
             %    RequestId, ?DCP_STATUS_NOT_MY_VBUCKET,
             %    <<"{}">>),
-            %ok = gen_tcp:send(Socket, StatError),
+            %ok = socket_send(Socket, StatError),
             true
         end
     end, Partitions),
     case lists:all(fun(E) -> E end, Result) of
     true ->
         EndStat = couch_dcp_producer:encode_stat(RequestId, <<>>, <<>>),
-        ok = gen_tcp:send(Socket, EndStat);
+        ok = socket_send(Socket, EndStat);
     false ->
         ok
     end.
