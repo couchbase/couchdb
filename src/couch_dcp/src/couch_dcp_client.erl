@@ -53,7 +53,7 @@
     stream_queues = dict:new()              :: dict:dict(),
     enum_start_seq = dict:new()             :: dict:dict(),
     active_streams = []                     :: list(),
-    worker_pid                              :: pid(),
+    worker_pid                              :: pid() | undefined,
     max_buffer_size = ?MAX_BUF_SIZE         :: integer(),
     total_buffer_size = 0                   :: non_neg_integer(),
     stream_info = dict:new()                :: dict:dict(),

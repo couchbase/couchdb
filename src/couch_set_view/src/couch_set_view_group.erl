@@ -119,7 +119,7 @@
     waiting_list = []                  :: [#waiter{}],
     cleaner_pid = nil                  :: 'nil' | pid(),
     shutdown = false                   :: boolean(),
-    shutdown_aliases                   :: [binary()],
+    shutdown_aliases                   :: undefined | [binary()],
     auto_cleanup = true                :: boolean(),
     auto_transfer_replicas = true      :: boolean(),
     replica_partitions = []            :: ordsets:ordset(partition_id()),
