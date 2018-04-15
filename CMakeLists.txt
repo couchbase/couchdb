@@ -10,8 +10,23 @@ SET(abs_top_builddir ${CMAKE_CURRENT_BINARY_DIR})
 FILE(GLOB_RECURSE COUCHDB_ALL_ERLANG_HEADERS
      FOLLOW_SYMLINKS ${CMAKE_CURRENT_SOURCE_DIR}/src/*.hrl)
 
-ADD_CUSTOM_TARGET(check COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -j4
-                  DEPENDS dialyzer)
+IF(WIN32)
+ADD_CUSTOM_TARGET(check
+    COMMAND ${CMAKE_COMMAND} -E echo "Running unit tests with ipv4 bind address"
+    COMMAND ${CMAKE_COMMAND} -E env ipv6=false ${CMAKE_CTEST_COMMAND} --output-on-failure
+    COMMAND ${CMAKE_COMMAND} -E echo "Running unit tests with ipv6 bind address"
+    COMMAND ${CMAKE_COMMAND} -E env ipv6=true ${CMAKE_CTEST_COMMAND} --output-on-failure
+    DEPENDS dialyzer
+    )
+ELSE(WIN32)
+ADD_CUSTOM_TARGET(check
+    COMMAND ${CMAKE_COMMAND} -E echo "Running unit tests with ipv4 bind address"
+    COMMAND ${CMAKE_COMMAND} -E env ipv6=false ${CMAKE_CTEST_COMMAND} --output-on-failure -j4
+    COMMAND ${CMAKE_COMMAND} -E echo "Running unit tests with ipv6 bind address"
+    COMMAND ${CMAKE_COMMAND} -E env ipv6=true ${CMAKE_CTEST_COMMAND} --output-on-failure -j4
+    DEPENDS dialyzer
+    )
+ENDIF(WIN32)
 
 IF(WIN32)
   ADD_DEFINITIONS(-D__WIN32__)

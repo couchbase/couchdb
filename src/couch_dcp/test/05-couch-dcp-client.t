@@ -27,26 +27,21 @@ num_docs_pp() -> num_docs() div num_set_partitions().
 -define(DCP_MSG_SIZE_STREAM_END, 28).
 
 main(_) ->
-    etap:plan(112),
-    case {run_test(false), run_test(true)} of
-    {ok, ok} ->
-        etap:end_tests();
-    Other ->
-        etap:diag(io_lib:format("test died abnormally: ~p", [Other])),
-        etap:bail(Other)
+    test_util:init_code_path(),
+
+    etap:plan(56),
+    case (catch test()) of
+        ok ->
+            etap:end_tests();
+        Other ->
+            etap:diag(io_lib:format("Test died abnormally: ~p", [Other])),
+            etap:bail(Other)
     end,
     ok.
 
-run_test(IsIPv6) ->
-    test_util:init_code_path(),
-    case (catch test(IsIPv6)) of
-        ok -> ok;
-        Other -> Other
-    end.
 
-test(IsIPv6) ->
-    couch_set_view_test_util:start_server(test_set_name(), IsIPv6),
-
+test() ->
+    couch_set_view_test_util:start_server(test_set_name()),
     setup_test(),
 
     tests(),
@@ -366,6 +361,7 @@ tests() ->
     % when data is 20% consumed, client sends the buffer ack to increase
     % the flow control buffer.
     try_until_unthrottled(Pid, StreamReq0_4, 0, 210),
+    timer:sleep(500),
     NumBufferAck3 = couch_dcp_fake_server:get_num_buffer_acks(),
     etap:is(NumBufferAck3, NumBufferAck + 1, "Got the buffer ack"),
     couch_dcp_client:remove_stream(Pid, 0),

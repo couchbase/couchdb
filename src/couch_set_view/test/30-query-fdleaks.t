@@ -26,26 +26,21 @@ num_docs() -> 8000.
 
 
 main(_) ->
-    etap:plan(12),
-    case {run_test(false), run_test(true)} of
-    {ok, ok} ->
-        etap:end_tests();
-    Other ->
-        etap:diag(io_lib:format("test died abnormally: ~p", [Other])),
-        etap:bail(Other)
+    test_util:init_code_path(),
+
+    etap:plan(6),
+    case (catch test()) of
+        ok ->
+            etap:end_tests();
+        Other ->
+            etap:diag(io_lib:format("Test died abnormally: ~p", [Other])),
+            etap:bail(Other)
     end,
     ok.
 
-run_test(IsIPv6) ->
-    test_util:init_code_path(),
-    case (catch test(IsIPv6)) of
-        ok -> ok;
-        Other -> Other
-    end.
 
-test(IsIPv6) ->
-    couch_set_view_test_util:start_server(test_set_name(), IsIPv6),
-
+test() ->
+    couch_set_view_test_util:start_server(test_set_name()),
     etap:diag("Checking view with only map function for leaks"),
     test_group_refleaks(map),
     etap:diag("Checking view with reducer function for leaks"),

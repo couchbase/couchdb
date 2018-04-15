@@ -35,25 +35,21 @@ admin_user_ctx() ->
 
 
 main(_) ->
-    etap:plan(146),
-    case {run_test(false), run_test(true)} of
-    {ok, ok} ->
-        etap:end_tests();
-    Other ->
-        etap:diag(io_lib:format("Test died abnormally: ~p", [Other])),
-        etap:bail(Other)
+    test_util:init_code_path(),
+
+    etap:plan(73),
+    case (catch test()) of
+        ok ->
+            etap:end_tests();
+        Other ->
+            etap:diag(io_lib:format("Test died abnormally: ~p", [Other])),
+            etap:bail(Other)
     end,
     ok.
 
-run_test(IsIPv6) ->
-    test_util:init_code_path(),
-    case (catch test(IsIPv6)) of
-        ok -> ok;
-        Other -> Other
-    end.
 
-test(IsIPv6) ->
-    couch_set_view_test_util:start_server(test_set_name(), IsIPv6),
+test() ->
+    couch_set_view_test_util:start_server(test_set_name()),
 
     create_set(),
     ValueGenFun1 = fun(I) -> I end,
@@ -92,6 +88,7 @@ test(IsIPv6) ->
             ", currently marked for cleanup in the pending transition"),
         ok = couch_set_view_test_util:delete_set_db(test_set_name(), PartId)
     end, lists:seq(2, num_set_partitions() - 1, 2)),
+    ok = timer:sleep(5000),
     etap:is(is_process_alive(GroupPid), true, "Group process didn't die"),
 
     % Recreate database 1, populate new contents, verify that neither old
@@ -101,6 +98,7 @@ test(IsIPv6) ->
     ok = couch_set_view:set_partition_states(
            mapreduce_view, test_set_name(), ddoc_id(), [], [], [1]),
     recreate_db(1, 9000009),
+    ok = timer:sleep(6000),
     etap:is(is_process_alive(GroupPid), true, "Group process didn't die"),
 
     {ok, Db0} = open_db(0),
@@ -130,6 +128,7 @@ test(IsIPv6) ->
 recreate_db(PartId, Value) ->
     DbName = iolist_to_binary([test_set_name(), $/, integer_to_list(PartId)]),
     ok = couch_server:delete(DbName, [admin_user_ctx()]),
+    ok = timer:sleep(300),
     {ok, Db} = couch_db:create(DbName, [admin_user_ctx()]),
     Doc = couch_doc:from_json_obj({[
         {<<"meta">>, {[{<<"id">>, doc_id(Value)}]}},

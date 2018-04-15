@@ -25,25 +25,21 @@ num_docs() -> 8000.
 
 
 main(_) ->
-    etap:plan(50),
-    case {run_test(false), run_test(true)} of
-    {ok, ok} ->
-        etap:end_tests();
-    Other ->
-        etap:diag(io_lib:format("Test died abnormally: ~p", [Other])),
-        etap:bail(Other)
+    test_util:init_code_path(),
+
+    etap:plan(25),
+    case (catch test()) of
+        ok ->
+            etap:end_tests();
+        Other ->
+            etap:diag(io_lib:format("Test died abnormally: ~p", [Other])),
+            etap:bail(Other)
     end,
     ok.
 
-run_test(IsIPv6) ->
-    test_util:init_code_path(),
-    case (catch test(IsIPv6)) of
-        ok -> ok;
-        Other -> Other
-    end.
 
-test(IsIPv6) ->
-    couch_set_view_test_util:start_server(test_set_name(), IsIPv6),
+test() ->
+    couch_set_view_test_util:start_server(test_set_name()),
 
     create_set(lists:seq(0, num_set_partitions() - 1), []),
     ValueGenFun1 = fun(I) -> I end,
@@ -65,6 +61,7 @@ test(IsIPv6) ->
         lists:seq(0, num_set_partitions() - 1),
         true),
 
+    ok = timer:sleep(3000),
 
     etap:is(is_process_alive(GroupPid), true,
         "Group is alive after database compactions"),

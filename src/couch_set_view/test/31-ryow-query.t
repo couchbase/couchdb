@@ -25,26 +25,21 @@ num_docs() -> 5000.
 -define(TIMEOUT, 600000).
 
 main(_) ->
-    etap:plan(2),
-    case {run_test(false), run_test(true)} of
-    {ok, ok} ->
-        etap:end_tests();
-    Other ->
-        etap:diag(io_lib:format("test died abnormally: ~p", [Other])),
-        etap:bail(Other)
+    test_util:init_code_path(),
+
+    etap:plan(1),
+    case (catch test()) of
+        ok ->
+            etap:end_tests();
+        Other ->
+            etap:diag(io_lib:format("Test died abnormally: ~p", [Other])),
+            etap:bail(Other)
     end,
     ok.
 
-run_test(IsIPv6) ->
-    test_util:init_code_path(),
-    case (catch test(IsIPv6)) of
-        ok -> ok;
-        Other -> Other
-    end.
-
-test(IsIPv6) ->
-    couch_set_view_test_util:start_server(test_set_name(), IsIPv6),
-
+test() ->
+    etap:diag("Testing stale=false query for RYOW property"),
+    couch_set_view_test_util:start_server(test_set_name()),
     etap:diag("Adding documents with value = 0"),
     create_set(),
     GroupPid = couch_set_view:get_group_pid(
@@ -59,7 +54,7 @@ test(IsIPv6) ->
     {ok, UpdaterPid} = gen_server:call(GroupPid, {start_updater, [pause]}, ?TIMEOUT),
     Parent = self(),
     QueryPid = spawn(fun() ->
-        setup_query_env(IsIPv6),
+        setup_query_env(),
         {ok, {ViewResults}} = couch_set_view_test_util:query_view(
             test_set_name(), ddoc_id(), <<"test">>, ["stale=false"]),
         Parent ! {query_response, self(), ViewResults}
@@ -94,14 +89,13 @@ test(IsIPv6) ->
     ok.
 
 
-setup_query_env(IsIPv6) ->
-    case IsIPv6 of
-    false ->
-        put(addr, couch_config:get("httpd", "ip4_bind_address", "127.0.0.1"));
-    true ->
-        IP6Addr = couch_config:get("httpd", "ip6_bind_address", "::1"),
-        IP6Addr2 = "[" ++ IP6Addr ++ "]",
-        put(addr, IP6Addr2)
+setup_query_env() ->
+    case misc:is_ipv6() of
+        false ->
+            put(addr, couch_config:get("httpd", "ip4_bind_address", "127.0.0.1"));
+        true ->
+            Ip6Addr = couch_config:get("httpd", "ip6_bind_address", "::1"),
+            put(addr, "[" ++ Ip6Addr ++ "]")
     end,
     put(port, integer_to_list(mochiweb_socket_server:get(couch_httpd, port))),
     ok.

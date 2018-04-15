@@ -19,7 +19,7 @@ default_config() ->
 
 main(_) ->
     test_util:init_code_path(),
-    etap:plan(4),
+    etap:plan(3),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -46,17 +46,15 @@ test() ->
         "Created a new non-persisted k/v pair."
     ),
 
-    ok = couch_config:set("httpd", "ip4_bind_address", "127.0.0.1"),
-    etap:is(
-        couch_config:get("httpd", "ip4_bind_address"),
-        "127.0.0.1",
-        "Asking for a persistent key/value pair doesn't choke."
-    ),
+    {Field, Addr} = case misc:is_ipv6() of
+                true -> {"ip6_bind_address", "::1"};
+                false -> {"ip4_bind_address", "127.0.0.1"}
+            end,
 
-    ok = couch_config:set("httpd", "ip6_bind_address", "::1"),
+    ok = couch_config:set("httpd", Field, Addr),
     etap:is(
-        couch_config:get("httpd", "ip6_bind_address"),
-        "::1",
+        couch_config:get("httpd", Field),
+        Addr,
         "Asking for a persistent key/value pair doesn't choke."
     ),
 

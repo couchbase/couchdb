@@ -87,8 +87,6 @@ main(_) ->
     ok.
 
 test() ->
-    ets:new(ipv6, [set, protected, named_table]),
-    ets:insert(ipv6, {is_ipv6, false}),
     couch_server_sup:start_link(test_util:config_files()),
     couch_file_write_guard:disable_for_testing(),
     couch_server:delete(<<"etap-test-db">>, []),
@@ -165,5 +163,4 @@ test() ->
               "Db should still be compactable."),
     couch_db:close(Db3),
     couch_server:delete(<<"etap-test-db">>, []),
-    ets:delete(ipv6),
     ok.
