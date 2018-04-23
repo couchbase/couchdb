@@ -437,9 +437,9 @@ wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup) ->
                 couch_util:shutdown_sync(DocLoader),
                 couch_util:shutdown_sync(Mapper),
                 couch_util:shutdown_sync(Writer)
-            end,
-            stop_dcp_streams(OldGroup#set_view_group.dcp_pid)
+            end
         end,
+        stop_dcp_streams(OldGroup#set_view_group.dcp_pid),
         exit({updater_error, shutdown});
     {add_stream, DcpPid, PartId, PartUuid, StartSeq, EndSeq, Flags} ->
         Result = couch_dcp_client:add_stream(DcpPid, PartId, PartUuid, StartSeq, EndSeq, Flags),
@@ -581,7 +581,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                         AccVersions2 = AccVersions,
                         AccRollbacks2 = AccRollbacks,
                         ?LOG_ERROR("set view `~s`, ~s (~s) group `~s` error"
-                            "while loading changes for partition ~p:~n~p~n",
+                            " while loading changes for partition ~p:~n~p~n",
                             [?LOG_USERDATA(SetName), GroupType, Category, ?LOG_USERDATA(DDocId), PartId,
                                 Error]),
                         throw(Error)

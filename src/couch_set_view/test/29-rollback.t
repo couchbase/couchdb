@@ -24,25 +24,21 @@ num_docs() -> 128.  % keep it a multiple of num_set_partitions()
 
 
 main(_) ->
-    etap:plan(132),
-    case {run_test(false), run_test(true)} of
-    {ok, ok} ->
-        etap:end_tests();
-    Other ->
-        etap:diag(io_lib:format("test died abnormally: ~p", [Other])),
-        etap:bail(Other)
+    test_util:init_code_path(),
+
+    etap:plan(66),
+    case (catch test()) of
+        ok ->
+            etap:end_tests();
+        Other ->
+            etap:diag(io_lib:format("Test died abnormally: ~p", [Other])),
+            etap:bail(Other)
     end,
     ok.
 
-run_test(IsIPv6) ->
-    test_util:init_code_path(),
-    case (catch test(IsIPv6)) of
-        ok -> ok;
-        Other -> Other
-    end.
 
-test(IsIPv6) ->
-    couch_set_view_test_util:start_server(test_set_name(), IsIPv6),
+test() ->
+    couch_set_view_test_util:start_server(test_set_name()),
 
     etap:diag("Testing rollback of indexes"),
 
@@ -211,7 +207,7 @@ test_rollback_to_first_header() ->
     %  Verify that are no previous headers left
     {ok, HeaderBin3, Pos3} = couch_file:find_header_bin(Fd2, Pos2 - 1),
     etap:is(Pos3, 0,
-        "There are no headers Other than the one the file starts with"),
+        "There are no headers other than the one the file starts with"),
 
     % Pick a sequence number that is lower than the one from the header,
     % hence doesn't exist in the file

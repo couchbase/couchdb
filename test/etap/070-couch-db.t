@@ -28,8 +28,7 @@ main(_) ->
     ok.
 
 test() ->
-    ets:new(ipv6, [set, protected, named_table]),
-    ets:insert(ipv6, {is_ipv6, false}),
+
     couch_server_sup:start_link(test_util:config_files()),
 
     couch_db:create(<<"etap-test-db">>, []),
@@ -71,5 +70,4 @@ test() ->
     end, 0, lists:seq(1, 6)),
     etap:is(6, NumDeleted, "Deleted all databases."),
 
-    ets:delete(ipv6),
     ok.

@@ -18,7 +18,7 @@
 % This is used only in standalone couchdb unit tests
 
 is_ipv6() ->
-    case ets:lookup(ipv6, is_ipv6) of
-        [{is_ipv6, true}] -> true;
+    case os:getenv("ipv6") of
+        "true" -> true;
         _ -> false
     end.

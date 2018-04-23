@@ -14,7 +14,7 @@
 
 -module(couch_set_view_test_util).
 
--export([start_server/1, start_server/2, stop_server/0]).
+-export([start_server/0, start_server/1, stop_server/0]).
 -export([create_set_dbs/2, delete_set_dbs/2, doc_count/2]).
 -export([open_set_db/2, get_db_main_pid/1, delete_set_db/2]).
 -export([populate_set_alternated/3, populate_set_sequentially/3]).
@@ -36,12 +36,10 @@
 
 -define(DCP_SERVER_PORT, 12345).
 
-start_server(IsIPv6) ->
-    ets:new(ipv6, [set, protected, named_table]),
-    ets:insert(ipv6, {is_ipv6, IsIPv6}),
+start_server() ->
     couch_server_sup:start_link(test_util:config_files()),
     ok = timer:sleep(100),
-    case IsIPv6 of
+    case misc:is_ipv6() of
     false ->
         put(addr, couch_config:get("httpd", "ip4_bind_address", "127.0.0.1"));
     true ->
@@ -52,7 +50,7 @@ start_server(IsIPv6) ->
     put(port, integer_to_list(mochiweb_socket_server:get(couch_httpd, port))).
 
 
-start_server(SetName, IsIPv6) ->
+start_server(SetName) ->
     couch_config:start_link(test_util:config_files()),
     DbDir = couch_config:get("couchdb", "database_dir"),
     IndexDir = couch_config:get("couchdb", "view_index_dir"),
@@ -79,7 +77,7 @@ start_server(SetName, IsIPv6) ->
     % The build slaves can be slow, hence set the DCP connection timeout
     % high enough to prevent sporadic failures
     ok = couch_config:set("dcp", "connection_timeout", "10000", false),
-    start_server(IsIPv6),
+    start_server(),
     % Also start the fake DCP server that is needed for testing
     {ok, DcpPid} = couch_dcp_fake_server:start(SetName),
     put(test_util_dcp_pid, DcpPid),
@@ -87,7 +85,6 @@ start_server(SetName, IsIPv6) ->
 
 
 stop_server() ->
-    ets:delete(ipv6),
     DcpPid = get(test_util_dcp_pid),
     couch_util:shutdown_sync(DcpPid),
     couch_server_sup:stop(),

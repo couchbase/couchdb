@@ -19,7 +19,7 @@ default_config() ->
 
 main(_) ->
     test_util:init_code_path(),
-    etap:plan(6),
+    etap:plan(5),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -62,21 +62,19 @@ test() ->
 
     ok = couch_config:set("httpd", "port", "8080", false),
 
+    {Field, Addr, AddrAny} = case misc:is_ipv6() of
+                true -> {"ip6_bind_address", "::1", "::0"};
+                false -> {"ip4_bind_address", "127.0.0.1", "0.0.0.0"}
+            end,
+
+
     % Implicitly checking that we *don't* call the function
     etap:is(
-        couch_config:get("httpd", "ip4_bind_address"),
-        "127.0.0.1",
-        "{httpd, ip4_bind_address} is not '0.0.0.0'"
+        couch_config:get("httpd", Field),
+        Addr,
+        "{httpd, " ++ Field ++ "} is not " ++ AddrAny
     ),
-    ok = couch_config:set("httpd", "ip4_bind_address", "0.0.0.0", false),
-
-    etap:is(
-        couch_config:get("httpd", "ip6_bind_address"),
-        "::1",
-        "{httpd, ip6_bind_address} is not ::"
-    ),
-    ok = couch_config:set("httpd", "ip6_bind_address", "::", false),
-
+    ok = couch_config:set("httpd", Field, AddrAny, false),
 
     % Ping-Pong kill process
     SentinelPid ! {ping, self()},

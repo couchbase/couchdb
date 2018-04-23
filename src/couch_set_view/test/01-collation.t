@@ -23,25 +23,21 @@ thread_counts() ->
     ].
 
 main(_) ->
-    etap:plan(2*(length(expectations()) + lists:sum(thread_counts()))),
-    case {run_test(false), run_test(true)} of
-    {ok, ok} ->
-        etap:end_tests();
-    Other ->
-        etap:diag(io_lib:format("Test died abnormally: ~p", [Other])),
-        etap:bail(Other)
+    test_util:init_code_path(),
+
+    etap:plan(length(expectations()) + lists:sum(thread_counts())),
+    case (catch test()) of
+        ok ->
+            etap:end_tests();
+        Other ->
+            etap:diag(io_lib:format("Test died abnormally: ~p", [Other])),
+            etap:bail(Other)
     end,
     ok.
 
-run_test(IsIPv6) ->
-    test_util:init_code_path(),
-    case (catch test(IsIPv6)) of
-        ok -> ok;
-        Other -> Other
-    end.
 
-test(IsIPv6) ->
-    couch_set_view_test_util:start_server(<<"set_view_raw_collator">>, IsIPv6),
+test() ->
+    couch_set_view_test_util:start_server(<<"set_view_raw_collator">>),
 
     etap:diag("Running single thread tests"),
     single_thread(),

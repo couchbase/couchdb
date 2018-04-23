@@ -17,25 +17,21 @@
 -include_lib("couch_set_view/include/couch_set_view.hrl").
 
 main(_) ->
-    etap:plan(18),
-    case {run_test(false), run_test(true)} of
-    {ok, ok} ->
-        etap:end_tests();
-    Other ->
-        etap:diag(io_lib:format("Test died abnormally: ~p", [Other])),
-        etap:bail(Other)
+    test_util:init_code_path(),
+
+    etap:plan(9),
+    case (catch test()) of
+        ok ->
+            etap:end_tests();
+        Other ->
+            etap:diag(io_lib:format("Test died abnormally: ~p", [Other])),
+            etap:bail(Other)
     end,
     ok.
 
-run_test(IsIPv6) ->
-    test_util:init_code_path(),
-    case (catch test(IsIPv6)) of
-        ok -> ok;
-        Other -> Other
-    end.
 
-test(IsIPv6) ->
-    couch_set_view_test_util:start_server(<<"couch_set_view_header_tests">>, IsIPv6),
+test() ->
+    couch_set_view_test_util:start_server(<<"couch_set_view_header_tests">>),
 
     EmptyHeader = #set_view_index_header{},
     EmptyGroup = #set_view_group{
@@ -125,5 +121,5 @@ test(IsIPv6) ->
     etap:isnt(Header3Bin,
               Header2Bin,
               "Serialized forms of headers 2 and 3 are different"),
-    couch_set_view_test_util:stop_server(),
+    couch_set_view_util:stop_server(),
     ok.

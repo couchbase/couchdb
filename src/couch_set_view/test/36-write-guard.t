@@ -25,25 +25,21 @@ ddoc_id() -> <<"_design/test">>.
 
 
 main(_) ->
-    etap:plan(6),
-    case {run_test(false), run_test(true)} of
-    {ok, ok} ->
-        etap:end_tests();
-    Other ->
-        etap:diag(io_lib:format("test died abnormally: ~p", [Other])),
-        etap:bail(Other)
+    test_util:init_code_path(),
+
+    etap:plan(3),
+    case (catch test()) of
+        ok ->
+            etap:end_tests();
+        Other ->
+            etap:diag(io_lib:format("Test died abnormally: ~p", [Other])),
+            etap:bail(Other)
     end,
     ok.
 
-run_test(IsIPv6) ->
-    test_util:init_code_path(),
-    case (catch test(IsIPv6)) of
-        ok -> ok;
-        Other -> Other
-    end.
 
-test(IsIPv6) ->
-    couch_set_view_test_util:start_server(test_set_name(), IsIPv6),
+test() ->
+    couch_set_view_test_util:start_server(test_set_name()),
 
     etap:diag("Testing startup when header is invalid"),
 
@@ -65,8 +61,8 @@ test(IsIPv6) ->
 
     % Shutdown the group, so that it fails when it starts up again
     couch_util:shutdown_sync(whereis(couch_setview_server_name_prod)),
-    % wait for server to come up
-    timer:sleep(2000),
+    % Wait for server to restart
+    timer:sleep(1000),
 
     % The first query leads to an error due to the invalid header
     {ok, Body1} = couch_set_view_test_util:query_view(
