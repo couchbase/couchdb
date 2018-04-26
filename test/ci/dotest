@@ -76,7 +76,7 @@ error_email() {
        -s west.smtp.mx.exch029.serverdata.net:25 \
        -f 'Views CI <community_admin@couchbase.com>' \
        -t $WATCHERS \
-       -u 'Views CI just broke'
+       -u "Views CI $CINAME broke"
 }
 
 error_exit() {
@@ -129,16 +129,17 @@ collect_logs
 stop_cluster
 
 # Integration tests
-echo "</pre><h4>Integration tests</h4><pre>"
-export phase=integration
-cd $WORKSPACE/testrunner
-(timeout 2h "No integration tests defined" 2>&1 | ts) | tee -a $WORKSPACE/test.log
-collect_logs
+#echo "</pre><h4>Integration tests</h4><pre>"
+#export phase=integration
+#cd $WORKSPACE/testrunner
+#(timeout 2h "No integration tests defined" 2>&1 | ts) | tee -a $WORKSPACE/test.log
+#collect_logs
 
 # Verify results
 > /tmp/fail.log
 cd $WORKSPACE/couchdb
 grep 'make:\s\*\*\*\s\[test-view.*\]\s' $WORKSPACE/test.log >> /tmp/fail.log
+grep 'recipe for target .* failed' $WORKSPACE/test.log >> /tmp/fail.log
 grep '\sfail\s*$' $WORKSPACE/test.log >> /tmp/fail.log
 grep 'FAIL\s*github.com/couchbase' $WORKSPACE/test.log >> /tmp/fail.log
 grep -- '--- FAIL:' $WORKSPACE/test.log >> /tmp/fail.log
@@ -173,7 +174,7 @@ git rev-parse HEAD > ~/forestdb.good
 cd $WORKSPACE/ns_server
 git rev-parse HEAD > ~/ns_server.good
 cd $WORKSPACE/couchdb
-git rev-parse HEAD > ~/couchdb.good
+git rev-parse couchbase/$BRANCH > ~/couchdb.good
 cd $WORKSPACE/couchstore
 git rev-parse HEAD > ~/couchstore.good
 cd $WORKSPACE/goproj/src/github.com/couchbase/plasma
@@ -184,6 +185,8 @@ cd $WORKSPACE/testrunner
 git rev-parse HEAD > ~/testrunner.good
 cd $WORKSPACE/kv_engine
 git rev-parse HEAD > ~/kv_engine.good
+cd $WORKSPACE/geocouch
+git rev-parse HEAD > ~/geocouch.good
 
 touch ~/.cigreen
 exit 0

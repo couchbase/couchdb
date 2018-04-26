@@ -5,7 +5,7 @@ export PATH=$PATH:~/bin
 rm -rf ~/.ciscripts
 git clone -q git://github.com/couchbase/couchdb ~/.ciscripts
 cd ~/.ciscripts
-git checkout unstable
+(source ~/.cienv; git checkout $BRANCH)
 
 while true; do
   git pull -q

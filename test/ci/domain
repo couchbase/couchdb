@@ -2,12 +2,15 @@
 
 if [ ! -f ~/.cienv ]; then
 cat > ~/.cienv <<EOF
+    export CINAME=ci-views
     export WORKSPACE=/opt/build
     export RELEASE=5.0.0
     export MANIFEST="couchbase-server/spock.xml"
     export MODE="test"
+    export BRANCH="unstable"
     #export WATCHERS="somebody@couchbase.com nobody@couchbase.com"
-    #export PEGGED=3277
+    #export PEGGED=1979          # Set to fix base build, 0 means latest
+    #export GERRIT="90331 90332" # Pick up uncommitted changes from gerrit
 EOF
 fi
 source ~/.cienv
