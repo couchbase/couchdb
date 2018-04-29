@@ -14,6 +14,7 @@
 % License for the specific language governing permissions and limitations under
 % the License.
 
+-include_lib("couch_dcp/include/couch_dcp_typespecs.hrl").
 -include_lib("couch_dcp/include/couch_dcp.hrl").
 
 test_set_name() -> <<"couch_test_couch_dcp_client">>.

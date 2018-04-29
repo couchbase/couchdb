@@ -14,9 +14,9 @@
 % License for the specific language governing permissions and limitations under
 % the License.
 
+-include("../../couchdb/couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
 
--define(b2l(B), binary_to_list(B)).
 -define(MAX_WAIT_TIME, 60000).
 
 test_set_name() -> <<"couch_test_set_index_query_fdleaks">>.

@@ -17,6 +17,7 @@
 % This test is about a corrupted file on group startup. This lead to
 % dangling references in the couch_file_write_guard.
 
+-include("../../couchdb/couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
 
 test_set_name() -> <<"couch_test_set_view_write_guard">>.

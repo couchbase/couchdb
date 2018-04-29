@@ -14,21 +14,15 @@
 % License for the specific language governing permissions and limitations under
 % the License.
 
+-include("../../couchdb/couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
 
--define(JSON_ENCODE(V), ejson:encode(V)). % couch_db.hrl
 -define(MAX_WAIT_TIME, 600 * 1000).
 
 test_set_name() -> <<"couch_test_set_pending_transition">>.
 num_set_partitions() -> 64.
 ddoc_id() -> <<"_design/test">>.
 num_docs() -> 20288.  % keep it a multiple of num_set_partitions()
-
--record(user_ctx, {
-    name = null,
-    roles = [],
-    handler
-}).
 
 admin_user_ctx() ->
     {user_ctx, #user_ctx{roles = [<<"_admin">>]}}.
