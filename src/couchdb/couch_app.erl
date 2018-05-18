@@ -62,8 +62,9 @@ start_apps([App|Rest]) ->
        start_apps(Rest);
     {error, {already_started, App}} ->
        start_apps(Rest);
-    {error, _Reason} when App =:= public_key ->
+    {error, _Reason} when App =:= public_key; App =:= couch_index_merger ->
        % ignore on R12B5
+       % don't crash the node if couch_query_logger fails to start
        start_apps(Rest);
     {error, Reason} ->
        error_logger:error_msg("Could not start app ~p: ~p~n", [App, Reason]),

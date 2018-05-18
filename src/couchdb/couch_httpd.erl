@@ -477,26 +477,42 @@ verify_is_server_admin(#user_ctx{roles=Roles}) ->
     end.
 
 log_request(#httpd{mochi_req=MochiReq,peer=Peer}=Req, Code) ->
-    ?LOG_INFO("~s - - ~s ~s ~B", [?LOG_USERDATA(Peer),
-                                  ?LOG_USERDATA(MochiReq:get(method)),
-                                  ?LOG_USERDATA(MochiReq:get(raw_path)),
-                                  Code]),
-    try log_post_request(Req) of _ -> ok
-    catch _:_ -> ok end.
+    Path = case MochiReq:get(method) of
+    'POST' ->
+        log_parse_post(Req);
+    _ ->
+        MochiReq:get(raw_path)
+    end,
+    ?LOG_INFO("~s -- ~s ~s ~B", [?LOG_USERDATA(Peer),
+                                 MochiReq:get(method),
+                                 ?LOG_USERDATA(Path),
+                                 Code]).
 
-log_post_request(#httpd{mochi_req=MochiReq}=Req) ->
-    case MochiReq:get(method) of 'POST' ->
-        Views = proplists:get_value(<<"views">>, element(1, json_body_obj(Req))),
-        Sets = proplists:get_value(<<"sets">>, element(1, Views)),
-        {BucketBin, DDocList} = lists:nth(1, element(1, Sets)),
-        Bucket = binary_to_list(BucketBin),
-        ViewBin = proplists:get_value(<<"view">>, element(1, DDocList)),
-        Tokens = string:tokens(binary_to_list(ViewBin),"/"),
-        View = lists:last(Tokens),
-        ViewList = lists:subtract(Tokens, [View]) ++ ["_view",View],
-        DDocView = string:join(ViewList, "/"),
-        ?LOG_INFO("POST - Bucket: ~s, View: ~s",[?LOG_USERDATA(Bucket), ?LOG_USERDATA(DDocView)]);
-     _ -> ok
+log_parse_post(Req) ->
+    try log_do_parse(Req) of Str -> ?l2b(Str)
+    catch _:_ -> "" end.
+
+log_do_parse(#httpd{method='POST'} = Req) ->
+    {[{Bucket, {Props}}]} = couch_util:get_nested_json_value(
+        json_body_obj(Req), [<<"views">>, <<"sets">>]),
+    ViewName = couch_util:get_value(<<"view">>, Props),
+    {DDoc, View} = couch_util:parse_view_name(ViewName),
+    [<<"/">>, Bucket, <<"/">>, DDoc, <<"/_view/">>, View].
+
+log_volume(#httpd{path_parts=Parts, mochi_req=MochiReq} = Req, Code) ->
+    try
+        {Origin, Path} = case Parts of
+            [_, <<"_design">>, _, <<"_view">>, _] ->
+                {external, MochiReq:get(path)};
+            _ ->
+                {internal, ?b2l(?l2b(log_do_parse(Req)))}
+        end,
+        Staleness = list_to_existing_atom(string:to_lower(
+            couch_httpd:qs_value(Req, "stale", "update_after"))),
+        ok = couch_query_logger:log(Path, Origin, Staleness)
+    catch
+        _:_ ->
+            log_request(Req, Code)
     end.
 
 start_response_length(#httpd{mochi_req=MochiReq}=Req, Code, Headers, Length) ->
@@ -540,7 +556,7 @@ http_1_0_keep_alive(Req, Headers) ->
     end.
 
 start_chunked_response(#httpd{mochi_req=MochiReq}=Req, Code, Headers) ->
-    log_request(Req, Code),
+    log_volume(Req, Code),
     Headers2 = http_1_0_keep_alive(MochiReq, Headers),
     Resp = MochiReq:respond({Code, Headers2, chunked}),
     case MochiReq:get(method) of

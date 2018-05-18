@@ -102,7 +102,7 @@ validate_sets_param({[_ | _] = Sets}) ->
                 ok
             end,
 
-            {DDocId, Vn} = parse_view_name(ViewName),
+            {DDocId, Vn} = couch_util:parse_view_name(ViewName),
             case not(is_list(Partitions)) orelse
                 lists:any(fun (X) -> not(is_integer(X)) end, Partitions) of
             true ->
@@ -124,18 +124,6 @@ validate_sets_param({[_ | _] = Sets}) ->
 validate_sets_param(_) ->
     throw({bad_request, <<"`sets` parameter must be an object with at ",
                           "least 1 property.">>}).
-
-parse_view_name(Name) ->
-    Tokens = string:tokens(couch_util:trim(?b2l(Name)), "/"),
-    case [?l2b(couch_httpd:unquote(Token)) || Token <- Tokens] of
-    [DDocName, ViewName] ->
-        {<<"_design/", DDocName/binary>>, ViewName};
-    [<<"_design">>, DDocName, ViewName] ->
-        {<<"_design/", DDocName/binary>>, ViewName};
-    _ ->
-        throw({bad_request, "A `view` property must have the shape"
-            " `ddoc_name/view_name`."})
-    end.
 
 
 revision_param(nil) ->
