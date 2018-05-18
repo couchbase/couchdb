@@ -30,10 +30,19 @@ SET_TARGET_PROPERTIES(mapreduce_nif PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/priv"
 )
 
-IF (APPLE)
+IF (UNIX)
+    # It would be nice to share this code from
+    # tlm/cmake/Modules/CouchbaseRpath.cmake, but unfortunately MacOS has
+    # a distinction between @loader_path and @executable_path that doesn't
+    # map to anything on other Unices, so it just has to be special
+    IF (APPLE)
+        SET (ORIGIN @loader_path)
+    ELSE ()
+        SET (ORIGIN \$ORIGIN)
+    ENDIF ()
     # map from lib/couchdb/erlang/lib/mapreduce-1.0/priv/ to lib/
     SET_TARGET_PROPERTIES(mapreduce_nif PROPERTIES
-                          INSTALL_RPATH "@loader_path/../../../../..")
+                          INSTALL_RPATH "${ORIGIN}/../../../../..")
 ENDIF ()
 
 ERL_BUILD(APPNAME "mapreduce" SOURCES mapreduce.erl)
