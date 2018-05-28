@@ -977,7 +977,11 @@ handle_call({before_database_delete, SetName}, _From, Server) ->
         fun({_SetName, {_DDocId, Sig}}) ->
             case ets:lookup(Server#server.sig_to_pid_ets, {SetName, Sig}) of
             [{_, Pid}] when is_pid(Pid) ->
-                gen_server:call(Pid, before_master_delete);
+                try
+                    gen_server:call(Pid, before_master_delete)
+                catch
+                    exit:{noproc, _Reason} -> ok;
+                end;
             _ ->
                 ok
             end
