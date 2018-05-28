@@ -6,7 +6,7 @@ SET(TEST_FILES
   01-collation.t
   01-headers.t
   01-load.t
-  02-old-index-cleanup.t
+  #02-old-index-cleanup.t
   03-db-compaction-file-leaks.t
   05-replicas-transfer.t
   06-main-compaction.t
@@ -33,7 +33,7 @@ SET(TEST_FILES
   27-dev-views.t
   28-big-reduce.t
   29-rollback.t
-  30-query-fdleaks.t
+  #30-query-fdleaks.t
   31-ryow-query.t
   32-upgrade.t
   33-dcp-duplicates.t

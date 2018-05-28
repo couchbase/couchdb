@@ -30,6 +30,7 @@
 -export([brace/1, debrace/1]).
 -export([split_iolist/2]).
 -export([log_data/2]).
+-export([parse_view_name/1]).
 
 -include("couch_db.hrl").
 
@@ -87,7 +88,7 @@ shutdown_sync(Pid) ->
     after
         erlang:demonitor(MRef, [flush])
     end.
-    
+
 
 simple_call(Pid, Message) ->
     MRef = erlang:monitor(process, Pid),
@@ -168,7 +169,7 @@ json_user_ctx(#db{name=DbName, user_ctx=Ctx}) ->
     {[{<<"db">>, DbName},
             {<<"name">>,Ctx#user_ctx.name},
             {<<"roles">>,Ctx#user_ctx.roles}]}.
-    
+
 
 % returns a random integer
 rand32() ->
@@ -432,3 +433,16 @@ log_data(Tag, Arg) when is_binary(Arg) ->
     io_lib:format("<~p>~s</~p>", [Tag, Arg, Tag]);
 log_data(Tag, Arg) ->
     io_lib:format("<~p>~p</~p>", [Tag, Arg, Tag]).
+
+parse_view_name(Name) ->
+    Tokens = string:tokens(couch_util:trim(?b2l(Name)), "/"),
+    case [?l2b(couch_httpd:unquote(Token)) || Token <- Tokens] of
+        [DDocName, ViewName] ->
+            {<<"_design/", DDocName/binary>>, ViewName};
+        [<<"_design">>, DDocName, ViewName] ->
+            {<<"_design/", DDocName/binary>>, ViewName};
+        _ ->
+            throw({bad_request, "A `view` property must have the shape"
+            " `ddoc_name/view_name`."})
+    end.
+

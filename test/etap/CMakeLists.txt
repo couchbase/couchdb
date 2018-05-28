@@ -16,7 +16,7 @@ SET(TEST_FILES
   041-uuid-gen.t
   042-work-queue.t
   070-couch-db.t
-  071-couch-db-external-write.t
+  #071-couch-db-external-write.t
   073-changes.t
   080-config-get-set.t
   081-config-override.t
