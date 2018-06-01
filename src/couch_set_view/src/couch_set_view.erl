@@ -980,7 +980,7 @@ handle_call({before_database_delete, SetName}, _From, Server) ->
                 try
                     gen_server:call(Pid, before_master_delete)
                 catch
-                    exit:{noproc, _Reason} -> ok;
+                    exit:{noproc, _Reason} -> ok
                 end;
             _ ->
                 ok
