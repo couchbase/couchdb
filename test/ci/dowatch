@@ -10,8 +10,7 @@ fi
 for i in {1..240}; do
   cd $WORKSPACE
   sleep 60
-  branch=unstable
-  current="`git ls-remote git://github.com/couchbase/couchdb $branch | awk '{print $1}'`"
+  current="`git ls-remote git://github.com/couchbase/couchdb $BRANCH | awk '{print $1}'`"
   good="`cat ~/couchdb.good`"
   if [ "$current" != "$good" ]; then exit 0; fi
 done
