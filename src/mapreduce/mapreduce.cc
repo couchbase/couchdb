@@ -129,7 +129,7 @@ static void freeLogResults(map_reduce_ctx_t *ctx);
 static Platform *v8platform;
 void initV8()
 {
-    V8::InitializeICU();
+    V8::InitializeICUDefaultLocation("");
     v8platform = platform::CreateDefaultPlatform();
     V8::InitializePlatform(v8platform);
     V8::Initialize();
