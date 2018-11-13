@@ -73,7 +73,7 @@
 -define(SEQS_CACHE_TTL, 300000).
 
 -define(DCP_OPEN_INCLUDE_XATTRS, 16#04).
--define(DCP_OPEN_NO_VALUE, 16#08).
+-define(DCP_OPEN_NO_VALUE_WITH_UNDERLYING_DATATYPE, 16#40).
 
 -record(util_stats, {
     useful_indexing_time = 0.0  :: float(),
@@ -445,7 +445,7 @@ do_init({_, SetName, _} = InitArgs) ->
         {ok, doc_fields_unused} ->
             ?LOG_INFO("~s set view group `~s`, set `~s` (~s), doc_fields_unused",
               [Type, ?LOG_USERDATA(Group#set_view_group.name), ?LOG_USERDATA(SetName), Category]),
-            ?DCP_OPEN_NO_VALUE bor ?DCP_OPEN_INCLUDE_XATTRS;
+            ?DCP_OPEN_NO_VALUE_WITH_UNDERLYING_DATATYPE bor ?DCP_OPEN_INCLUDE_XATTRS;
         {ok, doc_fields_used} ->
             ?LOG_INFO("~s set view group `~s`, set `~s` (~s), doc_fields_used",
               [Type, ?LOG_USERDATA(Group#set_view_group.name), ?LOG_USERDATA(SetName), Category]),
