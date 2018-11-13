@@ -785,6 +785,15 @@ accumulate_xattr(Body, Acc, XATTRSize, AccSum) ->
     Xattr = binary:replace(Data2, <<0>>, <<"\":">>),
     accumulate_xattr(Rest2, <<Acc/binary, Xattr/binary>>, XATTRSize, AccSum2).
 
+%With DCP_OPEN_NO_VALUE_UNDERLYING_DATATYPE flag set dcp can send datatype as json even if body is empty.
+%This will fail during json parsing of doc body with "Unexpected end of JSON input (line 1:0)".
+%Change the doc body if doc is empty binary.
+-spec change_docbody_if_empty(binary())-> binary().
+change_docbody_if_empty(<<>>)->
+        <<"\"\"">>;
+change_docbody_if_empty(DocBody) ->
+        DocBody.
+
 do_maps(Group, MapQueue, WriteQueue) ->
     #set_view_group{
         set_name = SetName,
@@ -838,7 +847,8 @@ do_maps(Group, MapQueue, WriteQueue) ->
                     {?CONTENT_META_NON_JSON_MODE, DocBody2, XATTRs2};
                 ?DCP_DATA_TYPE_JSON ->
                     {DocBody3, XATTRs3} = accumulate_xattr(Body, <<"\"xattrs\":{">>, 0, 0),
-                    {?CONTENT_META_JSON, DocBody3, XATTRs3};
+                    DocBody6 = change_docbody_if_empty(DocBody3),
+                    {?CONTENT_META_JSON, DocBody6, XATTRs3};
                 ?DCP_DATA_TYPE_BINARY_XATTR ->
                     <<XATTRSize:32, Rest/binary>> = Body,
                     {DocBody4, XATTRs4} = accumulate_xattr(Rest, <<"\"xattrs\":{">>, XATTRSize, 0),
@@ -846,7 +856,8 @@ do_maps(Group, MapQueue, WriteQueue) ->
                 ?DCP_DATA_TYPE_JSON_XATTR ->
                     <<XATTRSize:32, Rest/binary>> = Body,
                     {DocBody5, XATTRs5} = accumulate_xattr(Rest, <<"\"xattrs\":{">>, XATTRSize, 0),
-                    {?CONTENT_META_JSON, DocBody5, XATTRs5}
+                    DocBody7 = change_docbody_if_empty(DocBody5),
+                    {?CONTENT_META_JSON, DocBody7, XATTRs5}
                 end,
                 Doc = #doc{
                     id = Id,
