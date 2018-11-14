@@ -29,6 +29,11 @@ SET_TARGET_PROPERTIES(mapreduce_nif PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/priv"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/priv"
 )
+# mapreduce_nif is loaded into Erlang VM (beam.smp) which doesn't
+# link the sanitizer libs and hence cannot successfully
+# load mapreduce_nif if it has the sanitizers enabled. As such
+# disable them.
+remove_sanitizers(mapreduce_nif)
 
 IF (APPLE)
     # map from lib/couchdb/erlang/lib/mapreduce-1.0/priv/ to lib/
