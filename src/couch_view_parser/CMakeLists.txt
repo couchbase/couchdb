@@ -32,12 +32,16 @@ ADD_LIBRARY(couch_view_parser_nif MODULE ${COUCH_VIEW_YAJL_SRC})
 SET_TARGET_PROPERTIES(couch_view_parser_nif PROPERTIES PREFIX "")
 
 TARGET_LINK_LIBRARIES(couch_view_parser_nif ${COUCHBASE_UNRESOLVED}
-                                   ${COUCHBASE_MATH_LIBS} platform)
+                                   ${COUCHBASE_MATH_LIBS} platform_unsanitized)
 SET_TARGET_PROPERTIES(couch_view_parser_nif PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/priv"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/priv"
 )
-
+# couch_view_parser_nif is loaded into Erlang VM (beam.smp) which
+# doesn't link the sanitizer libs and hence cannot successfully load
+# couch_view_parser_nif if it has the sanitizers enabled. As such
+# disable them.
+remove_sanitizers(couch_view_parser_nif)
 
 ERL_BUILD(APPNAME "couch_view_parser" SOURCES couch_view_parser.erl)
 
