@@ -42,7 +42,7 @@ fi
 test "$BLD_NUM" = "0" || echo "Using pegged server, $BLD_NUM build"
 echo "Calculating base"
 rm -rf ~/.manifests
-git clone https://github.com/couchbase/build-team-manifests ~/.manifests 1>>$WORKSPACE/make.log 2>&1
+git clone https://github.com/couchbase/build-manifests ~/.manifests 1>>$WORKSPACE/make.log 2>&1
 cd ~/.manifests
 
 test "$BLD_NUM" = "0" && BLD_NUM="`git log --oneline | grep "couchbase-server" | grep "$RELEASE-[0-9]" | head -1 | awk -F- '{print $3}'`"
@@ -53,7 +53,7 @@ echo "Updating mirror"
 cd ~/.reference
 repo sync --jobs=32 1>>$WORKSPACE/make.log 2>&1
 
-echo "Basing run on $RELEASE-$BLD_NUM <a href=https://github.com/couchbase/build-team-manifests/blob/$SHA/$MANIFEST>$SHA</a>"
+echo "Basing run on $RELEASE-$BLD_NUM <a href=https://github.com/couchbase/build-manifests/blob/$SHA/$MANIFEST>$SHA</a>"
 find $WORKSPACE -mindepth 1 -not -name '*.log' -exec rm -rf {} + 1>>$WORKSPACE/make.log 2>&1
 mkdir -p $WORKSPACE 1>>$WORKSPACE/make.log 2>&1
 cd $WORKSPACE
