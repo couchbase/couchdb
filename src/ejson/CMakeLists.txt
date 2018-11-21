@@ -27,6 +27,11 @@ SET_TARGET_PROPERTIES(ejson PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/priv"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/priv"
 )
+# ejson is loaded into Erlang VM (beam.smp) which doesn't
+# link the sanitizer libs and hence cannot successfully
+# load ejson if it has the sanitizers enabled. As such
+# disable them.
+remove_sanitizers(ejson)
 
 
 
