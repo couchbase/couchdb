@@ -35,11 +35,8 @@ test() ->
     % them, and 1 succeeds while others will fail.
     couch_set_view_test_util:start_server(),
     {ok, RepDb} = couch_db:open_int(<<"_replicator">>, []),
-    {ok, UsersDb} = couch_db:open_int(<<"_users">>, []),
     {ok, _} = couch_db:ensure_full_commit(RepDb),
-    {ok, _} = couch_db:ensure_full_commit(UsersDb),
     ok = couch_db:close(RepDb),
-    ok = couch_db:close(UsersDb),
     etap:is(true, true, "Preparation for parallel testing done"),
     couch_set_view_test_util:stop_server(),
     ok.

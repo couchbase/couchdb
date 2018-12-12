@@ -22,7 +22,8 @@
     encode_failover_log/2, encode_stat/3, encode_stat_error/3,
     encode_sasl_auth/1, encode_stream_close_response/2,
     encode_select_bucket_response/2, encode_control_flow_ok/1,
-    encode_buffer_ack_ok/1, encode_noop_request/1]).
+    encode_buffer_ack_ok/1, encode_noop_request/1,
+    encode_seqs/2]).
 
 -include_lib("couch_dcp/include/couch_dcp.hrl").
 -include_lib("couch_dcp/include/couch_dcp_typespecs.hrl").
@@ -31,7 +32,8 @@
 -spec parse_header(<<_:192>>) ->
                           {atom(), request_id(), partition_id()} |
                           {atom(), size(), request_id()} |
-                          {atom(), size(), request_id(), partition_id()}.
+                          {atom(), size(), request_id(), partition_id()} |
+                          {atom(), request_id()}.
 parse_header(<<?DCP_MAGIC_REQUEST,
                Opcode,
                _KeyLength:?DCP_SIZES_KEY_LENGTH,
@@ -59,7 +61,9 @@ parse_header(<<?DCP_MAGIC_REQUEST,
     ?DCP_OPCODE_DCP_BUFFER ->
         {buffer_ack, BodyLength, RequestId};
     ?DCP_OPCODE_DCP_CONTROL ->
-        {control_request, BodyLength, RequestId}
+        {control_request, BodyLength, RequestId};
+    ?DCP_OPCODE_SEQS ->
+        {all_seqs, RequestId}
     end;
 
 parse_header(<<?DCP_MAGIC_RESPONSE,
@@ -132,6 +136,18 @@ encode_snapshot_marker(PartId, RequestId, StartSeq, EndSeq, Type) ->
                0:?DCP_SIZES_CAS>>,
     <<Header/binary, Body/binary>>.
 
+-spec generate_xattr_body(binary()) -> binary().
+generate_xattr_body(Value) ->
+    Temp = binary:split(Value, <<",">>),
+    [Xattr | _] = Temp,
+    <<"{\"xattrs\":", Random/binary>> = Xattr,
+    XattrKey = <<"xattr_key",0>>,
+    XattrVal = <<Random/binary, 0>>,
+    Xattr2 = <<XattrKey/binary, XattrVal/binary>>,
+    XattrSize = byte_size(Xattr2),
+    TotalXattrSize = XattrSize + 4,
+    <<TotalXattrSize:32, XattrSize:32, Xattr2/binary>>.
+
 %DCP_MUTATION command
 %Field        (offset) (value)
 %Magic        (0)    : 0x80
@@ -159,12 +175,29 @@ encode_snapshot_marker(PartId, RequestId, StartSeq, EndSeq, Type) ->
                                       binary().
 encode_snapshot_mutation(PartId, RequestId, Cas, Seq, RevSeq, Flags,
                          Expiration, LockTime, Key, Value) ->
-    % XXX vmx 2014-01-08: No metadata support for now
-    MetadataLength = 0,
-    % NRU is set intentionally to some strange value, to simulate
-    % that it could be anything and should be ignored.
-    Nru = 87,
-    Body = <<Seq:?DCP_SIZES_BY_SEQ,
+    case binary:match(Value, <<"\"deleted\"">>) of
+    nomatch ->
+        {DataType, XATTRBody} = case ejson:validate(Value) of
+        ok ->
+            case binary:match(Value, <<"\"xattrs\"">>) of
+            nomatch ->
+                {?DCP_DATA_TYPE_JSON, <<>>};
+            _ ->
+                {?DCP_DATA_TYPE_JSON_XATTR, generate_xattr_body(Value)}
+            end;
+        _ ->
+            {?DCP_DATA_TYPE_RAW, <<>>}
+        end,
+        % XXX vmx 2014-01-08: No metadata support for now
+        MetadataLength = 0,
+        % NRU is set intentionally to some strange value, to simulate
+        % that it could be anything and should be ignored.
+        Nru = 87,
+        KeyLength = byte_size(Key),
+
+        XattrValue = <<XATTRBody/binary, Value/binary>>,
+        ValueLength = byte_size(XattrValue),
+        Body = <<Seq:?DCP_SIZES_BY_SEQ,
              RevSeq:?DCP_SIZES_REV_SEQ,
              Flags:?DCP_SIZES_FLAGS,
              Expiration:?DCP_SIZES_EXPIRATION,
@@ -172,20 +205,11 @@ encode_snapshot_mutation(PartId, RequestId, Cas, Seq, RevSeq, Flags,
              MetadataLength:?DCP_SIZES_METADATA_LENGTH,
              Nru:?DCP_SIZES_NRU_LENGTH,
              Key/binary,
-             Value/binary>>,
+             XattrValue/binary>>,
 
-    KeyLength = byte_size(Key),
-    ValueLength = byte_size(Value),
-    BodyLength = byte_size(Body),
-    ExtraLength = BodyLength - KeyLength - ValueLength - MetadataLength,
-
-    DataType = case ejson:validate(Value) of
-    ok ->
-        ?DCP_DATA_TYPE_JSON;
-    _ ->
-        ?DCP_DATA_TYPE_RAW
-    end,
-    Header = <<?DCP_MAGIC_REQUEST,
+        BodyLength = byte_size(Body),
+        ExtraLength = BodyLength - KeyLength - ValueLength - MetadataLength,
+        Header = <<?DCP_MAGIC_REQUEST,
                ?DCP_OPCODE_MUTATION,
                KeyLength:?DCP_SIZES_KEY_LENGTH,
                ExtraLength,
@@ -194,7 +218,10 @@ encode_snapshot_mutation(PartId, RequestId, Cas, Seq, RevSeq, Flags,
                BodyLength:?DCP_SIZES_BODY,
                RequestId:?DCP_SIZES_OPAQUE,
                Cas:?DCP_SIZES_CAS>>,
-    <<Header/binary, Body/binary>>.
+        <<Header/binary, Body/binary>>;
+    _ ->
+        encode_snapshot_deletion(PartId, RequestId, Cas, Seq, RevSeq, Key, Value)
+    end.
 
 %DCP_DELETION command
 %Field        (offset) (value)
@@ -236,6 +263,46 @@ encode_snapshot_deletion(PartId, RequestId, Cas, Seq, RevSeq, Key) ->
                RequestId:?DCP_SIZES_OPAQUE,
                Cas:?DCP_SIZES_CAS>>,
     <<Header/binary, Body/binary>>.
+
+-spec encode_snapshot_deletion(partition_id(), request_id(), non_neg_integer(),
+                               non_neg_integer(), non_neg_integer(),
+                               binary(), binary()) -> binary().
+encode_snapshot_deletion(PartId, RequestId, Cas, Seq, RevSeq, Key, Value) ->
+    % XXX vmx 2014-01-08: No metadata support for now
+    {DataType, XATTRBody} = case ejson:validate(Value) of
+    ok ->
+        case binary:match(Value, <<"\"xattrs\"">>) of
+        nomatch ->
+            {?DCP_DATA_TYPE_RAW, <<>>};
+        _ ->
+            {?DCP_DATA_TYPE_BINARY_XATTR, generate_xattr_body(Value)}
+        end;
+    _ ->
+        {?DCP_DATA_TYPE_RAW, <<>>}
+    end,
+
+    MetadataLength = 0,
+    ValueLength = byte_size(XATTRBody),
+    Body = <<Seq:?DCP_SIZES_BY_SEQ,
+             RevSeq:?DCP_SIZES_REV_SEQ,
+             MetadataLength:?DCP_SIZES_METADATA_LENGTH,
+             Key/binary, XATTRBody/binary>>,
+
+    KeyLength = byte_size(Key),
+    BodyLength = byte_size(Body),
+    ExtraLength = BodyLength - KeyLength - ValueLength - MetadataLength,
+
+    Header = <<?DCP_MAGIC_REQUEST,
+               ?DCP_OPCODE_DELETION,
+               KeyLength:?DCP_SIZES_KEY_LENGTH,
+               ExtraLength,
+               DataType,
+               PartId:?DCP_SIZES_PARTITION,
+               BodyLength:?DCP_SIZES_BODY,
+               RequestId:?DCP_SIZES_OPAQUE,
+               Cas:?DCP_SIZES_CAS>>,
+    <<Header/binary, Body/binary>>.
+
 
 %DCP_STREAM_REQ response
 %Field        (offset) (value)
@@ -583,3 +650,36 @@ encode_noop_request(RequestId) ->
       0:?DCP_SIZES_BODY,
       RequestId:?DCP_SIZES_OPAQUE,
       0:?DCP_SIZES_CAS>>.
+
+%GET_ALL_VB_SEQNOS response
+%Field        (offset) (value)
+%Magic        (0)    : 0x81
+%Opcode       (1)    : 0x48
+%Key length   (2,3)  : 0x0000
+%Extra length (4)    : 0x00
+%Data type    (5)    : 0x00
+%Status       (6,7)  : 0x0000
+%Total body   (8-11) : 0x00000014
+%Opaque       (12-15): 0x00000000
+%CAS          (16-23): 0x0000000000000000
+%  vb         (24-25): 0x0000
+%  vb seqno   (26-33): 0x0000000000005432
+%  vb         (34-35): 0x0001
+%  vb seqno   (36-43): 0x0000000000001111
+-spec encode_seqs(request_id(), [tuple()]) -> binary().
+encode_seqs(RequestId, PartIdSeqs) ->
+    Body = lists:foldl(
+        fun({PartId, Seq}, Acc) ->
+            <<Acc/binary, PartId:?DCP_SIZES_PARTITION, Seq:?DCP_SIZES_BY_SEQ>>
+        end, <<>>, PartIdSeqs),
+    BodyLength = byte_size(Body),
+    Header = <<?DCP_MAGIC_RESPONSE,
+               ?DCP_OPCODE_SEQS,
+               0:?DCP_SIZES_KEY_LENGTH,
+               0,
+               0,
+               ?DCP_STATUS_OK:?DCP_SIZES_STATUS,
+               BodyLength:?DCP_SIZES_BODY,
+               RequestId:?DCP_SIZES_OPAQUE,
+               0:?DCP_SIZES_CAS>>,
+    <<Header/binary, Body/binary>>.

@@ -17,15 +17,20 @@
 -export([update/6]).
 % Exported for the MapReduce specific stuff
 -export([new_sort_file_name/1]).
-% Exported for unit tests only.
--export([convert_back_index_kvs_to_binary/2]).
+
+% Imported for log cleanup
+-import(couch_set_view_util, [condense/1]).
 
 -include("couch_db.hrl").
--include("couch_set_view_updater.hrl").
+-include_lib("couch_set_view/include/couch_set_view.hrl").
 -include_lib("couch_dcp/include/couch_dcp.hrl").
 
 -define(MAP_QUEUE_SIZE, 256 * 1024).
 -define(WRITE_QUEUE_SIZE, 512 * 1024).
+% The size of the accumulator the emitted key-values are queued up in before
+% they get actually queued. The bigger the value, the less the lock contention,
+% but the higher the possible memory consumption is.
+-define(QUEUE_ACC_BATCH_SIZE, 256 * 1024).
 
 % incremental updates
 -define(INC_MAX_TMP_FILE_SIZE, 31457280).
@@ -34,6 +39,30 @@
 % For file sorter and file merger commands.
 -define(PORT_OPTS,
         [exit_status, use_stdio, stderr_to_stdout, {line, 4096}, binary]).
+
+-record(writer_acc, {
+    parent,
+    owner,
+    group,
+    last_seqs = orddict:new(),
+    part_versions = orddict:new(),
+    compactor_running,
+    write_queue,
+    initial_build,
+    view_empty_kvs,
+    kvs = [],
+    kvs_size = 0,
+    state = updating_active,
+    final_batch = false,
+    max_seqs,
+    stats = #set_view_updater_stats{},
+    tmp_dir = nil,
+    initial_seqs,
+    max_insert_batch_size,
+    tmp_files = dict:new(),
+    throttle = 0,
+    force_flush = false
+}).
 
 
 -spec update(pid(), #set_view_group{},
@@ -82,31 +111,33 @@ update(Owner, Group, CurSeqs, CompactorRunning, TmpDir, Options) ->
     CleanupParts = couch_set_view_util:decode_bitmask(?set_cbitmask(Group)),
     InitialBuild = couch_set_view_util:is_initial_build(Group),
     ?LOG_INFO("Updater for set view `~s`, ~s group `~s` started~n"
-              "Active partitions:    ~w~n"
-              "Passive partitions:   ~w~n"
-              "Cleanup partitions:   ~w~n"
-              "Replicas to transfer: ~w~n"
+              "Active partitions:    ~s~n"
+              "Passive partitions:   ~s~n"
+              "Cleanup partitions:   ~s~n"
+              "Replicas to transfer: ~s~n"
               "Pending transition:   ~n"
-              "    active:           ~w~n"
-              "    passive:          ~w~n"
-              "    unindexable:      ~w~n"
+              "    active:           ~s~n"
+              "    passive:          ~s~n"
+              "    unindexable:      ~s~n"
               "Initial build:        ~s~n"
               "Compactor running:    ~s~n"
-              "Min # changes:        ~p~n"
-              "Partition versions:   ~w~n",
-              [SetName, Type, DDocId,
-               ActiveParts,
-               PassiveParts,
-               CleanupParts,
-               ?set_replicas_on_transfer(Group),
-               ?pending_transition_active(?set_pending_transition(Group)),
-               ?pending_transition_passive(?set_pending_transition(Group)),
-               ?pending_transition_unindexable(?set_pending_transition(Group)),
+              "Min # changes:        ~p~n",
+              [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId),
+               condense(ActiveParts),
+               condense(PassiveParts),
+               condense(CleanupParts),
+               condense(?set_replicas_on_transfer(Group)),
+               condense(?pending_transition_active(?set_pending_transition(Group))),
+               condense(?pending_transition_passive(?set_pending_transition(Group))),
+               condense(?pending_transition_unindexable(?set_pending_transition(Group))),
                InitialBuild,
                CompactorRunning,
-               NumChanges,
-               ?set_partition_versions(Group)
+               NumChanges
               ]),
+    ?LOG_DEBUG("Updater set view `~s`, ~s group `~s` Partition versions ~w",
+                       [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId), ?set_partition_versions(Group)]),
+
+
 
     WriterAcc0 = #writer_acc{
         parent = self(),
@@ -133,8 +164,7 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
         set_name = SetName,
         type = Type,
         name = DDocId,
-        sig = GroupSig,
-        mod = Mod
+        sig = GroupSig
     } = Group,
 
     StartTime = os:timestamp(),
@@ -144,25 +174,21 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
     {ok, MapQueue} = couch_work_queue:new(MapQueueOptions),
     {ok, WriteQueue} = couch_work_queue:new(WriteQueueOptions),
 
+    Parent = self(),
+
     Mapper = spawn_link(fun() ->
         try
-            couch_set_view_mapreduce:start_map_context(Group),
-            try
-                do_maps(Group, MapQueue, WriteQueue)
-            after
-                couch_set_view_mapreduce:end_map_context()
-            end
+            do_maps(Group, MapQueue, WriteQueue)
         catch _:Error ->
             Stacktrace = erlang:get_stacktrace(),
             ?LOG_ERROR("Set view `~s`, ~s group `~s`, mapper error~n"
                 "error:      ~p~n"
-                "stacktrace: ~p~n",
-                [SetName, Type, DDocId, Error, Stacktrace]),
+                "stacktrace: ~s~n",
+                [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId), Error, ?LOG_USERDATA(Stacktrace)]),
             exit(Error)
         end
     end),
 
-    Parent = self(),
     Writer = spawn_link(fun() ->
         BarrierEntryPid ! shutdown,
         ViewEmptyKVs = [{View, []} || View <- Group#set_view_group.views],
@@ -183,50 +209,45 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
         }),
         ok = couch_set_view_util:open_raw_read_fd(Group),
         try
-            Mod:start_reduce_context(Group),
-            try
-                WriterAcc3 = do_writes(WriterAcc2),
-                receive
-                {doc_loader_finished, {PartVersions0, RealMaxSeqs}} ->
-                    WriterAccStats = WriterAcc3#writer_acc.stats,
-                    WriterAccGroup = WriterAcc3#writer_acc.group,
-                    WriterAccHeader = WriterAccGroup#set_view_group.index_header,
-                    PartVersions = lists:ukeymerge(1, PartVersions0,
-                        WriterAccHeader#set_view_index_header.partition_versions),
-                    case WriterAcc3#writer_acc.initial_build of
-                    true ->
-                        % The doc loader might not load the mutations up to the
-                        % most recent one, but only to a lower one. Update the
-                        % group header and stats with the correct information.
-                        MaxSeqs = lists:ukeymerge(
-                            1, RealMaxSeqs, WriterAcc3#writer_acc.max_seqs),
-                        Stats = WriterAccStats#set_view_updater_stats{
-                            seqs = lists:sum([S || {_, S} <- MaxSeqs])
-                        };
-                    false ->
-                        MaxSeqs = WriterAccHeader#set_view_index_header.seqs,
-                        Stats = WriterAcc3#writer_acc.stats
-                    end,
-                    FinalWriterAcc = WriterAcc3#writer_acc{
-                        stats = Stats,
-                        group = WriterAccGroup#set_view_group{
-                            index_header = WriterAccHeader#set_view_index_header{
-                                partition_versions = PartVersions,
-                                seqs = MaxSeqs
-                            }
+            WriterAcc3 = do_writes(WriterAcc2),
+            receive
+            {doc_loader_finished, {PartVersions0, RealMaxSeqs}} ->
+                WriterAccStats = WriterAcc3#writer_acc.stats,
+                WriterAccGroup = WriterAcc3#writer_acc.group,
+                WriterAccHeader = WriterAccGroup#set_view_group.index_header,
+                PartVersions = lists:ukeymerge(1, PartVersions0,
+                    WriterAccHeader#set_view_index_header.partition_versions),
+                case WriterAcc3#writer_acc.initial_build of
+                true ->
+                    % The doc loader might not load the mutations up to the
+                    % most recent one, but only to a lower one. Update the
+                    % group header and stats with the correct information.
+                    MaxSeqs = lists:ukeymerge(
+                        1, RealMaxSeqs, WriterAccHeader#set_view_index_header.seqs),
+                    Stats = WriterAccStats#set_view_updater_stats{
+                        seqs = lists:sum([S || {_, S} <- RealMaxSeqs])
+                    };
+                false ->
+                    MaxSeqs = WriterAccHeader#set_view_index_header.seqs,
+                    Stats = WriterAcc3#writer_acc.stats
+                end,
+                FinalWriterAcc = WriterAcc3#writer_acc{
+                    stats = Stats,
+                    group = WriterAccGroup#set_view_group{
+                        index_header = WriterAccHeader#set_view_index_header{
+                            partition_versions = PartVersions,
+                            seqs = MaxSeqs
                         }
                     }
-                end,
-                Parent ! {writer_finished, FinalWriterAcc}
-            after
-                Mod:end_reduce_context(Group)
-            end
+                }
+            end,
+            Parent ! {writer_finished, FinalWriterAcc}
         catch _:Error ->
             Stacktrace = erlang:get_stacktrace(),
             ?LOG_ERROR("Set view `~s`, ~s group `~s`, writer error~n"
                 "error:      ~p~n"
-                "stacktrace: ~p~n",
-                [SetName, Type, DDocId, Error, Stacktrace]),
+                "stacktrace: ~s~n",
+                [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId), ?LOG_USERDATA(Error), ?LOG_USERDATA(Stacktrace)]),
             exit(Error)
         after
             ok = couch_set_view_util:close_raw_read_fd(Group)
@@ -267,7 +288,8 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
         try
             {PartVersions, MaxSeqs} = load_changes(
                 Owner, Parent, Group, MapQueue, ActiveParts, PassiveParts,
-                WriterAcc#writer_acc.max_seqs, WriterAcc#writer_acc.initial_build),
+                WriterAcc#writer_acc.max_seqs,
+                WriterAcc#writer_acc.initial_build),
             Parent ! {doc_loader_finished, {PartVersions, MaxSeqs}}
         catch
         throw:purge ->
@@ -278,8 +300,8 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
             Stacktrace = erlang:get_stacktrace(),
             ?LOG_ERROR("Set view `~s`, ~s group `~s`, doc loader error~n"
                 "error:      ~p~n"
-                "stacktrace: ~p~n",
-                [SetName, Type, DDocId, Error, Stacktrace]),
+                "stacktrace: ~s~n",
+                [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId), Error, ?LOG_USERDATA(Stacktrace)]),
             exit(Error)
         end,
         % Since updater progress stats is added from docloader,
@@ -302,13 +324,41 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
         ?LOG_DEBUG("Updater for ~s set view group `~s`, set `~s`, writer finished:~n"
                    "  start seqs: ~w~n"
                    "  end seqs:   ~w~n",
-                   [Type, DDocId, SetName, ?set_seqs(Group), ?set_seqs(NewGroup)]);
+                   [Type, ?LOG_USERDATA(DDocId), ?LOG_USERDATA(SetName), ?set_seqs(Group), ?set_seqs(NewGroup)]);
     _ ->
         ok
     end,
     DocLoader ! updater_finished,
     exit(Result).
 
+-spec get_active_dcp_streams(pid()) -> list().
+get_active_dcp_streams(DcpPid) ->
+    case couch_dcp_client:list_streams(DcpPid) of
+    {active_list_streams, ActiveStreams} ->
+        ActiveStreams;
+    {retry_list_streams, Timeout} ->
+        receive
+        after Timeout ->
+            get_active_dcp_streams(DcpPid)
+        end
+    end.
+
+-spec stop_dcp_streams(pid()) -> ok.
+stop_dcp_streams(DcpPid) ->
+    ActiveStreams = get_active_dcp_streams(DcpPid),
+    lists:foreach(fun(ActiveStream) ->
+        case couch_dcp_client:remove_stream(DcpPid, ActiveStream) of
+        ok ->
+            ok;
+        {error, vbucket_stream_not_found} ->
+            ok;
+        Error ->
+            ?LOG_ERROR("Unexpected error for closing stream of partition ~p",
+                [ActiveStream]),
+            throw(Error)
+        end
+    end, ActiveStreams),
+    ok.
 
 wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup) ->
     #set_view_group{set_name = SetName, name = DDocId, type = Type} = OldGroup,
@@ -344,13 +394,13 @@ wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup) ->
     {compactor_started, Pid, Ref} ->
         ?LOG_INFO("Set view `~s`, ~s group `~s`, updater received "
                   "compactor ~p notification, ref ~p, writer ~p",
-                   [SetName, Type, DDocId, Pid, Ref, Writer]),
+                   [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId), Pid, Ref, Writer]),
         Writer ! {compactor_started, self()},
         erlang:put(compactor_pid, {Pid, Ref}),
         wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup);
     {compactor_started_ack, Writer, GroupSnapshot} ->
         ?LOG_INFO("Set view `~s`, ~s group `~s`, updater received compaction ack"
-                  " from writer ~p", [SetName, Type, DDocId, Writer]),
+                  " from writer ~p", [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId), Writer]),
         case erlang:erase(compactor_pid) of
         {Pid, Ref} ->
             Pid ! {Ref, {ok, GroupSnapshot}};
@@ -362,6 +412,7 @@ wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup) ->
         couch_util:shutdown_sync(DocLoader),
         couch_util:shutdown_sync(Mapper),
         couch_util:shutdown_sync(Writer),
+        stop_dcp_streams(OldGroup#set_view_group.dcp_pid),
         {updater_error, Reason};
     {native_updater_start, Writer} ->
         % We need control over spawning native updater process
@@ -388,7 +439,12 @@ wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup) ->
                 couch_util:shutdown_sync(Writer)
             end
         end,
-        exit({updater_error, shutdown})
+        stop_dcp_streams(OldGroup#set_view_group.dcp_pid),
+        exit({updater_error, shutdown});
+    {add_stream, DcpPid, PartId, PartUuid, StartSeq, EndSeq, Flags} ->
+        Result = couch_dcp_client:add_stream(DcpPid, PartId, PartUuid, StartSeq, EndSeq, Flags),
+        DocLoader ! {add_stream_result, Result},
+        wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup)
     end.
 
 
@@ -419,6 +475,11 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
 
     MaxDocSize = list_to_integer(
         couch_config:get("set_views", "indexer_max_doc_size", "0")),
+    AddStreamFun = fun(Pid, PartId, PartUuid, StartSeq, EndSeq, Flags) ->
+        Updater ! {add_stream, Pid, PartId, PartUuid, StartSeq, EndSeq, Flags},
+        receive {add_stream_result, Result} -> Result end,
+        Result
+    end,
     FoldFun = fun({PartId, EndSeq}, {AccCount, AccSeqs, AccVersions, AccRollbacks}) ->
         case couch_set_view_util:has_part_seq(PartId, ?set_unindexable_seqs(Group))
             andalso not lists:member(PartId, ?set_replicas_on_transfer(Group)) of
@@ -443,6 +504,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
             _ ->
                 Flags
             end,
+
             case AccRollbacks of
             [] ->
                 case EndSeq =:= Since of
@@ -457,11 +519,11 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                             Acc;
                         ({snapshot_marker, {MarkerStartSeq, MarkerEndSeq, MarkerType}}, {Count, _})
                             when MarkerType band ?DCP_SNAPSHOT_TYPE_MASK =/= 0 ->
-                            ?LOG_INFO(
+                            ?LOG_DEBUG(
                                 "set view `~s`, ~s (~s) group `~s`: received "
                                 "a snapshot marker (~s) for partition ~p from "
                                 "sequence ~p to ~p",
-                                [SetName, GroupType, Category, DDocId,
+                                [?LOG_USERDATA(SetName), GroupType, Category, ?LOG_USERDATA(DDocId),
                                     dcp_marker_to_string(MarkerType),
                                     PartId, MarkerStartSeq, MarkerEndSeq]),
                             case Count of
@@ -487,7 +549,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                                 "set view `~s`, ~s (~s) group `~s`: received "
                                 "a snapshot marker (~s) for partition ~p from "
                                 "sequence ~p to ~p",
-                                [SetName, GroupType, Category, DDocId,
+                                [?LOG_USERDATA(SetName), GroupType, Category, ?LOG_USERDATA(DDocId),
                                     dcp_marker_to_string(MarkerType),
                                     PartId, MarkerStartSeq, MarkerEndSeq]),
                             throw({error, unknown_snapshot_marker, MarkerType}),
@@ -500,7 +562,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                         end,
                     Result = couch_dcp_client:enum_docs_since(
                         DcpPid, PartId, PartVersions, Since, EndSeq, Flags2,
-                        ChangesWrapper, {0, 0}),
+                        ChangesWrapper, {0, 0}, AddStreamFun),
                     case Result of
                     {ok, {AccCount2, AccEndSeq}, NewPartVersions} ->
                         AccSeqs2 = orddict:store(PartId, AccEndSeq, AccSeqs),
@@ -519,8 +581,8 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                         AccVersions2 = AccVersions,
                         AccRollbacks2 = AccRollbacks,
                         ?LOG_ERROR("set view `~s`, ~s (~s) group `~s` error"
-                            "while loading changes for partition ~p:~n~p~n",
-                            [SetName, GroupType, Category, DDocId, PartId,
+                            " while loading changes for partition ~p:~n~p~n",
+                            [?LOG_USERDATA(SetName), GroupType, Category, ?LOG_USERDATA(DDocId), PartId,
                                 Error]),
                         throw(Error)
                     end,
@@ -533,7 +595,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                 ChangesWrapper = fun(_, _) -> ok end,
                 Result = couch_dcp_client:enum_docs_since(
                     DcpPid, PartId, PartVersions, Since, Since, Flags2,
-                    ChangesWrapper, ok),
+                    ChangesWrapper, ok, AddStreamFun),
                 case Result of
                 {ok, _, _} ->
                     AccRollbacks2 = AccRollbacks;
@@ -556,7 +618,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
     _ ->
         ?LOG_INFO("Updater reading changes from active partitions to "
                   "update ~s set view group `~s` from set `~s`",
-                  [GroupType, DDocId, SetName]),
+                  [GroupType, ?LOG_USERDATA(DDocId), ?LOG_USERDATA(SetName)]),
         {ActiveChangesCount, MaxSeqs, PartVersions, Rollbacks} = lists:foldl(
             FoldFun, {0, orddict:new(), PartVersions0, ordsets:new()},
             couch_set_view_util:filter_seqs(ActiveParts, EndSeqs))
@@ -570,7 +632,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
     _ ->
         ?LOG_INFO("Updater reading changes from passive partitions to "
                   "update ~s set view group `~s` from set `~s`",
-                  [GroupType, DDocId, SetName]),
+                  [GroupType, ?LOG_USERDATA(DDocId), ?LOG_USERDATA(SetName)]),
         {FinalChangesCount, MaxSeqs2, PartVersions2, Rollbacks2} = lists:foldl(
             FoldFun, {ActiveChangesCount, MaxSeqs, PartVersions, Rollbacks},
             couch_set_view_util:filter_seqs(PassiveParts, EndSeqs))
@@ -587,10 +649,11 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
     end,
 
     couch_work_queue:close(MapQueue),
-    ?LOG_INFO("Updater for ~s set view group `~s`, set `~s`, read a total of ~p changes",
-              [GroupType, DDocId, SetName, FinalChangesCount3]),
+    ?LOG_INFO("Updater for ~s set view group `~s`, set `~s` (~s), "
+              "read a total of ~p changes",
+              [GroupType, ?LOG_USERDATA(DDocId), ?LOG_USERDATA(SetName), Category, FinalChangesCount3]),
     ?LOG_DEBUG("Updater for ~s set view group `~s`, set `~s`, max partition seqs found:~n~w",
-               [GroupType, DDocId, SetName, MaxSeqs3]),
+               [GroupType, ?LOG_USERDATA(DDocId), ?LOG_USERDATA(SetName), MaxSeqs3]),
     {PartVersions3, MaxSeqs3}.
 
 
@@ -609,9 +672,9 @@ load_changes_from_passive_parts_in_mailbox(DcpPid,
         PartVersions = lists:ukeymerge(1, AddPartVersions, PartVersions0),
 
         MaxSeqs = lists:ukeymerge(1, AddMaxSeqs, MaxSeqs0),
-        ?LOG_INFO("Updater reading changes from new passive partitions ~w to "
+        ?LOG_INFO("Updater reading changes from new passive partitions ~s to "
                   "update ~s set view group `~s` from set `~s`",
-                  [Parts, GroupType, DDocId, SetName]),
+                  [condense(Parts), GroupType, ?LOG_USERDATA(DDocId), ?LOG_USERDATA(SetName)]),
         {ChangesCount2, MaxSeqs2, PartVersions2, Rollbacks2} = lists:foldl(
             FoldFun, {ChangesCount, MaxSeqs, PartVersions, Rollbacks}, AddMaxSeqs),
         load_changes_from_passive_parts_in_mailbox(DcpPid,
@@ -640,29 +703,46 @@ queue_doc({part_versions, _} = PartVersions, MapQueue, _Group, _MaxDocSize,
     _InitialBuild) ->
     couch_work_queue:queue(MapQueue, PartVersions);
 queue_doc(Doc, MapQueue, Group, MaxDocSize, InitialBuild) ->
-    case Doc#dcp_doc.deleted of
+    Doc2 = case Doc#dcp_doc.deleted of
+    true ->
+        case Group#set_view_group.index_xattr_on_deleted_docs of
+        true ->
+            case Doc#dcp_doc.body of
+            <<>> ->
+                Doc#dcp_doc{deleted = true};
+            _ ->
+                Doc#dcp_doc{deleted = false}
+            end;
+        false ->
+            Doc
+        end;
+    false ->
+        Doc
+    end,
+
+    case Doc2#dcp_doc.deleted of
     true when InitialBuild ->
         Entry = nil;
     true ->
-        Entry = Doc;
+        Entry = Doc2;
     false ->
         #set_view_group{
            set_name = SetName,
            name = DDocId,
            type = GroupType
         } = Group,
-        case couch_util:validate_utf8(Doc#dcp_doc.id) of
+        case couch_util:validate_utf8(Doc2#dcp_doc.id) of
         true ->
             case (MaxDocSize > 0) andalso
-                (iolist_size(Doc#dcp_doc.body) > MaxDocSize) of
+                (iolist_size(Doc2#dcp_doc.body) > MaxDocSize) of
             true ->
                 ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, skipping "
                     "document with ID `~s`: too large body (~p bytes)",
-                    [SetName, GroupType, DDocId,
-                     ?b2l(Doc#dcp_doc.id), iolist_size(Doc#dcp_doc.body)]),
-                Entry = Doc#dcp_doc{deleted = true};
+                    [?LOG_USERDATA(SetName), GroupType, ?LOG_USERDATA(DDocId),
+                     ?LOG_USERDATA(?b2l(Doc2#dcp_doc.id)), iolist_size(Doc2#dcp_doc.body)]),
+                Entry = Doc2#dcp_doc{deleted = true};
             false ->
-                Entry = Doc
+                Entry = Doc2
             end;
         false ->
             % If the id isn't utf8 (memcached allows it), then log an error
@@ -672,8 +752,8 @@ queue_doc(Doc, MapQueue, Group, MaxDocSize, InitialBuild) ->
             % not reprocess again.
             ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, skipping "
                 "document with non-utf8 id. Doc id bytes: ~w",
-                [SetName, GroupType, DDocId, ?b2l(Doc#dcp_doc.id)]),
-            Entry = Doc#dcp_doc{deleted = true}
+                [?LOG_USERDATA(SetName), GroupType, ?LOG_USERDATA(DDocId), ?LOG_USERDATA(?b2l(Doc2#dcp_doc.id))]),
+            Entry = Doc2#dcp_doc{deleted = true}
         end
     end,
     case Entry of
@@ -684,6 +764,35 @@ queue_doc(Doc, MapQueue, Group, MaxDocSize, InitialBuild) ->
         update_task(1)
     end.
 
+-spec accumulate_xattr(binary(), binary(), non_neg_integer(), non_neg_integer()) ->
+    {binary(), binary()}.
+accumulate_xattr(Data, Acc, XATTRSize, AccSum) when AccSum =:= XATTRSize ->
+    {Data, <<Acc/binary, "}">>};
+accumulate_xattr(Body, Acc, XATTRSize, AccSum) ->
+    <<DataSize:32, Rest/binary>> = Body,
+    AccSum2 = AccSum + DataSize + 4,
+    <<Data0:DataSize/binary, Rest2/binary>> = Rest,
+    % Remove last zero value from  XATTR
+    Data = binary:part(Data0, 0, DataSize-1),
+    % Jsonify key and value
+    Data2 = case AccSum2 of
+    XATTRSize ->
+        <<"\"", Data/binary>>;
+    _ ->
+        <<"\"", Data/binary, ",">>
+    end,
+    % Replace zero byte after key with colon
+    Xattr = binary:replace(Data2, <<0>>, <<"\":">>),
+    accumulate_xattr(Rest2, <<Acc/binary, Xattr/binary>>, XATTRSize, AccSum2).
+
+%With DCP_OPEN_NO_VALUE_UNDERLYING_DATATYPE flag set dcp can send datatype as json even if body is empty.
+%This will fail during json parsing of doc body with "Unexpected end of JSON input (line 1:0)".
+%Change the doc body if doc is empty binary.
+-spec change_docbody_if_empty(binary())-> binary().
+change_docbody_if_empty(<<>>)->
+        <<"\"\"">>;
+change_docbody_if_empty(DocBody) ->
+        DocBody.
 
 do_maps(Group, MapQueue, WriteQueue) ->
     #set_view_group{
@@ -697,16 +806,30 @@ do_maps(Group, MapQueue, WriteQueue) ->
         couch_work_queue:close(WriteQueue);
     {ok, Queue, _QueueSize} ->
         ViewCount = length(Group#set_view_group.views),
-        Items = lists:foldr(
-            fun(#dcp_doc{deleted = true} = DcpDoc, Acc) ->
+        {Items, _} = lists:foldl(
+            fun(#dcp_doc{deleted = true} = DcpDoc, {Acc, Size}) ->
                 #dcp_doc{
                     id = Id,
                     partition = PartId,
                     seq = Seq
                 } = DcpDoc,
                 Item = {Seq, Id, PartId, []},
-                [Item | Acc];
-            (#dcp_doc{deleted = false} = DcpDoc, Acc) ->
+                {[Item | Acc], Size};
+            (#dcp_doc{deleted = false} = DcpDoc, {Acc0, Size0}) ->
+                % When there are a lot of emits per document the memory can
+                % grow almost indefinitely as the queue size is only limited
+                % by the number of documents and not their emits.
+                % In case the accumulator grows huge, queue the items early
+                % into the writer queue. Only take emits into account, the
+                % other cases in this `foldl` won't ever have an significant
+                % size.
+                {Acc, Size} = case Size0 > ?QUEUE_ACC_BATCH_SIZE of
+                true ->
+                    couch_work_queue:queue(WriteQueue, lists:reverse(Acc0)),
+                    {[], 0};
+                false ->
+                    {Acc0, Size0}
+                end,
                 #dcp_doc{
                     id = Id,
                     body = Body,
@@ -718,49 +841,72 @@ do_maps(Group, MapQueue, WriteQueue) ->
                     flags = Flags,
                     data_type = DcpDataType
                 } = DcpDoc,
-                DataType = case DcpDataType of
+                {DataType, DocBody, XATTRs} = case DcpDataType of
                 ?DCP_DATA_TYPE_RAW ->
-                    ?CONTENT_META_NON_JSON_MODE;
+                    {DocBody2, XATTRs2} = accumulate_xattr(Body, <<"\"xattrs\":{">>, 0, 0),
+                    {?CONTENT_META_NON_JSON_MODE, DocBody2, XATTRs2};
                 ?DCP_DATA_TYPE_JSON ->
-                    ?CONTENT_META_JSON
+                    {DocBody3, XATTRs3} = accumulate_xattr(Body, <<"\"xattrs\":{">>, 0, 0),
+                    DocBody6 = change_docbody_if_empty(DocBody3),
+                    {?CONTENT_META_JSON, DocBody6, XATTRs3};
+                ?DCP_DATA_TYPE_BINARY_XATTR ->
+                    <<XATTRSize:32, Rest/binary>> = Body,
+                    {DocBody4, XATTRs4} = accumulate_xattr(Rest, <<"\"xattrs\":{">>, XATTRSize, 0),
+                    {?CONTENT_META_NON_JSON_MODE, DocBody4, XATTRs4};
+                ?DCP_DATA_TYPE_JSON_XATTR ->
+                    <<XATTRSize:32, Rest/binary>> = Body,
+                    {DocBody5, XATTRs5} = accumulate_xattr(Rest, <<"\"xattrs\":{">>, XATTRSize, 0),
+                    DocBody7 = change_docbody_if_empty(DocBody5),
+                    {?CONTENT_META_JSON, DocBody7, XATTRs5}
                 end,
                 Doc = #doc{
                     id = Id,
                     rev = {RevSeq, <<Cas:64, Expiration:32, Flags:32>>},
-                    body = Body,
+                    body = DocBody,
                     content_meta = DataType,
                     deleted = false
                 },
                 try
-                    {ok, Result} = couch_set_view_mapreduce:map(Doc),
+                    {ok, Result, LogList} = couch_set_view_mapreduce:map(
+                        Doc, XATTRs, PartId, Seq, Group),
                     {Result2, _} = lists:foldr(
                         fun({error, Reason}, {AccRes, Pos}) ->
                             ErrorMsg = "Bucket `~s`, ~s group `~s`, error mapping"
                                     " document `~s` for view `~s`: ~s",
                             ViewName = Mod:view_name(Group, Pos),
-                            Args = [SetName, Type, DDocId, Id, ViewName,
-                                    couch_util:to_binary(Reason)],
+                            Args = [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId),
+                                    ?LOG_USERDATA(Id), ?LOG_USERDATA(ViewName),
+                                    ?LOG_USERDATA(couch_util:to_binary(Reason))],
                             ?LOG_MAPREDUCE_ERROR(ErrorMsg, Args),
                             {[[] | AccRes], Pos - 1};
                         (KVs, {AccRes, Pos}) ->
                             {[KVs | AccRes], Pos - 1}
                         end,
                         {[], ViewCount}, Result),
+                    lists:foreach(
+                        fun(Msg) ->
+                            DebugMsg = "Bucket `~s`, ~s group `~s`, map function"
+                                " log for document `~s`: ~s",
+                            Args = [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId),
+                                    ?LOG_USERDATA(Id), binary_to_list(Msg)],
+                            ?LOG_MAPREDUCE_ERROR(DebugMsg, Args)
+                        end, LogList),
                     Item = {Seq, Id, PartId, Result2},
-                    [Item | Acc]
+                    {[Item | Acc], Size + erlang:external_size(Result2)}
                 catch _:{error, Reason} ->
                     ErrorMsg = "Bucket `~s`, ~s group `~s`, error mapping document `~s`: ~s",
-                    Args = [SetName, Type, DDocId, Id, couch_util:to_binary(Reason)],
+                    Args = [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId),
+                            ?LOG_USERDATA(Id), ?LOG_USERDATA(couch_util:to_binary(Reason))],
                     ?LOG_MAPREDUCE_ERROR(ErrorMsg, Args),
-                    [{Seq, Id, PartId, []} | Acc]
+                    {[{Seq, Id, PartId, []} | Acc], Size}
                 end;
-            (snapshot_marker, Acc) ->
-                [snapshot_marker | Acc];
-            ({part_versions, _} = PartVersions, Acc) ->
-                [PartVersions | Acc]
+            (snapshot_marker, {Acc, Size}) ->
+                {[snapshot_marker | Acc], Size};
+            ({part_versions, _} = PartVersions, {Acc, Size}) ->
+                {[PartVersions | Acc], Size}
             end,
-            [], Queue),
-        ok = couch_work_queue:queue(WriteQueue, Items),
+            {[], 0}, Queue),
+        ok = couch_work_queue:queue(WriteQueue, lists:reverse(Items)),
         do_maps(Group, MapQueue, WriteQueue)
     end.
 
@@ -814,36 +960,44 @@ flush_writes(#writer_acc{initial_build = false} = Acc0) ->
         group = Group,
         parent = Parent,
         owner = Owner,
-        last_seqs = LastSeqs,
+        final_batch = IsFinalBatch,
         part_versions = PartVersions
     } = Acc0,
+    Mod = Group#set_view_group.mod,
     % Only incremental updates can contain multiple snapshots
     {MultipleSnapshots, Kvs2} = merge_snapshots(Kvs),
+    Acc1 = case MultipleSnapshots of
+    true ->
+        Acc2 = maybe_update_btrees(Acc0#writer_acc{force_flush = true}),
+        checkpoint(Acc2);
+    false ->
+        Acc0
+    end,
+    #writer_acc{last_seqs = LastSeqs} = Acc1,
     {ViewKVs, DocIdViewIdKeys, NewLastSeqs, NewPartVersions} =
-        process_map_results(Kvs2, ViewEmptyKVs, LastSeqs, PartVersions),
-    Acc1 = Acc0#writer_acc{last_seqs = NewLastSeqs, part_versions = NewPartVersions},
-    Acc = write_to_tmp_batch_files(ViewKVs, DocIdViewIdKeys, Acc1),
-    #writer_acc{group = NewGroup} = Acc,
+        process_map_results(Mod, Kvs2, ViewEmptyKVs, LastSeqs, PartVersions),
+    Acc3 = Acc1#writer_acc{last_seqs = NewLastSeqs, part_versions = NewPartVersions},
+    Acc4 = write_to_tmp_batch_files(ViewKVs, DocIdViewIdKeys, Acc3),
+    #writer_acc{group = NewGroup} = Acc4,
     case ?set_seqs(NewGroup) =/= ?set_seqs(Group) of
     true ->
-        Acc2 = checkpoint(Acc),
-        case (Acc#writer_acc.state =:= updating_active) andalso
+        Acc5 = checkpoint(Acc4),
+        case (Acc4#writer_acc.state =:= updating_active) andalso
             lists:any(fun({PartId, _}) ->
                 ((1 bsl PartId) band ?set_pbitmask(Group) =/= 0)
             end, NewLastSeqs) of
         true ->
             notify_owner(Owner, {state, updating_passive}, Parent),
-            Acc2#writer_acc{state = updating_passive};
+            Acc5#writer_acc{state = updating_passive};
         false ->
-            Acc2
+            Acc5
         end;
     false ->
-        case MultipleSnapshots of
+        case IsFinalBatch of
         true ->
-            Acc2 = maybe_update_btrees(Acc#writer_acc{force_flush = true}),
-            checkpoint(Acc2);
+            checkpoint(Acc4);
         false ->
-            Acc
+            Acc4
         end
     end;
 
@@ -866,13 +1020,13 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
         mod = Mod
     } = Group,
     {ViewKVs, DocIdViewIdKeys, MaxSeqs2, PartVersions2} = process_map_results(
-        Kvs, ViewEmptyKVs, MaxSeqs, PartVersions),
+        Mod, Kvs, ViewEmptyKVs, MaxSeqs, PartVersions),
 
     IdRecords = lists:foldr(
         fun({_DocId, {_PartId, []}}, Acc) ->
                 Acc;
             (Kv, Acc) ->
-                [{KeyBin, ValBin}] = convert_back_index_kvs_to_binary([Kv], []),
+                [{KeyBin, ValBin}] = Mod:convert_back_index_kvs_to_binary([Kv], []),
                 KvBin = [<<(byte_size(KeyBin)):16>>, KeyBin, ValBin],
                 [[<<(iolist_size(KvBin)):32/native>>, KvBin] | Acc]
         end,
@@ -890,11 +1044,12 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
     false ->
         WriterAcc#writer_acc{
             max_seqs = MaxSeqs2,
-            stats = Stats2
+            stats = Stats2,
+            tmp_files = TmpFiles2
         };
     true ->
         ?LOG_INFO("Updater for set view `~s`, ~s group `~s`, starting btree "
-                  "build phase" , [SetName, Type, DDocId]),
+                  "build phase" , [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId)]),
         {Group2, BuildFd} = Mod:finish_build(Group, TmpFiles2, TmpDir),
         WriterAcc#writer_acc{
             tmp_files = dict:store(build_file, BuildFd, TmpFiles2),
@@ -906,13 +1061,13 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
     end.
 
 
-process_map_results(Kvs, ViewEmptyKVs, PartSeqs, PartVersions) ->
+process_map_results(Mod, Kvs, ViewEmptyKVs, PartSeqs, PartVersions) ->
     lists:foldl(
         fun({Seq, DocId, PartId, []}, {ViewKVsAcc, DocIdViewIdKeysAcc, PartIdSeqs, PartIdVersions}) ->
             PartIdSeqs2 = update_part_seq(Seq, PartId, PartIdSeqs),
             {ViewKVsAcc, [{DocId, {PartId, []}} | DocIdViewIdKeysAcc], PartIdSeqs2, PartIdVersions};
         ({Seq, DocId, PartId, QueryResults}, {ViewKVsAcc, DocIdViewIdKeysAcc, PartIdSeqs, PartIdVersions}) ->
-            {NewViewKVs, NewViewIdKeys} = view_insert_doc_query_results(
+            {NewViewKVs, NewViewIdKeys} = Mod:view_insert_doc_query_results(
                     DocId, PartId, QueryResults, ViewKVsAcc, [], []),
             PartIdSeqs2 = update_part_seq(Seq, PartId, PartIdSeqs),
             {NewViewKVs, [{DocId, {PartId, NewViewIdKeys}} | DocIdViewIdKeysAcc], PartIdSeqs2, PartIdVersions};
@@ -980,43 +1135,13 @@ update_part_versions(NewVersions, PartId, PartVersions) ->
     orddict:store(PartId, NewVersions, PartVersions).
 
 
-view_insert_doc_query_results(_DocId, _PartitionId, [], [], ViewKVsAcc, ViewIdKeysAcc) ->
-    {lists:reverse(ViewKVsAcc), lists:reverse(ViewIdKeysAcc)};
-view_insert_doc_query_results(DocId, PartitionId, [ResultKVs | RestResults],
-        [{View, KVs} | RestViewKVs], ViewKVsAcc, ViewIdKeysAcc) ->
-    % Take any identical keys and combine the values
-    {NewKVs, NewViewIdKeysAcc} = lists:foldl(
-        fun({Key, Val}, {[{{Key, PrevDocId} = Kd, PrevVal} | AccRest], AccVid}) when PrevDocId =:= DocId ->
-            AccKv2 = case PrevVal of
-            {PartitionId, {dups, Dups}} ->
-                [{Kd, {PartitionId, {dups, [Val | Dups]}}} | AccRest];
-            {PartitionId, UserPrevVal} ->
-                [{Kd, {PartitionId, {dups, [Val, UserPrevVal]}}} | AccRest]
-            end,
-            {AccKv2, AccVid};
-        ({Key, Val}, {AccKv, AccVid}) ->
-            {[{{Key, DocId}, {PartitionId, Val}} | AccKv], [Key | AccVid]}
-        end,
-        {KVs, []}, lists:sort(ResultKVs)),
-    NewViewKVsAcc = [{View, NewKVs} | ViewKVsAcc],
-    case NewViewIdKeysAcc of
-    [] ->
-        NewViewIdKeysAcc2 = ViewIdKeysAcc;
-    _ ->
-        NewViewIdKeysAcc2 = [{View#set_view.id_num, NewViewIdKeysAcc} | ViewIdKeysAcc]
-    end,
-    view_insert_doc_query_results(
-        DocId, PartitionId, RestResults, RestViewKVs, NewViewKVsAcc, NewViewIdKeysAcc2).
-
-
 % Incremental updates.
 write_to_tmp_batch_files(ViewKeyValuesToAdd, DocIdViewIdKeys, WriterAcc) ->
     #writer_acc{
         tmp_files = TmpFiles,
         group = #set_view_group{
             id_btree = IdBtree,
-            mod = Mod,
-            fd = Fd
+            mod = Mod
         }
     } = WriterAcc,
 
@@ -1040,15 +1165,16 @@ write_to_tmp_batch_files(ViewKeyValuesToAdd, DocIdViewIdKeys, WriterAcc) ->
         end,
         {[], [], []}, DocIdViewIdKeys),
 
-    AddDocIdViewIdKeys = convert_back_index_kvs_to_binary(AddDocIdViewIdKeys0, []),
+    AddDocIdViewIdKeys = Mod:convert_back_index_kvs_to_binary(
+        AddDocIdViewIdKeys0, []),
 
     IdsData1 = lists:map(
-        fun(K) -> couch_set_view_updater_helper:encode_btree_op(remove, K) end,
+        fun(K) -> couch_set_view_updater_helper:encode_op(remove, K) end,
         RemoveDocIds),
 
     IdsData2 = lists:foldl(
         fun({K, V}, Acc) ->
-            Bin = couch_set_view_updater_helper:encode_btree_op(insert, K, V),
+            Bin = couch_set_view_updater_helper:encode_op(insert, K, V),
             [Bin | Acc]
         end,
         IdsData1,
@@ -1090,7 +1216,7 @@ write_to_tmp_batch_files(ViewKeyValuesToAdd, DocIdViewIdKeys, WriterAcc) ->
                     fun({ViewId, Keys}, KeysToRemoveByViewAcc2) ->
                         RemoveKeysDict = lists:foldl(
                             fun(Key, RemoveKeysDictAcc) ->
-                                EncodedKey = couch_set_view_util:encode_key_docid(Key, DocId),
+                                EncodedKey = Mod:encode_key_docid(Key, DocId),
                                 dict:store(EncodedKey, nil, RemoveKeysDictAcc)
                             end,
                         couch_util:dict_find(ViewId, KeysToRemoveByViewAcc2, dict:new()), Keys),
@@ -1103,34 +1229,90 @@ write_to_tmp_batch_files(ViewKeyValuesToAdd, DocIdViewIdKeys, WriterAcc) ->
         end,
         dict:new(), LookupResults),
 
-    case Mod of
-    mapreduce_view ->
-        ok;
-    % Wait for the native updater from a previous run to finish before we
-    % start to update the spatial view. Else we would end up with concurrent
-    % writes from the Erlang and C world which would skrew up things.
-    spatial_view ->
-        case erlang:erase(native_updater_for_spatial) of
-        undefined ->
-            ok;
-        NativeUpdater ->
-            case is_process_alive(NativeUpdater) of
-            true ->
-                MRef = erlang:monitor(process, NativeUpdater),
-                receive
-                {'DOWN', MRef, process, NativeUpdater, _} ->
-                    ok
-                end;
-            false ->
-                ok
-            end,
-            ok = couch_file:refresh_eof(Fd)
-        end
-    end,
-    WriterAcc2 = Mod:update_tmp_files(
-        WriterAcc#writer_acc{tmp_files = TmpFiles2}, ViewKeyValuesToAdd,
+    WriterAcc2 = update_tmp_files(
+        Mod, WriterAcc#writer_acc{tmp_files = TmpFiles2}, ViewKeyValuesToAdd,
         KeysToRemoveByView),
     maybe_update_btrees(WriterAcc2).
+
+
+% Update the temporary files with the key-values from the indexer. Return
+% the updated writer accumulator.
+-spec update_tmp_files(atom(), #writer_acc{},
+                       [{#set_view{}, [set_view_key_value()]}],
+                       dict:dict(non_neg_integer(), dict:dict(binary(), nil)))
+                      -> #writer_acc{}.
+update_tmp_files(Mod, WriterAcc, ViewKeyValues, KeysToRemoveByView) ->
+    #writer_acc{
+       group = Group,
+       tmp_files = TmpFiles
+    } = WriterAcc,
+    TmpFiles2 = lists:foldl(
+        fun({#set_view{id_num = ViewId}, AddKeyValues}, AccTmpFiles) ->
+            AddKeyValuesBinaries = Mod:convert_primary_index_kvs_to_binary(
+                AddKeyValues, Group, []),
+            KeysToRemoveDict = couch_util:dict_find(
+                ViewId, KeysToRemoveByView, dict:new()),
+
+            case Mod of
+            % The b-tree replaces nodes with the same key, hence we don't
+            % need to delete a node that gets updated anyway
+            mapreduce_view ->
+                {KeysToRemoveDict2, BatchData} = lists:foldl(
+                    fun({K, V}, {KeysToRemoveAcc, BinOpAcc}) ->
+                        Bin = couch_set_view_updater_helper:encode_op(
+                            insert, K, V),
+                        BinOpAcc2 = [Bin | BinOpAcc],
+                        case dict:find(K, KeysToRemoveAcc) of
+                        {ok, _} ->
+                            {dict:erase(K, KeysToRemoveAcc), BinOpAcc2};
+                        _ ->
+                            {KeysToRemoveAcc, BinOpAcc2}
+                        end
+                    end,
+                    {KeysToRemoveDict, []}, AddKeyValuesBinaries);
+            % In r-trees there are multiple possible paths to a key. Hence it's
+            % not easily possible to replace an existing node with a new one,
+            % as the insertion could happen in a subtree that is different
+            % from the subtree of the old value.
+            spatial_view ->
+                BatchData = [
+                    couch_set_view_updater_helper:encode_op(insert, K, V) ||
+                        {K, V} <- AddKeyValuesBinaries],
+                KeysToRemoveDict2 = KeysToRemoveDict
+            end,
+
+            BatchData2 = dict:fold(
+                fun(K, _V, BatchAcc) ->
+                    Bin = couch_set_view_updater_helper:encode_op(remove, K),
+                    [Bin | BatchAcc]
+                end,
+                BatchData, KeysToRemoveDict2),
+
+            ViewTmpFileInfo = dict:fetch(ViewId, TmpFiles),
+            case ViewTmpFileInfo of
+            #set_view_tmp_file_info{fd = nil} ->
+                0 = ViewTmpFileInfo#set_view_tmp_file_info.size,
+                ViewTmpFilePath = new_sort_file_name(WriterAcc),
+                {ok, ViewTmpFileFd} = file2:open(
+                    ViewTmpFilePath, [raw, append, binary]),
+                ViewTmpFileSize = 0;
+            #set_view_tmp_file_info{fd = ViewTmpFileFd,
+                                    size = ViewTmpFileSize,
+                                    name = ViewTmpFilePath} ->
+                ok
+            end,
+            ok = file:write(ViewTmpFileFd, BatchData2),
+            ViewTmpFileInfo2 = ViewTmpFileInfo#set_view_tmp_file_info{
+                fd = ViewTmpFileFd,
+                name = ViewTmpFilePath,
+                size = ViewTmpFileSize + iolist_size(BatchData2)
+            },
+            dict:store(ViewId, ViewTmpFileInfo2, AccTmpFiles)
+        end,
+    TmpFiles, ViewKeyValues),
+    WriterAcc#writer_acc{
+        tmp_files = TmpFiles2
+    }.
 
 
 is_new_partition(PartId, #writer_acc{initial_seqs = InitialSeqs}) ->
@@ -1142,10 +1324,7 @@ maybe_update_btrees(WriterAcc0) ->
     #writer_acc{
         view_empty_kvs = ViewEmptyKVs,
         tmp_files = TmpFiles,
-        group = #set_view_group{
-            views = Views,
-            mod = Mod
-        },
+        group = Group0,
         final_batch = IsFinalBatch,
         owner = Owner,
         last_seqs = LastSeqs,
@@ -1153,19 +1332,12 @@ maybe_update_btrees(WriterAcc0) ->
         force_flush = ForceFlush
     } = WriterAcc0,
     IdTmpFileInfo = dict:fetch(ids_index, TmpFiles),
-    ShouldFlushViews = case Mod of
-    mapreduce_view ->
+    ShouldFlushViews =
         lists:any(
             fun({#set_view{id_num = Id}, _}) ->
                 ViewTmpFileInfo = dict:fetch(Id, TmpFiles),
                 ViewTmpFileInfo#set_view_tmp_file_info.size >= ?INC_MAX_TMP_FILE_SIZE
-            end, ViewEmptyKVs);
-    % Currently the spatial views are updated through an code path within
-    % Erlang without using the new C based code. Though the ID b-tree of
-    % the spatial views is updated through the code path below
-    spatial_view ->
-        true
-    end,
+            end, ViewEmptyKVs),
     ShouldFlush = IsFinalBatch orelse
         ForceFlush orelse
         ((IdTmpFileInfo#set_view_tmp_file_info.size >= ?INC_MAX_TMP_FILE_SIZE) andalso
@@ -1195,7 +1367,7 @@ maybe_update_btrees(WriterAcc0) ->
                 ViewTmpFileInfo = dict:fetch(Id, TmpFiles),
                 ok = close_tmp_fd(ViewTmpFileInfo)
             end,
-            Views),
+            Group0#set_view_group.views),
         case erlang:erase(updater_worker) of
         undefined ->
             WriterAcc1 = WriterAcc0;
@@ -1220,22 +1392,8 @@ maybe_update_btrees(WriterAcc0) ->
             WriterAcc = WriterAcc1;
         _ ->
             WriterAcc2 = check_if_compactor_started(WriterAcc1),
-            {NewUpdaterWorker, NativeUpdater} = spawn_updater_worker(
-                WriterAcc2, LastSeqs, PartVersions),
+            NewUpdaterWorker = spawn_updater_worker(WriterAcc2, LastSeqs, PartVersions),
             erlang:put(updater_worker, NewUpdaterWorker),
-            case Mod of
-            mapreduce_view ->
-                ok;
-            spatial_view ->
-                % There's already an entry with the name `native_updater` in
-                % the process dictionary of the `DocLoader`. Adding an entry
-                % with the same name into the the process dictionary of this
-                % process would technically be possible, but it would make the
-                % code harder to understand/grep. Hence this entry is called
-                % `native_updater_for_spatial` as it is only needed for the
-                % spatial views.
-                erlang:put(native_updater_for_spatial, NativeUpdater)
-            end,
 
             TmpFiles2 = dict:map(
                 fun(_, _) -> #set_view_tmp_file_info{} end, TmpFiles),
@@ -1287,7 +1445,7 @@ send_log_compact_files(Owner, Files, Seqs, PartVersions) ->
 
 
 -spec spawn_updater_worker(#writer_acc{}, partition_seqs(),
-                           partition_versions()) -> {reference(), pid()}.
+                           partition_versions()) -> reference().
 spawn_updater_worker(WriterAcc, PartIdSeqs, PartVersions) ->
     Parent = self(),
     Ref = make_ref(),
@@ -1322,7 +1480,7 @@ spawn_updater_worker(WriterAcc, PartIdSeqs, PartVersions) ->
             } = Group,
             ?LOG_INFO("Updater for set view `~s`, ~s group `~s`, performed cleanup "
                       "of ~p key/value pairs in ~.3f seconds",
-                      [SetName, GroupType, DDocId, CleanupCount, CleanupTime])
+                      [?LOG_USERDATA(SetName), GroupType, ?LOG_USERDATA(DDocId), CleanupCount, CleanupTime])
         end,
         NewSeqs = update_seqs(PartIdSeqs, ?set_seqs(Group)),
         NewPartVersions = update_versions(PartVersions, ?set_partition_versions(Group)),
@@ -1344,7 +1502,7 @@ spawn_updater_worker(WriterAcc, PartIdSeqs, PartVersions) ->
         Parent ! {Ref, NewGroup2, NewStats2, NewCompactFiles}
     end),
     UpdaterPid ! {native_updater_pid, Pid},
-    {Ref, Pid}.
+    Ref.
 
 % Update id btree and view btrees with current batch of changes
 update_btrees(WriterAcc) ->
@@ -1356,9 +1514,6 @@ update_btrees(WriterAcc) ->
         compactor_running = CompactorRunning,
         max_insert_batch_size = MaxBatchSize
     } = WriterAcc,
-    % Remove spatial views from group
-    % The native updater can currently handle mapreduce views only
-    Group = couch_set_view_util:remove_group_views(Group0, spatial_view),
 
     % Prepare list of operation logs for each btree
     #set_view_tmp_file_info{name = IdFile} = dict:fetch(ids_index, TmpFiles),
@@ -1368,8 +1523,20 @@ update_btrees(WriterAcc) ->
                 name = ViewFile
             } = dict:fetch(Id, TmpFiles),
             ViewFile
-        end, Group#set_view_group.views),
-    LogFiles = [IdFile | ViewFiles],
+        end, Group0#set_view_group.views),
+    % `LogFiles` is supplied to the native updater. For spatial views only the
+    % ID b-tree is updated.
+    LogFiles = case Group0#set_view_group.mod of
+    mapreduce_view ->
+        [IdFile | ViewFiles];
+    spatial_view ->
+        [IdFile]
+    end,
+
+    % Remove spatial views from group
+    % The native updater can currently handle mapreduce views only, but it
+    % handles the ID b-tree of the spatial view
+    Group = couch_set_view_util:remove_group_views(Group0, spatial_view),
 
     {ok, NewGroup0, Stats2} = couch_set_view_updater_helper:update_btrees(
         Group, TmpDir, LogFiles, MaxBatchSize, false),
@@ -1378,6 +1545,44 @@ update_btrees(WriterAcc) ->
     % Add back spatial views
     NewGroup = couch_set_view_util:update_group_views(
         NewGroup0, Group0, spatial_view),
+
+    % The native update for the Id b-tree was run, now it's time to run the
+    % Erlang updater for the spatial views
+    NewGroup2 = case NewGroup#set_view_group.mod of
+    mapreduce_view ->
+        NewGroup;
+    spatial_view = Mod ->
+        process_flag(trap_exit, true),
+        ok = couch_file:refresh_eof(NewGroup#set_view_group.fd),
+        Parent = self(),
+        Pid = spawn_link(fun() ->
+            Views = Mod:update_spatial(NewGroup#set_view_group.views, ViewFiles,
+                MaxBatchSize),
+            Parent ! {spatial_views_updater_result, Views},
+            exit(Parent, normal)
+            end),
+        receive
+        {spatial_views_updater_result, Views} ->
+            NewGroup#set_view_group{
+                views = Views,
+                index_header = (NewGroup#set_view_group.index_header)#set_view_index_header{
+                    view_states = [Mod:get_state(V#set_view.indexer) || V <- Views]
+                }
+            };
+        {'EXIT', Pid, Reason} ->
+            exit(Reason);
+        stop ->
+            #set_view_group{
+                set_name = SetName,
+                name = DDocId,
+                type = Type
+            } = NewGroup,
+            ?LOG_INFO("Set view `~s`, ~s group `~s`, index updater (spatial"
+                      "update) stopped successfully.", [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId)]),
+            couch_util:shutdown_sync(Pid),
+            exit(shutdown)
+        end
+    end,
 
     NewStats = Stats#set_view_updater_stats{
      inserted_ids = Stats#set_view_updater_stats.inserted_ids + IdsInserted,
@@ -1404,8 +1609,8 @@ update_btrees(WriterAcc) ->
                 ok = file2:delete(SortedFile),
                 AccCompactFiles
             end
-        end, [], LogFiles),
-    {ok, NewGroup, CleanupCount, NewStats, CompactFiles}.
+        end, [], [IdFile | ViewFiles]),
+    {ok, NewGroup2, CleanupCount, NewStats, CompactFiles}.
 
 
 update_seqs(PartIdSeqs, Seqs) ->
@@ -1444,8 +1649,8 @@ checkpoint(#writer_acc{owner = Owner, parent = Parent, group = Group} = Acc) ->
         name = DDocId,
         type = Type
     } = Group,
-    ?LOG_INFO("Updater checkpointing set view `~s` update for ~s group `~s`",
-              [SetName, Type, DDocId]),
+    ?LOG_DEBUG("Updater checkpointing set view `~s` update for ~s group `~s`",
+              [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId)]),
     NewGroup = maybe_fix_group(Group),
     ok = couch_file:refresh_eof(NewGroup#set_view_group.fd),
     Owner ! {partial_update, Parent, self(), NewGroup},
@@ -1462,18 +1667,7 @@ maybe_fix_group(#set_view_group{index_header = Header} = Group) ->
     receive
     {new_passive_partitions, Parts} ->
         Bitmask = couch_set_view_util:build_bitmask(Parts),
-        {Seqs, PartVersions} = lists:foldl(
-            fun(PartId, {SeqAcc, PartVersionsAcc} = Acc) ->
-                case couch_set_view_util:has_part_seq(PartId, SeqAcc) of
-                true ->
-                    Acc;
-                false ->
-                    {ordsets:add_element({PartId, 0}, SeqAcc),
-                        ordsets:add_element({PartId, [{0, 0}]},
-                            PartVersionsAcc)}
-                end
-            end,
-            {?set_seqs(Group), ?set_partition_versions(Group)}, Parts),
+        {Seqs, PartVersions} = couch_set_view_util:fix_partitions(Group, Parts),
         Group#set_view_group{
             index_header = Header#set_view_index_header{
                 seqs = Seqs,
@@ -1529,33 +1723,6 @@ new_sort_file_name(TmpDir, true) ->
     couch_set_view_util:new_sort_file_path(TmpDir, compactor);
 new_sort_file_name(TmpDir, false) ->
     couch_set_view_util:new_sort_file_path(TmpDir, updater).
-
-
-convert_back_index_kvs_to_binary([], Acc)->
-    lists:reverse(Acc);
-convert_back_index_kvs_to_binary([{DocId, {PartId, ViewIdKeys}} | Rest], Acc) ->
-    ViewIdKeysBinary = lists:foldl(
-        fun({ViewId, Keys}, Acc2) ->
-            KeyListBinary = lists:foldl(
-                fun(Key, AccKeys) ->
-                    <<AccKeys/binary, (byte_size(Key)):16, Key/binary>>
-                end,
-                <<>>, Keys),
-            NumKeys = length(Keys),
-            case NumKeys >= (1 bsl 16) of
-            true ->
-                ErrorMsg = io_lib:format("Too many (~p) keys emitted for "
-                                         "document `~s` (maximum allowed is ~p",
-                                         [NumKeys, DocId, (1 bsl 16) - 1]),
-                throw({error, iolist_to_binary(ErrorMsg)});
-            false ->
-                ok
-            end,
-            <<Acc2/binary, ViewId:8, NumKeys:16, KeyListBinary/binary>>
-        end,
-        <<>>, ViewIdKeys),
-    KvBin = {make_back_index_key(DocId, PartId), <<PartId:16, ViewIdKeysBinary/binary>>},
-    convert_back_index_kvs_to_binary(Rest, [KvBin | Acc]).
 
 
 make_back_index_key(DocId, PartId) ->

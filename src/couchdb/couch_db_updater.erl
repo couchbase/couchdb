@@ -173,7 +173,7 @@ handle_call({purge_docs, DocIds}, _From, Db) ->
 handle_call({start_compact, Options}, _From, Db) ->
     case Db#db.compactor_info of
     nil ->
-        ?LOG_INFO("Starting compaction for db \"~s\", options: ~w", [Db#db.name, Options]),
+        ?LOG_INFO("Starting compaction for db \"~s\", options: ~w", [?LOG_USERDATA(Db#db.name), Options]),
         Pid = spawn_link(fun() -> start_copy_compact(Db, Options) end),
         Db2 = Db#db{compactor_info=Pid},
         ok = notify_db_updated(Db2),
@@ -231,7 +231,7 @@ handle_call({compact_done, CompactFilepath}, _From, Db) ->
         ok = couch_file:set_close_after(NewFd, ?FD_CLOSE_TIMEOUT_MS),
         couch_file:delete(RootDir, Filepath),
         couch_db_update_notifier:notify({compacted, NewDb2#db.name}),
-        ?LOG_INFO("Compaction for db \"~s\" completed.", [Db#db.name]),
+        ?LOG_INFO("Compaction for db \"~s\" completed.", [?LOG_USERDATA(Db#db.name)]),
         {reply, ok, NewDb2#db{compactor_info=nil}};
     false ->
         ?LOG_INFO("Compaction file still behind main file "
@@ -254,7 +254,7 @@ handle_call({update_header_pos, FileVersion, NewPos}, _From, Db) ->
             if Db#db.update_seq > NewHeader#db_header.update_seq ->
                 ?LOG_INFO("Database ~s, received pointer to header with a "
                     "non-greater seq number (current ~p, new header ~p)",
-                    [Db#db.name, Db#db.update_seq, NewHeader#db_header.update_seq]),
+                    [?LOG_USERDATA(Db#db.name), Db#db.update_seq, NewHeader#db_header.update_seq]),
                 {reply, update_behind_couchdb, Db};
             true ->
                 NewDb = populate_db_from_header(Db, NewHeader),
@@ -309,7 +309,7 @@ handle_call({remove_update_listener, Pid}, _From, Db) ->
 
 
 handle_cast(Msg, #db{name = Name} = Db) ->
-    ?LOG_ERROR("Database `~s` updater received unexpected cast: ~p", [Name, Msg]),
+    ?LOG_ERROR("Database `~s` updater received unexpected cast: ~p", [?LOG_USERDATA(Name), Msg]),
     {stop, Msg, Db}.
 
 
@@ -322,7 +322,7 @@ handle_info({update_docs, Client, Docs, NonRepDocs, FullCommit}, Db) ->
                     #doc_update_info{deleted = Deleted, rev = NewRev} = DUI,
                     ?LOG_INFO("Database `~s`, design document `~s` updated "
                           "(new revision: ~s, deleted: ~s)",
-                          [Db#db.name, Id, couch_doc:rev_to_str(NewRev), Deleted]),
+                          [?LOG_USERDATA(Db#db.name), ?LOG_USERDATA(Id), couch_doc:rev_to_str(NewRev), Deleted]),
                     case DUI#doc_update_info.deleted of
                     true ->
                         DDocBody = {[]};
@@ -374,7 +374,7 @@ handle_info({'DOWN', _Ref, process, Pid, _Reason} = Msg, Db) ->
 handle_info({'EXIT', _Pid, normal}, Db) ->
     {noreply, Db};
 handle_info({'EXIT', Pid, Reason}, #db{compactor_info = Pid, name=Name} = Db) ->
-    ?LOG_INFO("Database `~s` compactor died with reason: ~p", [Name, Reason]),
+    ?LOG_INFO("Database `~s` compactor died with reason: ~p", [?LOG_USERDATA(Name), Reason]),
     RootDir = couch_config:get("couchdb", "database_dir", "."),
     catch couch_file:delete(RootDir, Db#db.filepath ++ ".compact"),
     {noreply, Db#db{compactor_info = nil}};
@@ -910,7 +910,7 @@ make_compactor_options(Acc, [Opt | Rest]) ->
 start_copy_compact(#db{name=Name,filepath=Filepath}=Db, Options) ->
     PrefixOpts = make_compactor_options([], Options),
     CompactFile = Filepath ++ ".compact",
-    ?LOG_DEBUG("Compaction process spawned for db \"~s\"", [Name]),
+    ?LOG_DEBUG("Compaction process spawned for db \"~s\"", [?LOG_USERDATA(Name)]),
     % we don't want to consistency every time, so get the ratio
     % and generate a random number. Default to 10%
     CheckRatio = list_to_float(couch_config:get("couchdb",
@@ -931,11 +931,11 @@ start_copy_compact(#db{name=Name,filepath=Filepath}=Db, Options) ->
         {error, enoent} -> % Initial compact
             case native_initial_compact(Db, CompactFile, PrefixOpts) of
                 {ok, CompactedDb} ->
-                    ?LOG_INFO("Native initial compact succeeded for \"~s\"", [Name]),
+                    ?LOG_INFO("Native initial compact succeeded for \"~s\"", [?LOG_USERDATA(Name)]),
                     CompactedDb;
                 {error, Reason} ->
                     ?LOG_ERROR("Native compact for \"~s\" failed due to error ~w. Falling back to erlang.",
-                               [Name, Reason]),
+                               [?LOG_USERDATA(Name), Reason]),
                     {ok, TargetDB} = make_target_db(Db, CompactFile),
                     copy_compact(Db, TargetDB, false)
             end
@@ -1016,7 +1016,7 @@ jump_to_another_version(Db, NewFilePath, NewVersion, NewPos) ->
                     couch_file:delete(RootDir, FilePath),
 
                     couch_db_update_notifier:notify({compacted, NewDb#db.name}),
-                    ?LOG_INFO("Compaction for db \"~s\" completed.", [NewDb#db.name]),
+                    ?LOG_INFO("Compaction for db \"~s\" completed.", [?LOG_USERDATA(NewDb#db.name)]),
                     {ok, NewDb};
                 _ ->
                     close_db(InitNewDb),

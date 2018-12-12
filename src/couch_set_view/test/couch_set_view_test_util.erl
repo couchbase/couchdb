@@ -20,7 +20,7 @@
 -export([populate_set_alternated/3, populate_set_sequentially/3]).
 -export([populate_set_randomly/3, update_ddoc/2, delete_ddoc/2]).
 -export([define_set_view/5]).
--export([query_view/3, query_view/4]).
+-export([query_view/3, query_view/4, query_view/5]).
 -export([are_view_keys_sorted/2]).
 -export([get_db_ref_counters/2, compact_set_dbs/3]).
 -export([get_db_seqs/2]).
@@ -38,7 +38,15 @@
 
 start_server() ->
     couch_server_sup:start_link(test_util:config_files()),
-    put(addr, couch_config:get("httpd", "bind_address", "127.0.0.1")),
+    ok = timer:sleep(100),
+    case misc:is_ipv6() of
+    false ->
+        put(addr, couch_config:get("httpd", "ip4_bind_address", "127.0.0.1"));
+    true ->
+        IP6Addr = couch_config:get("httpd", "ip6_bind_address", "::1"),
+        IP6Addr2 = "[" ++ IP6Addr ++ "]",
+        put(addr, IP6Addr2)
+    end,
     put(port, integer_to_list(mochiweb_socket_server:get(couch_httpd, port))).
 
 
@@ -66,15 +74,21 @@ start_server(SetName) ->
     end,
     ok = couch_config:set("couchdb", "database_dir", NewDbDir, false),
     ok = couch_config:set("couchdb", "view_index_dir", NewIndexDir, false),
+    % The build slaves can be slow, hence set the DCP connection timeout
+    % high enough to prevent sporadic failures
+    ok = couch_config:set("dcp", "connection_timeout", "10000", false),
     start_server(),
     % Also start the fake DCP server that is needed for testing
-    {ok, _} = couch_dcp_fake_server:start(SetName),
-    ok.
+    {ok, DcpPid} = couch_dcp_fake_server:start(SetName),
+    put(test_util_dcp_pid, DcpPid),
+    ok = timer:sleep(100).
 
 
 stop_server() ->
-    ok = timer:sleep(1000),
-    couch_server_sup:stop().
+    DcpPid = get(test_util_dcp_pid),
+    couch_util:shutdown_sync(DcpPid),
+    couch_server_sup:stop(),
+    ok = timer:sleep(100).
 
 
 admin_user_ctx() ->
@@ -241,6 +255,9 @@ query_view(SetName, DDocId, ViewName) ->
     query_view(SetName, DDocId, ViewName, []).
 
 query_view(SetName, DDocId, ViewName, QueryString) ->
+    query_view(SetName, DDocId, ViewName, QueryString, 200).
+
+query_view(SetName, DDocId, ViewName, QueryString, ExpectedCode) ->
     QueryUrl = set_view_url(SetName, DDocId, ViewName) ++
         case QueryString of
         [] ->
@@ -250,11 +267,12 @@ query_view(SetName, DDocId, ViewName, QueryString) ->
         end,
     {ok, Code, _Headers, Body} = test_util:request(QueryUrl, [], get),
     case Code of
-    200 ->
+    ExpectedCode ->
         ok;
     _ ->
         io:format(standard_error, "~nView response body: ~p~n~n", [Body]),
-        etap:bail("View response status is not 200 (got " ++
+        etap:bail("View response status is not " ++
+            integer_to_list(ExpectedCode) ++ " (got " ++
             integer_to_list(Code) ++ ")")
     end,
     {ok, ejson:decode(Body)}.
@@ -370,8 +388,8 @@ fold_view_btree(_Group, Btree, Fun, Acc, Args) ->
         Vals ->
             Val = {dups, lists:sort([?JSON_DECODE(V) || V <- Vals])}
         end,
-        {Key, Id} = couch_set_view_util:decode_key_docid(KeyDocId),
-        Fun({{Key, Id}, {PartId, Val}}, AccRed, Acc0)
+        {Key, Id} = mapreduce_view:decode_key_docid(KeyDocId),
+        Fun({{?JSON_DECODE(Key), Id}, {PartId, Val}}, AccRed, Acc0)
     end,
     couch_btree:fold(Btree, FunWrap, Acc, Args).
 

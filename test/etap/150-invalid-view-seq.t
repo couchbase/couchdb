@@ -51,7 +51,13 @@ test() ->
     % make DB file backup
     backup_db_file(),
 
-    put(addr, couch_config:get("httpd", "bind_address", "127.0.0.1")),
+    case misc:is_ipv6() of
+        false ->
+            put(addr, couch_config:get("httpd", "ip4_bind_address", "127.0.0.1"));
+        true ->
+            IP6Addr = couch_config:get("httpd", "ip6_bind_address", "::1"),
+            put(addr, "[" ++ IP6Addr ++ "]")
+    end,
     put(port, integer_to_list(mochiweb_socket_server:get(couch_httpd, port))),
 
     create_new_doc(),
@@ -176,7 +182,8 @@ restore_backup_db_file() ->
     timer:sleep(3000),
     DbFile = test_util:build_file("tmp/lib/" ++
         binary_to_list(test_db_name()) ++ ".couch.1"),
-    ok = file:delete(DbFile),
+    % NOTE vmx 2016-01-25: overwrite the original file via renaming. This
+    % works well on Windows (as opposed to deleting the file first).
     ok = file:rename(DbFile ++ ".backup", DbFile),
     couch_server_sup:start_link(test_util:config_files()),
     timer:sleep(1000),

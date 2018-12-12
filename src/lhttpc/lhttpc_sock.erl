@@ -1,7 +1,7 @@
 %%% ----------------------------------------------------------------------------
 %%% Copyright (c) 2009, Erlang Training and Consulting Ltd.
 %%% All rights reserved.
-%%% 
+%%%
 %%% Redistribution and use in source and binary forms, with or without
 %%% modification, are permitted provided that the following conditions are met:
 %%%    * Redistributions of source code must retain the above copyright
@@ -12,7 +12,7 @@
 %%%    * Neither the name of Erlang Training and Consulting Ltd. nor the
 %%%      names of its contributors may be used to endorse or promote products
 %%%      derived from this software without specific prior written permission.
-%%% 
+%%%
 %%% THIS SOFTWARE IS PROVIDED BY Erlang Training and Consulting Ltd. ''AS IS''
 %%% AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
 %%% IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
@@ -24,25 +24,30 @@
 %%% ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 %%% ----------------------------------------------------------------------------
 
+%%------------------------------------------------------------------------------
 %%% @private
 %%% @author Oscar Hellström <oscar@hellstrom.st>
 %%% @doc
 %%% This module implements wrappers for socket operations.
 %%% Makes it possible to have the same interface to ssl and tcp sockets.
+%%------------------------------------------------------------------------------
 -module(lhttpc_sock).
 
--export([
-        connect/5,
-        recv/2,
-        recv/3,
-        send/3,
-        controlling_process/3,
-        setopts/3,
-        close/2
-    ]).
+-export([connect/5,
+         recv/2, recv/3,
+         send/3,
+         controlling_process/3,
+         setopts/3,
+         close/2
+        ]).
 
 -include("lhttpc_types.hrl").
 
+%%==============================================================================
+%% Exported functions
+%%==============================================================================
+
+%%------------------------------------------------------------------------------
 %% @spec (Host, Port, Options, Timeout, SslFlag) -> {ok, Socket} | {error, Reason}
 %%   Host = string() | ip_address()
 %%   Port = integer()
@@ -56,6 +61,7 @@
 %% Will use the `ssl' module if `SslFlag' is `true' and gen_tcp otherwise.
 %% `Options' are the normal `gen_tcp' or `ssl' Options.
 %% @end
+%%------------------------------------------------------------------------------
 -spec connect(host(), integer(), socket_options(), timeout(), boolean()) ->
     {ok, socket()} | {error, atom()}.
 connect(Host, Port, Options, Timeout, true) ->
@@ -63,6 +69,7 @@ connect(Host, Port, Options, Timeout, true) ->
 connect(Host, Port, Options, Timeout, false) ->
     gen_tcp:connect(Host, Port, Options, Timeout).
 
+%%------------------------------------------------------------------------------
 %% @spec (Socket, SslFlag) -> {ok, Data} | {error, Reason}
 %%   Socket = socket()
 %%   Length = integer()
@@ -74,6 +81,7 @@ connect(Host, Port, Options, Timeout, false) ->
 %% Will block untill data is available on the socket and return the first
 %% packet.
 %% @end
+%%------------------------------------------------------------------------------
 -spec recv(socket(), boolean()) ->
     {ok, any()} | {error, atom()} | {error, {http_error, string()}}.
 recv(Socket, true) ->
@@ -81,6 +89,7 @@ recv(Socket, true) ->
 recv(Socket, false) ->
     gen_tcp:recv(Socket, 0).
 
+%%------------------------------------------------------------------------------
 %% @spec (Socket, Length, SslFlag) -> {ok, Data} | {error, Reason}
 %%   Socket = socket()
 %%   Length = integer()
@@ -91,6 +100,7 @@ recv(Socket, false) ->
 %% Receives `Length' bytes from `Socket'.
 %% Will block untill `Length' bytes is available.
 %% @end
+%%------------------------------------------------------------------------------
 -spec recv(socket(), integer(), boolean()) -> {ok, any()} | {error, atom()}.
 recv(_, 0, _) ->
     {ok, <<>>};
@@ -99,6 +109,7 @@ recv(Socket, Length, true) ->
 recv(Socket, Length, false) ->
     gen_tcp:recv(Socket, Length).
 
+%%------------------------------------------------------------------------------
 %% @spec (Socket, Data, SslFlag) -> ok | {error, Reason}
 %%   Socket = socket()
 %%   Data = iolist()
@@ -109,12 +120,14 @@ recv(Socket, Length, false) ->
 %% Will use the `ssl' module if `SslFlag' is set to `true', otherwise the
 %% gen_tcp module.
 %% @end
+%%------------------------------------------------------------------------------
 -spec send(socket(), iolist() | binary(), boolean()) -> ok | {error, atom()}.
 send(Socket, Request, true) ->
     ssl:send(Socket, Request);
 send(Socket, Request, false) ->
     gen_tcp:send(Socket, Request).
 
+%%------------------------------------------------------------------------------
 %% @spec (Socket, Process, SslFlag) -> ok | {error, Reason}
 %%   Socket = socket()
 %%   Process = pid() | atom()
@@ -123,6 +136,7 @@ send(Socket, Request, false) ->
 %% @doc
 %% Sets the controlling proces for the `Socket'.
 %% @end
+%%------------------------------------------------------------------------------
 -spec controlling_process(socket(), pid() | atom(), boolean()) ->
     ok | {error, atom()}.
 controlling_process(Socket, Controller, IsSsl) when is_atom(Controller) ->
@@ -132,6 +146,7 @@ controlling_process(Socket, Pid, true) ->
 controlling_process(Socket, Pid, false) ->
     gen_tcp:controlling_process(Socket, Pid).
 
+%%------------------------------------------------------------------------------
 %% @spec (Socket, Options, SslFlag) -> ok | {error, Reason}
 %%   Socket = socket()
 %%   Options = [atom() | {atom(), term()}]
@@ -140,13 +155,14 @@ controlling_process(Socket, Pid, false) ->
 %% @doc
 %% Sets options for a socket. Look in `inet:setopts/2' for more info.
 %% @end
--spec setopts(socket(), socket_options(), boolean()) ->
-    ok | {error, atom()}.
+%%------------------------------------------------------------------------------
+-spec setopts(socket(), socket_options(), boolean()) -> ok | {error, atom()}.
 setopts(Socket, Options, true) ->
     ssl:setopts(Socket, Options);
 setopts(Socket, Options, false) ->
     inet:setopts(Socket, Options).
 
+%%------------------------------------------------------------------------------
 %% @spec (Socket, SslFlag) -> ok | {error, Reason}
 %%   Socket = socket()
 %%   SslFlag = boolean()
@@ -154,6 +170,7 @@ setopts(Socket, Options, false) ->
 %% @doc
 %% Closes a socket.
 %% @end
+%%------------------------------------------------------------------------------
 -spec close(socket(), boolean()) -> ok | {error, atom()}.
 close(Socket, true) ->
     ssl:close(Socket);

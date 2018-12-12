@@ -142,14 +142,14 @@ maybe_compact_db(DbName, Config) ->
         true ->
             {ok, DbCompactPid} = couch_db:start_compact(Db),
             TimeLeft = compact_time_left(Config),
-            case Config#config.parallel_view_compact of
+            ViewsMonRef = case Config#config.parallel_view_compact of
             true ->
                 ViewsCompactPid = spawn_link(fun() ->
                     maybe_compact_views(DbName, DDocNames, Config)
                 end),
-                ViewsMonRef = erlang:monitor(process, ViewsCompactPid);
+                erlang:monitor(process, ViewsCompactPid);
             false ->
-                ViewsMonRef = nil
+                nil
             end,
             DbMonRef = erlang:monitor(process, DbCompactPid),
             receive
@@ -164,11 +164,11 @@ maybe_compact_db(DbName, Config) ->
             {'DOWN', DbMonRef, process, _, Reason} ->
                 couch_db:close(Db),
                 ?LOG_ERROR("Compaction daemon - an error ocurred while"
-                    " compacting the database `~s`: ~p", [DbName, Reason])
+                    " compacting the database `~s`: ~p", [?LOG_USERDATA(DbName), Reason])
             after TimeLeft ->
                 ?LOG_INFO("Compaction daemon - canceling compaction for database"
                     " `~s` because it's exceeding the allowed period.",
-                    [DbName]),
+                    [?LOG_USERDATA(DbName)]),
                 erlang:demonitor(DbMonRef, [flush]),
                 ok = couch_db:cancel_compact(Db),
                 couch_db:close(Db)
@@ -235,12 +235,12 @@ maybe_compact_view(DbName, GroupId, Config) ->
             {'DOWN', MonRef, process, CompactPid, Reason} ->
                 ?LOG_ERROR("Compaction daemon - an error ocurred while compacting"
                     " the view group `~s` from database `~s`: ~p",
-                    [GroupId, DbName, Reason]),
+                    [?LOG_USERDATA(GroupId), ?LOG_USERDATA(DbName), Reason]),
                 ok
             after TimeLeft ->
                 ?LOG_INFO("Compaction daemon - canceling the compaction for the "
                     "view group `~s` of the database `~s` because it's exceeding"
-                    " the allowed period.", [GroupId, DbName]),
+                    " the allowed period.", [?LOG_USERDATA(GroupId), ?LOG_USERDATA(DbName)]),
                 erlang:demonitor(MonRef, [flush]),
                 ok = couch_view_compactor:cancel_compact(DbName, GroupId),
                 timeout
@@ -250,7 +250,7 @@ maybe_compact_view(DbName, GroupId, Config) ->
         end;
     Error ->
         ?LOG_ERROR("Error opening view group `~s` from database `~s`: ~p",
-            [GroupId, DbName, Error]),
+            [?LOG_USERDATA(GroupId), ?LOG_USERDATA(DbName), Error]),
         ok
     end.
 
@@ -291,7 +291,7 @@ can_db_compact(#config{db_frag = Threshold} = Config, Db) ->
         {ok, DbInfo} = couch_db:get_db_info(Db),
         {Frag, SpaceRequired} = frag(DbInfo),
         ?LOG_DEBUG("Fragmentation for database `~s` is ~p%, estimated space for"
-           " compaction is ~p bytes.", [Db#db.name, Frag, SpaceRequired]),
+           " compaction is ~p bytes.", [?LOG_USERDATA(Db#db.name), Frag, SpaceRequired]),
         case check_frag(Threshold, Frag) of
         false ->
             false;
@@ -304,7 +304,7 @@ can_db_compact(#config{db_frag = Threshold} = Config, Db) ->
                 ?LOG_INFO("Compaction daemon - skipping database `~s` "
                     "compaction: the estimated necessary disk space is about ~p"
                     " bytes but the currently available disk space is ~p bytes.",
-                   [Db#db.name, SpaceRequired, Free]),
+                   [?LOG_USERDATA(Db#db.name), SpaceRequired, Free]),
                 false
             end
         end
@@ -322,7 +322,7 @@ can_view_compact(Config, DbName, GroupId, GroupInfo) ->
             {Frag, SpaceRequired} = frag(GroupInfo),
             ?LOG_DEBUG("Fragmentation for view group `~s` (database `~s`) is "
                 "~p%, estimated space for compaction is ~p bytes.",
-                [GroupId, DbName, Frag, SpaceRequired]),
+                [?LOG_USERDATA(GroupId), ?LOG_USERDATA(DbName), Frag, SpaceRequired]),
             case check_frag(Config#config.view_frag, Frag) of
             false ->
                 false;
@@ -336,7 +336,7 @@ can_view_compact(Config, DbName, GroupId, GroupInfo) ->
                         "compaction (database `~s`): the estimated necessary "
                         "disk space is about ~p bytes but the currently available"
                         " disk space is ~p bytes.",
-                        [GroupId, DbName, SpaceRequired, Free]),
+                        [?LOG_USERDATA(GroupId), ?LOG_USERDATA(DbName), SpaceRequired, Free]),
                     false
                 end
             end
@@ -405,11 +405,11 @@ parse_config(DbName, ConfigString) ->
         {ok, Conf};
     incomplete_period ->
         ?LOG_ERROR("Incomplete period ('to' or 'from' missing) in the compaction"
-            " configuration for database `~s`", [DbName]),
+            " configuration for database `~s`", [?LOG_USERDATA(DbName)]),
         error;
     _ ->
         ?LOG_ERROR("Invalid compaction configuration for database "
-            "`~s`: `~s`", [DbName, ConfigString]),
+            "`~s`: `~s`", [?LOG_USERDATA(DbName), ConfigString]),
         error
     end.
 

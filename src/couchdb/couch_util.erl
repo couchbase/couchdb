@@ -14,7 +14,7 @@
 
 -export([priv_dir/0, normpath/1]).
 -export([should_flush/0, should_flush/1, to_existing_atom/1]).
--export([rand32/0, implode/2, collate/2, collate/3]).
+-export([rand32/0, implode/2]).
 -export([abs_pathname/1,abs_pathname/2, trim/1]).
 -export([encodeBase64Url/1, decodeBase64Url/1]).
 -export([validate_utf8/1, to_hex/1, parse_term/1, dict_find/3]).
@@ -29,6 +29,8 @@
 -export([encode_doc_id/1]).
 -export([brace/1, debrace/1]).
 -export([split_iolist/2]).
+-export([log_data/2]).
+-export([parse_view_name/1]).
 
 -include("couch_db.hrl").
 
@@ -86,7 +88,7 @@ shutdown_sync(Pid) ->
     after
         erlang:demonitor(MRef, [flush])
     end.
-    
+
 
 simple_call(Pid, Message) ->
     MRef = erlang:monitor(process, Pid),
@@ -167,7 +169,7 @@ json_user_ctx(#db{name=DbName, user_ctx=Ctx}) ->
     {[{<<"db">>, DbName},
             {<<"name">>,Ctx#user_ctx.name},
             {<<"roles">>,Ctx#user_ctx.roles}]}.
-    
+
 
 % returns a random integer
 rand32() ->
@@ -244,33 +246,6 @@ implode([H], Sep, Acc) ->
 implode([H|T], Sep, Acc) ->
     implode(T, Sep, [Sep,H|Acc]).
 
-
-drv_port() ->
-    case get(couch_drv_port) of
-    undefined ->
-        Port = open_port({spawn, "couch_icu_driver"}, []),
-        put(couch_drv_port, Port),
-        Port;
-    Port ->
-        Port
-    end.
-
-collate(A, B) ->
-    collate(A, B, []).
-
-collate(A, B, Options) when is_binary(A), is_binary(B) ->
-    Operation =
-    case lists:member(nocase, Options) of
-        true -> 1; % Case insensitive
-        false -> 0 % Case sensitive
-    end,
-    SizeA = byte_size(A),
-    SizeB = byte_size(B),
-    Bin = <<SizeA:32/native, A/binary, SizeB:32/native, B/binary>>,
-    [Result] = erlang:port_control(drv_port(), Operation, Bin),
-    % Result is 0 for lt, 1 for eq and 2 for gt. Subtract 1 to return the
-    % expected typical -1, 0, 1
-    Result - 1.
 
 should_flush() ->
     should_flush(?FLUSH_MAX_MEM).
@@ -454,4 +429,20 @@ split_iolist([Sublist| Rest], SplitAt, BeginAcc) when is_list(Sublist) ->
 split_iolist([Byte | Rest], SplitAt, BeginAcc) when is_integer(Byte) ->
     split_iolist(Rest, SplitAt - 1, [Byte | BeginAcc]).
 
+log_data(Tag, Arg) when is_binary(Arg) ->
+    io_lib:format("<~p>~s</~p>", [Tag, Arg, Tag]);
+log_data(Tag, Arg) ->
+    io_lib:format("<~p>~p</~p>", [Tag, Arg, Tag]).
+
+parse_view_name(Name) ->
+    Tokens = string:tokens(couch_util:trim(?b2l(Name)), "/"),
+    case [?l2b(couch_httpd:unquote(Token)) || Token <- Tokens] of
+        [DDocName, ViewName] ->
+            {<<"_design/", DDocName/binary>>, ViewName};
+        [<<"_design">>, DDocName, ViewName] ->
+            {<<"_design/", DDocName/binary>>, ViewName};
+        _ ->
+            throw({bad_request, "A `view` property must have the shape"
+            " `ddoc_name/view_name`."})
+    end.
 

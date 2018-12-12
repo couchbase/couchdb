@@ -132,18 +132,27 @@ end_tests() ->
         true ->
             ok
     end,
-    case whereis(etap_server) of
-        undefined -> ok;
-        _ -> etap_server ! done, ok
-    end.
+    kill().
 
 bail() ->
     bail("").
 
 bail(Reason) ->
     etap_server ! {self(), diag, "Bail out! " ++ Reason},
-    etap_server ! done, ok,
-    ok.
+    kill().
+
+kill() ->
+    case whereis(etap_server) of
+        undefined ->
+            ok;
+        Pid ->
+            MRef = erlang:monitor(process, Pid),
+            Pid ! done,
+            receive
+                {'DOWN', MRef, process, _, _} ->
+                    ok
+            end
+    end.
 
 %% @spec test_state() -> Return
 %%       Return = test_state_record() | {error, string()}

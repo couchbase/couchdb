@@ -121,4 +121,5 @@ test() ->
     etap:isnt(Header3Bin,
               Header2Bin,
               "Serialized forms of headers 2 and 3 are different"),
+    couch_set_view_util:stop_server(),
     ok.

@@ -1,4 +1,3 @@
-FILE(GLOB SRC *.erl)
 SET(MR_VERSION "1.0")
 SET(MR_PREFIX ${CMAKE_ERL_LIB_INSTALL_PREFIX}/mapreduce-${MR_VERSION})
 SET(MR_EBIN_PREFIX ${MR_PREFIX}/ebin)
@@ -14,7 +13,8 @@ CONFIGURE_FILE(${CMAKE_CURRENT_SOURCE_DIR}/mapreduce.app.in
 
 
 SET(COUCH_VIEW_MR_SRC mapreduce_nif.cc
-                      mapreduce.cc)
+                      mapreduce.cc
+                      ${CMAKE_CURRENT_BINARY_DIR}/jsfunctions/jsfunctions_data.cc)
 
 INCLUDE_DIRECTORIES(BEFORE ${V8_INCLUDE_DIR}
                            ${ERLANG_INCLUDE_PATH})
@@ -30,8 +30,22 @@ SET_TARGET_PROPERTIES(mapreduce_nif PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/priv"
 )
 
+IF (UNIX)
+    # It would be nice to share this code from
+    # tlm/cmake/Modules/CouchbaseRpath.cmake, but unfortunately MacOS has
+    # a distinction between @loader_path and @executable_path that doesn't
+    # map to anything on other Unices, so it just has to be special
+    IF (APPLE)
+        SET (ORIGIN @loader_path)
+    ELSE ()
+        SET (ORIGIN \$ORIGIN)
+    ENDIF ()
+    # map from lib/couchdb/erlang/lib/mapreduce-1.0/priv/ to lib/
+    SET_TARGET_PROPERTIES(mapreduce_nif PROPERTIES
+                          INSTALL_RPATH "${ORIGIN}/../../../../..")
+ENDIF ()
 
-ERL_BUILD("mapreduce" ${SRC})
+ERL_BUILD(APPNAME "mapreduce" SOURCES mapreduce.erl)
 
 INSTALL(TARGETS mapreduce_nif
         DESTINATION ${MR_PRIV_PREFIX})
@@ -40,3 +54,4 @@ INSTALL(FILES ${outfiles}
         DESTINATION ${MR_EBIN_PREFIX})
 
 ADD_SUBDIRECTORY(test)
+ADD_SUBDIRECTORY(jsfunctions)

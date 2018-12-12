@@ -140,8 +140,8 @@ do_maps(Group, MapQueue, WriteQueue, AccItems, AccItemsSize) ->
                         fun({error, Reason}, {AccRes, Pos}) ->
                             ErrorMsg = "View group `~s`, error mapping document "
                                     " `~s` for view `~s`: ~s",
-                            Args = [Group#group.name, Id, view_name(Group, Pos),
-                                couch_util:to_binary(Reason)],
+                            Args = [?LOG_USERDATA(Group#group.name), ?LOG_USERDATA(Id),
+                                    ?LOG_USERDATA(view_name(Group, Pos)), couch_util:to_binary(Reason)],
                             ?LOG_MAPREDUCE_ERROR(ErrorMsg, Args),
                             {[[] | AccRes], Pos - 1};
                         (KVs, {AccRes, Pos}) ->
@@ -152,7 +152,7 @@ do_maps(Group, MapQueue, WriteQueue, AccItems, AccItemsSize) ->
                     [Item | Acc]
                 catch _:{error, Reason} ->
                     ErrorMsg = "View group `~s`, error mapping document `~s`: ~s",
-                    Args = [Group#group.name, Id, couch_util:to_binary(Reason)],
+                    Args = [?LOG_USERDATA(Group#group.name), ?LOG_USERDATA(Id), couch_util:to_binary(Reason)],
                     ?LOG_MAPREDUCE_ERROR(ErrorMsg, Args),
                     [{Seq, Id, []} | Acc]
                 end

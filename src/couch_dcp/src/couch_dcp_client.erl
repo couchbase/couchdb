@@ -14,12 +14,12 @@
 -behaviour(gen_server).
 
 % Public API
--export([start/5]).
+-export([start/6]).
 -export([add_stream/6, get_seqs/2, get_num_items/2,
     get_failover_log/2]).
 -export([get_stream_event/2, remove_stream/2, list_streams/1]).
--export([enum_docs_since/8, restart_worker/1]).
--export([get_seqs_async/1, parse_stats_seqnos/1]).
+-export([enum_docs_since/9, restart_worker/1]).
+-export([get_seqs_async/1]).
 
 % gen_server callbacks
 -export([init/1, terminate/2, handle_call/3, handle_cast/2, handle_info/2, code_change/3]).
@@ -30,8 +30,10 @@
 -include_lib("couch_dcp/include/couch_dcp_typespecs.hrl").
 -define(MAX_BUF_SIZE, 10485760).
 -define(TIMEOUT, 60000).
+-define(DEFAULT_NOOP_INTERVAL, 120000).
 -define(TIMEOUT_STATS, 2000).
 -define(DCP_RETRY_TIMEOUT, 2000).
+-define(DCP_LIST_STREAMS_TIMEOUT, 100).
 -define(DCP_BUF_WINDOW, 65535).
 -define(SOCKET(BufSocket), BufSocket#bufsocket.sockpid).
 
@@ -44,17 +46,20 @@
 }).
 
 -record(state, {
-    bufsocket = nil                 :: #bufsocket{} | nil,
-    timeout = 5000                  :: timeout(),
-    request_id = 0                  :: request_id(),
-    pending_requests = dict:new()   :: dict(),
-    stream_queues = dict:new()      :: dict(),
-    active_streams = []             :: list(),
-    worker_pid                      :: pid(),
-    max_buffer_size = ?MAX_BUF_SIZE :: integer(),
-    total_buffer_size = 0           :: non_neg_integer(),
-    stream_info = dict:new()        :: dict(),
-    args = []                       :: list()
+    bufsocket = nil                         :: #bufsocket{} | nil,
+    timeout = 5000                          :: timeout(),
+    request_id = 0                          :: request_id(),
+    pending_requests = dict:new()           :: dict(),
+    stream_queues = dict:new()              :: dict(),
+    enum_start_seq = dict:new()             :: dict(),
+    active_streams = []                     :: list(),
+    worker_pid                              :: pid(),
+    max_buffer_size = ?MAX_BUF_SIZE         :: integer(),
+    total_buffer_size = 0                   :: non_neg_integer(),
+    stream_info = dict:new()                :: dict(),
+    args = []                               :: list(),
+    noop_enable = true                      :: atom(),
+    noop_interval = ?DEFAULT_NOOP_INTERVAL  :: non_neg_integer()
 }).
 
 -record(stream_info, {
@@ -80,10 +85,10 @@
 
 % Public API
 
--spec start(binary(), binary(), binary(), binary(), non_neg_integer()) -> {ok, pid()} | ignore |
-                                   {error, {already_started, pid()} | term()}.
-start(Name, Bucket, AdmUser, AdmPasswd, BufferSize) ->
-    gen_server:start_link(?MODULE, [Name, Bucket, AdmUser, AdmPasswd, BufferSize], []).
+-spec start(binary(), binary(), binary(), binary(), non_neg_integer(), non_neg_integer()) ->
+    {ok, pid()} | ignore | {error, {already_started, pid()} | term()}.
+start(Name, Bucket, AdmUser, AdmPasswd, BufferSize, Flags) ->
+    gen_server:start_link(?MODULE, [Name, Bucket, AdmUser, AdmPasswd, BufferSize, Flags], []).
 
 -spec add_stream(pid(), partition_id(), uuid(), update_seq(),
     update_seq(), dcp_data_type()) -> {error, term()} | {request_id(), term()}.
@@ -98,10 +103,10 @@ remove_stream(Pid, PartId) ->
     gen_server:call(Pid, {remove_stream, PartId}, ?TIMEOUT).
 
 
--spec list_streams(pid()) -> list().
+-spec list_streams(pid()) -> {active_list_streams, list()} |
+                             {retry_list_streams, timeout()}.
 list_streams(Pid) ->
-    gen_server:call(Pid, list_streams).
-
+        gen_server:call(Pid, list_streams).
 
 -spec get_stats_reply(pid(), reference()) -> term().
 get_stats_reply(Pid, MRef) ->
@@ -111,12 +116,25 @@ get_stats_reply(Pid, MRef) ->
     {'DOWN', MRef, process, Pid, Reason} ->
         exit({dcp_client_died, Pid, Reason})
     after ?TIMEOUT_STATS ->
-        ?LOG_ERROR("dcp client (~p): vbucket-seqno stats timed out after ~p seconds."
+        ?LOG_ERROR("dcp client (~p): stats timed out after ~p seconds."
                    " Waiting...",
             [Pid, ?TIMEOUT_STATS / 1000]),
         get_stats_reply(Pid, MRef)
     end.
 
+-spec get_all_seqs_reply(pid(), reference()) -> term().
+get_all_seqs_reply(Pid, MRef) ->
+    receive
+    {all_seqs, MRef, Reply} ->
+        Reply;
+    {'DOWN', MRef, process, Pid, Reason} ->
+        exit({dcp_client_died, Pid, Reason})
+    after ?TIMEOUT_STATS ->
+        ?LOG_ERROR("dcp client (~p): dcp all seqs timed out after ~p seconds."
+                   " Waiting...",
+            [Pid, ?TIMEOUT_STATS / 1000]),
+        get_all_seqs_reply(Pid, MRef)
+    end.
 
 -spec get_stats(pid(), binary(), partition_id() | nil) -> term().
 get_stats(Pid, Name, PartId) ->
@@ -127,35 +145,19 @@ get_stats(Pid, Name, PartId) ->
     Reply.
 
 
-% The async get_seqs API requests asynchronous stats.
+% The async get_seqs API requests seq numbers asynchronously.
 % The response will be sent to the caller process asynchronously in the
 % following message format:
-% {get_stats, nil, StatsResponse}.
-% The receiver needs to use parse_stats_seqnos() method to parse the
-% response to valid seqnos format.
+% {all_seqs, nil, StatsResponse}.
 -spec get_seqs_async(pid()) -> ok.
 get_seqs_async(Pid) ->
-    Pid ! {get_stats, <<"vbucket-seqno">>, nil, {nil, self()}},
+    Pid ! {get_all_seqs, {nil, self()}},
     ok.
-
--spec parse_stats_seqnos([{binary(), binary()}]) -> [{partition_id(), update_seq()}].
-parse_stats_seqnos(Stats) ->
-    lists:foldr(fun({Key, SeqBin}, Acc) ->
-        case binary:split(Key, <<":">>) of
-        [<<"vb_", PartIdBin/binary>>, <<"high_seqno">>] ->
-            PartId = list_to_integer(binary_to_list(PartIdBin)),
-            Seq = list_to_integer(binary_to_list(SeqBin)),
-            [{PartId, Seq} | Acc];
-        _ ->
-            Acc
-        end
-    end, [], Stats).
-
 
 -spec get_seqs(pid(), ordsets:ordset(partition_id()) | nil) ->
          {ok, partition_seqs()} | {error, term()}.
 get_seqs(Pid, SortedPartIds) ->
-    case get_seqs(Pid) of
+    case get_all_seqs(Pid) of
     {ok, Seqs} ->
         case SortedPartIds of
         nil ->
@@ -168,16 +170,13 @@ get_seqs(Pid, SortedPartIds) ->
         Error
     end.
 
-get_seqs(Pid) ->
-    Reply = get_stats(Pid, <<"vbucket-seqno">>, nil),
-    case Reply of
-    {ok, Stats} ->
-        Seqs = parse_stats_seqnos(Stats),
-        {ok, Seqs};
-    {error, _Error} = Error ->
-        Error
-    end.
-
+-spec get_all_seqs(pid()) -> term().
+get_all_seqs(Pid) ->
+    MRef = erlang:monitor(process, Pid),
+    Pid ! {get_all_seqs, {MRef, self()}},
+    Reply = get_all_seqs_reply(Pid, MRef),
+    erlang:demonitor(MRef, [flush]),
+    Reply.
 
 -spec get_num_items(pid(), partition_id()) ->
                            {ok, non_neg_integer()} | {error, not_my_vbucket}.
@@ -190,7 +189,9 @@ get_num_items(Pid, PartId) ->
             <<"vb_", BinPartId/binary, ":num_items">>, 1, Stats),
         {ok, list_to_integer(binary_to_list(NumItems))};
     {error, {?DCP_STATUS_NOT_MY_VBUCKET, _}} ->
-        {error, not_my_vbucket}
+        {error, not_my_vbucket};
+    {error, Reason} ->
+        {error, Reason}
     end.
 
 
@@ -206,11 +207,11 @@ get_failover_log(Pid, PartId) ->
 get_stream_event(Pid, ReqId) ->
     MRef = erlang:monitor(process, Pid),
     Pid ! {get_stream_event, ReqId, self()},
-    Reply = get_stream_event_get_reply(Pid, ReqId, MRef),
+    Reply = get_stream_event_get_reply(Pid, ReqId, MRef, ?TIMEOUT),
     erlang:demonitor(MRef, [flush]),
     Reply.
 
-get_stream_event_get_reply(Pid, ReqId, MRef) ->
+get_stream_event_get_reply(Pid, ReqId, MRef, RetryTimeout) ->
     receive
     {stream_event, ReqId, Reply} ->
         Reply;
@@ -219,22 +220,30 @@ get_stream_event_get_reply(Pid, ReqId, MRef) ->
     after ?TIMEOUT ->
         Msg = {print_log, ReqId},
         Pid ! Msg,
-        get_stream_event_get_reply(Pid, ReqId, MRef)
+        case RetryTimeout >= (2 * ?DEFAULT_NOOP_INTERVAL) of
+        true ->
+            ?LOG_ERROR("Not got any response from KV after 2x noop_interval ~p seconds, "
+                       "exiting updater ~p.", [(2 * ?DEFAULT_NOOP_INTERVAL)/1000, self()]),
+            exit(timeout);
+        false ->
+            get_stream_event_get_reply(Pid, ReqId, MRef,
+                                       RetryTimeout + ?TIMEOUT)
+        end
     end.
 
 -spec enum_docs_since(pid(), partition_id(), partition_version(), update_seq(),
                       update_seq(), 0..255, mutations_fold_fun(),
-                      mutations_fold_acc()) ->
+                      mutations_fold_acc(), fun()) ->
                              {error, vbucket_stream_not_found |
                               wrong_start_sequence_number |
                               too_large_failover_log } |
                              {rollback, update_seq()} |
                              {ok, mutations_fold_acc(), partition_version()}.
-enum_docs_since(_, _, [], _, _, _, _, _) ->
+enum_docs_since(_, _, [], _, _, _, _, _, _) ->
     % No matching partition version found. Recreate the index from scratch
     {rollback, 0};
 enum_docs_since(Pid, PartId, PartVersions, StartSeq, EndSeq0, Flags,
-        CallbackFn, InAcc) ->
+        CallbackFn, InAcc, AddStreamFun) ->
     [PartVersion | PartVersionsRest] = PartVersions,
     {PartUuid, _} = PartVersion,
     EndSeq = case EndSeq0 < StartSeq of
@@ -247,7 +256,7 @@ enum_docs_since(Pid, PartId, PartVersions, StartSeq, EndSeq0, Flags,
         EndSeq0
     end,
 
-    case add_stream(Pid, PartId, PartUuid, StartSeq, EndSeq, Flags) of
+    case AddStreamFun(Pid, PartId, PartUuid, StartSeq, EndSeq, Flags) of
     {error, _} = Error ->
         Error;
     {RequestId, Resp} ->
@@ -267,13 +276,13 @@ enum_docs_since(Pid, PartId, PartVersions, StartSeq, EndSeq0, Flags,
             end;
         {error, vbucket_stream_not_found} ->
             enum_docs_since(Pid, PartId, PartVersionsRest, StartSeq, EndSeq,
-                Flags, CallbackFn, InAcc);
+                Flags, CallbackFn, InAcc, AddStreamFun);
         {error, vbucket_stream_tmp_fail} ->
             ?LOG_INFO("dcp client (~p): Temporary failure on stream request "
                 "on partition ~p. Retrying...", [Pid, PartId]),
             timer:sleep(100),
             enum_docs_since(Pid, PartId, PartVersions, StartSeq, EndSeq,
-                Flags, CallbackFn, InAcc);
+                Flags, CallbackFn, InAcc, AddStreamFun);
         _ ->
             Resp
         end
@@ -284,7 +293,7 @@ enum_docs_since(Pid, PartId, PartVersions, StartSeq, EndSeq0, Flags,
 
 -spec init([binary() | non_neg_integer()]) -> {ok, #state{}} |
                     {stop, sasl_auth_failed | closed | inet:posix()}.
-init([Name, Bucket, AdmUser, AdmPasswd, BufferSize]) ->
+init([Name, Bucket, AdmUser, AdmPasswd, BufferSize, Flags]) ->
     DcpTimeout = list_to_integer(
         couch_config:get("dcp", "connection_timeout")),
     DcpPort = list_to_integer(couch_config:get("dcp", "port")),
@@ -305,9 +314,9 @@ init([Name, Bucket, AdmUser, AdmPasswd, BufferSize]) ->
             case select_bucket(Bucket, State2) of
             {ok, State3} ->
                 % Store the meta information to reconnect
-                Args = [Name, Bucket, AdmUser, AdmPasswd, BufferSize],
+                Args = [Name, Bucket, AdmUser, AdmPasswd, BufferSize, Flags],
                 State4 = State3#state{args = Args},
-                case open_connection(Name, State4) of
+                case open_connection(Name, Flags, State4) of
                 {ok, State5} ->
                     Parent = self(),
                     process_flag(trap_exit, true),
@@ -319,9 +328,26 @@ init([Name, Bucket, AdmUser, AdmPasswd, BufferSize]) ->
                     gen_tcp:controlling_process(?SOCKET(BufSocket), WorkerPid),
                     case set_buffer_size(State5, BufferSize) of
                     {ok, State6} ->
-                        {ok, State6#state{worker_pid = WorkerPid}};
+                            case enable_noop(State6, true) of
+                                {ok, State7} ->
+                                    case State7#state.noop_enable of
+                                    true ->
+                                        case noop_interval(State7) of
+                                        {ok, State8} ->
+                                            {ok, State8#state{worker_pid = WorkerPid}};
+                                        {error, Reason} ->
+                                            exit(WorkerPid, shutdown),
+                                            {stop, Reason}
+                                        end;
+                                    false ->
+                                        exit(WorkerPid, shutdown),
+                                        {stop, noop_not_enabled}
+                                    end;
+                                {error, Reason} ->
+                                    exit(WorkerPid, shutdown),
+                                    {stop, Reason}
+                            end;
                     {error, Reason} ->
-                        exit(WorkerPid, shutdown),
                         {stop, Reason}
                     end;
                 {error, Reason} ->
@@ -348,7 +374,10 @@ handle_call({add_stream, PartId, PartUuid, StartSeq, EndSeq, Flags},
     {error, Reason} ->
         {reply, {error, Reason}, State};
     State2 ->
-        {noreply, State2}
+        EnumStartSeq = State2#state.enum_start_seq,
+        State3 = State2#state{enum_start_seq =
+                                  dict:store(PartId, StartSeq, EnumStartSeq)},
+        {noreply, State3}
     end;
 
 handle_call({remove_stream, PartId}, From, State) ->
@@ -370,9 +399,15 @@ handle_call({remove_stream, PartId}, From, State) ->
 
 handle_call(list_streams, _From, State) ->
     #state{
-       active_streams = ActiveStreams
+        active_streams = ActiveStreams,
+        pending_requests = PendingRequests
     } = State,
-    Reply = lists:foldl(fun({PartId, _}, Acc) -> [PartId | Acc] end, [], ActiveStreams),
+    Reply = case dict:size(PendingRequests) of
+    0 ->
+        {active_list_streams, lists:foldl(fun({PartId, _}, Acc) -> [PartId | Acc] end, [], ActiveStreams)};
+    _ ->
+        {retry_list_streams, ?DCP_LIST_STREAMS_TIMEOUT}
+    end,
     {reply, Reply, State};
 
 handle_call({get_failover_log, PartId}, From, State) ->
@@ -475,13 +510,25 @@ handle_info({get_stats, Stat, PartId, From}, State) ->
         {reply, Error, State}
     end;
 
+handle_info({get_all_seqs, From}, State) ->
+    #state{
+       request_id = RequestId,
+       bufsocket = BufSocket
+    } = State,
+    SeqStatRequest = couch_dcp_consumer:encode_all_seqs_request(RequestId),
+    case bufsocket_send(BufSocket, SeqStatRequest) of
+    ok ->
+        State2 = next_request_id(State),
+        State3 = add_pending_request(State2, RequestId, all_seqs, From),
+        {noreply, State3};
+    Error ->
+        {reply, Error, State}
+    end;
 
 % Handle response message send by connection receiver worker
 % Reply back to waiting callers
 handle_info({stream_response, RequestId, Msg}, State) ->
     State3 = case find_pending_request(State, RequestId) of
-    {_, nil} ->
-        State;
     {ReqInfo, SendTo} ->
         State2 = case ReqInfo of
         {add_stream, PartId} ->
@@ -490,7 +537,12 @@ handle_info({stream_response, RequestId, Msg}, State) ->
             {_, {failoverlog, _}} ->
                 add_request_queue(State, PartId, RequestId);
             _ ->
-                State
+                % Remove possible leak in stream_info
+                #state{
+                    stream_info = StreamData
+                } = State,
+                StreamData2 = dict:erase(RequestId, StreamData),
+                State#state{stream_info = StreamData2}
             end;
         {remove_stream, PartId} ->
             gen_server:reply(SendTo, Msg),
@@ -510,11 +562,27 @@ handle_info({stream_response, RequestId, Msg}, State) ->
                 State
             end;
         % Server sent the response for the internal control request
-        {control_request, Size} ->
-            State#state{max_buffer_size = Size};
+        {control_request, Type} ->
+            case Type of
+                {size, Size} ->
+                    State#state{max_buffer_size = Size};
+                {enable_noop, Enable} ->
+                    case Enable of
+                        true ->
+                            State#state{noop_enable = true};
+                        false ->
+                            State#state{noop_enable = false}
+                    end;
+                {noop_interval, Interval} ->
+                    State#state{noop_interval = Interval}
+            end;
         get_stats ->
             {MRef, From} = SendTo,
             From ! {get_stats, MRef, Msg},
+            State;
+        all_seqs ->
+            {MRef, From} = SendTo,
+            From ! {all_seqs, MRef, Msg},
             State;
         _ ->
             gen_server:reply(SendTo, Msg),
@@ -586,7 +654,7 @@ handle_info({stream_event, RequestId, Event}, State) ->
     end;
 
 handle_info({'EXIT', Pid, {conn_error, Reason}}, #state{worker_pid = Pid} = State) ->
-    [Name, Bucket, _AdmUser, _AdmPasswd, _BufferSize] = State#state.args,
+    [Name, Bucket, _AdmUser, _AdmPasswd, _BufferSize, _Flags] = State#state.args,
     ?LOG_ERROR("dcp client (~s, ~s): dcp receive worker failed due to reason: ~p."
         " Restarting dcp receive worker...",
         [Bucket, Name, Reason]),
@@ -597,22 +665,36 @@ handle_info({'EXIT', Pid, Reason}, #state{worker_pid = Pid} = State) ->
     {stop, Reason, State};
 
 handle_info({print_log, ReqId}, State) ->
-    [Name, Bucket, _AdmUser, _AdmPasswd, _BufferSize] = State#state.args,
+    [Name, Bucket, _AdmUser, _AdmPasswd, _BufferSize, _Flags] = State#state.args,
     case find_stream_info(ReqId, State) of
     nil ->
         ?LOG_ERROR(
             "dcp client (~s, ~s): Obtaining message from server timed out "
             "after ~p seconds [RequestId ~p]. Waiting...",
-            [Bucket, Name, ?TIMEOUT / 1000, ReqId]);
+            [?LOG_USERDATA(Bucket), ?LOG_USERDATA(Name), ?TIMEOUT / 1000, ReqId]);
     StreamInfo ->
         #stream_info{
            start_seq = Start,
            end_seq = End,
-           part_id = PartId
+           part_id = PartId,
+           snapshot_seq = Boundary
         } = StreamInfo,
-        ?LOG_ERROR("dcp client (~s, ~s): Obtaining mutation from server timed out "
-            "after ~p seconds [RequestId ~p, PartId ~p, StartSeq ~p, EndSeq ~p]. Waiting...",
-            [Bucket, Name, ?TIMEOUT / 1000, ReqId, PartId, Start, End])
+        % The Start seq stored in stream_info is updated each time
+        % we get a mutation and is actually the "current" seq number.
+        % IndexStartSeq is the seq persisted during enum_docs_since
+        % call and is the original start seq number
+        EnumStartSeq = State#state.enum_start_seq,
+        IndexStartSeq = case dict:find(PartId, EnumStartSeq) of
+                            {ok, EStartSeq} -> EStartSeq;
+                            error -> "error_fetching_start_seq"
+                        end,
+        Format = "dcp client (~s, ~s): Obtaining mutation from server timed out "
+                 "after ~p seconds [RequestId ~p, PartId ~p, StartSeq ~p, "
+                 "CurrentSnapshotSeq ~p, EndSeq ~p, SnapshotBoundary ~w] "
+                 "Waiting..." ,
+        Content = [?LOG_USERDATA(Bucket), ?LOG_USERDATA(Name), ?TIMEOUT / 1000, ReqId, PartId, IndexStartSeq,
+                   Start, End, Boundary],
+        ?LOG_ERROR(Format, Content)
     end,
     {noreply, State};
 
@@ -725,15 +807,16 @@ select_bucket(Bucket, State) ->
         Error
     end.
 
--spec open_connection(binary(), #state{}) -> {ok, #state{}} | {error, term()}.
-open_connection(Name, State) ->
+-spec open_connection(binary(), non_neg_integer(), #state{}) ->
+    {ok, #state{}} | {error, term()}.
+open_connection(Name, Flags, State) ->
     #state{
         bufsocket = BufSocket,
         timeout = DcpTimeout,
         request_id = RequestId
     } = State,
     OpenConnection = couch_dcp_consumer:encode_open_connection(
-        Name, RequestId),
+        Name, Flags, RequestId),
     case bufsocket_send(BufSocket, OpenConnection) of
     ok ->
         case bufsocket_recv(BufSocket, ?DCP_HEADER_LEN, DcpTimeout) of
@@ -807,10 +890,10 @@ receive_snapshot_deletion(BufSocket, Timeout, PartId, KeyLength, BodyLength,
     {ok, Body, BufSocket2} ->
          {snapshot_deletion, Deletion} =
              couch_dcp_consumer:parse_snapshot_deletion(KeyLength, Body),
-         {Seq, RevSeq, Key, _Metadata} = Deletion,
+         {Seq, RevSeq, Key, _Metadata, XATTRs} = Deletion,
          {#dcp_doc{
              id = Key,
-             body = <<>>,
+             body = XATTRs,
              data_type = DataType,
              partition = PartId,
              cas = Cas,
@@ -875,6 +958,18 @@ receive_stat(BufSocket, Timeout, Status, BodyLength, KeyLength) ->
     {ok, Body, BufSocket2} ->
         {couch_dcp_consumer:parse_stat(
             Body, Status, KeyLength, BodyLength - KeyLength), BufSocket2};
+    {error, Reason} ->
+        {error, Reason}
+    end.
+
+-spec receive_all_seqs(#bufsocket{}, timeout(), dcp_status(), size()) ->
+        {ok, list()} |
+        {error, {dcp_status(), binary()}} |
+        {error, closed}.
+receive_all_seqs(BufSocket, Timeout, Status, BodyLength) ->
+    case bufsocket_recv(BufSocket, BodyLength, Timeout) of
+    {ok, Body, BufSocket2} ->
+        {couch_dcp_consumer:parse_all_seqs(Status, Body, []), BufSocket2};
     {error, Reason} ->
         {error, Reason}
     end.
@@ -1251,7 +1346,11 @@ receive_worker(BufSocket, Timeout, Parent, MsgAcc0) ->
             {Flag, BufSocket5} = receive_stream_end(BufSocket2,
                 Timeout, BodyLength),
             {done, {stream_event, RequestId, {stream_end,
-                {RequestId, PartId, Flag}, BodyLength}}, BufSocket5}
+                {RequestId, PartId, Flag}, BodyLength}}, BufSocket5};
+        {all_seqs, Status, RequestId, BodyLength} ->
+            {Resp, BufSocket5} = receive_all_seqs(
+                BufSocket2, Timeout, Status, BodyLength),
+            {done, {stream_response, RequestId, Resp}, BufSocket5}
         end,
         case Action of
         done ->
@@ -1339,16 +1438,60 @@ set_buffer_size(State, Size) ->
         bufsocket = BufSocket,
         request_id = RequestId
     } = State,
-    ControlRequest = couch_dcp_consumer:encode_control_request(RequestId, connection, Size),
+    ControlRequest = couch_dcp_consumer:
+        encode_control_request(RequestId, connection, Size),
     case bufsocket_send(BufSocket, ControlRequest) of
     ok ->
         State2 = next_request_id(State),
-        State3 = add_pending_request(State2, RequestId, {control_request, Size}, nil),
+        State3 = add_pending_request(State2, RequestId,
+                        {control_request, {size,Size}}, nil),
         State4 = State3#state{max_buffer_size = Size},
         {ok, State4};
     {error, Error} ->
         {error, Error}
     end.
+
+-spec enable_noop(#state{}, boolean()) -> {ok ,#state{}} |
+                                            {error, closed | inet:posix()}.
+enable_noop(State, Enable) ->
+    #state{
+        bufsocket = BufSocket,
+        request_id = RequestId
+    } = State,
+    ControlRequest = couch_dcp_consumer:
+        encode_control_request(RequestId, enable_noop, Enable),
+    case bufsocket_send(BufSocket,ControlRequest) of
+        ok ->
+            State2 = next_request_id(State),
+            State3 = add_pending_request(State2, RequestId,
+                        {control_request, {enable_noop, Enable}}, nil),
+            {ok, State3};
+        {error,Error} ->
+            {error, Error}
+    end.
+
+-spec noop_interval(#state{}) -> {ok ,#state{}} |
+                                {error, closed | inet:posix()}.
+noop_interval(State) ->
+    #state{
+        bufsocket = BufSocket,
+        request_id = RequestId,
+        noop_interval = Interval
+    } = State,
+    % KV expects values in seconds. We need to pass 120 as default noop interval
+    ControlRequest = couch_dcp_consumer:
+        encode_control_request(RequestId, set_noop_interval, Interval div 1000),
+    case bufsocket_send(BufSocket,ControlRequest) of
+        ok ->
+            State2 = next_request_id(State),
+            State3 = add_pending_request(State2, RequestId,
+                        {control_request, {noop_interval, Interval}}, nil),
+            {ok, State3};
+        {error,Error} ->
+            {error, Error}
+    end.
+
+
 
 -spec get_queue_size(queue(), non_neg_integer()) -> non_neg_integer().
 get_queue_size(EvQueue, Size) ->
@@ -1450,6 +1593,9 @@ restart_worker(State) ->
             get_stats ->
                 {MRef, From} = SendTo,
                 From ! {get_stats, MRef, Error};
+            all_seqs ->
+                {MRef, From} = SendTo,
+                From ! {all_seqs, MRef, Error};
             {control_request, _} ->
                 ok;
             _ ->

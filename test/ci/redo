@@ -1,0 +1,6 @@
+#!/bin/bash
+cd $HOME/bin
+kick
+sleep 3
+build &
+

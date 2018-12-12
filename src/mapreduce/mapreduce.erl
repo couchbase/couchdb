@@ -18,7 +18,7 @@
 
 -module(mapreduce).
 
--export([start_map_context/1]).
+-export([start_map_context/2]).
 -export([map_doc/3]).
 
 -export([start_reduce_context/1]).
@@ -26,6 +26,7 @@
 -export([rereduce/3]).
 
 -export([set_timeout/1, set_max_kv_size_per_doc/1]).
+-export([is_doc_used/1, set_optimize_doc_load/1]).
 
 -on_load(init/0).
 
@@ -49,11 +50,7 @@ init() ->
     end.
 
 
-start_map_context(MapFunSources) ->
-    Ref = erlang:phash2(make_ref()),
-    start_map_context(MapFunSources, Ref).
-
-start_map_context(_MapFunSources, _Ref) ->
+start_map_context(_Mod, _MapFunSources) ->
     erlang:nif_error(mapreduce_nif_not_loaded).
 
 
@@ -61,11 +58,7 @@ map_doc(_Context, _Doc, _Meta) ->
     erlang:nif_error(mapreduce_nif_not_loaded).
 
 
-start_reduce_context(ReduceFunSources) ->
-    Ref = erlang:phash2(make_ref()),
-    start_reduce_context(ReduceFunSources, Ref).
-
-start_reduce_context(_ReduceFunSources, _Ref) ->
+start_reduce_context(_ReduceFunSources) ->
     erlang:nif_error(mapreduce_nif_not_loaded).
 
 
@@ -86,4 +79,10 @@ set_timeout(_TimeoutMs) ->
 
 
 set_max_kv_size_per_doc(_Max) ->
+    erlang:nif_error(mapreduce_nif_not_loaded).
+
+is_doc_used(_Ctx) ->
+    erlang:nif_error(mapreduce_nif_not_loaded).
+
+set_optimize_doc_load(_Flag) ->
     erlang:nif_error(mapreduce_nif_not_loaded).

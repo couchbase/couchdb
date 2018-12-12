@@ -1,7 +1,7 @@
 %%% ----------------------------------------------------------------------------
 %%% Copyright (c) 2009, Erlang Training and Consulting Ltd.
 %%% All rights reserved.
-%%% 
+%%%
 %%% Redistribution and use in source and binary forms, with or without
 %%% modification, are permitted provided that the following conditions are met:
 %%%    * Redistributions of source code must retain the above copyright
@@ -12,7 +12,7 @@
 %%%    * Neither the name of Erlang Training and Consulting Ltd. nor the
 %%%      names of its contributors may be used to endorse or promote products
 %%%      derived from this software without specific prior written permission.
-%%% 
+%%%
 %%% THIS SOFTWARE IS PROVIDED BY Erlang Training and Consulting Ltd. ''AS IS''
 %%% AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
 %%% IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
@@ -24,39 +24,46 @@
 %%% ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 %%% ----------------------------------------------------------------------------
 
+%%------------------------------------------------------------------------------
 %%% @private
 %%% @author Oscar Hellström <oscar@hellstrom.st>
 %%% @doc
 %%% This module implements various library functions used in lhttpc.
+%%------------------------------------------------------------------------------
 -module(lhttpc_lib).
 
--export([
-        parse_url/1,
-        format_request/7,
-        header_value/2,
-        header_value/3,
-        normalize_method/1
-    ]).
--export([maybe_atom_to_list/1]).
-
--export([format_hdrs/1, dec/1]).
+-export([parse_url/1,
+         format_request/7,
+         header_value/2, header_value/3,
+         normalize_method/1,
+         maybe_atom_to_list/1,
+         format_hdrs/1,
+         dec/1
+        ]).
 
 -include("lhttpc_types.hrl").
 -include("lhttpc.hrl").
 
+%%==============================================================================
+%% Exported functions
+%%==============================================================================
+
+%%------------------------------------------------------------------------------
 %% @spec header_value(Header, Headers) -> undefined | term()
 %% Header = string()
-%% Headers = [{string(), term()}]
+%% Headers = [{header(), term()}]
 %% Value = term()
 %% @doc
 %% Returns the value associated with the `Header' in `Headers'.
 %% `Header' must be a lowercase string, since every header is mangled to
 %% check the match.
 %% @end
--spec header_value(string(), [{string(), Value}]) -> undefined | Value.
+%%------------------------------------------------------------------------------
+-spec header_value(string(), headers()) -> undefined | term().
 header_value(Hdr, Hdrs) ->
     header_value(Hdr, Hdrs, undefined).
 
+%%------------------------------------------------------------------------------
 %% @spec header_value(Header, Headers, Default) -> Default | term()
 %% Header = string()
 %% Headers = [{string(), term()}]
@@ -67,18 +74,30 @@ header_value(Hdr, Hdrs) ->
 %% `Header' must be a lowercase string, since every header is mangled to
 %% check the match.  If no match is found, `Default' is returned.
 %% @end
--spec header_value(string(), [{string(), Value}], Default) ->
-    Default | Value.
+%%------------------------------------------------------------------------------
+-spec header_value(string(), headers(), term()) -> term().
 header_value(Hdr, [{Hdr, Value} | _], _) ->
-    Value;
+    case is_list(Value) of
+        true -> string:strip(Value);
+        false -> Value
+    end;
+header_value(Hdr, [{ThisHdr, Value}| Hdrs], Default) when is_atom(ThisHdr) ->
+    header_value(Hdr, [{atom_to_list(ThisHdr), Value}| Hdrs], Default);
+header_value(Hdr, [{ThisHdr, Value}| Hdrs], Default) when is_binary(ThisHdr) ->
+    header_value(Hdr, [{binary_to_list(ThisHdr), Value}| Hdrs], Default);
 header_value(Hdr, [{ThisHdr, Value}| Hdrs], Default) ->
     case string:equal(string:to_lower(ThisHdr), Hdr) of
-        true  -> Value;
-        false -> header_value(Hdr, Hdrs, Default)
+        true  -> case is_list(Value) of
+                     true -> string:strip(Value);
+                     false -> Value
+                 end;
+        false ->
+            header_value(Hdr, Hdrs, Default)
     end;
 header_value(_, [], Default) ->
     Default.
 
+%%------------------------------------------------------------------------------
 %% @spec (Item) -> OtherItem
 %%   Item = atom() | list()
 %%   OtherItem = list()
@@ -86,15 +105,19 @@ header_value(_, [], Default) ->
 %% Will make any item, being an atom or a list, in to a list. If it is a
 %% list, it is simple returned.
 %% @end
+%%------------------------------------------------------------------------------
 -spec maybe_atom_to_list(atom() | list()) -> list().
 maybe_atom_to_list(Atom) when is_atom(Atom) ->
     atom_to_list(Atom);
-maybe_atom_to_list(List) when is_list(List) ->
+maybe_atom_to_list(List) ->
     List.
 
+%%------------------------------------------------------------------------------
 %% @spec (URL) -> #lhttpc_url{}
 %%   URL = string()
 %% @doc
+%% @end
+%%------------------------------------------------------------------------------
 -spec parse_url(string()) -> #lhttpc_url{}.
 parse_url(URL) ->
     % XXX This should be possible to do with the re module?
@@ -111,11 +134,83 @@ parse_url(URL) ->
         is_ssl = (Scheme =:= https)
     }.
 
+%%------------------------------------------------------------------------------
+%% @spec (Path, Method, Headers, Host, Port, Body, PartialUpload) -> Request
+%% Path = iolist()
+%% Method = atom() | string()
+%% Headers = [{atom() | string(), string()}]
+%% Host = string()
+%% Port = integer()
+%% Body = iolist()
+%% PartialUpload = true | false
+%% @doc
+%% @end
+%%------------------------------------------------------------------------------
+-spec format_request(iolist(), method(), headers(), string(),
+    integer(), iolist(), boolean()) -> {boolean(), iolist()}.
+format_request(Path, Method, Hdrs, Host, Port, Body, PartialUpload) ->
+    AllHdrs = add_mandatory_hdrs(Method, Hdrs, Host, Port, Body, PartialUpload),
+    IsChunked = is_chunked(AllHdrs),
+    {
+        IsChunked,
+        [
+            Method, " ", Path, " HTTP/1.1\r\n",
+            format_hdrs(AllHdrs),
+            format_body(Body, IsChunked)
+        ]
+    }.
+
+%%------------------------------------------------------------------------------
+%% @spec normalize_method(AtomOrString) -> Method
+%%   AtomOrString = atom() | string()
+%%   Method = string()
+%% @doc
+%% Turns the method in to a string suitable for inclusion in a HTTP request
+%% line.
+%% @end
+%%------------------------------------------------------------------------------
+-spec normalize_method(method()) -> string().
+normalize_method(Method) when is_atom(Method) ->
+    string:to_upper(atom_to_list(Method));
+normalize_method(Method) ->
+    Method.
+
+%%------------------------------------------------------------------------------
+%% @doc
+%% @end
+%%------------------------------------------------------------------------------
+-spec dec(timeout()) -> timeout().
+dec(Num) when is_integer(Num) -> Num - 1;
+dec(Else)                     -> Else.
+
+%%------------------------------------------------------------------------------
+%% @doc
+%% @end
+%%------------------------------------------------------------------------------
+-spec format_hdrs(headers()) -> [string()].
+format_hdrs(Headers) ->
+    NormalizedHeaders = normalize_headers(Headers),
+    format_hdrs(NormalizedHeaders, []).
+
+%%==============================================================================
+%% Internal functions
+%%==============================================================================
+
+%%------------------------------------------------------------------------------
+%% @private
+%% @doc
+%% @end
+%%------------------------------------------------------------------------------
 split_scheme("http://" ++ HostPortPath) ->
     {http, HostPortPath};
 split_scheme("https://" ++ HostPortPath) ->
     {https, HostPortPath}.
 
+%%------------------------------------------------------------------------------
+%% @private
+%% @doc
+%% @end
+%%------------------------------------------------------------------------------
 split_credentials(CredsHostPortPath) ->
     case string:tokens(CredsHostPortPath, "@") of
         [HostPortPath] ->
@@ -135,6 +230,12 @@ split_credentials(CredsHostPortPath) ->
             end
     end.
 
+%%------------------------------------------------------------------------------
+%% @private
+%% @doc
+%% @end
+%%------------------------------------------------------------------------------
+-spec split_host(string(), string()) -> {string(), string()}.
 split_host("[" ++ Rest, []) ->
     % IPv6 address literals are enclosed by square brackets (RFC2732)
     case string:str(Rest, "]") of
@@ -153,11 +254,21 @@ split_host([$: | PortPath], Host) ->
     {lists:reverse(Host), PortPath};
 split_host([$/ | _] = PortPath, Host) ->
     {lists:reverse(Host), PortPath};
+split_host([$? | _] = Query, Host) ->
+    %% The query string follows the hostname, without a slash.  The
+    %% path is empty, but for HTTP an empty path is equivalent to "/"
+    %% (RFC 3986, section 6.2.3), so let's add the slash ourselves.
+    {lists:reverse(Host), "/" ++ Query};
 split_host([H | T], Host) ->
     split_host(T, [H | Host]);
 split_host([], Host) ->
     {lists:reverse(Host), []}.
 
+%%------------------------------------------------------------------------------
+%% @private
+%% @doc
+%% @end
+%%------------------------------------------------------------------------------
 split_port(http, [$/ | _] = Path, []) ->
     {80, Path};
 split_port(https, [$/ | _] = Path, []) ->
@@ -173,53 +284,56 @@ split_port(_,[$/ | _] = Path, Port) ->
 split_port(Scheme, [P | T], Port) ->
     split_port(Scheme, T, [P | Port]).
 
-%% @spec (Path, Method, Headers, Host, Port, Body, PartialUpload) -> Request
-%% Path = iolist()
-%% Method = atom() | string()
-%% Headers = [{atom() | string(), string()}]
-%% Host = string()
-%% Port = integer()
-%% Body = iolist()
-%% PartialUpload = true | false
--spec format_request(iolist(), atom() | string(), headers(), string(),
-    integer(), iolist(), true | false ) -> {true | false, iolist()}.
-format_request(Path, Method, Hdrs, Host, Port, Body, PartialUpload) ->
-    AllHdrs = add_mandatory_hdrs(Method, Hdrs, Host, Port, Body, PartialUpload),
-    IsChunked = is_chunked(AllHdrs),
-    {
-        IsChunked,
-        [
-            Method, " ", Path, " HTTP/1.1\r\n",
-            format_hdrs(AllHdrs),
-            format_body(Body, IsChunked)
-        ]
-    }.
-
-%% @spec normalize_method(AtomOrString) -> Method
-%%   AtomOrString = atom() | string()
-%%   Method = string()
-%% @doc
-%% Turns the method in to a string suitable for inclusion in a HTTP request
+%%------------------------------------------------------------------------------
+%% @private
+%% @spec normalize_headers(RawHeaders) -> Headers
+%%   RawHeaders = [{atom() | binary() | string(), binary() | string()}]
+%%   Headers = headers()
+%% @doc Turns the headers into binaries suitable for inclusion in a HTTP request
 %% line.
 %% @end
--spec normalize_method(atom() | string()) -> string().
-normalize_method(Method) when is_atom(Method) ->
-    string:to_upper(atom_to_list(Method));
-normalize_method(Method) ->
-    Method.
+%%------------------------------------------------------------------------------
+-spec normalize_headers(raw_headers()) -> headers().
+normalize_headers(Headers) ->
+    normalize_headers(Headers, []).
 
--spec format_hdrs(headers()) -> iolist().
-format_hdrs(Headers) ->
-    format_hdrs(Headers, []).
+%%------------------------------------------------------------------------------
+%% @private
+%% @doc
+%% @end
+%%------------------------------------------------------------------------------
+-spec normalize_headers(raw_headers(), headers()) -> headers().
+normalize_headers([{Header, Value} | T], Acc) when is_list(Header) ->
+    NormalizedHeader = try list_to_existing_atom(Header)
+                      catch
+                           error:badarg -> Header
+                       end,
+    NewAcc = [{NormalizedHeader, Value} | Acc],
+    normalize_headers(T, NewAcc);
+normalize_headers([{Header, Value} | T], Acc) ->
+    NewAcc = [{Header, Value} | Acc],
+    normalize_headers(T, NewAcc);
+normalize_headers([], Acc) ->
+    Acc.
 
+%%------------------------------------------------------------------------------
+%% @private
+%% @doc
+%% @end
+%%------------------------------------------------------------------------------
 format_hdrs([{Hdr, Value} | T], Acc) ->
-    NewAcc = [
-        maybe_atom_to_list(Hdr), ": ", maybe_atom_to_list(Value), "\r\n" | Acc
-    ],
+    NewAcc =
+        [maybe_atom_to_list(Hdr), ": ", maybe_atom_to_list(Value), "\r\n" | Acc],
     format_hdrs(T, NewAcc);
 format_hdrs([], Acc) ->
     [Acc, "\r\n"].
 
+%%------------------------------------------------------------------------------
+%% @private
+%% @doc
+%% @end
+%%------------------------------------------------------------------------------
+-spec format_body(iolist(), boolean()) -> iolist().
 format_body(Body, false) ->
     Body;
 format_body(Body, true) ->
@@ -233,17 +347,40 @@ format_body(Body, true) ->
             ]
     end.
 
+%%------------------------------------------------------------------------------
+%% @private
+%% @doc
+%% @end
+%%------------------------------------------------------------------------------
+-spec add_mandatory_hdrs(method(), headers(), host(), port_num(),
+                         iolist(), boolean()) -> headers().
 add_mandatory_hdrs(Method, Hdrs, Host, Port, Body, PartialUpload) ->
-    ContentHdrs = add_content_headers(Method, Hdrs, Body, PartialUpload),  
+    ContentHdrs = add_content_headers(Method, Hdrs, Body, PartialUpload),
     add_host(ContentHdrs, Host, Port).
 
+%%------------------------------------------------------------------------------
+%% @private
+%% @doc
+%% @end
+%%------------------------------------------------------------------------------
+-spec add_content_headers(string(), headers(), iolist(), boolean()) -> headers().
 add_content_headers("POST", Hdrs, Body, PartialUpload) ->
     add_content_headers(Hdrs, Body, PartialUpload);
 add_content_headers("PUT", Hdrs, Body, PartialUpload) ->
     add_content_headers(Hdrs, Body, PartialUpload);
+add_content_headers("PATCH", Hdrs, Body, PartialUpload) ->
+    add_content_headers(Hdrs, Body, PartialUpload);
+add_content_headers("DELETE", Hdrs, Body, PartialUpload) ->
+    add_content_headers(Hdrs, Body, PartialUpload);
 add_content_headers(_, Hdrs, _, _PartialUpload) ->
     Hdrs.
 
+%%------------------------------------------------------------------------------
+%% @private
+%% @doc
+%% @end
+%%------------------------------------------------------------------------------
+-spec add_content_headers(headers(), iolist(), boolean()) -> headers().
 add_content_headers(Hdrs, Body, false) ->
     case header_value("content-length", Hdrs) of
         undefined ->
@@ -253,7 +390,7 @@ add_content_headers(Hdrs, Body, false) ->
             Hdrs
     end;
 add_content_headers(Hdrs, _Body, true) ->
-    case {header_value("content-length", Hdrs), 
+    case {header_value("content-length", Hdrs),
          header_value("transfer-encoding", Hdrs)} of
         {undefined, undefined} ->
             [{"Transfer-Encoding", "chunked"} | Hdrs];
@@ -264,10 +401,16 @@ add_content_headers(Hdrs, _Body, true) ->
             end;
         {_Length, undefined} ->
             Hdrs;
-        {_Length, _TransferEncoding} -> %% have both cont.length and chunked 
+        {_Length, _TransferEncoding} -> %% have both cont.length and chunked
             erlang:error({error, bad_header})
     end.
 
+%%------------------------------------------------------------------------------
+%% @private
+%% @doc
+%% @end
+%%------------------------------------------------------------------------------
+-spec add_host(headers(), host(), port_num()) -> headers().
 add_host(Hdrs, Host, Port) ->
     case header_value("host", Hdrs) of
         undefined ->
@@ -276,6 +419,12 @@ add_host(Hdrs, Host, Port) ->
             Hdrs
     end.
 
+%%------------------------------------------------------------------------------
+%% @private
+%% @doc
+%% @end
+%%------------------------------------------------------------------------------
+-spec is_chunked(headers()) -> boolean().
 is_chunked(Hdrs) ->
     TransferEncoding = string:to_lower(
         header_value("transfer-encoding", Hdrs, "undefined")),
@@ -284,16 +433,24 @@ is_chunked(Hdrs) ->
         _ -> false
     end.
 
--spec dec(timeout()) -> timeout().
-dec(Num) when is_integer(Num) -> Num - 1;
-dec(Else)                     -> Else.
-
+%%------------------------------------------------------------------------------
+%% @private
+%% @doc
+%% @end
+%%------------------------------------------------------------------------------
+-spec host(host(), port_num()) -> any().
 host(Host, 80)   -> maybe_ipv6_enclose(Host);
 % When proxying after an HTTP CONNECT session is established, squid doesn't
 % like the :443 suffix in the Host header.
 host(Host, 443)  -> maybe_ipv6_enclose(Host);
 host(Host, Port) -> [maybe_ipv6_enclose(Host), $:, integer_to_list(Port)].
 
+%%------------------------------------------------------------------------------
+%% @private
+%% @doc
+%% @end
+%%------------------------------------------------------------------------------
+-spec maybe_ipv6_enclose(host()) -> host().
 maybe_ipv6_enclose(Host) ->
     case inet_parse:address(Host) of
         {ok, {_, _, _, _, _, _, _, _}} ->

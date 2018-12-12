@@ -22,6 +22,8 @@
 -define(MIN_STR, <<"">>).
 -define(MAX_STR, <<255>>). % illegal utf string
 
+-define(QUERY_TIMING_STATS_ETS, view_query_timing_stats).
+
 % the lowest possible database sequence number
 -define(LOWEST_SEQ, 0).
 
@@ -65,6 +67,20 @@
     catch error:undef ->
         ?LOG_ERROR(Format, Args)
     end).
+
+-define(LOG_WITH_TAGS(Tag, Arg),
+        couch_util:log_data(Tag, Arg)
+        ).
+
+-define(LOG_USERDATA(Arg),
+        ?LOG_WITH_TAGS(ud, Arg)
+       ).
+-define(LOG_SYSTEMDATA(Arg),
+        ?LOG_WITH_TAGS(sd, Arg)
+       ).
+-define(LOG_METADATA(Arg),
+        ?LOG_WITH_TAGS(md, Arg)
+       ).
 
 -define(CONTENT_META_JSON, 0).
 -define(CONTENT_META_INVALID_JSON, 1).

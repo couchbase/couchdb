@@ -171,6 +171,8 @@ expectations() ->
      %{<<"\"Os cágados voadores que atacaram as vacas do senhor engenheiro Bairrão!\""/utf8>>,
      % <<"\"Os cagádos voadores que atacaram as vacas do senhor engenheiro Bairrão!\""/utf8>>,
      % 1},
+     % MB-12967
+     %{<<"\"法\""/utf8>>, <<"\"法、\""/utf8>>, -1},
      {<<"\"\\\\u00e1\"">>, <<"\"\"">>, 1},
      {<<"\"\\\\U00e1\"">>, <<"\"\"">>, 1},
      {<<"\"h\\\\u00e1\"">>, <<"\"\\\\u00e1\"">>, 1},

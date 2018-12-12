@@ -16,11 +16,11 @@
 
 -export([parse_header/1, parse_snapshot_marker/1, parse_snapshot_mutation/4,
     parse_snapshot_deletion/2, parse_failover_log/1, parse_stat/4]).
--export([encode_sasl_auth/3, encode_open_connection/2, encode_stream_request/8,
+-export([encode_sasl_auth/3, encode_open_connection/3, encode_stream_request/8,
     encode_failover_log_request/2, encode_stat_request/3, encode_stream_close/2,
     encode_select_bucket/2]).
 -export([encode_noop_response/1, encode_buffer_request/2,
-    encode_control_request/3]).
+    encode_control_request/3, parse_all_seqs/3, encode_all_seqs_request/1]).
 
 -include_lib("couch_dcp/include/couch_dcp.hrl").
 -include_lib("couch_dcp/include/couch_dcp_typespecs.hrl").
@@ -67,7 +67,9 @@ parse_header(<<?DCP_MAGIC_RESPONSE,
     ?DCP_OPCODE_DCP_BUFFER ->
         {buffer_ack, Status, RequestId};
     ?DCP_OPCODE_DCP_CONTROL ->
-        {control_request, Status, RequestId}
+        {control_request, Status, RequestId};
+    ?DCP_OPCODE_SEQS ->
+        {all_seqs, Status, RequestId, BodyLength}
     end;
 parse_header(<<?DCP_MAGIC_REQUEST,
                Opcode,
@@ -135,7 +137,7 @@ parse_snapshot_mutation(KeyLength, Body, BodyLength, ExtraLength) ->
 -spec parse_snapshot_deletion(size(), binary()) ->
                                      {snapshot_deletion,
                                       {update_seq(), non_neg_integer(),
-                                       binary(), binary()}}.
+                                       binary(), binary(), binary()}}.
 parse_snapshot_deletion(KeyLength, Body) ->
     % XXX vmx 2014-01-07: No metadata support for now. Make it so it breaks
     % once it's there.
@@ -144,8 +146,9 @@ parse_snapshot_deletion(KeyLength, Body) ->
       RevSeq:?DCP_SIZES_REV_SEQ,
       MetadataLength:?DCP_SIZES_METADATA_LENGTH,
       Key:KeyLength/binary,
-      Metadata:MetadataLength/binary>> = Body,
-    {snapshot_deletion, {Seq, RevSeq, Key, Metadata}}.
+      Metadata:MetadataLength/binary,
+      XATTRs/binary>> = Body,
+    {snapshot_deletion, {Seq, RevSeq, Key, Metadata, XATTRs}}.
 
 
 -spec parse_failover_log(binary(), partition_version()) ->
@@ -170,6 +173,17 @@ parse_stat(Body, ?DCP_STATUS_OK, KeyLength, ValueLength) ->
     <<Key:KeyLength/binary, Value:ValueLength/binary>> = Body,
     {ok, {Key, Value}}.
 
+-spec parse_all_seqs(dcp_status(), binary(), list()) ->
+                        {ok, list()} |
+                        {error, {dcp_status(), binary()}}.
+parse_all_seqs(?DCP_STATUS_OK, <<Key:?DCP_SIZES_PARTITION, Value:
+        ?DCP_SIZES_BY_SEQ, Rest/binary>>, Acc) ->
+    Acc2 = [{Key, Value} | Acc],
+    parse_all_seqs(?DCP_STATUS_OK, Rest, Acc2);
+parse_all_seqs(?DCP_STATUS_OK, <<>>, Acc) ->
+    {ok, lists:reverse(Acc)};
+parse_all_seqs(Status, Body, _Acc) ->
+    {error, {Status, Body}}.
 
 -spec encode_sasl_auth(binary(), binary(), request_id()) -> binary().
 encode_sasl_auth(User, Passwd, RequestId) ->
@@ -235,11 +249,11 @@ encode_select_bucket(Bucket, RequestId) ->
 %  seqno      (24-27): 0x00000000
 %  flags      (28-31): 0x00000000 (consumer)
 %Key          (32-55): bucketstream vb[100-105]
--spec encode_open_connection(binary(), request_id()) -> binary().
-encode_open_connection(Name, RequestId) ->
+-spec encode_open_connection(binary(), non_neg_integer(), request_id()) -> binary().
+encode_open_connection(Name, Flags, RequestId) ->
     Body = <<0:?DCP_SIZES_SEQNO,
-             ?DCP_FLAG_PRODUCER:?DCP_SIZES_FLAGS,
-             Name/binary>>,
+            (Flags bor ?DCP_FLAG_PRODUCER):?DCP_SIZES_FLAGS,
+            Name/binary>>,
 
     KeyLength = byte_size(Name),
     BodyLength = byte_size(Body),
@@ -386,6 +400,29 @@ encode_stat_request(Stat, PartId, RequestId) ->
                0:?DCP_SIZES_CAS>>,
     <<Header/binary, Body/binary>>.
 
+%GET_ALL_VB_SEQNOS command
+%Field        (offset) (value)
+%Magic        (0)    : 0x80
+%Opcode       (1)    : 0x48
+%Key length   (2,3)  : 0x0000
+%Extra length (4)    : 0x00
+%Data type    (5)    : 0x00
+%VBucket      (6,7)  : 0x0000
+%Total body   (8-11) : 0x00000000
+%Opaque       (12-15): 0x00000000
+%CAS          (16-23): 0x0000000000000000
+encode_all_seqs_request(RequestId) ->
+    Header = <<?DCP_MAGIC_REQUEST,
+               ?DCP_OPCODE_SEQS,
+               0:?DCP_SIZES_KEY_LENGTH,
+               0,
+               0,
+               0:?DCP_SIZES_PARTITION,
+               0:?DCP_SIZES_BODY,
+               RequestId:?DCP_SIZES_OPAQUE,
+               0:?DCP_SIZES_CAS>>,
+    <<Header/binary>>.
+
 %DCP_CONTROL_BINARY_REQUEST command
 %Field        (offset) (value)
 %Magic        (0)    : 0x80
@@ -399,15 +436,26 @@ encode_stat_request(Stat, PartId, RequestId) ->
 %CAS          (16-23): 0x0000000000000000
 %Key                 : connection_buffer_size
 %Value               : 0x31303234
--spec encode_control_request(request_id(), connection | stream, integer())
+-spec encode_control_request(request_id(), atom(), integer()|boolean())
                                                                 -> binary().
-encode_control_request(RequestId, Type, BufferSize) ->
-    Key = case Type of
-    connection ->
-        <<"connection_buffer_size">>
+encode_control_request(RequestId, Key0, Value0) ->
+    Key = case Key0 of
+        connection ->
+            <<"connection_buffer_size">>;
+        enable_noop ->
+            <<"enable_noop">>;
+        set_noop_interval ->
+            <<"set_noop_interval">>
     end,
-    BufferSize2 = list_to_binary(integer_to_list(BufferSize)),
-    Body = <<Key/binary, BufferSize2/binary>>,
+    Value = case Key0 of
+        connection ->
+            list_to_binary(integer_to_list(Value0));
+        enable_noop ->
+            list_to_binary(atom_to_list(Value0));
+        set_noop_interval ->
+            list_to_binary(integer_to_list(Value0))
+    end,
+    Body = <<Key/binary, Value/binary>>,
 
     KeyLength =  byte_size(Key),
     BodyLength = byte_size(Body),

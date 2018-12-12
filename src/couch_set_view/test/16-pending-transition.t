@@ -121,7 +121,6 @@ test() ->
     test_monitor_pending_partition(),
 
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions() - 1),
-    ok = timer:sleep(1000),
     couch_set_view_test_util:stop_server(),
     ok.
 

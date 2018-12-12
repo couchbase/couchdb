@@ -12,13 +12,6 @@
 
 -define(ON_ERROR_DEFAULT, continue).
 
--record(simple_index_spec, {
-    database,
-    ddoc_database = nil, % Couchbase specific
-    ddoc_id,
-    index_name
-}).
-
 % It's always remote.
 -record(merged_index_spec, {
     url,
@@ -26,17 +19,20 @@
 }).
 
 -record(index_merge, {
-   indexes = [],   % [ #simple_index_spec{} | #merged_index_spec{} ]
+   indexes = [],   % [ #merged_index_spec{} ]
    callback,
    user_acc,
    % parameters that matter only when there are remote views to merge
-   conn_timeout = 60000,             % milliseconds
+   conn_timeout = nil,               % milliseconds
    on_error = ?ON_ERROR_DEFAULT,     % 'continue' | 'stop'
    ddoc_revision = nil,              % nil | auto | Revision
    http_params = nil,
    user_ctx = nil,
+   make_row_fun = nil,
    % extra is for index implementation specific properties
-   extra = nil
+   extra = nil,
+   % captures the timestamp for start of query processing pipeline
+   start_timer = nil :: erlang:timestamp() | nil
 }).
 
 -record(merge_params, {
@@ -55,4 +51,9 @@
    timeout,
    headers = [{"Accept", "application/json"}],
    lhttpc_options = []
+}).
+
+-record(merge_acc, {
+    fold_fun,
+    acc
 }).

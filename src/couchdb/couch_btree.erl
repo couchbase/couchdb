@@ -388,13 +388,12 @@ chunkify([InElement | RestInList], ChunkThreshold, OutList, OutListSize, OutputC
     end.
 
 modify_node(Bt, RootPointerInfo, Actions, QueryOutput, Acc, PurgeFun, PurgeFunAcc, KeepPurging) ->
-    case RootPointerInfo of
+    {NodeType, NodeList} = case RootPointerInfo of
     nil ->
-        NodeType = kv_node,
-        NodeList = [];
+        {kv_node, []};
     _Tuple ->
         Pointer = element(1, RootPointerInfo),
-        {NodeType, NodeList} = get_node(Bt, Pointer)
+        get_node(Bt, Pointer)
     end,
 
     case NodeType of
@@ -829,14 +828,21 @@ reduce_stream_kp_node2(Bt, Dir, NodeList, KeyStart, InEndRangeFun,
         GroupedKVsAcc2 = GroupedKVsAcc,
         GroupedKey2 = GroupedKey;
     _ ->
-        {ok, Acc2, GroupedReds2, GroupedKVsAcc2, GroupedKey2} = lists:foldl(
+        #btree{reduce=ReduceFun} = Bt,
+        {ok, Acc2, GroupedReds2Tmp, GroupedKVsAcc2, GroupedKey2} = lists:foldl(
             fun({_, Node}, {ok, A, RedsAcc, KVsAcc, K}) ->
-                reduce_stream_node(
+                {ok, A2, RedsAcc2, KVsAcc2, K2} = reduce_stream_node(
                     Bt, Dir, Node, KeyStart, InEndRangeFun, K,
-                    KVsAcc, RedsAcc, KeyGroupFun, Fun, FilterFun, A)
+                    KVsAcc, RedsAcc, KeyGroupFun, Fun, FilterFun, A),
+                % Reduce the KVs early to reduce memory usage
+                Red = ReduceFun(reduce, KVsAcc2),
+                RedsAcc3 = [Red | RedsAcc2],
+                {ok, A2, RedsAcc3, [], K2}
             end,
             {ok, Acc, GroupedReds1 ++ GroupedRedsAcc, GroupedKVsAcc, GroupedKey},
-            NeedFilter)
+            NeedFilter),
+        % Rereduce the reduces early to reduce memory usage
+        GroupedReds2 = [ReduceFun(rereduce, GroupedReds2Tmp)]
     end,
     case UngroupedNodes of
     [{_Key, NodeInfo}|RestNodes] ->
@@ -989,13 +995,12 @@ guided_purge(#btree{root = Root} = Bt, GuideFun, GuideAcc0) ->
 
 guided_purge(Bt, NodeState, GuideFun, GuideAcc) ->
     % inspired by modify_node/5
-    case NodeState of
+    {NodeType, NodeList} = case NodeState of
     nil ->
-        NodeType = kv_node,
-        NodeList = [];
+        {kv_node, []};
     _Tuple ->
         Pointer = element(1, NodeState),
-        {NodeType, NodeList} = get_node(Bt, Pointer)
+        get_node(Bt, Pointer)
     end,
     {ok, NewNodeList, GuideAcc2, Bt2, Go} =
     case NodeType of

@@ -15,7 +15,6 @@
 #ifndef _COUCH_EJSON_COMPARE_H
 #define _COUCH_EJSON_COMPARE_H
 
-#include <assert.h>
 #include <string.h>
 #include "erl_nif_compat.h"
 #include "unicode/ucol.h"

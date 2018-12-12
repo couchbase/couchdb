@@ -16,9 +16,9 @@
 
 -export([handle_req/1]).
 
--export([make_view_fold_fun/6, finish_view_fold/4, finish_view_fold/5]).
+-export([finish_view_fold/4, finish_view_fold/5]).
 -export([view_etag/2, view_etag/3]).
--export([design_doc_view/6, parse_bool_param/1, get_row_doc/5]).
+-export([design_doc_view/6, parse_bool_param/1]).
 
 -import(couch_httpd,
     [send_json/2,send_json/3,send_json/4,send_method_not_allowed/2,send_chunk/2,
@@ -107,6 +107,15 @@ route_request(#httpd{method = 'GET'} = Req, SetName, DDocId, [<<"_get_utilizatio
     {ok, Stats} = couch_set_view:get_utilization_stats(
         mapreduce_view, SetName, DDocId),
     couch_httpd:send_json(Req, 200, {Stats});
+
+route_request(#httpd{method = 'GET'} = Req, _SetName, DDocId, [<<"_get_query_stats">>]) ->
+    DDocStats = ets:lookup(?QUERY_TIMING_STATS_ETS, DDocId),
+    DefaultHeaders = [{"Content-Type", couch_httpd:negotiate_content_type(Req)},
+                      {"Cache-Control", "must-revalidate"}],
+    % using mochijson2:encode because ejson:encode doesn't work
+    % with nested arrays
+    Body = [mochijson2:encode([{query_timing_in_ms, DDocStats}]), $\n],
+    couch_httpd:send_response(Req, 200, DefaultHeaders, Body);
 
 route_request(#httpd{method = 'GET'} = Req, SetName, DDocId, [<<"_view">>, ViewName]) ->
     Keys = couch_httpd:qs_json_value(Req, "keys", nil),
@@ -235,7 +244,7 @@ output_map_view(Req, View, Group, QueryArgs) ->
         RowCount = couch_set_view:get_row_count(Group, View),
         RedCountFun = get_reduce_count_fun(Group),
         FoldHelpers = #view_fold_helper_funs{reduce_count = RedCountFun},
-        FoldlFun = make_view_fold_fun(Req, QueryArgs, CurrentEtag, Group, RowCount, FoldHelpers),
+        FoldlFun = make_view_fold_fun(Req, QueryArgs, CurrentEtag, RowCount, FoldHelpers),
         FoldAccInit = {Limit, SkipCount, undefined, []},
         {ok, LastReduce, FoldResult} = couch_set_view:fold(Group, View, FoldlFun, FoldAccInit, QueryArgs),
         finish_view_fold(Req, RowCount, RedCountFun(LastReduce), FoldResult)
@@ -277,7 +286,7 @@ parse_view_params(Req, Keys, ViewName, ViewType) ->
     Params = couch_httpd_view:parse_view_params(Req, Keys, ViewType),
     Params#view_query_args{view_name = ViewName}.
 
-make_view_fold_fun(Req, QueryArgs, Etag, Group, TotalViewCount, HelperFuns) ->
+make_view_fold_fun(Req, QueryArgs, Etag, TotalViewCount, HelperFuns) ->
     #view_fold_helper_funs{
         start_response = StartRespFun,
         send_row = SendRowFun,
@@ -285,22 +294,10 @@ make_view_fold_fun(Req, QueryArgs, Etag, Group, TotalViewCount, HelperFuns) ->
     } = apply_default_helper_funs(HelperFuns),
 
     #view_query_args{
-        include_docs = IncludeDocs,
-        conflicts = Conflicts,
         debug = Debug
     } = QueryArgs,
-    #set_view_group{
-        set_name = SetName
-    } = Group,
-    DocOpenOptions = case Conflicts of
-    true ->
-        [conflicts];
-    false ->
-        []
-    end,
-    
-    fun({{_Key, DocId}, {PartId, _Value}} = Kv, OffsetReds,
-            {AccLimit, AccSkip, Resp, RowFunAcc}) ->
+
+    fun(Kv, OffsetReds, {AccLimit, AccSkip, Resp, RowFunAcc}) ->
         case {AccLimit, AccSkip, Resp} of
         {0, _, _} ->
             % we've done "limit" rows, stop foldling
@@ -313,37 +310,14 @@ make_view_fold_fun(Req, QueryArgs, Etag, Group, TotalViewCount, HelperFuns) ->
             Offset = ReduceCountFun(OffsetReds),
             {ok, Resp2, RowFunAcc0} = StartRespFun(Req, Etag,
                 TotalViewCount, Offset, RowFunAcc),
-            JsonDoc = maybe_get_row_doc(
-                IncludeDocs, DocId, PartId, SetName, Req#httpd.user_ctx, DocOpenOptions),
-            {Go, RowFunAcc2} = SendRowFun(Resp2, Kv, JsonDoc, RowFunAcc0, Debug),
+            {Go, RowFunAcc2} = SendRowFun(Resp2, Kv, RowFunAcc0, Debug),
             {Go, {AccLimit - 1, 0, Resp2, RowFunAcc2}};
         {AccLimit, _, Resp} when (AccLimit > 0) ->
             % rendering all other rows
-            JsonDoc = maybe_get_row_doc(
-                IncludeDocs, DocId, PartId, SetName, Req#httpd.user_ctx, DocOpenOptions),
-            {Go, RowFunAcc2} = SendRowFun(Resp, Kv, JsonDoc, RowFunAcc, Debug),
+            {Go, RowFunAcc2} = SendRowFun(Resp, Kv, RowFunAcc, Debug),
             {Go, {AccLimit - 1, 0, Resp, RowFunAcc2}}
         end
     end.
-
-
-maybe_get_row_doc(false, _KeyDocId, _PartId, _SetName, _UserCtx, _DocOpenOptions) ->
-    nil;
-maybe_get_row_doc(true, DocId, PartId, SetName, UserCtx, DocOpenOptions) ->
-    get_row_doc(SetName, PartId, DocId, UserCtx, DocOpenOptions).
-
-
-get_row_doc(DocId, PartId, SetName, UserCtx, DocOptions) ->
-    {ok, Db} = couch_db:open(
-        ?dbname(SetName, PartId), [{user_ctx, UserCtx}]),
-    JsonDoc = case (catch couch_db_frontend:open_doc(Db, DocId, DocOptions)) of
-    {ok, #doc{} = Doc} ->
-        {json, couch_doc:to_json_bin(Doc)};
-    _ ->
-        {json, <<"null">>}
-    end,
-    ok = couch_db:close(Db),
-    JsonDoc.
 
 
 make_reduce_fold_fun(Req, _QueryArgs, Etag, HelperFuns) ->
@@ -371,45 +345,15 @@ make_reduce_fold_fun(Req, _QueryArgs, Etag, HelperFuns) ->
         {Go, {AccLimit - 1, 0, Resp, RowAcc2}}
     end.
 
-apply_default_helper_funs(
-        #view_fold_helper_funs{
-            start_response = StartResp,
-            send_row = SendRow
-        }=Helpers) ->
-    StartResp2 = case StartResp of
-    undefined -> fun json_view_start_resp/5;
-    _ -> StartResp
-    end,
-
-    SendRow2 = case SendRow of
-    undefined -> fun send_json_view_row/5;
-    _ -> SendRow
-    end,
-
+apply_default_helper_funs(#view_fold_helper_funs{} = Helpers) ->
     Helpers#view_fold_helper_funs{
-        start_response = StartResp2,
-        send_row = SendRow2
+        start_response = fun json_view_start_resp/5,
+        send_row = fun send_json_view_row/4
     };
-
-
-apply_default_helper_funs(
-        #reduce_fold_helper_funs{
-            start_response = StartResp,
-            send_row = SendRow
-        }=Helpers) ->
-    StartResp2 = case StartResp of
-    undefined -> fun json_reduce_start_resp/3;
-    _ -> StartResp
-    end,
-
-    SendRow2 = case SendRow of
-    undefined -> fun send_json_reduce_row/3;
-    _ -> SendRow
-    end,
-
+apply_default_helper_funs(#reduce_fold_helper_funs{} = Helpers) ->
     Helpers#reduce_fold_helper_funs{
-        start_response = StartResp2,
-        send_row = SendRow2
+        start_response = fun json_reduce_start_resp/3,
+        send_row = fun send_json_reduce_row/3
     }.
 
 json_view_start_resp(Req, Etag, TotalRowCount, Offset, _Acc) ->
@@ -425,8 +369,8 @@ json_view_start_resp(Req, Etag, TotalRowCount, Offset, _Acc) ->
     end,
     {ok, Resp, [BeginBody, "\"rows\":[\r\n"]}.
 
-send_json_view_row(Resp, Kv, Doc, RowFront, DebugMode) ->
-    JsonObj = view_row_obj(Kv, Doc, DebugMode),
+send_json_view_row(Resp, Kv, RowFront, DebugMode) ->
+    JsonObj = view_row_obj(Kv, DebugMode),
     send_chunk(Resp, RowFront ++ ?JSON_ENCODE(JsonObj)),
     {ok, ",\r\n"}.
 
@@ -456,16 +400,12 @@ view_etag(Group, #set_view{}, Extra) ->
     couch_httpd:make_etag({Sig, UpdateSeqs, Extra, NumPartitions, Abitmask}).
 
 % the view row has an error
-view_row_obj({{Key, error}, Value}, _Doc, _DebugMode) ->
+view_row_obj({{Key, error}, Value}, _DebugMode) ->
     {[{<<"key">>, Key}, {<<"error">>, Value}]};
-view_row_obj({{Key, DocId}, {_PartId, Value}}, nil, false) ->
+view_row_obj({{Key, DocId}, {_PartId, Value}}, false) ->
     {[{<<"id">>, DocId}, {<<"key">>, Key}, {<<"value">>, Value}]};
-view_row_obj({{Key, DocId}, {PartId, Value}}, nil, true) ->
-    {[{<<"id">>, DocId}, {<<"key">>, Key}, {<<"partition">>, PartId}, {<<"value">>, Value}]};
-view_row_obj({{Key, DocId}, {_PartId, Value}}, Doc, false) ->
-    {[{<<"id">>, DocId}, {<<"key">>, Key}, {<<"value">>, Value}, {<<"doc">>, Doc}]};
-view_row_obj({{Key, DocId}, {PartId, Value}}, Doc, true) ->
-    {[{<<"id">>, DocId}, {<<"key">>, Key}, {<<"partition">>, PartId}, {<<"value">>, Value}, {<<"doc">>, Doc}]}.
+view_row_obj({{Key, DocId}, {PartId, Value}}, true) ->
+    {[{<<"id">>, DocId}, {<<"key">>, Key}, {<<"partition">>, PartId}, {<<"value">>, Value}]}.
 
 
 finish_view_fold(Req, TotalRows, Offset, FoldResult) ->

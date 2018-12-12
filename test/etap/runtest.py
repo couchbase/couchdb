@@ -6,6 +6,8 @@ import getopt
 import os
 import subprocess
 import re
+import platform
+import shlex
 
 TEST_COUNT_RE = r"^1\.\.(\d+)"
 TEST_OK_RE = r"(^ok)\b"
@@ -16,17 +18,44 @@ MODULES = ["../test/etap"]
 def usage():
     print "Usage: %s -p builddir -l erl_libs_dir -m module_dir_paths" \
     " -f erl_flags -t testfile [ -v ] [ -c couchstore_install_path ]" \
+    " [-e escript_path]" \
     % sys.argv[0]
     print
 
-def run_test(testfile, verbose = False):
+def setup():
+    """Configure LD_LIBRARY_PATH"""
+    if platform.system() == "Linux":
+        dname, fname = os.path.split(os.path.abspath(__file__))
+        cpath = dname.rsplit('couchdb')[0]
+        nspath = os.path.join(cpath, 'ns_server')
+
+        def read_configuration():
+            cfig = os.path.join(nspath, 'build', 'cluster_run.configuration')
+            with open(cfig) as f:
+                def fn(line):
+                    k, v = line.strip().split('=')
+                    return k, shlex.split(v)[0]
+                return dict(fn(line) for line in f.readlines())
+
+        config = read_configuration()
+        PREFIX = config['prefix']
+
+        LIBS = os.path.join(PREFIX, 'lib')
+        MEMCACHED = os.path.join(LIBS, 'memcached')
+        LD_LIBRARY_PATH = LIBS + os.pathsep + MEMCACHED
+        env = os.environ.copy()
+        if 'LD_LIBRARY_PATH' in env:
+            LD_LIBRARY_PATH += os.pathsep + env['LD_LIBRARY_PATH']
+        os.environ['LD_LIBRARY_PATH'] = LD_LIBRARY_PATH
+
+def run_test(testfile,eescript_path, verbose = False):
     test_total = -1
     test_passed = 0
     exit_status = 0
     count_re = re.compile(TEST_COUNT_RE)
     ok_re = re.compile(TEST_OK_RE)
     not_ok_re = re.compile(TEST_NOT_OK_RE)
-    s = subprocess.Popen(['escript', testfile], stdout=subprocess.PIPE,
+    s = subprocess.Popen([escript_path, testfile], stdout=subprocess.PIPE,
             stderr=subprocess.PIPE)
     while True:
         line = s.stdout.readline()
@@ -61,9 +90,9 @@ def run_test(testfile, verbose = False):
 
 if __name__ == '__main__':
     try:
-        opts, args = getopt.getopt(sys.argv[1:], "p:l:m:f:t:hvc:", \
+        opts, args = getopt.getopt(sys.argv[1:], "p:l:m:f:t:hvc:e:", \
                     ["path=", "libsdir=", "modules=", "flags=", "test=",
-                     "help", "verbose", "couchstore-installdir="])
+                     "help", "verbose", "couchstore-installdir=", "escript="])
     except getopt.GetoptError, err:
         print err
         usage()
@@ -80,6 +109,7 @@ if __name__ == '__main__':
     flags = None
     verbose = False
     couchstore_path = None
+    escript_path = 'escript'
 
     for opt, arg in opts:
         if opt in ("-p", "--path"):
@@ -96,6 +126,8 @@ if __name__ == '__main__':
             verbose = True
         elif opt in ("-c", "--couchstore-installdir"):
             couchstore_path = arg
+        elif opt in ("-e", "--escript"):
+            escript_path = arg
         elif opt in ("-h", "--help"):
             usage()
             sys.exit(0)
@@ -159,6 +191,10 @@ if __name__ == '__main__':
         os.putenv("PATH", env)
 
     if test:
-        sys.exit(run_test(test, verbose))
+        """
+        Uncomment to fix mapreduce_nif_not_loaded
+        setup()
+        """
+        sys.exit(run_test(test, escript_path, verbose))
     else:
         sys.exit("ERROR: No test specified")

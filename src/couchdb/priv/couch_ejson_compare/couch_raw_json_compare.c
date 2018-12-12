@@ -17,7 +17,7 @@
  * the License.
  */
 
-#include <assert.h>
+#include <platform/cbassert.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -172,8 +172,8 @@ static int compareStringsUnicode(const char **in1, const char **in2,
 {
     int len1, len2;
     int free1 = 0, free2 = 0;
-    const char *str1;
-    const char *str2;
+    const char *str1 = NULL;
+    const char *str2 = NULL;
     int result = 0;
 
     str1 = createStringFromJSON(in1, &len1, &free1, ctx);
@@ -245,7 +245,7 @@ static const char * createStringFromJSON(const char **in, int *length,
             }
             *dst++ = c;
         }
-        assert(dst - buf == (int) *length);
+        cb_assert(dst - buf == (int) *length);
         start = buf;
     }
 

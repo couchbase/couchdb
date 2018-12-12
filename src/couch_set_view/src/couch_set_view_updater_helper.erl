@@ -15,10 +15,13 @@
 -module(couch_set_view_updater_helper).
 
 -export([update_btree/3, update_btree/5]).
--export([encode_btree_op/2, encode_btree_op/3]).
+-export([encode_op/2, encode_op/3]).
 -export([file_sorter_batch_format_fun/1]).
 -export([count_items_from_set/2]).
 -export([update_btrees/5]).
+-export([index_builder_wait_loop/3]).
+% Used by spatial_view module
+-export([code_to_op/1]).
 
 
 -include("couch_db.hrl").
@@ -91,34 +94,34 @@ update_btree_loop(Fd, Bt, BufferSize, PurgeFun, PurgeAcc,
     end.
 
 
--spec encode_btree_op('remove', binary()) -> binary().
-encode_btree_op(remove = Op, Key) ->
-    Data = <<(btree_op_to_code(Op)):8, (byte_size(Key)):16, Key/binary>>,
+-spec encode_op('remove', binary()) -> binary().
+encode_op(remove = Op, Key) ->
+    Data = <<(op_to_code(Op)):8, (byte_size(Key)):16, Key/binary>>,
     <<(byte_size(Data)):32/native, Data/binary>>.
 
 
--spec encode_btree_op('insert', binary(), binary()) -> binary().
-encode_btree_op(insert = Op, Key, Value) ->
-    Data = <<(btree_op_to_code(Op)):8,
+-spec encode_op('insert', binary(), binary()) -> binary().
+encode_op(insert = Op, Key, Value) ->
+    Data = <<(op_to_code(Op)):8,
              (byte_size(Key)):16, Key/binary, Value/binary>>,
     <<(byte_size(Data)):32/native, Data/binary>>.
 
 
-btree_op_to_code(remove) ->
+op_to_code(remove) ->
     1;
-btree_op_to_code(insert) ->
+op_to_code(insert) ->
     2.
 
 
-code_to_btree_op(1) ->
+code_to_op(1) ->
     remove;
-code_to_btree_op(2) ->
+code_to_op(2) ->
     insert.
 
 
--spec file_sorter_batch_format_fun(binary()) -> view_btree_op().
+-spec file_sorter_batch_format_fun(binary()) -> view_op().
 file_sorter_batch_format_fun(<<Op:8, KeyLen:16, K:KeyLen/binary, Rest/binary>>) ->
-    case code_to_btree_op(Op) of
+    case code_to_op(Op) of
     remove ->
         {remove, K, nil};
     insert ->
@@ -204,7 +207,7 @@ update_btrees_wait_loop(Port, Group, Acc0, Stats) ->
             {ok, {Group, Stats}};
         {Port, {exit_status, 1}} ->
             ?LOG_INFO("Set view `~s`, ~s group `~s`, index updater stopped successfully.",
-                       [SetName, Type, DDocId]),
+                       [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId)]),
             exit(shutdown);
         {Port, {exit_status, Status}} ->
             throw({view_group_index_updater_exit, Status, Acc});
@@ -212,7 +215,7 @@ update_btrees_wait_loop(Port, Group, Acc0, Stats) ->
             throw({view_group_index_updater_error, Error});
         stop ->
             ?LOG_INFO("Set view `~s`, ~s group `~s`, sending stop message to index updater.",
-                       [SetName, Type, DDocId]),
+                       [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId)]),
             port_command(Port, "exit"),
             update_btrees_wait_loop(Port, Group, Acc, Stats)
         end;
@@ -254,7 +257,8 @@ update_btrees_wait_loop(Port, Group, Acc0, Stats) ->
                 views = NewViews,
                 index_header = Header
             },
-            {NewGroup0, Rest};
+            NewGroup2 = couch_set_view_group:remove_duplicate_partitions(NewGroup0),
+            {NewGroup2, Rest};
         {error, Error, Rest} ->
             self() ! Error,
             {Group, Rest}
@@ -271,13 +275,61 @@ update_btrees_wait_loop(Port, Group, Acc0, Stats) ->
         Stats2 = {IdInserted, IdDeleted, ViewInserted, ViewDeleted, Cleanups},
         update_btrees_wait_loop(Port, Group, Acc, Stats2);
     Msg ->
-        ?LOG_ERROR("Set view `~s`, ~s group `~s`, received error from index updater: ~s",
-                   [SetName, Type, DDocId, Msg]),
-        Msg2 = case Msg of
+        ErrorMsg = "Set view `~s`, ~s group `~s`, "
+                   "received error from index updater: ~s",
+        ErrorArgs = [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId)],
+        Msg2 = couch_set_view_util:log_port_error(Msg, ErrorMsg, ErrorArgs),
+        Msg3 = case Msg2 of
         <<"Error updating index", _/binary>> ->
-            Msg;
+            Msg2;
         _ ->
             <<>>
         end,
-        update_btrees_wait_loop(Port, Group, Msg2, Stats)
+        update_btrees_wait_loop(Port, Group, Msg3, Stats)
+    end.
+
+
+index_builder_wait_loop(Port, Group, Acc) ->
+    #set_view_group{
+        set_name = SetName,
+        name = DDocId,
+        type = Type
+    } = Group,
+    receive
+    {Port, {exit_status, 0}} ->
+        ok;
+    {Port, {exit_status, 1}} ->
+        ?LOG_INFO("Set view `~s`, ~s group `~s`, index builder stopped successfully.",
+                   [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId)]),
+        exit(shutdown);
+    {Port, {exit_status, Status}} ->
+        throw({index_builder_exit, Status, ?l2b(Acc)});
+    {Port, {data, {noeol, Data}}} ->
+        index_builder_wait_loop(Port, Group, [Data | Acc]);
+    {Port, {data, {eol, Data}}} ->
+        #set_view_group{
+            set_name = SetName,
+            name = DDocId,
+            type = Type
+        } = Group,
+        Msg = ?l2b(lists:reverse([Data | Acc])),
+        ErrorMsg = "Set view `~s`, ~s group `~s`, "
+                   "received error from index builder: ~s",
+        ErrorArgs = [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId)],
+        Msg2 = couch_set_view_util:log_port_error(Msg, ErrorMsg, ErrorArgs),
+        % Propogate this message to query response error message
+        Msg3 = case Msg2 of
+        <<"Error building index", _/binary>> ->
+            [Msg2];
+        _ ->
+            []
+        end,
+        index_builder_wait_loop(Port, Group, Msg3);
+    {Port, Error} ->
+        throw({index_builder_error, Error});
+    stop ->
+        ?LOG_INFO("Set view `~s`, ~s group `~s`, sending stop message to index builder.",
+                   [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId)]),
+        port_command(Port, "exit"),
+        index_builder_wait_loop(Port, Group, Acc)
     end.

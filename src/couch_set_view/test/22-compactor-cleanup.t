@@ -93,7 +93,6 @@ test() ->
             "# of compactions is 1"),
 
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
-    ok = timer:sleep(1000),
     couch_set_view_test_util:stop_server(),
     ok.
 

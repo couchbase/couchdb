@@ -36,6 +36,7 @@
 -export([get_row_count/2, reduce_to_count/1, extract_map_view/1]).
 -export([map_view_key_compare/2, reduce_view_key_compare/2]).
 -export([get_map_view0/2, get_reduce_view0/2]).
+-export([inc_group_access_stat/1]).
 
 % Exported for spatial index
 -export([modify_bitmasks/2]).
@@ -58,11 +59,6 @@
     pid_to_sig_ets  :: atom(),
     name            :: atom(),
     indexer         :: mapreduce_view | spatial_view
-}).
-
--record(merge_acc, {
-    fold_fun,
-    acc
 }).
 
 
@@ -372,7 +368,7 @@ demonitor_partition_update(Mod, SetName, DDocId, Ref) ->
 
 % Trigger a view group index update if there are at least N new changes
 % (from all the active/passive partitions) to index.
--spec trigger_update(atom(), binary(), binary(), non_neg_integer()) -> no_return().
+-spec trigger_update(atom(), binary(), binary(), non_neg_integer()) -> ok.
 trigger_update(Mod, SetName, DDocId, MinNumChanges) ->
     try
         Pid = get_group_pid(Mod, SetName, DDocId, prod),
@@ -384,7 +380,7 @@ trigger_update(Mod, SetName, DDocId, MinNumChanges) ->
 
 % Trigger a replica view group index update if there are at least N new
 % changes (from all the currently defined replica partitions) to index.
--spec trigger_replica_update(atom(), binary(), binary(), non_neg_integer()) -> no_return().
+-spec trigger_replica_update(atom(), binary(), binary(), non_neg_integer()) -> ok.
 trigger_replica_update(Mod, SetName, DDocId, MinNumChanges) ->
     try
         Pid = get_group_pid(Mod, SetName, DDocId, prod),
@@ -549,7 +545,7 @@ cleanup_index_files(Mod, SetName) ->
         ok;
     _ ->
         ?LOG_INFO("Deleting unused (old) set view `~s` index files:~n~n~s",
-            [SetName, string:join(DeleteFiles, "\n")])
+            [?LOG_USERDATA(SetName), string:join(DeleteFiles, "\n")])
     end,
     RootDir = couch_config:get("couchdb", "view_index_dir"),
     lists:foreach(
@@ -615,13 +611,13 @@ fold_reduce(#set_view_group{replica_group = #set_view_group{} = RepGroup} = Grou
     ],
     MergeParams = #index_merge{
         indexes = ViewSpecs,
-        callback = fun reduce_view_merge_callback/2,
+        callback = fun couch_view_merger:reduce_view_merge_callback/2,
         user_acc = #merge_acc{fold_fun = FoldFun, acc = FoldAcc},
         user_ctx = #user_ctx{roles = [<<"_admin">>]},
         http_params = ViewQueryArgs,
+        make_row_fun = fun(RowData) -> RowData end,
         extra = #view_merge{
-            keys = ViewQueryArgs#view_query_args.keys,
-            make_row_fun = fun(RowData) -> RowData end
+            keys = ViewQueryArgs#view_query_args.keys
         }
     },
     #merge_acc{acc = FinalAcc} = couch_index_merger:query_index(couch_view_merger, MergeParams),
@@ -682,7 +678,6 @@ do_fold_reduce(Group, ViewInfo, Fun, Acc, Options0, ViewQueryArgs) ->
     end,
     PreResultPadding = lists:duplicate(NthRed - 1, <<>>),
     PostResultPadding = lists:duplicate(length(RedFuns) - NthRed, <<>>),
-    couch_set_view_mapreduce:start_reduce_context(View),
     ReduceFun =
         fun(reduce, KVs) ->
             KVs2 = couch_set_view_util:expand_dups(KVs, []),
@@ -706,7 +701,7 @@ do_fold_reduce(Group, ViewInfo, Fun, Acc, Options0, ViewQueryArgs) ->
             0 ->
                 <<"null">>;
             _ when is_integer(GroupLevel) ->
-                {KeyJson, _DocId} = couch_set_view_util:split_key_docid(KeyDocId),
+                {KeyJson, _DocId} = mapreduce_view:decode_key_docid(KeyDocId),
                 case is_array_key(KeyJson) of
                 true ->
                     ?JSON_ENCODE(lists:sublist(?JSON_DECODE(KeyJson), GroupLevel));
@@ -714,7 +709,7 @@ do_fold_reduce(Group, ViewInfo, Fun, Acc, Options0, ViewQueryArgs) ->
                     KeyJson
                 end;
             _ ->
-                {KeyJson, _DocId} = couch_set_view_util:split_key_docid(KeyDocId),
+                {KeyJson, _DocId} = mapreduce_view:decode_key_docid(KeyDocId),
                 KeyJson
             end,
             <<_Count:40, _BitMap:?MAX_NUM_PARTITIONS, Reds/binary>> =
@@ -726,8 +721,7 @@ do_fold_reduce(Group, ViewInfo, Fun, Acc, Options0, ViewQueryArgs) ->
     try
         couch_btree:fold_reduce(Bt, WrapperFun, Acc, Options)
     after
-        couch_set_view_util:close_raw_read_fd(Group),
-        couch_set_view_mapreduce:end_reduce_context(View)
+        couch_set_view_util:close_raw_read_fd(Group)
     end.
 
 
@@ -808,6 +802,10 @@ reduce_to_count(Reductions) ->
         end, Reductions),
     Count.
 
+-spec inc_group_access_stat(#set_view_group{}) -> 'ok'.
+inc_group_access_stat(Group) ->
+    GroupPid = get_group_server(Group#set_view_group.set_name, Group),
+    ok = couch_set_view_group:inc_access_stat(GroupPid).
 
 % This case is triggered when at least one partition of the replica group is
 % active. This happens during failover, when a replica index is transferred
@@ -820,11 +818,21 @@ reduce_to_count(Reductions) ->
            #view_query_args{} | tuple()) -> {'ok', term(), term()}.
 fold(#set_view_group{replica_group = #set_view_group{} = RepGroup} = Group, View, Fun, Acc, ViewQueryArgs) ->
     RepView = lists:nth(View#set_view.id_num + 1, RepGroup#set_view_group.views),
+    case ViewQueryArgs of
+    #view_query_args{keys = Keys} ->
+        Extra = #view_merge{keys = Keys},
+        Merger = couch_view_merger;
+    _ ->
+        Extra = nil,
+        Merger = spatial_merger
+    end,
+    Mod = Group#set_view_group.mod,
+    ViewName = Mod:query_args_view_name(ViewQueryArgs),
     ViewSpecs = [
         #set_view_spec{
             name = Group#set_view_group.set_name,
             ddoc_id = Group#set_view_group.name,
-            view_name = ViewQueryArgs#view_query_args.view_name,
+            view_name = ViewName,
             partitions = [],  % not needed in this context
             group = Group#set_view_group{replica_group = nil},
             view = View
@@ -832,7 +840,7 @@ fold(#set_view_group{replica_group = #set_view_group{} = RepGroup} = Group, View
         #set_view_spec{
             name = RepGroup#set_view_group.set_name,
             ddoc_id = RepGroup#set_view_group.name,
-            view_name = ViewQueryArgs#view_query_args.view_name,
+            view_name = ViewName,
             partitions = [],  % not needed in this context
             % We want the partitions filtered like it would be a main group
             group = RepGroup#set_view_group{type = main},
@@ -841,17 +849,15 @@ fold(#set_view_group{replica_group = #set_view_group{} = RepGroup} = Group, View
     ],
     MergeParams = #index_merge{
         indexes = ViewSpecs,
-        callback = fun map_view_merge_callback/2,
+        callback = fun Merger:map_view_merge_callback/2,
         user_acc = #merge_acc{fold_fun = Fun, acc = Acc},
         user_ctx = #user_ctx{roles = [<<"_admin">>]},
-        % FoldFun does include_docs=true logic
-        http_params = ViewQueryArgs#view_query_args{include_docs = false},
-        extra = #view_merge{
-            keys = ViewQueryArgs#view_query_args.keys,
-            make_row_fun = fun(RowData) -> RowData end
-        }
+        http_params = ViewQueryArgs,
+        make_row_fun = fun(RowData) -> RowData end,
+        extra = Extra
     },
-    #merge_acc{acc = FinalAcc} = couch_index_merger:query_index(couch_view_merger, MergeParams),
+    #merge_acc{acc = FinalAcc} = couch_index_merger:query_index(
+        Merger, MergeParams),
     {ok, nil, FinalAcc};
 
 fold(Group, View, Fun, Acc, #view_query_args{keys = Keys} = ViewQueryArgs0)
@@ -897,11 +903,16 @@ init({Category, Indexer}) ->
         fun("mapreduce", "function_timeout", NewTimeout) ->
                 ok = mapreduce:set_timeout(list_to_integer(NewTimeout));
             ("mapreduce", "max_kv_size_per_doc", NewMax) ->
-                ok = mapreduce:set_max_kv_size_per_doc(list_to_integer(NewMax))
+                ok = mapreduce:set_max_kv_size_per_doc(list_to_integer(NewMax));
+            ("mapreduce", "optimize_doc_load", NewFlag) ->
+                ok = mapreduce:set_optimize_doc_load(list_to_atom(NewFlag))
         end),
 
     ok = mapreduce:set_timeout(list_to_integer(
         couch_config:get("mapreduce", "function_timeout", "10000"))),
+
+    ok = mapreduce:set_optimize_doc_load(list_to_atom(
+        couch_config:get("mapreduce", "optimize_doc_load", "true"))),
 
     Server = init_server(Category, Indexer),
     % {SetName, {DDocId, Signature}}
@@ -966,7 +977,11 @@ handle_call({before_database_delete, SetName}, _From, Server) ->
         fun({_SetName, {_DDocId, Sig}}) ->
             case ets:lookup(Server#server.sig_to_pid_ets, {SetName, Sig}) of
             [{_, Pid}] when is_pid(Pid) ->
-                gen_server:cast(Pid, before_master_delete);
+                try
+                    gen_server:call(Pid, before_master_delete)
+                catch
+                    exit:{noproc, _Reason} -> ok
+                end;
             _ ->
                 ok
             end
@@ -974,14 +989,14 @@ handle_call({before_database_delete, SetName}, _From, Server) ->
         ets:lookup(Server#server.name_to_sig_ets, SetName)),
     true = ets:delete(Server#server.name_to_sig_ets, SetName),
     ?LOG_INFO("Deleting index files for set `~s` because master database "
-              "is about to deleted", [SetName]),
+              "is about to deleted", [?LOG_USERDATA(SetName)]),
     try
         delete_index_dir(RootDir, SetName)
     catch _:Error ->
         Stack = erlang:get_stacktrace(),
         ?LOG_ERROR("Error deleting index files for set `~s`:~n"
-                   "  error: ~p~n  stacktrace: ~p~n",
-                   [SetName, Error, Stack])
+                   "  error: ~p~n  stacktrace: ~s~n",
+                   [?LOG_USERDATA(SetName), Error, ?LOG_USERDATA(Stack)])
     end,
     {reply, ok, Server};
 
@@ -1212,49 +1227,6 @@ make_handle_db_event_fun(Mod, ServerName, SigToPidEts, NameToSigEts) ->
     end.
 
 
-map_view_merge_callback(start, Acc) ->
-    {ok, Acc};
-
-map_view_merge_callback({start, _}, Acc) ->
-    {ok, Acc};
-
-map_view_merge_callback(stop, Acc) ->
-    {ok, Acc};
-
-map_view_merge_callback({row, Row}, #merge_acc{fold_fun = Fun, acc = Acc} = Macc) ->
-    case Fun(Row, nil, Acc) of
-    {ok, Acc2} ->
-        {ok, Macc#merge_acc{acc = Acc2}};
-    {stop, Acc2} ->
-        {stop, Macc#merge_acc{acc = Acc2}}
-    end;
-
-map_view_merge_callback({debug_info, _From, _Info}, Acc) ->
-    {ok, Acc}.
-
-
-
-reduce_view_merge_callback(start, Acc) ->
-    {ok, Acc};
-
-reduce_view_merge_callback({start, _}, Acc) ->
-    {ok, Acc};
-
-reduce_view_merge_callback(stop, Acc) ->
-    {ok, Acc};
-
-reduce_view_merge_callback({row, {Key, Red}}, #merge_acc{fold_fun = Fun, acc = Acc} = Macc) ->
-    case Fun(Key, Red, Acc) of
-    {ok, Acc2} ->
-        {ok, Macc#merge_acc{acc = Acc2}};
-    {stop, Acc2} ->
-        {stop, Macc#merge_acc{acc = Acc2}}
-    end;
-
-reduce_view_merge_callback({debug_info, _From, _Info}, Acc) ->
-    {ok, Acc}.
-
-
 % Returns whether the results should be filtered based on a bitmask or not
 -spec filter(#set_view_group{}) -> false | {true, bitmask(), bitmask()}.
 filter(#set_view_group{type = main} = Group) ->
@@ -1277,8 +1249,8 @@ make_reduce_group_keys_fun(0) ->
     fun(_, _) -> true end;
 make_reduce_group_keys_fun(GroupLevel) when is_integer(GroupLevel) ->
     fun(KeyDocId1, KeyDocId2) ->
-        {Key1, _DocId1} = couch_set_view_util:split_key_docid(KeyDocId1),
-        {Key2, _DocId2} = couch_set_view_util:split_key_docid(KeyDocId2),
+        {Key1, _DocId1} = mapreduce_view:decode_key_docid(KeyDocId1),
+        {Key2, _DocId2} = mapreduce_view:decode_key_docid(KeyDocId2),
         case is_array_key(Key1) andalso is_array_key(Key2) of
         true ->
             lists:sublist(?JSON_DECODE(Key1), GroupLevel) ==
@@ -1289,8 +1261,8 @@ make_reduce_group_keys_fun(GroupLevel) when is_integer(GroupLevel) ->
     end;
 make_reduce_group_keys_fun(_) ->
     fun(KeyDocId1, KeyDocId2) ->
-        {Key1, _DocId1} = couch_set_view_util:split_key_docid(KeyDocId1),
-        {Key2, _DocId2} = couch_set_view_util:split_key_docid(KeyDocId2),
+        {Key1, _DocId1} = mapreduce_view:decode_key_docid(KeyDocId1),
+        {Key2, _DocId2} = mapreduce_view:decode_key_docid(KeyDocId2),
         couch_ejson_compare:less_json(Key1, Key2) == 0
     end.
 

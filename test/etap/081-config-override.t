@@ -128,6 +128,12 @@ test() ->
     ok = file:truncate(Fd),
     ok = file:close(Fd),
 
+    {Field, Addr} = case misc:is_ipv6() of
+                true -> {"ip6_bind_address", "::1"};
+                false -> {"ip4_bind_address", "127.0.0.1"}
+            end,
+
+
     % Open and write a value
     CheckCanWrite = fun() ->
         etap:is(
@@ -149,15 +155,15 @@ test() ->
         ),
 
         etap:is(
-            couch_config:delete("httpd", "bind_address"),
+            couch_config:delete("httpd", Field),
             ok,
-            "Deleting {httpd, bind_address} succeeds"
+            "Deleting {httpd, " ++ Field ++ "} succeeds"
         ),
 
         etap:is(
-            couch_config:get("httpd", "bind_address"),
+            couch_config:get("httpd", Field),
             undefined,
-            "{httpd, bind_address} was actually deleted."
+            "{httpd, " ++ Field ++ "} was actually deleted."
         )
     end,
 
@@ -173,9 +179,9 @@ test() ->
         ),
 
         etap:is(
-            couch_config:get("httpd", "bind_address"),
-            "127.0.0.1",
-            "{httpd, bind_address} was not deleted form the primary INI file."
+            couch_config:get("httpd", Field),
+            Addr,
+            "{httpd, " ++ Field ++ "} was not deleted form the primary INI file."
         )
     end,
 
@@ -190,9 +196,9 @@ test() ->
         ),
 
         etap:is(
-            couch_config:get("httpd", "bind_address"),
+            couch_config:get("httpd", Field),
             undefined,
-            "{httpd, bind_address} is still \"\" after reopening."
+            "{httpd, " ++ Field ++ "} is still \"\" after reopening."
         )
     end,
 

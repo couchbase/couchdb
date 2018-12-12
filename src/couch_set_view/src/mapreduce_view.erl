@@ -15,27 +15,26 @@
 -module(mapreduce_view).
 
 % For the updater
--export([write_kvs/3, finish_build/3, get_state/1, set_state/2,
-         start_reduce_context/1, end_reduce_context/1, view_name/2,
-         update_tmp_files/3, view_bitmap/1]).
--export([update_index/5]).
+-export([write_kvs/3, finish_build/3, get_state/1, set_state/2, view_name/2,
+         convert_primary_index_kvs_to_binary/3, view_bitmap/1]).
+-export([encode_key_docid/2, decode_key_docid/1]).
+-export([convert_back_index_kvs_to_binary/2]).
+-export([view_insert_doc_query_results/6]).
 % For the group
 -export([design_doc_to_set_view_group/2, view_group_data_size/2,
          reset_view/1, setup_views/5]).
 % For the utils
 -export([cleanup_view_group/1]).
-% For the compactor
--export([compact_view/6, apply_log/2]).
 % For the main module
 -export([get_row_count/1, make_wrapper_fun/2, fold/4, index_extension/0,
-        make_key_options/1, should_filter/1]).
+        make_key_options/1, should_filter/1, query_args_view_name/1]).
 -export([stats_ets/1, server_name/1, sig_to_pid_ets/1, name_to_sig_ets/1,
          pid_to_sig_ets/1]).
 -export([view_info/1]).
 
 
 -include("couch_db.hrl").
--include("couch_set_view_updater.hrl").
+-include_lib("couch_set_view/include/couch_set_view.hrl").
 
 % Same as in couch_btree.erl
 -define(KEY_BITS,       12).
@@ -86,7 +85,7 @@ write_kvs(Group, TmpFiles, ViewKVs) ->
 convert_primary_index_kvs_to_binary([], _Group, Acc) ->
     lists:reverse(Acc);
 convert_primary_index_kvs_to_binary([{{Key, DocId}, {PartId, V0}} | Rest], Group, Acc)->
-    KeyBin = couch_set_view_util:encode_key_docid(Key, DocId),
+    KeyBin = encode_key_docid(Key, DocId),
     couch_set_view_util:check_primary_key_size(
         KeyBin, ?MAX_KEY_SIZE, Key, DocId, Group),
     V = case V0 of
@@ -142,7 +141,7 @@ finish_build(Group, TmpFiles, TmpDir) ->
         Views),
 
     try
-        index_builder_wait_loop(Port, Group, [])
+        couch_set_view_updater_helper:index_builder_wait_loop(Port, Group, [])
     after
         catch port_close(Port)
     end,
@@ -181,51 +180,8 @@ finish_build(Group, TmpFiles, TmpDir) ->
         index_header = NewHeader,
         header_pos = NewHeaderPos
     },
-    {NewGroup, NewFd}.
-
-index_builder_wait_loop(Port, Group, Acc) ->
-    #set_view_group{
-        set_name = SetName,
-        name = DDocId,
-        type = Type
-    } = Group,
-    receive
-    {Port, {exit_status, 0}} ->
-        ok;
-    {Port, {exit_status, 1}} ->
-        ?LOG_INFO("Set view `~s`, ~s group `~s`, index builder stopped successfully.",
-                   [SetName, Type, DDocId]),
-        exit(shutdown);
-    {Port, {exit_status, Status}} ->
-        throw({index_builder_exit, Status, ?l2b(Acc)});
-    {Port, {data, {noeol, Data}}} ->
-        index_builder_wait_loop(Port, Group, [Data | Acc]);
-    {Port, {data, {eol, Data}}} ->
-        #set_view_group{
-            set_name = SetName,
-            name = DDocId,
-            type = Type
-        } = Group,
-        Msg = ?l2b(lists:reverse([Data | Acc])),
-        ?LOG_ERROR("Set view `~s`, ~s group `~s`, received error from index builder: ~s",
-                   [SetName, Type, DDocId, Msg]),
-
-        % Propogate this message to query response error message
-        Msg2 = case Msg of
-        <<"Error building index", _/binary>> ->
-            [Msg];
-        _ ->
-            []
-        end,
-        index_builder_wait_loop(Port, Group, Msg2);
-    {Port, Error} ->
-        throw({index_builder_error, Error});
-    stop ->
-        ?LOG_INFO("Set view `~s`, ~s group `~s`, sending stop message to index builder.",
-                   [SetName, Type, DDocId]),
-        port_command(Port, "exit"),
-        index_builder_wait_loop(Port, Group, Acc)
-    end.
+    NewGroup2 = couch_set_view_group:remove_duplicate_partitions(NewGroup),
+    {NewGroup2, NewFd}.
 
 
 % Return the state of a view (which will be stored in the header)
@@ -243,13 +199,6 @@ view_bitmap(View) ->
     Bm.
 
 
-start_reduce_context(Group) ->
-    couch_set_view_mapreduce:start_reduce_context(Group).
-
-end_reduce_context(Group) ->
-    couch_set_view_mapreduce:end_reduce_context(Group).
-
-
 view_name(#set_view_group{views = SetViews}, ViewPos) ->
     View = (lists:nth(ViewPos, SetViews))#set_view.indexer,
     case View#mapreduce_view.map_names of
@@ -259,76 +208,6 @@ view_name(#set_view_group{views = SetViews}, ViewPos) ->
         ok
     end,
     Name.
-
-
-% Update the temporary files with the key-values from the indexer. Return
-% the updated writer accumulator.
-update_tmp_files(WriterAcc, ViewKeyValues, KeysToRemoveByView) ->
-    #writer_acc{
-       group = Group,
-       tmp_files = TmpFiles
-    } = WriterAcc,
-    TmpFiles2 = lists:foldl(
-        fun({#set_view{id_num = ViewId}, AddKeyValues}, AccTmpFiles) ->
-            AddKeyValuesBinaries = convert_primary_index_kvs_to_binary(AddKeyValues, Group, []),
-            KeysToRemoveDict = couch_util:dict_find(ViewId, KeysToRemoveByView, dict:new()),
-
-            {KeysToRemoveDict2, BatchData} = lists:foldl(
-                fun({K, V},{KeysToRemoveAcc, BinOpAcc}) ->
-                    Bin = couch_set_view_updater_helper:encode_btree_op(insert, K, V),
-                    BinOpAcc2 = [Bin | BinOpAcc],
-                    case dict:find(K, KeysToRemoveAcc) of
-                    {ok, _} ->
-                        {dict:erase(K, KeysToRemoveAcc), BinOpAcc2};
-                    _ ->
-                        {KeysToRemoveAcc, BinOpAcc2}
-                    end
-                end,
-                {KeysToRemoveDict, []}, AddKeyValuesBinaries),
-
-            BatchData2 = dict:fold(
-                fun(K, _V, BatchAcc) ->
-                    Bin = couch_set_view_updater_helper:encode_btree_op(remove, K),
-                    [Bin | BatchAcc]
-                end,
-                BatchData, KeysToRemoveDict2),
-
-            ViewTmpFileInfo = dict:fetch(ViewId, TmpFiles),
-            case ViewTmpFileInfo of
-            #set_view_tmp_file_info{fd = nil} ->
-                0 = ViewTmpFileInfo#set_view_tmp_file_info.size,
-                ViewTmpFilePath = couch_set_view_updater:new_sort_file_name(WriterAcc),
-                {ok, ViewTmpFileFd} = file2:open(ViewTmpFilePath, [raw, append, binary]),
-                ViewTmpFileSize = 0;
-            #set_view_tmp_file_info{fd = ViewTmpFileFd,
-                                    size = ViewTmpFileSize,
-                                    name = ViewTmpFilePath} ->
-                ok
-            end,
-            ok = file:write(ViewTmpFileFd, BatchData2),
-            ViewTmpFileInfo2 = ViewTmpFileInfo#set_view_tmp_file_info{
-                fd = ViewTmpFileFd,
-                name = ViewTmpFilePath,
-                size = ViewTmpFileSize + iolist_size(BatchData2)
-            },
-            dict:store(ViewId, ViewTmpFileInfo2, AccTmpFiles)
-        end,
-    TmpFiles, ViewKeyValues),
-    WriterAcc#writer_acc{
-        tmp_files = TmpFiles2
-    }.
-
-
--spec update_index(#btree{},
-                   string(),
-                   non_neg_integer(),
-                   set_view_btree_purge_fun() | 'nil',
-                   term()) ->
-                          {'ok', term(), #btree{},
-                           non_neg_integer(), non_neg_integer()}.
-update_index(Bt, FilePath, BufferSize, PurgeFun, PurgeAcc) ->
-    couch_set_view_updater_helper:update_btree(Bt, FilePath, BufferSize,
-        PurgeFun, PurgeAcc).
 
 
 -spec design_doc_to_set_view_group(binary(), #doc{}) -> #set_view_group{}.
@@ -376,13 +255,15 @@ design_doc_to_set_view_group(SetName, #doc{id = Id, body = {Fields}}) ->
             {SetView#set_view{id_num = N}, N + 1}
         end,
         0, lists:sort(dict:to_list(DictBySrc))),
+    IndexXATTRonDeletedDocs = couch_util:get_value(<<"index_xattr_on_deleted_docs">>, Fields, false),
     SetViewGroup = #set_view_group{
         set_name = SetName,
         name = Id,
         views = SetViews,
         design_options = DesignOptions,
         mod = ?MODULE,
-        extension = index_extension()
+        extension = index_extension(),
+        index_xattr_on_deleted_docs = IndexXATTRonDeletedDocs
     },
     set_view_sig(SetViewGroup).
 
@@ -395,14 +276,14 @@ set_view_for_sig(SetView) ->
     #set_view{
         id_num = Id,
         def = Def,
-        ref = Ref,
         indexer = #mapreduce_view{
             map_names = MapNames,
-            btree = Btree,
             reduce_funs = ReduceFuns,
             options = Options
         }
     } = SetView,
+    Btree = nil,
+    Ref = undefined,
     {set_view, Id, MapNames, Def, Btree, ReduceFuns, Options, Ref}.
 
 
@@ -458,16 +339,17 @@ setup_views(Fd, BtreeOptions, Group, ViewStates, Views) ->
                         PrettyKVs = [
                             begin
                                 {KeyDocId, <<_PartId:16, Value/binary>>} = RawKV,
-                                {couch_set_view_util:split_key_docid(KeyDocId), Value}
+                                {decode_key_docid(KeyDocId), Value}
                             end
                             || RawKV <- KVs2
                         ],
                         ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, error executing"
                                              " reduce function for view `~s'~n"
                                              "  reason:                ~s~n"
-                                             "  input key-value pairs: ~p~n",
-                                             [SetName, Type, DDocId, ViewName,
-                                              couch_util:to_binary(Reason), PrettyKVs]),
+                                             "  input key-value pairs: ~s~n",
+                                             [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId),
+                                              ?LOG_USERDATA(ViewName), couch_util:to_binary(Reason),
+                                              ?LOG_USERDATA(PrettyKVs)]),
                         throw(Error)
                     end,
                 if length(Reduced) > 255 ->
@@ -490,17 +372,18 @@ setup_views(Fd, BtreeOptions, Group, ViewStates, Views) ->
                         ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, error executing"
                                              " rereduce function for view `~s'~n"
                                              "  reason:           ~s~n"
-                                             "  input reductions: ~p~n",
-                                             [SetName, Type, DDocId, ViewName,
-                                              couch_util:to_binary(Reason), UserReds]),
+                                             "  input reductions: ~s~n",
+                                             [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId),
+                                              ?LOG_USERDATA(ViewName), couch_util:to_binary(Reason),
+                                              ?LOG_USERDATA(UserReds)]),
                         throw(Error)
                     end,
                 UserReductions = encode_reductions(Reduced),
                 iolist_to_binary([<<Count:40, AllPartitionsBitMap:?MAX_NUM_PARTITIONS>> | UserReductions])
             end,
         Less = fun(A, B) ->
-            {Key1, DocId1} = couch_set_view_util:split_key_docid(A),
-            {Key2, DocId2} = couch_set_view_util:split_key_docid(B),
+            {Key1, DocId1} = decode_key_docid(A),
+            {Key2, DocId2} = decode_key_docid(B),
             case couch_ejson_compare:less_json(Key1, Key2) of
             0 ->
                 DocId1 < DocId2;
@@ -551,7 +434,7 @@ cleanup_view_group_wait_loop(Port, Group, Acc, PurgedCount) ->
         {ok, PurgedCount};
     {Port, {exit_status, 1}} ->
         ?LOG_INFO("Set view `~s`, ~s group `~s`, index cleaner stopped successfully.",
-                   [SetName, Type, DDocId]),
+                   [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId)]),
         throw(stopped);
     {Port, {exit_status, Status}} ->
         throw({view_group_cleanup_exit, Status});
@@ -563,61 +446,22 @@ cleanup_view_group_wait_loop(Port, Group, Acc, PurgedCount) ->
     {Port, {data, {eol, Data}}} ->
         Msg = lists:reverse([Data | Acc]),
         ?LOG_ERROR("Set view `~s`, ~s group `~s`, received error from index cleanup: ~s",
-                   [SetName, Type, DDocId, Msg]),
+                   [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId), Msg]),
         cleanup_view_group_wait_loop(Port, Group, [], PurgedCount);
     {Port, Error} ->
         throw({view_group_cleanup_error, Error});
     stop ->
         ?LOG_INFO("Set view `~s`, ~s group `~s`, sending stop message to index cleaner.",
-                   [SetName, Type, DDocId]),
+                   [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId)]),
         port_command(Port, "exit"),
         cleanup_view_group_wait_loop(Port, Group, Acc, PurgedCount)
     end.
 
-compact_view(Fd, SetView, EmptySetView, FilterFun, BeforeKVWriteFun, Acc0) ->
-    EmptyView = EmptySetView#set_view.indexer,
-    #mapreduce_view{
-       btree = ViewBtree
-    } = EmptyView,
-
-    couch_set_view_mapreduce:start_reduce_context(SetView),
-    {ok, NewBtreeRoot, Acc2} = couch_btree_copy:copy(
-        (SetView#set_view.indexer)#mapreduce_view.btree, Fd,
-        [{before_kv_write, {BeforeKVWriteFun, Acc0}}, {filter, FilterFun}]),
-    couch_set_view_mapreduce:end_reduce_context(SetView),
-
-    NewSetView = EmptySetView#set_view{
-        indexer = EmptyView#mapreduce_view{
-            btree = ViewBtree#btree{
-                root = NewBtreeRoot
-            }
-        }
-    },
-    {NewSetView, Acc2}.
-
-
 -spec get_row_count(#set_view{}) -> non_neg_integer().
 get_row_count(SetView) ->
     Bt = (SetView#set_view.indexer)#mapreduce_view.btree,
-    ok = couch_set_view_mapreduce:start_reduce_context(SetView),
     {ok, <<Count:40, _/binary>>} = couch_btree:full_reduce(Bt),
-    ok = couch_set_view_mapreduce:end_reduce_context(SetView),
     Count.
-
-
-apply_log(#set_view_group{views = SetViews}, ViewLogFiles) ->
-    lists:zipwith(fun(SetView, ViewLogFile) ->
-        View = SetView#set_view.indexer,
-        Bt = View#mapreduce_view.btree,
-        {ok, NewBt, _, _} = couch_set_view_updater_helper:update_btree(
-               Bt, ViewLogFile, ?SORTED_CHUNK_SIZE),
-        ok = file2:delete(ViewLogFile),
-        SetView#set_view{
-            indexer = View#mapreduce_view{
-                btree = NewBt
-            }
-        }
-    end, SetViews, ViewLogFiles).
 
 
 make_wrapper_fun(Fun, Filter) ->
@@ -639,7 +483,7 @@ fold_fun(_Fun, [], _, Acc) ->
     {ok, Acc};
 fold_fun(Fun, [KV | Rest], {KVReds, Reds}, Acc) ->
     {KeyDocId, <<PartId:16, Value/binary>>} = KV,
-    {JsonKey, DocId} = couch_set_view_util:split_key_docid(KeyDocId),
+    {JsonKey, DocId} = decode_key_docid(KeyDocId),
     case Fun({{{json, JsonKey}, DocId}, {PartId, {json, Value}}}, {KVReds, Reds}, Acc) of
     {ok, Acc2} ->
         fold_fun(Fun, Rest, {[KV | KVReds], Reds}, Acc2);
@@ -678,19 +522,16 @@ make_start_key_option(#view_query_args{start_key = Key, start_docid = DocId}) ->
     if Key == undefined ->
         [];
     true ->
-        [{start_key,
-            couch_set_view_util:encode_key_docid(?JSON_ENCODE(Key), DocId)}]
+        [{start_key, encode_key_docid(?JSON_ENCODE(Key), DocId)}]
     end.
 
 make_end_key_option(#view_query_args{end_key = undefined}) ->
     [];
 make_end_key_option(#view_query_args{end_key = Key, end_docid = DocId, inclusive_end = true}) ->
-    [{end_key,
-        couch_set_view_util:encode_key_docid(?JSON_ENCODE(Key), DocId)}];
+    [{end_key, encode_key_docid(?JSON_ENCODE(Key), DocId)}];
 make_end_key_option(#view_query_args{end_key = Key, end_docid = DocId,
         inclusive_end = false}) ->
-    [{end_key_gt,
-        couch_set_view_util:encode_key_docid(?JSON_ENCODE(Key),
+    [{end_key_gt, encode_key_docid(?JSON_ENCODE(Key),
         reverse_key_default(DocId))}].
 
 reverse_key_default(?MIN_STR) -> ?MAX_STR;
@@ -738,3 +579,84 @@ view_info(#mapreduce_view{reduce_funs = Funs}) ->
         end,
         [], Funs),
     [Prefix | Acc2].
+
+
+-spec decode_key_docid(binary()) -> {binary(), binary()}.
+decode_key_docid(<<KeyLen:16, JsonKey:KeyLen/binary, DocId/binary>>) ->
+    {JsonKey, DocId}.
+
+
+-spec encode_key_docid(binary(), binary()) -> binary().
+encode_key_docid(JsonKey, DocId) ->
+    <<(byte_size(JsonKey)):16, JsonKey/binary, DocId/binary>>.
+
+
+convert_back_index_kvs_to_binary([], Acc)->
+    lists:reverse(Acc);
+convert_back_index_kvs_to_binary([{DocId, {PartId, ViewIdKeys}} | Rest], Acc) ->
+    ViewIdKeysBinary = lists:foldl(
+        fun({ViewId, Keys}, Acc2) ->
+            KeyListBinary = lists:foldl(
+                fun(Key, AccKeys) ->
+                    <<AccKeys/binary, (byte_size(Key)):16, Key/binary>>
+                end,
+                <<>>, Keys),
+            NumKeys = length(Keys),
+            case NumKeys >= (1 bsl 16) of
+            true ->
+                ErrorMsg = io_lib:format(
+                    "Too many (~p) keys emitted for "
+                    "document `~s` (maximum allowed is ~p",
+                    [NumKeys, ?LOG_USERDATA(DocId), (1 bsl 16) - 1]),
+                throw({error, iolist_to_binary(ErrorMsg)});
+            false ->
+                ok
+            end,
+            <<Acc2/binary, ViewId:8, NumKeys:16, KeyListBinary/binary>>
+        end,
+        <<>>, ViewIdKeys),
+    KvBin = {<<PartId:16, DocId/binary>>,
+        <<PartId:16, ViewIdKeysBinary/binary>>},
+    convert_back_index_kvs_to_binary(Rest, [KvBin | Acc]).
+
+
+-spec view_insert_doc_query_results(
+        binary(), partition_id(), [set_view_key_value()],
+        [set_view_key_value()], [set_view_key_value()], [set_view_key()]) ->
+            {[set_view_key_value()], [set_view_key()]}.
+view_insert_doc_query_results(_DocId, _PartitionId, [], [], ViewKVsAcc,
+        ViewIdKeysAcc) ->
+    {lists:reverse(ViewKVsAcc), lists:reverse(ViewIdKeysAcc)};
+view_insert_doc_query_results(DocId, PartitionId, [ResultKVs | RestResults],
+        [{View, KVs} | RestViewKVs], ViewKVsAcc, ViewIdKeysAcc) ->
+    % Take any identical keys and combine the values
+    {NewKVs, NewViewIdKeysAcc} = lists:foldl(
+        fun({Key, Val}, {[{{Key, PrevDocId} = Kd, PrevVal} | AccRest], AccVid})
+                when PrevDocId =:= DocId ->
+            AccKv2 = case PrevVal of
+            {PartitionId, {dups, Dups}} ->
+                [{Kd, {PartitionId, {dups, [Val | Dups]}}} | AccRest];
+            {PartitionId, UserPrevVal} ->
+                [{Kd, {PartitionId, {dups, [Val, UserPrevVal]}}} | AccRest]
+            end,
+            {AccKv2, AccVid};
+        ({Key, Val}, {AccKv, AccVid}) ->
+            {[{{Key, DocId}, {PartitionId, Val}} | AccKv], [Key | AccVid]}
+        end,
+        {KVs, []}, lists:sort(ResultKVs)),
+    NewViewKVsAcc = [{View, NewKVs} | ViewKVsAcc],
+    case NewViewIdKeysAcc of
+    [] ->
+        NewViewIdKeysAcc2 = ViewIdKeysAcc;
+    _ ->
+        NewViewIdKeysAcc2 = [
+            {View#set_view.id_num, NewViewIdKeysAcc} | ViewIdKeysAcc]
+    end,
+    view_insert_doc_query_results(
+        DocId, PartitionId, RestResults, RestViewKVs, NewViewKVsAcc,
+        NewViewIdKeysAcc2).
+
+
+-spec query_args_view_name(#view_query_args{}) -> binary().
+query_args_view_name(#view_query_args{view_name = ViewName}) ->
+    ViewName.

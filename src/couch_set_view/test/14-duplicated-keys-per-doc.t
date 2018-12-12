@@ -45,7 +45,6 @@ test() ->
     test_same_key_by_same_doc_multiple_times(),
     test_same_key_by_different_docs_multiple_times(),
 
-    ok = timer:sleep(1000),
     couch_set_view_test_util:stop_server(),
     ok.
 

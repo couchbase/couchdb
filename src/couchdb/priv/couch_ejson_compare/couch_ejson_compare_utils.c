@@ -20,11 +20,13 @@
 #define INLINE_MODIFIER __inline
 #endif
 
+#include <platform/cbassert.h>
+
 INLINE_MODIFIER void reserve_coll(couch_ejson_ctx_t *ctx)
 {
     if (ctx->coll == NULL) {
         enif_mutex_lock(ctx->globalCtx->collMutex);
-        assert(ctx->globalCtx->collStackTop < ctx->globalCtx->numCollators);
+        cb_assert(ctx->globalCtx->collStackTop < ctx->globalCtx->numCollators);
         ctx->coll = ctx->globalCtx->collators[ctx->globalCtx->collStackTop];
         ctx->globalCtx->collStackTop += 1;
         enif_mutex_unlock(ctx->globalCtx->collMutex);
@@ -36,7 +38,7 @@ INLINE_MODIFIER void release_coll(couch_ejson_ctx_t *ctx)
     if (ctx->coll != NULL) {
         enif_mutex_lock(ctx->globalCtx->collMutex);
         ctx->globalCtx->collStackTop -= 1;
-        assert(ctx->globalCtx->collStackTop >= 0);
+        cb_assert(ctx->globalCtx->collStackTop >= 0);
         enif_mutex_unlock(ctx->globalCtx->collMutex);
     }
 }

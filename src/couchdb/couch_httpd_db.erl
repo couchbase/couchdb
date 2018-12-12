@@ -190,7 +190,7 @@ db_req(#httpd{method='POST',
                 case catch(DbFrontend:update_doc(Db, Doc, [])) of
                 ok -> ok;
                 Error ->
-                    ?LOG_INFO("Batch doc error (~s): ~p",[DocId, Error])
+                    ?LOG_INFO("Batch doc error (~s): ~p",[?LOG_USERDATA(DocId), Error])
                 end
             end),
             
@@ -435,7 +435,7 @@ all_docs_view(Req, Db, Keys) ->
                     not_found ->
                         {{Key, error}, not_found};
                     _ ->
-                        ?LOG_ERROR("Invalid DocInfo: ~p", [DocInfo]),
+                        ?LOG_ERROR("Invalid DocInfo: ~p", [?LOG_USERDATA(DocInfo)]),
                         throw({error, invalid_doc_info})
                     end,
                     {_, FoldAcc2} = FoldlFun(Doc, 0, FoldAcc),
@@ -508,6 +508,9 @@ db_doc_req(#httpd{method='PUT'}=Req, Db, DocId) ->
         Body = couch_httpd:body(Req),
         couch_doc:from_binary(DocId, Body, false)
     end,
+    % deleting ets stats record upon design doc update
+    ets:delete(?QUERY_TIMING_STATS_ETS, DocId),
+
     % Body = couch_httpd:body(Req),
     % Doc = couch_doc:from_binary(DocId, Body, couch_httpd:is_ctype(Req, "application/json")),
     update_doc(Req, Db, DocId, Doc, RespHeaders);
@@ -554,6 +557,7 @@ update_doc(Req, Db, DocId, #doc{deleted=Deleted}=Doc, Headers) ->
         Options = []
     end,
     ok = DbFrontend:update_doc(Db, Doc, Options),
+    ets:delete(?QUERY_TIMING_STATS_ETS, DocId),
     send_json(Req, if Deleted -> 200; true -> 201 end,
         Headers, {[
             {ok, true},

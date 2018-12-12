@@ -38,7 +38,7 @@ main(_) ->
         ok ->
             etap:end_tests();
         Other ->
-            io:format(standard_error, "Test died abnormally: ~p", [Other]),
+            etap:diag(io_lib:format("Test died abnormally: ~p", [Other])),
             etap:bail(Other)
     end,
     ok.
@@ -245,7 +245,6 @@ test() ->
     verify_btrees_1(ActiveParts, [], ExpectedSeqs4, ExpectedUnindexableSeqs4, ValueGenFun2),
 
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
-    ok = timer:sleep(1000),
     couch_set_view_test_util:stop_server(),
     ok.
 

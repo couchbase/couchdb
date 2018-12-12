@@ -29,7 +29,7 @@
 -export([send_response/4,send_method_not_allowed/2,send_error/4, send_redirect/2,send_chunked_error/2]).
 -export([send_json/2,send_json/3,send_json/4,last_chunk/1,parse_multipart_request/3]).
 -export([accepted_encodings/1,validate_referer/1,validate_ctype/2]).
--export([is_ctype/2]).
+-export([is_ctype/2, negotiate_content_type/1]).
 
 start_link() ->
     start_link(http).
@@ -58,7 +58,11 @@ start_link(Name, Options) ->
     % just stop if one of the config settings change. couch_server_sup
     % will restart us and then we will pick up the new settings.
 
-    BindAddress = couch_config:get("httpd", "bind_address", any),
+    Field = case misc:is_ipv6() of
+                true -> "ip6_bind_address";
+                false -> "ip4_bind_address"
+            end,
+    BindAddress = couch_config:get("httpd", Field, any),
     DefaultSpec = "{couch_httpd_db, handle_request}",
     DefaultFun = make_arity_1_fun(
         couch_config:get("httpd", "default_handler", DefaultSpec)
@@ -123,7 +127,9 @@ start_link(Name, Options) ->
 stop() ->
     mochiweb_http:stop(?MODULE).
 
-config_change("httpd", "bind_address") ->
+config_change("httpd", "ip4_bind_address") ->
+    ?MODULE:stop();
+config_change("httpd", "ip6_bind_address") ->
     ?MODULE:stop();
 config_change("httpd", "port") ->
     ?MODULE:stop();
@@ -251,7 +257,7 @@ handle_request(MochiReq, DbFrontendModule, DefaultFun,
         Tag:Error ->
             Stack = erlang:get_stacktrace(),
             ?LOG_ERROR("Uncaught error in HTTP request: ~p~n~n"
-                       "Stacktrace: ~p", [{Tag, Error}, Stack]),
+                       "Stacktrace: ~s", [{Tag, Error}, ?LOG_USERDATA(Stack)]),
             send_error(HttpReq, Error)
     end,
     {ok, Resp}.
@@ -470,13 +476,44 @@ verify_is_server_admin(#user_ctx{roles=Roles}) ->
     false -> throw({unauthorized, <<"You are not a server admin.">>})
     end.
 
-log_request(#httpd{mochi_req=MochiReq,peer=Peer}, Code) ->
-    ?LOG_INFO("~s - - ~s ~s ~B", [
-        Peer,
-        MochiReq:get(method),
-        MochiReq:get(raw_path),
-        Code
-    ]).
+log_request(#httpd{mochi_req=MochiReq,peer=Peer}=Req, Code) ->
+    Path = case MochiReq:get(method) of
+    'POST' ->
+        log_parse_post(Req);
+    _ ->
+        MochiReq:get(raw_path)
+    end,
+    ?LOG_INFO("~s -- ~s ~s ~B", [?LOG_USERDATA(Peer),
+                                 MochiReq:get(method),
+                                 ?LOG_USERDATA(Path),
+                                 Code]).
+
+log_parse_post(Req) ->
+    try log_do_parse(Req) of Str -> ?l2b(Str)
+    catch _:_ -> "" end.
+
+log_do_parse(#httpd{method='POST'} = Req) ->
+    {[{Bucket, {Props}}]} = couch_util:get_nested_json_value(
+        json_body_obj(Req), [<<"views">>, <<"sets">>]),
+    ViewName = couch_util:get_value(<<"view">>, Props),
+    {DDoc, View} = couch_util:parse_view_name(ViewName),
+    [<<"/">>, Bucket, <<"/">>, DDoc, <<"/_view/">>, View].
+
+log_volume(#httpd{path_parts=Parts, mochi_req=MochiReq} = Req, Code) ->
+    try
+        {Origin, Path} = case Parts of
+            [_, <<"_design">>, _, <<"_view">>, _] ->
+                {external, MochiReq:get(path)};
+            _ ->
+                {internal, ?b2l(?l2b(log_do_parse(Req)))}
+        end,
+        Staleness = list_to_existing_atom(string:to_lower(
+            couch_httpd:qs_value(Req, "stale", "update_after"))),
+        ok = couch_query_logger:log(Path, Origin, Staleness)
+    catch
+        _:_ ->
+            log_request(Req, Code)
+    end.
 
 start_response_length(#httpd{mochi_req=MochiReq}=Req, Code, Headers, Length) ->
     log_request(Req, Code),
@@ -519,7 +556,7 @@ http_1_0_keep_alive(Req, Headers) ->
     end.
 
 start_chunked_response(#httpd{mochi_req=MochiReq}=Req, Code, Headers) ->
-    log_request(Req, Code),
+    log_volume(Req, Code),
     Headers2 = http_1_0_keep_alive(MochiReq, Headers),
     Resp = MochiReq:respond({Code, Headers2, chunked}),
     case MochiReq:get(method) of
@@ -543,7 +580,7 @@ send_response(#httpd{mochi_req=MochiReq}=Req, Code, Headers, Body) ->
     log_request(Req, Code),
     Headers2 = http_1_0_keep_alive(MochiReq, Headers),
     if Code >= 400 ->
-        ?LOG_DEBUG("httpd ~p error response:~n ~s", [Code, Body]);
+        ?LOG_DEBUG("httpd ~p error response:~n ~s", [?LOG_USERDATA(Code), ?LOG_USERDATA(Body)]);
     true -> ok
     end,
     {ok, MochiReq:respond({Code, Headers2, Body})}.
@@ -685,54 +722,14 @@ error_info({Status, Error, Reason}) ->
 error_info(Error) ->
     {500, <<"unknown_error">>, couch_util:to_binary(Error)}.
 
-error_headers(#httpd{mochi_req=MochiReq}=Req, Code, ErrorStr, ReasonStr) ->
+error_headers(#httpd{mochi_req=MochiReq}, Code) ->
     if Code == 401 ->
         % this is where the basic auth popup is triggered
         case MochiReq:get_header_value("X-CouchDB-WWW-Authenticate") of
         undefined ->
             case couch_config:get("httpd", "WWW-Authenticate", nil) of
             nil ->
-                % If the client is a browser and the basic auth popup isn't turned on
-                % redirect to the session page.
-                case ErrorStr of
-                <<"unauthorized">> ->
-                    case couch_config:get("couch_httpd_auth", "authentication_redirect", nil) of
-                    nil -> {Code, []};
-                    AuthRedirect ->
-                        case couch_config:get("couch_httpd_auth", "require_valid_user", "false") of
-                        "true" ->
-                            % send the browser popup header no matter what if we are require_valid_user
-                            {Code, [{"WWW-Authenticate", "Basic realm=\"server\""}]};
-                        _False ->
-                            case MochiReq:accepts_content_type("application/json") of
-                            true ->
-                                {Code, []};
-                            false ->
-                                case MochiReq:accepts_content_type("text/html") of
-                                true ->
-                                    % Redirect to the path the user requested, not
-                                    % the one that is used internally.
-                                    UrlReturnRaw = case MochiReq:get_header_value("x-couchdb-vhost-path") of
-                                    undefined ->
-                                        MochiReq:get(path);
-                                    VHostPath ->
-                                        VHostPath
-                                    end,
-                                    RedirectLocation = lists:flatten([
-                                        AuthRedirect,
-                                        "?return=", couch_util:url_encode(UrlReturnRaw),
-                                        "&reason=", couch_util:url_encode(ReasonStr)
-                                    ]),
-                                    {302, [{"Location", absolute_uri(Req, RedirectLocation)}]};
-                                false ->
-                                    {Code, []}
-                                end
-                            end
-                        end
-                    end;
-                _Else ->
-                    {Code, []}
-                end;
+                {Code, []};
             Type ->
                 {Code, [{"WWW-Authenticate", Type}]}
             end;
@@ -748,7 +745,7 @@ send_error(_Req, {already_sent, Resp, _Error}) ->
 
 send_error(Req, Error) ->
     {Code, ErrorStr, ReasonStr} = error_info(Error),
-    {Code1, Headers} = error_headers(Req, Code, ErrorStr, ReasonStr),
+    {Code1, Headers} = error_headers(Req, Code),
     send_error(Req, Code1, Headers, ErrorStr, ReasonStr).
 
 send_error(Req, Code, ErrorStr, ReasonStr) ->
@@ -937,5 +934,3 @@ partial_find(B, D, N, K) ->
         _ ->
             partial_find(B, D, 1 + N, K - 1)
     end.
-
-

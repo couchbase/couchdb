@@ -9,7 +9,8 @@
 
 [httpd]
 ;port = 5984
-;bind_address = 127.0.0.1
+;ip4_bind_address = 127.0.0.1
+;ip6_bind_address = ::1
 ; Options for the MochiWeb HTTP server.
 ;server_options = [{backlog, 128}, {acceptor_pool_size, 16}]
 ; For more socket options, consult Erlang's module 'inet' man page.
@@ -27,12 +28,6 @@
 
 [httpd_global_handlers]
 ;_google = {couch_httpd_proxy, handle_proxy_req, <<"http://www.google.com">>}
-
-[couch_httpd_auth]
-; If you set this to true, you should also uncomment the WWW-Authenticate line
-; above. If you don't configure a WWW-Authenticate header, CouchDB will send
-; Basic realm="server" in order to prevent you getting logged out.
-; require_valid_user = false
 
 [log]
 ;level = debug

@@ -16,7 +16,8 @@
 -export([from_json_obj/1,to_json_obj/2,to_json_obj/1,to_json_bin/1,from_binary/3]).
 -export([validate_docid/1,with_uncompressed_body/1]).
 -export([with_ejson_body/1,with_json_body/1]).
--export([to_raw_json_binary_views/1,to_json_base64/1]).
+-export([to_raw_json_binary_views/1, to_raw_json_binary_views/3]).
+-export([to_json_base64/1, to_json_obj_with_bin_body/1]).
 
 -include("couch_db.hrl").
 
@@ -26,6 +27,10 @@ to_json_rev(0, _) ->
     [];
 to_json_rev(Start, RevId) ->
     [{<<"rev">>, ?l2b([integer_to_list(Start),"-",revid_to_str(RevId)])}].
+
+to_json_vbinfo(PartId, Seq) ->
+    [{<<"seq">>, integer_to_binary(Seq)}]
+    ++ [{<<"vb">>, integer_to_binary(PartId)}].
 
 to_ejson_body({Body}, _ContentMeta) ->
     {<<"json">>, {Body}};
@@ -44,8 +49,8 @@ revid_to_str(RevId) ->
 
 rev_to_str({Pos, RevId}) ->
     ?l2b([integer_to_list(Pos),"-",revid_to_str(RevId)]).
-                    
-                    
+
+
 revs_to_strs([]) ->
     [];
 revs_to_strs([{Pos, RevId}| Rest]) ->
@@ -91,10 +96,16 @@ to_deleted_meta(_) ->
     [].
 
 to_full_ejson_meta(#doc{id=Id,deleted=Del,rev={Start, RevId},
-        meta=Meta, content_meta=ContentMeta}=Doc, IncludeType) ->
+        meta=Meta, content_meta=ContentMeta}=Doc, PartId, Seq, IncludeType) ->
     {
         [json_id(Id)]
         ++ to_json_rev(Start, RevId)
+        ++ case {PartId, Seq} of
+           {nil, nil} ->
+               [];
+           _ ->
+               to_json_vbinfo(PartId, Seq)
+           end
         ++ to_json_meta(Meta)
         ++ to_memcached_meta(Doc)
         ++ to_deleted_meta(Del)
@@ -107,6 +118,8 @@ to_full_ejson_meta(#doc{id=Id,deleted=Del,rev={Start, RevId},
            []
         end
     }.
+to_full_ejson_meta(Doc, IncludeType) ->
+    to_full_ejson_meta(Doc, nil, nil, IncludeType).
 
 to_json_obj(Doc0)->
     to_json_obj(Doc0, []).
@@ -114,6 +127,19 @@ to_json_obj(Doc0)->
 to_json_obj(Doc0, _Options)->
     JSONBin = to_json_bin(Doc0),
     ?JSON_DECODE(JSONBin).
+
+to_json_obj_with_bin_body(Doc0) ->
+    Doc = #doc{content_meta = ContentMeta, body = Body} = with_json_body(Doc0),
+    Meta = to_full_ejson_meta(Doc, false),
+
+    BodyTuple =
+        case ContentMeta of
+            ?CONTENT_META_JSON ->
+                {json, Body};
+            _ ->
+                {base64, base64:encode(Body)}
+        end,
+    {[{meta, Meta}, BodyTuple]}.
 
 to_json_base64(Doc)->
     #doc{body = Body} = Doc2 = with_uncompressed_body(Doc),
@@ -145,12 +171,10 @@ mk_json_doc_from_binary(<<?LOCAL_DOC_PREFIX, _/binary>> = Id, Value) ->
     Error ->
         throw(Error)
     end;
-mk_json_doc_from_binary(Id, <<>>) ->
-    #doc{id=Id, body = <<>>, content_meta = ?CONTENT_META_INVALID_JSON};
 mk_json_doc_from_binary(Id, Value) ->
     % Docs should accept any JSON value, not just objs and arrays
     % (this would be anything that is acceptable as a value in an array
-    case ejson:validate([<<"[">>, Value, <<"]">>]) of
+    case ejson:validate([<<"[{},">>, Value, <<"]">>]) of
     {error, invalid_json} ->
         #doc{id=Id, body = Value,
             content_meta = ?CONTENT_META_INVALID_JSON};
@@ -203,7 +227,7 @@ validate_docid(Id) when is_binary(Id) ->
     ok;
 
 validate_docid(Id) ->
-    ?LOG_DEBUG("Document id is not a string: ~p", [Id]),
+    ?LOG_DEBUG("Document id is not a string: ~p", [?LOG_USERDATA(Id)]),
     throw({bad_request, <<"Document id must be a string">>}).
 
 
@@ -296,9 +320,14 @@ json_id(Id) ->
         {<<"id">>, Id}
     end.
 
-to_raw_json_binary_views(Doc0) ->
+to_raw_json_binary_views(Doc0, PartId, Seq) ->
     Doc = with_json_body(Doc0),
-    MetaBin = ?JSON_ENCODE(to_full_ejson_meta(Doc, true)),
+    MetaBin = case {PartId, Seq} of
+    {nil, nil} ->
+        ?JSON_ENCODE(to_full_ejson_meta(Doc, true));
+    _ ->
+        ?JSON_ENCODE(to_full_ejson_meta(Doc, PartId, Seq, true))
+    end,
     ContentBin = case Doc#doc.content_meta of
     ?CONTENT_META_JSON ->
         iolist_to_binary(Doc#doc.body);
@@ -306,3 +335,5 @@ to_raw_json_binary_views(Doc0) ->
         iolist_to_binary([<<"\"">>, base64:encode(iolist_to_binary(Doc#doc.body)), <<"\"">>])
     end,
     {ContentBin, MetaBin}.
+to_raw_json_binary_views(Doc0) ->
+    to_raw_json_binary_views(Doc0, nil, nil).

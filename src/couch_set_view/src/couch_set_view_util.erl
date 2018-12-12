@@ -23,7 +23,6 @@
 -export([missing_changes_count/2]).
 -export([is_initial_build/1]).
 -export([new_sort_file_path/2, delete_sort_files/2]).
--export([encode_key_docid/2, decode_key_docid/1, split_key_docid/1]).
 -export([parse_values/1, parse_reductions/1, parse_view_id_keys/1]).
 -export([split_set_db_name/1]).
 -export([group_to_header_bin/1, header_bin_sig/1, header_bin_to_term/1]).
@@ -36,7 +35,9 @@
 -export([remove_group_views/2, update_group_views/3]).
 -export([send_group_info/2]).
 -export([filter_seqs/2]).
-
+-export([log_port_error/3]).
+-export([fix_partitions/2]).
+-export([condense/1]).
 
 -include("couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
@@ -196,7 +197,7 @@ open_raw_read_fd(Group) ->
     {error, Reason} ->
         ?LOG_INFO("Warning, could not open raw fd for fast reads for "
             "~s view group `~s`, set `~s`: ~s",
-            [Type, DDocId, SetName, file:format_error(Reason)]),
+            [Type, ?LOG_USERDATA(DDocId), ?LOG_USERDATA(SetName), file:format_error(Reason)]),
         ok
     end.
 
@@ -327,21 +328,6 @@ do_delete_sort_files(RootDir, Suffix) ->
             _ = file2:delete(F)
         end,
         filelib:wildcard(WildCard)).
-
-
--spec decode_key_docid(binary()) -> {term(), binary()}.
-decode_key_docid(<<KeyLen:16, KeyJson:KeyLen/binary, DocId/binary>>) ->
-    {?JSON_DECODE(KeyJson), DocId}.
-
-
--spec split_key_docid(binary()) -> {binary(), binary()}.
-split_key_docid(<<KeyLen:16, KeyJson:KeyLen/binary, DocId/binary>>) ->
-    {KeyJson, DocId}.
-
-
--spec encode_key_docid(binary(), binary()) -> binary().
-encode_key_docid(JsonKey, DocId) ->
-    <<(byte_size(JsonKey)):16, JsonKey/binary, DocId/binary>>.
 
 
 -spec split_set_db_name(string() | binary()) ->
@@ -629,9 +615,9 @@ check_primary_key_size(Bin, Max, Key, DocId, Group) when byte_size(Bin) > Max ->
     KeyPrefix = lists:sublist(unicode:characters_to_list(Key), 100),
     Error = iolist_to_binary(
         io_lib:format("key emitted for document `~s` is too long: ~s... (~p bytes)",
-                      [DocId, KeyPrefix, byte_size(Bin)])),
+                      [?LOG_USERDATA(DocId), ?LOG_USERDATA(KeyPrefix), byte_size(Bin)])),
     ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, ~s",
-                         [SetName, Type, DDocId, Error]),
+                         [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId), Error]),
     throw({error, Error});
 check_primary_key_size(_Bin, _Max, _Key, _DocId, _Group) ->
     ok.
@@ -643,9 +629,9 @@ check_primary_value_size(Bin, Max, Key, DocId, Group) when byte_size(Bin) > Max 
     #set_view_group{set_name = SetName, name = DDocId, type = Type} = Group,
     Error = iolist_to_binary(
         io_lib:format("value emitted for key `~s`, document `~s`, is too big"
-                      " (~p bytes)", [Key, DocId, byte_size(Bin)])),
+                      " (~p bytes)", [?LOG_USERDATA(Key), ?LOG_USERDATA(DocId), byte_size(Bin)])),
     ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, ~s",
-                         [SetName, Type, DDocId, Error]),
+                         [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId), Error]),
     throw({error, Error});
 check_primary_value_size(_Bin, _Max, _Key, _DocId, _Group) ->
     ok.
@@ -822,3 +808,82 @@ filter_seqs(SortedParts, Seqs) ->
     lists:filter(fun({PartId, _Seq}) ->
         lists:member(PartId, SortedParts)
     end, Seqs).
+
+-spec log_port_error(binary(), string(), [any()]) -> binary().
+log_port_error(<<"MAPREDUCE ", Msg/binary>>, ErrorMsg, ErrorArgs) ->
+    ?LOG_MAPREDUCE_ERROR(ErrorMsg, ErrorArgs ++ [?LOG_USERDATA(Msg)]),
+    Msg;
+log_port_error(<<"SPATIAL ", Msg/binary>>, ErrorMsg, ErrorArgs) ->
+    % As of now log errors from spatial views into mapreduce_errors.log
+    ?LOG_MAPREDUCE_ERROR(ErrorMsg, ErrorArgs ++ [?LOG_USERDATA(Msg)]),
+    Msg;
+log_port_error(<<"GENERIC ", Msg/binary>>, ErrorMsg, ErrorArgs) ->
+    ?LOG_ERROR(ErrorMsg, ErrorArgs ++ [?LOG_USERDATA(Msg)]),
+    Msg;
+log_port_error(Msg, ErrorMsg, ErrorArgs) ->
+    ?LOG_ERROR(ErrorMsg, ErrorArgs ++ [?LOG_USERDATA(Msg)]),
+    Msg.
+
+-spec fix_partitions(#set_view_group{}, ordsets:ordset(partition_id())) ->
+    {partition_seqs(), partition_versions()}.
+fix_partitions(Group, PartList) ->
+    lists:foldl(
+        fun(PartId, {SeqAcc, PartVersionsAcc} = Acc) ->
+            case has_part_seq(PartId, SeqAcc) of
+            true ->
+                Acc;
+            false ->
+                % Since we are treating this vbucket as a fresh partition, we are resetting
+                % the older partition version and seq number information.
+                {lists:ukeymerge(1, [{PartId, 0}], SeqAcc),
+                 lists:ukeymerge(1, [{PartId, [{0, 0}]}], PartVersionsAcc)}
+            end
+        end,
+        {?set_seqs(Group), ?set_partition_versions(Group)},
+        PartList).
+
+% The condense function converts [1,2,3,6,9] ->
+%                          [ "[", ",", "1-3", ",", "6", ",", "9", "]" ]
+% "[" "]" and "," are explicitly included for io:format("~s",[output]).
+-spec condense(ordsets:ordset(partition_id())|[partition_id()]) -> any().
+condense(List) ->
+    try condense_inner(List) of
+        Result ->
+            Result
+    catch _:_ ->
+            io_lib:format("~w",[List])
+    end.
+
+-spec condense_inner(ordsets:ordset(partition_id())|[partition_id()]) -> any().
+condense_inner([]) ->
+    "[]"; % base-case
+condense_inner([H]) ->
+    lists:flatten(io_lib:format("[~B]", [H])); % base-case
+condense_inner([H|Rest]) ->
+    condense_inner(Rest, #condense{start=H, last=H}). % call recursive
+
+-spec condense_inner(ordsets:ordset(partition_id())|[partition_id()],
+                     #condense{}) -> any().
+condense_inner([], #condense{start=Start, last=Last, acc=Acc}) ->
+    Range = case Last > Start of % flush last range
+                true ->
+                    lists:flatten(io_lib:format("~B-~B]", [Start, Last]));
+                false ->
+                    lists:flatten(io_lib:format("~B]", [Start]))
+                end,
+    lists:reverse([Range|Acc]);
+condense_inner([H|Rest], #condense{start=Start, last=Last, acc=Acc} = State) ->
+    case H == (Last + 1) of % main code path
+        true ->
+            State2 = State#condense{last = H},
+            condense_inner(Rest, State2);
+        false ->
+            Range = case Last > Start of
+                true ->
+                    lists:flatten(io_lib:format("~B-~B,", [Start, Last]));
+                false ->
+                    lists:flatten(io_lib:format("~B,", [Start]))
+                end,
+            State2 = State#condense{start=H, last=H, acc=[Range|Acc]},
+            condense_inner(Rest, State2)
+    end.

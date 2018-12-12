@@ -12,8 +12,7 @@
 
 -record(view_merge, {
     keys = nil,
-    rereduce_fun = nil,
-    make_row_fun = nil
+    rereduce_fun = nil
 }).
 
 -record(set_view_spec, {

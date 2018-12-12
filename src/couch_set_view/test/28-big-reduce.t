@@ -38,8 +38,6 @@ main(_) ->
 
 
 test() ->
-    etap:diag("Testing rollback of indexes"),
-
     couch_set_view_test_util:start_server(test_set_name()),
     ReduceValue = setup_test(5000),
 

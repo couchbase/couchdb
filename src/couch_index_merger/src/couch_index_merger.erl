@@ -18,12 +18,11 @@
 
 % Only needed for indexer implementation. Those functions should perhaps go into
 % a utils module.
-% The functions open_db/3, dec_counter/1, should_check_rev/2, get_ddoc/2 are
-% also needed by this file
--export([open_db/3, collect_rows/4, collect_row_count/6,
+% The functions dec_counter/1, should_check_rev/2 are also needed by this file
+-export([collect_rows/4, collect_row_count/6,
     merge_indexes_no_acc/2, merge_indexes_no_limit/1, handle_skip/1,
-    dec_counter/1, get_group_id/2, void_event/1, should_check_rev/2,
-    ddoc_rev_str/1, ddoc_unchanged/2, ddoc_not_found_msg/2]).
+    dec_counter/1, void_event/1, should_check_rev/2,
+    ddoc_unchanged/2, ddoc_not_found_msg/2]).
 
 -include("couch_db.hrl").
 -include_lib("couch_index_merger/include/couch_index_merger.hrl").
@@ -39,25 +38,51 @@
 
 -define(RETRY_INTERVAL, 1000).
 -define(MAX_RETRIES, 30).
+% Default timeout for the internal HTTP requests (during scatter phase)
+-define(DEFAULT_INTERNAL_HTTP_TIMEOUT, 60000).
 
 
 query_index(Mod, #index_merge{http_params = HttpParams, user_ctx = UserCtx} = IndexMergeParams) when HttpParams =/= nil, UserCtx =/= nil ->
     #index_merge{
         indexes = Indexes,
-        user_ctx = UserCtx,
-        conn_timeout = Timeout
+        user_ctx = UserCtx
     } = IndexMergeParams,
-    {ok, DDoc, IndexName} = get_first_ddoc(Indexes, UserCtx, Timeout),
+    {ok, DDoc, IndexName} = get_first_ddoc(Indexes, UserCtx),
     query_index_loop(Mod, IndexMergeParams, DDoc, IndexName, ?MAX_RETRIES).
 
 % Special and simpler case, trigger a lighter and faster code path.
-query_index(Mod, #index_merge{indexes = [#set_view_spec{}]} = Params, Req) ->
+query_index(Mod, #index_merge{indexes = [#set_view_spec{}]} = Params0, Req) ->
     #index_merge{
         indexes = Indexes,
-        conn_timeout = Timeout,
-        ddoc_revision = DesiredDDocRevision
-    } = Params,
-    {ok, DDoc, _} = get_first_ddoc(Indexes, Req#httpd.user_ctx, Timeout),
+        ddoc_revision = DesiredDDocRevision,
+        conn_timeout = Timeout
+    } = Params0,
+    {ok, DDoc, _} = get_first_ddoc(Indexes, Req#httpd.user_ctx),
+    case Req#httpd.method of
+    'GET' ->
+        Params = Params0#index_merge{
+            start_timer = os:timestamp()
+        };
+    'POST' ->
+        Params = Params0,
+        % Force close the socket conservatively if we
+        % do not reply in the stipulated time period
+        try
+            case Timeout =/= nil of
+            true ->
+                {ok, TRef} = timer:kill_after(Timeout),
+                % The query executes in the same process
+                put(tref, TRef);
+            false ->
+                ok
+            end
+        catch
+            Error ->
+                ?LOG_ERROR("Could not enable socket watchdog "
+                           "for design document `~s` err:  ~p",
+                           [?LOG_USERDATA(DDoc#doc.id), ?LOG_USERDATA(Error)])
+        end
+    end,
     DDocRev = ddoc_rev(DDoc),
     case should_check_rev(Params, DDoc) of
     true ->
@@ -66,12 +91,12 @@ query_index(Mod, #index_merge{indexes = [#set_view_spec{}]} = Params, Req) ->
             ok;
         DDocRev ->
             ok;
-        OtherDDocRev ->
+        _ ->
             ?LOG_ERROR("View merger, revision mismatch for design document `~s',"
-                       " wanted ~s, got ~s",
-                       [DDoc#doc.id,
+                       " revision on local node ~s, revision on remote node ~s",
+                       [?LOG_USERDATA(DDoc#doc.id),
                         rev_str(DesiredDDocRevision),
-                        rev_str(OtherDDocRev)]),
+                        rev_str(DDocRev)]),
             throw({error, revision_mismatch})
         end;
     false ->
@@ -82,11 +107,11 @@ query_index(Mod, #index_merge{indexes = [#set_view_spec{}]} = Params, Req) ->
 query_index(Mod, IndexMergeParams0, #httpd{user_ctx = UserCtx} = Req) ->
     #index_merge{
         indexes = Indexes,
-        conn_timeout = Timeout,
         extra = Extra
     } = IndexMergeParams0,
-    {ok, DDoc, IndexName} = get_first_ddoc(Indexes, UserCtx, Timeout),
+    {ok, DDoc, IndexName} = get_first_ddoc(Indexes, UserCtx),
     IndexMergeParams = IndexMergeParams0#index_merge{
+        start_timer = os:timestamp(),
         user_ctx = UserCtx,
         http_params = Mod:parse_http_params(Req, DDoc, IndexName, Extra)
     },
@@ -103,10 +128,9 @@ query_index_loop(Mod, IndexMergeParams, DDoc, IndexName, N) ->
         timer:sleep(?RETRY_INTERVAL),
         #index_merge{
             indexes = Indexes,
-            user_ctx = UserCtx,
-            conn_timeout = Timeout
+            user_ctx = UserCtx
         } = IndexMergeParams,
-        {ok, DDoc2, IndexName} = get_first_ddoc(Indexes, UserCtx, Timeout),
+        {ok, DDoc2, IndexName} = get_first_ddoc(Indexes, UserCtx),
         query_index_loop(Mod, IndexMergeParams, DDoc2, IndexName, N - 1)
     end.
 
@@ -114,7 +138,8 @@ query_index_loop(Mod, IndexMergeParams, DDoc, IndexName, N) ->
 do_query_index(Mod, IndexMergeParams, DDoc, IndexName) ->
     #index_merge{
        indexes = Indexes, callback = Callback, user_acc = UserAcc,
-       ddoc_revision = DesiredDDocRevision, user_ctx = UserCtx
+       ddoc_revision = DesiredDDocRevision, user_ctx = UserCtx,
+       start_timer = StartTimer
     } = IndexMergeParams,
 
     DDocRev = ddoc_rev(DDoc),
@@ -125,12 +150,12 @@ do_query_index(Mod, IndexMergeParams, DDoc, IndexName) ->
             ok;
         DDocRev ->
             ok;
-        OtherDDocRev ->
+        _ ->
             ?LOG_ERROR("View merger, revision mismatch for design document `~s',"
-                       " wanted ~s, got ~s",
-                       [DDoc#doc.id,
+                       " revision on local node ~s, revision on remote node ~s",
+                       [?LOG_USERDATA(DDoc#doc.id),
                         rev_str(DesiredDDocRevision),
-                        rev_str(OtherDDocRev)]),
+                        rev_str(DDocRev)]),
             throw({error, revision_mismatch})
         end;
     false ->
@@ -205,12 +230,12 @@ do_query_index(Mod, IndexMergeParams, DDoc, IndexName) ->
             case DesiredDDocRevision of
             auto ->
                 throw(retry);
-            OtherDDocRev2 ->
+            _ ->
                 ?LOG_ERROR("View merger, revision mismatch for design document `~s',"
-                           " wanted ~s, got ~s",
-                           [DDoc#doc.id,
+                           " revision on local node ~s, revision on remote node ~s",
+                           [?LOG_USERDATA(DDoc#doc.id),
                             rev_str(DesiredDDocRevision),
-                            rev_str(OtherDDocRev2)]),
+                            rev_str(DDocRev)]),
                 throw({error, revision_mismatch})
             end;
         {ok, Resp} ->
@@ -219,7 +244,18 @@ do_query_index(Mod, IndexMergeParams, DDoc, IndexName) ->
             Resp
         end
     after
+        DDocId = DDoc#doc.id,
+        case StartTimer of
+        nil ->
+            start_timer_not_set;
+        _ ->
+            TimeElapsed = timer:now_diff(
+                os:timestamp(), StartTimer) / 1000,
+            couch_view_merger:update_timing_stat(
+                DDocId, IndexName, TimeElapsed)
+        end,
         unlink(Queue),
+        erlang:erase(reduce_context),
         lists:foreach(fun erlang:unlink/1, Folders),
         % Important, shutdown the queue first. This ensures any blocked
         % HTTP folders (bloked by queue calls) will get an error/exit and
@@ -261,15 +297,10 @@ clean_exit_messages(FinalReason) ->
     end.
 
 
-get_first_ddoc([], _UserCtx, _Timeout) ->
+get_first_ddoc([], _UserCtx) ->
     throw({error, <<"A view spec can not consist of merges exclusively.">>});
 
-get_first_ddoc([#simple_index_spec{ddoc_id = nil} = Spec | _],
-        _UserCtx, _Timeout) ->
-    #simple_index_spec{index_name = <<"_all_docs">>} = Spec,
-    {ok, nil, <<"_all_docs">>};
-
-get_first_ddoc([#set_view_spec{} = Spec | _], _UserCtx, _Timeout) ->
+get_first_ddoc([#set_view_spec{} = Spec | _], _UserCtx) ->
     #set_view_spec {
         name = SetName, ddoc_id = Id, view_name = ViewName
     } = Spec,
@@ -285,24 +316,8 @@ get_first_ddoc([#set_view_spec{} = Spec | _], _UserCtx, _Timeout) ->
         throw({not_found, ddoc_not_found_msg(?master_dbname(SetName), Id)})
     end;
 
-get_first_ddoc([#simple_index_spec{} = Spec | _], UserCtx, Timeout) ->
-    #simple_index_spec{
-        database = DbName, ddoc_database = DDocDbName, ddoc_id = Id,
-        index_name = IndexName
-    } = Spec,
-    {ok, Db} = case DDocDbName of
-    nil ->
-        open_db(DbName, UserCtx, Timeout);
-    _ when is_binary(DDocDbName) ->
-        open_db(DDocDbName, UserCtx, Timeout)
-    end,
-    {ok, DDoc} = get_ddoc(Db, Id),
-    close_db(Db),
-
-    {ok, DDoc, IndexName};
-
-get_first_ddoc([_MergeSpec | Rest], UserCtx, Timeout) ->
-    get_first_ddoc(Rest, UserCtx, Timeout).
+get_first_ddoc([_MergeSpec | Rest], UserCtx) ->
+    get_first_ddoc(Rest, UserCtx).
 
 
 open_db(<<"http://", _/binary>> = DbName, _UserCtx, Timeout) ->
@@ -336,11 +351,6 @@ maybe_add_trailing_slash(Url) ->
     _ ->
         Url ++ "/"
     end.
-
-close_db(#httpdb{}) ->
-    ok;
-close_db(Db) ->
-    couch_db:close(Db).
 
 get_ddoc(#httpdb{} = HttpDb, Id) ->
     #httpdb{
@@ -378,19 +388,6 @@ get_ddoc(Db, Id) ->
         throw({not_found, ddoc_not_found_msg(Db#db.name, Id)})
     end.
 
-% Returns the group ID of the indexer group that contains the Design Document
-% In Couchbase the Design Document is stored in a so-called master database.
-% This is Couchbase specific
-get_group_id(nil, DDocId) ->
-    DDocId;
-get_group_id(DDocDbName, DDocId) when is_binary(DDocDbName) ->
-    DDocDb = case couch_db:open_int(DDocDbName, []) of
-    {ok, DDocDb1} ->
-        DDocDb1;
-    {not_found, _} ->
-        throw(ddoc_db_not_found)
-    end,
-    {DDocDb, DDocId}.
 
 db_uri(#httpdb{url = Url}) ->
     db_uri(Url);
@@ -572,60 +569,21 @@ dec_counter(0) -> 0;
 dec_counter(N) -> N - 1.
 
 
-index_folder(Mod, #simple_index_spec{database = <<"http://", _/binary>>} =
-        IndexSpec, MergeParams, _UserCtx, DDoc, Queue, _FoldFun) ->
-    http_index_folder(Mod, IndexSpec, MergeParams, DDoc, Queue);
-
-index_folder(Mod, #simple_index_spec{database = <<"https://", _/binary>>} =
-        IndexSpec, MergeParams, _UserCtx, DDoc, Queue, _FoldFun) ->
-    http_index_folder(Mod, IndexSpec, MergeParams, DDoc, Queue);
-
 index_folder(Mod, #merged_index_spec{} = IndexSpec,
-        MergeParams, _UserCtx, DDoc, Queue, _FoldFun) ->
+        MergeParams0, _UserCtx, DDoc, Queue, _FoldFun) ->
+    MergeParams = case MergeParams0#index_merge.conn_timeout of
+    nil ->
+        MergeParams0#index_merge{
+              conn_timeout = ?DEFAULT_INTERNAL_HTTP_TIMEOUT
+        };
+    _ ->
+        MergeParams0
+    end,
     http_index_folder(Mod, IndexSpec, MergeParams, DDoc, Queue);
 
 index_folder(_Mod, #set_view_spec{} = ViewSpec, MergeParams,
         UserCtx, DDoc, Queue, FoldFun) ->
-    FoldFun(nil, ViewSpec, MergeParams, UserCtx, DDoc, Queue);
-
-index_folder(_Mod, IndexSpec, MergeParams, UserCtx, DDoc, Queue, FoldFun) ->
-    #simple_index_spec{
-        database = DbName, ddoc_database = DDocDbName, ddoc_id = DDocId
-    } = IndexSpec,
-    case couch_db:open(DbName, [{user_ctx, UserCtx}]) of
-    {ok, Db} ->
-        try
-            FoldFun(Db, IndexSpec, MergeParams, UserCtx, DDoc, Queue)
-        catch
-        queue_shutdown ->
-            ok;
-        {not_found, Reason} when Reason =:= missing; Reason =:= deleted ->
-            ok = couch_view_merger_queue:queue(
-                Queue, {error, ?LOCAL, ddoc_not_found_msg(DbName, DDocId)});
-        ddoc_db_not_found ->
-            ok = couch_view_merger_queue:queue(
-                Queue, {error, ?LOCAL, ddoc_not_found_msg(DDocDbName, DDocId)});
-        _Tag:Error ->
-            Stack = erlang:get_stacktrace(),
-            ?LOG_ERROR("Caught unexpected error while serving "
-                       "index query for `~s/~s`:~n~p", [DbName, DDocId, Stack]),
-            couch_view_merger_queue:queue(Queue, parse_error(Error))
-        after
-            ok = couch_view_merger_queue:done(Queue),
-            couch_db:close(Db)
-        end;
-    {not_found, _} ->
-        ok = couch_view_merger_queue:queue(
-            Queue, {error, ?LOCAL, db_not_found_msg(DbName)}),
-        ok = couch_view_merger_queue:done(Queue)
-    end.
-
-
-% `invalid_value` only happens on reduces
-parse_error({invalid_value, Reason}) ->
-    {error, ?LOCAL, to_binary(Reason)};
-parse_error(Error) ->
-    {error, ?LOCAL, to_binary(Error)}.
+    FoldFun(nil, ViewSpec, MergeParams, UserCtx, DDoc, Queue).
 
 
 % Fold function for remote indexes
@@ -722,8 +680,7 @@ run_http_index_folder(Mod, IndexSpec, MergeParams, DDoc, Queue) ->
     end.
 
 
-http_index_folder_req_details(Mod, #merged_index_spec{} = IndexSpec,
-        MergeParams, DDoc) ->
+http_index_folder_req_details(Mod, IndexSpec, MergeParams, DDoc) ->
     #merged_index_spec{
         url = MergeUrl0,
         ejson_spec = {EJson}
@@ -733,7 +690,7 @@ http_index_folder_req_details(Mod, #merged_index_spec{} = IndexSpec,
         http_params = ViewArgs,
         extra = Extra
     } = MergeParams,
-    {ok, HttpDb} = couch_index_merger:open_db(MergeUrl0, nil, Timeout),
+    {ok, HttpDb} = open_db(MergeUrl0, nil, Timeout),
     #httpdb{
         url = Url,
         lhttpc_options = Options,
@@ -746,7 +703,7 @@ http_index_folder_req_details(Mod, #merged_index_spec{} = IndexSpec,
     EJson2 = case couch_index_merger:should_check_rev(MergeParams, DDoc) of
     true ->
         P = fun (Tuple) -> element(1, Tuple) =/= <<"ddoc_revision">> end,
-        [{<<"ddoc_revision">>, couch_index_merger:ddoc_rev_str(DDoc)} |
+        [{<<"ddoc_revision">>, ddoc_rev_str(DDoc)} |
             lists:filter(P, EJson1)];
     false ->
         EJson1
@@ -754,42 +711,7 @@ http_index_folder_req_details(Mod, #merged_index_spec{} = IndexSpec,
 
     Body = {EJson2},
     put(from_url, ?l2b(Url)),
-    {MergeUrl, "POST", Headers, ?JSON_ENCODE(Body), Options};
-
-% #simple_index_spec{} is only used for _all_docs and the old spatial views
-http_index_folder_req_details(Mod, #simple_index_spec{} = IndexSpec,
-        MergeParams, _DDoc) ->
-    #simple_index_spec{
-        database = DbUrl,
-        ddoc_id = DDocId,
-        index_name = ViewName
-    } = IndexSpec,
-    #index_merge{
-        conn_timeout = Timeout,
-        http_params = ViewArgs,
-        extra = #view_merge{
-            keys = Keys
-        }
-    } = MergeParams,
-    {ok, HttpDb} = couch_index_merger:open_db(DbUrl, nil, Timeout),
-    #httpdb{
-        url = Url,
-        lhttpc_options = Options,
-        headers = Headers
-    } = HttpDb,
-    ViewUrl = Url ++ case ViewName of
-    <<"_all_docs">> ->
-        "_all_docs";
-    _ ->
-        couch_httpd:quote(DDocId) ++ "/_spatial/" ++ couch_httpd:quote(ViewName)
-    end ++ Mod:view_qs(ViewArgs, MergeParams),
-    put(from_url, DbUrl),
-    case Keys of
-    nil ->
-        {ViewUrl, get, [], [], Options};
-    _ ->
-        {ViewUrl, post, Headers, ?JSON_ENCODE({[{<<"keys">>, Keys}]}), Options}
-    end.
+    {MergeUrl, "POST", Headers, ?JSON_ENCODE(Body), Options}.
 
 
 stream_data(Pid, Timeout) ->

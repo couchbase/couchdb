@@ -35,8 +35,6 @@ main(_) ->
             etap:diag(io_lib:format("Test died abnormally: ~p", [Other])),
             etap:bail(Other)
     end,
-    %init:stop(),
-    %receive after infinity -> ok end,
     ok.
 
 
@@ -59,7 +57,7 @@ test_partition_versions_update() ->
     setup_test(),
     {auth, User, Passwd} = cb_auth_info:get(),
     {ok, Pid} = couch_dcp_client:start(
-            test_set_name(), test_set_name(), User, Passwd, 20*1024*1024),
+            test_set_name(), test_set_name(), User, Passwd, 20*1024*1024, 0),
 
     {ok, InitialFailoverLog1} = couch_dcp_client:get_failover_log(Pid, 1),
     {ok, InitialFailoverLog2} = couch_dcp_client:get_failover_log(Pid, 2),

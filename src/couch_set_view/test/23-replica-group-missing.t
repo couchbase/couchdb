@@ -30,7 +30,6 @@ main(_) ->
             etap:end_tests();
         Other ->
             etap:diag(io_lib:format("Test died abnormally: ~p", [Other])),
-            io:format(standard_error, "Test died abnormally: ~p", [Other]),
             etap:bail(Other)
     end,
     ok.
@@ -83,7 +82,6 @@ test() ->
     etap:is(true, filelib:is_file(RepIndexFile), "Replica index file recreated"),
 
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
-    ok = timer:sleep(1000),
     couch_set_view_test_util:stop_server(),
     ok.
 

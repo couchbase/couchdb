@@ -123,7 +123,7 @@
 -type set_view_fold_reduce_fun() :: fun((set_view_key(), Reduction::term(), Acc::term()) ->
                                     {'ok' | 'stop', FinalAcc::term()}).
 
--type view_btree_op()            :: {'insert', Key::binary(), Value::binary()} |
+-type view_op()                  :: {'insert', Key::binary(), Value::binary()} |
                                     {'remove', Key::binary(), 'nil'}.
 
 -type view_btree_less_fun()      :: fun((binary(), binary()) -> boolean()).
@@ -199,7 +199,8 @@
     update_errors = 0       :: non_neg_integer(),
     update_history = []     :: [ejson_object()],
     compaction_history = [] :: [ejson_object()],
-    cleanup_history = []    :: [ejson_object()]
+    cleanup_history = []    :: [ejson_object()],
+    dup_partitions_counter = 0 :: non_neg_integer()
 }).
 
 -record(set_view_debug_info, {
@@ -263,7 +264,8 @@
     category = nil                          :: 'nil' | 'prod' | 'dev',
     stats_ets = nil                         :: atom(),
     header_pos = 0                          :: non_neg_integer(),
-    dcp_pid = nil                           :: 'nil' | pid()
+    dcp_pid = nil                           :: 'nil' | pid(),
+    index_xattr_on_deleted_docs = false     :: boolean()
 }).
 
 -record(set_view_updater_stats, {
@@ -299,4 +301,10 @@
     % The spatial indexer stores the enclosing bounding box of the data
     % within the file
     extra = nil
+}).
+
+-record(condense, {
+    start = -1,
+    last = -1,
+    acc = ["["]
 }).

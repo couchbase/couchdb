@@ -17,8 +17,15 @@
         couch_index_merger,
         couch_view_merger,
         couch_view_merger_queue,
-        couch_httpd_view_merger
+        couch_httpd_view_merger,
+        couch_index_app,
+        couch_index_sup,
+        couch_query_logger
     ]},
-    {registered, []},
+    {registered, [
+        couch_view_merger_queue,
+        couch_query_logger
+    ]},
+    {mod, {couch_index_app, []}},
     {applications, [kernel, stdlib]}
 ]}.

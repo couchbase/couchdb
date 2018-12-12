@@ -173,7 +173,6 @@ test() ->
     verify_btrees_1(Group8),
 
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
-    ok = timer:sleep(1000),
     couch_set_view_test_util:stop_server(),
     ok.
 
@@ -391,7 +390,7 @@ verify_btrees_1(Group) ->
             end,
             true = (P < num_set_partitions()),
             V = ?JSON_ENCODE(doc_id(I)),
-            [ExpectedKv] = couch_set_view_updater:convert_back_index_kvs_to_binary(
+            [ExpectedKv] = mapreduce_view:convert_back_index_kvs_to_binary(
                 [{doc_id(I), {P, [{0, [V]}]}}], []),
             case ExpectedKv =:= Kv of
             true ->
@@ -409,7 +408,7 @@ verify_btrees_1(Group) ->
         View0Btree,
         fun(Kv, _, Acc) ->
             V = ?JSON_ENCODE(Acc),
-            ExpectedKeyDocId = couch_set_view_util:encode_key_docid(
+            ExpectedKeyDocId = mapreduce_view:encode_key_docid(
                 ?JSON_ENCODE(doc_id(Acc)), doc_id(Acc)),
             ExpectedKv = {ExpectedKeyDocId, <<(Acc rem 64):16, (size(V)):24, V/binary>>},
             case ExpectedKv =:= Kv of

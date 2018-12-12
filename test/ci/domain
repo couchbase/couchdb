@@ -1,0 +1,56 @@
+#!/bin/bash
+
+if [ ! -f ~/.cienv ]; then
+cat > ~/.cienv <<EOF
+    export CINAME=ci-views
+    export WORKSPACE=/opt/build
+    export RELEASE=5.0.0
+    export MANIFEST="couchbase-server/spock.xml"
+    export MODE="test"
+    export BRANCH="unstable"
+    #export WATCHERS="somebody@couchbase.com nobody@couchbase.com"
+    #export PEGGED=1979          # Set to fix base build, 0 means latest
+    #export GERRIT="90331 90332" # Pick up uncommitted changes from gerrit
+EOF
+fi
+source ~/.cienv
+
+if [ "$WORKSPACE" = "" ]; then
+  echo 'WORKSPACE not set'
+  exit 2
+fi
+
+if [ "$MODE" = "" ]; then
+  echo MODE must be set to 'test'
+  exit 2
+fi
+
+if [ "$MANIFEST" == "" ]; then
+  echo MANIFEST must be set
+fi
+
+if [ "$RELEASE" == "" ]; then
+  echo RELEASE must be set
+fi
+
+cd /var/www
+(ls -t logs-*.tar* | head -n 30; ls -t logs-*.tar*) | sort | uniq -u | xargs -r rm
+(ls -t make-*.log | head -n 3; ls -t make-*.log) | sort | uniq -u | xargs -r rm
+export TS="`date +%d.%m.%Y-%H.%M`"
+echo '<html><head></head><body><pre>' > /var/www/views-current.html
+chmod a+rx /var/www/views-current.html
+dobuild clean 1>>/var/www/views-current.html 2>&1; rc=$?
+test $rc -eq 0 && dotest 1>>/var/www/views-current.html 2>&1; rc=$?
+echo '</pre>' >> /var/www/views-current.html
+if [ $rc -eq 0 ]; then status=pass; else status=fail; fi
+echo '<pre>' >> /var/www/views-current.html
+gzip ${WORKSPACE}/logs.tar 2>&1 1>/dev/null
+echo "Version: <a href='versions-$TS.cfg'>versions-$TS.cfg</a>" >> /var/www/views-current.html
+echo "Build Log: <a href='make-$TS.log'>make-$TS.log</a>" >> /var/www/views-current.html
+echo "Server Log: <a href='logs-$TS.tar.gz'>logs-$TS.tar.gz</a>" >> /var/www/views-current.html
+echo "</pre><h1>Finished</h1></body></html>" >> /var/www/views-current.html
+cp  /var/www/views-current.html /var/www/views-$TS.$status.html
+mv ${WORKSPACE}/make.log /var/www/make-$TS.log
+mv ${WORKSPACE}/logs.tar.gz /var/www/logs-$TS.tar.gz
+mv ${WORKSPACE}/versions.cfg /var/www/versions-$TS.cfg
+dowatch

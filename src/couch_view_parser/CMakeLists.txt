@@ -1,4 +1,3 @@
-FILE(GLOB SRC *.erl)
 SET(COUCH_VIEW_PARSER_VERSION "1.0")
 SET(COUCH_VIEW_PARSER_PREFIX ${CMAKE_ERL_LIB_INSTALL_PREFIX}/couch_view_parser-${COUCH_VIEW_PARSER_VERSION})
 SET(COUCH_VIEW_PARSER_EBIN_PREFIX ${COUCH_VIEW_PARSER_PREFIX}/ebin)
@@ -24,6 +23,7 @@ SET(COUCH_VIEW_YAJL_SRC couch_view_parser.cc
     yajl/yajl_version.c)
 
 INCLUDE_DIRECTORIES(BEFORE ${CMAKE_CURRENT_SOURCE_DIR}
+                           ${Platform_SOURCE_DIR}/include
                            ${ERLANG_INCLUDE_PATH})
 
 
@@ -32,14 +32,14 @@ ADD_LIBRARY(couch_view_parser_nif MODULE ${COUCH_VIEW_YAJL_SRC})
 SET_TARGET_PROPERTIES(couch_view_parser_nif PROPERTIES PREFIX "")
 
 TARGET_LINK_LIBRARIES(couch_view_parser_nif ${COUCHBASE_UNRESOLVED}
-                                            ${COUCHBASE_MATH_LIBS})
+                                   ${COUCHBASE_MATH_LIBS} platform)
 SET_TARGET_PROPERTIES(couch_view_parser_nif PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/priv"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/priv"
 )
 
 
-ERL_BUILD("couch_view_parser" ${SRC})
+ERL_BUILD(APPNAME "couch_view_parser" SOURCES couch_view_parser.erl)
 
 INSTALL(TARGETS couch_view_parser_nif
         DESTINATION ${COUCH_VIEW_PARSER_PRIV_PREFIX})

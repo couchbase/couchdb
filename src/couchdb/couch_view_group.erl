@@ -90,7 +90,7 @@ init({{_, DbName, _} = InitArgs, ReturnPid, Ref}) ->
             ?LOG_INFO("Started view group `~s`, signature `~s`, "
                       "database `~s`, ddoc database `~s`",
                       [Group#group.name, couch_util:to_hex(Group#group.sig),
-                       DbName, Group#group.ddoc_db_name]),
+                       ?LOG_USERDATA(DbName), ?LOG_USERDATA(Group#group.ddoc_db_name)]),
             {ok, #group_state{
                     db_name=DbName,
                     init_args=InitArgs,
@@ -163,7 +163,7 @@ handle_call({start_compact, CompactFun}, _From, #group_state{compactor_pid=nil}
         group = #group{name = GroupId, sig = GroupSig, ddoc_db_name = DDocDbName} = Group,
         init_args = {RootDir, DbName, _}
     } = State,
-    ?LOG_INFO("View index compaction starting for ~s ~s", [DbName, GroupId]),
+    ?LOG_INFO("View index compaction starting for ~s ~s", [?LOG_USERDATA(DbName), ?LOG_USERDATA(GroupId)]),
     {ok, Db} = couch_db:open_int(DbName, []),
     {ok, Fd} = open_index_file(compact, RootDir, DDocDbName, GroupSig),
     NewGroup = reset_file(Db, Fd, DbName, Group),
@@ -185,7 +185,7 @@ handle_call({compact_done, #group{current_seq=NewSeq} = NewGroup}, _From,
         ref_counter = RefCounter
     } = State,
 
-    ?LOG_INFO("View index compaction complete for ~s ~s", [DbName, GroupId]),
+    ?LOG_INFO("View index compaction complete for ~s ~s", [?LOG_USERDATA(DbName), ?LOG_USERDATA(GroupId)]),
     FileName = index_file_name(RootDir, DDocDbName, GroupSig),
     ok = couch_file:only_snapshot_reads(OldFd),
     ok = couch_file:delete(RootDir, FileName),
@@ -221,7 +221,7 @@ handle_call({compact_done, NewGroup}, _From, State) ->
         init_args={_RootDir, DbName, _}
     } = State,
     ?LOG_INFO("View index compaction still behind for ~s ~s -- current: ~p " ++
-        "compact: ~p", [DbName, GroupId, CurrentSeq, NewGroup#group.current_seq]),
+        "compact: ~p", [?LOG_USERDATA(DbName), ?LOG_USERDATA(GroupId), CurrentSeq, NewGroup#group.current_seq]),
     {reply, update, State};
 
 handle_call(cancel_compact, _From, #group_state{compactor_pid = nil} = State) ->
@@ -249,7 +249,7 @@ handle_cast({partial_update, Pid, NewGroup}, #group_state{updater_pid=Pid}
     case NewSeq > Group#group.current_seq of
     true ->
         ?LOG_INFO("checkpointing view update at seq ~p for ~s ~s", [NewSeq,
-            DbName, NewGroup#group.name]),
+            ?LOG_USERDATA(DbName), ?LOG_USERDATA(NewGroup#group.name)]),
         if not WaitingCommit ->
             erlang:send_after(1000, self(), delayed_commit);
         true -> ok
@@ -272,7 +272,8 @@ handle_cast({ddoc_updated, NewSig}, State) ->
               "  new signature:   ~s~n"
               "  shutdown flag:   ~s~n"
               "  waiting clients: ~p~n",
-              [DDocId, couch_util:to_hex(CurSig), DbName, DDocDbName,
+              [?LOG_USERDATA(DDocId), couch_util:to_hex(CurSig),
+               ?LOG_USERDATA(DbName), ?LOG_USERDATA(DDocDbName),
                couch_util:to_hex(NewSig), State#group_state.shutdown, length(Waiters)]),
     case NewSig of
     CurSig ->
@@ -374,8 +375,8 @@ terminate(Reason, State) ->
     } = State,
     ?LOG_INFO("View group `~s`, signature `~s`, database `~s`, ddoc database `~s`,"
               " terminating with reason: ~p",
-              [Group#group.name, couch_util:to_hex(Group#group.sig),
-               DbName, Group#group.ddoc_db_name, Reason]),
+              [?LOG_USERDATA(Group#group.name), couch_util:to_hex(Group#group.sig),
+               ?LOG_USERDATA(DbName), ?LOG_USERDATA(Group#group.ddoc_db_name), Reason]),
     reply_all(State, Reason),
     couch_util:shutdown_sync(Update),
     couch_util:shutdown_sync(Compact),
@@ -637,7 +638,7 @@ reset_group(#group{views=Views}=Group) ->
     Group#group{fd=nil, current_seq=0, id_btree=nil, views=Views2}.
 
 reset_file(Db, Fd, DbName, #group{sig=Sig,name=Name} = Group) ->
-    ?LOG_DEBUG("Resetting group index \"~s\" in db ~s", [Name, DbName]),
+    ?LOG_DEBUG("Resetting group index \"~s\" in db ~s", [?LOG_USERDATA(Name), ?LOG_USERDATA(DbName)]),
     ok = couch_file:truncate(Fd, 0),
     {ok, _Pos} = couch_file:write_header(Fd, {Sig, nil}),
     init_group(Db, Fd, reset_group(Group), nil).
@@ -680,8 +681,8 @@ init_group(Db, Fd, #group{views=Views0} = Group, IndexHeader) ->
                                              " reduce function for view `~s'~n"
                                              "  reason:                ~s~n"
                                              "  input key-value pairs: ~p~n",
-                                             [DbName, DDocId, ViewName,
-                                              couch_util:to_binary(Reason), KVs]),
+                                             [?LOG_USERDATA(DbName), ?LOG_USERDATA(DDocId), ?LOG_USERDATA(ViewName),
+                                              couch_util:to_binary(Reason), ?LOG_USERDATA(KVs)]),
                         throw(Error)
                     end;
                 (rereduce, Reds) ->
@@ -695,12 +696,12 @@ init_group(Db, Fd, #group{views=Views0} = Group, IndexHeader) ->
                                              " rereduce function for view `~s'~n"
                                              "  reason:           ~s~n"
                                              "  input reductions: ~p~n",
-                                             [DbName, DDocId, ViewName,
-                                              couch_util:to_binary(Reason), UserReds]),
+                                             [?LOG_USERDATA(DbName), ?LOG_USERDATA(DDocId), ?LOG_USERDATA(ViewName),
+                                              couch_util:to_binary(Reason), ?LOG_USERDATA(UserReds)]),
                         throw(Error)
                     end
                 end,
-            
+
             case couch_util:get_value(<<"collation">>, Options, <<"default">>) of
             <<"default">> ->
                 Less = fun couch_view:less_json_ids/2;

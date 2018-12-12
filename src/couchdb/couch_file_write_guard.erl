@@ -52,6 +52,29 @@ init([]) ->
     {ok, true}.
 
 
+ets_add(Filepath, Pid) ->
+    case ets:insert_new(couch_files_by_name, {Filepath, Pid}) of
+    true ->
+        Ref = erlang:monitor(process, Pid),
+        true = ets:insert_new(couch_files_by_pid, {Pid, Filepath, Ref}),
+        ok;
+    false ->
+        already_added_to_file_write_guard
+    end.
+
+
+ets_remove(Pid) ->
+    case ets:lookup(couch_files_by_pid, Pid) of
+    [{Pid, Filepath, Ref}] ->
+        true = demonitor(Ref, [flush]),
+        true = ets:delete(couch_files_by_name, Filepath),
+        true = ets:delete(couch_files_by_pid, Pid),
+        {reply, ok, true};
+    _ ->
+        {reply, removing_unadded_file, true}
+        end.
+
+
 terminate(_Reason, _Srv) ->
     % kill all files we are guarding, then wait for their 'DOWN'
     [exit(Pid, kill) || {_, Pid} <-
@@ -62,27 +85,28 @@ terminate(_Reason, _Srv) ->
 
 
 handle_call({add, Filepath, Pid}, _From, true) ->
-    case ets:insert_new(couch_files_by_name, {Filepath, Pid}) of
-    true ->
-        Ref = erlang:monitor(process, Pid),
-        true = ets:insert_new(couch_files_by_pid, {Pid, Filepath, Ref}),
+    case ets_add(Filepath, Pid) of
+    ok ->
         {reply, ok, true};
-    false ->
-        {reply, already_added_to_file_write_guard, true}
+    already_added_to_file_write_guard ->
+        [{Filepath, ExistingPid}] = ets:lookup(couch_files_by_name, Filepath),
+        case is_process_alive(ExistingPid) of
+        true ->
+            ?LOG_ERROR("Unable to add new writer pid: `~p` for `~s` as there"
+                       " is already an active writer process pid: `~p`",
+                       [ExistingPid, Filepath, Pid]),
+            {reply, already_added_to_file_write_guard, true};
+        false ->
+            {reply, ok, true} = ets_remove(ExistingPid),
+            ok = ets_add(Filepath, Pid),
+            {reply, ok, true}
+        end
     end;
 handle_call({add, _Filepath, _Pid}, _From, false) ->
     % no-op for testing
     {reply, ok, false};
 handle_call({remove, Pid}, _From, true) ->
-    case ets:lookup(couch_files_by_pid, Pid) of
-    [{Pid, Filepath, Ref}] ->
-        true = demonitor(Ref, [flush]),
-        true = ets:delete(couch_files_by_name, Filepath),
-        true = ets:delete(couch_files_by_pid, Pid),
-        {reply, ok, true};
-    _ ->
-        {reply, removing_unadded_file, true}
-    end;
+    ets_remove(Pid);
 handle_call({remove, _Pid}, _From, false) ->
     % no-op for testing
     {reply, ok, false};

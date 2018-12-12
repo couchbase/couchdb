@@ -96,10 +96,9 @@ handle_req(Req) ->
 
 
 apply_http_config(Req, Body, MergeParams) ->
-    DefConnTimeout = MergeParams#index_merge.conn_timeout,
-    QsTimeout = qs_json_value(Req, "connection_timeout", DefConnTimeout),
+    QsTimeout = qs_json_value(Req, "connection_timeout", nil),
     ConnTimeout = case get_value(<<"connection_timeout">>, Body, QsTimeout) of
-    T when is_integer(T) ->
+    T when is_integer(T) orelse T =:= nil ->
         T;
     _ ->
         Msg = "Query parameter `connection_timeout` must be an integer",
@@ -128,6 +127,15 @@ http_sender(start, #sender_acc{req = Req} = SAcc) ->
     {ok, SAcc#sender_acc{resp = Resp, acc = <<"\r\n">>}};
 
 http_sender({start, RowCount}, #sender_acc{req = Req} = SAcc) ->
+    % The remote node is ready to start streaming the response
+    % Call off the hit
+    case get(tref) of
+    nil ->
+        ok;
+    TRef ->
+        timer:cancel(TRef),
+        erase(tref)
+    end,
     #httpd{mochi_req = MReq} = Req,
     ok = mochiweb_socket:setopts(MReq:get(socket), [{nodelay, true}]),
     {ok, Resp} = couch_httpd:start_json_response(Req, 200, []),

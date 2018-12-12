@@ -35,8 +35,6 @@ main(_) ->
             etap:diag(io_lib:format("Test died abnormally: ~p", [Other])),
             etap:bail(Other)
     end,
-    % init:stop(),
-    % receive after infinity -> ok end,
     ok.
 
 test() ->
@@ -92,7 +90,13 @@ test() ->
 
 
 setup_query_env() ->
-    put(addr, couch_config:get("httpd", "bind_address", "127.0.0.1")),
+    case misc:is_ipv6() of
+        false ->
+            put(addr, couch_config:get("httpd", "ip4_bind_address", "127.0.0.1"));
+        true ->
+            Ip6Addr = couch_config:get("httpd", "ip6_bind_address", "::1"),
+            put(addr, "[" ++ Ip6Addr ++ "]")
+    end,
     put(port, integer_to_list(mochiweb_socket_server:get(couch_httpd, port))),
     ok.
 

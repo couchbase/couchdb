@@ -18,8 +18,8 @@
  **/
 
 #include <iostream>
+#include <platform/cbassert.h>
 #include <string.h>
-#include <assert.h>
 
 #include "couch_view_parser.h"
 
@@ -315,7 +315,7 @@ static ERL_NIF_TERM nextState(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[
             return makeError(env, "unexpected state");
         }
     case ending:
-        assert(ctx->parser_state == parser_ending);
+        cb_assert(ctx->parser_state == parser_ending);
         return enif_make_tuple2(env, ATOM_OK, ATOM_DONE);
     }
 
@@ -386,7 +386,7 @@ static inline ERL_NIF_TERM make_rows_list(ErlNifEnv *env, ctx_t *ctx)
         memcpy(valueBin.data, (*it)->value.data(), (*it)->value.length());
 
         if (hasDoc) {
-            assert(isReduceView == false);
+            cb_assert(isReduceView == false);
             if (!enif_alloc_binary_compat(env, (*it)->doc.length(), &docBin)) {
                 enif_release_binary(&keyBin);
                 enif_release_binary(&idBin);

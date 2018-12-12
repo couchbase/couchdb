@@ -28,13 +28,26 @@ num_docs_0() -> 78144.  % keep it a multiple of num_set_partitions()
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(40),
-    case (catch test()) of
-        ok ->
-            etap:end_tests();
-        Other ->
-            io:format(standard_error, "Test died abnormally: ~p", [Other]),
-            etap:bail(Other)
+    % If the Erlang version is < 17, then it's returned as 0
+    Version = try
+        list_to_integer(erlang:system_info(otp_release))
+    catch error:badarg ->
+        0
+    end,
+    % Erlang < 17.0 on Windows doesn't support long file paths, hence disable
+    % that test on that platform.
+    case Version < 17 andalso element(1, os:type()) =:= win32 of
+    true ->
+        etap:plan(skip);
+    false ->
+        etap:plan(40),
+        case (catch test()) of
+            ok ->
+                etap:end_tests();
+            Other ->
+                etap:diag(io_lib:format("Test died abnormally: ~p", [Other])),
+                etap:bail(Other)
+        end
     end,
     ok.
 
@@ -74,7 +87,6 @@ test() ->
         ActiveParts, PassiveParts, NumDocs2, ValueGenFun1),
 
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
-    ok = timer:sleep(1000),
     couch_set_view_test_util:stop_server(),
     ok.
 

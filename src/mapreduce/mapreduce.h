@@ -20,11 +20,13 @@
 #ifndef _MAPREDUCE_H
 #define _MAPREDUCE_H
 
+#include <chrono>
 #include <cstddef>
 #include <iostream>
 #include <string>
 #include <list>
 #include <vector>
+#include <mutex>
 #include <v8.h>
 
 #include "erl_nif_compat.h"
@@ -33,8 +35,14 @@
 class MapReduceError;
 
 typedef std::list<ErlNifBinary, NifStlAllocator<ErlNifBinary> >  json_results_list_t;
+typedef std::list<ErlNifBinary, NifStlAllocator<ErlNifBinary> >  log_results_list_t;
 typedef std::pair<ErlNifBinary, ErlNifBinary>  kv_pair_t;
 typedef std::list< kv_pair_t, NifStlAllocator< kv_pair_t > >  kv_pair_list_t;
+
+typedef enum {
+    VIEW_INDEX_TYPE_MAPREDUCE,
+    VIEW_INDEX_TYPE_SPATIAL
+}  view_index_type_t;
 
 typedef enum {
     MAP_KVS,
@@ -52,13 +60,8 @@ typedef struct {
 typedef std::list< map_result_t,
                    NifStlAllocator< map_result_t > >  map_results_list_t;
 
-#ifdef V8_POST_3_19_API
 typedef std::vector< v8::Persistent<v8::Function>*,
                      NifStlAllocator< v8::Persistent<v8::Function>* > >  function_vector_t;
-#else
-typedef std::vector< v8::Persistent<v8::Function>,
-                     NifStlAllocator< v8::Persistent<v8::Function> > >  function_vector_t;
-#endif
 
 typedef std::basic_string< char,
                            std::char_traits<char>,
@@ -67,21 +70,24 @@ typedef std::basic_string< char,
 typedef std::list< function_source_t,
                    NifStlAllocator< function_source_t > >  function_sources_list_t;
 
-
 typedef struct {
     v8::Persistent<v8::Context>                  jsContext;
     v8::Isolate                                  *isolate;
     function_vector_t                            *functions;
     kv_pair_list_t                               *kvs;
-    unsigned int                                 key;
     ErlNifEnv                                    *env;
-    volatile time_t                              taskStartTime;
+    std::chrono::high_resolution_clock::time_point                             taskStartTime;
     int                                          emitKvSize;
     int                                          maxEmitKvSize;
+    bool                                         isDocUsed;
+    log_results_list_t                           *logResults;
+    view_index_type_t                            viewType;
+    std::mutex                                   exitMutex;
 } map_reduce_ctx_t;
 
 
-void initContext(map_reduce_ctx_t *ctx, const function_sources_list_t &funs);
+void initContext(map_reduce_ctx_t *ctx, const function_sources_list_t &funs,
+                 const view_index_type_t viewType);
 void destroyContext(map_reduce_ctx_t *ctx);
 
 map_results_list_t mapDoc(map_reduce_ctx_t *ctx,
@@ -102,6 +108,21 @@ ErlNifBinary runRereduce(map_reduce_ctx_t *ctx,
 
 void terminateTask(map_reduce_ctx_t *ctx);
 
+/**
+* This API needs to be called once per process to initialize
+* v8 javascript engine. This needs to be called before
+* any v8 APIs like creating v8 isolate and v8 context.
+**/
+void initV8();
+
+/**
+* This API needs to be called once per process to cleanup
+* v8 resources. This needs to be called after disposing all
+* v8 thread contexts like v8 isolate and v8 context.
+**/
+void deinitV8();
+
+void setOptimizeDocLoadFlag(const char *);
 
 class MapReduceError {
 public:

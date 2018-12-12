@@ -18,7 +18,6 @@
 -export([debug/2, info/2, error/2]).
 -export([debug_on/0, info_on/0, get_level/0, get_level_integer/0, set_level/1]).
 -export([read/2]).
-
 -export([pre_db_open/1]).
 
 % gen_event callbacks

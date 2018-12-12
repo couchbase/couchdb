@@ -1,5 +1,3 @@
-FILE(GLOB SRC *.erl)
-
 CONFIGURE_FILE(${CMAKE_CURRENT_SOURCE_DIR}/snappy.app.in
                ${CMAKE_CURRENT_BINARY_DIR}/snappy.app)
 
@@ -24,7 +22,13 @@ SET_TARGET_PROPERTIES(snappy_nif PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/priv"
 )
 
-ERL_BUILD("snappy" ${SRC})
+IF (APPLE)
+    # map from lib/couchdb/erlang/lib/snappy-1.0.4/priv/ to lib/
+    SET_TARGET_PROPERTIES(snappy_nif PROPERTIES
+                          INSTALL_RPATH "@loader_path/../../../../..")
+ENDIF ()
+
+ERL_BUILD(APPNAME "snappy" SOURCES snappy.erl)
 
 INSTALL(TARGETS snappy_nif
         DESTINATION ${COUCH_SNAPPY_PRIV_PREFIX})

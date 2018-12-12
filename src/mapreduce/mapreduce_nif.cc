@@ -17,24 +17,19 @@
  * the License.
  **/
 
-#include <iostream>
-#include <cstring>
-#include <sstream>
-#include <map>
-#include <time.h>
-
-#if defined(WIN32) || defined(_WIN32)
-#include <windows.h>
-#define doSleep(Ms) Sleep(Ms)
-#else
-#define doSleep(Ms)                             \
-    do {                                        \
-        struct timespec ts;                     \
-        ts.tv_sec = Ms / 1000;                  \
-        ts.tv_nsec = (Ms % 1000) * 1000000;     \
-        nanosleep(&ts, NULL);                   \
-    } while(0)
+#ifdef WIN32
+#define NOMINMAX
 #endif
+
+#include <algorithm>
+#include <atomic>
+#include <cassert>
+#include <condition_variable>
+#include <cstring>
+#include <iostream>
+#include <mutex>
+#include <sstream>
+#include <unordered_set>
 
 #include "erl_nif_compat.h"
 #include "mapreduce.h"
@@ -45,13 +40,14 @@ static ERL_NIF_TERM ATOM_OK;
 static ERL_NIF_TERM ATOM_ERROR;
 
 // maxTaskDuration is in seconds
-static volatile int                                maxTaskDuration = 5;
+static std::atomic<int>                            maxTaskDuration;
 static int                                         maxKvSize = 1 * 1024 * 1024;
 static ErlNifResourceType                          *MAP_REDUCE_CTX_RES;
 static ErlNifTid                                   terminatorThreadId;
 static ErlNifMutex                                 *terminatorMutex;
-static volatile int                                shutdownTerminator = 0;
-static std::map< unsigned int, map_reduce_ctx_t* > contexts;
+static std::atomic<bool>                           shutdownTerminator;
+static std::unordered_set< map_reduce_ctx_t* >     contexts;
+static std::condition_variable                     *cv;
 
 
 // NIF API functions
@@ -62,6 +58,8 @@ static ERL_NIF_TERM doReduce(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]
 static ERL_NIF_TERM doRereduce(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
 static ERL_NIF_TERM setTimeout(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
 static ERL_NIF_TERM setMaxKvSize(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
+static ERL_NIF_TERM isDocUsed(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
+static ERL_NIF_TERM setOptimizeDocLoad(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
 
 // NIF API callbacks
 static int onLoad(ErlNifEnv* env, void** priv, ERL_NIF_TERM info);
@@ -74,7 +72,7 @@ static bool parseFunctions(ErlNifEnv *env, ERL_NIF_TERM functionsArg, function_s
 // NIF resource functions
 static void free_map_reduce_context(ErlNifEnv *env, void *res);
 
-static inline void registerContext(map_reduce_ctx_t *ctx, ErlNifEnv *env, const ERL_NIF_TERM &refTerm);
+static inline void registerContext(map_reduce_ctx_t *ctx);
 static inline void unregisterContext(map_reduce_ctx_t *ctx);
 static void *terminatorLoop(void *);
 
@@ -82,9 +80,23 @@ static void *terminatorLoop(void *);
 
 ERL_NIF_TERM startMapContext(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
+    char viewTypeAtom[256];
+    view_index_type_t viewType;
     function_sources_list_t mapFunctions;
 
-    if (!parseFunctions(env, argv[0], mapFunctions)) {
+    if (!enif_get_atom(env, argv[0], viewTypeAtom, sizeof(viewTypeAtom),
+                       ERL_NIF_LATIN1)) {
+        return enif_make_badarg(env);
+    }
+    if (!strcmp(viewTypeAtom, "mapreduce_view")) {
+        viewType = VIEW_INDEX_TYPE_MAPREDUCE;
+    } else if (!strcmp(viewTypeAtom, "spatial_view")) {
+        viewType = VIEW_INDEX_TYPE_SPATIAL;
+    } else {
+        return makeError(env, "unknown view type");
+    }
+
+    if (!parseFunctions(env, argv[1], mapFunctions)) {
         return enif_make_badarg(env);
     }
 
@@ -92,12 +104,12 @@ ERL_NIF_TERM startMapContext(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]
         enif_alloc_resource(MAP_REDUCE_CTX_RES, sizeof(map_reduce_ctx_t)));
 
     try {
-        initContext(ctx, mapFunctions);
+        initContext(ctx, mapFunctions, viewType);
 
         ERL_NIF_TERM res = enif_make_resource(env, ctx);
         enif_release_resource(ctx);
 
-        registerContext(ctx, env, argv[1]);
+        registerContext(ctx);
 
         return enif_make_tuple2(env, ATOM_OK, res);
 
@@ -136,6 +148,7 @@ ERL_NIF_TERM doMapDoc(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         // pairs emitted by a map function for the document.
         map_results_list_t mapResults = mapDoc(ctx, docBin, metaBin);
         ERL_NIF_TERM outerList = enif_make_list(env, 0);
+        ERL_NIF_TERM logList = enif_make_list(env, 0);
         map_results_list_t::reverse_iterator i = mapResults.rbegin();
 
         for ( ; i != mapResults.rend(); ++i) {
@@ -167,8 +180,17 @@ ERL_NIF_TERM doMapDoc(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
                 break;
             }
         }
-
-        return enif_make_tuple2(env, ATOM_OK, outerList);
+        if (ctx->logResults) {
+            log_results_list_t::reverse_iterator k = ctx->logResults->rbegin();
+            for ( ; k != ctx->logResults->rend(); ++k) {
+                ERL_NIF_TERM logMsg = enif_make_binary(env, &(*k));
+                logList = enif_make_list_cell(env, logMsg, logList);
+            }
+            ctx->logResults->~log_results_list_t();
+            enif_free(ctx->logResults);
+            ctx->logResults = NULL;
+        }
+        return enif_make_tuple3(env, ATOM_OK, outerList, logList);
 
     } catch(MapReduceError &e) {
         return makeError(env, e.getMsg());
@@ -190,12 +212,12 @@ ERL_NIF_TERM startReduceContext(ErlNifEnv *env, int argc, const ERL_NIF_TERM arg
         enif_alloc_resource(MAP_REDUCE_CTX_RES, sizeof(map_reduce_ctx_t)));
 
     try {
-        initContext(ctx, reduceFunctions);
+        initContext(ctx, reduceFunctions, VIEW_INDEX_TYPE_MAPREDUCE);
 
         ERL_NIF_TERM res = enif_make_resource(env, ctx);
         enif_release_resource(ctx);
 
-        registerContext(ctx, env, argv[1]);
+        registerContext(ctx);
 
         return enif_make_tuple2(env, ATOM_OK, res);
 
@@ -342,6 +364,8 @@ ERL_NIF_TERM setTimeout(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
     maxTaskDuration = (timeout + 999) / 1000;
 
+    cv->notify_one();
+
     return ATOM_OK;
 }
 
@@ -359,6 +383,36 @@ ERL_NIF_TERM setMaxKvSize(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     return ATOM_OK;
 }
 
+ERL_NIF_TERM isDocUsed(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    map_reduce_ctx_t *ctx;
+    const char *retAtom;
+
+    if (!enif_get_resource(env, argv[0], MAP_REDUCE_CTX_RES, reinterpret_cast<void **>(&ctx))) {
+        return enif_make_badarg(env);
+    }
+
+    if (ctx->isDocUsed) {
+        retAtom = "doc_fields_used";
+    }
+    else {
+        retAtom = "doc_fields_unused";
+    }
+    return enif_make_tuple2(env, ATOM_OK, enif_make_atom(env, retAtom));
+}
+
+ERL_NIF_TERM setOptimizeDocLoad(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    char optimizeDocLoadAtom[8];
+
+    if (!enif_get_atom(env, argv[0], optimizeDocLoadAtom, sizeof(optimizeDocLoadAtom),
+                       ERL_NIF_LATIN1)) {
+        return enif_make_badarg(env);
+    }
+    setOptimizeDocLoadFlag(optimizeDocLoadAtom);
+
+    return ATOM_OK;
+}
 
 int onLoad(ErlNifEnv *env, void **priv, ERL_NIF_TERM info)
 {
@@ -377,10 +431,20 @@ int onLoad(ErlNifEnv *env, void **priv, ERL_NIF_TERM info)
         return -1;
     }
 
+    shutdownTerminator = false;
+    maxTaskDuration = 5;
+
     terminatorMutex = enif_mutex_create(const_cast<char *>("terminator mutex"));
     if (terminatorMutex == NULL) {
         return -2;
     }
+
+    try {
+        cv = new std::condition_variable();
+    } catch (std::bad_alloc) {
+        return -3;
+    }
+
 
     if (enif_thread_create(const_cast<char *>("terminator thread"),
                            &terminatorThreadId,
@@ -388,8 +452,11 @@ int onLoad(ErlNifEnv *env, void **priv, ERL_NIF_TERM info)
                            NULL,
                            NULL) != 0) {
         enif_mutex_destroy(terminatorMutex);
+        delete cv;
         return -4;
     }
+
+    initV8();
 
     return 0;
 }
@@ -399,9 +466,12 @@ void onUnload(ErlNifEnv *env, void *priv_data)
 {
     void *result = NULL;
 
-    shutdownTerminator = 1;
+    shutdownTerminator = true;
+    cv->notify_one();
     enif_thread_join(terminatorThreadId, &result);
     enif_mutex_destroy(terminatorMutex);
+    delete cv;
+    deinitV8();
 }
 
 
@@ -455,51 +525,53 @@ void free_map_reduce_context(ErlNifEnv *env, void *res) {
     destroyContext(ctx);
 }
 
-
 void *terminatorLoop(void *args)
 {
-    std::map< unsigned int, map_reduce_ctx_t* >::iterator it;
-    time_t now;
-
     while (!shutdownTerminator) {
         enif_mutex_lock(terminatorMutex);
-        // due to truncation of second's fraction lets pretend we're one second before
-        now = time(NULL) - 1;
+        auto now = std::chrono::high_resolution_clock::now();
+        std::chrono::high_resolution_clock::time_point epoch = {};
+        auto maxTaskmillisec = std::chrono::milliseconds(maxTaskDuration*1000);
+        auto minTimeDiff = maxTaskmillisec.count();
 
-        for (it = contexts.begin(); it != contexts.end(); ++it) {
-            map_reduce_ctx_t *ctx = (*it).second;
-
-            if (ctx->taskStartTime >= 0) {
-                if (ctx->taskStartTime + maxTaskDuration < now) {
+        for (map_reduce_ctx_t *ctx : contexts) {
+            ctx->exitMutex.lock();
+            std::chrono::high_resolution_clock::time_point startTime = ctx->taskStartTime;
+            auto execTimeDiff = std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime);
+            if ((startTime - epoch).count() > 0) {
+                if (execTimeDiff.count() >= maxTaskmillisec.count()) {
                     terminateTask(ctx);
                 }
+                else {
+                    auto timeToSleep = maxTaskmillisec - execTimeDiff;
+                    minTimeDiff = std::min(std::chrono::duration_cast<std::chrono::milliseconds>(timeToSleep).count(), minTimeDiff);
+                }
             }
+            ctx->exitMutex.unlock();
         }
 
         enif_mutex_unlock(terminatorMutex);
-        doSleep(maxTaskDuration * 1000);
+        std::mutex  cvMutex;
+        std::unique_lock<std::mutex> lk(cvMutex);
+        cv->wait_for(lk, std::chrono::milliseconds(minTimeDiff));
     }
 
     return NULL;
 }
 
-
-void registerContext(map_reduce_ctx_t *ctx, ErlNifEnv *env, const ERL_NIF_TERM &refTerm)
+void registerContext(map_reduce_ctx_t *ctx)
 {
-    if (!enif_get_uint(env, refTerm, &ctx->key)) {
-        throw MapReduceError("invalid context reference");
-    }
-
     enif_mutex_lock(terminatorMutex);
-    contexts[ctx->key] = ctx;
+    bool inserted = contexts.insert(ctx).second;
     enif_mutex_unlock(terminatorMutex);
+    assert(inserted == true);
 }
 
 
 void unregisterContext(map_reduce_ctx_t *ctx)
 {
     enif_mutex_lock(terminatorMutex);
-    contexts.erase(ctx->key);
+    contexts.erase(ctx);
     enif_mutex_unlock(terminatorMutex);
 }
 
@@ -507,12 +579,14 @@ void unregisterContext(map_reduce_ctx_t *ctx)
 static ErlNifFunc nif_functions[] = {
     {"start_map_context", 2, startMapContext},
     {"map_doc", 3, doMapDoc},
-    {"start_reduce_context", 2, startReduceContext},
+    {"start_reduce_context", 1, startReduceContext},
     {"reduce", 2, doReduce},
     {"reduce", 3, doReduce},
     {"rereduce", 3, doRereduce},
     {"set_timeout", 1, setTimeout},
-    {"set_max_kv_size_per_doc", 1, setMaxKvSize}
+    {"set_max_kv_size_per_doc", 1, setMaxKvSize},
+    {"is_doc_used", 1, isDocUsed},
+    {"set_optimize_doc_load", 1, setOptimizeDocLoad}
 };
 
 // Due to the stupid macros I need to manually do this in order

@@ -20,7 +20,8 @@
 
 
 start_map_context(#group{views = Views}) ->
-    {ok, Ctx} = mapreduce:start_map_context([View#view.def || View <- Views]),
+    {ok, Ctx} = mapreduce:start_map_context(
+        mapreduce_view, [View#view.def || View <- Views]),
     erlang:put(map_context, Ctx),
     ok.
 
@@ -63,7 +64,7 @@ map(Doc) ->
     Ctx = erlang:get(map_context),
     {DocBody, DocMeta} = couch_doc:to_raw_json_binary_views(Doc),
     case mapreduce:map_doc(Ctx, DocBody, DocMeta) of
-    {ok, Results} ->
+    {ok, Results, _LogLines} ->
         Fun = fun({error, _Reason} = Error) ->
                     Error;
             (KvList) ->

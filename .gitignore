@@ -60,7 +60,6 @@ src/couchdb/erlang.png
 src/couchdb/stylesheet.css
 src/couchdb/priv/.deps/
 src/couchdb/priv/.libs/
-src/couchdb/priv/couch_icu_driver.la
 src/couchdb/priv/couchjs
 src/couchdb/priv/couchspawnkillable
 src/couchdb/priv/stat_descriptions.cfg
@@ -134,7 +133,6 @@ CTestTestfile.cmake
 cmake_install.cmake
 /src/couch_view_parser/libcouch_view_parser_nif.so
 /src/couchdb/priv/couch_ejson_compare.so
-/src/couchdb/priv/couch_icu_driver.so
 /src/ejson/libejson.so
 /src/mapreduce/libmapreduce_nif.so
 /src/snappy/libsnappy_nif.so
@@ -150,15 +148,6 @@ cmake_install.cmake
 /src/couchdb/priv/couch_ejson_compare.ilk
 /src/couchdb/priv/couch_ejson_compare.lib
 /src/couchdb/priv/couch_ejson_compare.pdb
-/src/couchdb/priv/couch_icu_driver.dll
-/src/couchdb/priv/couch_icu_driver.dll.embed.manifest
-/src/couchdb/priv/couch_icu_driver.dll.embed.manifest.res
-/src/couchdb/priv/couch_icu_driver.dll.intermediate.manifest
-/src/couchdb/priv/couch_icu_driver.dll.resource.txt
-/src/couchdb/priv/couch_icu_driver.exp
-/src/couchdb/priv/couch_icu_driver.ilk
-/src/couchdb/priv/couch_icu_driver.lib
-/src/couchdb/priv/couch_icu_driver.pdb
 /src/ejson/ejson.exp
 /src/ejson/ejson.lib
 /src/mapreduce/mapreduce_nif.exp

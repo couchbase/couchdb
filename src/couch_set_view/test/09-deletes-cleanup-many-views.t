@@ -281,7 +281,6 @@ test() ->
     compare_groups(Group22, Group24),
 
     couch_set_view_test_util:delete_set_dbs(test_set_name(), num_set_partitions()),
-    ok = timer:sleep(1000),
     couch_set_view_test_util:stop_server(),
     ok.
 
@@ -514,19 +513,15 @@ verify_btrees_1(Group) ->
         {ok, {initial_num_docs(), ExpectedBitmask}},
         "Id Btree has the right reduce value"),
     ExpectedView0Reds = [lists:sum(lists:seq(0, initial_num_docs() - 1)), initial_num_docs()],
-    couch_set_view_mapreduce:start_reduce_context(View0),
     etap:is(
         couch_set_view_test_util:full_reduce_view_btree(Group, View0Btree),
         {ok, {initial_num_docs(), ExpectedView0Reds, ExpectedBitmask}},
         "View0 Btree has the right reduce value"),
-    couch_set_view_mapreduce:end_reduce_context(View0),
     ExpectedView2Reds = [lists:sum(lists:seq(0, initial_num_docs() - 1)) * 4],
-    couch_set_view_mapreduce:start_reduce_context(View2),
     etap:is(
         couch_set_view_test_util:full_reduce_view_btree(Group, View2Btree),
         {ok, {initial_num_docs(), ExpectedView2Reds, ExpectedBitmask}},
         "View2 Btree has the right reduce value"),
-    couch_set_view_mapreduce:end_reduce_context(View2),
 
     etap:is(HeaderUpdateSeqs, DbSeqs, "Header has right update seqs list"),
     etap:is(Abitmask, ExpectedBitmask, "Header has right active bitmask"),
@@ -633,18 +628,14 @@ verify_btrees_2(Group) ->
         couch_set_view_test_util:full_reduce_id_btree(Group, IdBtree),
         {ok, {0, 0}},
         "Id Btree has the right reduce value"),
-    couch_set_view_mapreduce:start_reduce_context(View0),
     etap:is(
         couch_set_view_test_util:full_reduce_view_btree(Group, View0Btree),
         {ok, {0, [0, 0], 0}},
         "View0 Btree has the right reduce value"),
-    couch_set_view_mapreduce:end_reduce_context(View0),
-    couch_set_view_mapreduce:start_reduce_context(View2),
     etap:is(
         couch_set_view_test_util:full_reduce_view_btree(Group, View2Btree),
         {ok, {0, [0], 0}},
         "View2 Btree has the right reduce value"),
-    couch_set_view_mapreduce:end_reduce_context(View2),
 
     etap:is(HeaderUpdateSeqs, DbSeqs, "Header has right update seqs list"),
     etap:is(Abitmask, ExpectedABitmask, "Header has right active bitmask"),
@@ -714,18 +705,14 @@ verify_btrees_3(Group) ->
         couch_set_view_test_util:full_reduce_id_btree(Group, IdBtree),
         {ok, {0, 0}},
         "Id Btree has the right reduce value"),
-    couch_set_view_mapreduce:start_reduce_context(View0),
     etap:is(
         couch_set_view_test_util:full_reduce_view_btree(Group, View0Btree),
         {ok, {0, [0, 0], 0}},
         "View0 Btree has the right reduce value"),
-    couch_set_view_mapreduce:end_reduce_context(View0),
-    couch_set_view_mapreduce:start_reduce_context(View2),
     etap:is(
         couch_set_view_test_util:full_reduce_view_btree(Group, View2Btree),
         {ok, {0, [0], 0}},
         "View2 Btree has the right reduce value"),
-    couch_set_view_mapreduce:end_reduce_context(View2),
 
     etap:is(HeaderUpdateSeqs, DbSeqs, "Header has right update seqs list"),
     etap:is(Abitmask, ExpectedABitmask, "Header has right active bitmask"),
