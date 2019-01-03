@@ -35,7 +35,7 @@ echo '</pre><h3>Building</h3><pre>'
 if [ ! -d ~/.reference ]; then
   mkdir ~/.reference
   cd ~/.reference
-  repo init -u https://github.com/couchbase/manifest -b master -m $MANIFEST -g all --mirror 1>>$WORKSPACE/make.log 2>&1
+  repo init -u https://github.com/couchbase/build-manifests -b master -m $MANIFEST -g all --mirror 1>>$WORKSPACE/make.log 2>&1
   test $? -eq 0 || error_exit "Repo Init"
 fi
 
@@ -45,7 +45,7 @@ rm -rf ~/.manifests
 git clone https://github.com/couchbase/build-manifests ~/.manifests 1>>$WORKSPACE/make.log 2>&1
 cd ~/.manifests
 
-test "$BLD_NUM" = "0" && BLD_NUM="`git log --oneline | grep "couchbase-server" | grep "$RELEASE-[0-9]" | head -1 | awk -F- '{print $3}'`"
+test "$BLD_NUM" = "0" && BLD_NUM="`git log --oneline | grep "couchbase-server" | grep -F "$RELEASE-" | head -1 | sed "s/^.*$RELEASE-\([0-9]*\).*$/\1/g"`"
 SHA=`git log --oneline | grep "couchbase-server" | grep "$RELEASE-$BLD_NUM" | head -1 | awk '{print $1}'`
 git branch thisrun $SHA 1>>$WORKSPACE/make.log 2>&1
 
@@ -259,11 +259,10 @@ rm -rf $WORKSPACE/voltron/build/deb
 rm -rf $WORKSPACE/install/*
 find goproj godeps -name \*.a -print0 | xargs -0 rm -f
 
+echo "Building cmakefiles and deps"
 cd $WORKSPACE
 mkdir -p build
 cd build
-
-echo "Building main product"
 cmake -D CMAKE_INSTALL_PREFIX=$WORKSPACE/install \
       -D CMAKE_PREFIX_PATH=$WORKSPACE/install \
       -D CMAKE_BUILD_TYPE=RelWithDebInfo \
@@ -272,8 +271,14 @@ cmake -D CMAKE_INSTALL_PREFIX=$WORKSPACE/install \
       -D CB_DOWNLOAD_DEPS=1 \
       -D SNAPPY_OPTION=Disable \
       .. 1>>$WORKSPACE/make.log 2>&1
-test $? -eq 0 || error_exit "Main build"
+test $? -eq 0 || error_exit "CMake build"
 
+echo "Patching breakpad"
+cd $WORKSPACE/build/tlm/deps/breakpad.exploded
+for pf in ~/bin/breakpad.debian9.*.patch; do patch -p1 < $pf; done
+
+echo "Building main product"
+cd $WORKSPACE/build
 make -j8 install 1>>$WORKSPACE/make.log 2>&1
 test $? -eq 0 || error_exit "Making Install"
 
