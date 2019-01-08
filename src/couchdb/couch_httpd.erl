@@ -14,7 +14,7 @@
 -include("couch_db.hrl").
 
 -export([start_link/0, start_link/1, stop/0, config_change/2,
-        handle_request/6]).
+        handle_request/7]).
 
 -export([header_value/2,header_value/3,qs_value/2,qs_value/3,qs/1,qs_json_value/3]).
 -export([path/1,absolute_uri/2,body_length/1]).
@@ -93,6 +93,9 @@ start_link(Name, Options) ->
 
     DbFrontendModule = list_to_atom(couch_config:get("httpd", "db_frontend", "couch_db_frontend")),
 
+    {ok, ExtraHeaders} = couch_util:parse_term(
+                           couch_config:get("httpd", "extra_headers", "[]")),
+
     Loop = fun(Req)->
         case SocketOptions of
         [] ->
@@ -100,9 +103,9 @@ start_link(Name, Options) ->
         _ ->
             ok = mochiweb_socket:setopts(Req:get(socket), SocketOptions)
         end,
-        apply(?MODULE, handle_request, [
-            Req, DbFrontendModule, DefaultFun, UrlHandlers, DbUrlHandlers, DesignUrlHandlers
-        ])
+        apply(?MODULE, handle_request,
+              [Req, DbFrontendModule, DefaultFun, UrlHandlers,
+               DbUrlHandlers, DesignUrlHandlers, ExtraHeaders])
     end,
 
     % set mochiweb options
@@ -143,6 +146,8 @@ config_change("httpd_global_handlers", _) ->
     ?MODULE:stop();
 config_change("httpd_db_handlers", _) ->
     ?MODULE:stop();
+config_change("httpd", "extra_headers") ->
+    ?MODULE:stop();
 config_change("ssl", _) ->
     ?MODULE:stop().
 
@@ -177,7 +182,7 @@ make_fun_spec_strs(SpecStr) ->
     re:split(SpecStr, "(?<=})\\s*,\\s*(?={)", [{return, list}]).
 
 handle_request(MochiReq, DbFrontendModule, DefaultFun,
-            UrlHandlers, DbUrlHandlers, DesignUrlHandlers) ->
+               UrlHandlers, DbUrlHandlers, DesignUrlHandlers, ExtraHeaders) ->
     % for the path, use the raw path with the query string and fragment
     % removed, but URL quoting left intact
     RawUri = MochiReq:get(raw_path),
@@ -209,16 +214,17 @@ handle_request(MochiReq, DbFrontendModule, DefaultFun,
 
     PathParts = [?l2b(unquote(Part)) || Part <- string:tokens(Path, "/")],
     HttpReq = #httpd{
-        mochi_req = MochiReq,
-        peer = MochiReq:get(peer),
-        method = Method,
-        path_parts = PathParts,
-        db_frontend = DbFrontendModule,
-        db_url_handlers = DbUrlHandlers,
-        design_url_handlers = DesignUrlHandlers,
-        default_fun = DefaultFun,
-        url_handlers = UrlHandlers,
-        user_ctx = #user_ctx{roles = [<<"_admin">>]}
+                 mochi_req = MochiReq,
+                 peer = MochiReq:get(peer),
+                 method = Method,
+                 path_parts = PathParts,
+                 db_frontend = DbFrontendModule,
+                 db_url_handlers = DbUrlHandlers,
+                 design_url_handlers = DesignUrlHandlers,
+                 default_fun = DefaultFun,
+                 url_handlers = UrlHandlers,
+                 extra_headers = ExtraHeaders,
+                 user_ctx = #user_ctx{roles = [<<"_admin">>]}
     },
 
     HandlerFun = couch_util:dict_find(HandlerKey, UrlHandlers, DefaultFun),
@@ -327,8 +333,9 @@ accepted_encodings(#httpd{mochi_req=MochiReq}) ->
 serve_file(Req, RelativePath, DocumentRoot) ->
     serve_file(Req, RelativePath, DocumentRoot, []).
 
-serve_file(#httpd{mochi_req=MochiReq}=Req, RelativePath, DocumentRoot, ExtraHeaders) ->
+serve_file(#httpd{mochi_req=MochiReq}=Req, RelativePath, DocumentRoot, Headers) ->
     log_request(Req, 200),
+    ExtraHeaders = extra_headers(Req, Headers),
     {ok, MochiReq:serve_file(RelativePath, DocumentRoot, ExtraHeaders)}.
 
 qs_value(Req, Key) ->
@@ -517,7 +524,9 @@ log_volume(#httpd{path_parts=Parts, mochi_req=MochiReq} = Req, Code) ->
 
 start_response_length(#httpd{mochi_req=MochiReq}=Req, Code, Headers, Length) ->
     log_request(Req, Code),
-    Resp = MochiReq:start_response_length({Code, Headers, Length}),
+    ExtraHeaders = extra_headers(Req, Headers),
+
+    Resp = MochiReq:start_response_length({Code, ExtraHeaders, Length}),
     case MochiReq:get(method) of
     'HEAD' -> throw({http_head_abort, Resp});
     _ -> ok
@@ -526,7 +535,8 @@ start_response_length(#httpd{mochi_req=MochiReq}=Req, Code, Headers, Length) ->
 
 start_response(#httpd{mochi_req=MochiReq}=Req, Code, Headers) ->
     log_request(Req, Code),
-    Resp = MochiReq:start_response({Code, Headers}),
+    ExtraHeaders = extra_headers(Req, Headers),
+    Resp = MochiReq:start_response({Code, ExtraHeaders}),
     case MochiReq:get(method) of
         'HEAD' -> throw({http_head_abort, Resp});
         _ -> ok
@@ -545,6 +555,9 @@ no_resp_conn_header([{Hdr, _}|Rest]) ->
         _ -> no_resp_conn_header(Rest)
     end.
 
+extra_headers(#httpd{extra_headers = ExtraHeaders}, Headers) ->
+    ExtraHeaders ++ Headers.
+
 http_1_0_keep_alive(Req, Headers) ->
     case (Req:get(version) == {1, 0}) andalso
         (Req:should_close() == false) andalso
@@ -557,7 +570,7 @@ http_1_0_keep_alive(Req, Headers) ->
 
 start_chunked_response(#httpd{mochi_req=MochiReq}=Req, Code, Headers) ->
     log_volume(Req, Code),
-    Headers2 = http_1_0_keep_alive(MochiReq, Headers),
+    Headers2 = extra_headers(Req, http_1_0_keep_alive(MochiReq, Headers)),
     Resp = MochiReq:respond({Code, Headers2, chunked}),
     case MochiReq:get(method) of
     'HEAD' -> throw({http_head_abort, Resp});
@@ -578,7 +591,7 @@ last_chunk(Resp) ->
 
 send_response(#httpd{mochi_req=MochiReq}=Req, Code, Headers, Body) ->
     log_request(Req, Code),
-    Headers2 = http_1_0_keep_alive(MochiReq, Headers),
+    Headers2 = extra_headers(Req, http_1_0_keep_alive(MochiReq, Headers)),
     if Code >= 400 ->
         ?LOG_DEBUG("httpd ~p error response:~n ~s", [?LOG_USERDATA(Code), ?LOG_USERDATA(Body)]);
     true -> ok
