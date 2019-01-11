@@ -21,6 +21,10 @@ SET_TARGET_PROPERTIES(snappy_nif PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/priv"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/priv"
 )
+# snappy_nif is loaded into Erlang VM (beam.smp) which doesn't link
+# the sanitizer libs and hence cannot successfully load snappy_nif if
+# it has the sanitizers enabled. As such disable them.
+remove_sanitizers(snappy_nif)
 
 IF (APPLE)
     # map from lib/couchdb/erlang/lib/snappy-1.0.4/priv/ to lib/

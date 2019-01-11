@@ -16,7 +16,16 @@ SET(COUCH_EJSON_COMPARE_SRC couch_ejson_compare/couch_ejson_compare.c
 
 ADD_LIBRARY(couch_ejson_compare MODULE ${COUCH_EJSON_COMPARE_SRC})
 SET_TARGET_PROPERTIES(couch_ejson_compare PROPERTIES PREFIX "")
-TARGET_LINK_LIBRARIES(couch_ejson_compare ${COUCHBASE_UNRESOLVED} ${ICU_LIBRARIES} platform)
+TARGET_LINK_LIBRARIES(couch_ejson_compare
+  ${COUCHBASE_UNRESOLVED}
+  ${ICU_LIBRARIES}
+  platform_unsanitized)
+
+# couch_ejson_compare is loaded into Erlang VM (beam.smp) which
+# doesn't link the sanitizer libs and hence cannot successfully load
+# couch_ejson_compare if it has the sanitizers enabled. As such
+# disable them.
+remove_sanitizers(couch_ejson_compare)
 
 IF (APPLE)
     # map from lib/couchdb/erlang/lib/couch-1.2.0a-961ad59-git/priv/lib to lib/
