@@ -263,7 +263,7 @@ init(Options) ->
         true ->
             % Make sure that the ssl random number generator is seeded
             % This was new in R13 (ssl-3.10.1 in R13B vs. ssl-3.10.0 in R12B-5)
-            apply(ssl, seed, [crypto:rand_bytes(255)]);
+            apply(ssl, seed, [couch_util:strong_rand_bytes(255)]);
         false ->
             ok
     end,

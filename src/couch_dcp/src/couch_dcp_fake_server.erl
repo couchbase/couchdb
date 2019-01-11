@@ -968,12 +968,12 @@ create_mutations_dups(_Mutations, ItemsPerSnapshot, DupsPerSnapshot,
 create_mutations_dups(Mutations, ItemsPerSnapshot, DupsPerSnapshot,
         InitCount) ->
     % Make sure every test run leads to the same result
-    random:seed(5, 6, 7),
+    rand:seed(exrop, {5, 6, 7}),
     {Mutations2, _} = lists:foldl(fun(Mutation, {Acc, I}) ->
         case I > 0 andalso (I rem ItemsPerSnapshot) =:= 0 of
         true ->
             Shuffled = [X || {_, X} <- lists:sort(
-                [{random:uniform(), M} || M <- lists:usort(Acc)])],
+                [{rand:uniform(), M} || M <- lists:usort(Acc)])],
             RandomMutations = lists:sublist(Shuffled, DupsPerSnapshot),
             {Acc ++ RandomMutations ++ [Mutation], I + 1 + DupsPerSnapshot};
         false ->

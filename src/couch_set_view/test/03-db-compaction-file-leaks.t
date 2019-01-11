@@ -14,9 +14,8 @@
 % License for the specific language governing permissions and limitations under
 % the License.
 
+-include("../../couchdb/couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
-
--define(b2l(B), binary_to_list(B)).
 
 test_set_name() -> <<"couch_test_set_index_compaction">>.
 num_set_partitions() -> 8.

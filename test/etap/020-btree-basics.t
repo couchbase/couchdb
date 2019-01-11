@@ -46,7 +46,7 @@ main(_) ->
 %% nodes were created."
 test()->
     couch_file_write_guard:sup_start_link(),
-    Sorted = [{Seq, random:uniform()} || Seq <- lists:seq(1, rows())],
+    Sorted = [{Seq, rand:uniform()} || Seq <- lists:seq(1, rows())],
     etap:ok(test_kvs(Sorted), "Testing sorted keys"),
     etap:ok(test_kvs(lists:reverse(Sorted)), "Testing reversed sorted keys"),
     etap:ok(test_kvs(shuffle(Sorted)), "Testing shuffled keys."),
@@ -247,7 +247,7 @@ randomize(T, List) ->
 
 randomize(List) ->
     D = lists:map(fun(A) ->
-        {random:uniform(), A}
+        {rand:uniform(), A}
     end, List),
     {_, D1} = lists:unzip(lists:keysort(1, D)),
     D1.

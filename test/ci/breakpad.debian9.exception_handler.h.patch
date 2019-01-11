@@ -1,0 +1,11 @@
+--- breakpad.exploded/include/breakpad/client/linux/handler/exception_handler.h	2017-09-11 10:22:24.000000000 +0530
++++ breakpad.exploded/include/breakpad/client/linux/handler/exception_handler.h	2019-01-03 17:12:11.874066136 +0530
+@@ -191,7 +191,7 @@
+   struct CrashContext {
+     siginfo_t siginfo;
+     pid_t tid;  // the crashing thread.
+-    struct ucontext context;
++    ucontext_t context;
+ #if !defined(__ARM_EABI__) && !defined(__mips__)
+     // #ifdef this out because FP state is not part of user ABI for Linux ARM.
+     // In case of MIPS Linux FP state is already part of struct

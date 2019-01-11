@@ -176,7 +176,7 @@ do_POST(Transport, Size, Times) ->
                 end,
     TestReqs = [begin
                     Path = "/stuff/" ++ integer_to_list(N),
-                    Body = crypto:rand_bytes(Size),
+                    Body = couch_util:strong_rand_bytes(Size),
                     #treq{path=Path, body=Body, xreply=Body}
                 end || N <- lists:seq(1, Times)],
     ClientFun = new_client_fun('POST', TestReqs),

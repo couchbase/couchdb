@@ -16,6 +16,7 @@
 
 -define(MAX_WAIT_TIME, 600 * 1000).
 
+-include("../../couchdb/couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
 
 test_set_name() -> <<"couch_test_set_index_replica_compact">>.

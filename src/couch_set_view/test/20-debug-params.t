@@ -14,36 +14,8 @@
 % License for the specific language governing permissions and limitations under
 % the License.
 
+-include("../../couchdb/couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
-
-% from couch_db.hrl
--define(MIN_STR, <<>>).
--define(MAX_STR, <<255>>).
-
--record(view_query_args, {
-    start_key,
-    end_key,
-    start_docid = ?MIN_STR,
-    end_docid = ?MAX_STR,
-    direction = fwd,
-    inclusive_end = true,
-    limit = 10000000000,
-    skip = 0,
-    group_level = 0,
-    view_type = nil,
-    include_docs = false,
-    conflicts = false,
-    stale = false,
-    multi_get = false,
-    callback = nil,
-    list = nil,
-    run_reduce = true,
-    keys = nil,
-    view_name = nil,
-    debug = false,
-    filter = true,
-    type = main
-}).
 
 -define(etap_match(Got, Expected, Desc),
         etap:fun_is(fun(XXXXXX) ->

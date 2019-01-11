@@ -214,7 +214,7 @@
 -record(set_view, {
     id_num = 0        :: non_neg_integer(),
     def = <<>>        :: binary(),
-    ref               :: reference(),
+    ref               :: undefined | reference(),
     indexer = {}      :: tuple()
 }).
 

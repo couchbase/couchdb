@@ -14,41 +14,10 @@
 % License for the specific language governing permissions and limitations under
 % the License.
 
--define(JSON_ENCODE(V), ejson:encode(V)). % couch_db.hrl
--define(JSON_DECODE(V), ejson:decode(V)). % couch_db.hrl
 -define(MAX_WAIT_TIME, 600 * 1000).
 
+-include("../../couchdb/couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
-
-% from couch_db.hrl
--define(MIN_STR, <<>>).
--define(MAX_STR, <<255>>).
-
--record(view_query_args, {
-    start_key,
-    end_key,
-    start_docid = ?MIN_STR,
-    end_docid = ?MAX_STR,
-    direction = fwd,
-    inclusive_end = true,
-    limit = 10000000000,
-    skip = 0,
-    group_level = 0,
-    view_type = nil,
-    include_docs = false,
-    conflicts = false,
-    stale = false,
-    multi_get = false,
-    callback = nil,
-    list = nil,
-    run_reduce = true,
-    keys = nil,
-    view_name = nil,
-    debug = false,
-    filter = true,
-    type = main
-}).
-
 
 test_set_name() -> <<"couch_test_set_index_replicas_transfer">>.
 num_set_partitions() -> 64.

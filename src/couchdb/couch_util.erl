@@ -30,6 +30,7 @@
 -export([brace/1, debrace/1]).
 -export([split_iolist/2]).
 -export([log_data/2]).
+-export([strong_rand_bytes/1]).
 -export([parse_view_name/1]).
 
 -include("couch_db.hrl").
@@ -352,20 +353,20 @@ verify(_X, _Y) -> false.
 
 -spec md5(Data::(iolist() | binary())) -> Digest::binary().
 md5(Data) ->
-    try crypto:md5(Data) catch error:_ -> erlang:md5(Data) end.
+    try crypto:hash(md5, Data) catch error:_ -> erlang:md5(Data) end.
 
--spec md5_init() -> Context::binary().
+-spec md5_init() -> Context::term().
 md5_init() ->
-    try crypto:md5_init() catch error:_ -> erlang:md5_init() end.
+    try crypto:hash_init(md5) catch error:_ -> erlang:md5_init() end.
 
--spec md5_update(Context::binary(), Data::(iolist() | binary())) ->
-    NewContext::binary().
+-spec md5_update(Context::term(), Data::(iolist() | binary())) ->
+    NewContext::term().
 md5_update(Ctx, D) ->
-    try crypto:md5_update(Ctx,D) catch error:_ -> erlang:md5_update(Ctx,D) end.
+    try crypto:hash_update(Ctx,D) catch error:_ -> erlang:md5_update(Ctx,D) end.
 
--spec md5_final(Context::binary()) -> Digest::binary().
+-spec md5_final(Context::term()) -> Digest::binary().
 md5_final(Ctx) ->
-    try crypto:md5_final(Ctx) catch error:_ -> erlang:md5_final(Ctx) end.
+    try crypto:hash_final(Ctx) catch error:_ -> erlang:md5_final(Ctx) end.
 
 % linear search is faster for small lists, length() is 0.5 ms for 100k list
 reorder_results(Keys, SortedResults) when length(Keys) < 100 ->
@@ -433,6 +434,20 @@ log_data(Tag, Arg) when is_binary(Arg) ->
     io_lib:format("<~p>~s</~p>", [Tag, Arg, Tag]);
 log_data(Tag, Arg) ->
     io_lib:format("<~p>~p</~p>", [Tag, Arg, Tag]).
+
+strong_rand_bytes(N) ->
+    strong_rand_bytes(N, 10).
+
+strong_rand_bytes(N, Retries) ->
+    try
+        crypto:strong_rand_bytes(N)
+    catch
+        error:low_entropy when N > 1 ->
+            SeedTerm = {erlang:monotonic_time(), erlang:unique_integer()},
+            SeedBin = crypto:hash(sha256, term_to_binary(SeedTerm)),
+            crypto:rand_seed(SeedBin),
+            strong_rand_bytes(N, Retries - 1)
+    end.
 
 parse_view_name(Name) ->
     Tokens = string:tokens(couch_util:trim(?b2l(Name)), "/"),

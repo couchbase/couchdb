@@ -1429,7 +1429,7 @@ tmp_prefix1(Dir, TmpDirOpt) ->
     U = "_",
     Node = node(),
     Pid = os:getpid(),
-    {MSecs,Secs,MySecs} = now(),
+    {MSecs,Secs,MySecs} = erlang:timestamp(),
     F = lists:concat(["fs_",Node,U,Pid,U,MSecs,U,Secs,U,MySecs,"."]),
     TmpDir = case TmpDirOpt of
                  default ->

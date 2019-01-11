@@ -89,7 +89,7 @@ is_admin(User, ClearPwd) ->
     case couch_config:get("admins", User) of
     "-hashed-" ++ HashedPwdAndSalt ->
         [HashedPwd, Salt] = string:tokens(HashedPwdAndSalt, ","),
-        couch_util:to_hex(crypto:sha(ClearPwd ++ Salt)) == HashedPwd;
+        couch_util:to_hex(crypto:hash(sha, ClearPwd ++ Salt)) == HashedPwd;
     _Else ->
         false
     end.
@@ -109,7 +109,7 @@ hash_admin_passwords(Persist) ->
             ok; % already hashed
         ({User, ClearPassword}) ->
             Salt = ?b2l(couch_uuids:random()),
-            Hashed = couch_util:to_hex(crypto:sha(ClearPassword ++ Salt)),
+            Hashed = couch_util:to_hex(crypto:hash(sha, ClearPassword ++ Salt)),
             couch_config:set("admins",
                 User, "-hashed-" ++ Hashed ++ "," ++ Salt, Persist)
         end, couch_config:get("admins")).

@@ -14,6 +14,7 @@
 
 -include("couch_db.hrl").
 
+-compile(nowarn_export_all).
 -compile(export_all).
 
 do_db_req(#httpd{user_ctx=UserCtx,path_parts=[DbName|_]}=Req, Fun) ->

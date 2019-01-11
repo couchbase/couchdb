@@ -14,6 +14,7 @@
 % License for the specific language governing permissions and limitations under
 % the License.
 
+-include("../../couchdb/couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
 
 -define(MAX_WAIT_TIME, 900 * 1000).
@@ -27,37 +28,6 @@ test_set_name() -> <<"couch_test_set_index_multiple_reductions">>.
 num_set_partitions() -> 64.
 ddoc_id() -> <<"_design/test">>.
 initial_num_docs() -> 70400.  % must be multiple of num_set_partitions()
-
-
-% from couch_db.hrl
--define(MIN_STR, <<>>).
--define(MAX_STR, <<255>>).
-
--record(view_query_args, {
-    start_key,
-    end_key,
-    start_docid = ?MIN_STR,
-    end_docid = ?MAX_STR,
-    direction = fwd,
-    inclusive_end = true,
-    limit = 10000000000,
-    skip = 0,
-    group_level = 0,
-    view_type = nil,
-    include_docs = false,
-    conflicts = false,
-    stale = false,
-    multi_get = false,
-    callback = nil,
-    list = nil,
-    run_reduce = true,
-    keys = nil,
-    view_name = nil,
-    debug = false,
-    filter = true,
-    type = main
-}).
-
 
 main(_) ->
     test_util:init_code_path(),

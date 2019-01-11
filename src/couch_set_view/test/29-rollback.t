@@ -14,6 +14,7 @@
 % License for the specific language governing permissions and limitations under
 % the License.
 
+-include("../../couchdb/couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
 -define(MAX_WAIT_TIME, 10 * 1000).
 
@@ -124,7 +125,7 @@ test_rollback_different_seqs(From, NumRollback) ->
     etap:diag("Testing rollback when sequence numbers are different"),
     setup_test(25),
 
-    random:seed({4, 5, 6}),
+    rand:seed(exrop, {4, 5, 6}),
     Inserted = insert_data_randomly(From + NumRollback),
     rollback(Inserted, From),
     shutdown_group().
@@ -492,7 +493,7 @@ test_rollback_multiple_partitions() ->
     etap:diag("Testing rollback with multiple partitions"),
     setup_test(25),
 
-    random:seed({4, 5, 6}),
+    rand:seed(exrop, {4, 5, 6}),
     Inserted = insert_data_randomly(8),
 
     {PartSeqs3, ViewResult3} = lists:nth(3, Inserted),
@@ -775,8 +776,8 @@ setup_test(ReduceSize, NumViewPartitions) ->
     ok = configure_view_group(NumViewPartitions).
 
 random_binary(N) ->
-    random:seed({1, 2, 3}),
-    << <<(random:uniform(20) + 100):8>> ||  _ <- lists:seq(1, N) >>.
+    rand:seed(exrop, {1, 2, 3}),
+    << <<(rand:uniform(20) + 100):8>> ||  _ <- lists:seq(1, N) >>.
 
 
 shutdown_group() ->

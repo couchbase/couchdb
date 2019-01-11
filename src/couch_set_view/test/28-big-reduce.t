@@ -14,6 +14,7 @@
 % License for the specific language governing permissions and limitations under
 % the License.
 
+-include("../../couchdb/couch_db.hrl").
 -include_lib("couch_set_view/include/couch_set_view.hrl").
 
 
@@ -76,8 +77,8 @@ setup_test(ReduceSize) ->
     ReduceValue.
 
 random_binary(N) ->
-    random:seed({1, 2, 3}),
-    << <<(random:uniform(20) + 100):8>> ||  _ <- lists:seq(1, N) >>.
+    rand:seed(exrop, {1, 2, 3}),
+    << <<(rand:uniform(20) + 100):8>> ||  _ <- lists:seq(1, N) >>.
 
 
 shutdown_group() ->
