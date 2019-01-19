@@ -95,4 +95,4 @@
 -type result() ::
         {ok, {{pos_integer(), string()}, headers(), body()}} |
         {ok, upload_state()} |
-        {error, atom()}.
+        {error, atom() | {atom(), [any()]}}.
