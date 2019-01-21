@@ -486,7 +486,7 @@ verify_is_server_admin(#user_ctx{roles=Roles}) ->
 log_request(#httpd{mochi_req=MochiReq,peer=Peer}=Req, Code) ->
     Path = case MochiReq:get(method) of
     'POST' ->
-        log_parse_post(Req);
+        couch_util:log_parse_post(Req);
     _ ->
         MochiReq:get(raw_path)
     end,
@@ -495,28 +495,11 @@ log_request(#httpd{mochi_req=MochiReq,peer=Peer}=Req, Code) ->
                                  ?LOG_USERDATA(Path),
                                  Code]).
 
-log_parse_post(Req) ->
-    try log_do_parse(Req) of Str -> ?l2b(Str)
-    catch _:_ -> "" end.
-
-log_do_parse(#httpd{method='POST'} = Req) ->
-    {[{Bucket, {Props}}]} = couch_util:get_nested_json_value(
-        json_body_obj(Req), [<<"views">>, <<"sets">>]),
-    ViewName = couch_util:get_value(<<"view">>, Props),
-    {DDoc, View} = couch_util:parse_view_name(ViewName),
-    [<<"/">>, Bucket, <<"/">>, DDoc, <<"/_view/">>, View].
-
-log_volume(#httpd{path_parts=Parts, mochi_req=MochiReq} = Req, Code) ->
+log_volume(Req, Code) ->
     try
-        {Origin, Path} = case Parts of
-            [_, <<"_design">>, _, <<"_view">>, _] ->
-                {external, MochiReq:get(path)};
-            _ ->
-                {internal, ?b2l(?l2b(log_do_parse(Req)))}
-        end,
         Staleness = list_to_existing_atom(string:to_lower(
             couch_httpd:qs_value(Req, "stale", "update_after"))),
-        ok = couch_query_logger:log(Path, Origin, Staleness)
+        ok = couch_query_logger:log(Req, Staleness, 1)
     catch
         _:_ ->
             log_request(Req, Code)

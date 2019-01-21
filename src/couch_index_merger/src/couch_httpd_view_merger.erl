@@ -162,6 +162,7 @@ http_sender(stop, SAcc) ->
         Buffer1 = [<<"\r\n],\r\n\"errors\":[">> | lists:reverse(Buffer0, [<<"\r\n]">>])]
     end,
     Buffer2 = [make_rows_buffer(SAcc), Buffer1, <<"\r\n}">>],
+    log_bytes(SAcc#sender_acc.req, iolist_size(Buffer2)),
     couch_httpd:send_chunk(Resp, Buffer2),
     {ok, couch_httpd:end_json_response(Resp)};
 
@@ -211,6 +212,7 @@ maybe_flush_rows(JsonRow, SAcc) ->
 
 flush_rows(SAcc) ->
     Buffer = make_rows_buffer(SAcc),
+    log_bytes(SAcc#sender_acc.req, iolist_size(Buffer)),
     couch_httpd:send_chunk(SAcc#sender_acc.resp, Buffer),
     SAcc#sender_acc{
         rows_acc = [],
@@ -251,3 +253,10 @@ make_error_row({error, row_json, Json}) ->
 make_error_row({error, Url, Reason}) ->
     ?JSON_ENCODE({[{<<"from">>, iolist_to_binary(Url)},
                    {<<"reason">>, to_binary(Reason)}]}).
+
+log_bytes(Req, Size) ->
+    try
+        couch_query_logger:log(Req, response_size, Size)
+    catch
+        _:_ -> ok
+    end.
