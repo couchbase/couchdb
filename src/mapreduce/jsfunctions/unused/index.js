@@ -215,6 +215,10 @@ function unused(src) {
             exec(node.body, context);
             exec(node.test, context);
         },
+        LabeledStatement: function(node, context) {
+            exec(node.label, context);
+            exec(node.body, context);
+        },
         ContinueStatement: function() {
         },
         BreakStatement: function() {
