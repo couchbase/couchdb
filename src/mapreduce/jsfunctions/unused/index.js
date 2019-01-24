@@ -93,6 +93,18 @@ function unused(src) {
 
             Array.prototype.push.apply(unused_vars, ctx.unused());
         },
+        ArrowFunctionExpression: function(node, context) {
+            var ctx = new Context(context);
+
+            node.params.forEach(function(node) {
+                maybe_set_param(node, ctx);
+            });
+
+            // exec function body with new context
+            exec(node.body, ctx);
+
+            Array.prototype.push.apply(unused_vars, ctx.unused());
+        },
         BlockStatement: function(node, context) {
             node.body.forEach(function(node) {
                 exec(node, context);
