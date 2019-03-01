@@ -320,19 +320,19 @@ get_first_ddoc([_MergeSpec | Rest], UserCtx) ->
     get_first_ddoc(Rest, UserCtx).
 
 
-open_db(<<"http://", _/binary>> = DbName, _UserCtx, Timeout) ->
+open_db(<<"http://", _/binary>> = DbName, SSLOptions, _UserCtx, Timeout) ->
     HttpDb = #httpdb{
         url = maybe_add_trailing_slash(DbName),
         timeout = Timeout
     },
-    {ok, HttpDb#httpdb{lhttpc_options = lhttpc_options(HttpDb)}};
-open_db(<<"https://", _/binary>> = DbName, _UserCtx, Timeout) ->
+    {ok, HttpDb#httpdb{lhttpc_options = lhttpc_options(HttpDb, SSLOptions)}};
+open_db(<<"https://", _/binary>> = DbName, SSLOptions, _UserCtx, Timeout) ->
     HttpDb = #httpdb{
         url = maybe_add_trailing_slash(DbName),
         timeout = Timeout
     },
-    {ok, HttpDb#httpdb{lhttpc_options = lhttpc_options(HttpDb)}};
-open_db(DbName, UserCtx, _Timeout) ->
+    {ok, HttpDb#httpdb{lhttpc_options = lhttpc_options(HttpDb, SSLOptions)}};
+open_db(DbName, _SSLOptions, UserCtx, _Timeout) ->
     case couch_db:open(DbName, [{user_ctx, UserCtx}]) of
     {ok, _} = Ok ->
         Ok;
@@ -408,12 +408,11 @@ ddoc_not_found_msg(DbName, DDocId) ->
     iolist_to_binary(Msg).
 
 
-lhttpc_options(#httpdb{timeout = T}) ->
-    % TODO: add SSL options like verify and cacertfile, which should
-    % configurable somewhere.
+lhttpc_options(#httpdb{timeout = T}, SSLOptions) ->
+    ConnectOptions = [{keepalive, true}, {nodelay, true} | SSLOptions],
     [
         {connect_timeout, T},
-        {connect_options, [{keepalive, true}, {nodelay, true}]},
+        {connect_options, ConnectOptions},
         {pool, whereis(couch_index_merger_connection_pool)}
     ].
 
@@ -683,14 +682,15 @@ run_http_index_folder(Mod, IndexSpec, MergeParams, DDoc, Queue) ->
 http_index_folder_req_details(Mod, IndexSpec, MergeParams, DDoc) ->
     #merged_index_spec{
         url = MergeUrl0,
-        ejson_spec = {EJson}
+        ejson_spec = {EJson},
+        ssl_opts = SSLOptions
     } = IndexSpec,
     #index_merge{
         conn_timeout = Timeout,
         http_params = ViewArgs,
         extra = Extra
     } = MergeParams,
-    {ok, HttpDb} = open_db(MergeUrl0, nil, Timeout),
+    {ok, HttpDb} = open_db(MergeUrl0, SSLOptions, nil, Timeout),
     #httpdb{
         url = Url,
         lhttpc_options = Options,

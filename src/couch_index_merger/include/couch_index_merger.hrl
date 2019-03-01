@@ -15,7 +15,8 @@
 % It's always remote.
 -record(merged_index_spec, {
     url,
-    ejson_spec
+    ejson_spec,
+    ssl_opts
 }).
 
 -record(index_merge, {
