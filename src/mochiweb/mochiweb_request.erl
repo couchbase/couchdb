@@ -43,8 +43,8 @@
 % 5 minute default idle timeout
 -define(IDLE_TIMEOUT, 300000).
 
-% Maximum recv_body() length of 4MB
--define(MAX_RECV_BODY, (4*1024*1024)).
+% Maximum recv_body() length of 20MB
+-define(MAX_RECV_BODY, (20*1024*1024)).
 
 %% @spec new(Socket, Method, RawPath, Version, headers()) -> request()
 %% @doc Create a new request instance.
@@ -192,7 +192,7 @@ body_length({?MODULE, [_Socket, _Method, _RawPath, _Version, _Headers]}=THIS) ->
 
 %% @spec recv_body(request()) -> binary()
 %% @doc Receive the body of the HTTP request (defined by Content-Length).
-%%      Will only receive up to the default max-body length of 1MB.
+%%      Will only receive up to the default max-body length of 20MB.
 recv_body({?MODULE, [_Socket, _Method, _RawPath, _Version, _Headers]}=THIS) ->
     recv_body(?MAX_RECV_BODY, THIS).
 
