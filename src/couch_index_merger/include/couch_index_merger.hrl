@@ -16,7 +16,7 @@
 -record(merged_index_spec, {
     url,
     ejson_spec,
-    ssl_opts
+    ssl_opts = []
 }).
 
 -record(index_merge, {
