@@ -104,7 +104,7 @@ cd $WORKSPACE/testrunner
 echo "</pre><h4>Unit Tests sans couch_set_view and couch_dcp</h4><pre>"
 export phase=sanity
 cd $WORKSPACE/build/couchdb
-(timeout 1h ctest -E "couch_dcp|couch_set_view" 2>&1 | ts) | tee -a $WORKSPACE/test.log | egrep 'pass|fail|summary|ok$'
+(timeout 1h ctest -E "couch_dcp|couch_set_view|functional_test" 2>&1 | ts) | tee -a $WORKSPACE/test.log | egrep 'pass|fail|summary|ok$'
 
 # Test the premerge tests
 echo "</pre><h4>Views Pre merge test without createdelete views</h4><pre>"
@@ -124,7 +124,7 @@ start_cluster
 ulimit -c 2097152
 sudo bash -c "echo /tmp/core-%e.$TS.%p > /proc/sys/kernel/core_pattern"
 perl -pi -e 's/num_files, 10/num_files, 50/' $WORKSPACE/install/etc/couchbase/static_config
-(timeout 1h echo "No functional tests defined" 2>&1 | ts) | tee -a $WORKSPACE/test.log | egrep 'pass|fail|summary|ok$'
+(timeout 1h ctest -R  "functional_test" 2>&1 | ts) | tee -a $WORKSPACE/test.log | egrep 'pass|fail|summary|ok$'
 collect_logs
 stop_cluster
 

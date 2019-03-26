@@ -1,3 +1,4 @@
 ADD_SUBDIRECTORY(bench)
 ADD_SUBDIRECTORY(etap)
 ADD_SUBDIRECTORY(javascript)
+ADD_SUBDIRECTORY(functional_test)
