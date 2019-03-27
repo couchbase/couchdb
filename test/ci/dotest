@@ -119,11 +119,13 @@ cd $WORKSPACE/testrunner
 (timeout 1h make test-viewmerge-viewci 2>&1 | ts) | tee -a $WORKSPACE/test.log | egrep 'pass|fail|summary|ok$'
 
 # Functional tests
+echo "</pre><h4>Functional Tests</h4><pre>"
 export phase=functional
 start_cluster
 ulimit -c 2097152
 sudo bash -c "echo /tmp/core-%e.$TS.%p > /proc/sys/kernel/core_pattern"
 perl -pi -e 's/num_files, 10/num_files, 50/' $WORKSPACE/install/etc/couchbase/static_config
+cd $WORKSPACE/build/couchdb
 (timeout 1h ctest -R  "functional_test" 2>&1 | ts) | tee -a $WORKSPACE/test.log | egrep 'pass|fail|summary|ok$'
 collect_logs
 stop_cluster
