@@ -46,7 +46,7 @@
          list_pools/0,
          set_max_pool_size/2,
          ensure_call/6,
-         client_done/5
+         client_done/6
         ]).
 
 %% Callbacks
@@ -197,7 +197,7 @@ start_link(Options0) ->
 -spec ensure_call(pool_id(), pid(), host(), port_num(), boolean(), options()) ->
                         socket() | 'no_socket'.
 ensure_call(Pool, Pid, Host, Port, Ssl, Options) ->
-    SocketRequest = {socket, Pid, Host, Port, Ssl},
+    SocketRequest = {socket, Pid, Host, Port, Ssl, Options},
     try gen_server:call(Pool, SocketRequest, infinity) of
         {ok, S} ->
             %% Re-using HTTP/1.1 connections
@@ -239,11 +239,11 @@ ensure_call(Pool, Pid, Host, Port, Ssl, Options) ->
 %% which can be new or not.
 %% @end
 %%------------------------------------------------------------------------------
--spec client_done(pid(), host(), port_num(), boolean(), socket()) -> ok.
-client_done(Pool, Host, Port, Ssl, Socket) ->
+-spec client_done(pid(), host(), port_num(), boolean(), options(), socket()) -> ok.
+client_done(Pool, Host, Port, Ssl, Options, Socket) ->
     case lhttpc_sock:controlling_process(Socket, Pool, Ssl) of
         ok ->
-            DoneMsg = {done, Host, Port, Ssl, Socket},
+            DoneMsg = {done, Host, Port, Ssl, Options, Socket},
             ok = gen_server:call(Pool, DoneMsg, infinity);
         _ ->
             ok
@@ -276,13 +276,13 @@ init(Options) ->
 %%------------------------------------------------------------------------------
 -spec handle_call(any(), any(), #httpc_man{}) ->
     {reply, any(), #httpc_man{}}.
-handle_call({socket, Pid, Host, Port, Ssl}, {Pid, _Ref} = From, State) ->
+handle_call({socket, Pid, Host, Port, Ssl, Options}, {Pid, _Ref} = From, State) ->
     #httpc_man{
         max_pool_size = MaxSize,
         clients = Clients,
         queues = Queues
     } = State,
-    Dest = {Host, Port, Ssl},
+    Dest = {Host, Port, Ssl, erlang:phash2(lists:usort(Options))},
     {Reply0, State2} = find_socket(Dest, Pid, State),
     case Reply0 of
         {ok, _Socket} ->
@@ -303,15 +303,18 @@ handle_call(client_count, _, State) ->
     {reply, dict:size(State#httpc_man.clients), State};
 handle_call(connection_count, _, State) ->
     {reply, dict:size(State#httpc_man.sockets), State};
-handle_call({connection_count, Destination}, _, State) ->
-    Count = case dict:find(Destination, State#httpc_man.destinations) of
-        {ok, Sockets} -> length(Sockets);
-        error         -> 0
-    end,
+handle_call({connection_count, {Host, Port, Ssl}}, _, State) ->
+    Count = dict:fold(
+              fun (Dest, Sockets, Acc) ->
+                      case Dest of
+                          {Host, Port, Ssl, _} -> Acc + length(Sockets);
+                          _ -> Acc
+                      end
+              end, 0, State#httpc_man.destinations),
     {reply, Count, State};
-handle_call({done, Host, Port, Ssl, Socket}, {Pid, _} = From, State) ->
+handle_call({done, Host, Port, Ssl, Options, Socket}, {Pid, _} = From, State) ->
     gen_server:reply(From, ok),
-    Dest = {Host, Port, Ssl},
+    Dest = {Host, Port, Ssl, erlang:phash2(lists:usort(Options))},
     {Dest, MonRef} = dict:fetch(Pid, State#httpc_man.clients),
     true = erlang:demonitor(MonRef, [flush]),
     Clients2 = dict:erase(Pid, State#httpc_man.clients),
@@ -384,7 +387,7 @@ code_change(_, State, _) ->
 %------------------------------------------------------------------------------
 %% @private
 %%------------------------------------------------------------------------------
-find_socket({_, _, Ssl} = Dest, Pid, State) ->
+find_socket({_, _, Ssl, _} = Dest, Pid, State) ->
     Dests = State#httpc_man.destinations,
     case dict:find(Dest, Dests) of
         {ok, [Socket | Sockets]} ->
@@ -414,7 +417,7 @@ find_socket({_, _, Ssl} = Dest, Pid, State) ->
 remove_socket(Socket, State) ->
     Dests = State#httpc_man.destinations,
     case dict:find(Socket, State#httpc_man.sockets) of
-        {ok, {{_, _, Ssl} = Dest, Timer}} ->
+        {ok, {{_, _, Ssl, _} = Dest, Timer}} ->
             cancel_timer(Timer, Socket),
             lhttpc_sock:close(Socket, Ssl),
             Sockets = lists:delete(Socket, dict:fetch(Dest, Dests)),
@@ -429,7 +432,7 @@ remove_socket(Socket, State) ->
 %------------------------------------------------------------------------------
 %% @private
 %%------------------------------------------------------------------------------
-store_socket({_, _, Ssl} = Dest, Socket, State) ->
+store_socket({_, _, Ssl, _} = Dest, Socket, State) ->
     Timeout = State#httpc_man.timeout,
     Timer = erlang:send_after(Timeout, self(), {timeout, Socket}),
     % the socket might be closed from the other side
@@ -478,7 +481,7 @@ cancel_timer(Timer, Socket) ->
 %------------------------------------------------------------------------------
 %% @private
 %%------------------------------------------------------------------------------
-add_to_queue({_Host, _Port, _Ssl} = Dest, From, Queues) ->
+add_to_queue({_Host, _Port, _Ssl, _OptsHash} = Dest, From, Queues) ->
     case dict:find(Dest, Queues) of
         error ->
             dict:store(Dest, queue:in(From, queue:new()), Queues);
@@ -489,7 +492,7 @@ add_to_queue({_Host, _Port, _Ssl} = Dest, From, Queues) ->
 %------------------------------------------------------------------------------
 %% @private
 %%------------------------------------------------------------------------------
-queue_out({_Host, _Port, _Ssl} = Dest, Queues) ->
+queue_out({_Host, _Port, _Ssl, _OptsHash} = Dest, Queues) ->
     case dict:find(Dest, Queues) of
         error ->
             empty;
@@ -507,7 +510,7 @@ queue_out({_Host, _Port, _Ssl} = Dest, Queues) ->
 %------------------------------------------------------------------------------
 %% @private
 %%------------------------------------------------------------------------------
-deliver_socket(Socket, {_, _, Ssl} = Dest, State) ->
+deliver_socket(Socket, {_, _, Ssl, _OptsHash} = Dest, State) ->
     case queue_out(Dest, State#httpc_man.queues) of
         empty ->
             store_socket(Dest, Socket, State);
