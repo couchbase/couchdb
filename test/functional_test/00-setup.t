@@ -15,13 +15,21 @@
 %% limitations under the License.
 
 main(_) ->
-    etap:plan(1),
-    case (catch test()) of
-        ok ->
-            etap:end_tests();
-        Other ->
-            etap:diag(io_lib:format("Test died abnormally: ~p", [Other])),
-            etap:bail(Other)
+    %% test depends on port 9000 to port 9003 running
+    %% check if all ports are running or not
+    %% it will give econnrefused error when cluster_run is not running
+    case cluster_ops:check_cluster_ports() of
+    ok ->
+        etap:plan(1),
+        case (catch test()) of
+            ok ->
+                etap:end_tests();
+            Other ->
+                etap:diag(io_lib:format("Test died abnormally: ~p", [Other])),
+                etap:bail(Other)
+            end;
+    Reason ->
+        etap:plan({skip, Reason})
     end.
 
 test() ->

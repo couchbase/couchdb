@@ -15,11 +15,21 @@
 
 -module(cluster_ops).
 
--export([init_setup/0]).
+-export([init_setup/0, check_cluster_ports/0]).
 -export([node_rename/1, trigger_rebalance/1, add_node/1]).
 -export([create_bucket/1]).
 -export([get_url_with_auth/1, request/5]).
 -include("defs.hrl").
+
+check_cluster_ports() ->
+    lists:foldl(fun(Port, Result) ->
+                case request("localhost:"++Port, get, [], [], 2) of
+                econnrefused ->
+                    cluster_not_running;
+                {_, _, _, _} ->
+                    Result
+                end
+    end, ok, ["9000", "9001", "9002", "9003"]).
 
 init_node_paths()->
     Data = "data_path=%2Ftmp%2Fdata&index_path=%2Ftmp%2Fdata",
@@ -123,23 +133,25 @@ error_check(Code, ExpectedCode, Body) ->
 request(Url, Method, Headers, Body, Retry) ->
     Url2 = get_url_with_auth(Url),
     case test_util:request(Url2, Headers, Method, Body) of
-    {ok, Code, ResponseHeader, Body} ->
+    {ok, Code, ResponseHeader, ResponseBody} ->
         case Code of
         200 ->
-            {ok, Code, ResponseHeader, Body};
+            {ok, Code, ResponseHeader, ResponseBody};
         202 ->%request is accepted for processing but processing is not yet done
-            {ok, Code, ResponseHeader, Body};
+            {ok, Code, ResponseHeader, ResponseBody};
         _ ->
             case Retry of
             0 ->
-                {ok, Code, ResponseHeader, Body};
+                {ok, Code, ResponseHeader, ResponseBody};
             _ ->
                 request(Url, Method, Headers, Body, Retry-1)
 	    end
         end;
-     Reason ->
-        Reason
-     end.
+    {error, {econnrefused, _}} ->
+        econnrefused;
+    {error, {nxdomain, _}} ->
+        econnrefused
+    end.
 
 otp_nodes(NodesToRemove) ->
     {ok, _Code, _Header, Body} = request(?CLUSTER_INFO, get, [], [], 5),
