@@ -31,7 +31,7 @@
 -export([split_iolist/2]).
 -export([log_data/2]).
 -export([strong_rand_bytes/1]).
--export([parse_view_name/1]).
+-export([parse_view_name/1, log_parse_post/1]).
 
 -include("couch_db.hrl").
 
@@ -461,3 +461,13 @@ parse_view_name(Name) ->
             " `ddoc_name/view_name`."})
     end.
 
+log_parse_post(Req) ->
+    try log_do_parse(Req) of Str -> ?l2b(Str)
+    catch _:_ -> "" end.
+
+log_do_parse(#httpd{method='POST'} = Req) ->
+    {[{Bucket, {Props}}]} = couch_util:get_nested_json_value(
+        couch_httpd:json_body_obj(Req), [<<"views">>, <<"sets">>]),
+    ViewName = get_value(<<"view">>, Props),
+    {DDoc, View} = parse_view_name(ViewName),
+    [<<"/">>, Bucket, <<"/">>, DDoc, <<"/_view/">>, View].

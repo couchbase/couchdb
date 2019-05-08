@@ -49,13 +49,13 @@ handle_call({enable, Enabled}, _From, State) ->
 handle_call({interval, Interval}, _From, State) ->
     {reply, ok, State#state{interval = Interval}};
 
-handle_call({Path, Origin, Staleness}, _From, #state{enabled = true} = State) ->
-    Pos = pos(Origin, Staleness),
+handle_call({Path, Origin, Parameter, Value}, _From, #state{enabled = true} = State) ->
+    Pos = pos(Origin, Parameter),
     try
-        ets:update_counter(?MODULE, Path, {Pos, 1})
+        ets:update_counter(?MODULE, Path, {Pos, Value})
     catch
         error:badarg ->
-            ets:insert(?MODULE, default(Path, Pos))
+            ets:insert(?MODULE, default(Path, Pos, Value))
     end,
     {reply, ok, State};
 
@@ -91,8 +91,14 @@ code_change(_OldVsn, State, _Extra) ->
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
-log(Path, Origin, Staleness) ->
-    gen_server:call(?MODULE, {Path, Origin, Staleness}).
+log(#httpd{path_parts=Parts, mochi_req=MochiReq} = Req, QueryArgument, Value) ->
+    {Origin, Path} = case Parts of
+        [_, <<"_design">>, _, <<"_view">>, _] ->
+            {external, MochiReq:get(path)};
+        _ ->
+            {internal, ?b2l(couch_util:log_parse_post(Req))}
+    end,
+    gen_server:call(?MODULE, {Path, Origin, QueryArgument, Value}).
 
 set_interval(Interval) when is_integer(Interval)->
     gen_server:call(?MODULE, {interval, Interval}).
@@ -113,17 +119,20 @@ disable() ->
 pos(internal, ok) -> 2;
 pos(internal, update_after) -> 3;
 pos(internal, false) -> 4;
-pos(external, ok) -> 5;
-pos(external, update_after) -> 6;
-pos(external, false) -> 7.
+pos(internal, response_size) -> 5;
+pos(external, ok) -> 6;
+pos(external, update_after) -> 7;
+pos(external, false) -> 8;
+pos(external, response_size) -> 9.
 
-default(Path, Pos) ->
-    erlang:setelement(Pos, {Path, 0, 0, 0, 0, 0, 0}, 1).
+default(Path, Pos, Value) ->
+    %Iok, Iua, Ifalse, Ibytes, Eok, Eua, Efalse, Ebytes
+    erlang:setelement(Pos, {Path, 0, 0, 0, 0, 0, 0, 0, 0}, Value).
 
-tostring({Path, IO, IU, IF, EO, EU, EF}, Acc) ->
-    [io_lib:format("~s | internal.stale={ok: ~B, update_after: ~B, false: ~B}"
-                   " | external.stale={ok: ~B, update_after: ~B, false: ~B}~n",
-                   [?LOG_USERDATA(Path), IO, IU, IF, EO, EU, EF]) | Acc].
+tostring({Path, IO, IU, IF, IBytes, EO, EU, EF, EBytes}, Acc) ->
+    [io_lib:format("~s | internal={stale: {ok: ~B, upd_after: ~B, false: ~B}, ResultBytes: ~B}"
+                   " | external={stale: {ok: ~B, upd_after: ~B, false: ~B}, ResultBytes: ~B}~n",
+                   [?LOG_USERDATA(Path), IO, IU, IF, IBytes, EO, EU, EF, EBytes]) | Acc].
 
 dump() ->
     QVol = ets:foldl(fun tostring/2, [], ?MODULE),
