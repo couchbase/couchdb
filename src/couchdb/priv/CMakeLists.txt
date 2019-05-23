@@ -19,7 +19,7 @@ SET_TARGET_PROPERTIES(couch_ejson_compare PROPERTIES PREFIX "")
 TARGET_LINK_LIBRARIES(couch_ejson_compare
   ${COUCHBASE_UNRESOLVED}
   ${ICU_LIBRARIES}
-  platform_unsanitized)
+  platform_cbassert)
 
 # couch_ejson_compare is loaded into Erlang VM (beam.smp) which
 # doesn't link the sanitizer libs and hence cannot successfully load

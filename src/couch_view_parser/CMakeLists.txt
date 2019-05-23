@@ -32,7 +32,7 @@ ADD_LIBRARY(couch_view_parser_nif MODULE ${COUCH_VIEW_YAJL_SRC})
 SET_TARGET_PROPERTIES(couch_view_parser_nif PROPERTIES PREFIX "")
 
 TARGET_LINK_LIBRARIES(couch_view_parser_nif ${COUCHBASE_UNRESOLVED}
-                                   ${COUCHBASE_MATH_LIBS} platform_unsanitized)
+                                   ${COUCHBASE_MATH_LIBS} platform_cbassert)
 SET_TARGET_PROPERTIES(couch_view_parser_nif PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/priv"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/priv"
