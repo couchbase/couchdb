@@ -147,7 +147,9 @@ handle_design_req(#httpd{
         end),
         Handler(Req, Db, DDoc);
     {not_found, missing} ->
-        throw({not_found, <<"Design document ", DesignId/binary, " not found">>})
+        throw({not_found, <<"Design document ", DesignId/binary, " not found">>});
+    {not_found, deleted} ->
+        throw({not_found, <<"Design document ", DesignId/binary, " deleted">>})
     end;
 
 handle_design_req(Req, Db) ->
