@@ -43,12 +43,7 @@ init() ->
     Dir ->
         filename:join(Dir, "mapreduce_nif")
     end,
-    (catch erlang:load_nif(SoName, 0)),
-    case erlang:system_info(otp_release) of
-    "R13B03" -> true;
-    _ -> ok
-    end.
-
+    erlang:load_nif(SoName, SoName).
 
 start_map_context(_Mod, _MapFunSources) ->
     erlang:nif_error(mapreduce_nif_not_loaded).

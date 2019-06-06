@@ -127,9 +127,10 @@ static std::string exceptionString(const TryCatch &tryCatch);
 static void freeLogResults(map_reduce_ctx_t *ctx);
 
 static Platform *v8platform;
-void initV8()
+
+void initV8(const char* executable_img)
 {
-    V8::InitializeICUDefaultLocation("");
+    V8::InitializeICUDefaultLocation(executable_img, nullptr);
     v8platform = platform::CreateDefaultPlatform();
     V8::InitializePlatform(v8platform);
     V8::Initialize();
@@ -500,7 +501,7 @@ void destroyContext(map_reduce_ctx_t *ctx)
 static Local<Context> createJsContext(map_reduce_ctx_t *ctx)
 {
     EscapableHandleScope handle_scope(ctx->isolate);
-    Handle<ObjectTemplate> global = ObjectTemplate::New();
+    Handle<ObjectTemplate> global = ObjectTemplate::New(ctx->isolate);
 
     global->Set(createUtf8String(ctx->isolate, "emit"),
             FunctionTemplate::New(ctx->isolate, emit));
@@ -555,7 +556,7 @@ static void log(const v8::FunctionCallbackInfo<Value>& args)
             str = Handle<String>::Cast(logMsg);
             len = str->Length();
             if (len > MAX_LOG_STRING_SIZE) {
-                str = Handle<String>(String::Concat(
+                str = Handle<String>(String::Concat(ctx->isolate,
                           createUtf8String(ctx->isolate, TRUNCATE_STR), str)),
                 len = MAX_LOG_STRING_SIZE + sizeof(TRUNCATE_STR) - 1;
             }
@@ -568,7 +569,7 @@ static void log(const v8::FunctionCallbackInfo<Value>& args)
         if (!enif_alloc_binary_compat(isoData->ctx->env, len, &resultBin)) {
             throw std::bad_alloc();
         }
-        str->WriteUtf8(reinterpret_cast<char *>(resultBin.data),
+        str->WriteUtf8(ctx->isolate, reinterpret_cast<char *>(resultBin.data),
                 len, NULL, String::NO_NULL_TERMINATION);
         ctx->logResults->push_back(resultBin);
     } catch(Handle<String> &ex) {
@@ -664,11 +665,11 @@ ErlNifBinary jsonStringify(const Handle<Value> &obj)
         memcpy(resultBin.data, "null", len);
     } else {
         Handle<String> str = Handle<String>::Cast(result);
-        len = str->Utf8Length();
+        len = str->Utf8Length(isoData->ctx->isolate);
         if (!enif_alloc_binary_compat(isoData->ctx->env, len, &resultBin)) {
             throw std::bad_alloc();
         }
-        str->WriteUtf8(reinterpret_cast<char *>(resultBin.data),
+        str->WriteUtf8(isoData->ctx->isolate, reinterpret_cast<char *>(resultBin.data),
                        len, NULL, String::NO_NULL_TERMINATION);
     }
 
@@ -745,7 +746,7 @@ void loadFunctions(map_reduce_ctx_t *ctx,
                 // Some error during static analysis of map function
                 throw MapReduceError("Malformed map function");
             }
-            bool isDocUnused = js_result->BooleanValue();
+            bool isDocUnused = js_result->BooleanValue(ctx->isolate);
             if (isDocUnused == false) {
                 isDocUsed = true;
             }
@@ -780,18 +781,23 @@ Handle<Function> compileFunction(const function_source_t &funSource)
         throw MapReduceError(exceptionString(try_catch));
     }
 
-    Handle<Value> result = script->Run();
+    MaybeLocal<Value> result = script->Run(context);
+    Local<Value> retval;
 
-    if (result.IsEmpty()) {
+    if (!result.ToLocal(&retval)) {
         throw MapReduceError(exceptionString(try_catch));
     }
 
-    if (!result->IsFunction()) {
+    if (retval.IsEmpty()) {
+        throw MapReduceError(exceptionString(try_catch));
+    }
+
+    if (!retval->IsFunction()) {
         throw MapReduceError(std::string("Invalid function: ") +
                 funSource.c_str());
     }
 
-    return handle_scope.Escape(Handle<Function>::Cast(result));
+    return handle_scope.Escape(Handle<Function>::Cast(retval));
 }
 
 
@@ -837,21 +843,23 @@ void taskFinished(map_reduce_ctx_t *ctx)
 
 void terminateTask(map_reduce_ctx_t *ctx)
 {
-    V8::TerminateExecution(ctx->isolate);
+    ctx->isolate->TerminateExecution();
     ctx->taskStartTime = {};
 }
 
 
 std::string exceptionString(const TryCatch &tryCatch)
 {
+    Isolate *isolate = Isolate::GetCurrent();
+    Local<Context> context(isolate->GetCurrentContext());
     HandleScope handle_scope(Isolate::GetCurrent());
-    String::Utf8Value exception(tryCatch.Exception());
+    String::Utf8Value exception(isolate, tryCatch.Exception());
     const char *exceptionString = (*exception);
 
     if (exceptionString) {
         Handle<Message> message = tryCatch.Message();
         return std::string(exceptionString) + " (line " +
-                std::to_string(message->GetLineNumber()) + ":" +
+                std::to_string(message->GetLineNumber(context).FromMaybe(0)) + ":" +
                 std::to_string(message->GetStartColumn()) + ")";
     }
 

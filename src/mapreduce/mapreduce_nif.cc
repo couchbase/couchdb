@@ -456,7 +456,9 @@ int onLoad(ErlNifEnv *env, void **priv, ERL_NIF_TERM info)
         return -4;
     }
 
-    initV8();
+    char path[8092];
+    enif_get_string(env, info, path, sizeof(path), ERL_NIF_LATIN1);
+    initV8(path);
 
     return 0;
 }

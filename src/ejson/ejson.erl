@@ -26,12 +26,7 @@ init() ->
     Dir ->
         filename:join(Dir, "ejson")
     end,
-    (catch erlang:load_nif(SoName, 0)),
-    case erlang:system_info(otp_release) of
-    "R13B03" -> true;
-    _ -> ok
-    end.
-
+    erlang:load_nif(SoName, 0).
 
 decode(IoList) ->
     nif_decode(IoList).

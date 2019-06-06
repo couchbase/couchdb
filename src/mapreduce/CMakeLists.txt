@@ -58,5 +58,23 @@ INSTALL(FILES ${outfiles}
                ${CMAKE_CURRENT_BINARY_DIR}/mapreduce.app
         DESTINATION ${MR_EBIN_PREFIX})
 
+# icudtl.dat file is loaded in install/bin in Windows and install/lib
+# in LINUX, but the mapreduce files requires it to be present in
+# ${MR_PRIV_PREFIX} directory and other dependencies require them to be
+# present in install/bin directory, so we copy it from lib to bin
+# directory and lib to ${MR_PRIV_PREFIX} on LINUX, in Windows, we
+# just copy it to ${MR_PRIV_PREFIX} from bin.
+IF (WIN32)
+    INSTALL(FILES ${CMAKE_INSTALL_PREFIX}/bin/icudtl.dat
+            DESTINATION ${MR_PRIV_PREFIX})
+ELSE ()
+    INSTALL(FILES ${CMAKE_INSTALL_PREFIX}/lib/icudtl.dat
+            DESTINATION ${MR_PRIV_PREFIX})
+    INSTALL(FILES ${CMAKE_INSTALL_PREFIX}/lib/icudtl.dat
+            DESTINATION ${CMAKE_INSTALL_PREFIX}/bin)
+    INSTALL(FILES ${CMAKE_INSTALL_PREFIX}/lib/icudtl.dat
+            DESTINATION ${CMAKE_BINARY_DIR}/couchdb/src/mapreduce/priv)
+ENDIF ()
+
 ADD_SUBDIRECTORY(test)
 ADD_SUBDIRECTORY(jsfunctions)

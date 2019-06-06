@@ -43,11 +43,7 @@ init() ->
     Dir ->
         filename:join(Dir, "couch_view_parser_nif")
     end,
-    (catch erlang:load_nif(SoName, 0)),
-    case erlang:system_info(otp_release) of
-    "R13B03" -> true;
-    _ -> ok
-    end.
+    erlang:load_nif(SoName, 0).
 
 
 -spec start_context() -> {ok, Context::term()}.
