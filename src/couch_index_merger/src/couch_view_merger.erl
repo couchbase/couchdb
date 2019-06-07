@@ -506,7 +506,7 @@ prepare_set_view(ViewSpec, ViewGroupReq, DDoc, Queue, GetSetViewFn) ->
             {View, Group};
         {ok, _, Group, MissingPartitions} ->
             ?LOG_INFO("Set view `~s`, group `~s`, missing partitions: ~w",
-                      [?LOG_USERDATA(SetName), ?LOG_USERDATA(DDocId), MissingPartitions]),
+                      [SetName, DDocId, MissingPartitions]),
             couch_set_view:release_group(Group),
             couch_view_merger_queue:queue(Queue, set_view_outdated),
             couch_view_merger_queue:done(Queue),
@@ -621,7 +621,7 @@ map_set_view_folder(ViewSpec, MergeParams, DDoc, Queue) ->
             Stack = erlang:get_stacktrace(),
             ?LOG_ERROR("Caught unexpected error "
                        "while serving view query ~s/~s: ~p~n~s",
-                       [?LOG_USERDATA(SetName), ?LOG_USERDATA(DDocId), Error, ?LOG_USERDATA(Stack)]),
+                       [SetName, DDocId, Error, ?LOG_USERDATA(Stack)]),
             couch_view_merger_queue:queue(Queue, {error, ?LOCAL, to_binary(Error)})
         after
             couch_set_view:release_group(Group),
@@ -826,7 +826,7 @@ reduce_set_view_folder(ViewSpec, MergeParams, DDoc, Queue) ->
             Stack = erlang:get_stacktrace(),
             ?LOG_ERROR("Caught unexpected error "
                        "while serving view query ~s/~s: ~p~n~s",
-                       [?LOG_USERDATA(SetName), ?LOG_USERDATA(DDocId), Error, ?LOG_USERDATA(Stack)]),
+                       [SetName, DDocId, Error, ?LOG_USERDATA(Stack)]),
             couch_view_merger_queue:queue(Queue, {error, ?LOCAL, to_binary(Error)})
         after
             couch_set_view:release_group(Group),
@@ -1272,7 +1272,7 @@ simple_set_view_query(Params, DDoc, Req) ->
     _ ->
         couch_set_view:release_group(Group),
         ?LOG_INFO("Set view `~s`, group `~s`, missing partitions: ~w",
-                  [?LOG_USERDATA(SetName), ?LOG_USERDATA(DDocId), MissingPartitions]),
+                  [SetName, DDocId, MissingPartitions]),
         throw({error, set_view_outdated})
     end,
 

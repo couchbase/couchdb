@@ -545,7 +545,7 @@ cleanup_index_files(Mod, SetName) ->
         ok;
     _ ->
         ?LOG_INFO("Deleting unused (old) set view `~s` index files:~n~n~s",
-            [?LOG_USERDATA(SetName), string:join(DeleteFiles, "\n")])
+            [SetName, string:join(DeleteFiles, "\n")])
     end,
     RootDir = couch_config:get("couchdb", "view_index_dir"),
     lists:foreach(
@@ -989,14 +989,14 @@ handle_call({before_database_delete, SetName}, _From, Server) ->
         ets:lookup(Server#server.name_to_sig_ets, SetName)),
     true = ets:delete(Server#server.name_to_sig_ets, SetName),
     ?LOG_INFO("Deleting index files for set `~s` because master database "
-              "is about to deleted", [?LOG_USERDATA(SetName)]),
+              "is about to deleted", [SetName]),
     try
         delete_index_dir(RootDir, SetName)
     catch _:Error ->
         Stack = erlang:get_stacktrace(),
         ?LOG_ERROR("Error deleting index files for set `~s`:~n"
                    "  error: ~p~n  stacktrace: ~s~n",
-                   [?LOG_USERDATA(SetName), Error, ?LOG_USERDATA(Stack)])
+                   [SetName, Error, ?LOG_USERDATA(Stack)])
     end,
     {reply, ok, Server};
 

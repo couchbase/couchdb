@@ -671,7 +671,7 @@ handle_info({print_log, ReqId}, State) ->
         ?LOG_ERROR(
             "dcp client (~s, ~s): Obtaining message from server timed out "
             "after ~p seconds [RequestId ~p]. Waiting...",
-            [?LOG_USERDATA(Bucket), ?LOG_USERDATA(Name), ?TIMEOUT / 1000, ReqId]);
+            [Bucket, Name, ?TIMEOUT / 1000, ReqId]);
     StreamInfo ->
         #stream_info{
            start_seq = Start,
@@ -692,7 +692,7 @@ handle_info({print_log, ReqId}, State) ->
                  "after ~p seconds [RequestId ~p, PartId ~p, StartSeq ~p, "
                  "CurrentSnapshotSeq ~p, EndSeq ~p, SnapshotBoundary ~w] "
                  "Waiting..." ,
-        Content = [?LOG_USERDATA(Bucket), ?LOG_USERDATA(Name), ?TIMEOUT / 1000, ReqId, PartId, IndexStartSeq,
+        Content = [Bucket, Name, ?TIMEOUT / 1000, ReqId, PartId, IndexStartSeq,
                    Start, End, Boundary],
         ?LOG_ERROR(Format, Content)
     end,

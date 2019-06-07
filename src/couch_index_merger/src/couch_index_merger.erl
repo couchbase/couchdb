@@ -80,7 +80,7 @@ query_index(Mod, #index_merge{indexes = [#set_view_spec{}]} = Params0, Req) ->
             Error ->
                 ?LOG_ERROR("Could not enable socket watchdog "
                            "for design document `~s` err:  ~p",
-                           [?LOG_USERDATA(DDoc#doc.id), ?LOG_USERDATA(Error)])
+                           [DDoc#doc.id, ?LOG_USERDATA(Error)])
         end
     end,
     DDocRev = ddoc_rev(DDoc),
@@ -94,7 +94,7 @@ query_index(Mod, #index_merge{indexes = [#set_view_spec{}]} = Params0, Req) ->
         _ ->
             ?LOG_ERROR("View merger, revision mismatch for design document `~s',"
                        " revision on remote node ~s, revision on local node ~s",
-                       [?LOG_USERDATA(DDoc#doc.id),
+                       [DDoc#doc.id,
                         rev_str(DesiredDDocRevision),
                         rev_str(DDocRev)]),
             throw({error, revision_mismatch})
@@ -153,7 +153,7 @@ do_query_index(Mod, IndexMergeParams, DDoc, IndexName) ->
         _ ->
             ?LOG_ERROR("View merger, revision mismatch for design document `~s',"
                        " revision on remote node ~s, revision on local node ~s",
-                       [?LOG_USERDATA(DDoc#doc.id),
+                       [DDoc#doc.id,
                         rev_str(DesiredDDocRevision),
                         rev_str(DDocRev)]),
             throw({error, revision_mismatch})
@@ -233,7 +233,7 @@ do_query_index(Mod, IndexMergeParams, DDoc, IndexName) ->
             _ ->
                 ?LOG_ERROR("View merger, revision mismatch for design document `~s',"
                            " revision on remote node ~s, revision on local node ~s",
-                           [?LOG_USERDATA(DDoc#doc.id),
+                           [DDoc#doc.id,
                             rev_str(DesiredDDocRevision),
                             rev_str(DDocRev)]),
                 throw({error, revision_mismatch})

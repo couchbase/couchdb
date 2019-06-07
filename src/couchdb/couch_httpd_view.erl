@@ -64,7 +64,7 @@ handle_view_req(#httpd{method='POST',
     case couch_util:get_value(<<"keys">>, Fields, nil) of
     nil ->
         Fmt = "POST to view ~s/~s in database ~s with no keys member.",
-        ?LOG_DEBUG(Fmt, [?LOG_USERDATA(DName), ?LOG_USERDATA(ViewName), ?LOG_USERDATA(Db)]),
+        ?LOG_DEBUG(Fmt, [DName, ViewName, ?LOG_USERDATA(Db)]),
         design_doc_view(Req, Db, DName, ViewName, nil);
     Keys when is_list(Keys) ->
         design_doc_view(Req, Db, DName, ViewName, Keys);

@@ -652,7 +652,7 @@ handle_call(get_current_seq, _From, #db{update_seq = Seq} = Db) ->
 
 
 handle_cast(Msg, Db) ->
-    ?LOG_ERROR("Bad cast message received for db ~s: ~p", [?LOG_USERDATA(Db#db.name), Msg]),
+    ?LOG_ERROR("Bad cast message received for db ~s: ~p", [Db#db.name, Msg]),
     exit({error, Msg}).
 
 code_change(_OldVsn, State, _Extra) ->
@@ -674,7 +674,7 @@ handle_info({'EXIT', _Pid, normal}, Db) ->
 handle_info({'EXIT', _Pid, Reason}, Server) ->
     {stop, Reason, Server};
 handle_info(Msg, Db) ->
-    ?LOG_ERROR("Bad message received for db ~s: ~p", [?LOG_USERDATA(Db#db.name), Msg]),
+    ?LOG_ERROR("Bad message received for db ~s: ~p", [Db#db.name, Msg]),
     exit({error, Msg}).
 
 
