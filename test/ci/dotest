@@ -70,13 +70,16 @@ error_email() {
   if test "`find ~ -maxdepth 1 -name .cinotify -mmin -1440`"; then return; fi
   touch ~/.cinotify
 
-  if [ "$WATCHERS" = "" ]; then return; fi
+  if [ "$WATCHERS" = "" -o ! -f ~/.cicred ]; then return; fi
   cat /var/www/views-current.html | \
      sendemail -q \
-       -s west.smtp.mx.exch029.serverdata.net:25 \
-       -f 'Views CI <community_admin@couchbase.com>' \
+       -s smtp.gmail.com \
+       -o tls=yes \
+       -xu cb.ci.bot@gmail.com \
+       -xp "`cat ~/.cicred`" \
+       -f "$CINAME <cb.ci.bot@gmail.com>" \
        -t $WATCHERS \
-       -u "Views CI $CINAME broke"
+       -u "$CINAME broke"
 }
 
 error_exit() {
