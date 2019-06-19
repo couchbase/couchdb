@@ -65,7 +65,15 @@
 -spec connect(host(), integer(), socket_options(), timeout(), boolean()) ->
     {ok, socket()} | {error, atom()}.
 connect(Host, Port, Options, Timeout, true) ->
-    ssl:connect(Host, Port, Options, Timeout);
+    %% In case if raw ip is used we should pass it as a tuple to let
+    %% cert verification work properly with ip addresses. Otherwise it treats
+    %% the ip as a hostname
+    Addr =
+        case inet_parse:address(Host) of
+            {ok, A} -> A;
+            _ -> Host
+        end,
+    ssl:connect(Addr, Port, Options, Timeout);
 connect(Host, Port, Options, Timeout, false) ->
     gen_tcp:connect(Host, Port, Options, Timeout).
 
