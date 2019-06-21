@@ -359,7 +359,7 @@ handle_cast({reset_indexes, DbName}, #server{root_dir=Root}=Server) ->
 
 new_group(Root, DbName, #group{name=GroupId, sig=Sig, ddoc_db_name=DDocDbName} = Group) ->
     ?LOG_DEBUG("Spawning new group server for view group ~s in database ~s.",
-        [?LOG_USERDATA(GroupId), ?LOG_USERDATA(DbName)]),
+        [GroupId, DbName]),
     case (catch couch_view_group:start_link({Root, DbName, Group})) of
     {ok, NewPid} ->
         unlink(NewPid),
@@ -378,8 +378,8 @@ do_reset_indexes(DbName, Root) ->
     Fun = fun({{DataDbName, DDocDbName}, {DDocId, Sig}}) ->
         ?LOG_DEBUG("Killing update process for view group `~s`, signature `~s`, "
                    "data database `~s`, ddoc database `~s`",
-                   [?LOG_USERDATA(DDocId), couch_util:to_hex(Sig),
-                    ?LOG_USERDATA(DataDbName), ?LOG_USERDATA(DDocDbName)]),
+                   [DDocId, couch_util:to_hex(Sig),
+                    DataDbName, DDocDbName]),
         delete_index_dir(Root, DDocDbName),
         case ets:lookup(group_servers_by_sig, {DataDbName, DDocDbName, Sig}) of
         [{_, Pid}] when is_pid(Pid) ->

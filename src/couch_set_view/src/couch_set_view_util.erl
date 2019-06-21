@@ -197,7 +197,7 @@ open_raw_read_fd(Group) ->
     {error, Reason} ->
         ?LOG_INFO("Warning, could not open raw fd for fast reads for "
             "~s view group `~s`, set `~s`: ~s",
-            [Type, ?LOG_USERDATA(DDocId), ?LOG_USERDATA(SetName), file:format_error(Reason)]),
+            [Type, DDocId, SetName, file:format_error(Reason)]),
         ok
     end.
 
@@ -615,9 +615,9 @@ check_primary_key_size(Bin, Max, Key, DocId, Group) when byte_size(Bin) > Max ->
     KeyPrefix = lists:sublist(unicode:characters_to_list(Key), 100),
     Error = iolist_to_binary(
         io_lib:format("key emitted for document `~s` is too long: ~s... (~p bytes)",
-                      [?LOG_USERDATA(DocId), ?LOG_USERDATA(KeyPrefix), byte_size(Bin)])),
+                      [DocId, ?LOG_USERDATA(KeyPrefix), byte_size(Bin)])),
     ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, ~s",
-                         [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId), Error]),
+                         [SetName, Type, DDocId, Error]),
     throw({error, Error});
 check_primary_key_size(_Bin, _Max, _Key, _DocId, _Group) ->
     ok.
@@ -629,9 +629,9 @@ check_primary_value_size(Bin, Max, Key, DocId, Group) when byte_size(Bin) > Max 
     #set_view_group{set_name = SetName, name = DDocId, type = Type} = Group,
     Error = iolist_to_binary(
         io_lib:format("value emitted for key `~s`, document `~s`, is too big"
-                      " (~p bytes)", [?LOG_USERDATA(Key), ?LOG_USERDATA(DocId), byte_size(Bin)])),
+                      " (~p bytes)", [?LOG_USERDATA(Key), DocId, byte_size(Bin)])),
     ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, ~s",
-                         [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId), Error]),
+                         [SetName, Type, DDocId, Error]),
     throw({error, Error});
 check_primary_value_size(_Bin, _Max, _Key, _DocId, _Group) ->
     ok.

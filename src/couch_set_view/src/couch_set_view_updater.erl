@@ -122,7 +122,7 @@ update(Owner, Group, CurSeqs, CompactorRunning, TmpDir, Options) ->
               "Initial build:        ~s~n"
               "Compactor running:    ~s~n"
               "Min # changes:        ~p~n",
-              [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId),
+              [SetName, Type, DDocId,
                condense(ActiveParts),
                condense(PassiveParts),
                condense(CleanupParts),
@@ -135,7 +135,7 @@ update(Owner, Group, CurSeqs, CompactorRunning, TmpDir, Options) ->
                NumChanges
               ]),
     ?LOG_DEBUG("Updater set view `~s`, ~s group `~s` Partition versions ~w",
-                       [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId), ?set_partition_versions(Group)]),
+                       [SetName, Type, DDocId, ?set_partition_versions(Group)]),
 
 
 
@@ -184,7 +184,7 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
             ?LOG_ERROR("Set view `~s`, ~s group `~s`, mapper error~n"
                 "error:      ~p~n"
                 "stacktrace: ~s~n",
-                [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId), Error, ?LOG_USERDATA(Stacktrace)]),
+                [SetName, Type, DDocId, Error, ?LOG_USERDATA(Stacktrace)]),
             exit(Error)
         end
     end),
@@ -247,7 +247,7 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
             ?LOG_ERROR("Set view `~s`, ~s group `~s`, writer error~n"
                 "error:      ~p~n"
                 "stacktrace: ~s~n",
-                [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId), ?LOG_USERDATA(Error), ?LOG_USERDATA(Stacktrace)]),
+                [SetName, Type, DDocId, ?LOG_USERDATA(Error), ?LOG_USERDATA(Stacktrace)]),
             exit(Error)
         after
             ok = couch_set_view_util:close_raw_read_fd(Group)
@@ -301,7 +301,7 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
             ?LOG_ERROR("Set view `~s`, ~s group `~s`, doc loader error~n"
                 "error:      ~p~n"
                 "stacktrace: ~s~n",
-                [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId), Error, ?LOG_USERDATA(Stacktrace)]),
+                [SetName, Type, DDocId, Error, ?LOG_USERDATA(Stacktrace)]),
             exit(Error)
         end,
         % Since updater progress stats is added from docloader,
@@ -324,7 +324,7 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
         ?LOG_DEBUG("Updater for ~s set view group `~s`, set `~s`, writer finished:~n"
                    "  start seqs: ~w~n"
                    "  end seqs:   ~w~n",
-                   [Type, ?LOG_USERDATA(DDocId), ?LOG_USERDATA(SetName), ?set_seqs(Group), ?set_seqs(NewGroup)]);
+                   [Type, DDocId, SetName, ?set_seqs(Group), ?set_seqs(NewGroup)]);
     _ ->
         ok
     end,
@@ -394,13 +394,13 @@ wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup) ->
     {compactor_started, Pid, Ref} ->
         ?LOG_INFO("Set view `~s`, ~s group `~s`, updater received "
                   "compactor ~p notification, ref ~p, writer ~p",
-                   [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId), Pid, Ref, Writer]),
+                   [SetName, Type, DDocId, Pid, Ref, Writer]),
         Writer ! {compactor_started, self()},
         erlang:put(compactor_pid, {Pid, Ref}),
         wait_result_loop(StartTime, DocLoader, Mapper, Writer, BlockedTime, OldGroup);
     {compactor_started_ack, Writer, GroupSnapshot} ->
         ?LOG_INFO("Set view `~s`, ~s group `~s`, updater received compaction ack"
-                  " from writer ~p", [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId), Writer]),
+                  " from writer ~p", [SetName, Type, DDocId, Writer]),
         case erlang:erase(compactor_pid) of
         {Pid, Ref} ->
             Pid ! {Ref, {ok, GroupSnapshot}};
@@ -523,7 +523,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                                 "set view `~s`, ~s (~s) group `~s`: received "
                                 "a snapshot marker (~s) for partition ~p from "
                                 "sequence ~p to ~p",
-                                [?LOG_USERDATA(SetName), GroupType, Category, ?LOG_USERDATA(DDocId),
+                                [SetName, GroupType, Category, DDocId,
                                     dcp_marker_to_string(MarkerType),
                                     PartId, MarkerStartSeq, MarkerEndSeq]),
                             case Count of
@@ -549,7 +549,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                                 "set view `~s`, ~s (~s) group `~s`: received "
                                 "a snapshot marker (~s) for partition ~p from "
                                 "sequence ~p to ~p",
-                                [?LOG_USERDATA(SetName), GroupType, Category, ?LOG_USERDATA(DDocId),
+                                [SetName, GroupType, Category, DDocId,
                                     dcp_marker_to_string(MarkerType),
                                     PartId, MarkerStartSeq, MarkerEndSeq]),
                             throw({error, unknown_snapshot_marker, MarkerType}),
@@ -582,7 +582,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                         AccRollbacks2 = AccRollbacks,
                         ?LOG_ERROR("set view `~s`, ~s (~s) group `~s` error"
                             " while loading changes for partition ~p:~n~p~n",
-                            [?LOG_USERDATA(SetName), GroupType, Category, ?LOG_USERDATA(DDocId), PartId,
+                            [SetName, GroupType, Category, DDocId, PartId,
                                 Error]),
                         throw(Error)
                     end,
@@ -618,7 +618,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
     _ ->
         ?LOG_INFO("Updater reading changes from active partitions to "
                   "update ~s set view group `~s` from set `~s`",
-                  [GroupType, ?LOG_USERDATA(DDocId), ?LOG_USERDATA(SetName)]),
+                  [GroupType, DDocId, SetName]),
         {ActiveChangesCount, MaxSeqs, PartVersions, Rollbacks} = lists:foldl(
             FoldFun, {0, orddict:new(), PartVersions0, ordsets:new()},
             couch_set_view_util:filter_seqs(ActiveParts, EndSeqs))
@@ -632,7 +632,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
     _ ->
         ?LOG_INFO("Updater reading changes from passive partitions to "
                   "update ~s set view group `~s` from set `~s`",
-                  [GroupType, ?LOG_USERDATA(DDocId), ?LOG_USERDATA(SetName)]),
+                  [GroupType, DDocId, SetName]),
         {FinalChangesCount, MaxSeqs2, PartVersions2, Rollbacks2} = lists:foldl(
             FoldFun, {ActiveChangesCount, MaxSeqs, PartVersions, Rollbacks},
             couch_set_view_util:filter_seqs(PassiveParts, EndSeqs))
@@ -651,9 +651,9 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
     couch_work_queue:close(MapQueue),
     ?LOG_INFO("Updater for ~s set view group `~s`, set `~s` (~s), "
               "read a total of ~p changes",
-              [GroupType, ?LOG_USERDATA(DDocId), ?LOG_USERDATA(SetName), Category, FinalChangesCount3]),
+              [GroupType, DDocId, SetName, Category, FinalChangesCount3]),
     ?LOG_DEBUG("Updater for ~s set view group `~s`, set `~s`, max partition seqs found:~n~w",
-               [GroupType, ?LOG_USERDATA(DDocId), ?LOG_USERDATA(SetName), MaxSeqs3]),
+               [GroupType, DDocId, SetName, MaxSeqs3]),
     {PartVersions3, MaxSeqs3}.
 
 
@@ -674,7 +674,7 @@ load_changes_from_passive_parts_in_mailbox(DcpPid,
         MaxSeqs = lists:ukeymerge(1, AddMaxSeqs, MaxSeqs0),
         ?LOG_INFO("Updater reading changes from new passive partitions ~s to "
                   "update ~s set view group `~s` from set `~s`",
-                  [condense(Parts), GroupType, ?LOG_USERDATA(DDocId), ?LOG_USERDATA(SetName)]),
+                  [condense(Parts), GroupType, DDocId, SetName]),
         {ChangesCount2, MaxSeqs2, PartVersions2, Rollbacks2} = lists:foldl(
             FoldFun, {ChangesCount, MaxSeqs, PartVersions, Rollbacks}, AddMaxSeqs),
         load_changes_from_passive_parts_in_mailbox(DcpPid,
@@ -738,8 +738,8 @@ queue_doc(Doc, MapQueue, Group, MaxDocSize, InitialBuild) ->
             true ->
                 ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, skipping "
                     "document with ID `~s`: too large body (~p bytes)",
-                    [?LOG_USERDATA(SetName), GroupType, ?LOG_USERDATA(DDocId),
-                     ?LOG_USERDATA(?b2l(Doc2#dcp_doc.id)), iolist_size(Doc2#dcp_doc.body)]),
+                    [SetName, GroupType, DDocId,
+                     ?b2l(Doc2#dcp_doc.id), iolist_size(Doc2#dcp_doc.body)]),
                 Entry = Doc2#dcp_doc{deleted = true};
             false ->
                 Entry = Doc2
@@ -752,7 +752,7 @@ queue_doc(Doc, MapQueue, Group, MaxDocSize, InitialBuild) ->
             % not reprocess again.
             ?LOG_MAPREDUCE_ERROR("Bucket `~s`, ~s group `~s`, skipping "
                 "document with non-utf8 id. Doc id bytes: ~w",
-                [?LOG_USERDATA(SetName), GroupType, ?LOG_USERDATA(DDocId), ?LOG_USERDATA(?b2l(Doc2#dcp_doc.id))]),
+                [SetName, GroupType, DDocId, ?b2l(Doc2#dcp_doc.id)]),
             Entry = Doc2#dcp_doc{deleted = true}
         end
     end,
@@ -878,8 +878,8 @@ do_maps(Group, MapQueue, WriteQueue) ->
                             ErrorMsg = "Bucket `~s`, ~s group `~s`, error mapping"
                                     " document `~s` for view `~s`: ~s",
                             ViewName = Mod:view_name(Group, Pos),
-                            Args = [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId),
-                                    ?LOG_USERDATA(Id), ?LOG_USERDATA(ViewName),
+                            Args = [SetName, Type, DDocId,
+                                    ?LOG_USERDATA(Id), ViewName,
                                     ?LOG_USERDATA(couch_util:to_binary(Reason))],
                             ?LOG_MAPREDUCE_ERROR(ErrorMsg, Args),
                             {[[] | AccRes], Pos - 1};
@@ -891,7 +891,7 @@ do_maps(Group, MapQueue, WriteQueue) ->
                         fun(Msg) ->
                             DebugMsg = "Bucket `~s`, ~s group `~s`, map function"
                                 " log for document `~s`: ~s",
-                            Args = [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId),
+                            Args = [SetName, Type, DDocId,
                                     ?LOG_USERDATA(Id), binary_to_list(Msg)],
                             ?LOG_MAPREDUCE_ERROR(DebugMsg, Args)
                         end, LogList),
@@ -899,7 +899,7 @@ do_maps(Group, MapQueue, WriteQueue) ->
                     {[Item | Acc], Size + erlang:external_size(Result2)}
                 catch _:{error, Reason} ->
                     ErrorMsg = "Bucket `~s`, ~s group `~s`, error mapping document `~s`: ~s",
-                    Args = [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId),
+                    Args = [SetName, Type, DDocId,
                             ?LOG_USERDATA(Id), ?LOG_USERDATA(couch_util:to_binary(Reason))],
                     ?LOG_MAPREDUCE_ERROR(ErrorMsg, Args),
                     {[{Seq, Id, PartId, []} | Acc], Size}
@@ -1053,7 +1053,7 @@ flush_writes(#writer_acc{initial_build = true} = WriterAcc) ->
         };
     true ->
         ?LOG_INFO("Updater for set view `~s`, ~s group `~s`, starting btree "
-                  "build phase" , [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId)]),
+                  "build phase" , [SetName, Type, DDocId]),
         {Group2, BuildFd} = Mod:finish_build(Group, TmpFiles2, TmpDir),
         WriterAcc#writer_acc{
             tmp_files = dict:store(build_file, BuildFd, TmpFiles2),
@@ -1484,7 +1484,7 @@ spawn_updater_worker(WriterAcc, PartIdSeqs, PartVersions) ->
             } = Group,
             ?LOG_INFO("Updater for set view `~s`, ~s group `~s`, performed cleanup "
                       "of ~p key/value pairs in ~.3f seconds",
-                      [?LOG_USERDATA(SetName), GroupType, ?LOG_USERDATA(DDocId), CleanupCount, CleanupTime])
+                      [SetName, GroupType, DDocId, CleanupCount, CleanupTime])
         end,
         NewSeqs = update_seqs(PartIdSeqs, ?set_seqs(Group)),
         NewPartVersions = update_versions(PartVersions, ?set_partition_versions(Group)),
@@ -1582,7 +1582,7 @@ update_btrees(WriterAcc) ->
                 type = Type
             } = NewGroup,
             ?LOG_INFO("Set view `~s`, ~s group `~s`, index updater (spatial"
-                      "update) stopped successfully.", [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId)]),
+                      "update) stopped successfully.", [SetName, Type, DDocId]),
             couch_util:shutdown_sync(Pid),
             exit(shutdown)
         end
@@ -1654,7 +1654,7 @@ checkpoint(#writer_acc{owner = Owner, parent = Parent, group = Group} = Acc) ->
         type = Type
     } = Group,
     ?LOG_DEBUG("Updater checkpointing set view `~s` update for ~s group `~s`",
-              [?LOG_USERDATA(SetName), Type, ?LOG_USERDATA(DDocId)]),
+              [SetName, Type, DDocId]),
     NewGroup = maybe_fix_group(Group),
     ok = couch_file:refresh_eof(NewGroup#set_view_group.fd),
     Owner ! {partial_update, Parent, self(), NewGroup},
