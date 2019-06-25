@@ -117,7 +117,7 @@ init_setup() ->
     error_check(Code5, 200, Body5),
     {_, Code6, Body6} = create_bucket(),
     error_check(Code6, 202, Body6),
-    add_node(["127.0.0.1:9001", "127.0.0.1:9002", "127.0.0.1:9003"]),
+    add_node(["http://127.0.0.1:9001", "http://127.0.0.1:9002", "http://127.0.0.1:9003"]),
     {_, Code8, Body8} = trigger_rebalance([]),
     error_check(Code8, 200, Body8),
     ok = wait_for_rebalance_finish().
