@@ -112,8 +112,10 @@ void terminateTask(map_reduce_ctx_t *ctx);
 * This API needs to be called once per process to initialize
 * v8 javascript engine. This needs to be called before
 * any v8 APIs like creating v8 isolate and v8 context.
+* The API takes the current executable pathname to locate
+* the icudtl.dat file relative to it for initialization of ICU.
 **/
-void initV8();
+void initV8(const char* executable_img);
 
 /**
 * This API needs to be called once per process to cleanup
