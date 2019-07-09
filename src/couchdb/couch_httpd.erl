@@ -260,6 +260,8 @@ handle_request(MochiReq, DbFrontendModule, DefaultFun,
         throw:{query_parse_error, Reason} = Error->
             ?LOG_ERROR("query parameter error: ~p", [Reason]),
             send_error(HttpReq, Error);
+        throw:{unauthorized,<<"password required">>} = Error ->
+            send_error(HttpReq, Error);
         Tag:Error ->
             Stack = erlang:get_stacktrace(),
             ?LOG_ERROR("Uncaught error in HTTP request: ~p~n~n"
@@ -553,6 +555,7 @@ http_1_0_keep_alive(Req, Headers) ->
 
 start_chunked_response(#httpd{mochi_req=MochiReq}=Req, Code, Headers) ->
     log_volume(Req, Code),
+    couch_audit:audit_view_query_request(Req, Code, undefined, undefined),
     Headers2 = extra_headers(Req, http_1_0_keep_alive(MochiReq, Headers)),
     Resp = MochiReq:respond({Code, Headers2, chunked}),
     case MochiReq:get(method) of
@@ -748,6 +751,7 @@ send_error(Req, Code, ErrorStr, ReasonStr) ->
     send_error(Req, Code, [], ErrorStr, ReasonStr).
 
 send_error(Req, Code, Headers, ErrorStr, ReasonStr) ->
+    couch_audit:log_error(Req, Code, ErrorStr, ReasonStr),
     send_json(Req, Code, Headers,
         {[{<<"error">>,  ErrorStr},
          {<<"reason">>, ReasonStr}]}).

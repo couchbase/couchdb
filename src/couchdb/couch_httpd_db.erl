@@ -493,6 +493,7 @@ db_doc_req(#httpd{method = 'GET',
         options = Options
     } = parse_doc_query(Req),
     Doc = DbFrontend:couch_doc_open(Db, DocId, [ejson_body | Options]),
+    couch_audit:audit_view_meta_query(Req, 200, undefined, undefined),
     send_doc(Req, Doc, Options);
 
 
@@ -560,6 +561,12 @@ update_doc(Req, Db, DocId, #doc{deleted=Deleted}=Doc, Headers) ->
     end,
     ok = DbFrontend:update_doc(Db, Doc, Options),
     ets:delete(?QUERY_TIMING_STATS_ETS, DocId),
+    case Deleted of
+    true ->
+        couch_audit:audit_view_delete(Req, 200, undefined, undefined);
+    false ->
+        couch_audit:audit_view_create_update(Req, 201, undefined, undefined)
+    end,
     send_json(Req, if Deleted -> 200; true -> 201 end,
         Headers, {[
             {ok, true},

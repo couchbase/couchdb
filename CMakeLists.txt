@@ -81,6 +81,7 @@ ADD_CUSTOM_COMMAND(OUTPUT ${COUCHDB_PLT_FILE}
                    -pa src/couch_view_parser
                    -pa src/mapreduce
                    -pa src/couch_dcp
+                   -pa src/couch_audit
                    --apps
                         compiler
                         crypto
@@ -117,6 +118,7 @@ ADD_CUSTOM_TARGET(dialyzer
                    -pa src/lhttpc
                    -pa src/snappy
                    -pa src/couch_dcp
+                   -pa src/couch_audit
                    -r
                         src/couchdb
                         src/couch_set_view

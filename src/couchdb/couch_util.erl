@@ -32,6 +32,7 @@
 -export([log_data/2]).
 -export([strong_rand_bytes/1]).
 -export([parse_view_name/1, log_parse_post/1]).
+-export([log_do_parse/1]).
 
 -include("couch_db.hrl").
 

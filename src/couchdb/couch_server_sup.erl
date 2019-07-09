@@ -108,6 +108,14 @@ start_server(IniFiles) ->
 
     unlink(ConfigPid),
 
+    % start couch_audit process after couch_config process starts.
+    case application:start(couch_audit) of
+    ok ->
+       ok;
+    {error, Reason} ->
+       error_logger:error_msg("Could not start app couch_audit: ~p~n", [Reason])
+    end,
+
     Field = case misc:is_ipv6() of
                 true -> "ip6_bind_address";
                 false -> "ip4_bind_address"

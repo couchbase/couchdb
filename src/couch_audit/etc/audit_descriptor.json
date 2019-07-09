@@ -1,0 +1,92 @@
+{
+  "version" : 2,
+  "module" : "view_engine",
+  "events" : [
+    {
+      "id" : 40960,
+      "name" : "Create or Update Design Doc",
+      "description" : "Design Doc is Created or Updated",
+      "sync" : false,
+      "enabled" : true,
+      "filtering_permitted" : true,
+      "mandatory_fields" : {
+        "timestamp" : "",
+        "real_userid" : {"domain" : "", "user" : ""},
+        "remote" : {"ip" : "", "port" : 1},
+        "ddoc name": "",
+        "view name": [],
+        "userAgent" : "",
+        "status" : ""
+      },
+      "optional_fields" : {}
+    },
+    {
+      "id": 40961,
+      "name": "Delete Design Doc",
+      "description": "Design Doc is Deleted",
+      "sync" : false,
+      "enabled" : true,
+      "filtering_permitted" : true,
+      "mandatory_fields" : {
+        "timestamp" : "",
+        "real_userid" : {"domain" : "", "user" : ""},
+        "remote" : {"ip" : "", "port" : 1},
+        "ddoc name": "",
+        "view name": [],
+        "userAgent" : "",
+        "status" : ""
+      },
+      "optional_fields" : {}
+    },
+    {
+      "id": 40962,
+      "name": "Query DDoc Meta Data",
+      "description" : "Design Doc Meta Data Query Request",
+      "sync" : false,
+      "enabled" : true,
+      "filtering_permitted" : true,
+      "mandatory_fields" : {
+        "timestamp" : "",
+        "real_userid" : {"domain" : "", "user" : ""},
+        "remote" : {"ip" : "", "port" : 1},
+        "ddoc name": "",
+        "bucket": "",
+        "ddoc_name": "",
+        "userAgent" : "",
+        "status" : ""
+      },
+      "optional_fields" : {}
+    },
+    {
+      "id": 40963,
+      "name": "View Query",
+      "description" : "View Query Request",
+      "sync" : false,
+      "enabled" : false,
+      "filtering_permitted" : true,
+      "mandatory_fields" : {
+        "timestamp" : "",
+        "real_userid" : {"domain" : "", "user" : ""},
+        "remote" : {"ip" : "", "port" : 1},
+        "ddoc name": "",
+        "view name": "",
+        "userAgent" : "",
+        "status" : ""
+      },
+      "optional_fields" : {}
+    },
+    {
+        "id": 40964,
+        "name": "Audit Configuration Change",
+        "description": "Change in Audit Configuration",
+        "sync" : false,
+        "enabled" : true,
+        "filtering_permitted" : false,
+        "mandatory_fields" : {
+        "timestamp" : "",
+        "userAgent" : ""
+      },
+      "optional_fields" : {}
+    }
+   ]
+}
