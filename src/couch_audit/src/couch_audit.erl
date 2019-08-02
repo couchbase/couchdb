@@ -183,23 +183,27 @@ parse_basic_auth_header(Value) ->
     end.
 
 audit_view_create_update(#httpd{path_parts = PathParts} = Req, Code, ErrorStr, ReasonStr) ->
-    [BucketName, <<"_design">>, DDocName] = PathParts,
+    {BucketName, DDocName} = parse_path(PathParts),
     Body = [{bucket, BucketName}, {ddoc_name, DDocName},
             {method, put}, {status, Code},
             {error, ErrorStr},{reason, ReasonStr}],
-    ViewBody = couch_httpd:json_body(Req),
+    ViewBody = try couch_httpd:json_body(Req) of
+                Definition -> Definition
+                catch _:_ ->
+                    "{}"
+    end,
     Body2 = [{view_definition, ViewBody} | Body],
     gen_server:cast(?MODULE, {log, {create_or_update, prepare(Req, Body2)}}).
 
 audit_view_delete(#httpd{path_parts = PathParts} = Req, Code, ErrorStr, ReasonStr) ->
-    [BucketName, <<"_design">>, DDocName] = PathParts,
+    {BucketName, DDocName} = parse_path(PathParts),
     Body = [{bucket, BucketName}, {ddoc_name, DDocName},
             {method, delete}, {status, Code},
             {error, ErrorStr},{reason, ReasonStr}],
     gen_server:cast(?MODULE, {log, {ddoc_deleted, prepare(Req, Body)}}).
 
 audit_view_meta_query(#httpd{path_parts = PathParts} = Req, Code, ErrorStr, ReasonStr) ->
-    [BucketName, <<"_design">>, DDocName] = PathParts,
+    {BucketName, DDocName} = parse_path(PathParts),
     Body = [{bucket, BucketName}, {ddoc_name, DDocName},
             {method, get}, {status, Code},
             {error, ErrorStr},{reason, ReasonStr}],
@@ -362,4 +366,11 @@ log_error(#httpd{method = Method}=Req, Code, ErrorStr, ReasonStr) ->
         audit_view_delete(Req, Code, ErrorStr, ReasonStr);
     _ ->
         ok
+    end.
+
+parse_path(Path) ->
+    case Path of
+        [BucketName, <<"_design">>, DDocName | _] -> {BucketName, DDocName};
+        [BucketName | _ ] -> {BucketName, undefined};
+        _ -> {undefined, undefined}
     end.
