@@ -679,21 +679,31 @@ handle_info({print_log, ReqId}, State) ->
            part_id = PartId,
            snapshot_seq = Boundary
         } = StreamInfo,
+
+        #state{
+            enum_start_seq = EnumStartSeq,
+            max_buffer_size = MaxBufSize,
+            total_buffer_size = Size
+        } = State,
+
+        MaxAckSize = MaxBufSize * ?DCP_BUFFER_ACK_THRESHOLD,
+
         % The Start seq stored in stream_info is updated each time
         % we get a mutation and is actually the "current" seq number.
         % IndexStartSeq is the seq persisted during enum_docs_since
         % call and is the original start seq number
-        EnumStartSeq = State#state.enum_start_seq,
         IndexStartSeq = case dict:find(PartId, EnumStartSeq) of
                             {ok, EStartSeq} -> EStartSeq;
                             error -> "error_fetching_start_seq"
                         end,
+
         Format = "dcp client (~s, ~s): Obtaining mutation from server timed out "
                  "after ~p seconds [RequestId ~p, PartId ~p, StartSeq ~p, "
-                 "CurrentSnapshotSeq ~p, EndSeq ~p, SnapshotBoundary ~w] "
+                 "CurrentSnapshotSeq ~p, EndSeq ~p, SnapshotBoundary ~w, "
+                 "unacked bytes ~p, Ack Threshold ~p] "
                  "Waiting..." ,
         Content = [Bucket, Name, ?TIMEOUT / 1000, ReqId, PartId, IndexStartSeq,
-                   Start, End, Boundary],
+                   Start, End, Boundary, Size, MaxAckSize],
         ?LOG_ERROR(Format, Content)
     end,
     {noreply, State};

@@ -167,19 +167,32 @@ request_group(Pid, Req, Retries) ->
         } = Group,
         case request_replica_group(RepPid, ActiveReplicasBitmask, Req) of
         {ok, RepGroup} ->
+            case Retries of
+            1 ->
+                ok;
+            _ ->
+                ?LOG_INFO("Request replica group succeeded for `~s` (~s) request,"
+                       "stale=~s, set `~s` after ~p retry attempt",
+                      [GroupName, Category, Req#set_view_group_req.stale,
+                       SetName, Retries])
+            end,
             {ok, Group#set_view_group{replica_group = RepGroup}};
         retry ->
             couch_ref_counter:drop(RefCounter),
-            ?LOG_INFO("Retrying group `~s` (~s) request, stale=~s,"
-                      " set `~s`, retry attempt #~p",
+            case Retries of
+            1 ->
+                ?LOG_INFO("Retrying group `~s` (~s) request, stale=~s,"
+                      " set `~s`",
                       [GroupName, Category, Req#set_view_group_req.stale,
-                       SetName, Retries]),
+                       SetName]);
+            _ ->
+                ok
+            end,
             request_group(Pid, Req, Retries + 1)
         end;
     Error ->
         Error
     end.
-
 
 -spec request_replica_group(pid(), bitmask(), #set_view_group_req{}) ->
                            {'ok', #set_view_group{} | 'nil'} | 'retry'.
