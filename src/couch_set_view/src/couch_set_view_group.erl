@@ -3216,7 +3216,7 @@ notify_update_listeners(State, Listeners, NewGroup) ->
                 } = Listener,
                 case couch_set_view_util:find_part_seq(PartId, ?set_seqs(NewGroup)) of
                 {ok, IndexedSeq} when IndexedSeq >= Seq ->
-                   ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`,"
+                    ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`,"
                              " replying to partition ~p update monitor,"
                              " reference ~p, desired indexed seq ~p,"
                              " indexed seq ~p",
@@ -3226,18 +3226,25 @@ notify_update_listeners(State, Listeners, NewGroup) ->
                     erlang:demonitor(MonRef, [flush]),
                     false;
                 {ok, IndexedSeq} ->
-                   ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`,"
+                    ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`,"
                              " not replying yet to partition ~p update"
                              " monitor, reference ~p, desired indexed seq ~p,"
                              " indexed seq ~p",
                              [?set_name(State), ?type(State), ?category(State),
                               ?group_id(State), PartId, Ref, Seq, IndexedSeq]),
-                    true
+                    true;
+                not_found ->
+                    ?LOG_INFO("Set view `~s`, ~s (~s) group `~s`,"
+                        " partid ~p not found in new group, Monitor reference: ~p SetSeq: ~s ",
+                        [?set_name(State), ?type(State), ?category(State),
+                        ?group_id(State), PartId, Ref, condense(?set_seqs(NewGroup))]),
+                        Pid ! {Ref, not_found},
+                        erlang:demonitor(MonRef, [flush]),
+                    false
                 end
             end,
             Listeners)
     end.
-
 
 -spec error_notify_update_listeners(#state{}, dict:dict(), monitor_error()) -> dict:dict().
 error_notify_update_listeners(State, Listeners, Error) ->
