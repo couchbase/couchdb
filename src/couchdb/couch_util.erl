@@ -145,7 +145,7 @@ get_value(Key, List, Default) ->
     end.
 
 get_nested_json_value({Props}, [Key|Keys]) ->
-    case couch_util:get_value(Key, Props, nil) of
+    case get_value(Key, Props, nil) of
     nil -> throw({not_found, <<"missing json key: ", Key/binary>>});
     Value -> get_nested_json_value(Value, Keys)
     end;
@@ -467,7 +467,7 @@ log_parse_post(Req) ->
     catch _:_ -> "" end.
 
 log_do_parse(#httpd{method='POST'} = Req) ->
-    {[{Bucket, {Props}}]} = couch_util:get_nested_json_value(
+    {[{Bucket, {Props}}]} = get_nested_json_value(
         couch_httpd:json_body_obj(Req), [<<"views">>, <<"sets">>]),
     ViewName = get_value(<<"view">>, Props),
     {DDoc, View} = parse_view_name(ViewName),

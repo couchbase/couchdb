@@ -66,20 +66,20 @@ handle_call({audit, NewAuditSettings}, _From, State) ->
 handle_call(_Request, _From, State) ->
     {reply, ignored, State}.
 
-handle_cast({log, {Opcode, Data}},  #state{audit_enabled=true,
+handle_cast({log, {config_changed, Settings}}, #state{audit_enabled=true,
+                                memcached_socket=Socket}=State) ->
+    Socket2 = try_connecting_memcached(Socket),
+    memcached_calls:audit_put(Socket2, code(config_changed), Settings),
+    {noreply, State#state{memcached_socket=Socket2}};
+handle_cast({log, {Opcode, Req, Body}},  #state{audit_enabled=true,
                                 enabled_events=EnabledEvents,
                                 disabled_userid=DisabledUserId,
                                 memcached_socket=Socket}=State) ->
-    Socket2 = case Socket of
-    no_socket ->
-        memcached_calls:connect_memcached(3);
-    _ ->
-        Socket
-    end,
+    Data = prepare(Req, Body),
+    Socket2 = try_connecting_memcached(Socket),
 
     Opcode2 = code(Opcode),
-    case Opcode =:= config_changed orelse
-            check_logging(Opcode2, Data, EnabledEvents, DisabledUserId) of
+    case check_logging(Opcode2, Data, EnabledEvents, DisabledUserId) of
     true ->
         memcached_calls:audit_put(Socket2, Opcode2, Data);
     false ->
@@ -184,7 +184,8 @@ parse_basic_auth_header(Value) ->
 
 audit_view_create_update(#httpd{path_parts = PathParts} = Req, Code, ErrorStr, ReasonStr) ->
     {BucketName, DDocName} = parse_path(PathParts),
-    Body = [{bucket, BucketName}, {ddoc_name, DDocName},
+    Body = [{timestamp, now_to_iso8601(os:timestamp())},
+            {bucket, BucketName}, {ddoc_name, DDocName},
             {method, put}, {status, Code},
             {error, ErrorStr},{reason, ReasonStr}],
     ViewBody = try couch_httpd:json_body(Req) of
@@ -193,34 +194,36 @@ audit_view_create_update(#httpd{path_parts = PathParts} = Req, Code, ErrorStr, R
                     "{}"
     end,
     Body2 = [{view_definition, ViewBody} | Body],
-    gen_server:cast(?MODULE, {log, {create_or_update, prepare(Req, Body2)}}).
+    gen_server:cast(?MODULE, {log, {create_or_update, Req, Body2}}).
 
 audit_view_delete(#httpd{path_parts = PathParts} = Req, Code, ErrorStr, ReasonStr) ->
     {BucketName, DDocName} = parse_path(PathParts),
-    Body = [{bucket, BucketName}, {ddoc_name, DDocName},
+    Body = [{timestamp, now_to_iso8601(os:timestamp())},
+            {bucket, BucketName}, {ddoc_name, DDocName},
             {method, delete}, {status, Code},
             {error, ErrorStr},{reason, ReasonStr}],
-    gen_server:cast(?MODULE, {log, {ddoc_deleted, prepare(Req, Body)}}).
+    gen_server:cast(?MODULE, {log, {ddoc_deleted, Req, Body}}).
 
 audit_view_meta_query(#httpd{path_parts = PathParts} = Req, Code, ErrorStr, ReasonStr) ->
     {BucketName, DDocName} = parse_path(PathParts),
-    Body = [{bucket, BucketName}, {ddoc_name, DDocName},
+    Body = [{timestamp, now_to_iso8601(os:timestamp())},
+            {bucket, BucketName}, {ddoc_name, DDocName},
             {method, get}, {status, Code},
             {error, ErrorStr},{reason, ReasonStr}],
-    gen_server:cast(?MODULE, {log, {query_meta_data, prepare(Req, Body)}}).
+    gen_server:cast(?MODULE, {log, {query_meta_data, Req, Body}}).
 
 audit_view_query_request(Req, Code, ErrorStr, ReasonStr) ->
     {Origin, BucketName, DDocName, ViewName, Parameters} = case query_params(Req) of
     error -> {undefined, undefiend, undefined, undefined, undefined};
     Result -> Result
     end,
-
-    Body = [{status, Code}, {query_parameters,
+    Body = [{timestamp, now_to_iso8601(os:timestamp())},
+            {status, Code}, {query_parameters,
             {propset,Parameters}}, {request_type, Origin},
             {bucket, BucketName}, {ddoc_name, DDocName},
             {view_name, ViewName},{error, ErrorStr},
             {reason, ReasonStr}],
-    gen_server:cast(?MODULE, {log, {query_view, prepare(Req, Body)}}).
+    gen_server:cast(?MODULE, {log, {query_view, Req, Body}}).
 
 format_iso8601({{YYYY, MM, DD}, {Hour, Min, Sec}}, Microsecs, Offset) ->
     io_lib:format("~4.4.0w-~2.2.0w-~2.2.0wT~2.2.0w:~2.2.0w:~2.2.0w.~3.3.0w",
@@ -266,8 +269,7 @@ prepare(#httpd{mochi_req=Req}, Body) ->
         undefined
     end,
 
-    Body2 = [{timestamp, now_to_iso8601(os:timestamp())},
-            {remote, Remote},
+    Body2 = [{remote, Remote},
             {real_userid, UserId},
             {auth, Auth},
             {user_agent, UserAgent}| Body],
@@ -373,4 +375,12 @@ parse_path(Path) ->
         [BucketName, <<"_design">>, DDocName | _] -> {BucketName, DDocName};
         [BucketName | _ ] -> {BucketName, undefined};
         _ -> {undefined, undefined}
+    end.
+
+try_connecting_memcached(Socket) ->
+    case Socket of
+    no_socket ->
+        memcached_calls:connect_memcached(3);
+    _ ->
+        Socket
     end.
