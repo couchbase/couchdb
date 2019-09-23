@@ -559,13 +559,21 @@ update_doc(Req, Db, DocId, #doc{deleted=Deleted}=Doc, Headers) ->
     _ ->
         Options = []
     end,
+
+    OldDDoc = case couch_set_view_ddoc_cache:get_ddoc(Db#db.name, DocId) of
+    {ok, DDoc} ->
+        DDoc#doc.body;
+    {doc_open_error, _} ->
+        not_found
+    end,
+
     ok = DbFrontend:update_doc(Db, Doc, Options),
     ets:delete(?QUERY_TIMING_STATS_ETS, DocId),
     case Deleted of
     true ->
-        couch_audit:audit_view_delete(Req, 200, undefined, undefined);
+        couch_audit:audit_view_delete(Req, 200, undefined, undefined, OldDDoc);
     false ->
-        couch_audit:audit_view_create_update(Req, 201, undefined, undefined)
+        couch_audit:audit_view_create_update(Req, 201, undefined, undefined, OldDDoc)
     end,
     send_json(Req, if Deleted -> 200; true -> 201 end,
         Headers, {[

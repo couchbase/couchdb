@@ -25,8 +25,8 @@
 -export([init/1, handle_call/3, handle_cast/2,
          handle_info/2, terminate/2, code_change/3]).
 -export([config_change/2]).
--export([audit_view_delete/4, audit_view_query_request/4,
-         audit_view_meta_query/4, audit_view_create_update/4]).
+-export([audit_view_delete/5, audit_view_query_request/4,
+         audit_view_meta_query/4, audit_view_create_update/5]).
 -export([log_error/4]).
 
 -record(state, {
@@ -36,7 +36,7 @@
     memcached_socket = no_socket
 }).
 
-code(create_or_update)->
+code(ddoc_created)->
     40960;
 code(ddoc_deleted) ->
     40961;
@@ -44,8 +44,10 @@ code(query_meta_data) ->
     40962;
 code(query_view) ->
     40963;
+code(ddoc_updated) ->
+    40964;
 code(config_changed) ->
-    40964.
+    40965.
 
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
@@ -182,7 +184,7 @@ parse_basic_auth_header(Value) ->
             {"", ""}
     end.
 
-audit_view_create_update(#httpd{path_parts = PathParts} = Req, Code, ErrorStr, ReasonStr) ->
+audit_view_create_update(#httpd{path_parts = PathParts} = Req, Code, ErrorStr, ReasonStr, OldDDoc) ->
     {BucketName, DDocName} = parse_path(PathParts),
     Body = [{timestamp, now_to_iso8601(os:timestamp())},
             {bucket, BucketName}, {ddoc_name, DDocName},
@@ -193,13 +195,26 @@ audit_view_create_update(#httpd{path_parts = PathParts} = Req, Code, ErrorStr, R
                 catch _:_ ->
                     "{}"
     end,
-    Body2 = [{view_definition, ViewBody} | Body],
-    gen_server:cast(?MODULE, {log, {create_or_update, Req, Body2}}).
 
-audit_view_delete(#httpd{path_parts = PathParts} = Req, Code, ErrorStr, ReasonStr) ->
+    Body2 = [{view_definition, ViewBody} | Body],
+    {Msg, Body3} = case OldDDoc of
+    not_found -> {ddoc_created, Body2};
+    _ ->
+        {Created, Modified, Deleted} = compare_view_definition(ViewBody, OldDDoc),
+        {ddoc_updated, [{old_view_definition, OldDDoc}, {new_views, {list, Created}},
+                        {modified_views, {list, Modified}}, {deleted_views, {list, Deleted}}| Body2]}
+    end,
+    gen_server:cast(?MODULE, {log, {Msg, Req, Body3}}).
+
+audit_view_delete(#httpd{path_parts = PathParts} = Req, Code, ErrorStr, ReasonStr, OldDDoc) ->
     {BucketName, DDocName} = parse_path(PathParts),
+    DDocDeleted = case OldDDoc of
+                    not_found -> undefined;
+                    _ -> OldDDoc
+                    end,
     Body = [{timestamp, now_to_iso8601(os:timestamp())},
             {bucket, BucketName}, {ddoc_name, DDocName},
+            {deleted_ddoc_definition, DDocDeleted},
             {method, delete}, {status, Code},
             {error, ErrorStr},{reason, ReasonStr}],
     gen_server:cast(?MODULE, {log, {ddoc_deleted, Req, Body}}).
@@ -361,11 +376,11 @@ query_params(#httpd{path_parts=Parts} = Req) ->
 log_error(#httpd{method = Method}=Req, Code, ErrorStr, ReasonStr) ->
     case Method of
     'PUT' ->
-        audit_view_create_update(Req, Code, ErrorStr, ReasonStr);
+        audit_view_create_update(Req, Code, ErrorStr, ReasonStr, not_found);
     'GET' ->
         audit_view_query_request(Req, Code,ErrorStr, ReasonStr);
     'DELETE' ->
-        audit_view_delete(Req, Code, ErrorStr, ReasonStr);
+        audit_view_delete(Req, Code, ErrorStr, ReasonStr, not_found);
     _ ->
         ok
     end.
@@ -384,3 +399,48 @@ try_connecting_memcached(Socket) ->
     _ ->
         Socket
     end.
+
+compare_view_definition(NewViewDef1, OldViewDef1) ->
+    OldViewDef = get_view_list(OldViewDef1),
+    NewViewDef = get_view_list(NewViewDef1),
+    {Created, Modified} = lists:foldl(fun({ViewName, ViewDef}, {Created, Modified}) ->
+                                        case couch_util:get_value(ViewName, OldViewDef) of
+                                        undefined ->
+                                            {[ViewName | Created], Modified};
+                                        OldView ->
+                                            case compare(ViewDef, OldView) of
+                                                true -> {Created, [ViewName | Modified]};
+                                                false -> {Created, Modified}
+                                            end
+                                        end
+                          end, {[],[]}, NewViewDef),
+    Deleted = lists:foldl(fun({ViewName, _}, Deleted) ->
+                            case couch_util:get_value(ViewName, NewViewDef) of
+                            undefined -> [ViewName | Deleted];
+                            _ -> Deleted
+                           end
+              end, [], OldViewDef),
+    {Created, Modified, Deleted}.
+
+get_view_list(undefined) ->
+    [];
+get_view_list({Views}) ->
+    case couch_util:get_value(<<"views">>, Views) of
+    undefined -> [];
+    {ViewDef} -> ViewDef
+    end;
+get_view_list(_) ->
+    [].
+
+compare({ViewDef}, {OldView}) ->
+    lists:foldl(fun({Type, Def}, Modified) ->
+                    case couch_util:get_value(Type, OldView) of
+                        undefined -> true;
+                        Value -> case Value of
+                                    Def -> Modified;
+                                    _ -> true
+                                end
+                        end
+    end, false, ViewDef);
+compare(_, _) ->
+    false.

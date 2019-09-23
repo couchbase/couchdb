@@ -4,8 +4,8 @@
   "events" : [
     {
       "id" : 40960,
-      "name" : "Create or Update Design Doc",
-      "description" : "Design Doc is Created or Updated",
+      "name" : "Create Design Doc",
+      "description" : "Design Doc is Created",
       "sync" : false,
       "enabled" : true,
       "filtering_permitted" : true,
@@ -76,13 +76,31 @@
       "optional_fields" : {}
     },
     {
-        "id": 40964,
-        "name": "Audit Configuration Change",
-        "description": "Change in Audit Configuration",
-        "sync" : false,
-        "enabled" : true,
-        "filtering_permitted" : false,
-        "mandatory_fields" : {
+      "id" : 40964,
+      "name" : "Update Design Doc",
+      "description" : "Design Doc is Updated",
+      "sync" : false,
+      "enabled" : true,
+      "filtering_permitted" : true,
+      "mandatory_fields" : {
+        "timestamp" : "",
+        "real_userid" : {"domain" : "", "user" : ""},
+        "remote" : {"ip" : "", "port" : 1},
+        "ddoc name": "",
+        "view name": [],
+        "userAgent" : "",
+        "status" : ""
+      },
+      "optional_fields" : {}
+    },
+    {
+      "id": 40965,
+      "name": "Audit Configuration Change",
+      "description": "Change in Audit Configuration",
+      "sync" : false,
+      "enabled" : true,
+      "filtering_permitted" : false,
+      "mandatory_fields" : {
         "timestamp" : "",
         "userAgent" : ""
       },
