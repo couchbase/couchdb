@@ -232,8 +232,19 @@ audit_view_query_request(Req, Code, ErrorStr, ReasonStr) ->
     error -> {undefined, undefiend, undefined, undefined, undefined};
     Result -> Result
     end,
+
+    DDocName2 = case DDocName of
+    undefined ->
+        undefined;
+    <<"_design/", _/binary>> ->
+        DDocName;
+    _ ->
+        <<"_design/", DDocName/binary>>
+    end,
+
+    ViewDef = couch_set_view_ddoc_cache:get_view(BucketName, DDocName2, ViewName),
     Body = [{timestamp, now_to_iso8601(os:timestamp())},
-            {status, Code}, {query_parameters,
+            {status, Code}, {view_definition, ViewDef}, {query_parameters,
             {propset,Parameters}}, {request_type, Origin},
             {bucket, BucketName}, {ddoc_name, DDocName},
             {view_name, ViewName},{error, ErrorStr},
@@ -401,8 +412,8 @@ try_connecting_memcached(Socket) ->
     end.
 
 compare_view_definition(NewViewDef1, OldViewDef1) ->
-    OldViewDef = get_view_list(OldViewDef1),
-    NewViewDef = get_view_list(NewViewDef1),
+    OldViewDef = couch_util:get_view_list(OldViewDef1),
+    NewViewDef = couch_util:get_view_list(NewViewDef1),
     {Created, Modified} = lists:foldl(fun({ViewName, ViewDef}, {Created, Modified}) ->
                                         case couch_util:get_value(ViewName, OldViewDef) of
                                         undefined ->
@@ -421,16 +432,6 @@ compare_view_definition(NewViewDef1, OldViewDef1) ->
                            end
               end, [], OldViewDef),
     {Created, Modified, Deleted}.
-
-get_view_list(undefined) ->
-    [];
-get_view_list({Views}) ->
-    case couch_util:get_value(<<"views">>, Views) of
-    undefined -> [];
-    {ViewDef} -> ViewDef
-    end;
-get_view_list(_) ->
-    [].
 
 compare({ViewDef}, {OldView}) ->
     lists:foldl(fun({Type, Def}, Modified) ->

@@ -33,6 +33,7 @@
 -export([strong_rand_bytes/1]).
 -export([parse_view_name/1, log_parse_post/1]).
 -export([log_do_parse/1]).
+-export([get_view_list/1]).
 
 -include("couch_db.hrl").
 
@@ -472,3 +473,13 @@ log_do_parse(#httpd{method='POST'} = Req) ->
     ViewName = get_value(<<"view">>, Props),
     {DDoc, View} = parse_view_name(ViewName),
     [<<"/">>, Bucket, <<"/">>, DDoc, <<"/_view/">>, View].
+
+get_view_list(undefined) ->
+    [];
+get_view_list({Views}) ->
+    case couch_util:get_value(<<"views">>, Views) of
+    undefined -> [];
+    {ViewDef} -> ViewDef
+    end;
+get_view_list(_) ->
+    [].
