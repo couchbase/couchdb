@@ -1953,6 +1953,22 @@ reset_file(Fd, #set_view_group{views = Views, index_header = Header} = Group) ->
     {ok, Pos} = couch_file:write_header_bin(Fd, EmptyHeaderBin),
     init_group(Fd, reset_group(EmptyGroup), EmptyHeader, Pos).
 
+reset_file_header(Fd, #set_view_group{views = Views, index_header = Header} = Group) ->
+    EmptyHeader = Header#set_view_index_header{
+        seqs = [{PartId, 0} ||
+            {PartId, _} <- Header#set_view_index_header.seqs],
+        id_btree_state = nil,
+        view_states = [nil || _ <- Views],
+        replicas_on_transfer = [],
+        pending_transition = nil,
+        unindexable_seqs = [{PartId, 0} ||
+            {PartId, _} <- Header#set_view_index_header.unindexable_seqs],
+        partition_versions = [{PartId, [{0, 0}]} ||
+            {PartId, _} <- Header#set_view_index_header.partition_versions]
+    },
+    EmptyGroup = Group#set_view_group{index_header = EmptyHeader},
+    EmptyHeaderBin = couch_set_view_util:group_to_header_bin(EmptyGroup),
+    couch_file:write_header_bin(Fd, EmptyHeaderBin).
 
 -spec reset_group_from_state(#state{}) -> #state{}.
 reset_group_from_state(State) ->
@@ -3955,6 +3971,7 @@ rollback(State, RollbackPartSeqs) ->
 
     case rollback_file(Fd, RollbackPartSeqs) of
     {ok, HeaderBin} ->
+        reset_file_header(Fd, Group),
         NewHeader = couch_set_view_util:header_bin_to_term(HeaderBin),
         #set_view_index_header{
             id_btree_state = IdBtreeState,
