@@ -329,10 +329,39 @@ get_user_agent(Req) ->
     end.
 
 get_remote(Req) ->
-    Socket = mochiweb_request:get(socket, Req),
-    {ok, {Host, Port}} = mochiweb_socket:peername(Socket),
-    {[{ip, to_binary(inet_parse:ntoa(Host))},
-      {port, Port}]}.
+    {Ip2, Port2} = case mochiweb_request:get_header_value("ns-server-ui", Req) of
+    "yes" ->
+        List = mochiweb_request:get_header_value("Forwarded", Req),
+        case parse_for_value(List) of
+        undefined ->
+            Socket = mochiweb_request:get(socket, Req),
+            {ok, {Host, Port}} = mochiweb_socket:peername(Socket),
+            {inet_parse:ntoa(Host), Port};
+        Remote ->
+            Remote
+        end;
+    _ ->
+        Socket = mochiweb_request:get(socket, Req),
+        {ok, {Host, Port}} = mochiweb_socket:peername(Socket),
+        {inet_parse:ntoa(Host), Port}
+    end,
+    {[{ip, to_binary(Ip2)}, {port, Port2}]}.
+
+parse_for_value(undefined) ->
+    undefined;
+parse_for_value(List) ->
+    Tokens = string:tokens(List, ";"),
+    case couch_util:find_match(Tokens, "for=", undefined) of
+    undefined ->
+        undefined;
+    Matched ->
+        case string:split(Matched, ":", trailing) of
+        [Host, Port] ->
+            {Host, list_to_integer(Port)};
+        _ ->
+            undefined
+        end
+    end.
 
 to_binary({_Key, undefined}) ->
     [];
