@@ -33,7 +33,7 @@
 -export([strong_rand_bytes/1]).
 -export([parse_view_name/1, log_parse_post/1]).
 -export([log_do_parse/1]).
--export([get_view_list/1]).
+-export([get_view_list/1, find_match/3]).
 
 -include("couch_db.hrl").
 
@@ -483,3 +483,13 @@ get_view_list({Views}) ->
     end;
 get_view_list(_) ->
     [].
+
+find_match([], _, Default) ->
+    Default;
+find_match([Head|Tail], Prefix, Default) ->
+    case string:prefix(Head, Prefix) of
+    nomatch ->
+        find_match(Tail, Prefix, Default);
+    Matched ->
+        Matched
+    end.
