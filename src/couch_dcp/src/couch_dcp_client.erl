@@ -102,7 +102,6 @@ add_stream(Pid, PartId, PartUuid, StartSeq, EndSeq, Flags) ->
 remove_stream(Pid, PartId) ->
     gen_server:call(Pid, {remove_stream, PartId}, ?TIMEOUT).
 
-
 -spec list_streams(pid()) -> {active_list_streams, list()} |
                              {retry_list_streams, timeout()}.
 list_streams(Pid) ->
@@ -1378,7 +1377,7 @@ receive_worker(BufSocket, Timeout, Parent, MsgAcc0) ->
 -spec check_and_send_buffer_ack(#state{}, request_id(), tuple() | nil, atom()) ->
                         {ok, #state{}} | {error, closed | inet:posix()}.
 check_and_send_buffer_ack(State, _RequestId, {error, _, _}, _Type) ->
-    {ok, State};
+    {ok, State#state{total_buffer_size = 0}};
 
 check_and_send_buffer_ack(State, RequestId, Event, Type) ->
     #state{
@@ -1595,7 +1594,8 @@ restart_worker(State) ->
         State3 = State#state{
             bufsocket = BufSocket,
             pending_requests = dict:new(),
-            worker_pid = WorkerPid
+            worker_pid = WorkerPid,
+            total_buffer_size = 0
         },
         Error = {error, dcp_conn_closed},
         dict:map(fun(_RequestId, {ReqInfo, SendTo}) ->
