@@ -124,6 +124,7 @@ cd $WORKSPACE/testrunner
 # Functional tests
 echo "</pre><h4>Functional Tests</h4><pre>"
 export phase=functional
+stop_cluster
 start_cluster
 ulimit -c 2097152
 sudo bash -c "echo /tmp/core-%e.$TS.%p > /proc/sys/kernel/core_pattern"
