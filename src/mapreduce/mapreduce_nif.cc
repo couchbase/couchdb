@@ -591,14 +591,4 @@ static ErlNifFunc nif_functions[] = {
     {"set_optimize_doc_load", 1, setOptimizeDocLoad}
 };
 
-// Due to the stupid macros I need to manually do this in order
-// to get the correct linkage attributes :P
-extern "C" {
-#if defined (__SUNPRO_C) && (__SUNPRO_C >= 0x550)
-    __global ErlNifEntry* nif_init(void);
-#elif defined __GNUC__
-    __attribute__((visibility("default"))) ErlNifEntry* nif_init(void);
-#endif
-}
-
 ERL_NIF_INIT(mapreduce, nif_functions, &onLoad, NULL, NULL, &onUnload)

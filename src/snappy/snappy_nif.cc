@@ -252,14 +252,4 @@ static ErlNifFunc nif_functions[] = {
     {"is_valid", 1, snappy_is_valid}
 };
 
-// Due to the stupid macros I need to manually do this in order
-// to get the correct linkage attributes :P
-extern "C" {
-#if defined (__SUNPRO_C) && (__SUNPRO_C >= 0x550)
-    __global ErlNifEntry* nif_init(void);
-#elif defined __GNUC__
-    __attribute__((visibility("default"))) ErlNifEntry* nif_init(void);
-#endif
-}
-
 ERL_NIF_INIT(snappy, nif_functions, &on_load, &on_reload, &on_upgrade, NULL)
