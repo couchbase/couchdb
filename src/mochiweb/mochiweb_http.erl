@@ -11,7 +11,7 @@
 -export([parse_range_request/1, range_skip_length/2]).
 
 -define(REQUEST_RECV_TIMEOUT, 300000).   %% timeout waiting for request line
--define(HEADERS_RECV_TIMEOUT, 30000).    %% timeout waiting for headers
+-define(HEADERS_RECV_TIMEOUT, 5000).     %% timeout waiting for headers
 
 -define(MAX_HEADERS, 1000).
 -define(DEFAULTS, [{name, ?MODULE},
