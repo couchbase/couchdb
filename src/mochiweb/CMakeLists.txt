@@ -30,7 +30,6 @@ SET(SOURCES
   mochiweb_request_tests.erl
   mochiweb_response.erl
   mochiweb_session.erl
-  mochiweb_skel.erl
   mochiweb_socket.erl
   mochiweb_socket_server.erl
   mochiweb_sup.erl
