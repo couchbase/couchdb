@@ -158,37 +158,13 @@ parse_options([{profile_fun, ProfileFun} | Rest], State) when is_function(Profil
     parse_options(Rest, State#mochiweb_socket_server{profile_fun=ProfileFun}).
 
 
-start_server(F, State=#mochiweb_socket_server{ssl=Ssl, name=Name}) ->
-    ok = prep_ssl(Ssl),
+start_server(F, State=#mochiweb_socket_server{name=Name}) ->
     case Name of
         undefined ->
             gen_server:F(?MODULE, State, []);
         _ ->
             gen_server:F(Name, ?MODULE, State, [])
     end.
-
--ifdef(otp_21).
-check_ssl_compatibility() ->
-    case lists:keyfind(ssl, 1, application:loaded_applications()) of
-        {_, _, V} when V =:= "9.1" orelse V =:= "9.1.1" ->
-            {error, "ssl-" ++ V ++ " (OTP 21.2 to 21.2.2) has a regression and is not safe to use with mochiweb. See https://bugs.erlang.org/browse/ERL-830"};
-        _ ->
-            ok
-    end.
--else.
-check_ssl_compatibility() ->
-    ok.
--endif.
-
-prep_ssl(true) ->
-    ok = mochiweb:ensure_started(crypto),
-    ok = mochiweb:ensure_started(asn1),
-    ok = mochiweb:ensure_started(public_key),
-    ok = mochiweb:ensure_started(ssl),
-    ok = check_ssl_compatibility(),
-    ok;
-prep_ssl(false) ->
-    ok.
 
 ensure_int(N) when is_integer(N) ->
     N;
