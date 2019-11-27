@@ -200,7 +200,10 @@ init(State=#mochiweb_socket_server{ip=Ip, port=Port, backlog=Backlog,
         {_, _, _, _} -> % IPv4
             [inet, {ip, Ip} | BaseOpts];
         {_, _, _, _, _, _, _, _} -> % IPv6
-            [inet6, {ip, Ip} | BaseOpts]
+                   %% If ipv6_v6only is not specified it has different behavior
+                   %% on different platforms (at least linux, mac and windows
+                   %% tested)
+                   [inet6, {ip, Ip}, {ipv6_v6only, true} | BaseOpts]
     end,
     OptsBuf = set_buffer_opts(RecBuf, Buffer, Opts),
     listen(Port, OptsBuf, State).
