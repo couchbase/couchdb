@@ -121,6 +121,7 @@ http_sender({debug_info, From, Info}, SAcc) ->
     {ok, SAcc#sender_acc{debug_info_acc = DebugInfoAcc2}};
 
 http_sender(start, #sender_acc{req = Req} = SAcc) ->
+    maybe_stop_timer(),
     #httpd{mochi_req = MReq} = Req,
     ok = mochiweb_socket:setopts(MReq:get(socket), [{nodelay, true}]),
     {ok, Resp} = couch_httpd:start_json_response(Req, 200, []),
@@ -129,13 +130,7 @@ http_sender(start, #sender_acc{req = Req} = SAcc) ->
 http_sender({start, RowCount}, #sender_acc{req = Req} = SAcc) ->
     % The remote node is ready to start streaming the response
     % Call off the hit
-    case get(tref) of
-    nil ->
-        ok;
-    TRef ->
-        timer:cancel(TRef),
-        erase(tref)
-    end,
+    maybe_stop_timer(),
     #httpd{mochi_req = MReq} = Req,
     ok = mochiweb_socket:setopts(MReq:get(socket), [{nodelay, true}]),
     {ok, Resp} = couch_httpd:start_json_response(Req, 200, []),
@@ -251,3 +246,12 @@ make_error_row({error, row_json, Json}) ->
 make_error_row({error, Url, Reason}) ->
     ?JSON_ENCODE({[{<<"from">>, iolist_to_binary(Url)},
                    {<<"reason">>, to_binary(Reason)}]}).
+
+maybe_stop_timer() ->
+    case get(tref) of
+    undefined ->
+        ok;
+    TRef ->
+        timer:cancel(TRef),
+        erase(tref)
+    end.
