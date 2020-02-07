@@ -96,16 +96,33 @@ handle_call({enter, Pid}, From, #state{current = Current, waiting = Waiting} = S
 handle_cast({leave, Pid}, State) ->
     {noreply, handle_leave(Pid, State)};
 
-handle_cast({limit, Limit}, State) ->
-    couch_task_status:update([{limit, Limit}]),
-    {noreply, State#state{limit = Limit}}.
-
+handle_cast({limit, Limit}, #state{current = Current, waiting = Waiting} = State) ->
+    {Current2, Waiting2} = unblock_waiters(Limit, Current, Waiting),
+    couch_task_status:update([{limit, Limit},
+                              {waiting, queue:len(Waiting2)},
+                              {running, length(Current2)}]),
+    {noreply, State#state{limit = Limit,
+                          current = Current2,
+                          waiting = Waiting2}}.
 
 handle_info({'DOWN', _Ref, process, Pid, _Reason}, State) ->
     {noreply, handle_leave(Pid, State)}.
 
+unblock_waiters(Limit, Current, Waiting) ->
+    case length(Current) >= Limit of
+    true ->
+        {Current, Waiting};
+    false ->
+        case queue:out(Waiting) of
+        {empty, Waiting2} ->
+            {Current, Waiting2};
+        {{value, {From, FromPid}}, Waiting2} ->
+            gen_server:reply(From, ok),
+            unblock_waiters(Limit, [FromPid | Current], Waiting2)
+        end
+    end.
 
-handle_leave(Pid, #state{current = Current, waiting = Waiting} = State) ->
+handle_leave(Pid, #state{current = Current, waiting = Waiting, limit = Limit} = State) ->
     MRef = dict:fetch(Pid, State#state.mon_refs),
     erlang:demonitor(MRef, [flush]),
     State2 = State#state{mon_refs = dict:erase(Pid, State#state.mon_refs)},
@@ -115,13 +132,7 @@ handle_leave(Pid, #state{current = Current, waiting = Waiting} = State) ->
         couch_task_status:update([{waiting, queue:len(Waiting2)}]),
         State2#state{waiting = Waiting2};
     Current2 ->
-        case queue:out(Waiting) of
-        {empty, Waiting2} ->
-            Current3 = Current2;
-        {{value, {From, FromPid}}, Waiting2} ->
-            gen_server:reply(From, ok),
-            Current3 = [FromPid | Current2]
-        end,
+        {Current3, Waiting2} = unblock_waiters(Limit, Current2, Waiting),
         couch_task_status:update([
             {waiting, queue:len(Waiting2)},
             {running, length(Current3)}
