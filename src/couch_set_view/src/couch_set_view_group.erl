@@ -1367,18 +1367,28 @@ handle_info({'EXIT', Pid, {updater_error, Error}}, #state{updater_pid = Pid, gro
     true ->
         {stop, normal, reply_all(State2, {error, Error})};
     false ->
-        Error2 = case Error of
+        {Group2, Error2} = case Error of
         {_, 86, Msg} ->
-            {error, <<"Reducer: ", Msg/binary>>};
+            {Group, {error, <<"Reducer: ", Msg/binary>>}};
         {_, 87, _} ->
-            {error, <<"reduction too large">>};
+            {Group, {error, <<"reduction too large">>}};
+        {_, 94, _} = Error->
+            NewGroup = maybe_reset_file(Group),
+            {NewGroup, {error, Error}};
+        {_, 96, _} = Error ->
+            NewGroup = maybe_reset_file(Group),
+            {NewGroup, {error, Error}};
+        {_, 98, _} = Error->
+            NewGroup = maybe_reset_file(Group),
+            {NewGroup, {error, Error}};
         {_, _Reason} ->
-            Error;
+            {Group, Error};
         _ ->
-            {error, Error}
+            {Group, {error, Error}}
         end,
-        State3 = reply_all(State2, Error2),
-        {noreply, maybe_start_cleaner(State3), ?GET_TIMEOUT(State3)}
+        State3 = State2#state{ group = Group2},
+        State4 = reply_all(State3, Error2),
+        {noreply, maybe_start_cleaner(State4), ?GET_TIMEOUT(State4)}
     end;
 
 handle_info({'EXIT', _Pid, {updater_error, _Error}}, State) ->
@@ -4222,3 +4232,16 @@ remove_mapreduce_context_store(Group) ->
     ets:delete(map_context_store, Sig),
     [ets:delete(reduce_context_store, View#set_view.ref) || View <- Views],
     ok.
+
+maybe_reset_file(Group) ->
+    ResetOnCorruption = list_to_atom(couch_config:get("set_views",
+                                           "reset_on_corruption", "false")),
+    ?LOG_INFO("Maybe Reset Index file: ~p",[ResetOnCorruption]),
+    case ResetOnCorruption of
+    true ->
+        reset_file(Group#set_view_group.fd, Group);
+    false ->
+        Group;
+    _ ->
+        Group
+    end.
