@@ -801,6 +801,7 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
     true ->
         % Compactor might have received a group snapshot from an updater.
         NewGroup = fix_updater_group(NewGroup0, Group),
+        ok = couch_file:refresh_eof(NewGroup#set_view_group.fd),
         HeaderBin = couch_set_view_util:group_to_header_bin(NewGroup),
         {ok, NewHeaderPos} = couch_file:write_header_bin(
             NewGroup#set_view_group.fd, HeaderBin),
