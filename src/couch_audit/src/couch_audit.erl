@@ -198,7 +198,25 @@ audit_view_create_update(#httpd{path_parts = PathParts} = Req, Code, ErrorStr, R
 
     Body2 = [{view_definition, ViewBody} | Body],
     {Msg, Body3} = case OldDDoc of
-    not_found -> {ddoc_created, Body2};
+    not_found ->
+        case ErrorStr of
+        <<"invalid_design_document">> ->
+            case ReasonStr of
+            <<"Content is not json.">> ->
+                {ddoc_created, Body2};
+            _ ->
+                case couch_set_view_ddoc_cache:get_ddoc(BucketName, <<"_design/", DDocName/binary>>) of
+                {ok, DDoc} ->
+                    {Created, Modified, Deleted} = compare_view_definition(ViewBody, DDoc#doc.body),
+                    {ddoc_updated, [{old_view_definition, DDoc#doc.body}, {new_views, {list, Created}},
+                            {modified_views, {list, Modified}}, {deleted_views, {list, Deleted}}| Body2]};
+                {doc_open_error, _} ->
+                    {ddoc_created, Body2}
+                end
+            end;
+        _ ->
+            {ddoc_created, Body2}
+        end;
     _ ->
         {Created, Modified, Deleted} = compare_view_definition(ViewBody, OldDDoc),
         {ddoc_updated, [{old_view_definition, OldDDoc}, {new_views, {list, Created}},
