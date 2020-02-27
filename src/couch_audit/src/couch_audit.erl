@@ -190,11 +190,8 @@ audit_view_create_update(#httpd{path_parts = PathParts} = Req, Code, ErrorStr, R
             {bucket, BucketName}, {ddoc_name, DDocName},
             {method, put}, {status, Code},
             {error, ErrorStr},{reason, ReasonStr}],
-    ViewBody = try couch_httpd:json_body(Req) of
-                Definition -> Definition
-                catch _:_ ->
-                    "{}"
-    end,
+
+    ViewBody = get_req_view_definition(Req),
 
     Body2 = [{view_definition, ViewBody} | Body],
     {Msg, Body3} = case OldDDoc of
@@ -492,3 +489,16 @@ compare({ViewDef}, {OldView}) ->
     end, false, ViewDef);
 compare(_, _) ->
     false.
+
+get_req_view_definition(#httpd{req_body = undefined} = Req) ->
+    case couch_httpd:is_ctype(Req, "application/json") of
+    true ->
+        try couch_httpd:json_body(Req) of
+        Definition -> Definition
+        catch _:_ -> "{}"
+        end;
+    false ->
+        couch_httpd:body(Req)
+    end;
+get_req_view_definition(#httpd{req_body = RequestBody}) ->
+    RequestBody.
