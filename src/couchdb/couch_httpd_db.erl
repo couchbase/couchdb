@@ -501,22 +501,23 @@ db_doc_req(#httpd{method='PUT'}=Req, Db, DocId) ->
     couch_doc:validate_docid(DocId),
     Loc = absolute_uri(Req, "/" ++ ?b2l(Db#db.name) ++ "/" ++ ?b2l(DocId)),
     RespHeaders = [{"Location", Loc}],
-    Doc = case couch_httpd:is_ctype(Req, "application/json") of
+    {Doc, Body2} = case couch_httpd:is_ctype(Req, "application/json") of
     true ->
         Body = couch_httpd:json_body(Req),
-        couch_doc:from_json_obj({[
+        {couch_doc:from_json_obj({[
             {<<"meta">>, {[{<<"id">>, DocId}]}},
-            {<<"json">>, Body}]});
+            {<<"json">>, Body}]}), Body};
     false ->
         Body = couch_httpd:body(Req),
-        couch_doc:from_binary(DocId, Body, false)
+        {couch_doc:from_binary(DocId, Body, false), Body}
     end,
     % deleting ets stats record upon design doc update
     ets:delete(?QUERY_TIMING_STATS_ETS, DocId),
 
+    Req2 = Req#httpd{req_body = Body2},
     % Body = couch_httpd:body(Req),
     % Doc = couch_doc:from_binary(DocId, Body, couch_httpd:is_ctype(Req, "application/json")),
-    update_doc(Req, Db, DocId, Doc, RespHeaders);
+    update_doc(Req2, Db, DocId, Doc, RespHeaders);
 
 db_doc_req(Req, _Db, _DocId) ->
     send_method_not_allowed(Req, "DELETE,GET,HEAD,PUT").

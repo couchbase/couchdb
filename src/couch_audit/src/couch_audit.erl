@@ -190,15 +190,30 @@ audit_view_create_update(#httpd{path_parts = PathParts} = Req, Code, ErrorStr, R
             {bucket, BucketName}, {ddoc_name, DDocName},
             {method, put}, {status, Code},
             {error, ErrorStr},{reason, ReasonStr}],
-    ViewBody = try couch_httpd:json_body(Req) of
-                Definition -> Definition
-                catch _:_ ->
-                    "{}"
-    end,
+
+    ViewBody = get_req_view_definition(Req),
 
     Body2 = [{view_definition, ViewBody} | Body],
     {Msg, Body3} = case OldDDoc of
-    not_found -> {ddoc_created, Body2};
+    not_found ->
+        case ErrorStr of
+        <<"invalid_design_document">> ->
+            case ReasonStr of
+            <<"Content is not json.">> ->
+                {ddoc_created, Body2};
+            _ ->
+                case couch_set_view_ddoc_cache:get_ddoc(BucketName, <<"_design/", DDocName/binary>>) of
+                {ok, DDoc} ->
+                    {Created, Modified, Deleted} = compare_view_definition(ViewBody, DDoc#doc.body),
+                    {ddoc_updated, [{old_view_definition, DDoc#doc.body}, {new_views, {list, Created}},
+                            {modified_views, {list, Modified}}, {deleted_views, {list, Deleted}}| Body2]};
+                {doc_open_error, _} ->
+                    {ddoc_created, Body2}
+                end
+            end;
+        _ ->
+            {ddoc_created, Body2}
+        end;
     _ ->
         {Created, Modified, Deleted} = compare_view_definition(ViewBody, OldDDoc),
         {ddoc_updated, [{old_view_definition, OldDDoc}, {new_views, {list, Created}},
@@ -474,3 +489,16 @@ compare({ViewDef}, {OldView}) ->
     end, false, ViewDef);
 compare(_, _) ->
     false.
+
+get_req_view_definition(#httpd{req_body = undefined} = Req) ->
+    case couch_httpd:is_ctype(Req, "application/json") of
+    true ->
+        try couch_httpd:json_body(Req) of
+        Definition -> Definition
+        catch _:_ -> "{}"
+        end;
+    false ->
+        couch_httpd:body(Req)
+    end;
+get_req_view_definition(#httpd{req_body = RequestBody}) ->
+    RequestBody.
