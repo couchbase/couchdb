@@ -95,8 +95,7 @@ request(From, Host, Port, Ssl, Path, Method, Hdrs, Body, Options) ->
             {response, self(), {error, Reason}};
         error:closed ->
             {response, self(), {error, connection_closed}};
-        error:Reason ->
-            Stack = erlang:get_stacktrace(),
+        error:Reason:Stack ->
             {response, self(), {error, {Reason, Stack}}}
     end,
     case Result of
@@ -221,9 +220,9 @@ send_request(#client_state{socket = undefined} = State) ->
     catch
         exit:{{{badmatch, {error, {asn1, _}}}, _}, _} ->
             throw(ssl_decode_error);
-        Type:Error ->
+        Type:Error:Stack ->
                     error_logger:error_msg("Socket connection error: ~p ~p, ~p",
-                                           [Type, Error, erlang:get_stacktrace()])
+                                           [Type, Error, Stack])
     end;
 send_request(#client_state{proxy = #lhttpc_url{}, proxy_setup = false} = State) ->
 % use a proxy.

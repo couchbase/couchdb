@@ -4210,10 +4210,10 @@ remove_duplicate_partitions(Group) ->
             throw("duplicate partitions")
         end
     catch
-    _ ->
+    throw:_:Stack ->
         ?LOG_ERROR("set view `~s`, ~p ~p (~s) group `~s` have the duplicate "
             "partition versions ~p stacktrace ~s", [SetName, Mod, GroupType, Category,
-            DDocId, PartVersions,?LOG_USERDATA(erlang:get_stacktrace())]),
+            DDocId, PartVersions,?LOG_USERDATA(Stack)]),
         Stats2 = Stats#set_view_group_stats{
             dup_partitions_counter = DupPartitionCounter + 1
         },

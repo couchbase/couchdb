@@ -384,8 +384,7 @@ merge_reduce_min_row(Params, MinRow) ->
                 RedVal = rereduce(RowGroup, Params),
                 {{row, {element(1, FirstRow), {json, RedVal}}}, Col}
             catch
-            _Tag:Error ->
-                Stack = erlang:get_stacktrace(),
+            _Tag:Error:Stack ->
                 ?LOG_ERROR("Caught unexpected error while "
                            "merging reduce view: ~p~n~s", [Error, ?LOG_USERDATA(Stack)]),
                 on_rereduce_error(Col, Error)
@@ -617,8 +616,7 @@ map_set_view_folder(ViewSpec, MergeParams, DDoc, Queue) ->
             % The merger process shutdown our queue, limit was reached and this is
             % expected, so don't long unnecessary error message and stack trace.
             ok;
-        _Tag:Error ->
-            Stack = erlang:get_stacktrace(),
+            _Tag:Error:Stack ->
             ?LOG_ERROR("Caught unexpected error "
                        "while serving view query ~s/~s: ~p~n~s",
                        [SetName, DDocId, Error, ?LOG_USERDATA(Stack)]),
@@ -822,8 +820,7 @@ reduce_set_view_folder(ViewSpec, MergeParams, DDoc, Queue) ->
             % The merger process shutdown our queue, limit was reached and this is
             % expected, so don't long unnecessary error message and stack trace.
             ok;
-        _Tag:Error ->
-            Stack = erlang:get_stacktrace(),
+            _Tag:Error:Stack ->
             ?LOG_ERROR("Caught unexpected error "
                        "while serving view query ~s/~s: ~p~n~s",
                        [SetName, DDocId, Error, ?LOG_USERDATA(Stack)]),

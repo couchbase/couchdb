@@ -265,8 +265,7 @@ handle_request(MochiReq, DbFrontendModule, DefaultFun,
             send_error(HttpReq, Error);
         throw:{invalid_design_doc, <<"Content is not json.">>} = Error ->
             send_error(HttpReq, Error);
-        Tag:Error ->
-            Stack = erlang:get_stacktrace(),
+        Tag:Error:Stack ->
             ?LOG_ERROR("Uncaught error in HTTP request: ~p~n~n"
                        "Stacktrace: ~s", [{Tag, Error}, ?LOG_USERDATA(Stack)]),
             send_error(HttpReq, Error)
