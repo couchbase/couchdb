@@ -13,9 +13,6 @@
 -define(SSL_TIMEOUT, 10000).
 -define(SSL_HANDSHAKE_TIMEOUT, 20000).
 
-%% Unavailable prior to OTP 21 (per mochiweb rebar.config)
--define(ssl_handshake_unavailable, true).
-
 listen(Ssl, Port, Opts, SslOpts) ->
     case Ssl of
         true ->
@@ -89,17 +86,6 @@ transport_accept({ssl, ListenSocket}) ->
 transport_accept(ListenSocket) ->
     gen_tcp:accept(ListenSocket, ?ACCEPT_TIMEOUT).
 
--ifdef(ssl_handshake_unavailable).
-finish_accept({ssl, Socket}) ->
-    case ssl:ssl_accept(Socket, ?SSL_HANDSHAKE_TIMEOUT) of
-        ok ->
-            {ok, {ssl, Socket}};
-        {error, _} = Err ->
-            Err
-    end;
-finish_accept(Socket) ->
-    {ok, Socket}.
--else.
 finish_accept({ssl, Socket}) ->
     case ssl:handshake(Socket, ?SSL_HANDSHAKE_TIMEOUT) of
         {ok, SslSocket} ->
@@ -109,7 +95,6 @@ finish_accept({ssl, Socket}) ->
     end;
 finish_accept(Socket) ->
     {ok, Socket}.
--endif.
 
 recv({ssl, Socket}, Length, Timeout) ->
     ssl:recv(Socket, Length, Timeout);
