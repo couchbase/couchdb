@@ -101,7 +101,8 @@ start_link(Name, Options) ->
         [] ->
             ok;
         _ ->
-            ok = mochiweb_socket:setopts(Req:get(socket), SocketOptions)
+            ok = mochiweb_socket:setopts(mochiweb_request:get(socket, Req),
+                                         SocketOptions)
         end,
         apply(?MODULE, handle_request,
               [Req, DbFrontendModule, DefaultFun, UrlHandlers,
@@ -185,7 +186,7 @@ handle_request(MochiReq, DbFrontendModule, DefaultFun,
                UrlHandlers, DbUrlHandlers, DesignUrlHandlers, ExtraHeaders) ->
     % for the path, use the raw path with the query string and fragment
     % removed, but URL quoting left intact
-    RawUri = MochiReq:get(raw_path),
+    RawUri = mochiweb_request:get(raw_path, MochiReq),
     {"/" ++ Path, _, _} = mochiweb_util:urlsplit_path(RawUri),
 
     HandlerKey =
@@ -197,7 +198,7 @@ handle_request(MochiReq, DbFrontendModule, DefaultFun,
     end,
 
     Method1 =
-    case MochiReq:get(method) of
+    case mochiweb_request:get(method, MochiReq) of
         % already an atom
         Meth when is_atom(Meth) -> Meth;
 
@@ -215,7 +216,7 @@ handle_request(MochiReq, DbFrontendModule, DefaultFun,
     PathParts = [?l2b(unquote(Part)) || Part <- string:tokens(Path, "/")],
     HttpReq = #httpd{
                  mochi_req = MochiReq,
-                 peer = MochiReq:get(peer),
+                 peer = mochiweb_request:get(peer, MochiReq),
                  method = Method,
                  path_parts = PathParts,
                  db_frontend = DbFrontendModule,
@@ -313,19 +314,19 @@ partition(Path) ->
     mochiweb_util:partition(Path, "/").
 
 header_value(#httpd{mochi_req=MochiReq}, Key) ->
-    MochiReq:get_header_value(Key).
+    mochiweb_request:get_header_value(Key, MochiReq).
 
 header_value(#httpd{mochi_req=MochiReq}, Key, Default) ->
-    case MochiReq:get_header_value(Key) of
+    case mochiweb_request:get_header_value(Key, MochiReq) of
     undefined -> Default;
     Value -> Value
     end.
 
 primary_header_value(#httpd{mochi_req=MochiReq}, Key) ->
-    MochiReq:get_primary_header_value(Key).
+    mochiweb_request:get_primary_header_value(Key, MochiReq).
 
 accepted_encodings(#httpd{mochi_req=MochiReq}) ->
-    case MochiReq:accepted_encodings(["gzip", "identity"]) of
+    case mochiweb_request:accepted_encodings(["gzip", "identity"], MochiReq) of
     bad_accept_encoding_value ->
         throw(bad_accept_encoding_value);
     [] ->
@@ -340,7 +341,8 @@ serve_file(Req, RelativePath, DocumentRoot) ->
 serve_file(#httpd{mochi_req=MochiReq}=Req, RelativePath, DocumentRoot, Headers) ->
     log_request(Req, 200),
     ExtraHeaders = extra_headers(Req, Headers),
-    {ok, MochiReq:serve_file(RelativePath, DocumentRoot, ExtraHeaders)}.
+    {ok, mochiweb_request:serve_file(RelativePath, DocumentRoot, ExtraHeaders,
+                                     MochiReq)}.
 
 qs_value(Req, Key) ->
     qs_value(Req, Key, undefined).
@@ -357,18 +359,20 @@ qs_json_value(Req, Key, Default) ->
     end.
 
 qs(#httpd{mochi_req=MochiReq}) ->
-    MochiReq:parse_qs().
+    mochiweb_request:parse_qs(MochiReq).
 
 path(#httpd{mochi_req=MochiReq}) ->
-    MochiReq:get(path).
+    mochiweb_request:get(path, MochiReq).
 
 host_for_request(#httpd{mochi_req=MochiReq}) ->
     XHost = couch_config:get("httpd", "x_forwarded_host", "X-Forwarded-Host"),
-    case MochiReq:get_header_value(XHost) of
+    case mochiweb_request:get_header_value(XHost, MochiReq) of
         undefined ->
-            case MochiReq:get_header_value("Host") of
+            case mochiweb_request:get_header_value("Host", MochiReq) of
                 undefined ->
-                    {ok, {Address, Port}} = inet:sockname(MochiReq:get(socket)),
+                    {ok, {Address, Port}} = inet:sockname(
+                                              mochiweb_request:get(
+                                                socket, MochiReq)),
                     inet_parse:ntoa(Address) ++ ":" ++ integer_to_list(Port);
                 Value1 ->
                     Value1
@@ -379,14 +383,14 @@ host_for_request(#httpd{mochi_req=MochiReq}) ->
 absolute_uri(#httpd{mochi_req=MochiReq}=Req, Path) ->
     Host = host_for_request(Req),
     XSsl = couch_config:get("httpd", "x_forwarded_ssl", "X-Forwarded-Ssl"),
-    Scheme = case MochiReq:get_header_value(XSsl) of
+    Scheme = case mochiweb_request:get_header_value(XSsl, MochiReq) of
                  "on" -> "https";
                  _ ->
                      XProto = couch_config:get("httpd", "x_forwarded_proto", "X-Forwarded-Proto"),
-                     case MochiReq:get_header_value(XProto) of
+                     case mochiweb_request:get_header_value(XProto, MochiReq) of
                          %% Restrict to "https" and "http" schemes only
                          "https" -> "https";
-                         _ -> case MochiReq:get(scheme) of
+                         _ -> case mochiweb_request:get(scheme, MochiReq) of
                                   https -> "https";
                                   http -> "http"
                               end
@@ -404,13 +408,13 @@ parse_form(#httpd{mochi_req=MochiReq}) ->
     mochiweb_multipart:parse_form(MochiReq).
 
 recv(#httpd{mochi_req=MochiReq}, Len) ->
-    MochiReq:recv(Len).
+    mochiweb_request:recv(Len, MochiReq).
 
 recv_chunked(#httpd{mochi_req=MochiReq}, MaxChunkSize, ChunkFun, InitState) ->
     % Fun is called once with each chunk
     % Fun({Length, Binary}, State)
     % called with Length == 0 on the last time.
-    MochiReq:stream_body(MaxChunkSize, ChunkFun, InitState).
+    mochiweb_request:stream_body(MaxChunkSize, ChunkFun, InitState, MochiReq).
 
 body_length(Req) ->
     case header_value(Req, "Transfer-Encoding") of
@@ -428,7 +432,7 @@ body(#httpd{mochi_req=MochiReq, req_body=undefined} = Req) ->
         undefined ->
             MaxSize = list_to_integer(
                 couch_config:get("couchdb", "max_document_size", "4294967296")),
-            MochiReq:recv_body(MaxSize);
+            mochiweb_request:recv_body(MaxSize, MochiReq);
         chunked ->
             ChunkFun = fun({0, _Footers}, Acc) ->
                 lists:reverse(Acc);
@@ -437,7 +441,7 @@ body(#httpd{mochi_req=MochiReq, req_body=undefined} = Req) ->
             end,
             recv_chunked(Req, 8192, ChunkFun, []);
         Len ->
-            MochiReq:recv_body(Len)
+            mochiweb_request:recv_body(Len, MochiReq)
     end;
 body(#httpd{req_body=ReqBody}) ->
     ReqBody.
@@ -488,14 +492,14 @@ verify_is_server_admin(#user_ctx{roles=Roles}) ->
     end.
 
 log_request(#httpd{mochi_req=MochiReq,peer=Peer}=Req, Code) ->
-    Path = case MochiReq:get(method) of
+    Path = case mochiweb_request:get(method, MochiReq) of
     'POST' ->
         couch_util:log_parse_post(Req);
     _ ->
-        MochiReq:get(raw_path)
+        mochiweb_request:get(raw_path, MochiReq)
     end,
     ?LOG_INFO("~s -- ~s ~s ~B", [?LOG_USERDATA(Peer),
-                                 MochiReq:get(method),
+                                 mochiweb_request:get(method, MochiReq),
                                  ?LOG_USERDATA(Path),
                                  Code]).
 
@@ -513,8 +517,9 @@ start_response_length(#httpd{mochi_req=MochiReq}=Req, Code, Headers, Length) ->
     log_request(Req, Code),
     ExtraHeaders = extra_headers(Req, Headers),
 
-    Resp = MochiReq:start_response_length({Code, ExtraHeaders, Length}),
-    case MochiReq:get(method) of
+    Resp = mochiweb_request:start_response_length({Code, ExtraHeaders, Length},
+                                                  MochiReq),
+    case mochiweb_request:get(method, MochiReq) of
     'HEAD' -> throw({http_head_abort, Resp});
     _ -> ok
     end,
@@ -523,8 +528,8 @@ start_response_length(#httpd{mochi_req=MochiReq}=Req, Code, Headers, Length) ->
 start_response(#httpd{mochi_req=MochiReq}=Req, Code, Headers) ->
     log_request(Req, Code),
     ExtraHeaders = extra_headers(Req, Headers),
-    Resp = MochiReq:start_response({Code, ExtraHeaders}),
-    case MochiReq:get(method) of
+    Resp = mochiweb_request:start_response({Code, ExtraHeaders}, MochiReq),
+    case mochiweb_request:get(method, MochiReq) of
         'HEAD' -> throw({http_head_abort, Resp});
         _ -> ok
     end,
@@ -546,8 +551,8 @@ extra_headers(#httpd{extra_headers = ExtraHeaders}, Headers) ->
     ExtraHeaders ++ Headers.
 
 http_1_0_keep_alive(Req, Headers) ->
-    case (Req:get(version) == {1, 0}) andalso
-        (Req:should_close() == false) andalso
+    case (mochiweb_request:get(version, Req) == {1, 0}) andalso
+        (mochiweb_request:should_close(Req) == false) andalso
         no_resp_conn_header(Headers) of
     true ->
         [{"Connection", "Keep-Alive"} | Headers];
@@ -559,8 +564,8 @@ start_chunked_response(#httpd{mochi_req=MochiReq}=Req, Code, Headers) ->
     log_volume(Req, Code),
     couch_audit:audit_view_query_request(Req, Code, undefined, undefined),
     Headers2 = extra_headers(Req, http_1_0_keep_alive(MochiReq, Headers)),
-    Resp = MochiReq:respond({Code, Headers2, chunked}),
-    case MochiReq:get(method) of
+    Resp = mochiweb_request:respond({Code, Headers2, chunked}, MochiReq),
+    case mochiweb_request:get(method, MochiReq) of
     'HEAD' -> throw({http_head_abort, Resp});
     _ -> ok
     end,
@@ -584,7 +589,7 @@ send_response(#httpd{mochi_req=MochiReq}=Req, Code, Headers, Body) ->
         ?LOG_DEBUG("httpd ~p error response:~n ~s", [?LOG_USERDATA(Code), ?LOG_USERDATA(Body)]);
     true -> ok
     end,
-    {ok, MochiReq:respond({Code, Headers2, Body})}.
+    {ok, mochiweb_request:respond({Code, Headers2, Body}, MochiReq)}.
 
 send_method_not_allowed(Req, Methods) ->
     send_error(Req, 405, [{"Allow", Methods}], <<"method_not_allowed">>, ?l2b("Only " ++ Methods ++ " allowed")).
@@ -726,7 +731,8 @@ error_info(Error) ->
 error_headers(#httpd{mochi_req=MochiReq}, Code) ->
     if Code == 401 ->
         % this is where the basic auth popup is triggered
-        case MochiReq:get_header_value("X-CouchDB-WWW-Authenticate") of
+        case mochiweb_request:get_header_value("X-CouchDB-WWW-Authenticate",
+                                               MochiReq) of
         undefined ->
             case couch_config:get("httpd", "WWW-Authenticate", nil) of
             nil ->
@@ -743,7 +749,6 @@ error_headers(#httpd{mochi_req=MochiReq}, Code) ->
 
 send_error(_Req, {already_sent, Resp, _Error}) ->
     {ok, Resp};
-
 send_error(Req, Error) ->
     {Code, ErrorStr, ReasonStr} = error_info(Error),
     {Code1, Headers} = error_headers(Req, Code),
@@ -779,7 +784,8 @@ negotiate_content_type(#httpd{mochi_req=MochiReq}) ->
     %% depending on the Accept header in the request. A request that explicitly
     %% lists the correct JSON MIME type will get that type, otherwise the
     %% response will have the generic MIME type "text/plain"
-    AcceptedTypes = case MochiReq:get_header_value("Accept") of
+    AcceptedTypes = case mochiweb_request:get_header_value("Accept",
+                                                           MochiReq) of
         undefined       -> [];
         AcceptHeader    -> string:tokens(AcceptHeader, ", ")
     end,

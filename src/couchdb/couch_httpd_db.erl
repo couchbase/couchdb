@@ -331,8 +331,8 @@ db_req(#httpd{path_parts=[_,<<"_revs_diff">>]}=Req, _Db) ->
 % as slashes in document IDs must otherwise be URL encoded.
 db_req(#httpd{method='GET',mochi_req=MochiReq, path_parts=[DbName,<<"_design/",_/binary>>|_]}=Req, _Db) ->
     PathFront = "/" ++ couch_httpd:quote(binary_to_list(DbName)) ++ "/",
-    [_|PathTail] = re:split(MochiReq:get(raw_path), "_design%2F",
-        [{return, list}]),
+    [_|PathTail] = re:split(mochiweb_request:get(raw_path, MochiReq),
+                            "_design%2F", [{return, list}]),
     couch_httpd:send_redirect(Req, PathFront ++ "_design/" ++
         mochiweb_util:join(PathTail, "_design%2F"));
 

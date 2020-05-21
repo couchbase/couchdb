@@ -123,7 +123,8 @@ http_sender({debug_info, From, Info}, SAcc) ->
 http_sender(start, #sender_acc{req = Req} = SAcc) ->
     maybe_stop_timer(),
     #httpd{mochi_req = MReq} = Req,
-    ok = mochiweb_socket:setopts(MReq:get(socket), [{nodelay, true}]),
+    ok = mochiweb_socket:setopts(mochiweb_request:get(socket, MReq),
+                                 [{nodelay, true}]),
     {ok, Resp} = couch_httpd:start_json_response(Req, 200, []),
     {ok, SAcc#sender_acc{resp = Resp, acc = <<"\r\n">>}};
 
@@ -132,7 +133,8 @@ http_sender({start, RowCount}, #sender_acc{req = Req} = SAcc) ->
     % Call off the hit
     maybe_stop_timer(),
     #httpd{mochi_req = MReq} = Req,
-    ok = mochiweb_socket:setopts(MReq:get(socket), [{nodelay, true}]),
+    ok = mochiweb_socket:setopts(mochiweb_request:get(socket, MReq),
+                                 [{nodelay, true}]),
     {ok, Resp} = couch_httpd:start_json_response(Req, 200, []),
     {ok, SAcc#sender_acc{resp = Resp, total_rows = RowCount, acc = <<"\r\n">>}};
 

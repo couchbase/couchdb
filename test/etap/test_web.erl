@@ -32,14 +32,14 @@ loop(Req) ->
     %etap:diag("Handling request: ~p", [Req]),
     case gen_server:call(?HANDLER, {check_request, Req}) of
         {ok, RespInfo} ->
-            {ok, Req:respond(RespInfo)};
+            {ok, mochiweb_request:respond(RespInfo, Req)};
         {raw, {Status, Headers, BodyChunks}} ->
-            Resp = Req:start_response({Status, Headers}),
+            Resp = mochiweb_request:start_response({Status, Headers}, Req),
             lists:foreach(fun(C) -> Resp:send(C) end, BodyChunks),
             erlang:put(mochiweb_request_force_close, true),
             {ok, Resp};
         {chunked, {Status, Headers, BodyChunks}} ->
-            Resp = Req:respond({Status, Headers, chunked}),
+            Resp = mochiweb_request:respond({Status, Headers, chunked}, Req),
             timer:sleep(500),
             lists:foreach(fun(C) -> Resp:write_chunk(C) end, BodyChunks),
             Resp:write_chunk([]),
@@ -47,7 +47,7 @@ loop(Req) ->
         {error, Reason} ->
             etap:diag("Error: ~p", [Reason]),
             Body = lists:flatten(io_lib:format("Error: ~p", [Reason])),
-            {ok, Req:respond({200, [], Body})}
+            {ok, mochiweb_request:respond({200, [], Body}, Req)}
     end.
 
 get_port() ->
@@ -72,7 +72,7 @@ handle_call({check_request, Req}, _From, State) when is_function(State, 1) ->
         {chunked, Resp} -> {reply, {chunked, Resp}, was_ok};
         Error -> {reply, {error, Error}, not_ok}
     end,
-    Req:cleanup(),
+    mochiweb_request:cleanup(Req),
     Resp2;
 handle_call({check_request, _Req}, _From, _State) ->
     {reply, {error, no_assert_function}, not_ok};
