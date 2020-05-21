@@ -35,14 +35,16 @@ loop(Req) ->
             {ok, mochiweb_request:respond(RespInfo, Req)};
         {raw, {Status, Headers, BodyChunks}} ->
             Resp = mochiweb_request:start_response({Status, Headers}, Req),
-            lists:foreach(fun(C) -> Resp:send(C) end, BodyChunks),
+            lists:foreach(fun(C) -> mochiweb_response:send(C, Resp) end,
+                          BodyChunks),
             erlang:put(mochiweb_request_force_close, true),
             {ok, Resp};
         {chunked, {Status, Headers, BodyChunks}} ->
             Resp = mochiweb_request:respond({Status, Headers, chunked}, Req),
             timer:sleep(500),
-            lists:foreach(fun(C) -> Resp:write_chunk(C) end, BodyChunks),
-            Resp:write_chunk([]),
+            lists:foreach(fun(C) -> mochiweb_response:write_chunk(C, Resp) end,
+                          BodyChunks),
+            mochiweb_response:write_chunk([], Resp),
             {ok, Resp};
         {error, Reason} ->
             etap:diag("Error: ~p", [Reason]),

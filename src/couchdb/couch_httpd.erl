@@ -536,7 +536,7 @@ start_response(#httpd{mochi_req=MochiReq}=Req, Code, Headers) ->
     {ok, Resp}.
 
 send(Resp, Data) ->
-    Resp:send(Data),
+    mochiweb_response:send(Data, Resp),
     {ok, Resp}.
 
 no_resp_conn_header([]) ->
@@ -574,12 +574,12 @@ start_chunked_response(#httpd{mochi_req=MochiReq}=Req, Code, Headers) ->
 send_chunk(Resp, Data) ->
     case iolist_size(Data) of
     0 -> ok; % do nothing
-    _ -> Resp:write_chunk(Data)
+    _ -> mochiweb_response:write_chunk(Data, Resp)
     end,
     {ok, Resp}.
 
 last_chunk(Resp) ->
-    Resp:write_chunk([]),
+    mochiweb_response:write_chunk([], Resp),
     {ok, Resp}.
 
 send_response(#httpd{mochi_req=MochiReq}=Req, Code, Headers, Body) ->
