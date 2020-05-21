@@ -31,6 +31,7 @@
 -import(couch_util, [
     get_value/2,
     get_value/3,
+    rand_uniform/2,
     to_binary/1
 ]).
 
@@ -779,7 +780,7 @@ do_checkpoint(State) ->
             [{<<"history">>, lists:sublist([NewHistoryEntry | OldHistory], 50)}]
         ,
 
-        Rand = crypto:rand_uniform(0, 16#100000000),
+        Rand = rand_uniform(0, 16#100000000),
         RandBin = <<Rand:32/integer>>,
         try
             SrcRev = update_checkpoint(
