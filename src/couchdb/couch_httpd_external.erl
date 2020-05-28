@@ -26,10 +26,11 @@ json_req_obj(#httpd{mochi_req=Req,
                req_body=ReqBody
             }, Db, DocId) ->
     Body = case ReqBody of
-        undefined -> Req:recv_body();
+        undefined -> mochiweb_request:recv_body(Req);
         Else -> Else
     end,
-    ParsedForm = case Req:get_primary_header_value("content-type") of
+    ParsedForm = case mochiweb_request:get_primary_header_value("content-type",
+                                                                Req) of
         "application/x-www-form-urlencoded" ++ _ ->
             case Body of
             undefined -> [];
@@ -38,7 +39,7 @@ json_req_obj(#httpd{mochi_req=Req,
         _ ->
             []
     end,
-    Headers = Req:get(headers),
+    Headers = mochiweb_request:get(headers, Req),
     Hlist = mochiweb_headers:to_list(Headers),
     {ok, Info} = couch_db:get_db_info(Db),
     
@@ -48,12 +49,13 @@ json_req_obj(#httpd{mochi_req=Req,
         {<<"uuid">>, couch_uuids:new()},
         {<<"method">>, Method},
         {<<"path">>, Path},
-        {<<"query">>, json_query_keys(to_json_terms(Req:parse_qs()))},
+        {<<"query">>, json_query_keys(to_json_terms(
+                                        mochiweb_request:parse_qs(Req)))},
         {<<"headers">>, to_json_terms(Hlist)},
         {<<"body">>, Body},
-        {<<"peer">>, ?l2b(Req:get(peer))},
+        {<<"peer">>, ?l2b(mochiweb_request:get(peer, Req))},
         {<<"form">>, to_json_terms(ParsedForm)},
-        {<<"cookie">>, to_json_terms(Req:parse_cookie())},
+        {<<"cookie">>, to_json_terms(mochiweb_request:parse_cookie(Req))},
         {<<"userCtx">>, couch_util:json_user_ctx(Db)},
         {<<"secObj">>, couch_db:get_security(Db)}]}.
 
@@ -88,8 +90,9 @@ send_external_response(#httpd{mochi_req=MochiReq}=Req, Response) ->
         headers = Headers
     } = parse_external_response(Response),
     couch_httpd:log_request(Req, Code),
-    Resp = MochiReq:respond({Code,
-        default_or_content_type(CType, Headers ++ couch_httpd:server_header()), Data}),
+    Resp = mochiweb_request:respond({Code,
+        default_or_content_type(CType, Headers ++ couch_httpd:server_header()),
+        Data}, MochiReq),
     {ok, Resp}.
 
 parse_external_response({Response}) ->

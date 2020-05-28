@@ -232,7 +232,7 @@ random_doc_info(#db{docinfo_by_id_btree = IdBtree}) ->
     0 ->
         empty;
     _ ->
-        N = crypto:rand_uniform(1, DocCount + 1),
+        N = couch_util:rand_uniform(1, DocCount + 1),
         Acc0 = {1, undefined},
         FoldFun = fun
         (value, #doc_info{deleted = false} = DI, _Reds, {I, undefined}) ->

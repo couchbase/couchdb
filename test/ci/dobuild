@@ -273,10 +273,6 @@ cmake -D CMAKE_INSTALL_PREFIX=$WORKSPACE/install \
       .. 1>>$WORKSPACE/make.log 2>&1
 test $? -eq 0 || error_exit "CMake build"
 
-echo "Patching breakpad"
-cd $WORKSPACE/build/tlm/deps/breakpad.exploded
-for pf in ~/bin/breakpad.debian9.*.patch; do patch -p1 < $pf; done
-
 echo "Building main product"
 cd $WORKSPACE/build
 make -j8 install 1>>$WORKSPACE/make.log 2>&1

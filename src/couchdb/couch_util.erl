@@ -34,6 +34,7 @@
 -export([parse_view_name/1, log_parse_post/1]).
 -export([log_do_parse/1]).
 -export([get_view_list/1, find_match/3]).
+-export([rand_uniform/2]).
 
 -include("couch_db.hrl").
 
@@ -49,6 +50,10 @@ priv_dir() ->
             code:priv_dir(couchdb);
         Dir -> Dir
     end.
+
+%% Generates N: Lo =< N < Hi
+rand_uniform(Lo, Hi) ->
+    rand:uniform(Hi - Lo) + Lo - 1.
 
 % Normalize a pathname by removing .. and . components.
 normpath(Path) ->
@@ -176,7 +181,7 @@ json_user_ctx(#db{name=DbName, user_ctx=Ctx}) ->
 
 % returns a random integer
 rand32() ->
-    crypto:rand_uniform(0, 16#100000000).
+    rand_uniform(0, 16#100000000).
 
 % given a pathname "../foo/bar/" it gives back the fully qualified
 % absolute pathname.

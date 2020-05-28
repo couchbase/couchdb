@@ -94,7 +94,7 @@ start_link() ->
 log(#httpd{path_parts=Parts, mochi_req=MochiReq} = Req, QueryArgument, Value) ->
     {Origin, Path} = case Parts of
         [_, <<"_design">>, _, <<"_view">>, _] ->
-            {external, MochiReq:get(path)};
+            {external, mochiweb_request:get(path, MochiReq)};
         _ ->
             {internal, ?b2l(couch_util:log_parse_post(Req))}
     end,
