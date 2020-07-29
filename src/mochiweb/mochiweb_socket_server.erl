@@ -7,6 +7,7 @@
 -author('bob@mochimedia.com').
 -behaviour(gen_server).
 
+-include_lib("kernel/include/logger.hrl").
 -include("internal.hrl").
 
 -export([start/1, start_link/1, stop/1]).
@@ -57,8 +58,8 @@ get(Name, Property) ->
 set(Name, profile_fun, Fun) ->
     gen_server:cast(Name, {set, profile_fun, Fun});
 set(Name, Property, _Value) ->
-    error_logger:info_msg("?MODULE:set for ~p with ~p not implemented~n",
-                          [Name, Property]).
+    ?LOG_INFO("?MODULE:set for ~p with ~p not implemented~n",
+              [Name, Property]).
 
 stop(Name) when is_atom(Name) orelse is_pid(Name) ->
     gen_server:call(Name, stop);
@@ -374,7 +375,7 @@ handle_info({From, Tag, get_modules}, State = #mochiweb_socket_server{name={loca
 
 % If for some reason we can't get the module name, send empty list to avoid release_handler timeout:
 handle_info({From, Tag, get_modules}, State) ->
-    error_logger:info_msg("mochiweb_socket_server replying to dynamic modules request as '[]'~n",[]),
+    ?LOG_INFO("mochiweb_socket_server replying to dynamic modules request as '[]'~n",[]),
     From ! {element(2,Tag), []},
     {noreply, State};
 

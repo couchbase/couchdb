@@ -35,6 +35,7 @@
 
 -export([request/9]).
 
+-include_lib("kernel/include/logger.hrl").
 -include("lhttpc_types.hrl").
 -include("lhttpc.hrl").
 
@@ -221,8 +222,8 @@ send_request(#client_state{socket = undefined} = State) ->
         exit:{{{badmatch, {error, {asn1, _}}}, _}, _} ->
             throw(ssl_decode_error);
         Type:Error:Stack ->
-                    error_logger:error_msg("Socket connection error: ~p ~p, ~p",
-                                           [Type, Error, Stack])
+            ?LOG_ERROR("Socket connection error: ~p ~p, ~p",
+                       [Type, Error, Stack])
     end;
 send_request(#client_state{proxy = #lhttpc_url{}, proxy_setup = false} = State) ->
 % use a proxy.
