@@ -441,7 +441,7 @@ int onLoad(ErlNifEnv *env, void **priv, ERL_NIF_TERM info)
 
     try {
         cv = new std::condition_variable();
-    } catch (std::bad_alloc) {
+    } catch (const std::bad_alloc&) {
         return -3;
     }
 
