@@ -18,11 +18,12 @@
         {port,
          loop,
          name=undefined,
-         %% NOTE: This is currently ignored.
          max=2048,
          ip=any,
          listen=null,
          nodelay=false,
+         recbuf=?RECBUF_SIZE,
+         buffer=undefined,
          backlog=128,
          active_sockets=0,
          acceptor_pool_size=16,
@@ -59,13 +60,9 @@ set(Name, Property, _Value) ->
     error_logger:info_msg("?MODULE:set for ~p with ~p not implemented~n",
                           [Name, Property]).
 
-stop(Name) when is_atom(Name) ->
-    gen_server:cast(Name, stop);
-stop(Pid) when is_pid(Pid) ->
-    gen_server:cast(Pid, stop);
-stop({local, Name}) ->
-    stop(Name);
-stop({global, Name}) ->
+stop(Name) when is_atom(Name) orelse is_pid(Name) ->
+    gen_server:call(Name, stop);
+stop({Scope, Name}) when Scope =:= local orelse Scope =:= global ->
     stop(Name);
 stop(Options) ->
     State = parse_options(Options),
@@ -78,7 +75,16 @@ parse_options(State=#mochiweb_socket_server{}) ->
 parse_options(Options) ->
     parse_options(Options, #mochiweb_socket_server{}).
 
-parse_options([], State) ->
+parse_options([], State=#mochiweb_socket_server{acceptor_pool_size=PoolSize,
+                                                max=Max}) ->
+    case Max < PoolSize of
+        true ->
+            error_logger:info_report([{warning, "max is set lower than acceptor_pool_size"},
+                                      {max, Max},
+                                      {acceptor_pool_size, PoolSize}]);
+        false ->
+            ok
+    end,
     State;
 parse_options([{name, L} | Rest], State) when is_list(L) ->
     Name = {local, list_to_atom(L)},
@@ -112,13 +118,35 @@ parse_options([{backlog, Backlog} | Rest], State) ->
     parse_options(Rest, State#mochiweb_socket_server{backlog=Backlog});
 parse_options([{nodelay, NoDelay} | Rest], State) ->
     parse_options(Rest, State#mochiweb_socket_server{nodelay=NoDelay});
+parse_options([{recbuf, RecBuf} | Rest], State) when is_integer(RecBuf) orelse
+                                                RecBuf == undefined ->
+    %% XXX: `recbuf' value which is passed to `gen_tcp'
+    %% and value reported by `inet:getopts(P, [recbuf])' may
+    %% differ. They depends on underlying OS. From linux mans:
+    %%
+    %% The kernel doubles this value (to allow space for
+    %% bookkeeping overhead) when it is set using setsockopt(2),
+    %% and this doubled value is returned by getsockopt(2).
+    %%
+    %% See: man 7 socket | grep SO_RCVBUF
+    %%
+    %% In case undefined is passed instead of the default buffer
+    %% size ?RECBUF_SIZE, no size is set and the OS can control it dynamically
+    parse_options(Rest, State#mochiweb_socket_server{recbuf=RecBuf});
+parse_options([{buffer, Buffer} | Rest], State) when is_integer(Buffer) orelse
+                                                Buffer == undefined ->
+    %% `buffer` sets Erlang's userland socket buffer size. The size of this
+    %% buffer affects the maximum URL path that can be parsed. URL sizes that
+    %% are larger than this plus the size of the HTTP verb and some whitespace
+    %% will result in an `emsgsize` TCP error.
+    %%
+    %% If this value is not set Erlang sets it to 1460 which might be too low.
+    parse_options(Rest, State#mochiweb_socket_server{buffer=Buffer});
 parse_options([{acceptor_pool_size, Max} | Rest], State) ->
     MaxInt = ensure_int(Max),
     parse_options(Rest,
                   State#mochiweb_socket_server{acceptor_pool_size=MaxInt});
 parse_options([{max, Max} | Rest], State) ->
-    error_logger:info_report([{warning, "TODO: max is currently unsupported"},
-                              {max, Max}]),
     MaxInt = ensure_int(Max),
     parse_options(Rest, State#mochiweb_socket_server{max=MaxInt});
 parse_options([{ssl, Ssl} | Rest], State) when is_boolean(Ssl) ->
@@ -151,13 +179,16 @@ ipv6_supported() ->
             false
     end.
 
-init(State=#mochiweb_socket_server{ip=Ip, port=Port, backlog=Backlog, nodelay=NoDelay}) ->
+init(State=#mochiweb_socket_server{ip=Ip, port=Port, backlog=Backlog,
+                                   nodelay=NoDelay, recbuf=RecBuf,
+                                   buffer=Buffer}) ->
     process_flag(trap_exit, true),
+
     BaseOpts = [binary,
                 {reuseaddr, true},
                 {packet, 0},
                 {backlog, Backlog},
-                {recbuf, ?RECBUF_SIZE},
+                {exit_on_close, false},
                 {active, false},
                 {nodelay, NoDelay}],
     Opts = case Ip of
@@ -169,37 +200,60 @@ init(State=#mochiweb_socket_server{ip=Ip, port=Port, backlog=Backlog, nodelay=No
         {_, _, _, _} -> % IPv4
             [inet, {ip, Ip} | BaseOpts];
         {_, _, _, _, _, _, _, _} -> % IPv6
-            %% If ipv6_v6only is not specified it has different behavior on
-            %% different platforms (at least linux, mac and windows tested)
-            [inet6, {ip, Ip}, {ipv6_v6only, true} | BaseOpts]
+                   %% If ipv6_v6only is not specified it has different behavior
+                   %% on different platforms (at least linux, mac and windows
+                   %% tested)
+                   [inet6, {ip, Ip}, {ipv6_v6only, true} | BaseOpts]
     end,
-    listen(Port, Opts, State).
+    OptsBuf = set_buffer_opts(RecBuf, Buffer, Opts),
+    listen(Port, OptsBuf, State).
 
-new_acceptor_pool(Listen,
-                  State=#mochiweb_socket_server{acceptor_pool=Pool,
-                                                acceptor_pool_size=Size,
-                                                loop=Loop}) ->
-    F = fun (_, S) ->
-                Pid = mochiweb_acceptor:start_link(self(), Listen, Loop),
-                sets:add_element(Pid, S)
-        end,
-    Pool1 = lists:foldl(F, Pool, lists:seq(1, Size)),
-    State#mochiweb_socket_server{acceptor_pool=Pool1}.
+
+set_buffer_opts(undefined, undefined, Opts) ->
+    % If recbuf is undefined, user space buffer is set to the default 1460
+    % value. That unexpectedly break the {packet, http} parser and any URL
+    % lines longer than 1460 would error out with emsgsize. So when recbuf is
+    % undefined, use previous value of recbuf for buffer in order to keep older
+    % code from breaking.
+    [{buffer, ?RECBUF_SIZE} | Opts];
+set_buffer_opts(RecBuf, undefined, Opts) ->
+    [{recbuf, RecBuf} | Opts];
+set_buffer_opts(undefined, Buffer, Opts) ->
+    [{buffer, Buffer} | Opts];
+set_buffer_opts(RecBuf, Buffer, Opts) ->
+    % Note: order matters, recbuf will override buffer unless buffer value
+    % comes first, except on older versions of Erlang (ex. 17.0) where it works
+    % exactly the opposite.
+    [{buffer, Buffer}, {recbuf, RecBuf} | Opts].
+
+
+new_acceptor_pool(State=#mochiweb_socket_server{acceptor_pool_size=Size}) ->
+    lists:foldl(fun (_, S) -> new_acceptor(S) end, State, lists:seq(1, Size)).
+
+new_acceptor(State=#mochiweb_socket_server{acceptor_pool=Pool,
+                                           recbuf=RecBuf,
+                                           loop=Loop,
+                                           listen=Listen}) ->
+    LoopOpts = [{recbuf, RecBuf}],
+    Pid = mochiweb_acceptor:start_link(self(), Listen, Loop, LoopOpts),
+    State#mochiweb_socket_server{
+      acceptor_pool=sets:add_element(Pid, Pool)}.
 
 listen(Port, Opts, State=#mochiweb_socket_server{ssl=Ssl, ssl_opts=SslOpts}) ->
     case mochiweb_socket:listen(Ssl, Port, Opts, SslOpts) of
         {ok, Listen} ->
             {ok, ListenPort} = mochiweb_socket:port(Listen),
-            {ok, new_acceptor_pool(
-                   Listen,
-                   State#mochiweb_socket_server{listen=Listen,
-                                                port=ListenPort})};
+            {ok, new_acceptor_pool(State#mochiweb_socket_server{
+                                     listen=Listen,
+                                     port=ListenPort})};
         {error, Reason} ->
             {stop, Reason}
     end.
 
 do_get(port, #mochiweb_socket_server{port=Port}) ->
     Port;
+do_get(waiting_acceptors, #mochiweb_socket_server{acceptor_pool=Pool}) ->
+    sets:size(Pool);
 do_get(active_sockets, #mochiweb_socket_server{active_sockets=ActiveSockets}) ->
     ActiveSockets.
 
@@ -228,6 +282,8 @@ handle_call(Req, From, State) when ?is_old_state(State) ->
 handle_call({get, Property}, _From, State) ->
     Res = do_get(Property, State),
     {reply, Res, State};
+handle_call(stop, _From, State) ->
+    {stop, normal, ok, State};
 handle_call(_Message, _From, State) ->
     Res = error,
     {reply, Res, State}.
@@ -252,9 +308,7 @@ handle_cast({set, profile_fun, ProfileFun}, State) ->
                  _ ->
                      State
              end,
-    {noreply, State1};
-handle_cast(stop, State) ->
-    {stop, normal, State}.
+    {noreply, State1}.
 
 
 terminate(Reason, State) when ?is_old_state(State) ->
@@ -267,16 +321,31 @@ code_change(_OldVsn, State, _Extra) ->
 
 recycle_acceptor(Pid, State=#mochiweb_socket_server{
                         acceptor_pool=Pool,
-                        listen=Listen,
-                        loop=Loop,
+                        acceptor_pool_size=PoolSize,
+                        max=Max,
                         active_sockets=ActiveSockets}) ->
-    case sets:is_element(Pid, Pool) of
-        true ->
-            Acceptor = mochiweb_acceptor:start_link(self(), Listen, Loop),
-            Pool1 = sets:add_element(Acceptor, sets:del_element(Pid, Pool)),
-            State#mochiweb_socket_server{acceptor_pool=Pool1};
-        false ->
-            State#mochiweb_socket_server{active_sockets=ActiveSockets - 1}
+    %% A socket is considered to be active from immediately after it
+    %% has been accepted (see the {accepted, Pid, Timing} cast above).
+    %% This function will be called when an acceptor is transitioning
+    %% to an active socket, or when either type of Pid dies. An acceptor
+    %% Pid will always be in the acceptor_pool set, and an active socket
+    %% will be in that set during the transition but not afterwards.
+    Pool1 = sets:del_element(Pid, Pool),
+    NewSize = sets:size(Pool1),
+    ActiveSockets1 = case NewSize =:= sets:size(Pool) of
+                         %% Pid has died and it is not in the acceptor set,
+                         %% it must be an active socket.
+                         true -> max(0, ActiveSockets - 1);
+                         false -> ActiveSockets
+                     end,
+    State1 = State#mochiweb_socket_server{
+               acceptor_pool=Pool1,
+               active_sockets=ActiveSockets1},
+    %% Spawn a new acceptor only if it will not overrun the maximum socket
+    %% count or the maximum pool size.
+    case NewSize + ActiveSockets1 < Max andalso NewSize < PoolSize of
+        true -> new_acceptor(State1);
+        false -> State1
     end.
 
 handle_info(Msg, State) when ?is_old_state(State) ->
@@ -340,5 +409,12 @@ upgrade_state_test() ->
                                        acceptor_pool=acceptor_pool,
                                        profile_fun=undefined},
     ?assertEqual(CmpState, State).
+
+
+set_buffer_opts_test() ->
+    ?assertEqual([{buffer, 8192}], set_buffer_opts(undefined, undefined, [])),
+    ?assertEqual([{recbuf, 5}], set_buffer_opts(5, undefined, [])),
+    ?assertEqual([{buffer, 6}], set_buffer_opts(undefined, 6, [])),
+    ?assertEqual([{buffer, 6}, {recbuf, 5}], set_buffer_opts(5, 6, [])).
 
 -endif.

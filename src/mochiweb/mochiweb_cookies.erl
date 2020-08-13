@@ -1,5 +1,23 @@
 %% @author Emad El-Haraty <emad@mochimedia.com>
 %% @copyright 2007 Mochi Media, Inc.
+%%
+%% Permission is hereby granted, free of charge, to any person obtaining a
+%% copy of this software and associated documentation files (the "Software"),
+%% to deal in the Software without restriction, including without limitation
+%% the rights to use, copy, modify, merge, publish, distribute, sublicense,
+%% and/or sell copies of the Software, and to permit persons to whom the
+%% Software is furnished to do so, subject to the following conditions:
+%%
+%% The above copyright notice and this permission notice shall be included in
+%% all copies or substantial portions of the Software.
+%%
+%% THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+%% IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+%% FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+%% THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+%% LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+%% FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+%% DEALINGS IN THE SOFTWARE.
 
 %% @doc HTTP Cookie parsing and generating (RFC 2109, RFC 2965).
 
@@ -21,6 +39,19 @@
          C =:= $[ orelse C =:= $] orelse C =:= $? orelse C =:= $= orelse
          C =:= ${ orelse C =:= $})).
 
+%% RFC 6265 cookie value allowed characters
+%%  cookie-octet      = %x21 / %x23-2B / %x2D-3A / %x3C-5B / %x5D-7E
+%%                        ; US-ASCII characters excluding CTLs,
+%%                        ; whitespace DQUOTE, comma, semicolon,
+%%                        ; and backslash
+-define(IS_COOKIE_OCTET(C),
+        (C =:= 16#21
+         orelse (C >= 16#23 andalso C =< 16#2B)
+         orelse (C >= 16#2D andalso C =< 16#3A)
+         orelse (C >= 16#3C andalso C =< 16#5B)
+         orelse (C >= 16#5D andalso C =< 16#7E)
+        )).
+
 %% @type proplist() = [{Key::string(), Value::string()}].
 %% @type header() = {Name::string(), Value::string()}.
 %% @type int_seconds() = integer().
@@ -34,6 +65,7 @@ cookie(Key, Value) ->
 %% where Option = {max_age, int_seconds()} | {local_time, {date(), time()}}
 %%                | {domain, string()} | {path, string()}
 %%                | {secure, true | false} | {http_only, true | false}
+%%                | {same_site, lax | strict | none}
 %%
 %% @doc Generate a Set-Cookie header field tuple.
 cookie(Key, Value, Options) ->
@@ -91,7 +123,19 @@ cookie(Key, Value, Options) ->
             _ ->
                 ""
         end,
-    CookieParts = [Cookie, ExpiresPart, SecurePart, DomainPart, PathPart, HttpOnlyPart],
+    SameSitePart =
+        case proplists:get_value(same_site, Options) of
+            undefined ->
+                "";
+            lax ->
+                "; SameSite=Lax";
+            strict ->
+                "; SameSite=Strict";
+            none ->
+                "; SameSite=None"
+        end,
+    CookieParts = [Cookie, ExpiresPart, SecurePart, DomainPart, PathPart,
+        HttpOnlyPart, SameSitePart],
     {"Set-Cookie", lists:flatten(CookieParts)}.
 
 
@@ -179,10 +223,14 @@ read_value([$= | Value]) ->
         [?QUOTE | _] ->
             read_quoted(Value1);
         _ ->
-            read_token(Value1)
+            read_value_(Value1)
     end;
 read_value(String) ->
     {"", String}.
+
+read_value_(String) ->
+    F = fun (C) -> ?IS_COOKIE_OCTET(C) end,
+    lists:splitwith(F, String).
 
 read_quoted([?QUOTE | String]) ->
     read_quoted(String, []).
@@ -273,6 +321,12 @@ parse_cookie_test() ->
     ?assertEqual(
        [{"foo", "bar"}, {"baz", "wibble"}],
        parse_cookie("foo=bar , baz=wibble ")),
+    ?assertEqual(
+       [{"foo", "base64=="}, {"bar", "base64="}],
+       parse_cookie("foo=\"base64==\";bar=\"base64=\"")),
+    ?assertEqual(
+       [{"foo", "base64=="}, {"bar", "base64="}],
+       parse_cookie("foo=base64==;bar=base64=")),
     ok.
 
 domain_test() ->
@@ -326,6 +380,18 @@ cookie_test() ->
           "Max-Age=86417"},
     C3 = cookie("Customer", "WILE_E_COYOTE",
                 [{max_age, 86417}, {local_time, LocalTime}]),
+
+    % test various values for SameSite
+    %
+    % unset default to nothing
+    C4 = {"Set-Cookie","i=test123; Version=1"},
+    C4 = cookie("i", "test123", []),
+    C5 = {"Set-Cookie","i=test123; Version=1; SameSite=Strict"},
+    C5 = cookie("i", "test123", [ {same_site, strict}]),
+    C6 = {"Set-Cookie","i=test123; Version=1; SameSite=Lax"},
+    C6 = cookie("i", "test123", [ {same_site, lax}]),
+    C7 = {"Set-Cookie","i=test123; Version=1; SameSite=None"},
+    C7 = cookie("i", "test123", [ {same_site, none}]),
     ok.
 
 -endif.

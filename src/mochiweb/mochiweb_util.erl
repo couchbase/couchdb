@@ -14,6 +14,8 @@
 -export([safe_relative_path/1, partition/2]).
 -export([parse_qvalues/1, pick_accepted_encodings/3]).
 -export([make_io/1]).
+-export([normalize_path/1]).
+-export([rand_uniform/2]).
 
 -define(PERCENT, 37).  % $\%
 -define(FULLSTOP, 46). % $\.
@@ -357,11 +359,16 @@ urlsplit_query([C | Rest], Acc) ->
 %% @spec guess_mime(string()) -> string()
 %% @doc  Guess the mime type of a file by the extension of its filename.
 guess_mime(File) ->
-    case mochiweb_mime:from_extension(filename:extension(File)) of
-        undefined ->
-            "text/plain";
-        Mime ->
-            Mime
+    case filename:basename(File) of
+        "crossdomain.xml" ->
+            "text/x-cross-domain-policy";
+        Name ->
+            case mochiweb_mime:from_extension(filename:extension(Name)) of
+                undefined ->
+                    "text/plain";
+                Mime ->
+                    Mime
+            end
     end.
 
 %% @spec parse_header(string()) -> {Type, [{K, V}]}
@@ -581,6 +588,28 @@ make_io(Integer) when is_integer(Integer) ->
 make_io(Io) when is_list(Io); is_binary(Io) ->
     Io.
 
+%% @spec normalize_path(string()) -> string()
+%% @doc Remove duplicate slashes from an uri path ("//foo///bar////" becomes
+%%      "/foo/bar/").
+%%      Per RFC 3986, all but the last path segment must be non-empty.
+normalize_path(Path) ->
+	normalize_path(Path, []).
+
+normalize_path([], Acc) ->
+        lists:reverse(Acc);
+normalize_path("/" ++ Path, "/" ++ _ = Acc) ->
+        normalize_path(Path, Acc);
+normalize_path([C|Path], Acc) ->
+        normalize_path(Path, [C|Acc]).
+
+-ifdef(rand_mod_unavailable).
+rand_uniform(Start, End) ->
+    crypto:rand_uniform(Start, End).
+-else.
+rand_uniform(Start, End) ->
+    Start + rand:uniform(End - Start) - 1.
+-endif.
+
 %%
 %% Tests
 %%
@@ -686,12 +715,14 @@ parse_header_test() ->
     ok.
 
 guess_mime_test() ->
-    "text/plain" = guess_mime(""),
-    "text/plain" = guess_mime(".text"),
-    "application/zip" = guess_mime(".zip"),
-    "application/zip" = guess_mime("x.zip"),
-    "text/html" = guess_mime("x.html"),
-    "application/xhtml+xml" = guess_mime("x.xhtml"),
+    ?assertEqual("text/plain", guess_mime("")),
+    ?assertEqual("text/plain", guess_mime(".text")),
+    ?assertEqual("application/zip", guess_mime(".zip")),
+    ?assertEqual("application/zip", guess_mime("x.zip")),
+    ?assertEqual("text/html", guess_mime("x.html")),
+    ?assertEqual("application/xhtml+xml", guess_mime("x.xhtml")),
+    ?assertEqual("text/x-cross-domain-policy", guess_mime("crossdomain.xml")),
+    ?assertEqual("text/x-cross-domain-policy", guess_mime("www/crossdomain.xml")),
     ok.
 
 path_split_test() ->
@@ -982,5 +1013,36 @@ pick_accepted_encodings_test() ->
         "identity"
     ),
     ok.
+
+normalize_path_test() ->
+	"" = normalize_path(""),
+	"/" = normalize_path("/"),
+	"/" = normalize_path("//"),
+	"/" = normalize_path("///"),
+	"foo" = normalize_path("foo"),
+	"/foo" = normalize_path("/foo"),
+	"/foo" = normalize_path("//foo"),
+	"/foo" = normalize_path("///foo"),
+	"foo/" = normalize_path("foo/"),
+	"foo/" = normalize_path("foo//"),
+	"foo/" = normalize_path("foo///"),
+	"foo/bar" = normalize_path("foo/bar"),
+	"foo/bar" = normalize_path("foo//bar"),
+	"foo/bar" = normalize_path("foo///bar"),
+	"foo/bar" = normalize_path("foo////bar"),
+	"/foo/bar" = normalize_path("/foo/bar"),
+	"/foo/bar" = normalize_path("/foo////bar"),
+	"/foo/bar" = normalize_path("////foo/bar"),
+	"/foo/bar" = normalize_path("////foo///bar"),
+	"/foo/bar" = normalize_path("////foo////bar"),
+	"/foo/bar/" = normalize_path("/foo/bar/"),
+	"/foo/bar/" = normalize_path("////foo/bar/"),
+	"/foo/bar/" = normalize_path("/foo////bar/"),
+	"/foo/bar/" = normalize_path("/foo/bar////"),
+	"/foo/bar/" = normalize_path("///foo////bar/"),
+	"/foo/bar/" = normalize_path("////foo/bar////"),
+	"/foo/bar/" = normalize_path("/foo///bar////"),
+	"/foo/bar/" = normalize_path("////foo///bar////"),
+	ok.
 
 -endif.

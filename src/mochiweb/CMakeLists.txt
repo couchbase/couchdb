@@ -13,7 +13,9 @@ SET(SOURCES
   mochiutf8.erl
   mochiweb_acceptor.erl
   mochiweb_app.erl
+  mochiweb_base64url.erl
   mochiweb_charref.erl
+  mochiweb_clock.erl
   mochiweb_cookies.erl
   mochiweb_cover.erl
   mochiweb_echo.erl
@@ -27,11 +29,12 @@ SET(SOURCES
   mochiweb_request.erl
   mochiweb_request_tests.erl
   mochiweb_response.erl
-  mochiweb_skel.erl
+  mochiweb_session.erl
   mochiweb_socket.erl
   mochiweb_socket_server.erl
   mochiweb_sup.erl
   mochiweb_util.erl
+  mochiweb_websocket.erl
   reloader.erl)
 
 CONFIGURE_FILE(${CMAKE_CURRENT_SOURCE_DIR}/mochiweb.app.src
