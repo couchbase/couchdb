@@ -14,7 +14,7 @@
 -behaviour(gen_server).
 
 % Public API
--export([start/6]).
+-export([start/5]).
 -export([add_stream/6, get_seqs/2, get_num_items/2,
     get_failover_log/2]).
 -export([get_stream_event/2, remove_stream/2, list_streams/1]).
@@ -85,10 +85,10 @@
 
 % Public API
 
--spec start(binary(), binary(), binary(), binary(), non_neg_integer(), non_neg_integer()) ->
+-spec start(binary(), binary(), non_neg_integer(), non_neg_integer(), fun()) ->
     {ok, pid()} | ignore | {error, {already_started, pid()} | term()}.
-start(Name, Bucket, AdmUser, AdmPasswd, BufferSize, Flags) ->
-    gen_server:start_link(?MODULE, [Name, Bucket, AdmUser, AdmPasswd, BufferSize, Flags], []).
+start(Name, Bucket, BufferSize, Flags, Auth) ->
+    gen_server:start_link(?MODULE, [Name, Bucket, BufferSize, Flags, Auth], []).
 
 -spec add_stream(pid(), partition_id(), uuid(), update_seq(),
     update_seq(), dcp_data_type()) -> {error, term()} | {request_id(), term()}.
@@ -291,9 +291,9 @@ enum_docs_since(Pid, PartId, PartVersions, StartSeq, EndSeq0, Flags,
 
 % gen_server callbacks
 
--spec init([binary() | non_neg_integer()]) -> {ok, #state{}} |
+-spec init([binary() | non_neg_integer() | fun()]) -> {ok, #state{}} |
                     {stop, sasl_auth_failed | closed | inet:posix()}.
-init([Name, Bucket, AdmUser, AdmPasswd, BufferSize, Flags]) ->
+init([Name, Bucket, BufferSize, Flags, Auth]) ->
     DcpTimeout = list_to_integer(
         couch_config:get("dcp", "connection_timeout")),
     DcpPort = list_to_integer(couch_config:get("dcp", "port")),
@@ -309,12 +309,12 @@ init([Name, Bucket, AdmUser, AdmPasswd, BufferSize, Flags]) ->
             request_id = 0
         },
         % Auth as admin and select bucket for the connection
-        case sasl_auth(AdmUser, AdmPasswd, State) of
+        case sasl_auth(Auth, State) of
         {ok, State2} ->
             case select_bucket(Bucket, State2) of
             {ok, State3} ->
                 % Store the meta information to reconnect
-                Args = [Name, Bucket, AdmUser, AdmPasswd, BufferSize, Flags],
+                Args = [Name, Bucket, BufferSize, Flags, Auth],
                 State4 = State3#state{args = Args},
                 case open_connection(Name, Flags, State4) of
                 {ok, State5} ->
@@ -654,7 +654,7 @@ handle_info({stream_event, RequestId, Event}, State) ->
     end;
 
 handle_info({'EXIT', Pid, {conn_error, Reason}}, #state{worker_pid = Pid} = State) ->
-    [Name, Bucket, _AdmUser, _AdmPasswd, _BufferSize, _Flags] = State#state.args,
+    [Name, Bucket, _BufferSize, _Flags, _Auth] = State#state.args,
     ?LOG_ERROR("dcp client (~s, ~s): dcp receive worker failed due to reason: ~p."
         " Restarting dcp receive worker...",
         [Bucket, Name, Reason]),
@@ -665,7 +665,7 @@ handle_info({'EXIT', Pid, Reason}, #state{worker_pid = Pid} = State) ->
     {stop, Reason, State};
 
 handle_info({print_log, ReqId}, State) ->
-    [Name, Bucket, _AdmUser, _AdmPasswd, _BufferSize, _Flags] = State#state.args,
+    [Name, Bucket,_BufferSize, _Flags, _Auth] = State#state.args,
     case find_stream_info(ReqId, State) of
     nil ->
         ?LOG_ERROR(
@@ -727,14 +727,15 @@ format_status(_Opt, [_PDict, #state{stream_queues = StreamQueues} = State]) ->
 
 % Internal functions
 
--spec sasl_auth(binary(), binary(), #state{}) -> {ok, #state{}} |
+-spec sasl_auth(fun(), #state{}) -> {ok, #state{}} |
                             {error, sasl_auth_failed | closed | inet:posix()}.
-sasl_auth(User, Passwd, State) ->
+sasl_auth(Auth, State) ->
     #state{
         bufsocket = BufSocket,
         timeout = DcpTimeout,
         request_id = RequestId
     } = State,
+    {User, Passwd} = Auth(),
     Authenticate = couch_dcp_consumer:encode_sasl_auth(User, Passwd, RequestId),
     case bufsocket_send(BufSocket, Authenticate) of
     ok ->
