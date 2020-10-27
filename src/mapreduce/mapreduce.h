@@ -32,6 +32,15 @@
 #include "erl_nif_compat.h"
 #include "nif_stl_allocator.h"
 
+#define CHECK_SUCCESS(maybe)(CheckSuccess(maybe, __FILE__, __FUNCTION__, __LINE__))
+
+template <typename T>
+void CheckSuccess(const v8::Maybe<T> &from, const char *file = "", const char *caller = "", int line = -1) {
+  if(!from.FromJust()) {
+    // Fail silently
+  }
+}
+
 class MapReduceError;
 
 typedef std::list<ErlNifBinary, NifStlAllocator<ErlNifBinary> >  json_results_list_t;
