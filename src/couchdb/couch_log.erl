@@ -11,7 +11,7 @@
 % the License.
 
 -module(couch_log).
--behaviour(gen_event).
+-behaviour(gen_server).
 
 % public API
 -export([start_link/0, stop/0]).
@@ -20,9 +20,12 @@
 -export([read/2]).
 -export([pre_db_open/1]).
 
-% gen_event callbacks
--export([init/1, handle_event/2, terminate/2, code_change/3]).
--export([handle_info/2, handle_call/2]).
+%% gen_server callbacks
+-export([init/1, terminate/2, handle_call/3, handle_cast/2,
+         handle_info/2,code_change/3]).
+
+%% logger callbacks.
+-export([adding_handler/1, removing_handler/1, log/2]).
 
 -define(LEVEL_ERROR, 3).
 -define(LEVEL_INFO, 2).
@@ -38,19 +41,19 @@
 debug(Format, Args) ->
     {ConsoleMsg, FileMsg} = get_log_messages(self(), debug, Format, Args),
     ok = disk_log:balog(?DISK_LOGGER, FileMsg),
-    gen_event:sync_notify(error_logger, {couch_debug, ConsoleMsg}).
+    gen_server:call(?MODULE, {couch_debug, ConsoleMsg}).
 
 info(Format, Args) ->
     {ConsoleMsg, FileMsg} = get_log_messages(self(), info, Format, Args),
     ok = disk_log:balog(?DISK_LOGGER, FileMsg),
-    gen_event:sync_notify(error_logger, {couch_info, ConsoleMsg}).
+    gen_server:call(?MODULE, {couch_info, ConsoleMsg}).
 
 error(Format, Args) ->
     {ConsoleMsg, FileMsg} = get_log_messages(self(), error, Format, Args),
     % Synchronous logging for error messages only. We want to reduce the
     % chances of missing any if server is killed.
     ok = disk_log:blog(?DISK_LOGGER, FileMsg),
-    gen_event:sync_notify(error_logger, {couch_error, ConsoleMsg}).
+    gen_server:call(?MODULE, {couch_error, ConsoleMsg}).
 
 
 level_integer(error)    -> ?LEVEL_ERROR;
@@ -64,10 +67,38 @@ level_atom(?LEVEL_DEBUG) -> debug.
 
 
 start_link() ->
-    couch_event_sup:start_link({local, couch_log}, error_logger, couch_log, []).
+    try
+        logger:remove_handler(?MODULE),
+        {ok, Pid} = gen_server:start_link({local, ?MODULE}, ?MODULE, [], []),
+        ok = logger:add_handler(?MODULE, ?MODULE,
+                                #{level => error, filter_default => log}),
+        {ok, Pid}
+    catch
+        Type:Reason ->
+            catch(gen_server:stop(?MODULE)),
+            {error, {Type, Reason}}
+    end.
 
 stop() ->
-    couch_event_sup:stop(couch_log).
+    catch(gen_server:stop(?MODULE)).
+
+-spec adding_handler(logger:handler_config()) ->
+    {ok, logger:handler_config()} | {error, term()}.
+adding_handler(#{id:=?MODULE} = Config) ->
+    case whereis(?MODULE) of
+        undefined ->
+            {error, noproc};
+        _ ->
+            {ok, Config}
+    end.
+
+-spec removing_handler(logger:handler_config()) -> ok.
+removing_handler(#{id:=?MODULE}) ->
+    ok.
+
+-spec log(logger:log_event(), logger:handler_config()) -> ok.
+log(LogMsg, _Config) ->
+    gen_server:cast(?MODULE, LogMsg).
 
 init([]) ->
     % read config and register for configuration changes
@@ -124,47 +155,43 @@ get_level_integer() ->
     end.
 
 set_level_integer(Int) ->
-    gen_event:call(error_logger, couch_log, {set_level_integer, Int}).
+    gen_server:call(?MODULE, {set_level_integer, Int}).
 
-handle_event({couch_error, ConMsg}, State) ->
-    ok = io:put_chars(ConMsg),
-    {ok, State};
-handle_event({couch_info, ConMsg}, #state{level = LogLevel} = State)
-when LogLevel =< ?LEVEL_INFO ->
-    ok = io:put_chars(ConMsg),
-    {ok, State};
-handle_event({couch_debug, ConMsg}, #state{level = LogLevel} = State)
-when LogLevel =< ?LEVEL_DEBUG ->
-    ok = io:put_chars(ConMsg),
-    {ok, State};
-handle_event({error_report, _, {Pid, _, _}}=Event, #state{sasl = true} = St) ->
-    {ConMsg, FileMsg} = get_log_messages(Pid, error, "~p", [Event]),
+handle_cast(#{level:=Level, msg:=Msg, meta:=Meta}, #state{sasl = true} = St) ->
+    {ConMsg, FileMsg} = get_log_messages(Level, Msg, Meta),
     ok = disk_log:blog(?DISK_LOGGER, FileMsg),
     ok = io:put_chars(ConMsg),
-    {ok, St};
-handle_event({error, _, {Pid, Format, Args}}, #state{sasl = true} = State) ->
-    {ConMsg, FileMsg} = get_log_messages(Pid, error, Format, Args),
-    ok = disk_log:blog(?DISK_LOGGER, FileMsg),
-    ok = io:put_chars(ConMsg),
-    {ok, State};
-handle_event(_Event, State) ->
-    {ok, State}.
+    {noreply, St};
+handle_cast(_, State) ->
+    {noreply, State}.
 
-handle_call({set_level_integer, NewLevel}, State) ->
+handle_call({couch_error, ConMsg}, _From, State) ->
+    ok = io:put_chars(ConMsg),
+    {reply, ok, State};
+handle_call({couch_info, ConMsg}, _From, #state{level = LogLevel} = State)
+  when LogLevel =< ?LEVEL_INFO ->
+    ok = io:put_chars(ConMsg),
+    {reply, ok, State};
+handle_call({couch_debug, ConMsg}, _From, #state{level = LogLevel} = State)
+  when LogLevel =< ?LEVEL_DEBUG ->
+    ok = io:put_chars(ConMsg),
+    {reply, ok, State};
+handle_call({set_level_integer, NewLevel}, _From, State) ->
     ets:insert(?MODULE, {level, NewLevel}),
-    {ok, ok, State#state{level = NewLevel}}.
+    {reply, ok, State#state{level = NewLevel}}.
 
-handle_info({disk_log, _Node, _Log, {error_status, Status}}, _State) ->
+handle_info({disk_log, _Node, _Log, {error_status, Status}}, State) ->
     io:format("Disk logger error: ~p~n", [Status]),
-    % couch_event_sup will restart us.
-    remove_handler;
+    %% couch_primary_sup will restart us.
+    {stop, {disk_log, {error, Status}}, State};
 handle_info(_Info, State) ->
-    {ok, State}.
+    {noreply, State}.
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 terminate(_Arg, _State) ->
+    logger:remove_handler(?MODULE),
     ok = disk_log:close(?DISK_LOGGER).
 
 get_log_messages(Pid, Level, Format, Args) ->
@@ -172,6 +199,41 @@ get_log_messages(Pid, Level, Format, Args) ->
         "[~s] [~p] " ++ Format ++ "~n", [Level, Pid | Args])),
     FileMsg = ["[", httpd_util:rfc1123_date(), "] ", ConsoleMsg],
     {ConsoleMsg, iolist_to_binary(FileMsg)}.
+
+get_log_messages(Level, Msg, #{pid:=Pid} = Meta) ->
+    {Format, Args} = get_log(Msg, Meta),
+    get_log_messages(Pid, Level, Format, Args).
+
+get_log({string, Msg}, _Meta) ->
+    {"~ts", [Msg]};
+get_log({report, Msg}, Meta) ->
+    handle_report(Msg, Meta);
+get_log({Format, Args}, _Meta) when is_list(Format), is_list(Args) ->
+    {Format, Args}.
+
+handle_report(Report, Meta) ->
+    case maps:get(report_cb, Meta, fun logger:format_otp_report/1) of
+        RCBFun when is_function(RCBFun, 1) ->
+            try RCBFun(Report) of
+                {F, A} when is_list(F), is_list(A) ->
+                    {F, A};
+                Other ->
+                    {"REPORT_CB ERROR: ~tp; Returned: ~tp", [Report, Other]}
+            catch C:R ->
+                      {"REPORT_CB CRASH: ~tp; Reason: ~tp", [Report, {C, R}]}
+             end;
+        RCBFun when is_function(RCBFun, 2) ->
+            try RCBFun(Report, #{depth => unlimited,
+                                 chars_limit => unlimited,
+                                 single_line => false}) of
+                Chardata when (is_list(Chardata) orelse is_binary(Chardata)) ->
+                    {"~ts", [Chardata]};
+                Other ->
+                    {"REPORT_CB ERROR: ~tp; Returned: ~tp", [Report, Other]}
+            catch C:R ->
+                      {"REPORT_CB CRASH: ~tp; Reason: ~tp", [Report, {C, R}]}
+             end
+     end.
 
 read(Bytes, Offset) ->
     LogFileName = couch_config:get("log", "file"),
