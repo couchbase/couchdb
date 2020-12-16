@@ -16,7 +16,8 @@
 -export([handle_request/1, handle_compact_req/2, handle_design_req/2,
     db_req/2, handle_changes_req/2,
     update_doc_result_to_json/1, update_doc_result_to_json/2,
-    handle_design_info_req/3, handle_view_cleanup_req/2]).
+    handle_design_info_req/3, handle_view_cleanup_req/2, handle_ddoc_req/1,
+    backup/1]).
 
 -import(couch_httpd,
     [send_json/2,send_json/3,send_json/4,send_method_not_allowed/2,
@@ -154,6 +155,50 @@ handle_design_req(#httpd{
 
 handle_design_req(Req, Db) ->
     db_req(Req, Db).
+
+handle_ddoc_req(#httpd{
+        path_parts=[<<"api">>, <<"v1">>, DbName, <<"backup">>],
+        db_frontend = DbFrontend}
+        =Req) ->
+    {BucketName, _, UUID} = capi_utils:split_dbname_with_uuid(DbName),
+    DbFrontend:with_verify_bucket_auth(Req, BucketName, UUID, fun(_) ->
+                                                         couch_httpd_db:backup(Req) end).
+
+backup(#httpd{
+        method='GET',
+        path_parts=[<<"api">>, <<"v1">>, DbName, <<"backup">>]}
+        =Req) ->
+    case include_ddocs(Req) of
+    ok ->
+        {ok, Db} = couch_db:open_int(<<DbName/binary, "/master">>, []),
+        {ok, DDocs} = couch_db:get_design_docs(Db),
+        DDocList = [begin {[{doc, couch_doc:to_json_obj(Doc)}]} end ||
+                            #doc{deleted = Deleted} = Doc <- DDocs, Deleted == false],
+        send_json(Req, 200, {[{rows, DDocList}]});
+    _ ->
+        send_json(Req, 200, {[{rows, []}]})
+    end;
+
+backup(#httpd{
+            method='POST',
+            path_parts=[<<"api">>, <<"v1">>, DbName, <<"backup">>]}
+            =Req) ->
+    case include_ddocs(Req) of
+    ok ->
+        case remap_possible(Req) of
+        ok ->
+            DDocsList = restore_ddoc(Req, DbName),
+            send_json(Req, 200, {[{ok, true},
+                                {id, DDocsList}]});
+        _ ->
+            send_json(Req, 200, {[{ok, true}]})
+            end;
+    _ ->
+        send_json(Req, 200, {[{ok, true}]})
+    end;
+
+backup(Req) ->
+    send_method_not_allowed(Req, "GET,POST").
 
 handle_design_info_req(#httpd{
             method='GET',
@@ -660,5 +705,104 @@ parse_changes_query(Req) ->
         end
     end, #changes_args{}, couch_httpd:qs(Req)).
 
+include_ddocs(Req) ->
+    case couch_httpd:qs_value(Req, "include", not_found) of
+    not_found ->
+        case couch_httpd:qs_value(Req, "exclude", not_found) of
+        not_found ->
+            ok;
+        Exclude ->
+            case filter_result_default(Exclude) of
+            ok ->
+                not_found;
+            not_found ->
+                ok
+            end
+        end;
+    Include ->
+        filter_result_default(Include)
+    end.
 
+filter_result_default(Filter) ->
+    FilterList = string:tokens(Filter, ","),
+    case lists:member("_default", FilterList) of
+    true ->
+        ok;
+    false ->
+        case lists:member("_default._default", FilterList) of
+        true ->
+            ok;
+        false ->
+            not_found
+        end
+    end.
 
+remap_possible(Req) ->
+    case couch_httpd:qs_value(Req, "remap", not_found) of
+    not_found->
+        ok;
+    Remap ->
+        RemapList = string:tokens(Remap, ","),
+        remap_default(RemapList)
+    end.
+
+remap_default([]) ->
+    ok;
+remap_default([RemapArgs|Rest]) ->
+    [Source, Target] = string:tokens(RemapArgs, ":"),
+    case Source of
+    "_default" ->
+        case Target of
+        "_default" ->
+            remap_default(Rest);
+        _ ->
+            not_needed
+        end;
+    "_default._default" ->
+        case Target of
+        "_default._default" ->
+            remap_default(Rest);
+        _ ->
+            not_needed
+        end;
+    _ ->
+        remap_default(Rest)
+    end.
+
+restore_ddoc(#httpd{user_ctx=UserCtx} = Req, DbName) ->
+    {[{<<"rows">>, DDocsList}]} = case couch_httpd:is_ctype(Req, "application/json") of
+    true ->
+        couch_httpd:json_body(Req);
+    false ->
+        couch_httpd:body(Req)
+    end,
+    Db = #db{name=DbName, user_ctx=UserCtx},
+    restore_ddoc_in_seq(DDocsList, Db, Req, []).
+
+restore_ddoc_in_seq([], _, _, DDocsIds) ->
+    DDocsIds;
+restore_ddoc_in_seq([{[{<<"doc">>, DDoc}]} | Rest], Db, Req, DDocsIds) ->
+   Doc = couch_doc:from_json_obj(DDoc),
+   DbFrontend = Req#httpd.db_frontend,
+
+   case couch_httpd:header_value(Req, "X-Couch-Full-Commit") of
+    "true" ->
+        Options = [full_commit];
+    "false" ->
+        Options = [delay_commit];
+    _ ->
+        Options = []
+    end,
+
+    OldDDoc = case couch_set_view_ddoc_cache:get_ddoc(Db#db.name, Doc#doc.id) of
+    {ok, DDoc2} ->
+        DDoc2#doc.body;
+    {doc_open_error, _} ->
+        not_found
+    end,
+
+    ok = DbFrontend:update_doc(Db, Doc, Options),
+    ets:delete(?QUERY_TIMING_STATS_ETS, Doc#doc.id),
+    Req2 = Req#httpd{req_body=Doc#doc.body},
+    couch_audit:audit_view_create_update(Req2, 201, undefined, undefined, OldDDoc),
+    restore_ddoc_in_seq(Rest, Db, Req, [Doc#doc.id|DDocsIds]).

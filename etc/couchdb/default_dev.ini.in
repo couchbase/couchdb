@@ -60,6 +60,7 @@ compaction_daemon={couch_compaction_daemon, start_link, []}
 _active_tasks = {couch_httpd_misc_handlers, handle_task_status_req}
 _view_merge = {couch_httpd_view_merger, handle_req}
 _set_view = {couch_set_view_http, handle_req}
+api = {couch_httpd_db, handle_ddoc_req}
 
 [httpd_db_handlers]
 _view_cleanup = {couch_httpd_db, handle_view_cleanup_req}
