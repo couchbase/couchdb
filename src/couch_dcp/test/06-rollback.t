@@ -52,8 +52,9 @@ test_index_post_rollback() ->
     couch_set_view_test_util:create_set_dbs(test_set_name(), num_set_partitions()),
     setup_test(),
     {auth, User, Passwd} = cb_auth_info:get(),
+    Auth = fun() -> {User, Passwd} end,
     {ok, _Pid} = couch_dcp_client:start(
-        test_set_name(), test_set_name(), User, Passwd, 1024, 0),
+        test_set_name(), test_set_name(), 1024, 0, Auth),
 
     {ok, MainGroupInfo} = couch_set_view:get_group_info(
         mapreduce_view, test_set_name(), ddoc_id(), prod),

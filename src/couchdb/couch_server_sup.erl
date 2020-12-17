@@ -17,7 +17,7 @@
 -export([start_link/1,stop/0, couch_config_start_link_wrapper/2,
         restart_core_server/0, config_change/2]).
 
--include("couch_db.hrl").
+-include_lib("kernel/include/logger.hrl").
 
 %% supervisor callbacks
 -export([init/1]).
@@ -113,7 +113,7 @@ start_server(IniFiles) ->
     ok ->
        ok;
     {error, Reason} ->
-       error_logger:error_msg("Could not start app couch_audit: ~p~n", [Reason])
+       ?LOG_ERROR("Could not start app couch_audit: ~p~n", [Reason])
     end,
 
     Field = case misc:is_ipv6() of

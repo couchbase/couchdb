@@ -25,6 +25,7 @@
 
 -author('bob@mochimedia.com').
 
+-include_lib("kernel/include/logger.hrl").
 -include("internal.hrl").
 
 -export([init/4, start_link/3, start_link/4]).
@@ -64,10 +65,14 @@ init(Server, Listen, Loop, Opts) ->
 		receive  after ?EMFILE_SLEEP_MSEC -> ok end;
 	    _ -> ok
 	  end,
-	  error_logger:error_report([{application, mochiweb},
-				     "Accept failed error",
-				     lists:flatten(io_lib:format("~p",
-								 [Other]))]),
+      ?LOG_ERROR(
+         #{label => {mochiweb_acceptor, accept_error},
+           report => [{application, mochiweb},
+                      {accept_error, lists:flatten(
+                                       io_lib:format("~p", [Other]))}]},
+         #{domain => [mochiweb],
+           report_cb => fun logger:format_otp_report/1,
+           logger_formatter => #{title => "ERROR REPORT"}}),
 	  exit({error, accept_failed})
     end.
 

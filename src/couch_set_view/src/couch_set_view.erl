@@ -992,8 +992,7 @@ handle_call({before_database_delete, SetName}, _From, Server) ->
               "is about to deleted", [SetName]),
     try
         delete_index_dir(RootDir, SetName)
-    catch _:Error ->
-        Stack = erlang:get_stacktrace(),
+    catch _:Error:Stack ->
         ?LOG_ERROR("Error deleting index files for set `~s`:~n"
                    "  error: ~p~n  stacktrace: ~s~n",
                    [SetName, Error, ?LOG_USERDATA(Stack)])

@@ -179,8 +179,7 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
     Mapper = spawn_link(fun() ->
         try
             do_maps(Group, MapQueue, WriteQueue)
-        catch _:Error ->
-            Stacktrace = erlang:get_stacktrace(),
+        catch _:Error:Stacktrace ->
             ?LOG_ERROR("Set view `~s`, ~s group `~s`, mapper error~n"
                 "error:      ~p~n"
                 "stacktrace: ~s~n",
@@ -242,8 +241,7 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
                 }
             end,
             Parent ! {writer_finished, FinalWriterAcc}
-        catch _:Error ->
-            Stacktrace = erlang:get_stacktrace(),
+        catch _:Error:Stacktrace ->
             ?LOG_ERROR("Set view `~s`, ~s group `~s`, writer error~n"
                 "error:      ~p~n"
                 "stacktrace: ~s~n",
@@ -296,8 +294,7 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
             exit(purge);
         throw:{rollback, RollbackSeqs} ->
             exit({rollback, RollbackSeqs});
-        _:Error ->
-            Stacktrace = erlang:get_stacktrace(),
+            _:Error:Stacktrace ->
             ?LOG_ERROR("Set view `~s`, ~s group `~s`, doc loader error~n"
                 "error:      ~p~n"
                 "stacktrace: ~s~n",

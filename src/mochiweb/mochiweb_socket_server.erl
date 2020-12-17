@@ -7,6 +7,7 @@
 -author('bob@mochimedia.com').
 -behaviour(gen_server).
 
+-include_lib("kernel/include/logger.hrl").
 -include("internal.hrl").
 
 -export([start/1, start_link/1, stop/1]).
@@ -57,8 +58,8 @@ get(Name, Property) ->
 set(Name, profile_fun, Fun) ->
     gen_server:cast(Name, {set, profile_fun, Fun});
 set(Name, Property, _Value) ->
-    error_logger:info_msg("?MODULE:set for ~p with ~p not implemented~n",
-                          [Name, Property]).
+    ?LOG_INFO("?MODULE:set for ~p with ~p not implemented~n",
+              [Name, Property]).
 
 stop(Name) when is_atom(Name) orelse is_pid(Name) ->
     gen_server:call(Name, stop);
@@ -75,13 +76,20 @@ parse_options(State=#mochiweb_socket_server{}) ->
 parse_options(Options) ->
     parse_options(Options, #mochiweb_socket_server{}).
 
+
 parse_options([], State=#mochiweb_socket_server{acceptor_pool_size=PoolSize,
                                                 max=Max}) ->
     case Max < PoolSize of
         true ->
-            error_logger:info_report([{warning, "max is set lower than acceptor_pool_size"},
-                                      {max, Max},
-                                      {acceptor_pool_size, PoolSize}]);
+            ?LOG_INFO(
+               #{label => {mochiweb_socket_server, info},
+                 report => [{warning,
+                             "max is set lower than acceptor_pool_size"},
+                            {max, Max},
+                            {acceptor_pool_size, PoolSize}]},
+               #{domain => [mochiweb],
+                 report_cb => fun logger:format_otp_report/1,
+                 logger_formatter => #{title => "INFO REPORT"}});
         false ->
             ok
     end,
@@ -357,8 +365,12 @@ handle_info({'EXIT', Pid, Reason},
     case sets:is_element(Pid, Pool) of
         true ->
             %% If there was an unexpected error accepting, log and sleep.
-            error_logger:error_report({?MODULE, ?LINE,
-                                       {acceptor_error, Reason}}),
+            ?LOG_ERROR(#{label => {mochiweb_socket_server, acceptor_error},
+                         report => [{location, {?MODULE, ?LINE}},
+                                    {acceptor_error, Reason}]},
+                       #{domain => [mochiweb],
+                         report_cb => fun logger:format_otp_report/1,
+                         logger_formatter => #{title => "ERROR REPORT"}}),
             timer:sleep(100);
         false ->
             ok
@@ -374,12 +386,16 @@ handle_info({From, Tag, get_modules}, State = #mochiweb_socket_server{name={loca
 
 % If for some reason we can't get the module name, send empty list to avoid release_handler timeout:
 handle_info({From, Tag, get_modules}, State) ->
-    error_logger:info_msg("mochiweb_socket_server replying to dynamic modules request as '[]'~n",[]),
+    ?LOG_INFO("mochiweb_socket_server replying to dynamic modules request as '[]'~n",[]),
     From ! {element(2,Tag), []},
     {noreply, State};
 
 handle_info(Info, State) ->
-    error_logger:info_report([{'INFO', Info}, {'State', State}]),
+    ?LOG_INFO(#{label => {mochiweb_socket_server, info},
+                report => [{'INFO', Info}, {'State', State}]},
+              #{domain => [mochiweb],
+                report_cb => fun logger:format_otp_report/1,
+                logger_formatter => #{title => "INFO REPORT"}}),
     {noreply, State}.
 
 

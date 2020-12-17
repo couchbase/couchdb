@@ -14,7 +14,7 @@
 
 -behaviour(application).
 
--include("couch_db.hrl").
+-include_lib("kernel/include/logger.hrl").
 
 -export([start/2, stop/1]).
 
@@ -67,7 +67,7 @@ start_apps([App|Rest]) ->
        % don't crash the node if couch_query_logger fails to start
        start_apps(Rest);
     {error, Reason} ->
-       error_logger:error_msg("Could not start app ~p: ~p~n", [App, Reason]),
+       ?LOG_ERROR("Could not start app ~p: ~p~n", [App, Reason]),
        {error, {app_would_not_start, App}}
     end.
 
@@ -83,5 +83,5 @@ do_stop_apps([App|Rest]) ->
     {error, {not_running, App}} ->
        stop_apps(Rest);
     {error, Reason} ->
-       error_logger:error_msg("Could not stop app ~p: ~p~n", [App, Reason])
+       ?LOG_ERROR("Could not stop app ~p: ~p~n", [App, Reason])
     end.

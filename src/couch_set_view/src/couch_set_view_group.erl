@@ -469,12 +469,13 @@ do_init({_, SetName, _} = InitArgs) ->
             " (", (atom_to_binary(Category, latin1))/binary, "/",
             (atom_to_binary(Type, latin1))/binary, ")">>,
         {User, Passwd} = get_auth(),
+        Auth = fun() -> {User, Passwd} end,
         DcpBufferSize = list_to_integer(couch_config:get("dcp",
             "flow_control_buffer_size", ?DCP_CONTROL_BUFFER_SIZE)),
         ?LOG_INFO("Flow control buffer size is ~p bytes", [DcpBufferSize]),
 
-        case couch_dcp_client:start(DcpName, SetName, User, Passwd,
-            DcpBufferSize, DcpFlags) of
+        case couch_dcp_client:start(DcpName, SetName,
+            DcpBufferSize, DcpFlags, Auth) of
         {ok, DcpPid} ->
             Group2 = maybe_upgrade_header(Group, DcpPid),
             State = #state{
@@ -4210,10 +4211,10 @@ remove_duplicate_partitions(Group) ->
             throw("duplicate partitions")
         end
     catch
-    _ ->
+    throw:_:Stack ->
         ?LOG_ERROR("set view `~s`, ~p ~p (~s) group `~s` have the duplicate "
             "partition versions ~p stacktrace ~s", [SetName, Mod, GroupType, Category,
-            DDocId, PartVersions,?LOG_USERDATA(erlang:get_stacktrace())]),
+            DDocId, PartVersions,?LOG_USERDATA(Stack)]),
         Stats2 = Stats#set_view_group_stats{
             dup_partitions_counter = DupPartitionCounter + 1
         },
