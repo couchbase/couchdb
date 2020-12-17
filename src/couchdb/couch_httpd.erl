@@ -53,10 +53,7 @@ start_link(https) ->
               end,
     start_link(https, Options).
 start_link(Name, Options) ->
-    % read config and register for configuration changes
-
-    % just stop if one of the config settings change. couch_server_sup
-    % will restart us and then we will pick up the new settings.
+    % couch_secondary_sup will restart us when config settings change.
 
     Field = case misc:is_ipv6() of
                 true -> "ip6_bind_address";
@@ -115,17 +112,13 @@ start_link(Name, Options) ->
             {ip, BindAddress}]]),
 
     % launch mochiweb
-    {ok, Pid} = case mochiweb_http:start(FinalOptions) of
+    case mochiweb_http:start(FinalOptions) of
         {ok, MochiPid} ->
             {ok, MochiPid};
         {error, Reason} ->
             io:format("Failure to start Mochiweb: ~s~n",[Reason]),
             throw({error, Reason})
-    end,
-
-    ok = couch_config:register(fun ?MODULE:config_change/2, Pid),
-    {ok, Pid}.
-
+    end.
 
 stop() ->
     mochiweb_http:stop(?MODULE).
