@@ -30,6 +30,20 @@ init([]) ->
         begin
             {ok, {Module, Fun, Args}} = couch_util:parse_term(SpecStr),
 
+            case Module =:= couch_httpd andalso Fun =:= start_link of
+                true ->
+                    Sup = self(),
+                    ok = couch_config:register(
+                           fun (S, K) ->
+                                   %% Make sure the supervisor has had the
+                                   %% chance to handle previous restarts.
+                                   supervisor:which_children(Sup),
+
+                                   couch_httpd:config_change(S, K)
+                           end, Sup);
+                false ->
+                    ok
+            end,
             {list_to_atom(Name),
                 {Module, Fun, Args},
                 permanent,

@@ -293,12 +293,13 @@ now_to_iso8601(Now = {_, _, Microsecs}) ->
     format_iso8601(LocalNow, Microsecs, Offset).
 
 prepare(#httpd{mochi_req=Req}, Body) ->
-    {Remote, {Auth, _Password}, UserAgent} =
+    {Remote, Local, {Auth, _}, UserAgent} =
         case Req of
             undefined ->
-                {undefined, {undefined, undefined}, undefined};
+                {undefined, undefined, {undefined, undefined}, undefined};
             _ ->
                 {get_remote(Req),
+                 get_local(Req),
                  get_user_key(Req),
                  get_user_agent(Req)
                 }
@@ -311,6 +312,7 @@ prepare(#httpd{mochi_req=Req}, Body) ->
     end,
 
     Body2 = [{remote, Remote},
+            {local, Local},
             {real_userid, UserId},
             {auth, Auth},
             {user_agent, UserAgent}| Body],
@@ -361,6 +363,11 @@ get_remote(Req) ->
         {inet_parse:ntoa(Host), Port}
     end,
     {[{ip, to_binary(Ip2)}, {port, Port2}]}.
+
+get_local(Req) ->
+    Socket = mochiweb_request:get(socket, Req),
+    {ok, {Host, Port}} = network:sockname(Socket),
+    {[{ip, to_binary(inet_parse:ntoa(Host))}, {port, Port}]}.
 
 parse_for_value(undefined) ->
     undefined;
