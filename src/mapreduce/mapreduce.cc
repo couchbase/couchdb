@@ -202,15 +202,16 @@ void doInitContext(map_reduce_ctx_t* ctx,
     Context::Scope context_scope(context);
 
     Local<String> jsonString = createUtf8String(ctx->isolate, "JSON");
-    Handle<Object> jsonObject = Local<Object>::Cast(
-            context->Global()->Get(context, jsonString).ToLocalChecked());
+    Local<Value> result;
+    CHECK_SUCCESS_BOOL(context->Global()->Get(context, jsonString).ToLocal(&result));
+    Handle<Object> jsonObject = Local<Object>::Cast(result);
 
     Local<String> parseString = createUtf8String(ctx->isolate, "parse");
-    Handle<Function> parseFun = Local<Function>::Cast(
-            jsonObject->Get(context, parseString).ToLocalChecked());
+    CHECK_SUCCESS_BOOL(jsonObject->Get(context, parseString).ToLocal(&result));
+    Handle<Function> parseFun = Local<Function>::Cast(result);
     Local<String> stringifyString = createUtf8String(ctx->isolate, "stringify");
-    Handle<Function> stringifyFun = Local<Function>::Cast(
-            jsonObject->Get(context, stringifyString).ToLocalChecked());
+    CHECK_SUCCESS_BOOL(jsonObject->Get(context, stringifyString).ToLocal(&result));
+    Handle<Function> stringifyFun = Local<Function>::Cast(result);
 
     isolate_data_t* isoData =
             (isolate_data_t*)enif_alloc(sizeof(isolate_data_t));
@@ -267,8 +268,8 @@ map_results_list_t mapDoc(map_reduce_ctx_t* ctx,
         mapResult.result.kvs = new (mapResult.result.kvs) kv_pair_list_t();
         ctx->kvs = mapResult.result.kvs;
         ctx->emitKvSize = 0;
-        Handle<Value> result = fun->Call(context, context->Global(), 2, funArgs)
-                                       .ToLocalChecked();
+        Handle<Value> result;
+        CHECK_SUCCESS_BOOL(fun->Call(context, context->Global(), 2, funArgs).ToLocal(&result));
 
         if (result.IsEmpty()) {
             freeMapResult(mapResult);
@@ -327,8 +328,8 @@ json_results_list_t runReduce(map_reduce_ctx_t* ctx,
         Local<Function> fun =
                 Local<Function>::New(ctx->isolate, *(*ctx->functions)[i]);
         TryCatch try_catch(ctx->isolate);
-        Handle<Value> result =
-                fun->Call(context, context->Global(), 3, args).ToLocalChecked();
+        Handle<Value> result;
+        CHECK_SUCCESS_BOOL(fun->Call(context, context->Global(), 3, args).ToLocal(&result));
 
         if (result.IsEmpty()) {
             freeJsonData(results);
@@ -381,8 +382,8 @@ ErlNifBinary runReduce(map_reduce_ctx_t* ctx,
     taskStarted(ctx);
 
     TryCatch try_catch(ctx->isolate);
-    Handle<Value> result =
-            fun->Call(context, context->Global(), 3, args).ToLocalChecked();
+    Handle<Value> result;
+    CHECK_SUCCESS_BOOL(fun->Call(context, context->Global(), 3, args).ToLocal(&result));
 
     taskFinished(ctx);
     freeLogResults(ctx);
@@ -429,8 +430,8 @@ ErlNifBinary runRereduce(map_reduce_ctx_t* ctx,
     taskStarted(ctx);
 
     TryCatch try_catch(ctx->isolate);
-    Handle<Value> result =
-            fun->Call(context, context->Global(), 3, args).ToLocalChecked();
+    Handle<Value> result;
+    CHECK_SUCCESS_BOOL(fun->Call(context, context->Global(), 3, args).ToLocal(&result));
 
     taskFinished(ctx);
     freeLogResults(ctx);
@@ -634,8 +635,8 @@ ErlNifBinary jsonStringify(const Handle<Value>& obj) {
             Local<Function>::New(isoData->ctx->isolate, isoData->stringifyFun);
     Local<Object> jsonObject =
             Local<Object>::New(isoData->ctx->isolate, isoData->jsonObject);
-    Handle<Value> result =
-            stringifyFun->Call(context, jsonObject, 1, args).ToLocalChecked();
+    Handle<Value> result;
+    CHECK_SUCCESS_BOOL(stringifyFun->Call(context, jsonObject, 1, args).ToLocal(&result));
 
     if (result.IsEmpty()) {
         if (try_catch.HasCaught()) {
@@ -687,8 +688,8 @@ Handle<Value> jsonParse(const ErlNifBinary& thing) {
             Local<Function>::New(isoData->ctx->isolate, isoData->jsonParseFun);
     Local<Object> jsonObject =
             Local<Object>::New(isoData->ctx->isolate, isoData->jsonObject);
-    Handle<Value> result =
-            jsonParseFun->Call(context, jsonObject, 1, args).ToLocalChecked();
+    Handle<Value> result;
+    CHECK_SUCCESS_BOOL(jsonParseFun->Call(context, jsonObject, 1, args).ToLocal(&result));
 
     if (result.IsEmpty()) {
         throw MapReduceError(exceptionString(try_catch));
@@ -728,17 +729,17 @@ void loadFunctions(map_reduce_ctx_t* ctx,
         Handle<Function> fun = compileFunction(*it);
         // Do this if is_doc_unused function compilation is successful
         if (optimize_doc_load && !isDocUsed) {
-            Handle<Value> val = context->Global()
-                                        ->Get(context,
-                                              createUtf8String(ctx->isolate,
-                                                               "is_doc_unused"))
-                                        .ToLocalChecked();
+            Handle<Value> val;
+            CHECK_SUCCESS_BOOL(context->Global()
+                    ->Get(context,
+                          createUtf8String(ctx->isolate, "is_doc_unused"))
+                    .ToLocal(&val));
             Handle<Function> unusedFun = Handle<Function>::Cast(val);
             Handle<Value> arg = createUtf8String(ctx->isolate, it->data());
             TryCatch try_catch(ctx->isolate);
-            Handle<Value> js_result =
-                    unusedFun->Call(context, context->Global(), 1, &arg)
-                            .ToLocalChecked();
+            Handle<Value> js_result;
+            CHECK_SUCCESS_BOOL(unusedFun->Call(context, context->Global(), 1, &arg)
+                    .ToLocal(&js_result));
             if (try_catch.HasCaught()) {
                 throw MapReduceError(exceptionString(try_catch));
             }
