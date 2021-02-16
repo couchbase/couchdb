@@ -352,17 +352,28 @@ get_remote(Req) ->
         case parse_for_value(List) of
         undefined ->
             Socket = mochiweb_request:get(socket, Req),
-            {ok, {Host, Port}} = mochiweb_socket:peername(Socket),
-            {inet_parse:ntoa(Host), Port};
+            extract_hostport(Socket);
         Remote ->
             Remote
         end;
     _ ->
         Socket = mochiweb_request:get(socket, Req),
-        {ok, {Host, Port}} = mochiweb_socket:peername(Socket),
-        {inet_parse:ntoa(Host), Port}
+        extract_hostport(Socket)
     end,
-    {[{ip, to_binary(Ip2)}, {port, Port2}]}.
+    case {Ip2, Port2} of
+    {undefined, undefined} ->
+        undefined;
+    {_,_} ->
+        {[{ip, to_binary(Ip2)}, {port, Port2}]}
+    end.
+
+%% peername calls ssl:peername which can einval if client's socket is prematurely closed
+extract_hostport(Socket) ->
+    case mochiweb_socket:peername(Socket) of
+    {ok, {Host, Port}} ->
+        {inet_parse:ntoa(Host), Port};
+    _ -> {undefined, undefined}
+    end.
 
 get_local(Req) ->
     Socket = mochiweb_request:get(socket, Req),
