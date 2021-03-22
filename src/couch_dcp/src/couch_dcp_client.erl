@@ -352,6 +352,8 @@ init([Name, Bucket, BufferSize, Flags, Auth]) ->
                 {error, Reason} ->
                     {stop, Reason}
                 end;
+            {{error, vbucket_stream_not_found}, _} ->
+                {stop, vbucket_stream_not_found};
             {error, Reason} ->
                 {stop, Reason}
             end;
@@ -657,8 +659,17 @@ handle_info({'EXIT', Pid, {conn_error, Reason}}, #state{worker_pid = Pid} = Stat
     ?LOG_ERROR("dcp client (~s, ~s): dcp receive worker failed due to reason: ~p."
         " Restarting dcp receive worker...",
         [Bucket, Name, Reason]),
-    timer:sleep(?DCP_RETRY_TIMEOUT),
-    restart_worker(State);
+    case restart_worker(State) of
+    {stop, StopReason, _} ->
+        case StopReason of
+        vbucket_stream_not_found ->
+            ?LOG_ERROR("dcp client (~s,  ~s): vbucket streams have been terminated by the producer."
+                        "Shutting down this dcp client", [Bucket, Name]);
+        _ ->
+            timer:sleep(?DCP_RETRY_TIMEOUT),
+            restart_worker(State)
+        end
+    end;
 
 handle_info({'EXIT', Pid, Reason}, #state{worker_pid = Pid} = State) ->
     {stop, Reason, State};
