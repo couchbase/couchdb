@@ -200,19 +200,12 @@ check_logging(Message, DisabledUsers) ->
     end.
 
 get_real_user_id(Req) ->
-    case mochiweb_request:get_header_value("authorization", Req) of
-    "Basic " ++ Value ->
-        {Auth, Password} = parse_basic_auth_header(Value),
-        menelaus_auth:authenticate({Auth, Password});
-    undefined ->
-        case mochiweb_request:get_header_value("ns-server-auth-token", Req) of
-        undefined ->
-            undefined;
-        Token ->
-            menelaus_auth:authenticate({token, Token})
-        end;
-    _ ->
-        error
+    case {mochiweb_request:get_header_value("menelaus-auth-user", Req),
+          mochiweb_request:get_header_value("menelaus-auth-domain", Req)} of
+        {User, Domain} when (is_list(User) andalso is_list(Domain)) ->
+            {ok, {User, Domain}};
+        _ ->
+            error
     end.
 
 get_user_key(Req) ->
