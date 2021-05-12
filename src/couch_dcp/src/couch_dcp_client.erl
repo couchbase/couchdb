@@ -664,11 +664,13 @@ handle_info({'EXIT', Pid, {conn_error, Reason}}, #state{worker_pid = Pid} = Stat
         case StopReason of
         vbucket_stream_not_found ->
             ?LOG_ERROR("dcp client (~s,  ~s): vbucket streams have been terminated by the producer."
-                        "Shutting down this dcp client", [Bucket, Name]);
+                        "Shutting down this dcp client", [Bucket, Name]),
+            {stop, vbucket_stream_not_found, State};
         _ ->
             timer:sleep(?DCP_RETRY_TIMEOUT),
             restart_worker(State)
-        end
+        end;
+    {noreply, State2} -> {noreply, State2}
     end;
 
 handle_info({'EXIT', Pid, Reason}, #state{worker_pid = Pid} = State) ->
