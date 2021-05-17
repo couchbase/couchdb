@@ -16,11 +16,10 @@ TEST_NOT_OK_RE = r"(^not ok)\b"
 MODULES = ["../test/etap"]
 
 def usage():
-    print "Usage: %s -p builddir -l erl_libs_dir -m module_dir_paths" \
+    print("Usage: %s -p builddir -l erl_libs_dir -m module_dir_paths" \
     " -f erl_flags -t testfile [ -v ] [ -c couchstore_install_path ]" \
     " [-e escript_path]" \
-    % sys.argv[0]
-    print
+    % sys.argv[0])
 
 def setup():
     """Configure LD_LIBRARY_PATH"""
@@ -58,16 +57,16 @@ def run_test(testfile,eescript_path, verbose = False):
     s = subprocess.Popen([escript_path, testfile], stdout=subprocess.PIPE,
             stderr=subprocess.PIPE)
     while True:
-        line = s.stdout.readline()
+        line = s.stdout.readline().decode('utf-8')
         if line:
             if ok_re.match(line):
                 test_passed += 1
-                print line,
+                print(line, end=''),
             elif not_ok_re.match(line):
-                print line,
+                print(line, end=''),
             else:
                 if verbose:
-                    print line,
+                    print(line, end=''),
 
                 count = count_re.match(line)
                 if count:
@@ -81,10 +80,10 @@ def run_test(testfile,eescript_path, verbose = False):
         exit_status = 1
         err = s.stderr.read()
         if err:
-            print err
+            print(err, end='')
 
     if test_total > 0:
-        print "%d/%d tests passed" %(test_passed, test_total)
+        print("%d/%d tests passed" %(test_passed, test_total))
 
     return exit_status
 
@@ -93,8 +92,8 @@ if __name__ == '__main__':
         opts, args = getopt.getopt(sys.argv[1:], "p:l:m:f:t:hvc:e:", \
                     ["path=", "libsdir=", "modules=", "flags=", "test=",
                      "help", "verbose", "couchstore-installdir=", "escript="])
-    except getopt.GetoptError, err:
-        print err
+    except (getopt.GetoptError, err):
+        print(err)
         usage()
         sys.exit(2)
 
