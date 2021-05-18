@@ -9,7 +9,7 @@ SET(TEST_FILES
 FOREACH (it ${TEST_FILES})
    GET_FILENAME_COMPONENT(testname ${it} NAME_WE)
    GET_FILENAME_COMPONENT(fullpath ${it} REALPATH)
-   ADD_TEST(functional_test-${testname} ${PYTHON_EXECUTABLE}
+   ADD_TEST(functional_test-${testname}
      ${COUCHDB_RUNTEST} -c ${COUCHSTORE_BIN_PATH} -p ${COUCHDB_BIN_PATH}/src
       -e ${ESCRIPT_EXECUTABLE} -t ${fullpath} --verbose)
 ENDFOREACH (it)
