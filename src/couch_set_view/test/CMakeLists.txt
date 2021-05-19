@@ -45,7 +45,7 @@ SET(TEST_FILES
 FOREACH (it ${TEST_FILES})
    GET_FILENAME_COMPONENT(testname ${it} NAME_WE)
    GET_FILENAME_COMPONENT(fullpath ${it} REALPATH)
-   ADD_TEST(couchdb-couch_set_view-${testname}
+   ADD_TEST(couchdb-couch_set_view-${testname} python3
      ${COUCHDB_RUNTEST} -c ${CMAKE_INSTALL_PREFIX}/bin -p ${COUCHDB_BIN_PATH}/src
      -m couch_set_view/test -e ${ESCRIPT_EXECUTABLE} -t ${fullpath} --verbose)
 ENDFOREACH (it)
