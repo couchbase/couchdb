@@ -32,7 +32,7 @@ SET(TEST_FILES
 FOREACH (it ${TEST_FILES})
    GET_FILENAME_COMPONENT(testname ${it} NAME_WE)
    GET_FILENAME_COMPONENT(fullpath ${it} REALPATH)
-   ADD_TEST(couchdb-etap-${testname} ${COUCHDB_RUNTEST}
+   ADD_TEST(couchdb-etap-${testname} python3 ${COUCHDB_RUNTEST}
      -c ${COUCHSTORE_BIN_PATH} -p ${COUCHDB_BIN_PATH}/src
      -e ${ESCRIPT_EXECUTABLE} -t ${fullpath} --verbose)
 ENDFOREACH (it)
