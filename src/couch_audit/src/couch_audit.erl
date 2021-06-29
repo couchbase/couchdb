@@ -33,8 +33,12 @@
     audit_enabled = false,
     enabled_events = [],
     disabled_userid = [],
-    memcached_socket = no_socket
+    memcached_socket = no_socket,
+    queue
 }).
+
+views_ops() ->
+    [40960, 40961, 40962, 40963, 40964, 40965].
 
 code(ddoc_created)->
     40960;
@@ -47,7 +51,9 @@ code(query_view) ->
 code(ddoc_updated) ->
     40964;
 code(config_changed) ->
-    40965.
+    40965;
+code(_) ->
+    no_code.
 
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
@@ -60,37 +66,48 @@ default() ->
 init([]) ->
     {ok, AuditList} = couch_util:parse_term(couch_config:get("security","audit", default())),
     State = set_audit_values(AuditList, #state{}),
+    State2 = State#state{queue=queue:new()},
     ok = couch_config:register(fun ?MODULE:config_change/2),
-    {ok, State}.
+    {ok, State2}.
 
-handle_call({audit, NewAuditSettings}, _From, State) ->
-    {reply, true, set_audit_values(NewAuditSettings, State)};
+handle_call({audit, NewAuditSettings}, _From, #state{queue=Queue}=State) ->
+    ?LOG_INFO("Couch audit settings changed ~p", [NewAuditSettings]),
+    State2 = set_audit_values(NewAuditSettings, State),
+    Settings = [prepare_audit_setting(S) || S <- NewAuditSettings],
+    {true, NewQueue} = queue_put(code(config_changed), Settings, Queue),
+    State3 = State2#state{queue=NewQueue},
+    self() ! send,
+    {reply, ok, State3};
+handle_call({log, {Opcode, Req, Body}},  _From, #state{audit_enabled=true,
+                                enabled_events=EnabledEvents,
+                                disabled_userid=DisabledUserId,
+                                queue=Queue}=State) ->
+    case lists:member(code(Opcode), EnabledEvents) of
+    false ->
+        {reply, ok, State};
+    true ->
+        {Send, Queue2} = prepare_and_put(code(Opcode), Req, Body, DisabledUserId, Queue),
+        case Send of
+        true ->
+            self() ! send;
+        _ ->
+            ok
+        end,
+        {reply, ok, State#state{queue=Queue2}}
+    end;
 handle_call(_Request, _From, State) ->
     {reply, ignored, State}.
 
-handle_cast({log, {config_changed, Settings}}, #state{audit_enabled=true,
-                                memcached_socket=Socket}=State) ->
-    Socket2 = try_connecting_memcached(Socket),
-    memcached_calls:audit_put(Socket2, code(config_changed), Settings),
-    {noreply, State#state{memcached_socket=Socket2}};
-handle_cast({log, {Opcode, Req, Body}},  #state{audit_enabled=true,
-                                enabled_events=EnabledEvents,
-                                disabled_userid=DisabledUserId,
-                                memcached_socket=Socket}=State) ->
-    Data = prepare(Req, Body),
-    Socket2 = try_connecting_memcached(Socket),
-
-    Opcode2 = code(Opcode),
-    case check_logging(Opcode2, Data, EnabledEvents, DisabledUserId) of
-    true ->
-        memcached_calls:audit_put(Socket2, Opcode2, Data);
-    false ->
-        ok
-    end,
-    {noreply, State#state{memcached_socket=Socket2}};
 handle_cast(_Request, State) ->
     {noreply, State}.
 
+handle_info(send, #state{
+                memcached_socket=Socket,
+                queue=Queue
+                }=State) ->
+    Socket2 = try_connecting_memcached(Socket),
+    {ok, NewQueue} = send_to_memcached(Socket2, Queue),
+    {noreply, State#state{queue = NewQueue, memcached_socket=Socket2}};
 handle_info(_Reason, State) ->
     {noreply, State}.
 
@@ -112,21 +129,51 @@ set_audit_values(List, State) ->
                      undefined -> [];
                      _ -> EnabledEvents
                      end,
+
+    EnabledEvents3 = lists:filter(fun(Elem) -> lists:member(Elem, views_ops()) end,
+                                    EnabledEvents2),
+
     State#state{audit_enabled=AuditEnabled,
-           disabled_userid= DisabledUser2,
-           enabled_events = EnabledEvents2
+           enabled_events=EnabledEvents3,
+           disabled_userid= DisabledUser2
           }.
 
-config_change("security", "audit") ->
-    {ok, AuditList} = couch_util:parse_term(couch_config:get("security","audit", default())),
-    case gen_server:call(?MODULE, {audit, AuditList}) of
-    true -> audit_config_changed(AuditList);
-    false -> ok
+send_to_memcached(Socket, Queue) ->
+    case queue:out(Queue) of
+    {empty, Queue} ->
+        {ok, Queue};
+    {{value, {Opcode, Data}}, NewQueue} ->
+        memcached_calls:audit_put(Socket, Opcode, Data),
+        send_to_memcached(Socket, NewQueue)
     end.
 
-audit_config_changed(NewSettings) ->
-    Settings = [prepare_audit_setting(S) || S <- NewSettings],
-    gen_server:cast(?MODULE, {log, {config_changed, Settings}}).
+prepare_and_put(Opcode, Req, Body, DisabledUser, Queue) ->
+    Data = prepare(Req, Body),
+    case check_logging(Data, DisabledUser) of
+    true ->
+        queue_put(Opcode, Data, Queue);
+    false ->
+        {false, Queue}
+    end.
+
+queue_put(Opcode, Data, Queue) ->
+    Queue2 =
+        case queue:len(Queue) > 5000 of
+            true ->
+                ?LOG_ERROR("Dropping audit records to info log", []),
+                drop_audit_records(Queue),
+                queue:new();
+            false ->
+                Queue
+        end,
+    NewQueue = queue:in({Opcode, Data}, Queue2),
+    {true, NewQueue}.
+
+config_change("security", "audit") ->
+    {ok, AuditList} = couch_util:parse_term(couch_config:get("security", "audit", default())),
+    gen_server:call(?MODULE, {audit, AuditList});
+config_change(_, _) ->
+    ok.
 
 prepare_audit_setting({enabled_events, List}) ->
     {enabled, to_binary({list,List})};
@@ -135,13 +182,12 @@ prepare_audit_setting({disabled_users, Users}) ->
 prepare_audit_setting(Setting) ->
     Setting.
 
-check_logging(Opcode, Message, EnabledEvents, DisabledUsers) ->
-    RealUserIdCheck = case couch_util:get_value(real_userid, Message) of
-                      undefined -> true;
-                      {[{domain, Domain}, {user, UserId}]} ->
-                        not lists:member({?b2l(UserId), Domain}, DisabledUsers)
-                      end,
-    lists:member(Opcode, EnabledEvents) andalso RealUserIdCheck.
+check_logging(Message, DisabledUsers) ->
+    case couch_util:get_value(real_userid, Message) of
+    undefined -> true;
+    {[{domain, Domain}, {user, UserId}]} ->
+        not lists:member({?b2l(UserId), Domain}, DisabledUsers)
+    end.
 
 get_real_user_id(Req) ->
     case mochiweb_request:get_header_value("authorization", Req) of
@@ -184,6 +230,15 @@ parse_basic_auth_header(Value) ->
             {"", ""}
     end.
 
+drop_audit_records(Queue) ->
+    case queue:out(Queue) of
+    {empty, _} ->
+        ok;
+    {{value, V}, NewQueue} ->
+        ?LOG_INFO("Dropped audit entry: <ud>~p</ud>", [V]),
+        drop_audit_records(NewQueue)
+    end.
+
 audit_view_create_update(#httpd{path_parts = PathParts} = Req, Code, ErrorStr, ReasonStr, OldDDoc) ->
     {BucketName, DDocName} = parse_path(PathParts),
     Body = [{timestamp, now_to_iso8601(os:timestamp())},
@@ -219,7 +274,7 @@ audit_view_create_update(#httpd{path_parts = PathParts} = Req, Code, ErrorStr, R
         {ddoc_updated, [{old_view_definition, OldDDoc}, {new_views, {list, Created}},
                         {modified_views, {list, Modified}}, {deleted_views, {list, Deleted}}| Body2]}
     end,
-    gen_server:cast(?MODULE, {log, {Msg, Req, Body3}}).
+    gen_server:call(?MODULE, {log, {Msg, Req, Body3}}).
 
 audit_view_delete(#httpd{path_parts = PathParts} = Req, Code, ErrorStr, ReasonStr, OldDDoc) ->
     {BucketName, DDocName} = parse_path(PathParts),
@@ -232,7 +287,7 @@ audit_view_delete(#httpd{path_parts = PathParts} = Req, Code, ErrorStr, ReasonSt
             {deleted_ddoc_definition, DDocDeleted},
             {method, delete}, {status, Code},
             {error, ErrorStr},{reason, ReasonStr}],
-    gen_server:cast(?MODULE, {log, {ddoc_deleted, Req, Body}}).
+    gen_server:call(?MODULE, {log, {ddoc_deleted, Req, Body}}).
 
 audit_view_meta_query(#httpd{path_parts = PathParts} = Req, Code, ErrorStr, ReasonStr) ->
     {BucketName, DDocName} = parse_path(PathParts),
@@ -240,7 +295,7 @@ audit_view_meta_query(#httpd{path_parts = PathParts} = Req, Code, ErrorStr, Reas
             {bucket, BucketName}, {ddoc_name, DDocName},
             {method, get}, {status, Code},
             {error, ErrorStr},{reason, ReasonStr}],
-    gen_server:cast(?MODULE, {log, {query_meta_data, Req, Body}}).
+    gen_server:call(?MODULE, {log, {query_meta_data, Req, Body}}).
 
 audit_view_query_request(Req, Code, ErrorStr, ReasonStr) ->
     {Origin, BucketName, DDocName, ViewName, Parameters} = case query_params(Req) of
@@ -264,7 +319,7 @@ audit_view_query_request(Req, Code, ErrorStr, ReasonStr) ->
             {bucket, BucketName}, {ddoc_name, DDocName},
             {view_name, ViewName},{error, ErrorStr},
             {reason, ReasonStr}],
-    gen_server:cast(?MODULE, {log, {query_view, Req, Body}}).
+    gen_server:call(?MODULE, {log, {query_view, Req, Body}}).
 
 format_iso8601({{YYYY, MM, DD}, {Hour, Min, Sec}}, Microsecs, Offset) ->
     io_lib:format("~4.4.0w-~2.2.0w-~2.2.0wT~2.2.0w:~2.2.0w:~2.2.0w.~3.3.0w",
