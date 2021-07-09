@@ -94,13 +94,17 @@ connect_memcached(Tries) ->
      end.
 
 audit_put(no_socket, _Opcode, _Data) ->
-    ok;
+    {error, no_socket};
 audit_put(Socket, AuditOpcode, Data) ->
     RequestBody = encode_audit_put(AuditOpcode, Data),
-    ok = send(Socket, RequestBody),
-    case recv(Socket, ?HEADERLEN, infinity) of
-    {ok, _Ext, _Key, Body} -> Body;
-    Error -> Error
+    case send(Socket, RequestBody) of
+    ok ->
+        case recv(Socket, ?HEADERLEN, infinity) of
+        {ok, _Ext, _Key, Body} -> {ok, Body};
+        Error -> Error
+        end;
+    Error ->
+        Error
     end.
 
 auth(Socket) ->
