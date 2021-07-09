@@ -106,7 +106,12 @@ handle_info(send, #state{
                 queue=Queue
                 }=State) ->
     Socket2 = try_connecting_memcached(Socket),
-    {ok, NewQueue} = send_to_memcached(Socket2, Queue),
+    case send_to_memcached(Socket2, Queue) of
+    {ok, NewQueue} ->
+        ok;
+    {error, NewQueue} ->
+        erlang:send_after(1000, self(), send)
+    end,
     {noreply, State#state{queue = NewQueue, memcached_socket=Socket2}};
 handle_info(_Reason, State) ->
     {noreply, State}.
@@ -143,8 +148,13 @@ send_to_memcached(Socket, Queue) ->
     {empty, Queue} ->
         {ok, Queue};
     {{value, {Opcode, Data}}, NewQueue} ->
-        memcached_calls:audit_put(Socket, Opcode, Data),
-        send_to_memcached(Socket, NewQueue)
+        case memcached_calls:audit_put(Socket, Opcode, Data) of
+        {ok, _} ->
+            send_to_memcached(Socket, NewQueue);
+        {error, Reason} ->
+            ?LOG_ERROR("Error in sending log messsage to memcached Reason: ~p", [Reason]),
+            {error, Queue}
+        end
     end.
 
 prepare_and_put(Opcode, Req, Body, DisabledUser, Queue) ->
