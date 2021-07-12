@@ -110,6 +110,24 @@
         "userAgent" : ""
       },
       "optional_fields" : {}
+    },
+    {
+      "id": 40966,
+      "name": "Access denied",
+      "description": "Access denied to the REST API due to invalid permissions or credentials",
+      "sync" : false,
+      "enabled" : false,
+      "filtering_permitted" : true,
+      "mandatory_fields" : {
+        "timestamp" : "",
+        "real_userid" : {"domain" : "", "user" : ""},
+        "remote" : {"ip" : "", "port" : 1},
+        "local" : {"ip" : "", "port" : 1},
+        "url" : "",
+        "method" : "",
+        "userAgent" : ""
+      },
+      "optional_fields" : {}
     }
    ]
 }
