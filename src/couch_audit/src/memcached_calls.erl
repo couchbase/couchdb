@@ -101,9 +101,12 @@ audit_put(Socket, AuditOpcode, Data) ->
     ok ->
         case recv(Socket, ?HEADERLEN, infinity) of
         {ok, _Ext, _Key, Body} -> {ok, Body};
-        Error -> Error
+        Error ->
+            gen_tcp:close(Socket),
+            Error
         end;
     Error ->
+        gen_tcp:close(Socket),
         Error
     end.
 
