@@ -107,12 +107,12 @@ handle_info(send, #state{
                 }=State) ->
     Socket2 = try_connecting_memcached(Socket),
     case send_to_memcached(Socket2, Queue) of
-    {ok, NewQueue} ->
+    {ok, NewQueue, Socket3} ->
         ok;
-    {error, NewQueue} ->
+    {error, NewQueue, Socket3} ->
         erlang:send_after(1000, self(), send)
     end,
-    {noreply, State#state{queue = NewQueue, memcached_socket=Socket2}};
+    {noreply, State#state{queue = NewQueue, memcached_socket=Socket3}};
 handle_info(_Reason, State) ->
     {noreply, State}.
 
@@ -146,14 +146,14 @@ set_audit_values(List, State) ->
 send_to_memcached(Socket, Queue) ->
     case queue:out(Queue) of
     {empty, Queue} ->
-        {ok, Queue};
+        {ok, Queue, Socket};
     {{value, {Opcode, Data}}, NewQueue} ->
         case memcached_calls:audit_put(Socket, Opcode, Data) of
         {ok, _} ->
             send_to_memcached(Socket, NewQueue);
         {error, Reason} ->
             ?LOG_ERROR("Error in sending log messsage to memcached Reason: ~p", [Reason]),
-            {error, Queue}
+            {error, Queue, no_socket}
         end
     end.
 
