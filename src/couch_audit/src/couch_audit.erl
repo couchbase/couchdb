@@ -203,7 +203,7 @@ get_real_user_id(Req) ->
     case {mochiweb_request:get_header_value("menelaus-auth-user", Req),
           mochiweb_request:get_header_value("menelaus-auth-domain", Req)} of
         {User, Domain} when (is_list(User) andalso is_list(Domain)) ->
-            {ok, {User, Domain}};
+            {ok, {User, list_to_atom(Domain)}};
         _ ->
             error
     end.
