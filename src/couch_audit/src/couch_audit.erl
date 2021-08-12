@@ -38,7 +38,7 @@
 }).
 
 views_ops() ->
-    [40960, 40961, 40962, 40963, 40964, 40965].
+    [40960, 40961, 40962, 40963, 40964, 40965, 40966].
 
 code(ddoc_created)->
     40960;
@@ -52,6 +52,8 @@ code(ddoc_updated) ->
     40964;
 code(config_changed) ->
     40965;
+code(access_denied) ->
+    40966;
 code(_) ->
     no_code.
 
@@ -324,6 +326,12 @@ audit_view_query_request(Req, Code, ErrorStr, ReasonStr) ->
             {reason, ReasonStr}],
     gen_server:call(?MODULE, {log, {query_view, Req, Body}}).
 
+audit_access_denied(#httpd{method=Method, mochi_req=MochiReq} = Req, ErrorStr) ->
+    Url = mochiweb_request:get(raw_path, MochiReq),
+    Body = [{timestamp, now_to_iso8601(os:timestamp())},
+            {url, Url}, {method, Method}, {error, ErrorStr}],
+    gen_server:call(?MODULE, {log, {access_denied, Req, Body}}).
+
 format_iso8601({{YYYY, MM, DD}, {Hour, Min, Sec}}, Microsecs, Offset) ->
     io_lib:format("~4.4.0w-~2.2.0w-~2.2.0wT~2.2.0w:~2.2.0w:~2.2.0w.~3.3.0w",
                   [YYYY, MM, DD, Hour, Min, Sec, Microsecs div 1000]) ++ Offset.
@@ -508,6 +516,10 @@ query_params(#httpd{path_parts=Parts} = Req) ->
             error
     end.
 
+log_error(Req, 401, ErrorStr, _ReasonStr) ->
+    audit_access_denied(Req, ErrorStr);
+log_error(Req, 403, ErrorStr, _ReasonStr) ->
+    audit_access_denied(Req, ErrorStr);
 log_error(#httpd{method = Method}=Req, Code, ErrorStr, ReasonStr) ->
     case Method of
     'PUT' ->

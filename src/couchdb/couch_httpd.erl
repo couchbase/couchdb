@@ -589,6 +589,9 @@ send_method_not_allowed(Req, Methods) ->
 send_json(Req, Value) ->
     send_json(Req, 200, Value).
 
+send_json(Req, 403, Value) ->
+    couch_audit:log_error(Req, 403, <<"forbidden">>, Value),
+    send_json(Req, 403, [], Value);
 send_json(Req, Code, Value) ->
     send_json(Req, Code, [], Value).
 

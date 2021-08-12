@@ -74,6 +74,7 @@
 
 -define(DCP_OPEN_INCLUDE_XATTRS, 16#04).
 -define(DCP_OPEN_NO_VALUE_WITH_UNDERLYING_DATATYPE, 16#40).
+-define(MAX_CONNECTION_NAME, 200).
 
 -record(util_stats, {
     useful_indexing_time = 0.0  :: float(),
@@ -464,10 +465,7 @@ do_init({_, SetName, _} = InitArgs) ->
               [Type, Group#set_view_group.name, SetName, Category]),
             ?DCP_OPEN_INCLUDE_XATTRS
         end,
-        DcpName = <<(atom_to_binary(Mod, latin1))/binary, ": ",
-            SetName/binary, " ", (Group#set_view_group.name)/binary,
-            " (", (atom_to_binary(Category, latin1))/binary, "/",
-            (atom_to_binary(Type, latin1))/binary, ")">>,
+        DcpName = generate_dcp_name(Mod, SetName, Group#set_view_group.name, Category, Type),
         {User, Passwd} = get_auth(),
         Auth = fun() -> {User, Passwd} end,
         DcpBufferSize = list_to_integer(couch_config:get("dcp",
@@ -4245,4 +4243,23 @@ maybe_reset_file(Group) ->
         Group;
     _ ->
         Group
+    end.
+
+generate_dcp_name(Mod, SetName, DdocName, Category, Type) ->
+    Name = <<(atom_to_binary(Mod, latin1))/binary, ": ",
+        SetName/binary, " ", DdocName/binary,
+        " (", (atom_to_binary(Category, latin1))/binary, "/",
+        (atom_to_binary(Type, latin1))/binary, ")">>,
+
+    case string:length(Name) > ?MAX_CONNECTION_NAME of
+    false ->
+        Name;
+    true ->
+        TrimmedBkt = string:slice(SetName, 0, 70),
+        TrimmedDdoc = string:slice(DdocName, length("_design/"), 70),
+        Random = list_to_binary(integer_to_list(rand:uniform(10000))),
+        <<(atom_to_binary(Mod, latin1))/binary, ": ", TrimmedBkt/binary,
+            " ", TrimmedDdoc/binary, " ", Random/binary, " (",
+           (atom_to_binary(Category, latin1))/binary, "/",
+           (atom_to_binary(Type, latin1))/binary, ")">>
     end.
