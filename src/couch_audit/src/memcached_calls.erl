@@ -70,9 +70,11 @@ decode_header(<<?RES_MAGIC:8, _Opcode:8, KeyLen:16, ExtLen:8,
 
 connect_memcached(Tries) ->
     MemcachedPort = list_to_integer(couch_config:get("dcp", "port", 12000)),
+    AddrFamily = misc:get_net_family(),
+    Addr = misc:localhost(AddrFamily, []),
     try
-        {ok, SocketPid} = gen_tcp:connect("localhost", MemcachedPort,
-                        [binary, {packet, raw}, {active, false}, {nodelay, true},
+        {ok, SocketPid} = gen_tcp:connect(Addr, MemcachedPort,
+                        [AddrFamily, binary, {packet, raw}, {active, false}, {nodelay, true},
                          {buffer, 4098}]),
         case auth(SocketPid) of
         <<>> ->

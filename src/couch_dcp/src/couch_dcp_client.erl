@@ -296,9 +296,10 @@ init([Name, Bucket, BufferSize, Flags, Auth]) ->
     DcpTimeout = list_to_integer(
         couch_config:get("dcp", "connection_timeout")),
     DcpPort = list_to_integer(couch_config:get("dcp", "port")),
-
-    case gen_tcp:connect("localhost", DcpPort,
-        [binary, {packet, raw}, {active, true}, {nodelay, true},
+    AddrFamily = misc:get_net_family(),
+    Addr = misc:localhost(AddrFamily, []),
+    case gen_tcp:connect(Addr, DcpPort,
+        [AddrFamily, binary, {packet, raw}, {active, true}, {nodelay, true},
                  {buffer, ?DCP_BUF_WINDOW}], DcpTimeout) of
     {ok, SockPid} ->
         BufSocket = #bufsocket{sockpid = SockPid, sockbuf = <<>>},
