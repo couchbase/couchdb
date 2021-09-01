@@ -12,7 +12,9 @@
 
 -module(misc).
 
--export([is_ipv6/0]).
+-export([is_ipv6/0,
+         get_net_family/0,
+         localhost/2]).
 
 % This is a fake misc service (provided by ns_server in couchbase stack)
 % This is used only in standalone couchdb unit tests
@@ -22,3 +24,13 @@ is_ipv6() ->
         "true" -> true;
         _ -> false
     end.
+
+get_net_family() ->
+    case is_ipv6() of
+        true -> inet6;
+        false -> inet
+    end.
+
+localhost(inet, _Options) -> "127.0.0.1";
+localhost(inet6, [url]) -> "[::1]";
+localhost(inet6, []) -> "::1".
