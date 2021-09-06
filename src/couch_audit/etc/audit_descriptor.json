@@ -116,7 +116,7 @@
       "name": "Access denied",
       "description": "Access denied to the REST API due to invalid permissions or credentials",
       "sync" : false,
-      "enabled" : false,
+      "enabled" : true,
       "filtering_permitted" : true,
       "mandatory_fields" : {
         "timestamp" : "",
