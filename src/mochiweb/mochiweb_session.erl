@@ -142,20 +142,20 @@ gen_hmac(ExpirationTime, Data, SessionKey, Key) ->
 -spec encrypt_data(binary(), binary()) -> binary().
 encrypt_data(Data, Key) ->
     IV = couch_util:strong_rand_bytes(16),
-    Crypt = crypto:block_encrypt(aes_cfb128, Key, IV, Data),
+    Crypt = crypto:crypto_one_time(aes_cfb128, Key, IV, Data, true),
     <<IV/binary, Crypt/binary>>.
 
 -spec decrypt_data(binary(), binary()) -> binary().
 decrypt_data(<<IV:16/binary, Crypt/binary>>, Key) ->
-    crypto:block_decrypt(aes_cfb128, Key, IV, Crypt).
+    crypto:crypto_one_time(aes_cfb128, Key, IV, Crypt, false).
 
 -spec gen_key(iolist(), iolist()) -> binary().
 gen_key(ExpirationTime, ServerKey)->
-    crypto:hmac(md5, ServerKey, [ExpirationTime]).
+    crypto:mac(hmac, md5, ServerKey, [ExpirationTime]).
 
 -spec gen_hmac(iolist(), binary(), iolist(), binary()) -> binary().
 gen_hmac(ExpirationTime, Data, SessionKey, Key) ->
-    crypto:hmac(sha, Key, [ExpirationTime, Data, SessionKey]).
+    crypto:mac(hmac, sha, Key, [ExpirationTime, Data, SessionKey]).
 
 -endif.
 

@@ -1216,7 +1216,7 @@ write_to_tmp_batch_files(ViewKeyValuesToAdd, DocIdViewIdKeys, WriterAcc) ->
     KeysToRemoveByView = lists:foldl(
         fun(LookupResult, KeysToRemoveByViewAcc) ->
             case LookupResult of
-            {ok, {<<_Part:16, DocId/binary>>, <<_Part:16, ViewIdKeys/binary>>}} ->
+            {ok, {<<_:16, DocId/binary>>, <<_:16, ViewIdKeys/binary>>}} ->
                 lists:foldl(
                     fun({ViewId, Keys}, KeysToRemoveByViewAcc2) ->
                         RemoveKeysDict = lists:foldl(
