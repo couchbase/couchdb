@@ -51,6 +51,13 @@ start_server(IniFiles) ->
     _ -> ok
     end,
 
+    case couch_system_event:start_link() of
+    {ok, _} ->
+        ok;
+    {error, {already_started, _}} ->
+        ok
+    end,
+
     case couch_config:start_link(IniFiles) of
     {ok, ConfigPid} ->
         ok;

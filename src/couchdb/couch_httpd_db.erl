@@ -595,7 +595,7 @@ update_doc_result_to_json(DocId, Error) ->
 update_doc(Req, Db, DocId, Doc) ->
     update_doc(Req, Db, DocId, Doc, []).
 
-update_doc(Req, Db, DocId, #doc{deleted=Deleted}=Doc, Headers) ->
+update_doc(#httpd{req_body = RequestBody}=Req, Db, DocId, #doc{deleted=Deleted}=Doc, Headers) ->
     DbFrontend = Req#httpd.db_frontend,
     case couch_httpd:header_value(Req, "X-Couch-Full-Commit") of
     "true" ->
@@ -617,8 +617,17 @@ update_doc(Req, Db, DocId, #doc{deleted=Deleted}=Doc, Headers) ->
     ets:delete(?QUERY_TIMING_STATS_ETS, DocId),
     case Deleted of
     true ->
+        couch_system_event:ddoc_deleted(Db#db.name, DocId),
         couch_audit:audit_view_delete(Req, 200, undefined, undefined, OldDDoc);
     false ->
+        Views = couch_util:get_view_list(RequestBody),
+        Num = length(Views),
+        case OldDDoc of
+        not_found ->
+            couch_system_event:ddoc_created(Db#db.name, DocId, Num);
+        _ ->
+            couch_system_event:ddoc_modified(Db#db.name, DocId, Num)
+        end,
         couch_audit:audit_view_create_update(Req, 201, undefined, undefined, OldDDoc)
     end,
     send_json(Req, if Deleted -> 200; true -> 201 end,

@@ -30,6 +30,7 @@ main(_) ->
     ok.
 
 test() ->
+    couch_system_event:start_link(),
     couch_config:start_link([]),
 
     etap:fun_is(

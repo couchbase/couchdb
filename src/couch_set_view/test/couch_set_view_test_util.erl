@@ -51,6 +51,7 @@ start_server() ->
 
 
 start_server(SetName) ->
+    couch_system_event:start_link(),
     couch_config:start_link(test_util:config_files()),
     DbDir = couch_config:get("couchdb", "database_dir"),
     IndexDir = couch_config:get("couchdb", "view_index_dir"),
