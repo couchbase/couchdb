@@ -124,6 +124,18 @@ handle_call({set, Sec, Key, Val, Persist}, From, Config) ->
         _ ->
             ok
     end,
+
+    OldVal = case ets:lookup(?MODULE, {Sec, Key}) of
+            [] -> undefined;
+            [{_, Match}] -> Match
+    end,
+    case OldVal =:= Val of
+    false ->
+        couch_system_event:settings_changed(Sec, Key, OldVal, Val);
+    true ->
+        ok
+    end,
+
     case Result of
     ok ->
         true = ets:insert(?MODULE, {{Sec, Key}, Val}),
@@ -251,4 +263,3 @@ parse_ini_file(IniFile) ->
             end
         end, {"", []}, Lines),
     {ok, ParsedIniValues}.
-

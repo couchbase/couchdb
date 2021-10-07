@@ -35,6 +35,7 @@
 -export([log_do_parse/1]).
 -export([get_view_list/1, find_match/3]).
 -export([rand_uniform/2]).
+-export([to_json_key_value/2, timestamp_iso8601/1]).
 
 -include("couch_db.hrl").
 
@@ -498,3 +499,38 @@ find_match([Head|Tail], Prefix, Default) ->
     Matched ->
         Matched
     end.
+
+to_json_key_value(Key, Value) when is_list(Value) ->
+    {Key, list_to_binary(Value)};
+to_json_key_value(Key, Value) ->
+    {Key, Value}.
+
+iso_8601_fmt_datetime({{Year,Month,Day},{Hour,Min,Sec}}, DateDelim, TimeDelim) ->
+    lists:flatten(
+      io_lib:format("~4.10.0B~s~2.10.0B~s~2.10.0BT~2.10.0B~s~2.10.0B~s~2.10.0B",
+                    [Year, DateDelim, Month, DateDelim, Day, Hour, TimeDelim,
+                     Min, TimeDelim, Sec])).
+
+iso_8601_fmt({{Year,Month,Day},{Hour,Min,Sec}}, Millis, UTCOffset) ->
+    TimeS = iso_8601_fmt_datetime({{Year,Month,Day}, {Hour,Min,Sec}}, "-", ":"),
+    MilliSecond = case Millis of
+                     undefined -> "";
+                     _ -> io_lib:format(".~3.10.0B", [Millis])
+                  end,
+    OffsetS =
+        case UTCOffset of
+            undefined -> "";
+            {0, 0} -> "Z";
+            {H, M} ->
+                Sign = case H < 0 of
+                           true -> "-";
+                           false -> "+"
+                       end,
+                io_lib:format("~s~2.10.0B:~2.10.0B", [Sign, abs(H), M])
+        end,
+    lists:flatten(TimeS ++ MilliSecond ++ OffsetS).
+
+timestamp_iso8601(Time) ->
+    UTCTime = calendar:now_to_universal_time(Time),
+    Millis = erlang:element(3, Time) div 1000,
+    iso_8601_fmt(UTCTime, Millis, {0,0}).

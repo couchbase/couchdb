@@ -14,6 +14,7 @@ SET(COUCHDB_SRC file2.erl
             couch_doc.erl
             couch_ejson_compare.erl
             couch_event_sup.erl
+            couch_system_event.erl
             couch_file.erl
             couch_file_write_guard.erl
             couch_db_frontend.erl

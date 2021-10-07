@@ -28,6 +28,7 @@ local_config_write() ->
 
 % Run tests and wait for the config gen_server to shutdown.
 run_tests(IniFiles, Tests) ->
+    couch_system_event:start_link(),
     {ok, Pid} = couch_config:start_link(IniFiles),
     erlang:monitor(process, Pid),
     Tests(),

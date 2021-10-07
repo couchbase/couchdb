@@ -16,6 +16,7 @@
 
 -export([start/0, stop/0]).
 -export([new/0, random/0, utc_random/0]).
+-export([uuid4/0]).
 
 -export([init/1, terminate/2, code_change/3]).
 -export([handle_call/3, handle_cast/2, handle_info/2]).
@@ -28,6 +29,11 @@ stop() ->
 
 new() ->
     gen_server:call(?MODULE, create).
+
+uuid4() ->
+    <<B0:32, B1:16, B2:16, B3:16, B4:48>> = couch_util:strong_rand_bytes(16),
+    list_to_binary(io_lib:format("~8.16.0b-~4.16.0b-~4.16.0b-~4.16.0b-~12.16.0b",
+            [B0, B1, B2, B3, B4])).
 
 random() ->
     list_to_binary(couch_util:to_hex(couch_util:strong_rand_bytes(16))).

@@ -30,6 +30,7 @@ main(_) ->
     ok.
 
 test() ->
+    couch_system_event:start_link(),
     % start couch_config with default
     couch_config:start_link([default_config()]),
 
