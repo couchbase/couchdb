@@ -36,6 +36,7 @@
 -export([get_view_list/1, find_match/3]).
 -export([rand_uniform/2]).
 -export([to_json_key_value/2, timestamp_iso8601/1]).
+-export([iso_8601_fmt/3]).
 
 -include("couch_db.hrl").
 
