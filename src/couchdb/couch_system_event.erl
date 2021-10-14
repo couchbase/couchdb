@@ -193,8 +193,8 @@ event(settings_changed) ->
 settings_changed(Section, Key, OldValue, NewValue) ->
     system_log(settings_changed, [couch_util:to_json_key_value(section, Section),
                     couch_util:to_json_key_value(key, Key),
-                    couch_util:to_json_key_value(oldValue, OldValue),
-                    couch_util:to_json_key_value(newValue, NewValue)]).
+                    couch_util:to_json_key_value(old_value, OldValue),
+                    couch_util:to_json_key_value(new_value, NewValue)]).
 
 ddoc_created(Bucket, DDocId, NumViews) ->
     system_log(ddoc_created, [couch_util:to_json_key_value(bucket, Bucket),
