@@ -27,6 +27,8 @@
     queue
 }).
 
+-define(SYSTEM_EVENT_TIMEOUT, 5000).
+
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
@@ -111,7 +113,7 @@ log_system_event(Url, Headers, Queue) ->
 send_system_event(_, _, _, 0, Err) ->
     {error, Err};
 send_system_event(Url, Header, Log, N, _) ->
-    case lhttpc:request(Url, "POST", Header, Log, 60) of
+    case lhttpc:request(Url, "POST", Header, Log, ?SYSTEM_EVENT_TIMEOUT) of
     {ok, {{200, _}, _RespHeaders, _Body}} ->
         {ok, Header};
     {error, Err2} ->
