@@ -29,7 +29,17 @@ listen(Ssl, Port, Opts, SslOpts) ->
     end.
 
 add_unbroken_ciphers_default(Opts) ->
-    Default = filter_unsecure_cipher_suites(ssl:cipher_suites()),
+    CS = lists:map(
+           fun(#{cipher := C, key_exchange := K,
+                 mac := M, prf := P}) ->
+                   case P of
+                       default_prf ->
+                           {K, C, M};
+                       _ ->
+                           {K, C, M, P}
+                   end
+           end, ssl:cipher_suites(all, 'tlsv1.2')),
+    Default = filter_unsecure_cipher_suites(CS),
     Ciphers = filter_broken_cipher_suites(proplists:get_value(ciphers, Opts, Default)),
     [{ciphers, Ciphers} | proplists:delete(ciphers, Opts)].
 

@@ -5,7 +5,7 @@
 
 signature(BaseString, CS, TS) ->
   Key = oauth_uri:calate("&", [CS, TS]),
-  base64:encode_to_string(crypto:hmac(sha, Key, BaseString)).
+  base64:encode_to_string(crypto:mac(hmac, sha, Key, BaseString)).
 
 verify(Signature, BaseString, CS, TS) ->
   Signature =:= signature(BaseString, CS, TS).

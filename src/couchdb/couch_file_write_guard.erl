@@ -79,7 +79,7 @@ terminate(_Reason, _Srv) ->
     % kill all files we are guarding, then wait for their 'DOWN'
     [exit(Pid, kill) || {_, Pid} <-
             ets:tab2list(couch_files_by_name)],
-    [receive {'DOWN', _MonRef, _Type, Pid, _Reason} -> ok end || {_, Pid} <-
+    [receive {'DOWN', _MonRef, _Type, Pid, _} -> ok end || {_, Pid} <-
             ets:tab2list(couch_files_by_name)],
     ok.
 
