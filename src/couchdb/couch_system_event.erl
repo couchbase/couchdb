@@ -192,11 +192,19 @@ event(ddoc_modified) ->
 event(settings_changed) ->
     {10243, <<"view engine settings changed">>, views, info}.
 
+processed_settings(Settings) ->
+    case couch_util:parse_term(Settings) of
+        {ok, Settings2} ->
+            Sanitized = couch_util:sanitize(Settings2),
+            lists:flatten(io_lib:format("~p", [Sanitized]));
+        _ -> Settings
+    end.
+
 settings_changed(Section, Key, OldValue, NewValue) ->
     system_log(settings_changed, [couch_util:to_json_key_value(section, Section),
                     couch_util:to_json_key_value(key, Key),
-                    couch_util:to_json_key_value(old_value, OldValue),
-                    couch_util:to_json_key_value(new_value, NewValue)]).
+                    couch_util:to_json_key_value(old_value, processed_settings(OldValue)),
+                    couch_util:to_json_key_value(new_value, processed_settings(NewValue))]).
 
 ddoc_created(Bucket, DDocId, NumViews) ->
     system_log(ddoc_created, [couch_util:to_json_key_value(bucket, Bucket),
