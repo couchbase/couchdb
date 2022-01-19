@@ -35,7 +35,7 @@
 -export([log_do_parse/1]).
 -export([get_view_list/1, find_match/3]).
 -export([rand_uniform/2]).
--export([to_json_key_value/2, timestamp_iso8601/1]).
+-export([to_json_key_value/2, timestamp_iso8601/1, sanitize/1]).
 -export([iso_8601_fmt/3]).
 
 -include("couch_db.hrl").
@@ -137,9 +137,11 @@ to_digit(N)             -> $a + N-10.
 
 parse_term(Bin) when is_binary(Bin) ->
     parse_term(binary_to_list(Bin));
-parse_term(List) ->
+parse_term(List) when is_list(List) ->
     {ok, Tokens, _} = erl_scan:string(List ++ "."),
-    erl_parse:parse_term(Tokens).
+    erl_parse:parse_term(Tokens);
+parse_term(Data) ->
+    Data.
 
 get_value(Key, List) ->
     get_value(Key, List, undefined).
@@ -535,3 +537,23 @@ timestamp_iso8601(Time) ->
     UTCTime = calendar:now_to_universal_time(Time),
     Millis = erlang:element(3, Time) div 1000,
     iso_8601_fmt(UTCTime, Millis, {0,0}).
+
+sanitize(Value) when is_list(Value) ->
+    % Sanitize users
+    Users = proplists:get_value(disabled_users, Value, []),
+    case Users of
+        [] -> Value;
+        _ ->
+            ProcessedUsers = lists:foldl(
+            fun ({undefined, _}, Acc) ->
+                    Acc;
+                ({U, D}, Acc) ->
+                    {_, SU} = ns_config_log:sanitize_value(U, [add_salt]),
+                    [{binary_to_list(SU), D} | Acc];
+                (_, Acc) ->
+                    Acc
+            end, [], Users),
+            lists:keyreplace(disabled_users, 1, Value, {disabled_users, ProcessedUsers})
+    end;
+sanitize(Value) ->
+        Value.

@@ -73,7 +73,7 @@ init([]) ->
     {ok, State2}.
 
 handle_call({audit, NewAuditSettings}, _From, #state{queue=Queue}=State) ->
-    ?LOG_INFO("Couch audit settings changed ~p", [NewAuditSettings]),
+    ?LOG_INFO("Couch audit settings changed <ud>~p</ud>", [NewAuditSettings]),
     State2 = set_audit_values(NewAuditSettings, State),
     Settings = [prepare_audit_setting(S) || S <- NewAuditSettings],
     {true, NewQueue} = queue_put(code(config_changed), Settings, Queue),
