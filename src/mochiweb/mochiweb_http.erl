@@ -116,6 +116,9 @@ request(Socket, Opts, Body) ->
       {Protocol, _, {http_error, "\n"}}
 	  when Protocol == http orelse Protocol == ssl ->
 	  request(Socket, Opts, Body);
+      {Protocol, _, {http_error, _}} = Other
+          when Protocol == http orelse Protocol == ssl ->
+        handle_invalid_msg_request(Other, Socket, Opts);
       {tcp_closed, _} ->
 	  mochiweb_socket:close(Socket), exit(normal);
       {tcp_error, _, emsgsize} = Other ->
@@ -153,6 +156,9 @@ headers(Socket, Opts, Request, Headers, Body,
 	  when Protocol == http orelse Protocol == ssl ->
 	  headers(Socket, Opts, Request,
 		  [{Name, Value} | Headers], Body, 1 + HeaderCount);
+      {Protocol, _, {http_error, _}} = Other
+          when Protocol == http orelse Protocol == ssl ->
+        handle_invalid_msg_request(Other, Socket, Opts, Request, Headers);
       {tcp_closed, _} ->
 	  mochiweb_socket:close(Socket), exit(normal);
       {tcp_error, _, emsgsize} = Other ->
