@@ -216,20 +216,11 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
                 WriterAccHeader = WriterAccGroup#set_view_group.index_header,
                 PartVersions = lists:ukeymerge(1, PartVersions0,
                     WriterAccHeader#set_view_index_header.partition_versions),
-                case WriterAcc3#writer_acc.initial_build of
-                true ->
-                    % The doc loader might not load the mutations up to the
-                    % most recent one, but only to a lower one. Update the
-                    % group header and stats with the correct information.
-                    MaxSeqs = lists:ukeymerge(
-                        1, RealMaxSeqs, WriterAccHeader#set_view_index_header.seqs),
-                    Stats = WriterAccStats#set_view_updater_stats{
-                        seqs = lists:sum([S || {_, S} <- RealMaxSeqs])
-                    };
-                false ->
-                    MaxSeqs = WriterAccHeader#set_view_index_header.seqs,
-                    Stats = WriterAcc3#writer_acc.stats
-                end,
+                MaxSeqs = lists:ukeymerge(
+                    1, RealMaxSeqs, WriterAccHeader#set_view_index_header.seqs),
+                Stats = WriterAccStats#set_view_updater_stats{
+                    seqs = lists:sum([S || {_, S} <- RealMaxSeqs])
+                },
                 FinalWriterAcc = WriterAcc3#writer_acc{
                     stats = Stats,
                     group = WriterAccGroup#set_view_group{
@@ -589,10 +580,10 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                 % If there is a rollback needed, don't store any new documents
                 % in the index, but just check for a rollback of another
                 % partition (i.e. a request with start seq == end seq)
-                ChangesWrapper = fun(_, _) -> ok end,
+                ChangesWrapper = fun(_, _) -> {0,0} end,
                 Result = couch_dcp_client:enum_docs_since(
                     DcpPid, PartId, PartVersions, Since, Since, Flags2,
-                    ChangesWrapper, ok, AddStreamFun),
+                    ChangesWrapper, {0,0}, AddStreamFun),
                 case Result of
                 {ok, _, _} ->
                     AccRollbacks2 = AccRollbacks;
