@@ -267,8 +267,14 @@ enum_docs_since(Pid, PartId, PartVersions, StartSeq, EndSeq0, Flags,
             false ->
                 InAcc2 = CallbackFn({part_versions, {PartId, FailoverLog}}, InAcc),
                 case receive_events(Pid, RequestId, CallbackFn, InAcc2) of
-                {ok, InAcc3} ->
-                    {ok, InAcc3, FailoverLog};
+                {ok, {Count, MaxSeq}=InAcc3} ->
+                    InAcc4 = case EndSeq > MaxSeq of
+                    true ->
+                        {Count, EndSeq};
+                    false ->
+                        InAcc3
+                    end,
+                    {ok, InAcc4, FailoverLog};
                 Error ->
                     Error
                 end
@@ -1005,7 +1011,13 @@ receive_events(Pid, RequestId, CallbackFn, InAcc) ->
     {Optype, Data} = get_stream_event(Pid, RequestId),
     case Optype of
     stream_end ->
-        {ok, InAcc};
+        {_, _, <<Flag:32>>} = Data,
+        case Flag of
+        0 ->
+            {ok, InAcc};
+        _ ->
+            {error, stream_end_flag_notok}
+        end;
     snapshot_marker ->
         InAcc2 = CallbackFn({snapshot_marker, Data}, InAcc),
         receive_events(Pid, RequestId, CallbackFn, InAcc2);
