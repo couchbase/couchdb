@@ -52,7 +52,6 @@ leave(Barrier) ->
 leave(Barrier, Pid) ->
     ok = gen_server:cast(Barrier, {leave, Pid}).
 
-
 init({Name, LimitParamName}) ->
     State = #state{
         limit = list_to_integer(
@@ -128,9 +127,16 @@ handle_leave(Pid, #state{current = Current, waiting = Waiting, limit = Limit} = 
     State2 = State#state{mon_refs = dict:erase(Pid, State#state.mon_refs)},
     case Current -- [Pid] of
     Current ->
-        Waiting2 = queue:filter(fun({_, Pid0}) -> Pid0 =/= Pid end, Waiting),
-        couch_task_status:update([{waiting, queue:len(Waiting2)}]),
-        State2#state{waiting = Waiting2};
+        FuncPid = queue:filter(fun({_, Pid0}) -> Pid0 == Pid end, Waiting),
+        case queue:out(FuncPid) of
+        {empty, _} ->
+            State2;
+        {{value, {From, _}}, _} ->
+            gen_server:reply(From, ok),
+            Waiting2 = queue:filter(fun({_, Pid0}) -> Pid0 =/= Pid end, Waiting),
+            couch_task_status:update([{waiting, queue:len(Waiting2)}]),
+            State2#state{waiting = Waiting2}
+        end;
     Current2 ->
         {Current3, Waiting2} = unblock_waiters(Limit, Current2, Waiting),
         couch_task_status:update([

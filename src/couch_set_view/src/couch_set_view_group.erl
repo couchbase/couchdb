@@ -2948,6 +2948,12 @@ stop_updater(#state{updater_pid = Pid, initial_build = true} = State) when is_pi
     };
 stop_updater(#state{updater_pid = Pid} = State) when is_pid(Pid) ->
     MRef = erlang:monitor(process, Pid),
+    case ?type(State) of
+    main ->
+        couch_index_barrier:leave(couch_main_index_barrier, Pid);
+    replica ->
+        couch_index_barrier:leave(couch_replica_index_barrier, Pid)
+    end,
     Pid ! stop,
     unlink(Pid),
     ?LOG_INFO("Stopping updater for set view `~s`, ~s (~s) group `~s`",
