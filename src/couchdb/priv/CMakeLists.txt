@@ -27,10 +27,19 @@ TARGET_LINK_LIBRARIES(couch_ejson_compare
 # disable them.
 remove_sanitizers(couch_ejson_compare)
 
+IF (UNIX)
+# It would be nice to share this code from
+# tlm/cmake/Modules/CouchbaseRpath.cmake, but unfortunately MacOS has
+# a distinction between @loader_path and @executable_path that doesn't
+# map to anything on other Unices, so it just has to be special
 IF (APPLE)
-    # map from lib/couchdb/erlang/lib/couch-1.2.0a-961ad59-git/priv/lib to lib/
-    SET_TARGET_PROPERTIES(couch_ejson_compare PROPERTIES
-                          INSTALL_RPATH "@loader_path/../../../../../..")
+    SET (ORIGIN @loader_path)
+ELSE ()
+    SET (ORIGIN \$ORIGIN)
+ENDIF ()
+# map from lib/couchdb/erlang/lib/couch-1.2.0a-961ad59-git/priv/lib to lib/
+SET_TARGET_PROPERTIES(couch_ejson_compare PROPERTIES
+                      INSTALL_RPATH "${ORIGIN}/../../../../../..")
 ENDIF ()
 
 INSTALL(TARGETS couch_ejson_compare
