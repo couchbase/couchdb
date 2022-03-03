@@ -256,11 +256,11 @@ handle_call({add_stream, PartId, RequestId, StartSeq, EndSeq, Socket, FailoverLo
         false ->
             create_mutations(State#state.setname, PartId, StartSeq, EndSeq)
         end,
-        Num = case ItemsPerSnapshot of
+        EndSeq1 = case ItemsPerSnapshot of
         0 ->
-            length(Mutations);
+            EndSeq;
         _ ->
-            min(length(Mutations), ItemsPerSnapshot)
+            StartSeq+ItemsPerSnapshot
         end,
         Streams2 =
             [{PartId, {RequestId, Mutations, Socket, 0}} | Streams],
@@ -277,7 +277,7 @@ handle_call({add_stream, PartId, RequestId, StartSeq, EndSeq, Socket, FailoverLo
                 ?DCP_SNAPSHOT_TYPE_MEMORY
             end,
             Marker = couch_dcp_producer:encode_snapshot_marker(
-                PartId, RequestId, StartSeq, StartSeq + Num, SnapshotType),
+                PartId, RequestId, StartSeq, EndSeq1, SnapshotType),
             ok = socket_send(Socket, Marker),
             self() ! send_mutations
         end,
