@@ -366,7 +366,7 @@ tests() ->
     try_until_unthrottled(Pid, StreamReq0_4, 0, 210),
     timer:sleep(500),
     NumBufferAck3 = couch_dcp_fake_server:get_num_buffer_acks(),
-    etap:is(NumBufferAck3, NumBufferAck + 1, "Got the buffer ack"),
+    etap:is(NumBufferAck3, NumBufferAck+2, "Got the buffer ack"),
     couch_dcp_client:remove_stream(Pid, 0),
 
     couch_dcp_fake_server:pause_mutations(),
