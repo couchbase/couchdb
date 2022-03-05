@@ -218,18 +218,17 @@ update(WriterAcc, ActiveParts, PassiveParts, BlockedTime,
                     WriterAccHeader#set_view_index_header.partition_versions),
                 case WriterAcc3#writer_acc.initial_build of
                 true ->
-                    % The doc loader might not load the mutations up to the
-                    % most recent one, but only to a lower one. Update the
-                    % group header and stats with the correct information.
-                    MaxSeqs = lists:ukeymerge(
-                        1, RealMaxSeqs, WriterAccHeader#set_view_index_header.seqs),
                     Stats = WriterAccStats#set_view_updater_stats{
                         seqs = lists:sum([S || {_, S} <- RealMaxSeqs])
                     };
                 false ->
-                    MaxSeqs = WriterAccHeader#set_view_index_header.seqs,
                     Stats = WriterAcc3#writer_acc.stats
                 end,
+                % The doc loader might not load the mutations up to the
+                % most recent one, but only to a lower one. Update the
+                % group header and stats with the correct information.
+                MaxSeqs = lists:ukeymerge(
+                        1, RealMaxSeqs, WriterAccHeader#set_view_index_header.seqs),
                 FinalWriterAcc = WriterAcc3#writer_acc{
                     stats = Stats,
                     group = WriterAccGroup#set_view_group{
@@ -559,7 +558,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                         end,
                     Result = couch_dcp_client:enum_docs_since(
                         DcpPid, PartId, PartVersions, Since, EndSeq, Flags2,
-                        ChangesWrapper, {0, 0}, AddStreamFun),
+                        ChangesWrapper, {0, -1}, AddStreamFun),
                     case Result of
                     {ok, {AccCount2, AccEndSeq}, NewPartVersions} ->
                         AccSeqs2 = orddict:store(PartId, AccEndSeq, AccSeqs),
@@ -592,7 +591,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                 ChangesWrapper = fun(_, _) -> ok end,
                 Result = couch_dcp_client:enum_docs_since(
                     DcpPid, PartId, PartVersions, Since, Since, Flags2,
-                    ChangesWrapper, ok, AddStreamFun),
+                    ChangesWrapper, {0, -1}, AddStreamFun),
                 case Result of
                 {ok, _, _} ->
                     AccRollbacks2 = AccRollbacks;
