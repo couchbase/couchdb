@@ -794,7 +794,8 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
         update_listeners = Listeners,
         group = Group,
         updater_pid = UpdaterPid,
-        compactor_pid = CompactorPid
+        compactor_pid = CompactorPid,
+        compact_log_files = LogFiles
     } = State,
     #set_view_group{
         fd = OldFd,
@@ -807,10 +808,8 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
         cleanup_kv_count = CleanupKVCount
     } = Result,
 
-    MissingChangesCount = couch_set_view_util:missing_changes_count(
-        ?set_seqs(Group), ?set_seqs(NewGroup0)),
-    case MissingChangesCount == 0 of
-    true ->
+    case LogFiles of
+    nil ->
         % Compactor might have received a group snapshot from an updater.
         NewGroup = fix_updater_group(NewGroup0, Group),
         ok = couch_file:refresh_eof(NewGroup#set_view_group.fd),
@@ -903,10 +902,12 @@ handle_call({compact_done, Result}, {Pid, _}, #state{compactor_pid = Pid} = Stat
         },
         inc_compactions(Result),
         {reply, ok, maybe_apply_pending_transition(State2), ?GET_TIMEOUT(State2)};
-    false ->
+    _ ->
         State2 = State#state{
             compactor_retry_number = State#state.compactor_retry_number + 1
         },
+        MissingChangesCount = couch_set_view_util:missing_changes_count(
+            ?set_seqs(Group), ?set_seqs(NewGroup0)),
         {reply, {update, MissingChangesCount}, State2, ?GET_TIMEOUT(State2)}
     end;
 handle_call({compact_done, _Result}, _From, State) ->
