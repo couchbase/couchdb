@@ -54,7 +54,14 @@ start_link(https) ->
     start_link(https, Options).
 start_link(Name, Options) ->
     % couch_secondary_sup will restart us when config settings change.
+    case config_profile:get_bool({couchdb, enabled}) of
+        true ->
+            do_start_link(Name, Options);
+        false ->
+            ignore
+    end.
 
+do_start_link(Name, Options) ->
     Field = case misc:is_ipv6() of
                 true -> "ip6_bind_address";
                 false -> "ip4_bind_address"
