@@ -54,10 +54,10 @@ start_link(https) ->
     start_link(https, Options).
 start_link(Name, Options) ->
     % couch_secondary_sup will restart us when config settings change.
-    case config_profile:get_bool({couchdb, enabled}) of
-        true ->
-            do_start_link(Name, Options);
+    case config_profile:get_bool({couchdb, disabled}) of
         false ->
+            do_start_link(Name, Options);
+        true ->
             ignore
     end.
 
