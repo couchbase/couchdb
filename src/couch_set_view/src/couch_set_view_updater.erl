@@ -865,7 +865,12 @@ do_maps(Group, MapQueue, WriteQueue) ->
                 ?DCP_DATA_TYPE_RAW_COMPRESSED ->
                     {DocBody10, XATTRs6} = accumulate_xattr(Body, <<"\"xattrs\":{">>, 0, 0),
                     DocBody11 = change_docbody_if_empty(DocBody10),
-                    {?CONTENT_META_NON_JSON_MODE, DocBody11, XATTRs6}
+                    {?CONTENT_META_NON_JSON_MODE, DocBody11, XATTRs6};
+                ?DCP_DATA_TYPE_JSON_COMPRESSED_XATTR ->
+                    <<XATTRSize:32, Rest/binary>> = Body,
+                    {DocBody12, XATTRs7} = accumulate_xattr(Rest, <<"\"xattrs\":{">>, XATTRSize, 0),
+                    DocBody13 = change_docbody_if_empty(DocBody12),
+                    {?CONTENT_META_JSON, DocBody13, XATTRs7}
                 end,
                 Doc = #doc{
                     id = Id,
