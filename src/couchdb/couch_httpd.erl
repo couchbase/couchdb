@@ -33,6 +33,8 @@
 
 start_link() ->
     start_link(http).
+start_link(unittest) ->
+    start_link(unittest, http);
 start_link(http) ->
     Port = couch_config:get("httpd", "port", "5984"),
     start_link(?MODULE, [{port, Port}]);
@@ -52,6 +54,9 @@ start_link(https) ->
                       throw({error, missing_certs})
               end,
     start_link(https, Options).
+start_link(unittest, http) ->
+    Port = couch_config:get("httpd", "port", "5984"),
+    do_start_link(?MODULE, [{port, Port}]);
 start_link(Name, Options) ->
     % couch_secondary_sup will restart us when config settings change.
     case config_profile:get_bool({couchdb, disabled}) of
