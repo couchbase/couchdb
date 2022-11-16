@@ -7,25 +7,7 @@
 -import(lists, [concat/1]).
 
 
-normalize(URI) ->
-  case http_uri:parse(URI) of
-    {Scheme, UserInfo, Host, Port, Path, _Query} ->
-      normalize(Scheme, UserInfo, string:to_lower(Host), Port, [Path]);
-    Else ->
-      Else
-  end.
-
-normalize(http, UserInfo, Host, 80, Acc) ->
-  normalize(http, UserInfo, [Host|Acc]);
-normalize(https, UserInfo, Host, 443, Acc) ->
-  normalize(https, UserInfo, [Host|Acc]);
-normalize(Scheme, UserInfo, Host, Port, Acc) ->
-  normalize(Scheme, UserInfo, [Host, ":", Port|Acc]).
-
-normalize(Scheme, [], Acc) ->
-  concat([Scheme, "://"|Acc]);
-normalize(Scheme, UserInfo, Acc) ->
-  concat([Scheme, "://", UserInfo, "@"|Acc]).
+normalize(URI) -> uri_string:normalize(URI).
 
 params_to_header_string(Params) ->
   intercalate(", ", [concat([encode(K), "=\"", encode(V), "\""]) || {K, V} <- Params]).
