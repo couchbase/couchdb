@@ -46,12 +46,32 @@ stop() ->
 all() ->
     lists:sort(gen_server:call(?MODULE, all, infinity)).
 
+init_complete() ->
+    try ets:lookup(?MODULE, initialization_done) of
+        [{initialization_done, true}] -> true;
+        _ -> ?LOG_INFO("ETS initialization is not complete.", []),
+            false
+    catch _Tag:Error ->
+        ?LOG_DEBUG("ETS lookup error:~p", [Error]),
+        false
+    end.
+
+get_core(Section) ->
+    Matches = ets:match(?MODULE, {{Section, '$1'}, '$2'}),
+    [{Key, Value} || [Key, Value] <- Matches].
+get_core(Section, Key, Default) ->
+    case ets:lookup(?MODULE, {Section, Key}) of
+        [] -> Default;
+        [{_, Match}] -> Match
+    end.
 
 get(Section) when is_binary(Section) ->
     ?MODULE:get(?b2l(Section));
 get(Section) ->
-    Matches = ets:match(?MODULE, {{Section, '$1'}, '$2'}),
-    [{Key, Value} || [Key, Value] <- Matches].
+    case init_complete() of
+        false -> gen_server:call(?MODULE, {get, Section});
+        true -> get_core(Section)
+    end.
 
 get(Section, Key) ->
     ?MODULE:get(Section, Key, undefined).
@@ -59,9 +79,9 @@ get(Section, Key) ->
 get(Section, Key, Default) when is_binary(Section) and is_binary(Key) ->
     ?MODULE:get(?b2l(Section), ?b2l(Key), Default);
 get(Section, Key, Default) ->
-    case ets:lookup(?MODULE, {Section, Key}) of
-        [] -> Default;
-        [{_, Match}] -> Match
+    case init_complete() of
+        false -> gen_server:call(?MODULE, {get, Section, Key, Default});
+        true -> get_core(Section, Key, Default)
     end.
 
 set(Section, Key, Value) ->
@@ -102,6 +122,7 @@ init(IniFiles) ->
             [_|_] -> lists:last(IniFiles);
             _ -> undefined
         end,
+        ets:insert(?MODULE, {initialization_done, true}),
         {ok, #config{write_filename = WriteFile}}
     catch _Tag:Error ->
         {stop, Error}
@@ -114,6 +135,12 @@ terminate(_Reason, _State) ->
 
 handle_call(all, _From, Config) ->
     Resp = lists:sort((ets:tab2list(?MODULE))),
+    {reply, Resp, Config};
+handle_call({get, Section}, _From, Config) ->
+    Resp = get_core(Section),
+    {reply, Resp, Config};
+handle_call({get, Section, Key, Default}, _From, Config) ->
+    Resp = get_core(Section, Key, Default),
     {reply, Resp, Config};
 handle_call({set, Sec, Key, Val, Persist}, From, Config) ->
     Result = case {Persist, Config#config.write_filename} of
