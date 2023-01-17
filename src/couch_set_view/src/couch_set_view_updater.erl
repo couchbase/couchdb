@@ -698,6 +698,9 @@ queue_doc(snapshot_marker, MapQueue, _Group, _MaxDocSize, _InitialBuild) ->
 queue_doc({part_versions, _} = PartVersions, MapQueue, _Group, _MaxDocSize,
     _InitialBuild) ->
     couch_work_queue:queue(MapQueue, PartVersions);
+queue_doc(#dcp_doc{id = <<H:5/binary, _/binary>>, data_type = DcpDataType }, _, _, _, _)
+                    when (H == <<"_txn:">>) and (DcpDataType == ?DCP_DATA_TYPE_BINARY_XATTR) ->
+    ok;
 queue_doc(Doc, MapQueue, Group, MaxDocSize, InitialBuild) ->
     Doc2 = case Doc#dcp_doc.deleted of
     true ->
