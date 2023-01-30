@@ -241,10 +241,17 @@ get_stream_event_get_reply(Pid, ReqId, MRef, RetryTimeout) ->
 enum_docs_since(_, _, [], _, _, _, _, _, _) ->
     % No matching partition version found. Recreate the index from scratch
     {rollback, 0};
-enum_docs_since(Pid, PartId, PartVersions, StartSeq, EndSeq0, Flags,
+enum_docs_since(Pid, PartId, PartVersions, StartSeq0, EndSeq0, Flags,
         CallbackFn, InAcc, AddStreamFun) ->
     [PartVersion | PartVersionsRest] = PartVersions,
     {PartUuid, _} = PartVersion,
+    StartSeq = case StartSeq0 of
+    1 ->
+       0;
+    _ ->
+       StartSeq0
+    end,
+
     EndSeq = case EndSeq0 < StartSeq of
     true ->
         ?LOG_INFO("dcp client (~p): Expecting a rollback for partition ~p. "
@@ -269,6 +276,8 @@ enum_docs_since(Pid, PartId, PartVersions, StartSeq, EndSeq0, Flags,
                 case receive_events(Pid, RequestId, CallbackFn, InAcc2) of
                 {ok, InAcc3} ->
                     InAcc4 = case InAcc3 of
+                    {0, -1} when ((Flags band ?DCP_FLAG_DISKONLY) =:= ?DCP_FLAG_DISKONLY)->
+                        {0, 1};
                     {0, -1} ->
                         {0, EndSeq};
                     _ ->

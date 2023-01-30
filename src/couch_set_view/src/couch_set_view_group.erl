@@ -1280,7 +1280,7 @@ handle_info({'EXIT', Pid, {updater_finished, Result}}, #state{updater_pid = Pid}
             initial_build = false,
             updater_state = not_running
         },
-        State3 = start_updater(StoppedUpdaterState),
+        State3 = start_updater_after_initial_build(StoppedUpdaterState),
         WaitList2 = State3#state.waiting_list,
         is_pid(State3#state.updater_pid);
     false ->
@@ -3052,6 +3052,35 @@ process_last_updater_group(#state{updater_pid = Pid} = State, Group) ->
          end
     end.
 
+start_updater_after_initial_build(State) ->
+    #state{
+        group = Group,
+        replica_partitions = ReplicaParts,
+        waiting_list = WaitList
+    } = State,
+
+    Partitions = group_partitions(Group),
+    {ok, Seqs} = get_seqs(State, Partitions),
+    CurSeqs = indexable_partition_seqs(State, Seqs),
+    case CurSeqs > ?set_seqs(Group) of
+    true ->
+        do_start_updater(State, CurSeqs, []);
+    false ->
+       case check_initial_build(?set_seqs(Group)) of
+       true ->
+           do_start_updater(State, CurSeqs, []);
+       false ->
+           WaitList2 = reply_with_group(Group, ReplicaParts, WaitList),
+           State#state{waiting_list = WaitList2}
+       end
+    end.
+
+check_initial_build([]) ->
+    false;
+check_initial_build([{_, 1}|_]) ->
+    true;
+check_initial_build([_|T]) ->
+    check_initial_build(T).
 
 start_updater(State) ->
     start_updater(State, []).
