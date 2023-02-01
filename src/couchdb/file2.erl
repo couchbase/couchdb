@@ -77,17 +77,23 @@ fold_files(Dir, RegExp, Recursive, Fun, Acc) ->
 
 do_file_op(Mod, Fun, Args) ->
     case erlang:apply(Mod, Fun, Args) of
-    {error, eacces} = Error ->
-        case os:type() of
-        {win32, _} ->
-            RetryPeriod = couch_config:get(
-                "couchdb", "windows_file_op_retry_period", "5000"),
-            do_file_op_loop(Mod, Fun, Args, ?INIT_SLEEP, list_to_integer(RetryPeriod));
-        _ ->
-            Error
-        end;
-    Else ->
-        Else
+        {error, eacces} = Error ->
+            case os:type() of
+                {win32, _} ->
+                    RetryPeriod =
+                        try couch_config:get("couchdb",
+                                             "windows_file_op_retry_period",
+                                             "5000") of
+                            X -> list_to_integer(X)
+                        catch
+                            _T:_E -> 5000
+                        end,
+                    do_file_op_loop(Mod, Fun, Args, ?INIT_SLEEP, RetryPeriod);
+                _ ->
+                    Error
+            end;
+        Else ->
+            Else
     end.
 
 

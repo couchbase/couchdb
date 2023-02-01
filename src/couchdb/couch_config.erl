@@ -25,7 +25,7 @@
 -export([start_link/1, stop/0]).
 -export([all/0, get/1, get/2, get/3, set/3, set/4, delete/2, delete/3]).
 -export([register/1, register/2]).
--export([parse_ini_file/1]).
+-export([get_db_and_ix_paths_from_ini_files/1]).
 
 -export([init/1, terminate/2, code_change/3]).
 -export([handle_call/3, handle_cast/2, handle_info/2]).
@@ -84,6 +84,17 @@ get(Section, Key, Default) ->
         true -> get_core(Section, Key, Default)
     end.
 
+get_db_and_ix_paths_from_ini_files(IniFiles) ->
+    TableId = ets:new(t, [set, private]),
+    lists:foreach(fun(Ini) -> parse_ini_file(Ini, TableId) end, IniFiles),
+    [{_, DbPath}] = ets:lookup(TableId, {"couchdb", "database_dir"}),
+    IxPath = case ets:lookup(TableId, {"couchdb", "view_index_dir"}) of
+                 [] -> DbPath;
+                 [{_, Match}] -> Match
+             end,
+    ets:delete(TableId),
+    {filename:join([DbPath]), filename:join([IxPath])}.
+
 set(Section, Key, Value) ->
     ?MODULE:set(Section, Key, Value, true).
 
@@ -112,17 +123,14 @@ register(Fun, Pid) ->
 
 
 init(IniFiles) ->
-    ets:new(?MODULE, [named_table, set, protected]),
+    TableId = ets:new(?MODULE, [named_table, set, protected]),
     try
-        lists:map(fun(IniFile) ->
-            {ok, ParsedIniValues} = parse_ini_file(IniFile),
-            ets:insert(?MODULE, ParsedIniValues)
-        end, IniFiles),
-        WriteFile = case IniFiles of
-            [_|_] -> lists:last(IniFiles);
-            _ -> undefined
-        end,
+        lists:foreach(fun(Ini) -> parse_ini_file(Ini, TableId) end, IniFiles),
         ets:insert(?MODULE, {initialization_done, true}),
+        WriteFile = case IniFiles of
+                        [_|_] -> lists:last(IniFiles);
+                        _ -> undefined
+                    end,
         {ok, #config{write_filename = WriteFile}}
     catch _Tag:Error ->
         {stop, Error}
@@ -219,8 +227,7 @@ handle_info({'DOWN', _, _, DownPid, _}, #config{notify_funs=PidFuns}=Config) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-
-parse_ini_file(IniFile) ->
+parse_ini_file(IniFile, TableId) ->
     IniFilename = couch_util:abs_pathname(IniFile),
     IniBin =
     case file2:read_file(IniFilename) of
@@ -280,7 +287,7 @@ parse_ini_file(IniFile) ->
                     case re:split(RemainingLine, " ;|\t;", [{return, list}]) of
                     [[]] ->
                         % empty line means delete this key
-                        ets:delete(?MODULE, {AccSectionName, ValueName}),
+                        ets:delete(TableId, {AccSectionName, ValueName}),
                         {AccSectionName, AccValues};
                     [LineValue | _Rest] ->
                         {AccSectionName,
@@ -289,4 +296,4 @@ parse_ini_file(IniFile) ->
                 end
             end
         end, {"", []}, Lines),
-    {ok, ParsedIniValues}.
+    ets:insert(TableId, ParsedIniValues).
