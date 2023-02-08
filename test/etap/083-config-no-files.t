@@ -29,12 +29,19 @@ main(_) ->
     end,
     ok.
 
+check([]) ->
+    true;
+check([{initialization_done,true}|T]) ->
+    check(T);
+check(_) ->
+    false.
+
 test() ->
     couch_system_event:start_link(),
     couch_config:start_link([]),
 
     etap:fun_is(
-        fun(KVPairs) -> length(KVPairs) == 0 end,
+        fun(KVPairs) -> check(KVPairs) end,
         couch_config:all(),
         "No INI files specified returns 0 key/value pairs."
     ),

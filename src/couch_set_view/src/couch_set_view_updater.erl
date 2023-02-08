@@ -503,7 +503,7 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
 
             case AccRollbacks of
             [] ->
-                case EndSeq =:= Since of
+                case Since =/= 1 andalso EndSeq =:= Since of
                 true ->
                     {AccCount, AccSeqs, AccVersions, AccRollbacks};
                 false ->
@@ -1629,7 +1629,7 @@ update_seqs(PartIdSeqs, Seqs) ->
     orddict:fold(
         fun(PartId, NewSeq, Acc) ->
             OldSeq = couch_util:get_value(PartId, Acc, 0),
-            case NewSeq > OldSeq of
+            case NewSeq >= OldSeq of
             true ->
                 ok;
             false ->
