@@ -46,6 +46,11 @@ handle_call({system_event, Data}, _, #state{queue = Queue} = State) ->
 handle_call(_, _, State) ->
     {reply, ignored, State}.
 
+handle_cast({system_event, Data}, #state{queue = Queue} = State) ->
+    NewQueue = queue_put(Queue, Data),
+    State2 = State#state{queue=NewQueue},
+    self() ! send,
+    {noreply, State2};
 handle_cast(_Request, State) ->
     {noreply, State}.
 
@@ -78,7 +83,7 @@ fill_headers_url(undefined, Headers) ->
     Url ->
         fill_headers_url(Url, Headers)
     end;
-fill_headers_url(Url, undefined) ->
+fill_headers_url(Url, []) ->
     case get_auth_header() of
     undefined ->
         {error, Url, undefined};
@@ -116,9 +121,8 @@ send_system_event(Url, Header, Log, N, _) ->
     case lhttpc:request(Url, "POST", Header, Log, ?SYSTEM_EVENT_TIMEOUT) of
     {ok, {{200, _}, _RespHeaders, _Body}} ->
         {ok, Header};
-    {error, Err2} ->
-        timer:sleep(10),
-        send_system_event(Url, Header, Log, N-1, Err2);
+    {error, _} ->
+        {retry_after, 1000};
     {ok, {{Code, _}, RespHeaders, Body}} ->
         case retry_error(Code, RespHeaders) of
         {retry_after, Time} ->
@@ -238,7 +242,7 @@ system_log(Event, Extras) ->
                          build_extra_attributes(Extras)]),
 
     Body = ejson:encode({Log}),
-    gen_server:call(?MODULE, {system_event, Body}).
+    gen_server:cast(?MODULE, {system_event, Body}).
 
 get_system_log_url() ->
     try
