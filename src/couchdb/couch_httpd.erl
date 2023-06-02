@@ -59,7 +59,9 @@ start_link(unittest, http) ->
     do_start_link(?MODULE, [{port, Port}]);
 start_link(Name, Options) ->
     % couch_secondary_sup will restart us when config settings change.
-    case config_profile:get_bool({couchdb, disabled}) of
+    Plist = application:get_env(ns_server, config_profile,
+                                [{{couchdb, disabled}, false}]),
+    case proplists:get_bool({couchdb, disabled}, Plist) of
         false ->
             do_start_link(Name, Options);
         true ->
