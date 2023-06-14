@@ -75,11 +75,15 @@ partition2(_S, _Sep) ->
 safe_relative_path("/" ++ _) ->
     undefined;
 safe_relative_path(P) ->
-    case string:chr(P, $\\) of
-        0 ->
-           safe_relative_path(P, []);
-        _ ->
-           undefined
+    case filename:pathtype(P) of
+        relative ->
+            case string:chr(P, $\\) of
+                0 ->
+                    safe_relative_path(P, []);
+                _ ->
+                    undefined
+            end;
+        _ -> undefined
     end.
 
 safe_relative_path("", Acc) ->
