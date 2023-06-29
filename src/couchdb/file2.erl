@@ -60,7 +60,7 @@ read_file(Filepath) ->
 
 
 write_file(Filepath, Bytes) ->
-    do_file_op(file, write_file, [Filepath, Bytes]).
+    do_file_op(misc, atomic_write_file, [Filepath, Bytes]).
 
 
 read_file_info(Filepath) ->
