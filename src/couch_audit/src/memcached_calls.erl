@@ -81,6 +81,7 @@ connect_memcached(Tries) ->
                 SocketPid;
         Reason ->
                 ?LOG_ERROR("Error in connecting to memcached: Reason ~p",[Reason]),
+                ok = gen_tcp:close(SocketPid),
                 no_socket
         end
     catch
@@ -125,7 +126,7 @@ encode_auth_request(User, Password) ->
     User2 = iolist_to_binary(User),
     Password2 = iolist_to_binary(Password),
     Key = <<"PLAIN">>,
-    Body = <<0:8, User2/binary, 0:8, Password2/binary, 0:8>>,
+    Body = <<0:8, User2/binary, 0:8, Password2/binary>>,
     encode_request(?AUTH, <<>>, Key, Body).
 
 encode_audit_put(AuditOpcode, Data) ->
