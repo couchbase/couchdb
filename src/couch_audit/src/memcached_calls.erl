@@ -81,6 +81,7 @@ connect_memcached(Tries) ->
                 SocketPid;
         Reason ->
                 ?LOG_ERROR("Error in connecting to memcached: Reason ~p",[Reason]),
+                ok = gen_tcp:close(SocketPid),
                 no_socket
         end
     catch
