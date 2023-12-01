@@ -23,7 +23,6 @@
 
 -record(state, {
     url = undefined,
-    auth_header = [],
     queue
 }).
 
@@ -54,19 +53,19 @@ handle_cast({system_event, Data}, #state{queue = Queue} = State) ->
 handle_cast(_Request, State) ->
     {noreply, State}.
 
-handle_info(send, #state{url=Url, auth_header=Headers, queue=Queue}=State) ->
-    {Url3, Headers4, Queue3, Timer2} = case fill_headers_url(Url, Headers) of
-                        {error, Url2, Header2} ->
-                            {Url2, Header2, Queue, 1000};
-                        {ok, Url2, Headers2} ->
-                            {Headers3, Queue2, Time} = log_system_event(Url2, Headers2, Queue),
-                            {Url2, Headers3, Queue2, Time}
+handle_info(send, #state{url=Url, queue=Queue}=State) ->
+    {Url3, Queue3, Timer2} = case get_system_log_url(Url) of
+                        undefined ->
+                            {Url, Queue, 1000};
+                        Url2 ->
+                            {Queue2, Time} = log_system_event(Url2, Queue),
+                            {Url2, Queue2, Time}
                         end,
     case Timer2 of
     undefined -> ok;
     _ -> erlang:send_after(Timer2, self(), send)
     end,
-    {noreply, State#state{url=Url3, auth_header= Headers4, queue=Queue3}};
+    {noreply, State#state{url=Url3, queue=Queue3}};
 handle_info(_Reason, State) ->
     {noreply, State}.
 
@@ -76,35 +75,26 @@ terminate(_Reason, _State) ->
 code_change(_OldVsn, State, _Extra) ->
     State.
 
-fill_headers_url(undefined, Headers) ->
-    case get_system_log_url() of
-    undefined ->
-        {error, undefined, Headers};
-    Url ->
-        fill_headers_url(Url, Headers)
-    end;
-fill_headers_url(Url, []) ->
+log_system_event(Url, Queue) ->
     case get_auth_header() of
     undefined ->
-        {error, Url, undefined};
+        {Url, Queue};
     Headers ->
-        fill_headers_url(Url, Headers)
-    end;
-fill_headers_url(Url, Header) ->
-    {ok, Url, Header}.
+        log_system_event(Url, Headers, Queue)
+    end.
 
 log_system_event(Url, Headers, Queue) ->
     case queue:out(Queue) of
     {empty, Queue} ->
-        {Headers, Queue, undefined};
+        {Queue, undefined};
     {{value, Log}, NewQueue} ->
         case send_system_event(Url, Headers, Log, 5, undefined) of
         {retry_after, Time} ->
-            {Headers, Queue, Time};
+            {Queue, Time};
         %% This can be due to econnrefused or some issue with the connection
         %% Try the request after 1 sec backoff
         {error, _} ->
-            {Headers, Queue, 1000};
+            {Queue, 1000};
         %% Issue with the format of the log
         %% Dump it into couchdb log
         {server_error, Error} ->
@@ -244,14 +234,16 @@ system_log(Event, Extras) ->
     Body = ejson:encode({Log}),
     gen_server:cast(?MODULE, {system_event, Body}).
 
-get_system_log_url() ->
+get_system_log_url(undefined) ->
     try
         Port = service_ports:get_port(rest_port),
         misc:local_url(Port, "/_event", [])
     catch
         _:_:_ ->
             undefined
-    end.
+    end;
+get_system_log_url(Url) ->
+    Url.
 
 get_auth_header() ->
     case get_auth(2) of
