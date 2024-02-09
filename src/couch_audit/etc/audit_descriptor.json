@@ -15,7 +15,6 @@
         "remote" : {"ip" : "", "port" : 1},
         "local" : {"ip" : "", "port" : 1},
         "ddoc_name": "",
-        "view_name": [],
         "user_agent" : "",
         "status" : ""
       },
@@ -34,7 +33,6 @@
         "remote" : {"ip" : "", "port" : 1},
         "local" : {"ip" : "", "port" : 1},
         "ddoc_name": "",
-        "view_name": [],
         "user_agent" : "",
         "status" : ""
       },
@@ -91,7 +89,6 @@
         "remote" : {"ip" : "", "port" : 1},
         "local" : {"ip" : "", "port" : 1},
         "ddoc_name": "",
-        "view_name": [],
         "user_agent" : "",
         "status" : ""
       },
