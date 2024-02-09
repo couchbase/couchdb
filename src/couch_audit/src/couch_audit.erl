@@ -374,7 +374,7 @@ prepare(#httpd{mochi_req=Req}, Body) ->
     {ok, {User, Domain}} ->
         {propset, [{domain, convert_domain(Domain)}, {user, to_binary(User)}]};
     _ ->
-        {propset, [{domain, unknown}, {user, Auth}]}
+        {propset, [{domain, unknown}, {user, ""}]}
     end,
 
     Body2 = [{remote, Remote},
