@@ -14,9 +14,8 @@
         "real_userid" : {"domain" : "", "user" : ""},
         "remote" : {"ip" : "", "port" : 1},
         "local" : {"ip" : "", "port" : 1},
-        "ddoc name": "",
-        "view name": [],
-        "userAgent" : "",
+        "ddoc_name": "",
+        "user_agent" : "",
         "status" : ""
       },
       "optional_fields" : {}
@@ -33,9 +32,8 @@
         "real_userid" : {"domain" : "", "user" : ""},
         "remote" : {"ip" : "", "port" : 1},
         "local" : {"ip" : "", "port" : 1},
-        "ddoc name": "",
-        "view name": [],
-        "userAgent" : "",
+        "ddoc_name": "",
+        "user_agent" : "",
         "status" : ""
       },
       "optional_fields" : {}
@@ -52,10 +50,9 @@
         "real_userid" : {"domain" : "", "user" : ""},
         "remote" : {"ip" : "", "port" : 1},
         "local" : {"ip" : "", "port" : 1},
-        "ddoc name": "",
         "bucket": "",
         "ddoc_name": "",
-        "userAgent" : "",
+        "user_agent" : "",
         "status" : ""
       },
       "optional_fields" : {}
@@ -72,9 +69,9 @@
         "real_userid" : {"domain" : "", "user" : ""},
         "remote" : {"ip" : "", "port" : 1},
         "local" : {"ip" : "", "port" : 1},
-        "ddoc name": "",
-        "view name": "",
-        "userAgent" : "",
+        "ddoc_name": "",
+        "view_name": "",
+        "user_agent" : "",
         "status" : ""
       },
       "optional_fields" : {}
@@ -91,9 +88,8 @@
         "real_userid" : {"domain" : "", "user" : ""},
         "remote" : {"ip" : "", "port" : 1},
         "local" : {"ip" : "", "port" : 1},
-        "ddoc name": "",
-        "view name": [],
-        "userAgent" : "",
+        "ddoc_name": "",
+        "user_agent" : "",
         "status" : ""
       },
       "optional_fields" : {}
@@ -107,7 +103,7 @@
       "filtering_permitted" : false,
       "mandatory_fields" : {
         "timestamp" : "",
-        "userAgent" : ""
+        "user_agent" : ""
       },
       "optional_fields" : {}
     },
@@ -125,7 +121,7 @@
         "local" : {"ip" : "", "port" : 1},
         "url" : "",
         "method" : "",
-        "userAgent" : ""
+        "user_agent" : ""
       },
       "optional_fields" : {}
     }
