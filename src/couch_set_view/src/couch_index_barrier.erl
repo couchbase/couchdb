@@ -122,28 +122,33 @@ unblock_waiters(Limit, Current, Waiting) ->
     end.
 
 handle_leave(Pid, #state{current = Current, waiting = Waiting, limit = Limit} = State) ->
-    MRef = dict:fetch(Pid, State#state.mon_refs),
-    erlang:demonitor(MRef, [flush]),
-    State2 = State#state{mon_refs = dict:erase(Pid, State#state.mon_refs)},
-    case Current -- [Pid] of
-    Current ->
-        FuncPid = queue:filter(fun({_, Pid0}) -> Pid0 == Pid end, Waiting),
-        case queue:out(FuncPid) of
-        {empty, _} ->
-            State2;
-        {{value, {From, _}}, _} ->
-            gen_server:reply(From, ok),
-            Waiting2 = queue:filter(fun({_, Pid0}) -> Pid0 =/= Pid end, Waiting),
-            couch_task_status:update([{waiting, queue:len(Waiting2)}]),
-            State2#state{waiting = Waiting2}
+    case dict:is_key(Pid, State#state.mon_refs) of
+    true ->
+        MRef = dict:fetch(Pid, State#state.mon_refs),
+        erlang:demonitor(MRef, [flush]),
+        State2 = State#state{mon_refs = dict:erase(Pid, State#state.mon_refs)},
+        case Current -- [Pid] of
+        Current ->
+            FuncPid = queue:filter(fun({_, Pid0}) -> Pid0 == Pid end, Waiting),
+            case queue:out(FuncPid) of
+            {empty, _} ->
+                State2;
+            {{value, {From, _}}, _} ->
+                gen_server:reply(From, ok),
+                Waiting2 = queue:filter(fun({_, Pid0}) -> Pid0 =/= Pid end, Waiting),
+                couch_task_status:update([{waiting, queue:len(Waiting2)}]),
+                State2#state{waiting = Waiting2}
+            end;
+        Current2 ->
+            {Current3, Waiting2} = unblock_waiters(Limit, Current2, Waiting),
+            couch_task_status:update([
+                {waiting, queue:len(Waiting2)},
+                {running, length(Current3)}
+            ]),
+            State2#state{current = Current3, waiting = Waiting2}
         end;
-    Current2 ->
-        {Current3, Waiting2} = unblock_waiters(Limit, Current2, Waiting),
-        couch_task_status:update([
-            {waiting, queue:len(Waiting2)},
-            {running, length(Current3)}
-        ]),
-        State2#state{current = Current3, waiting = Waiting2}
+    false ->
+        State
     end.
 
 
