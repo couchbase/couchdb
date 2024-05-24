@@ -59,7 +59,7 @@ test() ->
     %% change minimum protocol so that ssl port restarts
     %% same behaviour for non ssl port when we change configuartion
     etap:diag("Changing ssl minimum protocol"),
-    cluster_ops:request(?DIAG_EVAL, post, [], "ns_config:set(ssl_minimum_protocol, 'tlsv1.2')", 5),
+    cluster_ops:request(?DIAG_EVAL, post, [], "ns_config:set(ssl_minimum_protocol, 'tlsv1.3')", 5),
 
     %% fire a new query when encryption level is set to all
     query_view(5, true, Loaded, "stale=false"),
@@ -71,7 +71,7 @@ reset_cluster() ->
     bucket_ops:delete_ddoc(?DEFAULT_BUCKET, ?TEST_DESIGN_DOC),
     cluster_ops:request(?SECURITY_URL, post, [{"content-type", "application/x-www-form-urlencoded"}],
                           "clusterEncryptionLevel=control", 5),
-    cluster_ops:request(?DIAG_EVAL, post, [], "ns_config:set(ssl_minimum_protocol, 'tlsv1')", 5).
+    cluster_ops:request(?DIAG_EVAL, post, [], "ns_config:set(ssl_minimum_protocol, 'tlsv1.2')", 5).
 
 query_view(0, IsSSL, _DocsLoaded, _) ->
     etap:bail(io_lib:format("query request failed: Is encryption level all? ~p",[IsSSL]));
