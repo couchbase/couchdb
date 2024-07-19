@@ -863,14 +863,16 @@ serve_file(Path, DocRoot, ExtraHeaders,
 	     _Headers, _Meta]} =
 	       THIS) ->
     case mochiweb_util:safe_relative_path(Path) of
-      undefined -> not_found(ExtraHeaders, THIS);
-      RelPath ->
-	  FullPath = filename:join([DocRoot, RelPath]),
-	  case filelib:is_dir(FullPath) of
-	    true ->
-		maybe_redirect(RelPath, FullPath, ExtraHeaders, THIS);
-	    false -> maybe_serve_file(FullPath, ExtraHeaders, THIS)
-	  end
+        undefined -> not_found(ExtraHeaders, THIS);
+        RelPath ->
+            %% filename:join removes preceding absolute path components
+            %% RelPath must be relative to the current working directory
+            %% in the current volume (not absolute or volume-relative).
+            FullPath = filename:join([DocRoot, RelPath]),
+            case filelib:is_dir(FullPath) of
+                true -> maybe_redirect(RelPath, FullPath, ExtraHeaders, THIS);
+                false -> maybe_serve_file(FullPath, ExtraHeaders, THIS)
+            end
     end.
 
 %% Internal API
