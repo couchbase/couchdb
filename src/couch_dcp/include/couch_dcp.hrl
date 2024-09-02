@@ -58,6 +58,10 @@
 -define(DCP_DATA_TYPE_BINARY_XATTR, 16#4).
 -define(DCP_DATA_TYPE_JSON_XATTR, 16#5).
 -define(DCP_DATA_TYPE_JSON_COMPRESSED_XATTR, 16#7).
+-define(DCP_SYSTEM_EVENT, 16#5F).
+-define(COLLECTION_HELO, 16#1F).
+-define(DCP_ADVANCE_SEQ_NUMBER, 16#64).
+-define(DCP_ENABLE_COLLECTION_FEATURE, 16#12).
 % The sizes are in bits
 -define(DCP_SIZES_KEY_LENGTH, 16).
 -define(DCP_SIZES_PARTITION, 16).
@@ -79,6 +83,7 @@
 -define(DCP_SIZES_NRU_LENGTH, 8).
 -define(DCP_SIZES_SNAPSHOT_TYPE, 32).
 -define(DCP_SIZES_BUFFER_SIZE, 32).
+-define(DCP_SIZES_COLLECTION_ID, 32).
 -define(DCP_BUFFER_ACK_THRESHOLD, 0.2).
 
 % NOTE vmx 2014-01-16: In ep-engine the maximum size is currently 25
