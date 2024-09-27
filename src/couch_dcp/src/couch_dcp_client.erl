@@ -325,9 +325,11 @@ init([Name, Bucket, BufferSize, Flags, Auth]) ->
         },
         % Auth as admin and select bucket for the connection
         case sasl_auth(Auth, State) of
-        {ok, State2} ->
+            {ok, State2} ->
             case select_bucket(Bucket, State2) of
-            {ok, State3} ->
+            {ok, State10} ->
+		case collection_helo(State10) of
+                                            {ok, State3} ->
                 % Store the meta information to reconnect
                 Args = [Name, Bucket, BufferSize, Flags, Auth],
                 State4 = State3#state{args = Args},
@@ -348,8 +350,8 @@ init([Name, Bucket, BufferSize, Flags, Auth]) ->
                                     case State7#state.noop_enable of
                                     true ->
                                         case noop_interval(State7) of
-                                        {ok, State8} ->
-                                            {ok, State8#state{worker_pid = WorkerPid}};
+					 {ok, State8} ->
+                                              {ok, State8#state{worker_pid = WorkerPid}};
                                         {error, Reason} ->
                                             exit(WorkerPid, shutdown),
                                             {stop, Reason}
@@ -373,6 +375,9 @@ init([Name, Bucket, BufferSize, Flags, Auth]) ->
             {error, Reason} ->
                 {stop, Reason}
             end;
+        {error, Reason} ->
+            {stop, Reason}
+        end;
         {error, Reason} ->
             {stop, Reason}
         end;
@@ -638,8 +643,13 @@ handle_info({stream_event, RequestId, Event}, State) ->
     snapshot_mutation ->
         store_snapshot_mutation(RequestId, Data, State);
     snapshot_deletion ->
-        store_snapshot_mutation(RequestId, Data, State)
+        store_snapshot_mutation(RequestId, Data, State);
+    advance_seq_num ->
+	store_seqnum(RequestId, Data, State);
+    system_event ->
+        store_seqnum(RequestId, Data, State)
     end,
+
     case stream_event_waiters_present(State2, RequestId) of
     true ->
         {State3, Waiter} = remove_stream_event_waiter(State2, RequestId),
@@ -804,6 +814,35 @@ sasl_auth(Auth, State) ->
         Error
     end.
 
+collection_helo(#state{
+        bufsocket = BufSocket,
+        timeout = DcpTimeout,
+        request_id = RequestId
+    } = State) ->
+    Msg = couch_dcp_consumer:encode_hello_message("HELO"," ", RequestId),
+    case bufsocket_send(BufSocket, Msg) of
+    ok ->
+        case bufsocket_recv(BufSocket, ?DCP_HEADER_LEN, DcpTimeout) of
+        {ok, Header, BufSocket2} ->
+            {collection_helo, Status, RequestId, BodyLength} =
+                                    couch_dcp_consumer:parse_header(Header),
+            case Status of
+            ?DCP_STATUS_OK ->
+                {ok, _, BufSocket3} = bufsocket_recv(BufSocket2, BodyLength, DcpTimeout),
+                {ok, State#state{
+                    request_id = RequestId + 1,
+                    bufsocket = BufSocket3
+                }};
+            Status ->
+                {error, Status}
+            end;
+        {error, _} = Error ->
+            Error
+        end;
+    {error, _} = Error ->
+        Error
+    end.
+
 -spec select_bucket(binary(), #state{}) -> {ok, #state{}} | {error, term()}.
 select_bucket(Bucket, State) ->
     #state{
@@ -956,6 +995,27 @@ receive_stream_end(BufSocket, Timeout, BodyLength) ->
         {error, Reason}
     end.
 
+-spec receive_system_event(#bufsocket{}, timeout(), size()) ->
+            {update_seq(), #bufsocket{}} | {error, closed | inet:posix()}.
+receive_system_event(BufSocket, Timeout, BodyLength) ->
+    case bufsocket_recv(BufSocket, BodyLength, Timeout) of
+        {ok, Body, BufSocket2} ->
+            {seqno, Seqno} = couch_dcp_consumer:parse_system_event(Body),
+            {Seqno, BufSocket2};
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+-spec receive_advance_seq_num(#bufsocket{}, timeout(), size()) ->
+            {update_seq(), #bufsocket{}} | {error, closed | inet:posix()}.
+receive_advance_seq_num(BufSocket, Timeout, BodyLength) ->
+    case bufsocket_recv(BufSocket, BodyLength, Timeout) of
+        {ok, Body, BufSocket2} ->
+            {seqno, Seqno} = couch_dcp_consumer:parse_advance_seqno(Body),
+            {Seqno, BufSocket2};
+        {error, Reason} ->
+            {error, Reason}
+    end.
 
 % Returns the failover log as a list 2-tuple pairs with
 % partition UUID and sequence number
@@ -1029,6 +1089,12 @@ receive_events(Pid, RequestId, CallbackFn, InAcc) ->
         end;
     snapshot_marker ->
         InAcc2 = CallbackFn({snapshot_marker, Data}, InAcc),
+        receive_events(Pid, RequestId, CallbackFn, InAcc2);
+    advance_seq_num ->
+        InAcc2 = CallbackFn({advance_seq_num, Data}, InAcc),
+        receive_events(Pid, RequestId, CallbackFn, InAcc2);
+    system_event ->
+        InAcc2 = CallbackFn({advance_seq_num, Data}, InAcc),
         receive_events(Pid, RequestId, CallbackFn, InAcc2);
     error ->
         {error, Data};
@@ -1395,7 +1461,13 @@ receive_worker(BufSocket, Timeout, Parent, MsgAcc0) ->
         {all_seqs, Status, RequestId, BodyLength} ->
             {Resp, BufSocket5} = receive_all_seqs(
                 BufSocket2, Timeout, Status, BodyLength),
-            {done, {stream_response, RequestId, Resp}, BufSocket5}
+            {done, {stream_response, RequestId, Resp}, BufSocket5};
+        {advance_seq_num, PartId, RequestId, BodyLength} ->
+            {Seqno, BufSocket5} = receive_advance_seq_num(BufSocket2, Timeout, BodyLength),
+            {done, {stream_event, RequestId, {advance_seq_num, {PartId, Seqno}, BodyLength}}, BufSocket5};
+        {system_event, PartId, RequestId, BodyLength} ->
+            {Seqno, BufSocket5} = receive_system_event(BufSocket2, Timeout, BodyLength),
+            {done, {stream_event, RequestId, {system_event, {PartId, Seqno}, BodyLength}}, BufSocket5}
         end,
         case Action of
         done ->
@@ -1602,7 +1674,7 @@ add_new_stream({PartId, PartUuid, StartSeq, EndSeq,
        request_id = RequestId
     } = State,
     StreamRequest = couch_dcp_consumer:encode_stream_request(
-        PartId, RequestId, Flags, StartSeq, EndSeq, PartUuid, SnapSeqStart, SnapSeqEnd),
+        PartId, RequestId, Flags, StartSeq, EndSeq, PartUuid, SnapSeqStart, SnapSeqEnd, "0"),
     case bufsocket_send(BufSocket, StreamRequest) of
     ok ->
         State2 = insert_stream_info(PartId, RequestId, PartUuid, StartSeq, EndSeq,
@@ -1676,6 +1748,20 @@ store_snapshot_mutation(RequestId, Data, State) ->
   #dcp_doc{
         seq = Seq
     } = Data,
+    #state{
+        stream_info = StreamData
+    } = State,
+    case dict:find(RequestId, StreamData) of
+    error ->
+        State;
+    {ok, Val} ->
+        Val2 = Val#stream_info{start_seq = Seq},
+        StreamData2 = dict:store(RequestId, Val2, StreamData),
+        State#state{stream_info = StreamData2}
+    end.
+
+-spec store_seqnum(request_id(), {partition_id(), update_seq()}, #state{}) -> #state{}.
+store_seqnum(RequestId, {_, Seq}, State) ->
     #state{
         stream_info = StreamData
     } = State,

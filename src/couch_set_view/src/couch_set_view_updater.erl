@@ -554,7 +554,29 @@ load_changes(Owner, Updater, Group, MapQueue, ActiveParts, PassiveParts,
                             queue_doc(
                                 Item, MapQueue, Group,
                                 MaxDocSize, InitialBuild),
-                            {Count + 1, AccEndSeq}
+                            {Count + 1, AccEndSeq};
+                        ({advance_seq_num, {_, Seqnum}}=AdvanceSeqNum, {Count, AccEndSeq}) ->
+                            EndSeqNum = case AccEndSeq < Seqnum of
+                            true ->
+                                Seqnum;
+                            false ->
+                                AccEndSeq
+                            end,
+                            queue_doc(
+                                AdvanceSeqNum, MapQueue, Group,
+                                MaxDocSize, InitialBuild),
+                            {Count, EndSeqNum};
+                        ({system_event, {_, Seqnum}} = SystemEvent, {Count, AccEndSeq}) ->
+                            EndSeqNum = case AccEndSeq < Seqnum of
+                            true ->
+                                Seqnum;
+                            false ->
+                                AccEndSeq
+                            end,
+                            queue_doc(
+                                SystemEvent, MapQueue, Group,
+                                MaxDocSize, InitialBuild),
+                            {Count, EndSeqNum}
                         end,
                     Result = couch_dcp_client:enum_docs_since(
                         DcpPid, PartId, PartVersions, Since, EndSeq, Flags2,
@@ -698,6 +720,12 @@ queue_doc(snapshot_marker, MapQueue, _Group, _MaxDocSize, _InitialBuild) ->
 queue_doc({part_versions, _} = PartVersions, MapQueue, _Group, _MaxDocSize,
     _InitialBuild) ->
     couch_work_queue:queue(MapQueue, PartVersions);
+queue_doc({advance_seq_num, {_, _}} = AdvanceSeqNum, MapQueue, _Group, _MaxDocSize,
+    _InitialBuild) ->
+    couch_work_queue:queue(MapQueue, AdvanceSeqNum);
+queue_doc({system_event, {_, _}} = SystemEvent, MapQueue, _Group, _MaxDocSize,
+    _InitialBuild) ->
+    couch_work_queue:queue(MapQueue, SystemEvent);
 queue_doc(#dcp_doc{id = <<H:5/binary, _/binary>>, data_type = DcpDataType }, _, _, _, _)
                     when (H == <<"_txn:">>) and (DcpDataType == ?DCP_DATA_TYPE_BINARY_XATTR) ->
     ok;
@@ -915,7 +943,11 @@ do_maps(Group, MapQueue, WriteQueue) ->
             (snapshot_marker, {Acc, Size}) ->
                 {[snapshot_marker | Acc], Size};
             ({part_versions, _} = PartVersions, {Acc, Size}) ->
-                {[PartVersions | Acc], Size}
+                {[PartVersions | Acc], Size};
+            ({system_event, {_, _}} = SystemEvent, {Acc, Size}) ->
+                {[SystemEvent | Acc], Size};
+            ({advance_seq_num, {_, _}} = AdvanceSeqNum, {Acc, Size}) ->
+                {[AdvanceSeqNum | Acc], Size}
             end,
             {[], 0}, Queue),
         ok = couch_work_queue:queue(WriteQueue, lists:reverse(Items)),
@@ -1089,7 +1121,13 @@ process_map_results(Mod, Kvs, ViewEmptyKVs, PartSeqs, PartVersions) ->
                   "but theu weren't">>});
         ({part_versions, {PartId, NewVersions}}, {ViewKVsAcc, DocIdViewIdKeysAcc, PartIdSeqs, PartIdVersions}) ->
             PartIdVersions2 = update_part_versions(NewVersions, PartId, PartIdVersions),
-            {ViewKVsAcc, DocIdViewIdKeysAcc, PartIdSeqs, PartIdVersions2}
+            {ViewKVsAcc, DocIdViewIdKeysAcc, PartIdSeqs, PartIdVersions2};
+        ({advance_seq_num, {PartId, Seqnum}}, {ViewKVsAcc, DocIdViewIdKeysAcc, PartIdSeqs, PartIdVersions}) ->
+            PartIdSeqs2 = update_part_seq(Seqnum, PartId, PartIdSeqs),
+            {ViewKVsAcc, DocIdViewIdKeysAcc, PartIdSeqs2, PartIdVersions};
+        ({system_event, {PartId, Seqnum}}, {ViewKVsAcc, DocIdViewIdKeysAcc, PartIdSeqs, PartIdVersions}) ->
+            PartIdSeqs2 = update_part_seq(Seqnum, PartId, PartIdSeqs),
+            {ViewKVsAcc, DocIdViewIdKeysAcc, PartIdSeqs2, PartIdVersions}
         end,
         {ViewEmptyKVs, [], PartSeqs, PartVersions}, Kvs).
 
