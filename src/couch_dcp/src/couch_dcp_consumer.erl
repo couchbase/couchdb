@@ -180,7 +180,8 @@ parse_snapshot_deletion(KeyLength, Body) ->
       Key:KeyLength/binary,
       Metadata:MetadataLength/binary,
       XATTRs/binary>> = Body,
-    {snapshot_deletion, {Seq, RevSeq, Key, Metadata, XATTRs}}.
+    {_, ActualKey} = decode_leb128(Key),
+    {snapshot_deletion, {Seq, RevSeq, ActualKey, Metadata, XATTRs}}.
 
 
 -spec parse_failover_log(binary(), partition_version()) ->
