@@ -198,6 +198,22 @@ parse_hybi_frames(Socket,
 		    _PayloadLen:16, _MaskKey:4/binary, _/binary-unit:8>> =
 		      PartFrame,
 		  Acc) ->
+    parse_hybi_continuation(Socket, PartFrame, Acc);
+parse_hybi_frames(S,
+		  <<_Fin:1, _Rsv:3, Opcode:4, _Mask:1, 127:7, 0:1,
+		    PayloadLen:63, MaskKey:4/binary,
+		    Payload:PayloadLen/binary-unit:8, Rest/binary>>,
+		  Acc) ->
+    Payload2 = hybi_unmask(Payload, MaskKey, <<>>),
+    parse_hybi_frames(S, Rest, [{Opcode, Payload2} | Acc]);
+parse_hybi_frames(Socket,
+		  <<_Fin:1, _Rsv:3, _Opcode:4, _Mask:1, 127:7, 0:1,
+		    _PayloadLen:63, _MaskKey:4/binary, _/binary-unit:8>> =
+		      PartFrame,
+		  Acc) ->
+    parse_hybi_continuation(Socket, PartFrame, Acc).
+
+parse_hybi_continuation(Socket, PartFrame, Acc) ->
     ok =
 	mochiweb_socket:exit_if_closed(mochiweb_socket:setopts(Socket,
 							       [{packet, 0},
@@ -217,14 +233,7 @@ parse_hybi_frames(Socket,
       _ -> mochiweb_socket:close(Socket), exit(normal)
       after 5000 ->
 		mochiweb_socket:close(Socket), exit(normal)
-    end;
-parse_hybi_frames(S,
-		  <<_Fin:1, _Rsv:3, Opcode:4, _Mask:1, 127:7, 0:1,
-		    PayloadLen:63, MaskKey:4/binary,
-		    Payload:PayloadLen/binary-unit:8, Rest/binary>>,
-		  Acc) ->
-    Payload2 = hybi_unmask(Payload, MaskKey, <<>>),
-    parse_hybi_frames(S, Rest, [{Opcode, Payload2} | Acc]).
+    end.
 
 %% Unmasks RFC 6455 message
 hybi_unmask(<<O:32, Rest/bits>>, MaskKey, Acc) ->
