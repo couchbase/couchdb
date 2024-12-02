@@ -28,7 +28,7 @@
 
 -export([loop/5, request/5, upgrade_connection/2]).
 
--export([send/3]).
+-export([send/3, send/4]).
 
 -ifdef(TEST).
 
@@ -75,20 +75,28 @@ call_body(Body, Payload, State, ReplyChannel) ->
     Body(Payload, State, ReplyChannel).
 
 send(Socket, Payload, hybi) ->
-    Prefix = <<1:1, 0:3, 1:4,
-	       (payload_length(iolist_size(Payload)))/binary>>,
-    mochiweb_socket:send(Socket, [Prefix, Payload]);
+    Opcode = 1,  %% text
+    send(Socket, Opcode, Payload, hybi);
 send(Socket, Payload, hixie) ->
     mochiweb_socket:send(Socket, [0, Payload, 255]).
+
+send(Socket, Opcode, Payload, hybi) ->
+    Fin = 1,  %% No further frames
+    Rsv = 0,  %% No use of reserved bits
+    PayloadSize = payload_length(size(Payload)),
+    Prefix = <<Fin:1, Rsv:3, Opcode:4, PayloadSize/binary>>,
+    mochiweb_socket:send(Socket, [Prefix, Payload]).
 
 upgrade_connection({ReqM, _} = Req, Body) ->
     case make_handshake(Req) of
       {Version, Response} ->
 	  ReqM:respond(Response, Req),
 	  Socket = ReqM:get(socket, Req),
-	  ReplyChannel = fun (Payload) ->
-				 (?MODULE):send(Socket, Payload, Version)
-			 end,
+	  ReplyChannel = fun ({Opcode, Payload}) ->
+                            (?MODULE):send(Socket, Opcode, Payload, Version);
+                         (Payload) ->
+				            (?MODULE):send(Socket, Payload, Version)
+			         end,
 	  Reentry = fun (State) ->
 			    (?MODULE):loop(Socket, Body, State, Version,
 					   ReplyChannel)
