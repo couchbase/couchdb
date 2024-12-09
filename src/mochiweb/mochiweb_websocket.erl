@@ -179,11 +179,18 @@ parse_frames(hixie, Frames, _Socket) ->
 %% Websockets internal functions for RFC6455 and hybi draft
 %%
 process_frames([], Acc) -> lists:reverse(Acc);
+process_frames([{16#8, _Payload} | _Rest], _Acc) ->
+    close;
 process_frames([{Opcode, Payload} | Rest], Acc) ->
-    case Opcode of
-      8 -> close;
-      _ -> process_frames(Rest, [Payload | Acc])
-    end.
+    ProcessedFrame =
+        case Opcode of
+            16#1 -> {text, Payload};
+            16#2 -> {binary, Payload};
+            16#9 -> ping;
+            16#10 -> pong;
+            _ -> {other, Payload}
+        end,
+    process_frames(Rest, [ProcessedFrame | Acc]).
 
 parse_hybi_frames(_, <<>>, Acc) -> lists:reverse(Acc);
 parse_hybi_frames(S,
