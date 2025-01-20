@@ -28,7 +28,7 @@
 
 -export([loop/5, request/5, upgrade_connection/2]).
 
--export([send/3]).
+-export([send/3, send/4]).
 
 -ifdef(TEST).
 
@@ -75,20 +75,28 @@ call_body(Body, Payload, State, ReplyChannel) ->
     Body(Payload, State, ReplyChannel).
 
 send(Socket, Payload, hybi) ->
-    Prefix = <<1:1, 0:3, 1:4,
-	       (payload_length(iolist_size(Payload)))/binary>>,
-    mochiweb_socket:send(Socket, [Prefix, Payload]);
+    Opcode = 1,  %% text
+    send(Socket, Opcode, Payload, hybi);
 send(Socket, Payload, hixie) ->
     mochiweb_socket:send(Socket, [0, Payload, 255]).
+
+send(Socket, Opcode, Payload, hybi) ->
+    Fin = 1,  %% No further frames
+    Rsv = 0,  %% No use of reserved bits
+    PayloadSize = payload_length(size(Payload)),
+    Prefix = <<Fin:1, Rsv:3, Opcode:4, PayloadSize/binary>>,
+    mochiweb_socket:send(Socket, [Prefix, Payload]).
 
 upgrade_connection({ReqM, _} = Req, Body) ->
     case make_handshake(Req) of
       {Version, Response} ->
 	  ReqM:respond(Response, Req),
 	  Socket = ReqM:get(socket, Req),
-	  ReplyChannel = fun (Payload) ->
-				 (?MODULE):send(Socket, Payload, Version)
-			 end,
+	  ReplyChannel = fun ({Opcode, Payload}) ->
+                            (?MODULE):send(Socket, Opcode, Payload, Version);
+                         (Payload) ->
+				            (?MODULE):send(Socket, Payload, Version)
+			         end,
 	  Reentry = fun (State) ->
 			    (?MODULE):loop(Socket, Body, State, Version,
 					   ReplyChannel)
@@ -171,11 +179,18 @@ parse_frames(hixie, Frames, _Socket) ->
 %% Websockets internal functions for RFC6455 and hybi draft
 %%
 process_frames([], Acc) -> lists:reverse(Acc);
+process_frames([{16#8, _Payload} | _Rest], _Acc) ->
+    close;
 process_frames([{Opcode, Payload} | Rest], Acc) ->
-    case Opcode of
-      8 -> close;
-      _ -> process_frames(Rest, [Payload | Acc])
-    end.
+    ProcessedFrame =
+        case Opcode of
+            16#1 -> {text, Payload};
+            16#2 -> {binary, Payload};
+            16#9 -> ping;
+            16#10 -> pong;
+            _ -> {other, Payload}
+        end,
+    process_frames(Rest, [ProcessedFrame | Acc]).
 
 parse_hybi_frames(_, <<>>, Acc) -> lists:reverse(Acc);
 parse_hybi_frames(S,
@@ -198,6 +213,22 @@ parse_hybi_frames(Socket,
 		    _PayloadLen:16, _MaskKey:4/binary, _/binary-unit:8>> =
 		      PartFrame,
 		  Acc) ->
+    parse_hybi_continuation(Socket, PartFrame, Acc);
+parse_hybi_frames(S,
+		  <<_Fin:1, _Rsv:3, Opcode:4, _Mask:1, 127:7, 0:1,
+		    PayloadLen:63, MaskKey:4/binary,
+		    Payload:PayloadLen/binary-unit:8, Rest/binary>>,
+		  Acc) ->
+    Payload2 = hybi_unmask(Payload, MaskKey, <<>>),
+    parse_hybi_frames(S, Rest, [{Opcode, Payload2} | Acc]);
+parse_hybi_frames(Socket,
+		  <<_Fin:1, _Rsv:3, _Opcode:4, _Mask:1, 127:7, 0:1,
+		    _PayloadLen:63, _MaskKey:4/binary, _/binary-unit:8>> =
+		      PartFrame,
+		  Acc) ->
+    parse_hybi_continuation(Socket, PartFrame, Acc).
+
+parse_hybi_continuation(Socket, PartFrame, Acc) ->
     ok =
 	mochiweb_socket:exit_if_closed(mochiweb_socket:setopts(Socket,
 							       [{packet, 0},
@@ -217,14 +248,7 @@ parse_hybi_frames(Socket,
       _ -> mochiweb_socket:close(Socket), exit(normal)
       after 5000 ->
 		mochiweb_socket:close(Socket), exit(normal)
-    end;
-parse_hybi_frames(S,
-		  <<_Fin:1, _Rsv:3, Opcode:4, _Mask:1, 127:7, 0:1,
-		    PayloadLen:63, MaskKey:4/binary,
-		    Payload:PayloadLen/binary-unit:8, Rest/binary>>,
-		  Acc) ->
-    Payload2 = hybi_unmask(Payload, MaskKey, <<>>),
-    parse_hybi_frames(S, Rest, [{Opcode, Payload2} | Acc]).
+    end.
 
 %% Unmasks RFC 6455 message
 hybi_unmask(<<O:32, Rest/bits>>, MaskKey, Acc) ->
