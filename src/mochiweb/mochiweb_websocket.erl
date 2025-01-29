@@ -33,7 +33,7 @@
 -ifdef(TEST).
 
 -export([hixie_handshake/7, make_handshake/1,
-	 parse_hixie_frames/2, parse_hybi_frames/3]).
+         parse_hixie_frames/2, parse_hybi_frames/4]).
 
 -endif.
 
@@ -163,7 +163,7 @@ hixie_handshake(Scheme, Host, Path, Key1, Key2, Body,
     {hixie, Response}.
 
 parse_frames(hybi, Frames, Socket) ->
-    try parse_hybi_frames(Socket, Frames, []) of
+    try parse_hybi_frames(Socket, Frames, fin, []) of
       Parsed -> process_frames(Parsed, [])
     catch
       _:_ -> error
@@ -192,43 +192,71 @@ process_frames([{Opcode, Payload} | Rest], Acc) ->
         end,
     process_frames(Rest, [ProcessedFrame | Acc]).
 
-parse_hybi_frames(_, <<>>, Acc) -> lists:reverse(Acc);
+parse_hybi_frames(S, <<>>, {frag, _, _} = FragState, Acc) ->
+    %% Last frame was not finished, so we expected another frame
+    parse_hybi_continuation(S, <<>>, FragState, Acc);
+parse_hybi_frames(_, <<>>, fin, Acc) -> lists:reverse(Acc);
 parse_hybi_frames(S,
-		  <<_Fin:1, _Rsv:3, Opcode:4, _Mask:1, PayloadLen:7,
-		    MaskKey:4/binary, Payload:PayloadLen/binary-unit:8,
-		    Rest/binary>>,
-		  Acc)
+                  <<Fin:1, _Rsv:3, Opcode:4, _Mask:1, PayloadLen:7,
+                    MaskKey:4/binary, Payload:PayloadLen/binary-unit:8,
+                    Rest/binary>>,
+                  FragState, Acc)
     when PayloadLen < 126 ->
-    Payload2 = hybi_unmask(Payload, MaskKey, <<>>),
-    parse_hybi_frames(S, Rest, [{Opcode, Payload2} | Acc]);
+    {NewFragState, NewAcc} = parse_hybi_frame(Fin, Opcode, Payload, MaskKey,
+                                            FragState, Acc),
+    parse_hybi_frames(S, Rest, NewFragState, NewAcc);
 parse_hybi_frames(S,
-		  <<_Fin:1, _Rsv:3, Opcode:4, _Mask:1, 126:7,
-		    PayloadLen:16, MaskKey:4/binary,
-		    Payload:PayloadLen/binary-unit:8, Rest/binary>>,
-		  Acc) ->
-    Payload2 = hybi_unmask(Payload, MaskKey, <<>>),
-    parse_hybi_frames(S, Rest, [{Opcode, Payload2} | Acc]);
+                  <<Fin:1, _Rsv:3, Opcode:4, _Mask:1, 126:7,
+                    PayloadLen:16, MaskKey:4/binary,
+                    Payload:PayloadLen/binary-unit:8, Rest/binary>>,
+                  FragState, Acc)
+  when Opcode =/= 0 ->
+    {NewFragState, NewAcc} = parse_hybi_frame(Fin, Opcode, Payload, MaskKey,
+                                              FragState, Acc),
+    parse_hybi_frames(S, Rest, NewFragState, NewAcc);
 parse_hybi_frames(Socket,
-		  <<_Fin:1, _Rsv:3, _Opcode:4, _Mask:1, 126:7,
-		    _PayloadLen:16, _MaskKey:4/binary, _/binary-unit:8>> =
-		      PartFrame,
-		  Acc) ->
-    parse_hybi_continuation(Socket, PartFrame, Acc);
+                  <<_Fin:1, _Rsv:3, _Opcode:4, _Mask:1, 126:7,
+                    _PayloadLen:16, _MaskKey:4/binary, _/binary-unit:8>> =
+                      PartFrame,
+                  FragState, Acc) ->
+    parse_hybi_continuation(Socket, PartFrame, FragState, Acc);
 parse_hybi_frames(S,
-		  <<_Fin:1, _Rsv:3, Opcode:4, _Mask:1, 127:7, 0:1,
-		    PayloadLen:63, MaskKey:4/binary,
-		    Payload:PayloadLen/binary-unit:8, Rest/binary>>,
-		  Acc) ->
-    Payload2 = hybi_unmask(Payload, MaskKey, <<>>),
-    parse_hybi_frames(S, Rest, [{Opcode, Payload2} | Acc]);
+                  <<Fin:1, _Rsv:3, Opcode:4, _Mask:1, 127:7, 0:1,
+                    PayloadLen:63, MaskKey:4/binary,
+                    Payload:PayloadLen/binary-unit:8, Rest/binary>>,
+                  FragState, Acc)
+  when Opcode =/= 0 ->
+    {NewFragState, NewAcc} = parse_hybi_frame(Fin, Opcode, Payload, MaskKey,
+                                              FragState, Acc),
+    parse_hybi_frames(S, Rest, NewFragState, NewAcc);
 parse_hybi_frames(Socket,
-		  <<_Fin:1, _Rsv:3, _Opcode:4, _Mask:1, 127:7, 0:1,
-		    _PayloadLen:63, _MaskKey:4/binary, _/binary-unit:8>> =
-		      PartFrame,
-		  Acc) ->
-    parse_hybi_continuation(Socket, PartFrame, Acc).
+                  <<_Fin:1, _Rsv:3, _Opcode:4, _Mask:1, 127:7, 0:1,
+                    _PayloadLen:63, _MaskKey:4/binary, _/binary-unit:8>> =
+                      PartFrame,
+                  FragState, Acc) ->
+    parse_hybi_continuation(Socket, PartFrame, FragState, Acc);
+parse_hybi_frames(_Socket, _Frame, _FragState, _Acc) ->
+    throw(invalid_frame).
 
-parse_hybi_continuation(Socket, PartFrame, Acc) ->
+%% Unmask payload and merge with any frame fragment from the previous frame
+parse_hybi_frame(0, Opcode, Payload, MaskKey, fin, Acc) when Opcode =/= 0 ->
+    Frag = hybi_unmask(Payload, MaskKey, <<>>),
+    {{frag, Opcode, Frag}, Acc};
+parse_hybi_frame(0, 0, Payload, MaskKey, {frag, Opcode, Frag0}, Acc) ->
+    Frag1 = hybi_unmask(Payload, MaskKey, <<>>),
+    Frag2 = <<Frag0/binary, Frag1/binary>>,
+    {{frag, Opcode, Frag2}, Acc};
+parse_hybi_frame(1, Opcode, Payload, MaskKey, fin, Acc) when Opcode =/= 0 ->
+    Payload2 = hybi_unmask(Payload, MaskKey, <<>>),
+    {fin, [{Opcode, Payload2} | Acc]};
+parse_hybi_frame(1, 0, Payload, MaskKey, {frag, Opcode, Frag0}, Acc) ->
+    Frag1 = hybi_unmask(Payload, MaskKey, <<>>),
+    Payload2 = <<Frag0/binary, Frag1/binary>>,
+    {fin, [{Opcode, Payload2} | Acc]};
+parse_hybi_frame(_Fin, 0, _Payload, _MaskKey, fin, _Acc) ->
+    throw(invalid_continuation_frame).
+
+parse_hybi_continuation(Socket, PartFrame, FragState, Acc) ->
     ok =
 	mochiweb_socket:exit_if_closed(mochiweb_socket:setopts(Socket,
 							       [{packet, 0},
@@ -244,7 +272,8 @@ parse_hybi_continuation(Socket, PartFrame, Acc) ->
       {Proto, _, Continuation}
 	  when Proto =:= tcp orelse Proto =:= ssl ->
 	  parse_hybi_frames(Socket,
-			    <<PartFrame/binary, Continuation/binary>>, Acc);
+                        <<PartFrame/binary, Continuation/binary>>,
+                        FragState, Acc);
       _ -> mochiweb_socket:close(Socket), exit(normal)
       after 5000 ->
 		mochiweb_socket:close(Socket), exit(normal)
