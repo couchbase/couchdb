@@ -176,6 +176,11 @@ parse_frames(hixie, Frames, _Socket) ->
       _:_ -> error
     end.
 
+-define(is_control_opcode(Opcode), Opcode =:= 16#8; Opcode =:= 16#9;
+                                   Opcode =:= 16#A; Opcode =:= 16#B;
+                                   Opcode =:= 16#C; Opcode =:= 16#D;
+                                   Opcode =:= 16#E; Opcode =:= 16#F).
+
 %%
 %% Websockets internal functions for RFC6455 and hybi draft
 %%
@@ -254,6 +259,11 @@ parse_hybi_frame(1, 0, Payload, MaskKey, {frag, Opcode, Frag0}, Acc) ->
     Frag1 = hybi_unmask(Payload, MaskKey, <<>>),
     Payload2 = <<Frag0/binary, Frag1/binary>>,
     {fin, [{Opcode, Payload2} | Acc]};
+parse_hybi_frame(1, Opcode, Payload, MaskKey, {frag, _, _} = Frag, Acc)
+    when ?is_control_opcode(Opcode) ->
+    %% Control opcodes jump ahead of any unfinished fragmented message frames
+    Payload2 = hybi_unmask(Payload, MaskKey, <<>>),
+    {Frag, [{Opcode, Payload2} | Acc]};
 parse_hybi_frame(_Fin, 0, _Payload, _MaskKey, fin, _Acc) ->
     throw(invalid_continuation_frame).
 
