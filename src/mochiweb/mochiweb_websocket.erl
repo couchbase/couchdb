@@ -59,6 +59,7 @@ request(Socket, Body, State, WsVersion, ReplyChannel) ->
 	  case parse_frames(WsVersion, WsFrames, Socket) of
 	    close -> mochiweb_socket:close(Socket), exit(normal);
 	    error -> mochiweb_socket:close(Socket), exit(normal);
+	    {error, _, _} = E -> mochiweb_socket:close(Socket), exit(E);
 	    Payload ->
 		NewState = call_body(Body, Payload, State,
 				     ReplyChannel),
@@ -166,7 +167,7 @@ parse_frames(hybi, Frames, Socket) ->
     try parse_hybi_frames(Socket, Frames, fin, []) of
       Parsed -> process_frames(Parsed, [])
     catch
-      _:_ -> error
+      T:E -> {error, T, E}
     end;
 parse_frames(hixie, Frames, _Socket) ->
     try parse_hixie_frames(Frames, []) of
@@ -276,7 +277,7 @@ parse_hybi_continuation(Socket, PartFrame, FragState, Acc) ->
                         FragState, Acc);
       _ -> mochiweb_socket:close(Socket), exit(normal)
       after 5000 ->
-		mochiweb_socket:close(Socket), exit(normal)
+		mochiweb_socket:close(Socket), exit(timeout)
     end.
 
 %% Unmasks RFC 6455 message
