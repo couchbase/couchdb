@@ -544,7 +544,8 @@ db_doc_req(#httpd{method = 'GET',
 
 db_doc_req(#httpd{method='PUT'}=Req, Db, DocId) ->
     couch_doc:validate_docid(DocId),
-    Loc = absolute_uri(Req, "/" ++ ?b2l(Db#db.name) ++ "/" ++ ?b2l(DocId)),
+    Loc = absolute_uri(Req, "/" ++ ?b2l(Db#db.name) ++ "/" ++
+                       ?b2l(uri_string:quote(DocId))),
     RespHeaders = [{"Location", Loc}],
     {Doc, Body2} = case couch_httpd:is_ctype(Req, "application/json") of
     true ->
