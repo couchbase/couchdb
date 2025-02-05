@@ -26,27 +26,30 @@
 
 %% @doc Websockets module for Mochiweb. Based on Misultin websockets module.
 
--export([loop/5, request/5, upgrade_connection/2]).
+-export([loop/5, request/6, upgrade_connection/2]).
 
 -export([send/3, send/4]).
 
 -ifdef(TEST).
 
 -export([hixie_handshake/7, make_handshake/1,
-	 parse_hixie_frames/2, parse_hybi_frames/3]).
+         parse_hixie_frames/2, parse_hybi_frames/4]).
 
 -endif.
 
 loop(Socket, Body, State, WsVersion, ReplyChannel) ->
+    loop(Socket, Body, State, WsVersion, ReplyChannel, fin).
+
+loop(Socket, Body, State, WsVersion, ReplyChannel, FragState) ->
     ok =
 	mochiweb_socket:exit_if_closed(mochiweb_socket:setopts(Socket,
 							       [{packet, 0},
 								{active,
 								 once}])),
     proc_lib:hibernate(?MODULE, request,
-		       [Socket, Body, State, WsVersion, ReplyChannel]).
+		       [Socket, Body, State, WsVersion, ReplyChannel, FragState]).
 
-request(Socket, Body, State, WsVersion, ReplyChannel) ->
+request(Socket, Body, State, WsVersion, ReplyChannel, FragState) ->
     receive
       {tcp_closed, _} ->
 	  mochiweb_socket:close(Socket), exit(normal);
@@ -54,17 +57,55 @@ request(Socket, Body, State, WsVersion, ReplyChannel) ->
 	  mochiweb_socket:close(Socket), exit(normal);
       {tcp_error, _, _} ->
 	  mochiweb_socket:close(Socket), exit(normal);
-      {Proto, _, WsFrames}
+      {Proto, _, Packet}
 	  when Proto =:= tcp orelse Proto =:= ssl ->
-	  case parse_frames(WsVersion, WsFrames, Socket) of
-	    close -> mochiweb_socket:close(Socket), exit(normal);
-	    error -> mochiweb_socket:close(Socket), exit(normal);
-	    Payload ->
-		NewState = call_body(Body, Payload, State,
-				     ReplyChannel),
-		loop(Socket, Body, NewState, WsVersion, ReplyChannel)
-	  end;
+	    handle_packet(Socket, Body, State, WsVersion, ReplyChannel, FragState,
+                      Packet);
       _ -> mochiweb_socket:close(Socket), exit(normal)
+    end.
+
+%% Handle a single packet. Parses any frames out of the packet, and calls the
+%% body with any complete frames. Finally, re-enters the loop, or waits for
+%% continuation of a part-frame.
+handle_packet(Socket, Body, State, WsVersion, ReplyChannel, FragState,
+              Packet) ->
+    case parse_frames(WsVersion, Packet, FragState, Socket) of
+        {close, _} -> mochiweb_socket:close(Socket), exit(normal);
+        error -> mochiweb_socket:close(Socket), exit(normal);
+        {error, _, _} = E -> mochiweb_socket:close(Socket), exit(E);
+        {Payload, WsState} ->
+            NewState = call_body(Body, Payload, State,
+                         ReplyChannel),
+            case WsState of
+                {<<>>, fin} ->
+                    loop(Socket, Body, NewState, WsVersion, ReplyChannel, fin);
+                {PartFrame, NewFragState} ->
+                    handle_continuation(Socket, Body, NewState, WsVersion,
+                                        ReplyChannel, PartFrame, NewFragState)
+            end
+    end.
+
+%% Handle the continuation of a part-frame. Assumes that more of the frame (or
+%% control frames) will be received within 5s.
+handle_continuation(Socket, Body, State, WsVersion, ReplyChannel, PartFrame,
+                    FragState) ->
+    ok = mochiweb_socket:exit_if_closed(
+           mochiweb_socket:setopts(
+             Socket, [{packet, 0}, {active, once}])),
+    receive
+        {tcp_closed, _} ->
+            mochiweb_socket:close(Socket), exit(normal);
+        {ssl_closed, _} ->
+            mochiweb_socket:close(Socket), exit(normal);
+        {tcp_error, _, _} ->
+            mochiweb_socket:close(Socket), exit(normal);
+        {Proto, _, Continuation}
+          when Proto =:= tcp orelse Proto =:= ssl ->
+            handle_packet(Socket, Body, State, WsVersion, ReplyChannel,
+                          FragState, <<PartFrame/binary, Continuation/binary>>);
+        _ -> mochiweb_socket:close(Socket), exit(normal)
+    after 5000 ->
+            mochiweb_socket:close(Socket), exit(timeout)
     end.
 
 call_body({M, F, A}, Payload, State, ReplyChannel) ->
@@ -162,18 +203,23 @@ hixie_handshake(Scheme, Host, Path, Key1, Key2, Body,
 		Challenge},
     {hixie, Response}.
 
-parse_frames(hybi, Frames, Socket) ->
-    try parse_hybi_frames(Socket, Frames, []) of
-      Parsed -> process_frames(Parsed, [])
+parse_frames(hybi, Frames, FragState, Socket) ->
+    try parse_hybi_frames(Socket, Frames, FragState, []) of
+        {Parsed, WsState} -> {process_frames(Parsed, []), WsState}
     catch
-      _:_ -> error
+        T:E -> {error, T, E}
     end;
-parse_frames(hixie, Frames, _Socket) ->
+parse_frames(hixie, Frames, _FragState, _Socket) ->
     try parse_hixie_frames(Frames, []) of
-      Payload -> Payload
+        Payload -> {Payload, {<<>>, fin}}
     catch
-      _:_ -> error
+        _:_ -> error
     end.
+
+-define(is_control_opcode(Opcode), Opcode =:= 16#8; Opcode =:= 16#9;
+                                   Opcode =:= 16#A; Opcode =:= 16#B;
+                                   Opcode =:= 16#C; Opcode =:= 16#D;
+                                   Opcode =:= 16#E; Opcode =:= 16#F).
 
 %%
 %% Websockets internal functions for RFC6455 and hybi draft
@@ -192,63 +238,75 @@ process_frames([{Opcode, Payload} | Rest], Acc) ->
         end,
     process_frames(Rest, [ProcessedFrame | Acc]).
 
-parse_hybi_frames(_, <<>>, Acc) -> lists:reverse(Acc);
+parse_hybi_frames(_S, <<>>, {frag, _, _} = FragState, Acc) ->
+    %% Last frame was not finished, so we expected another frame, but we return
+    %% the Acc so that the websocket body can process any complete messages
+    {Acc, {<<>>, FragState}};
+parse_hybi_frames(_, <<>>, fin, Acc) -> {lists:reverse(Acc), {<<>>, fin}};
 parse_hybi_frames(S,
-		  <<_Fin:1, _Rsv:3, Opcode:4, _Mask:1, PayloadLen:7,
-		    MaskKey:4/binary, Payload:PayloadLen/binary-unit:8,
-		    Rest/binary>>,
-		  Acc)
+                  <<Fin:1, _Rsv:3, Opcode:4, _Mask:1, PayloadLen:7,
+                    MaskKey:4/binary, Payload:PayloadLen/binary-unit:8,
+                    Rest/binary>>,
+                  FragState, Acc)
     when PayloadLen < 126 ->
-    Payload2 = hybi_unmask(Payload, MaskKey, <<>>),
-    parse_hybi_frames(S, Rest, [{Opcode, Payload2} | Acc]);
+    {NewFragState, NewAcc} = parse_hybi_frame(Fin, Opcode, Payload, MaskKey,
+                                            FragState, Acc),
+    parse_hybi_frames(S, Rest, NewFragState, NewAcc);
 parse_hybi_frames(S,
-		  <<_Fin:1, _Rsv:3, Opcode:4, _Mask:1, 126:7,
-		    PayloadLen:16, MaskKey:4/binary,
-		    Payload:PayloadLen/binary-unit:8, Rest/binary>>,
-		  Acc) ->
-    Payload2 = hybi_unmask(Payload, MaskKey, <<>>),
-    parse_hybi_frames(S, Rest, [{Opcode, Payload2} | Acc]);
-parse_hybi_frames(Socket,
-		  <<_Fin:1, _Rsv:3, _Opcode:4, _Mask:1, 126:7,
-		    _PayloadLen:16, _MaskKey:4/binary, _/binary-unit:8>> =
-		      PartFrame,
-		  Acc) ->
-    parse_hybi_continuation(Socket, PartFrame, Acc);
+                  <<Fin:1, _Rsv:3, Opcode:4, _Mask:1, 126:7,
+                    PayloadLen:16, MaskKey:4/binary,
+                    Payload:PayloadLen/binary-unit:8, Rest/binary>>,
+                  FragState, Acc)
+  when Opcode =/= 0 ->
+    {NewFragState, NewAcc} = parse_hybi_frame(Fin, Opcode, Payload, MaskKey,
+                                              FragState, Acc),
+    parse_hybi_frames(S, Rest, NewFragState, NewAcc);
+parse_hybi_frames(_Socket,
+                  <<_Fin:1, _Rsv:3, _Opcode:4, _Mask:1, 126:7,
+                    _PayloadLen:16, _MaskKey:4/binary, _/binary-unit:8>> =
+                      PartFrame,
+                  FragState, Acc) ->
+    {Acc, {PartFrame, FragState}};
 parse_hybi_frames(S,
-		  <<_Fin:1, _Rsv:3, Opcode:4, _Mask:1, 127:7, 0:1,
-		    PayloadLen:63, MaskKey:4/binary,
-		    Payload:PayloadLen/binary-unit:8, Rest/binary>>,
-		  Acc) ->
-    Payload2 = hybi_unmask(Payload, MaskKey, <<>>),
-    parse_hybi_frames(S, Rest, [{Opcode, Payload2} | Acc]);
-parse_hybi_frames(Socket,
-		  <<_Fin:1, _Rsv:3, _Opcode:4, _Mask:1, 127:7, 0:1,
-		    _PayloadLen:63, _MaskKey:4/binary, _/binary-unit:8>> =
-		      PartFrame,
-		  Acc) ->
-    parse_hybi_continuation(Socket, PartFrame, Acc).
+                  <<Fin:1, _Rsv:3, Opcode:4, _Mask:1, 127:7, 0:1,
+                    PayloadLen:63, MaskKey:4/binary,
+                    Payload:PayloadLen/binary-unit:8, Rest/binary>>,
+                  FragState, Acc)
+  when Opcode =/= 0 ->
+    {NewFragState, NewAcc} = parse_hybi_frame(Fin, Opcode, Payload, MaskKey,
+                                              FragState, Acc),
+    parse_hybi_frames(S, Rest, NewFragState, NewAcc);
+parse_hybi_frames(_Socket,
+                  <<_Fin:1, _Rsv:3, _Opcode:4, _Mask:1, 127:7, 0:1,
+                    _PayloadLen:63, _MaskKey:4/binary, _/binary-unit:8>> =
+                      PartFrame,
+                  FragState, Acc) ->
+    {Acc, {PartFrame, FragState}};
+parse_hybi_frames(_Socket, _Frame, _FragState, _Acc) ->
+    throw(invalid_frame).
 
-parse_hybi_continuation(Socket, PartFrame, Acc) ->
-    ok =
-	mochiweb_socket:exit_if_closed(mochiweb_socket:setopts(Socket,
-							       [{packet, 0},
-								{active,
-								 once}])),
-    receive
-      {tcp_closed, _} ->
-	  mochiweb_socket:close(Socket), exit(normal);
-      {ssl_closed, _} ->
-	  mochiweb_socket:close(Socket), exit(normal);
-      {tcp_error, _, _} ->
-	  mochiweb_socket:close(Socket), exit(normal);
-      {Proto, _, Continuation}
-	  when Proto =:= tcp orelse Proto =:= ssl ->
-	  parse_hybi_frames(Socket,
-			    <<PartFrame/binary, Continuation/binary>>, Acc);
-      _ -> mochiweb_socket:close(Socket), exit(normal)
-      after 5000 ->
-		mochiweb_socket:close(Socket), exit(normal)
-    end.
+%% Unmask payload and merge with any frame fragment from the previous frame
+parse_hybi_frame(0, Opcode, Payload, MaskKey, fin, Acc) when Opcode =/= 0 ->
+    Frag = hybi_unmask(Payload, MaskKey, <<>>),
+    {{frag, Opcode, Frag}, Acc};
+parse_hybi_frame(0, 0, Payload, MaskKey, {frag, Opcode, Frag0}, Acc) ->
+    Frag1 = hybi_unmask(Payload, MaskKey, <<>>),
+    Frag2 = <<Frag0/binary, Frag1/binary>>,
+    {{frag, Opcode, Frag2}, Acc};
+parse_hybi_frame(1, Opcode, Payload, MaskKey, fin, Acc) when Opcode =/= 0 ->
+    Payload2 = hybi_unmask(Payload, MaskKey, <<>>),
+    {fin, [{Opcode, Payload2} | Acc]};
+parse_hybi_frame(1, 0, Payload, MaskKey, {frag, Opcode, Frag0}, Acc) ->
+    Frag1 = hybi_unmask(Payload, MaskKey, <<>>),
+    Payload2 = <<Frag0/binary, Frag1/binary>>,
+    {fin, [{Opcode, Payload2} | Acc]};
+parse_hybi_frame(1, Opcode, Payload, MaskKey, {frag, _, _} = Frag, Acc)
+    when ?is_control_opcode(Opcode) ->
+    %% Control opcodes jump ahead of any unfinished fragmented message frames
+    Payload2 = hybi_unmask(Payload, MaskKey, <<>>),
+    {Frag, [{Opcode, Payload2} | Acc]};
+parse_hybi_frame(_Fin, 0, _Payload, _MaskKey, fin, _Acc) ->
+    throw(invalid_continuation_frame).
 
 %% Unmasks RFC 6455 message
 hybi_unmask(<<O:32, Rest/bits>>, MaskKey, Acc) ->
