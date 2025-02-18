@@ -256,8 +256,7 @@ parse_hybi_frames(S,
                   <<Fin:1, _Rsv:3, Opcode:4, _Mask:1, 126:7,
                     PayloadLen:16, MaskKey:4/binary,
                     Payload:PayloadLen/binary-unit:8, Rest/binary>>,
-                  FragState, Acc)
-  when Opcode =/= 0 ->
+                  FragState, Acc) ->
     {NewFragState, NewAcc} = parse_hybi_frame(Fin, Opcode, Payload, MaskKey,
                                               FragState, Acc),
     parse_hybi_frames(S, Rest, NewFragState, NewAcc);
@@ -271,8 +270,7 @@ parse_hybi_frames(S,
                   <<Fin:1, _Rsv:3, Opcode:4, _Mask:1, 127:7, 0:1,
                     PayloadLen:63, MaskKey:4/binary,
                     Payload:PayloadLen/binary-unit:8, Rest/binary>>,
-                  FragState, Acc)
-  when Opcode =/= 0 ->
+                  FragState, Acc) ->
     {NewFragState, NewAcc} = parse_hybi_frame(Fin, Opcode, Payload, MaskKey,
                                               FragState, Acc),
     parse_hybi_frames(S, Rest, NewFragState, NewAcc);
