@@ -1,12 +1,11 @@
 SET(COUCH_VIEW_PARSER_VERSION "1.0")
 SET(COUCH_VIEW_PARSER_PREFIX ${CMAKE_ERL_LIB_INSTALL_PREFIX}/couch_view_parser-${COUCH_VIEW_PARSER_VERSION})
-SET(COUCH_VIEW_PARSER_EBIN_PREFIX ${COUCH_VIEW_PARSER_PREFIX}/ebin)
 SET(COUCH_VIEW_PARSER_PRIV_PREFIX ${COUCH_VIEW_PARSER_PREFIX}/priv)
 
 CONFIGURE_FILE(${CMAKE_CURRENT_SOURCE_DIR}/test/run.tpl
                ${CMAKE_CURRENT_BINARY_DIR}/test/run)
 
-CONFIGURE_FILE(${CMAKE_CURRENT_SOURCE_DIR}/couch_view_parser.app.in
+CONFIGURE_FILE(${CMAKE_CURRENT_SOURCE_DIR}/src/couch_view_parser.app.src
                ${CMAKE_CURRENT_BINARY_DIR}/couch_view_parser.app)
 
 
@@ -43,12 +42,9 @@ SET_TARGET_PROPERTIES(couch_view_parser_nif PROPERTIES
 # disable them.
 remove_sanitizers(couch_view_parser_nif)
 
-ERL_BUILD(APPNAME "couch_view_parser" SOURCES couch_view_parser.erl)
-
 INSTALL(TARGETS couch_view_parser_nif
         DESTINATION ${COUCH_VIEW_PARSER_PRIV_PREFIX})
-INSTALL(FILES ${outfiles}
-              ${CMAKE_CURRENT_BINARY_DIR}/couch_view_parser.app
-        DESTINATION ${COUCH_VIEW_PARSER_EBIN_PREFIX})
+INSTALL(DIRECTORY ${COUCHDB_DEFAULT_LIB_DIR}/couch_view_parser/ebin
+        DESTINATION ${COUCH_VIEW_PARSER_PREFIX})
 
 ADD_SUBDIRECTORY(test)

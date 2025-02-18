@@ -1,13 +1,12 @@
 SET(MR_VERSION "1.0")
 SET(MR_PREFIX ${CMAKE_ERL_LIB_INSTALL_PREFIX}/mapreduce-${MR_VERSION})
-SET(MR_EBIN_PREFIX ${MR_PREFIX}/ebin)
 SET(MR_PRIV_PREFIX ${MR_PREFIX}/priv)
 
 
 CONFIGURE_FILE(${CMAKE_CURRENT_SOURCE_DIR}/test/run.tpl
                ${CMAKE_CURRENT_BINARY_DIR}/test/run)
 
-CONFIGURE_FILE(${CMAKE_CURRENT_SOURCE_DIR}/mapreduce.app.in
+CONFIGURE_FILE(${CMAKE_CURRENT_SOURCE_DIR}/src/mapreduce.app.src
                ${CMAKE_CURRENT_BINARY_DIR}/mapreduce.app)
 
 
@@ -50,13 +49,11 @@ IF (UNIX)
                           INSTALL_RPATH "${ORIGIN}/../../../../..")
 ENDIF ()
 
-ERL_BUILD(APPNAME "mapreduce" SOURCES mapreduce.erl)
 
 INSTALL(TARGETS mapreduce_nif
         DESTINATION ${MR_PRIV_PREFIX})
-INSTALL(FILES ${outfiles}
-               ${CMAKE_CURRENT_BINARY_DIR}/mapreduce.app
-        DESTINATION ${MR_EBIN_PREFIX})
+INSTALL(DIRECTORY ${COUCHDB_DEFAULT_LIB_DIR}/mapreduce/ebin
+        DESTINATION ${MR_PREFIX})
 
 ADD_SUBDIRECTORY(test)
 ADD_SUBDIRECTORY(jsfunctions)

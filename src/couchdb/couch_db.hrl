@@ -10,6 +10,10 @@
 % License for the specific language governing permissions and limitations under
 % the License.
 
+%% This file should ideally be in couchdb/include, but has a very large number
+%% of dependents, including geocouch, and it was decided not worth having to
+%% update all those dependents. We should probably move this eventually.
+
 -ifndef(_COUCH_DB_COMMON__HRL_).
 -define(_COUCH_DB_COMMON__HRL_,).
 
