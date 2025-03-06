@@ -246,10 +246,10 @@ extern "C" {
 
 
 static ErlNifFunc nif_functions[] = {
-    {"compress", 1, snappy_compress},
-    {"decompress", 1, snappy_decompress},
-    {"uncompressed_length", 1, snappy_uncompressed_length},
-    {"is_valid", 1, snappy_is_valid}
+    {"compress", 1, snappy_compress, 0},
+    {"decompress", 1, snappy_decompress, 0},
+    {"uncompressed_length", 1, snappy_uncompressed_length, 0},
+    {"is_valid", 1, snappy_is_valid, 0}
 };
 
 ERL_NIF_INIT(snappy, nif_functions, &on_load, &on_reload, &on_upgrade, NULL)

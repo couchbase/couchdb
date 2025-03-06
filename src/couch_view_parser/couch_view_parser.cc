@@ -124,7 +124,8 @@ static yajl_callbacks callbacks = {
 static yajl_alloc_funcs allocfuncs = {
     yajl_internal_malloc,
     yajl_internal_realloc,
-    yajl_internal_free
+    yajl_internal_free,
+    nullptr
 };
 
 
