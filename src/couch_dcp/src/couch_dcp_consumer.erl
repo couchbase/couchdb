@@ -467,8 +467,7 @@ encode_all_seqs_request(RequestId) ->
 %Total body   (8-11) : 0x00000006
 %Opaque       (12-15): 0x00000001
 %CAS          (16-23): 0x0000000000000000
-encode_hello_message(Key, _Value, RequestId) ->
-        BinaryKey=list_to_binary(Key),
+encode_hello_message(BinaryKey, _Value, RequestId) ->
         Value = <<0, ?DCP_ENABLE_COLLECTION_FEATURE>>,
         Body = <<BinaryKey/binary, Value/binary>>,
         KeyLength = byte_size(BinaryKey),

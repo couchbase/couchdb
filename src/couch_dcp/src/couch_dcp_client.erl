@@ -325,59 +325,59 @@ init([Name, Bucket, BufferSize, Flags, Auth]) ->
         },
         % Auth as admin and select bucket for the connection
         case sasl_auth(Auth, State) of
-            {ok, State2} ->
+        {ok, State2} ->
             case select_bucket(Bucket, State2) of
             {ok, State10} ->
-		case collection_helo(State10) of
-                                            {ok, State3} ->
                 % Store the meta information to reconnect
                 Args = [Name, Bucket, BufferSize, Flags, Auth],
-                State4 = State3#state{args = Args},
+                State4 = State10#state{args = Args},
                 case open_connection(Name, Flags, State4) of
-                {ok, State5} ->
-                    Parent = self(),
-                    process_flag(trap_exit, true),
-                    #state{bufsocket = BufSocket2} = State5,
-                    WorkerPid = spawn_link(
-                        fun() ->
-                            receive_worker(BufSocket2, DcpTimeout, Parent, [])
-                        end),
-                    gen_tcp:controlling_process(?SOCKET(BufSocket), WorkerPid),
-                    case set_buffer_size(State5, BufferSize) of
-                    {ok, State6} ->
+                {ok, State11} ->
+                    case collection_helo(Name, State11) of
+                    {ok, State5} ->
+                        Parent = self(),
+                        process_flag(trap_exit, true),
+                        #state{bufsocket = BufSocket2} = State5,
+                        WorkerPid = spawn_link(
+                            fun() ->
+                                receive_worker(BufSocket2, DcpTimeout, Parent, [])
+                            end),
+                        gen_tcp:controlling_process(?SOCKET(BufSocket), WorkerPid),
+                        case set_buffer_size(State5, BufferSize) of
+                        {ok, State6} ->
                             case enable_noop(State6, true) of
-                                {ok, State7} ->
-                                    case State7#state.noop_enable of
-                                    true ->
-                                        case noop_interval(State7) of
-					 {ok, State8} ->
-                                              {ok, State8#state{worker_pid = WorkerPid}};
-                                        {error, Reason} ->
-                                            exit(WorkerPid, shutdown),
-                                            {stop, Reason}
-                                        end;
-                                    false ->
+                            {ok, State7} ->
+                                case State7#state.noop_enable of
+                                true ->
+                                    case noop_interval(State7) of
+                                    {ok, State8} ->
+                                        {ok, State8#state{worker_pid = WorkerPid}};
+                                    {error, Reason} ->
                                         exit(WorkerPid, shutdown),
-                                        {stop, noop_not_enabled}
+                                        {stop, Reason}
                                     end;
-                                {error, Reason} ->
+                                false ->
                                     exit(WorkerPid, shutdown),
-                                    {stop, Reason}
+                                    {stop, noop_not_enabled}
+                                end;
+                            {error, Reason} ->
+                                exit(WorkerPid, shutdown),
+                                {stop, Reason}
                             end;
+                        {error, Reason} ->
+                            {stop, Reason}
+                        end;
                     {error, Reason} ->
                         {stop, Reason}
                     end;
+                {{error, vbucket_stream_not_found}, _} ->
+                    {stop, vbucket_stream_not_found};
                 {error, Reason} ->
                     {stop, Reason}
                 end;
-            {{error, vbucket_stream_not_found}, _} ->
-                {stop, vbucket_stream_not_found};
             {error, Reason} ->
                 {stop, Reason}
             end;
-        {error, Reason} ->
-            {stop, Reason}
-        end;
         {error, Reason} ->
             {stop, Reason}
         end;
@@ -814,12 +814,13 @@ sasl_auth(Auth, State) ->
         Error
     end.
 
-collection_helo(#state{
+-spec collection_helo(binary(), #state{}) -> {ok, #state{}} | {error, term()}.
+collection_helo(Name, #state{
         bufsocket = BufSocket,
         timeout = DcpTimeout,
         request_id = RequestId
     } = State) ->
-    Msg = couch_dcp_consumer:encode_hello_message("HELO"," ", RequestId),
+    Msg = couch_dcp_consumer:encode_hello_message(Name," ", RequestId),
     case bufsocket_send(BufSocket, Msg) of
     ok ->
         case bufsocket_recv(BufSocket, ?DCP_HEADER_LEN, DcpTimeout) of
