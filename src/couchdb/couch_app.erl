@@ -19,6 +19,7 @@
 -export([start/2, stop/1]).
 
 start(_Type, DefaultIniFiles) ->
+    ns_babysitter:setup_server_profile(),
     IniFiles = get_ini_files(DefaultIniFiles),
     Apps = [
         crypto, asn1, public_key, sasl, inets, oauth, ssl, lhttpc,

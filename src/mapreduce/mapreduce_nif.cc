@@ -579,16 +579,16 @@ void unregisterContext(map_reduce_ctx_t *ctx)
 
 
 static ErlNifFunc nif_functions[] = {
-    {"start_map_context", 2, startMapContext},
-    {"map_doc", 3, doMapDoc},
-    {"start_reduce_context", 1, startReduceContext},
-    {"reduce", 2, doReduce},
-    {"reduce", 3, doReduce},
-    {"rereduce", 3, doRereduce},
-    {"set_timeout", 1, setTimeout},
-    {"set_max_kv_size_per_doc", 1, setMaxKvSize},
-    {"is_doc_used", 1, isDocUsed},
-    {"set_optimize_doc_load", 1, setOptimizeDocLoad}
+    {"start_map_context", 2, startMapContext, 0},
+    {"map_doc", 3, doMapDoc, 0},
+    {"start_reduce_context", 1, startReduceContext, 0},
+    {"reduce", 2, doReduce, 0},
+    {"reduce", 3, doReduce, 0},
+    {"rereduce", 3, doRereduce, 0},
+    {"set_timeout", 1, setTimeout, 0},
+    {"set_max_kv_size_per_doc", 1, setMaxKvSize, 0},
+    {"is_doc_used", 1, isDocUsed, 0},
+    {"set_optimize_doc_load", 1, setOptimizeDocLoad, 0}
 };
 
 ERL_NIF_INIT(mapreduce, nif_functions, &onLoad, NULL, NULL, &onUnload)

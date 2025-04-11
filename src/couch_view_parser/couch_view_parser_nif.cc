@@ -596,9 +596,9 @@ static ERL_NIF_TERM makeError(ErlNifEnv *env, const std::string &msg)
 
 
 static ErlNifFunc nif_functions[] = {
-    {"start_context", 0, startContext},
-    {"parse_chunk", 2, parseChunk},
-    {"next_state", 1, nextState}
+    {"start_context", 0, startContext, 0},
+    {"parse_chunk", 2, parseChunk, 0},
+    {"next_state", 1, nextState, 0}
 };
 
 ERL_NIF_INIT(couch_view_parser, nif_functions, &onLoad, NULL, NULL, NULL)
