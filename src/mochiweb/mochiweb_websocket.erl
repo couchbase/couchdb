@@ -131,7 +131,6 @@ send(Socket, Opcode, Payload, hybi) ->
 upgrade_connection({ReqM, _} = Req, Body) ->
     case make_handshake(Req) of
       {Version, Response} ->
-	  ReqM:respond(Response, Req),
 	  Socket = ReqM:get(socket, Req),
 	  ReplyChannel = fun ({Opcode, Payload}) ->
                             (?MODULE):send(Socket, Opcode, Payload, Version);
@@ -142,7 +141,7 @@ upgrade_connection({ReqM, _} = Req, Body) ->
 			    (?MODULE):loop(Socket, Body, State, Version,
 					   ReplyChannel)
 		    end,
-	  {Reentry, ReplyChannel};
+	  {Response, Reentry, ReplyChannel};
       _ ->
 	  mochiweb_socket:close(ReqM:get(socket, Req)),
 	  exit(normal)
