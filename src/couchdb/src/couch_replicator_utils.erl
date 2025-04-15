@@ -23,7 +23,7 @@
 -include("couch_db.hrl").
 -include("couch_api_wrap.hrl").
 -include("couch_replicator.hrl").
--include("../lhttpc/lhttpc.hrl").
+-include_lib("lhttpc/include/lhttpc.hrl").
 
 -import(couch_util, [
     get_value/2,

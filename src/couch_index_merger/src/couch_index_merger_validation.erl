@@ -19,7 +19,7 @@
 -include("couch_db.hrl").
 -include_lib("couch_index_merger/include/couch_index_merger.hrl").
 -include_lib("couch_index_merger/include/couch_view_merger.hrl").
--include("../lhttpc/lhttpc.hrl").
+-include_lib("lhttpc/include/lhttpc.hrl").
 
 
 %% Valid `views` example:

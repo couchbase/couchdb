@@ -50,4 +50,7 @@ FOREACH (it ${TEST_FILES})
      -m couch_set_view/test -e ${ESCRIPT_EXECUTABLE} -t ${fullpath} --verbose)
 ENDFOREACH (it)
 
-ERL_BUILD(APPNAME "couch_set_view_test" SOURCES couch_set_view_test_util.erl)
+REBAR(TARGET couch_set_view_test
+      EUNIT
+      CLEAN_HOOK couch_set_view_test_realclean
+      EXTRA_ENV "REBAR_BASE_DIR=${COUCHDB_REBAR_BASE_DIR}")
