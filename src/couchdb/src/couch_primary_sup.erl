@@ -84,7 +84,13 @@ init([]) ->
             permanent,
             brutal_kill,
             worker,
-            [couch_index_barrier]}
+            [couch_index_barrier]},
+        {couch_dbname_cache,
+            {couch_dbname_cache, start_link, []},
+            permanent,
+            brutal_kill,
+            worker,
+            [couch_dbname_cache]}
     ],
     {ok, {{one_for_one, 10, 3600}, Children}}.
 

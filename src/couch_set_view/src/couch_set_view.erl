@@ -1092,11 +1092,13 @@ delete_index_dir(RootDir, SetName) ->
     nuke_dir(RootDir, DevDirName).
 
 set_index_dir(RootDir, SetName, prod) ->
-    filename:join([RootDir, "@indexes", ?b2l(SetName)]);
+    UUID = couch_dbname_cache:get_uuid_entry(SetName),
+    filename:join([RootDir, "@indexes", ?b2l(UUID)]);
 % development views must be stored in a different directory as they have
 % the same signature/filename as the production views
 set_index_dir(RootDir, SetName, dev) ->
-    filename:join([RootDir, "@indexes_dev", ?b2l(SetName)]).
+    UUID = couch_dbname_cache:get_uuid_entry(SetName),
+    filename:join([RootDir, "@indexes_dev", ?b2l(UUID)]).
 
 
 nuke_dir(RootDelDir, Dir) ->
