@@ -13,7 +13,7 @@
 -module(couch_server).
 -behaviour(gen_server).
 
--export([open/2,create/2,delete/2,get_version/0]).
+-export([open/2,create/2,delete_uuid/2,delete/2,get_version/0]).
 -export([all_databases/0, all_databases/2, all_known_databases_with_prefix/1]).
 -export([init/1, handle_call/3,sup_start_link/0]).
 -export([handle_cast/2,code_change/3,handle_info/2,terminate/2]).
@@ -69,6 +69,13 @@ create(DbName, Options) ->
         Error
     end.
 
+delete_uuid(UUID, Options) when is_list(UUID) ->
+    delete_uuid(?l2b(UUID), Options);
+delete_uuid(UUID, Options) ->
+    DbName = couch_dbname_cache:get_dbname_from_uuid(UUID),
+    MasterDB = iolist_to_binary([DbName, <<"/master">>]),
+    delete(MasterDB, Options).
+
 delete(DbName, Options) ->
     gen_server:call(couch_server, {delete, DbName, Options}, infinity).
 
@@ -98,7 +105,16 @@ has_admins() ->
     couch_config:get("admins") /= [].
 
 get_full_filename(Server, DbName) ->
-    filename:join([Server#server.root_dir, "./" ++ DbName ++ ".couch"]).
+    {DbName2, Id} = case couch_set_view_util:split_set_db_name(DbName) of
+                    {ok, DbName1, master} ->
+                        {DbName1, "master"};
+                    {ok, DbName1, Ext} ->
+                        {DbName1, integer_to_list(Ext)};
+                    _ ->
+                        {?l2b(DbName), ""}
+                   end,
+    UUID = couch_dbname_cache:get_uuid_entry(DbName2),
+    filename:join([Server#server.root_dir, "./" ++ ?b2l(UUID) ++ "/" ++ Id ++ ".couch"]).
 
 hash_admin_passwords() ->
     hash_admin_passwords(true).
@@ -290,6 +306,12 @@ handle_call({delete, DbName, _Options}, _From, Server) ->
         case Result of
         [ok|_] ->
             couch_db_update_notifier:notify({deleted, DbName}),
+            case couch_set_view_util:split_set_db_name(DbName) of
+            {ok, SetName, master} ->
+                couch_dbname_cache:delete(SetName);
+            _ ->
+                ok
+            end,
             {reply, ok, Server2};
         [] ->
             {reply, not_found, Server2};
