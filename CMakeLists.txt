@@ -10,7 +10,7 @@ FILE(GLOB_RECURSE COUCHDB_ALL_ERLANG_HEADERS
      FOLLOW_SYMLINKS ${CMAKE_CURRENT_SOURCE_DIR}/src/*.hrl)
 
 IF(WIN32)
-ADD_CUSTOM_TARGET(check
+ADD_CUSTOM_TARGET(couchdb-check
     COMMAND ${CMAKE_COMMAND} -E echo "Running unit tests with ipv4 bind address"
     COMMAND ${CMAKE_COMMAND} -E env ipv6=false ${CMAKE_CTEST_COMMAND} --output-on-failure
     COMMAND ${CMAKE_COMMAND} -E echo "Running unit tests with ipv6 bind address"
@@ -18,7 +18,7 @@ ADD_CUSTOM_TARGET(check
     DEPENDS dialyzer
     )
 ELSE(WIN32)
-ADD_CUSTOM_TARGET(check
+ADD_CUSTOM_TARGET(couchdb-check
     COMMAND ${CMAKE_COMMAND} -E echo "Running unit tests with ipv4 bind address"
     COMMAND ${CMAKE_COMMAND} -E env ipv6=false ${CMAKE_CTEST_COMMAND} --output-on-failure -j4
     COMMAND ${CMAKE_COMMAND} -E echo "Running unit tests with ipv6 bind address"
