@@ -278,10 +278,8 @@ enum_docs_since(Pid, PartId, PartVersions, StartSeq0, EndSeq0, Flags,
                     InAcc4 = case InAcc3 of
                     {0, -1} when ((Flags band ?DCP_FLAG_DISKONLY) =:= ?DCP_FLAG_DISKONLY)->
                         {0, 1};
-                    {0, -1} ->
-                        {0, EndSeq};
-                    _ ->
-                        InAcc3
+                    {Count, _} ->
+                        {Count, EndSeq}
                     end,
                     {ok, InAcc4, FailoverLog};
                 Error ->
