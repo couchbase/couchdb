@@ -23,7 +23,7 @@
 
 % gen_server callbacks
 -export([init/1, terminate/2, handle_call/3, handle_cast/2, handle_info/2, code_change/3]).
--export([format_status/2]).
+-export([format_status/1]).
 
 -include("couch_db.hrl").
 -include_lib("couch_dcp/include/couch_dcp.hrl").
@@ -764,11 +764,12 @@ code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 
-format_status(_Opt, [_PDict, #state{stream_queues = StreamQueues} = State]) ->
+format_status(#{state := #state{stream_queues = StreamQueues} = State}) ->
     TransformFn = fun(_Key, {Waiter, Queue}) ->
                      {Waiter, {queue:len(Queue), queue:peek_r(Queue)}}
                   end,
-    State#state{stream_queues = dict:map(TransformFn, StreamQueues)}.
+    StreamQueuesFormatted = dict:map(TransformFn, StreamQueues),
+    #{state => State#state{stream_queues = StreamQueuesFormatted}}.
 
 
 % Internal functions
