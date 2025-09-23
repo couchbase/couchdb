@@ -257,6 +257,9 @@ parse_ini_file(IniFile, TableId) ->
                 {AccSectionName, AccValues};
             Line2 ->
                 case re:split(Line2, "\s?=\s?", [{return, list}]) of
+                [] ->
+                    %% Empty line
+                    {AccSectionName, AccValues};
                 [Value] ->
                     MultiLineValuePart = case re:run(Line, "^ \\S", []) of
                     {match, _} ->
@@ -285,7 +288,8 @@ parse_ini_file(IniFile, TableId) ->
                     RemainingLine = couch_util:implode(LineValues, "="),
                     % removes comments
                     case re:split(RemainingLine, " ;|\t;", [{return, list}]) of
-                    [[]] ->
+                    %% TODO: Remove [[]] handling after OTP-27 upgrade
+                    SplitLine when SplitLine =:= [[]]; SplitLine =:= [] ->
                         % empty line means delete this key
                         ets:delete(TableId, {AccSectionName, ValueName}),
                         {AccSectionName, AccValues};
