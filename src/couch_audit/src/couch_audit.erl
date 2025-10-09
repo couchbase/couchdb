@@ -76,7 +76,8 @@ handle_call({audit, NewAuditSettings}, _From, #state{queue=Queue}=State) ->
     ?LOG_INFO("Couch audit settings changed <ud>~w</ud>", [NewAuditSettings]),
     State2 = set_audit_values(NewAuditSettings, State),
     Settings = [prepare_audit_setting(S) || S <- NewAuditSettings],
-    {true, NewQueue} = queue_put(code(config_changed), Settings, Queue),
+    Settings2 = prepare_list([{timestamp, now_to_iso8601(os:timestamp())}]) ++ Settings,
+    {true, NewQueue} = queue_put(code(config_changed), Settings2, Queue),
     State3 = State2#state{queue=NewQueue},
     self() ! send,
     {reply, ok, State3};
