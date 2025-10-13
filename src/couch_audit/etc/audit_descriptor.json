@@ -102,8 +102,7 @@
       "enabled" : true,
       "filtering_permitted" : false,
       "mandatory_fields" : {
-        "timestamp" : "",
-        "user_agent" : ""
+        "timestamp" : ""
       },
       "optional_fields" : {}
     },
