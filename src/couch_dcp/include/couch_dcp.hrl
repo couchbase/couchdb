@@ -80,6 +80,7 @@
 -define(DCP_SIZES_SNAPSHOT_TYPE, 32).
 -define(DCP_SIZES_BUFFER_SIZE, 32).
 -define(DCP_BUFFER_ACK_THRESHOLD, 0.2).
+-define(DCP_OPEN_RETRY_TIMEOUT, 1000).
 
 % NOTE vmx 2014-01-16: In ep-engine the maximum size is currently 25
 -define(DCP_MAX_FAILOVER_LOG_SIZE, 25).

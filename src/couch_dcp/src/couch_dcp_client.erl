@@ -366,6 +366,7 @@ init([Name, Bucket, BufferSize, Flags, Auth]) ->
                         {stop, Reason}
                     end;
                 {error, Reason} ->
+                    timer:sleep(?DCP_OPEN_RETRY_TIMEOUT),
                     {stop, Reason}
                 end;
             {{error, vbucket_stream_not_found}, _} ->
@@ -860,9 +861,14 @@ open_connection(Name, Flags, State) ->
     ok ->
         case bufsocket_recv(BufSocket, ?DCP_HEADER_LEN, DcpTimeout) of
         {ok, Header, BufSocket2} ->
-            {open_connection, RequestId} = couch_dcp_consumer:parse_header(Header),
-            State2 = State#state{bufsocket = BufSocket2},
-            {ok, next_request_id(State2)};
+            {open_connection, Status, RequestId} = couch_dcp_consumer:parse_header(Header),
+            case Status of
+            ?DCP_STATUS_OK ->
+                State2 = State#state{bufsocket = BufSocket2},
+                {ok, next_request_id(State2)};
+            _ ->
+                {error, Status}
+            end;
         {error, _} = Error ->
             Error
         end;
