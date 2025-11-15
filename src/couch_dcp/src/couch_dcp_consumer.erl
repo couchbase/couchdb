@@ -53,7 +53,7 @@ parse_header(<<?DCP_MAGIC_RESPONSE,
     ?DCP_OPCODE_STREAM_REQUEST ->
         {stream_request, Status, RequestId, BodyLength};
     ?DCP_OPCODE_OPEN_CONNECTION ->
-        {open_connection, RequestId};
+        {open_connection, Status, RequestId};
     ?DCP_OPCODE_FAILOVER_LOG_REQUEST ->
         {failover_log, Status, RequestId, BodyLength};
     ?DCP_OPCODE_STATS ->

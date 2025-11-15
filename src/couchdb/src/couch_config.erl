@@ -288,8 +288,7 @@ parse_ini_file(IniFile, TableId) ->
                     RemainingLine = couch_util:implode(LineValues, "="),
                     % removes comments
                     case re:split(RemainingLine, " ;|\t;", [{return, list}]) of
-                    %% TODO: Remove [[]] handling after OTP-27 upgrade
-                    SplitLine when SplitLine =:= [[]]; SplitLine =:= [] ->
+                    [] ->
                         % empty line means delete this key
                         ets:delete(TableId, {AccSectionName, ValueName}),
                         {AccSectionName, AccValues};
