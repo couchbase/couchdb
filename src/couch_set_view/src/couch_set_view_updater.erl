@@ -699,7 +699,7 @@ queue_doc({part_versions, _} = PartVersions, MapQueue, _Group, _MaxDocSize,
     _InitialBuild) ->
     couch_work_queue:queue(MapQueue, PartVersions);
 queue_doc(#dcp_doc{id = <<H:5/binary, _/binary>>, data_type = DcpDataType }, _, _, _, _)
-                    when (H == <<"_txn:">>) and (DcpDataType == ?DCP_DATA_TYPE_BINARY_XATTR) ->
+                    when (H == <<"_txn:">>) and (DcpDataType == ?DCP_DATA_TYPE_BINARY_XATTR orelse DcpDataType == ?DCP_DATA_TYPE_BINARY_COMPRESSED_XATTR) ->
     ok;
 queue_doc(Doc, MapQueue, Group, MaxDocSize, InitialBuild) ->
     Doc2 = case Doc#dcp_doc.deleted of
@@ -865,6 +865,10 @@ do_maps(Group, MapQueue, WriteQueue) ->
                     {DocBody10, XATTRs6} = accumulate_xattr(Body, <<"\"xattrs\":{">>, 0, 0),
                     DocBody11 = change_docbody_if_empty(DocBody10),
                     {?CONTENT_META_NON_JSON_MODE, DocBody11, XATTRs6};
+                ?DCP_DATA_TYPE_BINARY_COMPRESSED_XATTR ->
+                    <<XATTRSize:32, Rest/binary>> = Body,
+                    {DocBody13, XATTRs8} = accumulate_xattr(Rest, <<"\"xattrs\":{">>, XATTRSize, 0),
+                    {?CONTENT_META_NON_JSON_MODE, DocBody13, XATTRs8};
                 ?DCP_DATA_TYPE_JSON_COMPRESSED_XATTR ->
                     <<XATTRSize:32, Rest/binary>> = Body,
                     {DocBody12, XATTRs7} = accumulate_xattr(Rest, <<"\"xattrs\":{">>, XATTRSize, 0),
