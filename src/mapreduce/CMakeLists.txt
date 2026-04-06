@@ -15,7 +15,7 @@ SET(COUCH_VIEW_MR_SRC mapreduce_nif.cc
                       mapreduce.cc
                       ${CMAKE_CURRENT_BINARY_DIR}/jsfunctions/jsfunctions_data.cc)
 
-INCLUDE_DIRECTORIES(BEFORE ${V8_INCLUDE_DIR}
+INCLUDE_DIRECTORIES(BEFORE SYSTEM ${V8_INCLUDE_DIR}
                            ${ERLANG_INCLUDE_PATH})
 
 ADD_LIBRARY(mapreduce_nif MODULE ${COUCH_VIEW_MR_SRC})
