@@ -31,7 +31,8 @@
          ssl=false,
          ssl_opts=[{ssl_imp, new}],
          acceptor_pool=sets:new(),
-         profile_fun=undefined}).
+         profile_fun=undefined,
+         tls_alert_handler=undefined}).
 
 -define(is_old_state(State), not is_record(State, mochiweb_socket_server)).
 
@@ -163,7 +164,11 @@ parse_options([{ssl_opts, SslOpts} | Rest], State) when is_list(SslOpts) ->
     SslOpts1 = [{ssl_imp, new} | proplists:delete(ssl_imp, SslOpts)],
     parse_options(Rest, State#mochiweb_socket_server{ssl_opts=SslOpts1});
 parse_options([{profile_fun, ProfileFun} | Rest], State) when is_function(ProfileFun) ->
-    parse_options(Rest, State#mochiweb_socket_server{profile_fun=ProfileFun}).
+    parse_options(Rest, State#mochiweb_socket_server{profile_fun=ProfileFun});
+parse_options([{tls_alert_handler, Handler} | Rest], State)
+  when is_function(Handler, 2) orelse Handler =:= undefined ->
+    parse_options(Rest,
+                  State#mochiweb_socket_server{tls_alert_handler=Handler}).
 
 
 start_server(F, State=#mochiweb_socket_server{name=Name}) ->
@@ -241,8 +246,10 @@ new_acceptor_pool(State=#mochiweb_socket_server{acceptor_pool_size=Size}) ->
 new_acceptor(State=#mochiweb_socket_server{acceptor_pool=Pool,
                                            recbuf=RecBuf,
                                            loop=Loop,
-                                           listen=Listen}) ->
-    LoopOpts = [{recbuf, RecBuf}],
+                                           listen=Listen,
+                                           tls_alert_handler=AlertHandler}) ->
+    LoopOpts = [{recbuf, RecBuf},
+                {tls_alert_handler, AlertHandler}],
     Pid = mochiweb_acceptor:start_link(self(), Listen, Loop, LoopOpts),
     State#mochiweb_socket_server{
       acceptor_pool=sets:add_element(Pid, Pool)}.
