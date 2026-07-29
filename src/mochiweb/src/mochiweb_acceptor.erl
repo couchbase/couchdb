@@ -39,19 +39,49 @@ start_link(Server, Listen, Loop, Opts) ->
     proc_lib:spawn_link(?MODULE, init,
 			[Server, Listen, Loop, Opts]).
 
-do_accept(Server, Listen) ->
+do_accept(Server, Listen, Handler) ->
     T1 = os:timestamp(),
     case mochiweb_socket:transport_accept(Listen) of
       {ok, Socket} ->
 	  gen_server:cast(Server,
 			  {accepted, self(),
 			   timer:now_diff(os:timestamp(), T1)}),
-	  mochiweb_socket:finish_accept(Socket);
+	  finish_accept(Socket, Handler);
       Other -> Other
     end.
 
+finish_accept(Socket, undefined) ->
+    mochiweb_socket:finish_accept(Socket);
+finish_accept(Socket, Handler) ->
+    case mochiweb_socket:type(Socket) of
+      plain ->
+	  mochiweb_socket:finish_accept(Socket);
+      ssl ->
+	  %% Capture the peer first: a failed handshake closes the socket.
+	  ConnInfo = conn_info(Socket),
+	  case mochiweb_socket:finish_accept(Socket) of
+	    {error, {tls_alert, _} = Reason} = Err ->
+		notify_tls_alert(Handler, Reason, ConnInfo),
+		Err;
+	    Other ->
+		Other
+	  end
+    end.
+
+conn_info(Socket) ->
+    #{peername => addr(mochiweb_socket:peername(Socket)),
+      sockname => addr(mochiweb_socket:sockname(Socket))}.
+
+addr({ok, {Host, Port}}) -> {Host, Port};
+addr(_) -> undefined.
+
+notify_tls_alert(Handler, Reason, ConnInfo) ->
+    (catch Handler(Reason, ConnInfo)),
+    ok.
+
 init(Server, Listen, Loop, Opts) ->
-    case catch do_accept(Server, Listen) of
+    Handler = proplists:get_value(tls_alert_handler, Opts, undefined),
+    case catch do_accept(Server, Listen, Handler) of
       {ok, Socket} -> call_loop(Loop, Socket, Opts);
       {error, Err}
 	  when Err =:= closed orelse
