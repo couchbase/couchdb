@@ -5,7 +5,7 @@
 -module(mochiweb_socket).
 
 -export([listen/4,
-         accept/1, transport_accept/1, finish_accept/1,
+         accept/1, transport_accept/1, finish_accept/1, finish_accept/2,
          recv/3, send/2, close/1, port/1, peername/1,
          setopts/2, getopts/2, type/1, exit_if_closed/1]).
 
@@ -96,15 +96,45 @@ transport_accept({ssl, ListenSocket}) ->
 transport_accept(ListenSocket) ->
     gen_tcp:accept(ListenSocket, ?ACCEPT_TIMEOUT).
 
-finish_accept({ssl, Socket}) ->
-    case ssl:handshake(Socket, ?SSL_HANDSHAKE_TIMEOUT) of
-        {ok, SslSocket} ->
-            {ok, {ssl, SslSocket}};
-        {error, _} = Err ->
-            Err
-    end;
 finish_accept(Socket) ->
+    finish_accept(Socket, undefined).
+
+%% HsOptsFun, unless undefined, returns ssl options to pass to ssl:handshake/3,
+%% in addition to the ones the socket listens with
+finish_accept({ssl, Socket}, undefined) ->
+    handshake_result(ssl:handshake(Socket, ?SSL_HANDSHAKE_TIMEOUT));
+finish_accept({ssl, Socket}, HsOptsFun) ->
+    try ssl:handshake(Socket, HsOptsFun(), ?SSL_HANDSHAKE_TIMEOUT) of
+        Res ->
+            handshake_result(Res)
+    catch
+        %% The connection process died during the call; the call, which is a
+        %% part of the exit reason, has the options in it, which may be
+        %% secret, so it must not get to the logs
+        exit:{Reason, {gen_statem, call, _}} ->
+            {error, Reason}
+    end;
+finish_accept(Socket, _HsOptsFun) ->
     {ok, Socket}.
+
+handshake_result({ok, SslSocket}) ->
+    {ok, {ssl, SslSocket}};
+handshake_result({error, Reason}) ->
+    {error, hide_option_value(Reason)}.
+
+%% ssl puts the value of an option it rejects into the error, and options
+%% passed to ssl:handshake/3 can be secret (like the private key), so only
+%% the name of the option is kept
+%%
+%% Errors of option validation come wrapped in one more {error, _}:
+%% {error, {error, {options, {Option, Value}}}}
+hide_option_value({error, Reason}) ->
+    {error, hide_option_value(Reason)};
+hide_option_value({options, Option}) when is_tuple(Option),
+                                          tuple_size(Option) > 0 ->
+    {options, element(1, Option)};
+hide_option_value(Reason) ->
+    Reason.
 
 recv({ssl, Socket}, Length, Timeout) ->
     ssl:recv(Socket, Length, Timeout);
