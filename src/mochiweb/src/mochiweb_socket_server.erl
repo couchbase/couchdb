@@ -32,7 +32,8 @@
          ssl_opts=[{ssl_imp, new}],
          acceptor_pool=sets:new(),
          profile_fun=undefined,
-         tls_alert_handler=undefined}).
+         tls_alert_handler=undefined,
+         ssl_handshake_opts_fun=undefined}).
 
 -define(is_old_state(State), not is_record(State, mochiweb_socket_server)).
 
@@ -168,7 +169,18 @@ parse_options([{profile_fun, ProfileFun} | Rest], State) when is_function(Profil
 parse_options([{tls_alert_handler, Handler} | Rest], State)
   when is_function(Handler, 2) orelse Handler =:= undefined ->
     parse_options(Rest,
-                  State#mochiweb_socket_server{tls_alert_handler=Handler}).
+                  State#mochiweb_socket_server{tls_alert_handler=Handler});
+%% A fun that returns ssl options to be passed to ssl:handshake/3 for each
+%% accepted connection, in addition to ssl_opts, which are given to
+%% ssl:listen/2. Options that are secret, like the private key, should be
+%% passed this way: ssl keeps the options it listens with in the listen
+%% socket, which gets printed with the state of the processes holding it.
+%% The fun is called for every connection, so it can return new options,
+%% like a new certificate, without the server being restarted.
+parse_options([{ssl_handshake_opts_fun, Fun} | Rest], State)
+  when is_function(Fun, 0) ->
+    parse_options(Rest,
+                  State#mochiweb_socket_server{ssl_handshake_opts_fun=Fun}).
 
 
 start_server(F, State=#mochiweb_socket_server{name=Name}) ->
@@ -247,10 +259,12 @@ new_acceptor(State=#mochiweb_socket_server{acceptor_pool=Pool,
                                            recbuf=RecBuf,
                                            loop=Loop,
                                            listen=Listen,
-                                           tls_alert_handler=AlertHandler}) ->
+                                           tls_alert_handler=AlertHandler,
+                                           ssl_handshake_opts_fun=HsOptsFun}) ->
     LoopOpts = [{recbuf, RecBuf},
                 {tls_alert_handler, AlertHandler}],
-    Pid = mochiweb_acceptor:start_link(self(), Listen, Loop, LoopOpts),
+    Pid = mochiweb_acceptor:start_link(self(), Listen, Loop, LoopOpts,
+                                       HsOptsFun),
     State#mochiweb_socket_server{
       acceptor_pool=sets:add_element(Pid, Pool)}.
 
@@ -439,5 +453,118 @@ set_buffer_opts_test() ->
     ?assertEqual([{recbuf, 5}], set_buffer_opts(5, undefined, [])),
     ?assertEqual([{buffer, 6}], set_buffer_opts(undefined, 6, [])),
     ?assertEqual([{buffer, 6}, {recbuf, 5}], set_buffer_opts(5, 6, [])).
+
+ssl_handshake_opts_fun_test_() ->
+    {setup,
+     fun () ->
+             {ok, Apps} = application:ensure_all_started(ssl),
+             Apps
+     end,
+     fun (Apps) ->
+             [application:stop(A) || A <- lists:reverse(Apps)]
+     end,
+     ?_test(ssl_handshake_opts_fun())}.
+
+ssl_handshake_opts_fun() ->
+    {CertA, KeyA} = test_cert_and_key(),
+    {CertB, KeyB} = test_cert_and_key(),
+    OptsKey = {?MODULE, ssl_handshake_opts},
+    %% Without ciphers in ssl_opts, the server listens with TLS 1.2 ciphers
+    %% only (see mochiweb_socket:add_unbroken_ciphers_default/1), so this also
+    %% checks that the options passed to the handshake override those
+    Ciphers = ssl:cipher_suites(default, 'tlsv1.3') ++
+        ssl:cipher_suites(default, 'tlsv1.2'),
+    SetCertAndKey =
+        fun (Cert, Key) ->
+                persistent_term:put(OptsKey,
+                                    [{ciphers, Ciphers},
+                                     {certs_keys, [#{cert => Cert,
+                                                     key => Key}]}])
+        end,
+    SetCertAndKey(CertA, KeyA),
+    {ok, Pid} = start_link(
+                  [{port, 0}, {ip, {127, 0, 0, 1}}, {ssl, true},
+                   {ssl_opts, [{versions, ['tlsv1.3', 'tlsv1.2']}]},
+                   {ssl_handshake_opts_fun,
+                    fun () -> persistent_term:get(OptsKey) end},
+                   {loop, fun (Socket, _Opts) ->
+                                  %% wait for the client to close
+                                  _ = mochiweb_socket:recv(Socket, 0, 5000),
+                                  mochiweb_socket:close(Socket)
+                          end}]),
+    try
+        Port = get(Pid, port),
+        ?assertEqual(CertA, test_peer_cert(Port)),
+
+        %% The key isn't kept in the state of the server, which includes the
+        %% listen socket
+        {_, KeyDer} = KeyA,
+        Needle = string:trim(io_lib:format("~w", [binary:part(KeyDer, 32, 16)]),
+                             both, "<>"),
+        ?assertNotEqual(nomatch,
+                        string:find(io_lib:format("~w", [KeyDer]), Needle)),
+        ?assertEqual(nomatch,
+                     string:find(io_lib:format("~w", [sys:get_state(Pid)]),
+                                 Needle)),
+
+        %% New options are used for new connections
+        SetCertAndKey(CertB, KeyB),
+        ?assertEqual(CertB, test_peer_cert(Port))
+    after
+        stop(Pid),
+        persistent_term:erase(OptsKey)
+    end.
+
+ssl_handshake_opts_error_test_() ->
+    {setup,
+     fun () ->
+             {ok, Apps} = application:ensure_all_started(ssl),
+             Apps
+     end,
+     fun (Apps) ->
+             [application:stop(A) || A <- lists:reverse(Apps)]
+     end,
+     ?_test(ssl_handshake_opts_error())}.
+
+%% ssl puts the value of an option it rejects into the error, which the
+%% acceptor logs, so the value, which can be the private key, is dropped
+ssl_handshake_opts_error() ->
+    {Cert, {KeyType, KeyDer}} = test_cert_and_key(),
+    {ok, ListenSocket} = ssl:listen(0, [{versions, ['tlsv1.3', 'tlsv1.2']},
+                                        {active, false}]),
+    try
+        {ok, {_, Port}} = ssl:sockname(ListenSocket),
+        spawn_link(fun () ->
+                           _ = ssl:connect({127, 0, 0, 1}, Port,
+                                           [{verify, verify_none}], 5000)
+                   end),
+        {ok, Socket} = mochiweb_socket:transport_accept({ssl, ListenSocket}),
+        %% The key in a form ssl doesn't take
+        BadKey = {KeyType, KeyDer, not_encrypted},
+        ?assertEqual({error, {error, {options, key}}},
+                     mochiweb_socket:finish_accept(
+                       Socket,
+                       fun () ->
+                               [{certs_keys, [#{cert => Cert, key => BadKey}]}]
+                       end))
+    after
+        ssl:close(ListenSocket)
+    end.
+
+test_cert_and_key() ->
+    CertOpts = [{key, {rsa, 2048, 65537}}, {digest, sha256}],
+    Chain = #{root => CertOpts, intermediates => [], peer => CertOpts},
+    #{server_config := Config} =
+        public_key:pkix_test_data(#{server_chain => Chain,
+                                    client_chain => Chain}),
+    {proplists:get_value(cert, Config), proplists:get_value(key, Config)}.
+
+test_peer_cert(Port) ->
+    {ok, Socket} = ssl:connect({127, 0, 0, 1}, Port,
+                               [{verify, verify_none}, {active, false}],
+                               5000),
+    {ok, Cert} = ssl:peercert(Socket),
+    ssl:close(Socket),
+    Cert.
 
 -endif.

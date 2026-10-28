@@ -28,7 +28,7 @@
 -include_lib("kernel/include/logger.hrl").
 -include("internal.hrl").
 
--export([init/4, start_link/3, start_link/4]).
+-export([init/5, start_link/3, start_link/4, start_link/5]).
 
 -define(EMFILE_SLEEP_MSEC, 100).
 
@@ -36,30 +36,33 @@ start_link(Server, Listen, Loop) ->
     start_link(Server, Listen, Loop, []).
 
 start_link(Server, Listen, Loop, Opts) ->
-    proc_lib:spawn_link(?MODULE, init,
-			[Server, Listen, Loop, Opts]).
+    start_link(Server, Listen, Loop, Opts, undefined).
 
-do_accept(Server, Listen, Handler) ->
+start_link(Server, Listen, Loop, Opts, HsOptsFun) ->
+    proc_lib:spawn_link(?MODULE, init,
+			[Server, Listen, Loop, Opts, HsOptsFun]).
+
+do_accept(Server, Listen, Handler, HsOptsFun) ->
     T1 = os:timestamp(),
     case mochiweb_socket:transport_accept(Listen) of
       {ok, Socket} ->
 	  gen_server:cast(Server,
 			  {accepted, self(),
 			   timer:now_diff(os:timestamp(), T1)}),
-	  finish_accept(Socket, Handler);
+	  finish_accept(Socket, HsOptsFun, Handler);
       Other -> Other
     end.
 
-finish_accept(Socket, undefined) ->
-    mochiweb_socket:finish_accept(Socket);
-finish_accept(Socket, Handler) ->
+finish_accept(Socket, HsOptsFun, undefined) ->
+    mochiweb_socket:finish_accept(Socket, HsOptsFun);
+finish_accept(Socket, HsOptsFun, Handler) ->
     case mochiweb_socket:type(Socket) of
       plain ->
-	  mochiweb_socket:finish_accept(Socket);
+	  mochiweb_socket:finish_accept(Socket, HsOptsFun);
       ssl ->
 	  %% Capture the peer first: a failed handshake closes the socket.
 	  ConnInfo = conn_info(Socket),
-	  case mochiweb_socket:finish_accept(Socket) of
+	  case mochiweb_socket:finish_accept(Socket, HsOptsFun) of
 	    {error, {tls_alert, _} = Reason} = Err ->
 		notify_tls_alert(Handler, Reason, ConnInfo),
 		Err;
@@ -79,9 +82,9 @@ notify_tls_alert(Handler, Reason, ConnInfo) ->
     (catch Handler(Reason, ConnInfo)),
     ok.
 
-init(Server, Listen, Loop, Opts) ->
+init(Server, Listen, Loop, Opts, HsOptsFun) ->
     Handler = proplists:get_value(tls_alert_handler, Opts, undefined),
-    case catch do_accept(Server, Listen, Handler) of
+    case catch do_accept(Server, Listen, Handler, HsOptsFun) of
       {ok, Socket} -> call_loop(Loop, Socket, Opts);
       {error, Err}
 	  when Err =:= closed orelse
@@ -95,11 +98,13 @@ init(Server, Listen, Loop, Opts) ->
 		receive  after ?EMFILE_SLEEP_MSEC -> ok end;
 	    _ -> ok
 	  end,
+      %% Other isn't formatted here, so that a logger handler can still
+      %% remove secrets from it: the ssl options a handshake failed with
+      %% (like the private key) can be in it
       ?LOG_ERROR(
          #{label => {mochiweb_acceptor, accept_error},
            report => [{application, mochiweb},
-                      {accept_error, lists:flatten(
-                                       io_lib:format("~p", [Other]))}]},
+                      {accept_error, Other}]},
          #{domain => [mochiweb],
            report_cb => fun logger:format_otp_report/1,
            logger_formatter => #{title => "ERROR REPORT"}}),
